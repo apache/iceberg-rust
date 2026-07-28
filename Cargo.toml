@@ -33,7 +33,7 @@ resolver = "2"
 edition = "2024"
 homepage = "https://rust.iceberg.apache.org/"
 publish = false
-version = "0.10.0"
+version = "0.10.1"
 
 license = "Apache-2.0"
 repository = "https://github.com/apache/iceberg-rust"
