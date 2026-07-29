@@ -29,6 +29,7 @@ use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::prelude::SessionConfig;
 use expect_test::expect;
 use iceberg::io::LocalFsStorageFactory;
@@ -317,6 +318,16 @@ async fn scan_partition_count(
     plan.properties().output_partitioning().partition_count()
 }
 
+fn find_iceberg_scan(plan: &dyn ExecutionPlan) -> Option<&IcebergTableScan> {
+    if let Some(scan) = plan.downcast_ref::<IcebergTableScan>() {
+        return Some(scan);
+    }
+
+    plan.children()
+        .into_iter()
+        .find_map(|child| find_iceberg_scan(child.as_ref()))
+}
+
 #[tokio::test]
 async fn test_multi_file_scan_produces_multiple_partitions() -> Result<()> {
     let data_file_count = 3;
@@ -374,6 +385,70 @@ async fn test_set_enable_eager_scan_planning() -> Result<()> {
     let actual_partition_count = scan_partition_count(&ctx, &namespace, &table_name).await;
 
     assert_eq!(actual_partition_count, data_file_count);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_multi_partition_scan_enforces_global_limit() -> Result<()> {
+    let data_file_count = 3;
+    let limit = 2;
+    let target_partitions = data_file_count + 1;
+    let (iceberg_catalog, namespace, table_name) = get_multi_file_table_context(
+        "test_multi_partition_scan_limit",
+        "my_table",
+        data_file_count,
+    )
+    .await?;
+    let ctx = get_read_context(iceberg_catalog, target_partitions, Some(true)).await?;
+    let namespace_name = &namespace[0];
+    let query =
+        format!("SELECT foo1, foo2 FROM catalog.{namespace_name}.{table_name} LIMIT {limit}");
+    let dataframe = ctx.sql(&query).await.unwrap();
+    let plan = dataframe.create_physical_plan().await.unwrap();
+
+    // DataFusion's physical optimizer absorbs GlobalLimitExec into the
+    // partition coalescer, whose fetch remains the effective global bound.
+    let global_limit = plan
+        .downcast_ref::<CoalescePartitionsExec>()
+        .expect("Expected a globally limited CoalescePartitionsExec");
+    assert_eq!(global_limit.fetch(), Some(limit));
+
+    let scan = find_iceberg_scan(global_limit.input().as_ref())
+        .expect("Expected IcebergTableScan below the global limit");
+    assert_eq!(scan.limit(), Some(limit));
+    assert_eq!(
+        scan.properties().output_partitioning().partition_count(),
+        data_file_count
+    );
+
+    let batches = dataframe.collect().await.unwrap();
+    let mut seen_ids = std::collections::HashSet::new();
+    for batch in &batches {
+        let foo1 = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let foo2 = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        for row in 0..batch.num_rows() {
+            let id = foo1.value(row);
+            assert!((1..=data_file_count as i32).contains(&id));
+            assert_eq!(foo2.value(row), format!("row-{id}"));
+            assert!(seen_ids.insert(id), "duplicate row {id}");
+        }
+    }
+
+    assert_eq!(
+        batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        limit
+    );
+    assert_eq!(seen_ids.len(), limit);
 
     Ok(())
 }

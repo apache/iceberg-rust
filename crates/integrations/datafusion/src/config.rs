@@ -20,6 +20,9 @@ use datafusion::common::extensions_options;
 
 extensions_options! {
     /// Configuration options for Iceberg's DataFusion integration.
+    ///
+    /// Register this extension with [`SessionConfig::with_option_extension`](datafusion::prelude::SessionConfig::with_option_extension)
+    /// before creating a session to make `SET iceberg.<option> = <value>` available.
     pub struct IcebergDataFusionConfig {
         /// Plan Iceberg file scan tasks during TableProvider::scan().
         pub enable_eager_scan_planning: bool, default = false
