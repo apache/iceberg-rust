@@ -3370,6 +3370,7 @@ pub iceberg::ErrorKind::CatalogCommitConflicts
 pub iceberg::ErrorKind::DataInvalid
 pub iceberg::ErrorKind::FeatureUnsupported
 pub iceberg::ErrorKind::NamespaceAlreadyExists
+pub iceberg::ErrorKind::NamespaceNotEmpty
 pub iceberg::ErrorKind::NamespaceNotFound
 pub iceberg::ErrorKind::PreconditionFailed
 pub iceberg::ErrorKind::TableAlreadyExists
