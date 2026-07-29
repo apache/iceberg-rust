@@ -321,9 +321,20 @@ impl FileScanTaskReader {
         {
             let (spec, partition_data) = match (&task.partition_spec, &task.partition) {
                 (Some(spec), Some(data)) => (spec.clone(), data.clone()),
-                // Unpartitioned table or missing spec: build_partition_constant
-                // handles the empty unified_type case with an early return.
-                _ => (Arc::new(PartitionSpec::unpartition_spec()), Struct::empty()),
+                // A missing spec/data is only acceptable when there are no partition
+                // fields to fill (unpartitioned table). If the unified type has fields
+                // but we lack a spec or data, the task is inconsistent and we cannot
+                // build the _partition column.
+                _ if unified_type.fields().is_empty() => {
+                    (Arc::new(PartitionSpec::unpartition_spec()), Struct::empty())
+                }
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::Unexpected,
+                        "cannot build _partition column: unified partition type has fields \
+                         but the scan task is missing its partition spec or data",
+                    ));
+                }
             };
             let constant = build_partition_constant(unified_type, &spec, &partition_data)?;
             record_batch_transformer_builder =

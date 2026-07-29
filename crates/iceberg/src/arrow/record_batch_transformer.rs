@@ -628,6 +628,14 @@ impl RecordBatchTransformer {
                         ));
                     }
                     Some(ColumnConstant::Scalar(datum)) => {
+                        // Metadata/virtual fields (like _file, _spec_id) never exist in the
+                        // data file, so they always use their pre-computed constant value.
+                        //
+                        // For identity-partitioned fields, the Iceberg spec's "Column
+                        // Projection" rules only apply to "field ids which are not present in
+                        // a data file". When the column IS present in the Parquet file, it
+                        // must be read from the file; the partition metadata constant is only
+                        // a fallback for when the column is absent (e.g. add_files).
                         let is_metadata = get_metadata_field(*field_id).is_ok();
                         let present_in_file =
                             field_id_to_source_schema_map.contains_key(field_id);

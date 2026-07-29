@@ -21,7 +21,7 @@ use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 use crate::spec::{
-    NestedField, NestedFieldRef, PartitionSpec, Schema, StructType, Transform, Type,
+    NestedField, NestedFieldRef, PartitionField, PartitionSpec, Schema, StructType, Transform, Type,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -36,6 +36,8 @@ use crate::{Error, ErrorKind, Result};
 ///   names take precedence when deduplicating by field_id.
 /// - Unknown transforms cause an error.
 /// - Fields whose source column was dropped from the schema are skipped.
+/// - Two specs defining the same field_id must be compatible (same source, compatible
+///   transforms); V1 tables do not guarantee field ids are unique across specs.
 /// - When a newer spec marks a field as Void (dropped) but an older spec has it with a
 ///   real transform, the older spec's type is preserved while the newer spec's name is kept.
 /// - Fields are deduplicated by field_id; each unique field_id appears exactly once.
@@ -53,7 +55,7 @@ pub fn compute_unified_partition_type<'a>(
 
     let active_field_ids = all_active_field_ids(specs.iter().copied(), schema);
 
-    let mut field_map: HashMap<i32, &crate::spec::PartitionField> = HashMap::new();
+    let mut field_map: HashMap<i32, &PartitionField> = HashMap::new();
     let mut type_map: HashMap<i32, Type> = HashMap::new();
     let mut name_map: HashMap<i32, String> = HashMap::new();
 
@@ -61,19 +63,23 @@ pub fn compute_unified_partition_type<'a>(
         for field in spec.fields() {
             let field_id = field.field_id;
 
-            if !active_field_ids.contains(&field_id) {
-                continue;
-            }
-
+            // Reject unknown transforms up front: we cannot determine their result type,
+            // so we cannot build a partition column for them. This check must precede the
+            // active_field_ids filter below, otherwise an unknown transform could be
+            // silently skipped.
             if matches!(field.transform, Transform::Unknown) {
                 return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
+                    ErrorKind::DataInvalid,
                     format!(
-                        "Partition field '{}' uses an unknown transform that is not \
-                         supported by this version of iceberg-rust",
+                        "Partition field '{}' uses an unknown transform whose result type \
+                         cannot be determined",
                         field.name
                     ),
                 ));
+            }
+
+            if !active_field_ids.contains(&field_id) {
+                continue;
             }
 
             let source_field = match schema.field_by_id(field.source_id) {
@@ -89,6 +95,22 @@ pub fn compute_unified_partition_type<'a>(
                     name_map.insert(field_id, field.name.clone());
                 }
                 Some(existing) => {
+                    // V1 tables do not guarantee field ids are unique across specs, so two
+                    // specs may define the same field id. They must be compatible.
+                    if !equivalent_ignoring_names(field, existing) {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Conflicting partition fields for field id {field_id}: \
+                                 '{}' and '{}'",
+                                field.name, existing.name
+                            ),
+                        ));
+                    }
+
+                    // Use the correct type for dropped partitions in v1 tables: if the
+                    // newer spec voided the field but an older spec has a real transform,
+                    // keep the older spec's type.
                     if is_void_transform(existing) && !is_void_transform(field) {
                         let res_type = field.transform.result_type(&source_field.field_type)?;
                         field_map.insert(field_id, field);
@@ -102,20 +124,45 @@ pub fn compute_unified_partition_type<'a>(
     let mut field_ids: Vec<i32> = field_map.keys().copied().collect();
     field_ids.sort();
 
-    let struct_fields: Vec<NestedFieldRef> = field_ids
+    let struct_fields = field_ids
         .into_iter()
-        .map(|fid| {
-            let name = &name_map[&fid];
-            let ty = type_map.remove(&fid).unwrap();
-            NestedField::optional(fid, name, ty).into()
+        .map(|fid| -> Result<NestedFieldRef> {
+            let name = name_map.get(&fid).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Missing name for partition field {fid}"),
+                )
+            })?;
+            let ty = type_map.remove(&fid).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Missing type for partition field {fid}"),
+                )
+            })?;
+            Ok(NestedField::optional(fid, name, ty).into())
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(StructType::new(struct_fields))
 }
 
-fn is_void_transform(field: &crate::spec::PartitionField) -> bool {
+fn is_void_transform(field: &PartitionField) -> bool {
     matches!(field.transform, Transform::Void)
+}
+
+/// Two partition fields with the same field id are compatible if they share the same
+/// source id and have compatible transforms. Matches Java's
+/// `Partitioning.equivalentIgnoringNames`.
+fn equivalent_ignoring_names(field: &PartitionField, other: &PartitionField) -> bool {
+    field.field_id == other.field_id
+        && field.source_id == other.source_id
+        && compatible_transforms(&field.transform, &other.transform)
+}
+
+/// Transforms are compatible if they are equal, or if either is Void (a dropped field).
+/// Matches Java's `Partitioning.compatibleTransforms`.
+fn compatible_transforms(t1: &Transform, t2: &Transform) -> bool {
+    t1 == t2 || matches!(t1, Transform::Void) || matches!(t2, Transform::Void)
 }
 
 fn all_active_field_ids<'a>(
@@ -343,5 +390,60 @@ mod tests {
         let result =
             compute_unified_partition_type([&spec_v0, &spec_v1].into_iter(), &schema).unwrap();
         assert_eq!(result.fields().len(), 2);
+    }
+
+    #[test]
+    fn test_unknown_transform_errors() {
+        let schema = test_schema();
+
+        // A spec using an unknown transform. Deserialize directly since the builder
+        // validates transforms.
+        let spec = serde_json::from_value::<PartitionSpec>(serde_json::json!({
+            "spec-id": 0,
+            "fields": [{
+                "source-id": 4,
+                "field-id": 1000,
+                "name": "category",
+                "transform": "unknown"
+            }]
+        }))
+        .unwrap();
+
+        let err = compute_unified_partition_type([&spec].into_iter(), &schema).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[test]
+    fn test_conflicting_partition_fields_error() {
+        let schema = test_schema();
+
+        // Spec 0: field id 1000 -> source 4 (category), identity
+        let spec_v0 = serde_json::from_value::<PartitionSpec>(serde_json::json!({
+            "spec-id": 0,
+            "fields": [{
+                "source-id": 4,
+                "field-id": 1000,
+                "name": "category",
+                "transform": "identity"
+            }]
+        }))
+        .unwrap();
+
+        // Spec 1: field id 1000 reused for a different source (ts) and transform (year).
+        // This conflicts with spec 0 and must be rejected.
+        let spec_v1 = serde_json::from_value::<PartitionSpec>(serde_json::json!({
+            "spec-id": 1,
+            "fields": [{
+                "source-id": 3,
+                "field-id": 1000,
+                "name": "ts_year",
+                "transform": "year"
+            }]
+        }))
+        .unwrap();
+
+        let err =
+            compute_unified_partition_type([&spec_v0, &spec_v1].into_iter(), &schema).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 }
