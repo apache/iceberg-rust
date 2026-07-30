@@ -2529,6 +2529,8 @@ mod tests {
             Field::new("id", DataType::Int64, false),
             Field::new("name", DataType::Utf8, true),
             Field::new("price", DataType::Decimal128(10, 2), false),
+            Field::new("uuid", DataType::FixedSizeBinary(16), false)
+                .with_extension_type(DataTypeUuidExt),
             Field::new(
                 "created_at",
                 DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
@@ -2580,9 +2582,9 @@ mod tests {
         let schema = arrow_schema_to_schema_auto_assign_ids(&arrow_schema).unwrap();
 
         // Build expected schema with exact field IDs following level-order assignment:
-        // Level 0: id=1, name=2, price=3, created_at=4, tags=5, address=6, attributes=7, orders=8
-        // Level 1: tags.element=9, address.{street=10,city=11,zip=12}, attributes.{key=13,value=14}, orders.element=15
-        // Level 2: orders.element.{order_id=16,amount=17}
+        // Level 0: id=1, name=2, price=3, uuid=4, created_at=5, tags=6, address=7, attributes=8, orders=9
+        // Level 1: tags.element=10, address.{street=11,city=12,zip=13}, attributes.{key=14,value=15}, orders.element=16
+        // Level 2: orders.element.{order_id=17,amount=18}
         let expected = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
@@ -2596,14 +2598,15 @@ mod tests {
                     }),
                 )
                 .into(),
-                NestedField::optional(4, "created_at", Type::Primitive(PrimitiveType::Timestamptz))
+                NestedField::required(4, "uuid", Type::Primitive(PrimitiveType::Uuid)).into(),
+                NestedField::optional(5, "created_at", Type::Primitive(PrimitiveType::Timestamptz))
                     .into(),
                 NestedField::optional(
-                    5,
+                    6,
                     "tags",
                     Type::List(ListType {
                         element_field: NestedField::list_element(
-                            9,
+                            10,
                             Type::Primitive(PrimitiveType::String),
                             false,
                         )
@@ -2612,29 +2615,29 @@ mod tests {
                 )
                 .into(),
                 NestedField::optional(
-                    6,
+                    7,
                     "address",
                     Type::Struct(StructType::new(vec![
-                        NestedField::optional(10, "street", Type::Primitive(PrimitiveType::String))
+                        NestedField::optional(11, "street", Type::Primitive(PrimitiveType::String))
                             .into(),
-                        NestedField::required(11, "city", Type::Primitive(PrimitiveType::String))
+                        NestedField::required(12, "city", Type::Primitive(PrimitiveType::String))
                             .into(),
-                        NestedField::optional(12, "zip", Type::Primitive(PrimitiveType::Int))
+                        NestedField::optional(13, "zip", Type::Primitive(PrimitiveType::Int))
                             .into(),
                     ])),
                 )
                 .into(),
                 NestedField::optional(
-                    7,
+                    8,
                     "attributes",
                     Type::Map(MapType {
                         key_field: NestedField::map_key_element(
-                            13,
+                            14,
                             Type::Primitive(PrimitiveType::String),
                         )
                         .into(),
                         value_field: NestedField::map_value_element(
-                            14,
+                            15,
                             Type::Primitive(PrimitiveType::String),
                             false,
                         )
@@ -2643,20 +2646,20 @@ mod tests {
                 )
                 .into(),
                 NestedField::optional(
-                    8,
+                    9,
                     "orders",
                     Type::List(ListType {
                         element_field: NestedField::list_element(
-                            15,
+                            16,
                             Type::Struct(StructType::new(vec![
                                 NestedField::required(
-                                    16,
+                                    17,
                                     "order_id",
                                     Type::Primitive(PrimitiveType::Long),
                                 )
                                 .into(),
                                 NestedField::required(
-                                    17,
+                                    18,
                                     "amount",
                                     Type::Primitive(PrimitiveType::Double),
                                 )
@@ -2673,6 +2676,6 @@ mod tests {
             .unwrap();
 
         pretty_assertions::assert_eq!(schema, expected);
-        assert_eq!(schema.highest_field_id(), 17);
+        assert_eq!(schema.highest_field_id(), 18);
     }
 }
