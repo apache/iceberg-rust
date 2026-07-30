@@ -17,10 +17,9 @@
 
 use super::Manifest;
 use crate::encryption::{EncryptedInputFile, StandardKeyMetadata};
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::io::FileIO;
 use crate::spec::{ManifestContentType, ManifestEntry, ManifestFile};
-use crate::{Error, ErrorKind};
 
 /// Reads a manifest file referenced by a manifest list entry, transparently
 /// decrypting it when the entry records key metadata.
@@ -103,10 +102,7 @@ impl ManifestReader {
         };
 
         let mut next_row_id = i64::try_from(manifest_first_row_id).map_err(|_| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid first_row_id: {manifest_first_row_id} (exceeds i64::MAX)"),
-            )
+            invalid_data!("Invalid first_row_id: {manifest_first_row_id} (exceeds i64::MAX)")
         })?;
 
         for entry in entries {
@@ -119,13 +115,8 @@ impl ManifestReader {
                 entry.data_file.first_row_id = Some(file_first_row_id);
                 let record_count = entry.data_file.record_count;
                 next_row_id = file_first_row_id.checked_add_unsigned(record_count).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Row ID overflow assigning first_row_id in {}. File first_row_id: {file_first_row_id}, record count: {record_count}",
-                            manifest_file.manifest_path
-                        ),
-                    )
+                    invalid_data!("Row ID overflow assigning first_row_id in {}. File first_row_id: {file_first_row_id}, record count: {record_count}",
+                            manifest_file.manifest_path)
                 })?;
             }
         }
@@ -140,6 +131,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::ErrorKind;
     use crate::encryption::{EncryptedOutputFile, StandardKeyMetadata};
     use crate::io::FileIO;
     use crate::spec::{

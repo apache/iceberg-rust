@@ -25,7 +25,7 @@ use super::_const_schema::{
 };
 use super::_serde::{ManifestFileV1, ManifestFileV2, ManifestFileV3};
 use super::{FormatVersion, ManifestContentType, ManifestFile, UNASSIGNED_SEQUENCE_NUMBER};
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::io::FileWrite;
 use crate::{Error, ErrorKind};
 
@@ -208,12 +208,9 @@ impl ManifestListWriter {
     fn assign_sequence_numbers(&self, manifest: &mut ManifestFile) -> Result<()> {
         if manifest.sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
             if manifest.added_snapshot_id != self.snapshot_id {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Found unassigned sequence number for a manifest from snapshot {}.",
-                        manifest.added_snapshot_id
-                    ),
+                return Err(invalid_data!(
+                    "Found unassigned sequence number for a manifest from snapshot {}.",
+                    manifest.added_snapshot_id
                 ));
             }
             manifest.sequence_number = self.sequence_number;
@@ -221,12 +218,9 @@ impl ManifestListWriter {
 
         if manifest.min_sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
             if manifest.added_snapshot_id != self.snapshot_id {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Found unassigned sequence number for a manifest from snapshot {}.",
-                        manifest.added_snapshot_id
-                    ),
+                return Err(invalid_data!(
+                    "Found unassigned sequence number for a manifest from snapshot {}.",
+                    manifest.added_snapshot_id
                 ));
             }
             manifest.min_sequence_number = self.sequence_number;
@@ -265,13 +259,10 @@ impl ManifestListWriter {
                         .checked_add(existing_rows_count)
                         .and_then(|sum| sum.checked_add(added_rows_count))
                         .ok_or_else(|| {
-                            Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
+                            invalid_data!(
                                     "Row ID overflow when computing next row ID for Manifest {}. Next Row ID: {writer_next_row_id}, Existing Rows Count: {existing_rows_count}, Added Rows Count: {added_rows_count}",
                                     manifest.manifest_path
-                                ),
-                            )
+                                )
                         }).map(Some)?;
                     }
                     (None, None) => {
@@ -291,22 +282,16 @@ impl ManifestListWriter {
 
 fn require_row_counts_in_manifest(manifest: &ManifestFile) -> Result<(u64, u64)> {
     let existing_rows_count = manifest.existing_rows_count.ok_or_else(|| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!(
+        invalid_data!(
                 "Cannot include a Manifest without existing-rows-count to a table with row lineage enabled. Manifest path: {}",
                 manifest.manifest_path,
-            ),
-        )
+            )
     })?;
     let added_rows_count = manifest.added_rows_count.ok_or_else(|| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!(
+        invalid_data!(
                 "Cannot include a Manifest without added-rows-count to a table with row lineage enabled. Manifest path: {}",
                 manifest.manifest_path,
-            ),
-        )
+            )
     })?;
     Ok((existing_rows_count, added_rows_count))
 }
