@@ -299,7 +299,7 @@ pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
 
     serde_json::from_slice::<R>(&bytes).map_err(|e| {
         // Successful REST responses can contain OAuth tokens and delegated
-        // storage credentials. Never copy an unparseable response into an error.
+        // storage credentials. Never copy an unparsable response into an error.
         Error::new(
             ErrorKind::Unexpected,
             "Failed to parse response from rest catalog server",
