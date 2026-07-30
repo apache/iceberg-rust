@@ -65,7 +65,7 @@ jobs:
           # Verify that the workflow is being run on the same version as the release tag
           DESIRED_REF="refs/tags/${RELEASE_TAG}"
           if [[ "${GITHUB_REF}" != "${DESIRED_REF}" ]]; then
-            echo "Error: expected workflow execution on ref ${DESIRED_REF}, got ref: ${GITHUB_REF}"
+            echo "❌ Error: expected workflow execution on ref ${DESIRED_REF}, got ref: ${GITHUB_REF}"
             exit 1
           fi
 
