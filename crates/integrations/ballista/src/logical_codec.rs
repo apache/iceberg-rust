@@ -38,12 +38,14 @@ use datafusion::sql::TableReference;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use iceberg::TableIdent;
 use iceberg::inspect::MetadataTableType;
-use iceberg_datafusion::{IcebergMetadataTableProvider, IcebergTableProvider};
+use iceberg_datafusion::{
+    IcebergMetadataTableProvider, IcebergTableProvider, to_datafusion_error,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::bridge::{
-    CatalogConfigWire, TAG_DELEGATED, TAG_ICEBERG, block_on, encode_blob, get_catalog, load_table,
-    split_tagged, to_df_err,
+    CatalogConfigWire, Frame, TAG_DELEGATED, TAG_ICEBERG, block_on, encode_blob, get_catalog,
+    load_table, split_frame, to_df_err,
 };
 
 /// Wire representation of an Iceberg table provider. Carries enough to rebuild
@@ -111,12 +113,11 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
         schema: SchemaRef,
         ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
-        let (tag, rest) = split_tagged(buf, "iceberg logical table-provider")?;
-        match tag {
-            TAG_DELEGATED => self
+        match split_frame(buf, "iceberg logical table-provider")? {
+            Frame::Delegated(rest) => self
                 .inner
                 .try_decode_table_provider(rest, table_ref, schema, ctx),
-            TAG_ICEBERG => {
+            Frame::Iceberg(rest) => {
                 let wire: IcebergProviderWire = serde_json::from_slice(rest).map_err(to_df_err)?;
                 match wire {
                     IcebergProviderWire::Table {
@@ -128,14 +129,22 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
                         let cat = get_catalog(&config)?;
                         let TableIdent { namespace, name } = table;
                         // Both steps run on the catalog runtime: `with_snapshot_id`
-                        // reloads metadata to validate the pin, so it is async too.
+                        // reloads metadata to validate the pin, so it is async
+                        // too. It reloads even for `None`, so only call it when
+                        // there is a pin — the provider was just built from a
+                        // fresh load, and skipping it saves a catalog round-trip
+                        // on every unpinned decode.
                         let provider = block_on(async {
-                            IcebergTableProvider::try_new_with_config(cat, config, namespace, name)
-                                .await?
-                                .with_snapshot_id(snapshot_id)
-                                .await
+                            let unpinned = IcebergTableProvider::try_new_with_config(
+                                cat, config, namespace, name,
+                            )
+                            .await?;
+                            match snapshot_id {
+                                Some(_) => unpinned.with_snapshot_id(snapshot_id).await,
+                                None => Ok(unpinned),
+                            }
                         })
-                        .map_err(to_df_err)?;
+                        .map_err(to_datafusion_error)?;
                         Ok(Arc::new(provider))
                     }
                     IcebergProviderWire::Metadata {
@@ -144,7 +153,7 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
                         metadata_type,
                     } => {
                         let config = catalog.into();
-                        let table_obj = load_table(&config, &table)?;
+                        let (_, table_obj) = load_table(&config, &table)?;
                         let kind = MetadataTableType::try_from(metadata_type.as_str())
                             .map_err(DataFusionError::Internal)?;
                         let provider = IcebergMetadataTableProvider::new(table_obj, kind)
@@ -153,9 +162,6 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
                     }
                 }
             }
-            other => Err(DataFusionError::Internal(format!(
-                "unknown iceberg logical table-provider tag {other}"
-            ))),
         }
     }
 

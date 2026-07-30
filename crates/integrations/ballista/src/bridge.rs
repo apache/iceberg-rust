@@ -39,11 +39,12 @@ use std::sync::{Arc, LazyLock, Mutex};
 use datafusion::common::DataFusionError;
 use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, TableIdent};
-use iceberg_datafusion::IcebergCatalogConfig;
+use iceberg_datafusion::{IcebergCatalogConfig, to_datafusion_error};
 use iceberg_storage_opendal::OpenDalResolvingStorageFactory;
 use serde::{Deserialize, Serialize};
 
-/// Converts an arbitrary error into a [`DataFusionError`].
+/// Converts a non-Iceberg error (serde, etc.) into a [`DataFusionError`].
+/// Iceberg errors use [`to_datafusion_error`], the workspace's conversion.
 pub(crate) fn to_df_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> DataFusionError {
     DataFusionError::External(Box::new(e))
 }
@@ -118,11 +119,11 @@ pub(crate) async fn build_catalog(
     config: &IcebergCatalogConfig,
 ) -> Result<Arc<dyn Catalog>, DataFusionError> {
     iceberg_catalog_loader::load(&config.r#type)
-        .map_err(to_df_err)?
+        .map_err(to_datafusion_error)?
         .with_storage_factory(Arc::new(OpenDalResolvingStorageFactory::new()))
         .load(config.name.clone(), config.props.clone())
         .await
-        .map_err(to_df_err)
+        .map_err(to_datafusion_error)
 }
 
 /// Returns a catalog built from `config`, cached process-wide.
@@ -158,25 +159,32 @@ fn is_retryable(err: &Error) -> bool {
     matches!(err.kind(), ErrorKind::Unexpected)
 }
 
-/// Loads a fresh [`Table`] from the catalog described by `config`.
+/// Loads a fresh [`Table`] from the catalog described by `config`, returning
+/// the catalog that served the successful load alongside it.
 ///
 /// A retryable failure (see [`is_retryable`]) evicts the cached catalog and
 /// retries once against a rebuilt one, so an executor whose credentials went
 /// stale recovers instead of failing every decode until restart. A second
 /// failure propagates.
+///
+/// Returning the catalog matters for that retry: a caller that needs both (the
+/// commit node holds a catalog handle) must get the *rebuilt* catalog, not the
+/// stale one a separate [`get_catalog`] call before the eviction would have
+/// returned. Callers that only want the table ignore it: `let (_, table) = …`.
 pub(crate) fn load_table(
     config: &IcebergCatalogConfig,
     ident: &TableIdent,
-) -> Result<Table, DataFusionError> {
+) -> Result<(Arc<dyn Catalog>, Table), DataFusionError> {
     let catalog = get_catalog(config)?;
     match block_on(catalog.load_table(ident)) {
-        Ok(table) => Ok(table),
+        Ok(table) => Ok((catalog, table)),
         Err(e) if is_retryable(&e) => {
             evict_catalog(config);
             let fresh = get_catalog(config)?;
-            block_on(fresh.load_table(ident)).map_err(to_df_err)
+            let table = block_on(fresh.load_table(ident)).map_err(to_datafusion_error)?;
+            Ok((fresh, table))
         }
-        Err(e) => Err(to_df_err(e)),
+        Err(e) => Err(to_datafusion_error(e)),
     }
 }
 
@@ -205,13 +213,27 @@ pub(crate) fn encode_blob<T: Serialize>(
     Ok(())
 }
 
-/// Splits a codec blob into its leading tag byte and payload.
-pub(crate) fn split_tagged<'a>(
+/// A codec blob split into its framing tag and payload.
+pub(crate) enum Frame<'a> {
+    /// Payload owned by the inner (delegate) codec.
+    Delegated(&'a [u8]),
+    /// Payload owned by this crate's Iceberg codecs (JSON).
+    Iceberg(&'a [u8]),
+}
+
+/// Splits a codec blob into its [`Frame`], so which tags are legal is decided
+/// here — next to the tags — rather than at every decode site. `context` names
+/// the blob kind in errors.
+pub(crate) fn split_frame<'a>(
     buf: &'a [u8],
     context: &str,
-) -> Result<(u8, &'a [u8]), DataFusionError> {
+) -> Result<Frame<'a>, DataFusionError> {
     match buf.split_first() {
-        Some((&tag, rest)) => Ok((tag, rest)),
+        Some((&TAG_DELEGATED, rest)) => Ok(Frame::Delegated(rest)),
+        Some((&TAG_ICEBERG, rest)) => Ok(Frame::Iceberg(rest)),
+        Some((&tag, _)) => Err(DataFusionError::Internal(format!(
+            "unknown {context} tag {tag}"
+        ))),
         None => Err(DataFusionError::Internal(format!("empty {context} buffer"))),
     }
 }

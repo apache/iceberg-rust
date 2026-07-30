@@ -37,7 +37,6 @@ use iceberg::TableIdent;
 use iceberg::expr::Predicate;
 use iceberg::inspect::MetadataTableType;
 use iceberg::spec::{PartitionSpec, Schema};
-use iceberg::table::Table;
 use iceberg_datafusion::physical_plan::{
     IcebergCommitExec, IcebergMetadataScan, IcebergTableScan, IcebergWriteExec, PartitionExpr,
 };
@@ -47,8 +46,8 @@ use iceberg_datafusion::{
 use serde::{Deserialize, Serialize};
 
 use crate::bridge::{
-    CatalogConfigWire, TAG_DELEGATED, TAG_ICEBERG, encode_blob, get_catalog, load_table,
-    split_tagged, to_df_err,
+    CatalogConfigWire, Frame, TAG_DELEGATED, TAG_ICEBERG, encode_blob, load_table, split_frame,
+    to_df_err,
 };
 
 /// Wire representation of an Iceberg physical plan node.
@@ -123,22 +122,6 @@ fn missing_config_err(node: &str) -> DataFusionError {
     ))
 }
 
-/// Arrow schema of the table at `snapshot_id`, or its current schema for `None`.
-///
-/// A pinned scan must use the schema that snapshot was written under. The
-/// table's schema may have changed since, and the executor resolves this on its
-/// own — so using the current schema here would describe historical rows with a
-/// column list that no longer matches them.
-///
-/// Delegates to [`snapshot_arrow_schema`], the same function
-/// [`IcebergTableProvider`](iceberg_datafusion::IcebergTableProvider) resolves
-/// its schema with at planning time. Reimplementing it here would let the two
-/// drift, and a scheduler and executor that disagree about a pinned snapshot's
-/// schema is exactly the failure this node exists to prevent.
-fn arrow_schema_of(table: &Table, snapshot_id: Option<i64>) -> Result<SchemaRef, DataFusionError> {
-    snapshot_arrow_schema(table, snapshot_id).map_err(to_datafusion_error)
-}
-
 impl PhysicalExtensionCodec for IcebergPhysicalCodec {
     fn try_decode(
         &self,
@@ -146,15 +129,10 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
         inputs: &[Arc<dyn ExecutionPlan>],
         ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        let (tag, rest) = split_tagged(buf, "iceberg physical codec")?;
-        if tag == TAG_DELEGATED {
-            return self.inner.try_decode(rest, inputs, ctx);
-        }
-        if tag != TAG_ICEBERG {
-            return Err(DataFusionError::Internal(format!(
-                "unknown iceberg physical codec tag {tag}"
-            )));
-        }
+        let rest = match split_frame(buf, "iceberg physical codec")? {
+            Frame::Delegated(rest) => return self.inner.try_decode(rest, inputs, ctx),
+            Frame::Iceberg(rest) => rest,
+        };
 
         let node: IcebergPhysicalNode = serde_json::from_slice(rest).map_err(to_df_err)?;
 
@@ -168,8 +146,12 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
                 predicates,
             } => {
                 let config = catalog.into();
-                let table_obj = load_table(&config, &table)?;
-                let arrow_schema = arrow_schema_of(&table_obj, snapshot_id)?;
+                let (_, table_obj) = load_table(&config, &table)?;
+                // A pinned scan must use the schema that snapshot was written
+                // under — the table's schema may have changed since, and the
+                // current one would describe historical rows incorrectly.
+                let arrow_schema =
+                    snapshot_arrow_schema(&table_obj, snapshot_id).map_err(to_datafusion_error)?;
                 let proj_indices =
                     project_indices(&arrow_schema, projection.as_ref(), &table, snapshot_id)?;
                 let scan = IcebergTableScan::new(
@@ -186,10 +168,11 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
             }
             IcebergPhysicalNode::Write { catalog, table } => {
                 let config = catalog.into();
-                let table_obj = load_table(&config, &table)?;
+                let (_, table_obj) = load_table(&config, &table)?;
                 // Writes always target the current schema — a snapshot-pinned
                 // provider is read-only.
-                let arrow_schema = arrow_schema_of(&table_obj, None)?;
+                let arrow_schema =
+                    snapshot_arrow_schema(&table_obj, None).map_err(to_datafusion_error)?;
                 let input = single_input(inputs, "IcebergWriteExec")?;
                 let write = IcebergWriteExec::new(table_obj, input, arrow_schema)
                     .with_catalog_config(Some(config));
@@ -197,9 +180,9 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
             }
             IcebergPhysicalNode::Commit { catalog, table } => {
                 let config = catalog.into();
-                let cat = get_catalog(&config)?;
-                let table_obj = load_table(&config, &table)?;
-                let arrow_schema = arrow_schema_of(&table_obj, None)?;
+                let (cat, table_obj) = load_table(&config, &table)?;
+                let arrow_schema =
+                    snapshot_arrow_schema(&table_obj, None).map_err(to_datafusion_error)?;
                 let input = single_input(inputs, "IcebergCommitExec")?;
                 let commit = IcebergCommitExec::new(table_obj, cat, input, arrow_schema)
                     .with_catalog_config(Some(config));
@@ -211,7 +194,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
                 metadata_type,
             } => {
                 let config = catalog.into();
-                let table_obj = load_table(&config, &table)?;
+                let (_, table_obj) = load_table(&config, &table)?;
                 let kind = MetadataTableType::try_from(metadata_type.as_str())
                     .map_err(DataFusionError::Internal)?;
                 let provider = IcebergMetadataTableProvider::new(table_obj, kind)
@@ -312,18 +295,14 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
         buf: &[u8],
         inputs: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
-        let (tag, rest) = split_tagged(buf, "iceberg physical expr")?;
-        match tag {
-            TAG_DELEGATED => self.inner.try_decode_expr(rest, inputs),
-            TAG_ICEBERG => {
+        match split_frame(buf, "iceberg physical expr")? {
+            Frame::Delegated(rest) => self.inner.try_decode_expr(rest, inputs),
+            Frame::Iceberg(rest) => {
                 let wire: PartitionExprWire = serde_json::from_slice(rest).map_err(to_df_err)?;
                 let expr =
                     PartitionExpr::try_new(Arc::new(wire.partition_spec), Arc::new(wire.schema))?;
                 Ok(Arc::new(expr))
             }
-            other => Err(DataFusionError::Internal(format!(
-                "unknown iceberg physical expr tag {other}"
-            ))),
         }
     }
 }

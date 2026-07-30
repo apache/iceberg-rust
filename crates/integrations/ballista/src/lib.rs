@@ -62,6 +62,7 @@ use ballista_core::extension::SessionConfigExt;
 use datafusion::common::DataFusionError;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use iceberg::NamespaceIdent;
+use iceberg_datafusion::to_datafusion_error;
 pub use iceberg_datafusion::IcebergCatalogConfig;
 
 pub use crate::logical_codec::IcebergLogicalCodec;
@@ -97,7 +98,7 @@ pub async fn register_iceberg_table(
         catalog, config, namespace, table,
     )
     .await
-    .map_err(bridge::to_df_err)?;
+    .map_err(to_datafusion_error)?;
     ctx.register_table(register_name, Arc::new(provider))?;
     Ok(())
 }
@@ -117,7 +118,7 @@ pub async fn register_iceberg_catalog(
     let catalog = bridge::build_catalog(&config).await?;
     let provider = iceberg_datafusion::IcebergCatalogProvider::try_new_with_config(catalog, config)
         .await
-        .map_err(bridge::to_df_err)?;
+        .map_err(to_datafusion_error)?;
     ctx.register_catalog(register_name, Arc::new(provider));
     Ok(())
 }
