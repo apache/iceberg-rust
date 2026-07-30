@@ -200,26 +200,40 @@ impl ManifestFile {
         Ok(Manifest::new(metadata, entries))
     }
 
-    /// Assigns `first_row_id` to data-file entries that do not already have one,
-    /// starting from the manifest-level `first_row_id` and advancing by each
-    /// entry's record count. See the row-lineage inheritance rules in
+    /// Assigns `first_row_id` to the live data-file entries, following the
+    /// row-lineage inheritance rules in
     /// <https://github.com/apache/iceberg/blob/main/format/spec.md#first-row-id-inheritance>.
+    ///
+    /// With a manifest-level `first_row_id`, each live entry lacking one is
+    /// assigned the running id, which then advances by that entry's record
+    /// count; entries that already carry a `first_row_id` keep it and do not
+    /// advance the counter. Without a manifest-level `first_row_id`, any
+    /// inherited per-entry value is cleared so callers never observe a stale id.
     fn assign_first_row_ids(&self, entries: &mut [ManifestEntry]) -> Result<()> {
+        // A `first_row_id` is only valid on data manifests. Delete files always
+        // have a null `first_row_id`, so there is nothing to assign or clear; a
+        // stray value on a delete manifest is a spec violation by the writer,
+        // which we surface without failing the read.
+        if self.content != ManifestContentType::Data {
+            if let Some(manifest_first_row_id) = self.first_row_id {
+                tracing::warn!(
+                    "Ignoring first_row_id {manifest_first_row_id} on delete manifest {}",
+                    self.manifest_path
+                );
+            }
+
+            return Ok(());
+        }
+
         let Some(manifest_first_row_id) = self.first_row_id else {
+            // A data manifest with no manifest-level `first_row_id` predates row
+            // lineage; clear any per-entry value inherited from an earlier read.
+            for entry in entries {
+                entry.data_file.first_row_id = None;
+            }
+
             return Ok(());
         };
-
-        // A `first_row_id` is only valid on data manifests; delete files always
-        // have a null `first_row_id`.
-        if self.content != ManifestContentType::Data {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "first_row_id is not valid for delete manifests (found {manifest_first_row_id} on {})",
-                    self.manifest_path
-                ),
-            ));
-        }
 
         let mut next_row_id = i64::try_from(manifest_first_row_id).map_err(|_| {
             Error::new(
@@ -234,13 +248,14 @@ impl ManifestFile {
             }
 
             if entry.data_file.first_row_id.is_none() {
-                entry.data_file.first_row_id = Some(next_row_id);
+                let file_first_row_id = next_row_id;
+                entry.data_file.first_row_id = Some(file_first_row_id);
                 let record_count = entry.data_file.record_count;
-                next_row_id = next_row_id.checked_add_unsigned(record_count).ok_or_else(|| {
+                next_row_id = file_first_row_id.checked_add_unsigned(record_count).ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
                         format!(
-                            "Row ID overflow assigning first_row_id in {}. Next Row ID: {next_row_id}, Record Count: {record_count}",
+                            "Row ID overflow assigning first_row_id in {}. File first_row_id: {file_first_row_id}, record count: {record_count}",
                             self.manifest_path
                         ),
                     )
@@ -444,20 +459,19 @@ mod test {
         record_count: u64,
         first_row_id: Option<i64>,
     ) -> ManifestEntry {
-        let mut builder = DataFileBuilder::default();
-        builder
+        let data_file = DataFileBuilder::default()
             .content(DataContentType::Data)
             .file_path("s3://bucket/table/data/00000.parquet".to_string())
             .file_format(DataFileFormat::Parquet)
             .file_size_in_bytes(4096)
-            .record_count(record_count);
-        if let Some(id) = first_row_id {
-            builder.first_row_id(Some(id));
-        }
+            .record_count(record_count)
+            .first_row_id(first_row_id)
+            .build()
+            .unwrap();
 
         ManifestEntry::builder()
             .status(status)
-            .data_file(builder.build().unwrap())
+            .data_file(data_file)
             .build()
     }
 
@@ -492,8 +506,9 @@ mod test {
             // A pre-assigned entry between two assigned ones: it keeps its id and
             // must not advance the running counter.
             data_entry(ManifestStatus::Added, 5, Some(100)),
-            // A deleted entry likewise neither receives nor consumes a row id.
-            data_entry(ManifestStatus::Deleted, 7, None),
+            // A deleted entry with a pre-set id: it is skipped, so the id is
+            // preserved verbatim and does not advance the counter.
+            data_entry(ManifestStatus::Deleted, 7, Some(999)),
             data_entry(ManifestStatus::Existing, 2, None),
         ];
 
@@ -501,31 +516,39 @@ mod test {
 
         assert_eq!(entries[0].data_file.first_row_id, Some(10));
         assert_eq!(entries[1].data_file.first_row_id, Some(100));
-        assert_eq!(entries[2].data_file.first_row_id, None);
+        assert_eq!(entries[2].data_file.first_row_id, Some(999));
         // 10 + 3 = 13; the preserved and deleted entries in between do not move it.
         assert_eq!(entries[3].data_file.first_row_id, Some(13));
     }
 
     #[test]
-    fn test_assign_first_row_ids_noop_without_manifest_first_row_id() {
+    fn test_assign_first_row_ids_clears_without_manifest_first_row_id() {
+        // A data manifest with no manifest-level first_row_id predates row
+        // lineage: any per-entry value inherited from an earlier read is cleared
+        // so callers never observe a stale id.
         let manifest = manifest_file(ManifestContentType::Data, None);
+        let mut entries = vec![
+            data_entry(ManifestStatus::Added, 3, None),
+            data_entry(ManifestStatus::Existing, 5, Some(100)),
+        ];
+
+        manifest.assign_first_row_ids(&mut entries).unwrap();
+
+        assert_eq!(entries[0].data_file.first_row_id, None);
+        assert_eq!(entries[1].data_file.first_row_id, None);
+    }
+
+    #[test]
+    fn test_assign_first_row_ids_ignores_delete_manifest() {
+        // A stray first_row_id on a delete manifest is a writer-side spec
+        // violation; the read ignores it rather than failing, and does not
+        // assign ids to the entries.
+        let manifest = manifest_file(ManifestContentType::Deletes, Some(10));
         let mut entries = vec![data_entry(ManifestStatus::Added, 3, None)];
 
         manifest.assign_first_row_ids(&mut entries).unwrap();
 
         assert_eq!(entries[0].data_file.first_row_id, None);
-    }
-
-    #[test]
-    fn test_assign_first_row_ids_rejects_delete_manifest() {
-        let manifest = manifest_file(ManifestContentType::Deletes, Some(10));
-        let mut entries = vec![data_entry(ManifestStatus::Added, 3, None)];
-
-        let err = manifest
-            .assign_first_row_ids(&mut entries)
-            .expect_err("a delete manifest with a first_row_id must be rejected");
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("delete manifests"));
     }
 
     #[test]
