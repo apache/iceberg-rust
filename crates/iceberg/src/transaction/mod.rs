@@ -53,6 +53,7 @@
 mod action;
 
 pub use action::*;
+pub use update_schema::{AddColumn, DeleteColumn, MoveColumn, RenameColumn, UpdateColumn};
 mod append;
 mod expire_snapshots;
 mod snapshot;
@@ -67,7 +68,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWithContext};
-pub use update_schema::AddColumn;
 
 use crate::error::Result;
 use crate::spec::TableProperties;
@@ -141,11 +141,6 @@ impl Transaction {
         UpdatePropertiesAction::new()
     }
 
-    /// Creates an update schema action.
-    pub fn update_schema(&self) -> UpdateSchemaAction {
-        UpdateSchemaAction::new()
-    }
-
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
@@ -169,6 +164,14 @@ impl Transaction {
     /// Expire snapshots from the table metadata.
     pub fn expire_snapshots(&self) -> ExpireSnapshotsAction {
         ExpireSnapshotsAction::new()
+    }
+
+    /// Update the schema of table
+    pub fn update_schema(&self) -> Result<UpdateSchemaAction> {
+        UpdateSchemaAction::new(
+            self.table.current_schema_ref(),
+            self.table.metadata().last_column_id(),
+        )
     }
 
     /// Commit transaction.

@@ -19,6 +19,8 @@
 
 use ordered_float::OrderedFloat;
 
+use crate::spec::Literal;
+
 /// Values present in iceberg type
 #[derive(Clone, Debug, PartialOrd, PartialEq, Hash, Eq)]
 pub enum PrimitiveLiteral {
@@ -55,5 +57,11 @@ impl PrimitiveLiteral {
             PrimitiveLiteral::Float(val) => val.is_nan(),
             _ => false,
         }
+    }
+}
+
+impl From<PrimitiveLiteral> for Literal {
+    fn from(value: PrimitiveLiteral) -> Self {
+        Literal::Primitive(value)
     }
 }

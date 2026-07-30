@@ -19,13 +19,19 @@
 //! This module is pub just for internal testing.
 //! It is subject to change and is not intended to be used by external users.
 
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use arrow_array::RecordBatch;
 use expect_test::Expect;
 use itertools::Itertools;
 
+use crate::Result;
 use crate::runtime::Runtime;
+use crate::spec::{
+    NestedFieldRef, PrimitiveType, Schema, SchemaVisitor, StructType, Type, VariantType,
+    visit_schema, visit_type,
+};
 
 /// Returns a process-wide [`Runtime`] suitable for tests that need to construct
 /// a [`Table`](crate::table::Table) outside a tokio context.
@@ -97,4 +103,82 @@ pub fn check_record_batches(
             })
             .format(",\n")
     ));
+}
+
+struct GetProjectedIds {
+    field_ids: HashSet<i32>,
+}
+
+impl GetProjectedIds {
+    fn new() -> Self {
+        Self {
+            field_ids: HashSet::new(),
+        }
+    }
+}
+
+impl SchemaVisitor for GetProjectedIds {
+    type T = ();
+
+    fn schema(&mut self, _schema: &Schema, _value: Self::T) -> Result<Self::T> {
+        Ok(())
+    }
+
+    fn field(&mut self, field: &NestedFieldRef, _value: Self::T) -> Result<Self::T> {
+        if field.field_type.is_struct()
+            || field.field_type.is_primitive()
+            || field.field_type.is_variant()
+        {
+            self.field_ids.insert(field.id);
+        }
+        Ok(())
+    }
+
+    fn r#struct(&mut self, _struct: &StructType, _results: Vec<Self::T>) -> Result<Self::T> {
+        Ok(())
+    }
+
+    fn list(&mut self, list: &crate::spec::ListType, _value: Self::T) -> Result<Self::T> {
+        if list.element_field.field_type.is_primitive() {
+            self.field_ids.insert(list.element_field.id);
+        }
+        Ok(())
+    }
+
+    fn map(
+        &mut self,
+        map: &crate::spec::MapType,
+        _key_value: Self::T,
+        _value: Self::T,
+    ) -> Result<Self::T> {
+        if map.key_field.field_type.is_primitive() {
+            self.field_ids.insert(map.key_field.id);
+        }
+        if map.value_field.field_type.is_primitive() {
+            self.field_ids.insert(map.value_field.id);
+        }
+        Ok(())
+    }
+
+    fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
+        Ok(())
+    }
+
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
+        Ok(())
+    }
+}
+
+/// Get the projected field ids of a type.
+pub fn get_projected_ids_of_type(r#type: &Type) -> HashSet<i32> {
+    let mut visitor = GetProjectedIds::new();
+    visit_type(r#type, &mut visitor).unwrap();
+    visitor.field_ids
+}
+
+/// Get the projected field ids of a schema.
+pub fn get_projected_ids_of_schema(schema: &Schema) -> HashSet<i32> {
+    let mut visitor = GetProjectedIds::new();
+    visit_schema(schema, &mut visitor).unwrap();
+    visitor.field_ids
 }
