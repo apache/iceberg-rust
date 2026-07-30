@@ -145,7 +145,8 @@ fn parquet_compression(codec: &str, level: Option<i32>) -> Result<Compression> {
                 Some(l) => level_as_u32("brotli", l)?,
                 None => DEFAULT_BROTLI_COMPRESSION_LEVEL,
             };
-            let level = BrotliLevel::try_new(level).map_err(|e| invalid_level_error("brotli", e))?;
+            let level =
+                BrotliLevel::try_new(level).map_err(|e| invalid_level_error("brotli", e))?;
             Compression::BROTLI(level)
         }
         "zstd" => {
