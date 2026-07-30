@@ -37,13 +37,13 @@ use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
     get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
 };
-use crate::encryption::key_metadata::generate_standard_key_metadata;
 use crate::encryption::{AesKeySize, StandardKeyMetadata};
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
     NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
-    StructType, TableMetadata, TableProperties, Type, VariantType, visit_schema,
+    StructType, TableMetadata, TableProperties, Type, VariantType, data_encryption_key_size,
+    visit_schema,
 };
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
@@ -91,7 +91,8 @@ impl ParquetWriterBuilder {
     /// (`write.parquet.content-defined-chunking.*`); other keys fall back to
     /// parquet-rs defaults.
     ///
-    /// When `encryption.key-id` is set, records the DEK length.
+    /// When `encryption.key-id` is set, records the DEK length. The key
+    /// itself is minted per file in [`FileWriterBuilder::build`].
     pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Result<Self> {
         let cdc = table_props.cdc_enabled.then_some(CdcOptions {
             min_chunk_size: table_props.cdc_min_chunk_size,
@@ -106,17 +107,11 @@ impl ParquetWriterBuilder {
             .set_content_defined_chunking(cdc)
             .build();
 
-        let data_encryption_key_size = table_props
-            .encryption_key_id
-            .is_some()
-            .then(|| AesKeySize::from_key_length(table_props.encryption_data_key_length))
-            .transpose()?;
-
         Ok(Self {
             props,
             schema,
             match_mode: FieldMatchMode::Id,
-            data_encryption_key_size,
+            data_encryption_key_size: data_encryption_key_size(table_props)?,
         })
     }
 
@@ -136,7 +131,7 @@ impl FileWriterBuilder for ParquetWriterBuilder {
     async fn build(&self, output_file: OutputFile) -> Result<Self::R> {
         let key_metadata = self
             .data_encryption_key_size
-            .map(generate_standard_key_metadata);
+            .map(StandardKeyMetadata::generate);
         let writer_properties = resolve_writer_properties(&self.props, key_metadata.as_ref())?;
         Ok(ParquetWriter {
             schema: self.schema.clone(),

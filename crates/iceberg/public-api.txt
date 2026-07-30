@@ -353,6 +353,7 @@ pub fn iceberg::encryption::StandardKeyMetadata::decode(bytes: &[u8]) -> iceberg
 pub fn iceberg::encryption::StandardKeyMetadata::encode(&self) -> iceberg::Result<alloc::boxed::Box<[u8]>>
 pub fn iceberg::encryption::StandardKeyMetadata::encryption_key(&self) -> &iceberg::encryption::SecureKey
 pub fn iceberg::encryption::StandardKeyMetadata::file_length(&self) -> core::option::Option<u64>
+pub fn iceberg::encryption::StandardKeyMetadata::generate(key_size: iceberg::encryption::AesKeySize) -> Self
 pub fn iceberg::encryption::StandardKeyMetadata::try_new(encryption_key: &[u8]) -> iceberg::Result<Self>
 pub fn iceberg::encryption::StandardKeyMetadata::with_aad_prefix(self, aad_prefix: &[u8]) -> Self
 pub fn iceberg::encryption::StandardKeyMetadata::with_file_length(self, length: u64) -> Self

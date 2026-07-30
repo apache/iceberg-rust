@@ -20,6 +20,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 use crate::compression::CompressionCodec;
+use crate::encryption::AesKeySize;
 use crate::error::{Error, ErrorKind, Result};
 
 fn parse_property<T: FromStr>(
@@ -38,6 +39,19 @@ where
             )
         })
     })
+}
+
+/// The AES key size to use when generating data encryption keys, derived from
+/// `encryption.data-key-length`.
+///
+/// Returns `None` when the table is not configured for encryption.
+/// Returns an error when `encryption.data-key-length` is not a valid AES key length.
+pub(crate) fn data_encryption_key_size(props: &TableProperties) -> Result<Option<AesKeySize>> {
+    props
+        .encryption_key_id
+        .is_some()
+        .then(|| AesKeySize::from_key_length(props.encryption_data_key_length))
+        .transpose()
 }
 
 /// Strips trailing slashes from a location, preserving a bare URI scheme root

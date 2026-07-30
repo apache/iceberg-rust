@@ -36,7 +36,7 @@ const MILLIS_IN_DAY: i64 = 24 * 60 * 60 * 1000;
 
 use super::crypto::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
 use super::io::EncryptedOutputFile;
-use super::key_metadata::{StandardKeyMetadata, generate_standard_key_metadata};
+use super::key_metadata::StandardKeyMetadata;
 use super::kms::KeyManagementClient;
 use crate::io::OutputFile;
 use crate::spec::{EncryptedKey, FormatVersion, TableMetadataRef};
@@ -145,7 +145,7 @@ impl EncryptionManager {
     /// Returns an [`EncryptedOutputFile`] that transparently encrypts on
     /// write, along with key metadata for later decryption.
     pub fn encrypt(&self, raw_output: OutputFile) -> EncryptedOutputFile {
-        EncryptedOutputFile::new(raw_output, generate_standard_key_metadata(self.key_size))
+        EncryptedOutputFile::new(raw_output, StandardKeyMetadata::generate(self.key_size))
     }
 
     /// Wrap a manifest list key metadata with a KEK for storage in table metadata.
