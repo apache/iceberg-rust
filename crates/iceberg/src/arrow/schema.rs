@@ -26,7 +26,7 @@ use arrow_array::{
     FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
     TimestampMicrosecondArray, TimestampNanosecondArray,
 };
-use arrow_schema::extension::ExtensionType;
+use arrow_schema::extension::{ExtensionType, Uuid as UuidExtensionType};
 use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, Schema as ArrowSchema, TimeUnit,
 };
@@ -179,6 +179,20 @@ pub trait ArrowSchemaVisitor {
     where Self: Sized {
         visit_type(field.data_type(), self)
     }
+
+    /// Called when a field carries the `arrow.uuid` extension type.
+    ///
+    /// The default treats the field as its underlying Arrow storage, preserving
+    /// the behavior of visitors that don't special-case UUIDs. A visitor that
+    /// produces Iceberg types should override this to fold the storage into a
+    /// single logical UUID.
+    ///
+    /// Takes the `&FieldRef` rather than a `&DataType` because the UUID signal
+    /// lives on the field's metadata, not on its data type.
+    fn uuid(&mut self, field: &FieldRef) -> Result<Self::T>
+    where Self: Sized {
+        visit_type(field.data_type(), self)
+    }
 }
 
 /// Visiting a type in post order.
@@ -249,6 +263,8 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
 fn visit_field<V: ArrowSchemaVisitor>(field: &FieldRef, visitor: &mut V) -> Result<V::T> {
     if field.extension_type_name() == Some(VariantExtensionType::NAME) {
         visitor.variant(field)
+    } else if field.extension_type_name() == Some(UuidExtensionType::NAME) {
+        visitor.uuid(field)
     } else {
         visit_type(field.data_type(), visitor)
     }
@@ -583,6 +599,10 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
         // the storage sub-fields carry no Iceberg field id, so visiting them would
         // fail. The enclosing field's own id is read by the caller.
         Ok(Type::Variant(VariantType))
+    }
+
+    fn uuid(&mut self, _field: &FieldRef) -> Result<Self::T> {
+        Ok(Type::Primitive(PrimitiveType::Uuid))
     }
 }
 
