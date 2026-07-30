@@ -407,14 +407,14 @@ async fn test_multi_partition_scan_enforces_global_limit() -> Result<()> {
     let dataframe = ctx.sql(&query).await.unwrap();
     let plan = dataframe.create_physical_plan().await.unwrap();
 
-    // DataFusion's physical optimizer absorbs GlobalLimitExec into the
-    // partition coalescer, whose fetch remains the effective global bound.
-    let global_limit = plan
+    // The physical optimizer absorbs the initial GlobalLimitExec into
+    // CoalescePartitionsExec; its fetch enforces the global bound in the final plan.
+    let global_limit_coalescer = plan
         .downcast_ref::<CoalescePartitionsExec>()
         .expect("Expected a globally limited CoalescePartitionsExec");
-    assert_eq!(global_limit.fetch(), Some(limit));
+    assert_eq!(global_limit_coalescer.fetch(), Some(limit));
 
-    let scan = find_iceberg_scan(global_limit.input().as_ref())
+    let scan = find_iceberg_scan(global_limit_coalescer.input().as_ref())
         .expect("Expected IcebergTableScan below the global limit");
     assert_eq!(scan.limit(), Some(limit));
     assert_eq!(
@@ -449,6 +449,58 @@ async fn test_multi_partition_scan_enforces_global_limit() -> Result<()> {
         limit
     );
     assert_eq!(seen_ids.len(), limit);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_multi_partition_ordered_scan_enforces_global_limit() -> Result<()> {
+    let data_file_count = 3;
+    let limit = 2;
+    let target_partitions = data_file_count + 1;
+    let (iceberg_catalog, namespace, table_name) = get_multi_file_table_context(
+        "test_multi_partition_ordered_scan_limit",
+        "my_table",
+        data_file_count,
+    )
+    .await?;
+    let ctx = get_read_context(iceberg_catalog, target_partitions, Some(true)).await?;
+    let namespace_name = &namespace[0];
+    let query = format!(
+        "SELECT foo1, foo2 FROM catalog.{namespace_name}.{table_name} ORDER BY foo1 LIMIT {limit}"
+    );
+    let dataframe = ctx.sql(&query).await.unwrap();
+    let plan = dataframe.create_physical_plan().await.unwrap();
+
+    let scan = find_iceberg_scan(plan.as_ref()).expect("Expected IcebergTableScan in ordered plan");
+    assert_eq!(
+        scan.properties().output_partitioning().partition_count(),
+        data_file_count
+    );
+
+    let batches = dataframe.collect().await.unwrap();
+    let rows = batches
+        .iter()
+        .flat_map(|batch| {
+            let foo1 = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            let foo2 = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+
+            (0..batch.num_rows()).map(|row| (foo1.value(row), foo2.value(row).to_string()))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(rows, vec![
+        (1, "row-1".to_string()),
+        (2, "row-2".to_string())
+    ]);
 
     Ok(())
 }

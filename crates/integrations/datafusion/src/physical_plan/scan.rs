@@ -189,8 +189,8 @@ impl ExecutionPlan for IcebergTableScan {
         };
 
         // Apply a scan-partition bound if specified. In eager planning this is only
-        // a per-partition bound; DataFusion remains responsible for enforcing the
-        // final global limit above the scan.
+        // a per-partition bound. The optimized DataFusion plan enforces the final
+        // global bound above the scan, currently through CoalescePartitionsExec::fetch.
         let limited_stream: Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>> =
             if let Some(limit) = self.limit {
                 let mut remaining = limit;
