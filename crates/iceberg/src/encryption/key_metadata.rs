@@ -62,6 +62,12 @@ impl StandardKeyMetadata {
         Ok(Self::from(SecureKey::new(encryption_key)?))
     }
 
+    /// Generates a `StandardKeyMetadata` carrying a fresh random DEK of
+    /// `key_size` together with a fresh random AAD prefix.
+    pub fn generate(key_size: AesKeySize) -> Self {
+        Self::from(SecureKey::generate(key_size)).with_aad_prefix(&generate_aad_prefix())
+    }
+
     /// Adds an AAD prefix.
     pub fn with_aad_prefix(mut self, aad_prefix: &[u8]) -> Self {
         self.aad_prefix = Some(aad_prefix.into());
@@ -113,13 +119,6 @@ impl From<SecureKey> for StandardKeyMetadata {
 
 /// AAD prefix length in bytes.
 const AAD_PREFIX_LENGTH: usize = 16;
-
-/// Generate a [`StandardKeyMetadata`] with a fresh random DEK and AAD prefix,
-/// sized to `key_size`.
-pub(crate) fn generate_standard_key_metadata(key_size: AesKeySize) -> StandardKeyMetadata {
-    let dek = SecureKey::generate(key_size);
-    StandardKeyMetadata::from(dek).with_aad_prefix(&generate_aad_prefix())
-}
 
 fn generate_aad_prefix() -> Box<[u8]> {
     let mut prefix = vec![0u8; AAD_PREFIX_LENGTH];

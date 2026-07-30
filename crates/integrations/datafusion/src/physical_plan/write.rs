@@ -674,7 +674,7 @@ mod tests {
         // The planner encrypted the file.
         let key_metadata_bytes = data_file
             .key_metadata()
-            .expect("planner must record key metadata on an encrypted data file");
+            .expect("an encrypted data file must carry key metadata");
         let key_metadata = StandardKeyMetadata::decode(key_metadata_bytes)?;
         let mut builder =
             FileDecryptionProperties::builder(key_metadata.encryption_key().as_bytes().to_vec());
@@ -690,6 +690,13 @@ mod tests {
             .read()
             .await
             .unwrap();
+
+        // Check that the bytes on disk really are encrypted
+        assert!(
+            ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).is_err(),
+            "an encrypted parquet file must not be readable without decryption"
+        );
+
         let batches: Vec<RecordBatch> =
             ParquetRecordBatchReaderBuilder::try_new_with_options(bytes, options)
                 .unwrap()
