@@ -66,6 +66,8 @@ jobs:
           DESIRED_REF="refs/tags/${RELEASE_TAG}"
           if [[ "${GITHUB_REF}" != "${DESIRED_REF}" ]]; then
             echo "❌ Error: expected workflow execution on ref ${DESIRED_REF}, got ref: ${GITHUB_REF}"
+            echo "Workflow must be dispatched against the tag ref for the desired release."
+            echo "Dispatching workflow from main or another branch is not supported."
             exit 1
           fi
 
