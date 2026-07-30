@@ -26,7 +26,7 @@ use reqwest::header::HeaderMap;
 use reqwest::{Client, Method};
 use tokio::sync::Mutex;
 
-use super::{AuthManager, AuthRequest, AuthSession};
+use super::{AuthManager, AuthRequest, AuthSession, SensitiveString};
 use crate::catalog::{
     REST_CATALOG_PROP_URI, RestCatalogConfig, credential_from_props, default_token_endpoint,
     explicit_headers_from_props,
@@ -38,7 +38,7 @@ use crate::types::{ErrorResponse, TokenResponse};
 struct OAuth2Params {
     extra_headers: HeaderMap,
     token_endpoint: String,
-    credential: Option<(Option<String>, String)>,
+    credential: Option<(Option<String>, SensitiveString)>,
     extra_oauth_params: HashMap<String, String>,
 }
 
@@ -50,7 +50,7 @@ struct OAuth2Params {
 /// across sessions so it survives the config handshake.
 pub struct OAuth2Manager {
     client: Client,
-    token: Arc<Mutex<Option<String>>>,
+    token: Arc<Mutex<Option<SensitiveString>>>,
     init_params: OAuth2Params,
     /// True when the token endpoint was derived from the catalog URI (not
     /// explicitly configured): it is then recomputed from the merged URI in
@@ -83,13 +83,13 @@ impl OAuth2Manager {
 
     /// Sets a bearer token used directly (takes precedence over `credential`).
     pub fn with_token(mut self, token: impl Into<String>) -> Self {
-        self.token = Arc::new(Mutex::new(Some(token.into())));
+        self.token = Arc::new(Mutex::new(Some(SensitiveString::from(token.into()))));
         self
     }
 
     /// Sets the client credential exchanged for a token at the token endpoint.
     pub fn with_credential(mut self, client_id: Option<String>, client_secret: String) -> Self {
-        self.init_params.credential = Some((client_id, client_secret));
+        self.init_params.credential = Some((client_id, client_secret.into()));
         self
     }
 
@@ -116,11 +116,11 @@ impl OAuth2Manager {
     pub(crate) fn from_config(cfg: &RestCatalogConfig) -> Result<Self> {
         Ok(Self {
             client: cfg.client(),
-            token: Arc::new(Mutex::new(cfg.token())),
+            token: Arc::new(Mutex::new(cfg.token().map(SensitiveString::from))),
             init_params: OAuth2Params {
                 extra_headers: cfg.extra_headers()?,
                 token_endpoint: cfg.get_token_endpoint(),
-                credential: cfg.credential(),
+                credential: cfg.credential().map(|(id, secret)| (id, secret.into())),
                 extra_oauth_params: cfg.extra_oauth_params(),
             },
             endpoint_is_default: cfg.explicit_oauth2_server_uri().is_none(),
@@ -138,12 +138,8 @@ impl Debug for OAuth2Manager {
 
 #[async_trait]
 impl AuthManager for OAuth2Manager {
-    async fn init_session(&self) -> Result<Arc<dyn AuthSession>> {
-        Ok(Arc::new(OAuth2Session {
-            client: self.client.clone(),
-            token: self.token.clone(),
-            params: self.init_params.clone(),
-        }))
+    async fn init_session(&self) -> Result<Box<dyn AuthSession>> {
+        Ok(self.build_session(self.init_params.clone()))
     }
 
     async fn catalog_session(
@@ -152,7 +148,7 @@ impl AuthManager for OAuth2Manager {
     ) -> Result<Arc<dyn AuthSession>> {
         // The server config may carry a new token (or restate the user's).
         if let Some(token) = props.get("token") {
-            *self.token.lock().await = Some(token.clone());
+            *self.token.lock().await = Some(SensitiveString::from(token.clone()));
         }
 
         // Explicit property overrides merge ONTO the manager's options, so an
@@ -178,63 +174,136 @@ impl AuthManager for OAuth2Manager {
             _ => self.init_params.token_endpoint.clone(),
         };
 
-        Ok(Arc::new(OAuth2Session {
-            client: self.client.clone(),
-            token: self.token.clone(),
-            params: OAuth2Params {
+        Ok(Arc::from(
+            self.build_session(OAuth2Params {
                 extra_headers,
                 token_endpoint,
                 credential: credential_from_props(props)
+                    .map(|(id, secret)| (id, secret.into()))
                     .or_else(|| self.init_params.credential.clone()),
                 extra_oauth_params,
-            },
-        }))
+            }),
+        ))
     }
 }
 
-/// [`AuthSession`] adding a `Authorization: Bearer <token>` header.
-struct OAuth2Session {
-    client: Client,
-    /// Cached bearer token, shared with the owning [`OAuth2Manager`].
-    token: Arc<Mutex<Option<String>>>,
-    params: OAuth2Params,
+impl OAuth2Manager {
+    /// Builds the session matching the configured mode:
+    ///
+    /// - a `credential` yields a [`ClientCredentialsSession`] (its token cache
+    ///   pre-seeded when a `token` is also set, and the token then takes
+    ///   precedence until invalidated);
+    /// - otherwise a [`StaticTokenSession`], which attaches the configured
+    ///   token as-is — or nothing when none is set.
+    ///
+    /// Both share the manager's token cell, so a cached token survives the
+    /// config handshake and `invalidate` is observed by later sessions.
+    fn build_session(&self, params: OAuth2Params) -> Box<dyn AuthSession> {
+        match params.credential {
+            Some(credential) => Box::new(ClientCredentialsSession {
+                client: self.client.clone(),
+                token: self.token.clone(),
+                credential,
+                token_endpoint: params.token_endpoint,
+                extra_headers: params.extra_headers,
+                extra_oauth_params: params.extra_oauth_params,
+            }),
+            None => Box::new(StaticTokenSession {
+                token: self.token.clone(),
+            }),
+        }
+    }
 }
 
-impl Debug for OAuth2Session {
+/// Attaches `token` as a `Authorization: Bearer <token>` header, marked
+/// sensitive so `Debug`-formatted requests redact it.
+fn attach_bearer(req: &mut AuthRequest<'_>, token: &SensitiveString) -> Result<()> {
+    let mut value: http::HeaderValue =
+        format!("Bearer {}", token.expose()).parse().map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Invalid token received from catalog server!",
+            )
+            .with_source(e)
+        })?;
+    value.set_sensitive(true);
+    req.headers_mut().insert(http::header::AUTHORIZATION, value);
+    Ok(())
+}
+
+/// [`AuthSession`] for a pre-configured bearer token: attaches it as-is and
+/// cannot obtain a new one (there is no credential to exchange).
+#[derive(Debug)]
+struct StaticTokenSession {
+    /// Shared with the owning [`OAuth2Manager`].
+    token: Arc<Mutex<Option<SensitiveString>>>,
+}
+
+#[async_trait]
+impl AuthSession for StaticTokenSession {
+    async fn authenticate(&self, req: &mut AuthRequest<'_>) -> Result<()> {
+        // After `invalidate` there is nothing to fall back to: no auth is sent.
+        match self.token.lock().await.clone() {
+            Some(token) => attach_bearer(req, &token),
+            None => Ok(()),
+        }
+    }
+
+    async fn invalidate(&self) -> Result<()> {
+        *self.token.lock().await = None;
+        Ok(())
+    }
+
+    async fn refresh(&self) -> Result<()> {
+        Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Credential must be provided for authentication",
+        ))
+    }
+}
+
+/// [`AuthSession`] implementing the OAuth2 client-credentials flow: exchanges
+/// the credential for a token at the token endpoint and caches it.
+///
+/// # TODO: Support automatic token refreshing.
+struct ClientCredentialsSession {
+    client: Client,
+    /// Cached bearer token, shared with the owning [`OAuth2Manager`].
+    token: Arc<Mutex<Option<SensitiveString>>>,
+    credential: (Option<String>, SensitiveString),
+    token_endpoint: String,
+    extra_headers: HeaderMap,
+    extra_oauth_params: HashMap<String, String>,
+}
+
+impl Debug for ClientCredentialsSession {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OAuth2Session")
-            .field("token_endpoint", &self.params.token_endpoint)
+        f.debug_struct("ClientCredentialsSession")
+            .field("token_endpoint", &self.token_endpoint)
             .finish_non_exhaustive()
     }
 }
 
-impl OAuth2Session {
+impl ClientCredentialsSession {
     async fn exchange_credential_for_token(&self) -> Result<String> {
-        // Credential must exist here.
-        let (client_id, client_secret) = self.params.credential.as_ref().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Credential must be provided for authentication",
-            )
-        })?;
+        let (client_id, client_secret) = &self.credential;
 
         let mut params = HashMap::with_capacity(4);
         params.insert("grant_type", "client_credentials");
         if let Some(client_id) = client_id {
             params.insert("client_id", client_id);
         }
-        params.insert("client_secret", client_secret);
+        params.insert("client_secret", client_secret.expose());
         params.extend(
-            self.params
-                .extra_oauth_params
+            self.extra_oauth_params
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str())),
         );
 
         let mut auth_req = self
             .client
-            .request(Method::POST, &self.params.token_endpoint)
-            .headers(self.params.extra_headers.clone())
+            .request(Method::POST, &self.token_endpoint)
+            .headers(self.extra_headers.clone())
             .form(&params)
             .build()?;
         // extra headers add content-type application/json header it's necessary to override it with proper type
@@ -282,51 +351,27 @@ impl OAuth2Session {
 }
 
 #[async_trait]
-impl AuthSession for OAuth2Session {
-    /// Adds a bearer token to the authorization header.
-    ///
-    /// Three modes:
-    ///
-    /// 1. **No authentication** - Skip when both `credential` and `token` are missing.
-    /// 2. **Token authentication** - Use the provided `token` directly.
-    /// 3. **OAuth authentication** - Exchange `credential` for a token, cache it, then use it.
-    ///
-    /// When both `credential` and `token` are present, `token` takes precedence.
-    ///
-    /// # TODO: Support automatic token refreshing.
+impl AuthSession for ClientCredentialsSession {
+    /// Uses the cached token when present (a configured `token` takes
+    /// precedence over the credential until invalidated); otherwise exchanges
+    /// the credential for a token, caches it, then uses it.
     async fn authenticate(&self, req: &mut AuthRequest<'_>) -> Result<()> {
-        // Clone the token from lock without holding the lock for entire function.
-        let token = self.token.lock().await.clone();
-
-        if self.params.credential.is_none() && token.is_none() {
-            return Ok(());
-        }
-
-        // Either use the provided token or exchange credential for token, cache and use that
-        let token = match token {
-            Some(token) => token,
-            None => {
-                let token = self.exchange_credential_for_token().await?;
-                // Update token so that we use it for next request instead of
-                // exchanging credential for token from the server again
-                *self.token.lock().await = Some(token.clone());
-                token
+        // The lock is held across the exchange: waiters reuse a successful
+        // result, and retry themselves after a failure.
+        let token = {
+            let mut token = self.token.lock().await;
+            match &*token {
+                Some(token) => token.clone(),
+                None => {
+                    let new_token =
+                        SensitiveString::from(self.exchange_credential_for_token().await?);
+                    *token = Some(new_token.clone());
+                    new_token
+                }
             }
         };
 
-        // Insert token in request.
-        req.headers_mut().insert(
-            http::header::AUTHORIZATION,
-            format!("Bearer {token}").parse().map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Invalid token received from catalog server!",
-                )
-                .with_source(e)
-            })?,
-        );
-
-        Ok(())
+        attach_bearer(req, &token)
     }
 
     /// Invalidate the current token without generating a new one. On the next
@@ -344,7 +389,7 @@ impl AuthSession for OAuth2Session {
     /// an error and leave the current token unchanged.
     async fn refresh(&self) -> Result<()> {
         let new_token = self.exchange_credential_for_token().await?;
-        *self.token.lock().await = Some(new_token);
+        *self.token.lock().await = Some(new_token.into());
         Ok(())
     }
 }
