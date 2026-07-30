@@ -282,7 +282,7 @@ pub(crate) mod test {
     }
 
     #[test]
-    fn test_location_generate_with_special_characters_partitionq() {
+    fn test_location_generate_with_special_characters_partition() {
         let schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
