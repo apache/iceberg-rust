@@ -53,7 +53,8 @@ use crate::types::{
 pub const REST_CATALOG_PROP_URI: &str = "uri";
 /// REST catalog warehouse location
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
-/// Disable header redaction in error logs (defaults to false for security)
+/// Disable header redaction in error logs and `Debug` output (defaults to
+/// false for security)
 pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
 /// Authentication scheme: `none` or `oauth2` (default).
 pub const REST_CATALOG_PROP_AUTH_TYPE: &str = "rest.auth.type";
@@ -175,7 +176,7 @@ impl RestCatalogBuilder {
 }
 
 /// Rest catalog configuration.
-#[derive(Clone, Debug, TypedBuilder)]
+#[derive(Clone, TypedBuilder)]
 pub(crate) struct RestCatalogConfig {
     #[builder(default, setter(strip_option))]
     name: Option<String>,
@@ -199,6 +200,44 @@ pub(crate) struct RestCatalogConfig {
 
     #[builder(default)]
     auth_manager: Option<Arc<dyn AuthManager>>,
+}
+
+/// Property keys whose values are secrets, or may embed them (headers,
+/// connection strings, keys like `adls.account-key` or `s3.sse.key`).
+fn is_sensitive_prop(key: &str) -> bool {
+    key.contains("token")
+        || key.contains("credential")
+        || key.contains("secret")
+        || key.contains("password")
+        || key.contains("key")
+        || key.contains("connection-string")
+        || key.starts_with("header.")
+}
+
+/// Redacts secret property values: this config is printed by
+/// [`RestCatalog`]'s derived `Debug`.
+impl std::fmt::Debug for RestCatalogConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let props: HashMap<&str, &str> = self
+            .props
+            .iter()
+            .map(|(key, value)| {
+                let value = if is_sensitive_prop(key) {
+                    "[REDACTED]"
+                } else {
+                    value.as_str()
+                };
+                (key.as_str(), value)
+            })
+            .collect();
+        f.debug_struct("RestCatalogConfig")
+            .field("name", &self.name)
+            .field("uri", &self.uri)
+            .field("warehouse", &self.warehouse)
+            .field("props", &props)
+            .field("auth_manager", &self.auth_manager)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RestCatalogConfig {
@@ -286,7 +325,7 @@ impl RestCatalogConfig {
     }
 
     /// The properties handed to [`AuthManager::catalog_session`], with the
-    /// resolved token endpoint made explicit.
+    /// resolved catalog `uri` made explicit.
     pub(crate) fn auth_props(&self) -> HashMap<String, String> {
         // `oauth2-server-uri` stays absent unless explicitly configured, so an
         // injected manager keeps its own endpoint. The resolved `uri` IS passed
@@ -423,7 +462,8 @@ pub(crate) fn explicit_headers_from_props(props: &HashMap<String, String>) -> Re
             HeaderValue::from_str(value).map_err(|e| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Invalid header value: {value}"),
+                    // The value itself is omitted: it may be a secret.
+                    format!("Invalid value for header: {key}"),
                 )
                 .with_source(e)
             })?,
@@ -645,6 +685,9 @@ impl RestCatalog {
 
     /// Invalidate the current token without generating a new one. On the next request, the client
     /// will attempt to generate a new token.
+    ///
+    /// Sessions that don't manage a token (e.g. with `rest.auth.type` `none`,
+    /// or a custom [`AuthManager`]) may treat this as a no-op.
     pub async fn invalidate_token(&self) -> Result<()> {
         self.context().await?.client.session().invalidate().await
     }
@@ -655,6 +698,9 @@ impl RestCatalog {
     ///
     /// If credential is invalid, or the request fails, this method will return an error and leave
     /// the current token unchanged.
+    ///
+    /// Errors when the session has no credential to exchange (e.g. a static
+    /// token); a custom [`AuthManager`]'s session may treat this as a no-op.
     pub async fn regenerate_token(&self) -> Result<()> {
         self.context().await?.client.session().refresh().await
     }
@@ -1981,6 +2027,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_concurrent_authenticate_single_token_exchange() {
+        // Concurrent requests that all find no cached token must trigger ONE
+        // credential exchange (the lock is held across it), not one each.
+        let mut server = Server::new_async().await;
+        // create_oauth_mock_with_path expects exactly 1 hit.
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "tok-once", 200).await;
+
+        let manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()))
+            .with_credential(Some("client1".to_string()), "secret1".to_string());
+        let session: Arc<dyn crate::auth::AuthSession> =
+            Arc::from(manager.init_session().await.unwrap());
+
+        let client = Client::new();
+        let attempts = (0..8).map(|_| {
+            let session = session.clone();
+            let client = client.clone();
+            async move {
+                let mut req = client
+                    .get("https://rest.example.com/v1/config")
+                    .build()
+                    .unwrap();
+                session
+                    .authenticate(&mut crate::auth::AuthRequest::new(&mut req))
+                    .await
+                    .unwrap();
+                req.headers()
+                    .get("authorization")
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            }
+        });
+        let bearers = futures::future::join_all(attempts).await;
+
+        oauth_mock.assert_async().await;
+        assert!(bearers.iter().all(|b| b == "Bearer tok-once"));
+    }
+
+    #[tokio::test]
+    async fn test_seeded_token_with_credential_exchanges_once_after_invalidate() {
+        // The seeded token is attached without an exchange; after
+        // invalidate() the credential is exchanged exactly once.
+        let mut server = Server::new_async().await;
+        // create_oauth_mock_with_path expects exactly 1 hit.
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "tok-new", 200).await;
+
+        let manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()))
+            .with_token("tok-seed")
+            .with_credential(Some("client1".to_string()), "secret1".to_string());
+        let session = manager.init_session().await.unwrap();
+
+        let client = Client::new();
+        let mut req = client
+            .get("https://rest.example.com/v1/config")
+            .build()
+            .unwrap();
+        session
+            .authenticate(&mut crate::auth::AuthRequest::new(&mut req))
+            .await
+            .unwrap();
+        assert_eq!(
+            req.headers().get("authorization").unwrap(),
+            "Bearer tok-seed"
+        );
+
+        session.invalidate().await.unwrap();
+        let mut req = client
+            .get("https://rest.example.com/v1/config")
+            .build()
+            .unwrap();
+        session
+            .authenticate(&mut crate::auth::AuthRequest::new(&mut req))
+            .await
+            .unwrap();
+        assert_eq!(
+            req.headers().get("authorization").unwrap(),
+            "Bearer tok-new"
+        );
+
+        oauth_mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn test_injected_oauth_manager_keeps_endpoint_and_options() {
         // An injected OAuth2Manager must keep its own token endpoint, extra
         // headers and OAuth params across the config handshake: only explicit
@@ -2073,8 +2205,8 @@ mod tests {
         struct CapturingManager(Arc<AsyncMutex<Option<HashMap<String, String>>>>);
         #[async_trait]
         impl AuthManager for CapturingManager {
-            async fn init_session(&self) -> Result<Arc<dyn AuthSession>> {
-                Ok(Arc::new(PlainSession))
+            async fn init_session(&self) -> Result<Box<dyn AuthSession>> {
+                Ok(Box::new(PlainSession))
             }
             async fn catalog_session(
                 &self,
@@ -2189,8 +2321,8 @@ mod tests {
         struct GuardManager(Arc<AtomicBool>);
         #[async_trait]
         impl AuthManager for GuardManager {
-            async fn init_session(&self) -> Result<Arc<dyn AuthSession>> {
-                Ok(Arc::new(GuardSession(self.0.clone())))
+            async fn init_session(&self) -> Result<Box<dyn AuthSession>> {
+                Ok(Box::new(GuardSession(self.0.clone())))
             }
             async fn catalog_session(
                 &self,
@@ -2226,6 +2358,35 @@ mod tests {
     }
 
     #[test]
+    fn test_config_debug_redacts_secrets() {
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([
+                ("token".to_string(), "tok-secret".to_string()),
+                ("credential".to_string(), "id:cred-secret".to_string()),
+                ("header.authorization".to_string(), "Basic xyz".to_string()),
+                ("adls.account-key".to_string(), "adls-secret".to_string()),
+                ("s3.sse.key".to_string(), "sse-secret".to_string()),
+                (
+                    "adls.connection-string".to_string(),
+                    "cs-secret".to_string(),
+                ),
+                ("warehouse".to_string(), "wh1".to_string()),
+            ]))
+            .build();
+
+        let out = format!("{config:?}");
+        assert!(!out.contains("tok-secret"));
+        assert!(!out.contains("cred-secret"));
+        assert!(!out.contains("Basic xyz"));
+        assert!(!out.contains("adls-secret"));
+        assert!(!out.contains("sse-secret"));
+        assert!(!out.contains("cs-secret"));
+        assert!(out.contains("[REDACTED]"));
+        assert!(out.contains("wh1"));
+    }
+
+    #[test]
     fn test_unknown_auth_type_is_rejected() {
         let props = HashMap::from([(
             REST_CATALOG_PROP_AUTH_TYPE.to_string(),
@@ -2247,7 +2408,7 @@ mod tests {
         struct StubAuthManager;
         #[async_trait]
         impl AuthManager for StubAuthManager {
-            async fn init_session(&self) -> Result<Arc<dyn crate::auth::AuthSession>> {
+            async fn init_session(&self) -> Result<Box<dyn crate::auth::AuthSession>> {
                 unimplemented!()
             }
             async fn catalog_session(

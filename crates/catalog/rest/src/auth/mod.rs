@@ -44,13 +44,17 @@ pub const AUTH_TYPE_OAUTH2: &str = "oauth2";
 pub trait AuthManager: Debug + Send + Sync {
     /// Session used for the initial `/v1/config` handshake, built from the
     /// user-supplied configuration.
-    async fn init_session(&self) -> Result<Arc<dyn AuthSession>>;
+    ///
+    /// Returns a [`Box`]: an init session is used once and released, unlike
+    /// the shared [`AuthManager::catalog_session`].
+    async fn init_session(&self) -> Result<Box<dyn AuthSession>>;
 
     /// Session used for all subsequent catalog requests, given the properties
     /// merged from the user configuration and the server's config response.
     ///
-    /// Implementations may carry state (e.g. a cached token) over from the
-    /// init session.
+    /// Returns an [`Arc`]: this session is shared by concurrent requests for
+    /// the rest of the catalog's lifetime. Implementations may carry state
+    /// (e.g. a cached token) over from the init session.
     async fn catalog_session(
         &self,
         props: &HashMap<String, String>,
@@ -67,7 +71,8 @@ pub struct AuthRequest<'a> {
 }
 
 impl<'a> AuthRequest<'a> {
-    pub(crate) fn new(inner: &'a mut Request) -> Self {
+    /// Wraps a request, e.g. to unit-test a custom [`AuthSession`].
+    pub fn new(inner: &'a mut Request) -> Self {
         Self { inner }
     }
 
@@ -91,9 +96,40 @@ impl<'a> AuthRequest<'a> {
         self.inner.headers_mut()
     }
 
-    /// The in-memory request body, or `None` for an empty or streaming body.
-    pub fn body(&self) -> Option<&[u8]> {
-        self.inner.body().and_then(|body| body.as_bytes())
+    /// The request body, distinguishing an absent body from a streaming one:
+    /// signers can sign [`AuthRequestBody::Empty`] (empty-payload hash) and
+    /// [`AuthRequestBody::Buffered`], but not [`AuthRequestBody::Streaming`].
+    pub fn body(&self) -> AuthRequestBody<'_> {
+        match self.inner.body() {
+            None => AuthRequestBody::Empty,
+            Some(body) => match body.as_bytes() {
+                Some(bytes) => AuthRequestBody::Buffered(bytes),
+                None => AuthRequestBody::Streaming,
+            },
+        }
+    }
+}
+
+/// The body of an [`AuthRequest`], as seen by authentication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthRequestBody<'a> {
+    /// No body is set.
+    Empty,
+    /// An in-memory body.
+    Buffered(&'a [u8]),
+    /// A streaming body, whose bytes are not available for e.g. signing.
+    Streaming,
+}
+
+impl<'a> AuthRequestBody<'a> {
+    /// The signable bytes: empty for [`Self::Empty`], the buffer for
+    /// [`Self::Buffered`], and `None` for [`Self::Streaming`].
+    pub fn as_bytes(&self) -> Option<&'a [u8]> {
+        match self {
+            AuthRequestBody::Empty => Some(&[]),
+            AuthRequestBody::Buffered(bytes) => Some(bytes),
+            AuthRequestBody::Streaming => None,
+        }
     }
 }
 
@@ -124,6 +160,32 @@ pub trait AuthSession: Debug + Send + Sync {
     }
 }
 
+/// A secret string: `Debug` prints `[REDACTED]` and the memory is zeroized on
+/// drop. String-shaped counterpart of the core crate's `SensitiveBytes`; note
+/// that copies formatted into requests (form bodies, header values) are owned
+/// by the HTTP stack and outlive this wrapper.
+#[derive(Clone)]
+pub(crate) struct SensitiveString(zeroize::Zeroizing<String>);
+
+impl SensitiveString {
+    /// The wrapped secret.
+    pub(crate) fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for SensitiveString {
+    fn from(secret: String) -> Self {
+        Self(zeroize::Zeroizing::new(secret))
+    }
+}
+
+impl Debug for SensitiveString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[REDACTED]")
+    }
+}
+
 /// [`AuthManager`] that performs no authentication.
 #[derive(Debug)]
 pub struct NoopAuthManager;
@@ -134,8 +196,8 @@ struct NoopSession;
 
 #[async_trait]
 impl AuthManager for NoopAuthManager {
-    async fn init_session(&self) -> Result<Arc<dyn AuthSession>> {
-        Ok(Arc::new(NoopSession))
+    async fn init_session(&self) -> Result<Box<dyn AuthSession>> {
+        Ok(Box::new(NoopSession))
     }
 
     async fn catalog_session(
@@ -150,5 +212,102 @@ impl AuthManager for NoopAuthManager {
 impl AuthSession for NoopSession {
     async fn authenticate(&self, _request: &mut AuthRequest<'_>) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use reqwest::Client;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_static_token_session_lifecycle() {
+        // Token-only config: attach as-is; refresh keeps erroring (no
+        // credential to exchange); after invalidate, no auth is sent.
+        let manager = OAuth2Manager::new("http://localhost/unused").with_token("tok-static");
+        let session = manager.init_session().await.unwrap();
+        let client = Client::new();
+
+        let mut req = client
+            .get("https://rest.example.com/v1/config")
+            .build()
+            .unwrap();
+        session
+            .authenticate(&mut AuthRequest::new(&mut req))
+            .await
+            .unwrap();
+        assert_eq!(
+            req.headers().get("authorization").unwrap(),
+            "Bearer tok-static"
+        );
+
+        assert!(session.refresh().await.is_err());
+
+        session.invalidate().await.unwrap();
+        let mut req = client
+            .get("https://rest.example.com/v1/config")
+            .build()
+            .unwrap();
+        session
+            .authenticate(&mut AuthRequest::new(&mut req))
+            .await
+            .unwrap();
+        assert!(req.headers().get("authorization").is_none());
+    }
+
+    #[test]
+    fn test_sensitive_string_redacts_debug() {
+        let secret = SensitiveString::from("s3cret-value".to_string());
+        assert_eq!(format!("{secret:?}"), "[REDACTED]");
+
+        // Containers can safely derive Debug around it.
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct Holder {
+            secret: SensitiveString,
+        }
+        let rendered = format!("{:?}", Holder { secret });
+        assert!(!rendered.contains("s3cret-value"), "leaked: {rendered}");
+        assert!(rendered.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn test_auth_request_body_states() {
+        let client = Client::new();
+
+        // No body at all.
+        let mut req = client
+            .get("https://rest.example.com/v1/config")
+            .build()
+            .unwrap();
+        let auth_req = AuthRequest::new(&mut req);
+        let body = auth_req.body();
+        assert_eq!(body, AuthRequestBody::Empty);
+        assert_eq!(body.as_bytes(), Some(&[] as &[u8]));
+
+        // An in-memory body.
+        let mut req = client
+            .post("https://rest.example.com/v1/namespaces")
+            .body("{}")
+            .build()
+            .unwrap();
+        let auth_req = AuthRequest::new(&mut req);
+        let body = auth_req.body();
+        assert_eq!(body, AuthRequestBody::Buffered(b"{}"));
+        assert_eq!(body.as_bytes(), Some(b"{}" as &[u8]));
+
+        // A streaming body: bytes are unavailable, so it must not sign as empty.
+        let mut req = client
+            .post("https://rest.example.com/v1/namespaces")
+            .body(reqwest::Body::wrap_stream(futures::stream::once(async {
+                Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"chunk"))
+            })))
+            .build()
+            .unwrap();
+        let auth_req = AuthRequest::new(&mut req);
+        let body = auth_req.body();
+        assert_eq!(body, AuthRequestBody::Streaming);
+        assert_eq!(body.as_bytes(), None);
     }
 }

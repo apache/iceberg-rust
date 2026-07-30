@@ -36,6 +36,7 @@ http = { workspace = true }
 iceberg = { workspace = true }
 itertools = { workspace = true }
 reqwest = { workspace = true }
+zeroize = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
@@ -44,8 +45,12 @@ typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+bytes = { workspace = true }
+futures = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
+# `stream` lets tests build a streaming body to exercise AuthRequestBody::Streaming.
+reqwest = { workspace = true, features = ["stream"] }
 tokio = { workspace = true }
 
 [lints]

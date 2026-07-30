@@ -42,9 +42,14 @@ pub(crate) struct HttpClient {
 
 impl Debug for HttpClient {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // The inner client is omitted: an injected one may carry secrets in
+        // its default headers.
         f.debug_struct("HttpClient")
-            .field("client", &self.client)
-            .field("extra_headers", &self.extra_headers)
+            .field(
+                // `header.*` values may hold secrets (e.g. `authorization`).
+                "extra_headers",
+                &format_headers_redacted(&self.extra_headers, self.disable_header_redaction),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -53,7 +58,7 @@ impl HttpClient {
     /// Create a new http client.
     pub async fn new(cfg: &RestCatalogConfig) -> Result<Self> {
         let auth_manager = cfg.resolve_auth_manager()?;
-        let session = auth_manager.init_session().await?;
+        let session = Arc::from(auth_manager.init_session().await?);
         Ok(HttpClient {
             client: cfg.client(),
             extra_headers: cfg.extra_headers()?,
@@ -170,20 +175,21 @@ pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
     })
 }
 
-/// Headers that contain sensitive information and should be excluded from logs.
-const SENSITIVE_HEADERS: &[&str] = &[
-    "authorization",
-    "proxy-authorization",
-    "set-cookie",
-    "cookie",
-    "x-api-key",
-    "x-auth-token",
-];
-
-/// Returns true if the header name is considered sensitive.
+/// Returns true if the header may carry a secret (matched by substring, so
+/// e.g. `x-client-secret` is covered along with `authorization`).
 fn is_sensitive_header(name: &str) -> bool {
     let name_lower = name.to_lowercase();
-    SENSITIVE_HEADERS.iter().any(|h| name_lower == *h)
+    [
+        "auth",
+        "token",
+        "secret",
+        "key",
+        "password",
+        "cookie",
+        "credential",
+    ]
+    .iter()
+    .any(|pattern| name_lower.contains(pattern))
 }
 
 /// Redacts sensitive headers and returns a debug-formatted string.
@@ -263,6 +269,31 @@ mod tests {
         assert!(result.contains("application/json"));
         assert!(result.contains("x-request-id"));
         assert!(result.contains("abc123"));
+    }
+
+    #[tokio::test]
+    async fn test_http_client_debug_redacts_headers() {
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([
+                ("header.authorization".to_string(), "Basic xyz".to_string()),
+                (
+                    "header.x-client-secret".to_string(),
+                    "shh-secret".to_string(),
+                ),
+                (
+                    "header.x-client-credential".to_string(),
+                    "cred-value".to_string(),
+                ),
+            ]))
+            .build();
+        let client = HttpClient::new(&config).await.unwrap();
+
+        let out = format!("{client:?}");
+        assert!(!out.contains("Basic xyz"));
+        assert!(!out.contains("shh-secret"));
+        assert!(!out.contains("cred-value"));
+        assert!(out.contains("[REDACTED]"));
     }
 
     #[test]

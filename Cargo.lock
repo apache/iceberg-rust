@@ -3891,7 +3891,9 @@ name = "iceberg-catalog-rest"
 version = "0.10.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "chrono",
+ "futures",
  "http 1.4.2",
  "iceberg",
  "iceberg_test_utils",
@@ -3904,6 +3906,7 @@ dependencies = [
  "tokio",
  "typed-builder",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
