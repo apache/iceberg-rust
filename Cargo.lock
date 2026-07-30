@@ -3808,7 +3808,6 @@ dependencies = [
  "typed-builder",
  "typetag",
  "url",
- "urlencoding",
  "uuid",
  "zeroize",
  "zstd",

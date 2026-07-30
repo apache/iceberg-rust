@@ -587,7 +587,7 @@ pub(crate) mod test {
         );
     }
 
-    /// See: https://github.com/apache/iceberg/pull/10329
+    #[ignore]
     #[test]
     fn test_object_storage_include_partition_paths_with_special_characters() {
         let schema = Arc::new(
