@@ -20,10 +20,9 @@ use std::str::FromStr;
 use serde_derive::{Deserialize, Serialize};
 
 use super::ByteBuf;
-use crate::encryption::{EncryptedInputFile, StandardKeyMetadata};
 use crate::error::Result;
 use crate::io::FileIO;
-use crate::spec::Manifest;
+use crate::spec::{Manifest, ManifestReader};
 use crate::{Error, ErrorKind};
 
 /// Entry in a manifest list.
@@ -179,23 +178,7 @@ impl ManifestFile {
     ///
     /// This method will also initialize inherited values of [`ManifestEntry`](crate::spec::ManifestEntry), such as `sequence_number`.
     pub async fn load_manifest(&self, file_io: &FileIO) -> Result<Manifest> {
-        let input = file_io.new_input(&self.manifest_path)?;
-        let avro = match &self.key_metadata {
-            Some(key_metadata_bytes) => {
-                let key_metadata = StandardKeyMetadata::decode(key_metadata_bytes)?;
-                EncryptedInputFile::new(input, key_metadata).read().await?
-            }
-            None => input.read().await?,
-        };
-
-        let (metadata, mut entries) = Manifest::try_from_avro_bytes(&avro)?;
-
-        // Let entries inherit values from the manifest list entry.
-        for entry in &mut entries {
-            entry.inherit_data(self);
-        }
-
-        Ok(Manifest::new(metadata, entries))
+        ManifestReader::new(file_io.clone()).read(self).await
     }
 }
 
