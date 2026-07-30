@@ -47,6 +47,16 @@ use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
 use crate::{Error, ErrorKind, Result};
 
+/// Default compression levels, pinned to parquet-java's defaults so files are
+/// comparable across implementations rather than tracking the parquet-rs
+/// defaults, which may differ and could change without us noticing.
+/// Default zstd level (parquet-rs uses 1).
+const DEFAULT_ZSTD_COMPRESSION_LEVEL: i32 = 3;
+/// Default gzip level.
+const DEFAULT_GZIP_COMPRESSION_LEVEL: u32 = 6;
+/// Default brotli level.
+const DEFAULT_BROTLI_COMPRESSION_LEVEL: u32 = 1;
+
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
 #[derive(Clone, Debug)]
 pub struct ParquetWriterBuilder {
@@ -124,25 +134,23 @@ fn parquet_compression(codec: &str, level: Option<i32>) -> Result<Compression> {
         "lz4_raw" => Compression::LZ4_RAW,
         "gzip" => {
             let level = match level {
-                Some(l) => GzipLevel::try_new(level_as_u32("gzip", l)?)
-                    .map_err(|e| invalid_level_error("gzip", e))?,
-                None => GzipLevel::default(),
+                Some(l) => level_as_u32("gzip", l)?,
+                None => DEFAULT_GZIP_COMPRESSION_LEVEL,
             };
+            let level = GzipLevel::try_new(level).map_err(|e| invalid_level_error("gzip", e))?;
             Compression::GZIP(level)
         }
         "brotli" => {
             let level = match level {
-                Some(l) => BrotliLevel::try_new(level_as_u32("brotli", l)?)
-                    .map_err(|e| invalid_level_error("brotli", e))?,
-                None => BrotliLevel::default(),
+                Some(l) => level_as_u32("brotli", l)?,
+                None => DEFAULT_BROTLI_COMPRESSION_LEVEL,
             };
+            let level = BrotliLevel::try_new(level).map_err(|e| invalid_level_error("brotli", e))?;
             Compression::BROTLI(level)
         }
         "zstd" => {
-            let level = match level {
-                Some(l) => ZstdLevel::try_new(l).map_err(|e| invalid_level_error("zstd", e))?,
-                None => ZstdLevel::default(),
-            };
+            let level = level.unwrap_or(DEFAULT_ZSTD_COMPRESSION_LEVEL);
+            let level = ZstdLevel::try_new(level).map_err(|e| invalid_level_error("zstd", e))?;
             Compression::ZSTD(level)
         }
         other => {
@@ -2503,10 +2511,10 @@ mod tests {
             props.dictionary_page_size_limit(),
             TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT
         );
-        // Default codec is zstd at parquet-rs's default level.
+        // Default codec is zstd at the Java-aligned default level (3).
         assert_eq!(
             props.compression(&ColumnPath::from("id")),
-            Compression::ZSTD(ZstdLevel::default())
+            Compression::ZSTD(ZstdLevel::try_new(DEFAULT_ZSTD_COMPRESSION_LEVEL).unwrap())
         );
     }
 
@@ -2581,20 +2589,20 @@ mod tests {
         );
         assert_eq!(parquet_compression("lzo", None).unwrap(), Compression::LZO);
 
-        // Case-insensitive codec names.
+        // Case-insensitive codec names. With no level, each codec uses its
+        // parquet-java-aligned default, pinned explicitly rather than inherited
+        // from the parquet-rs.
         assert_eq!(
             parquet_compression("ZSTD", None).unwrap(),
-            Compression::ZSTD(ZstdLevel::default())
+            Compression::ZSTD(ZstdLevel::try_new(DEFAULT_ZSTD_COMPRESSION_LEVEL).unwrap())
         );
-
-        // Level-taking codecs use their default level when none is supplied.
         assert_eq!(
             parquet_compression("gzip", None).unwrap(),
-            Compression::GZIP(GzipLevel::default())
+            Compression::GZIP(GzipLevel::try_new(DEFAULT_GZIP_COMPRESSION_LEVEL).unwrap())
         );
         assert_eq!(
             parquet_compression("brotli", None).unwrap(),
-            Compression::BROTLI(BrotliLevel::default())
+            Compression::BROTLI(BrotliLevel::try_new(DEFAULT_BROTLI_COMPRESSION_LEVEL).unwrap())
         );
 
         // Explicit levels are honored.
