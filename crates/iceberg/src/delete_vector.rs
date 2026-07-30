@@ -19,7 +19,9 @@
 
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::ops::BitOrAssign;
+use std::ops::{
+    BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Deref, DerefMut, Sub, SubAssign,
+};
 
 use crc32fast::Hasher;
 use roaring::RoaringTreemap;
@@ -38,7 +40,7 @@ pub(crate) const DELETION_VECTOR_PROPERTY_CARDINALITY: &str = "cardinality";
 pub(crate) const DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE: &str = "referenced-data-file";
 
 /// A set of deleted row positions backed by a `RoaringTreemap`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DeleteVector {
     inner: RoaringTreemap,
 }
@@ -294,20 +296,117 @@ impl DeleteVectorIterator<'_> {
     }
 }
 
-impl BitOrAssign for DeleteVector {
-    fn bitor_assign(&mut self, other: Self) {
-        self.inner.bitor_assign(other.inner);
+impl From<DeleteVector> for RoaringTreemap {
+    fn from(val: DeleteVector) -> RoaringTreemap {
+        val.inner
     }
 }
 
-impl BitOrAssign<&DeleteVector> for DeleteVector {
-    fn bitor_assign(&mut self, other: &DeleteVector) {
-        self.inner.bitor_assign(&other.inner);
+impl Deref for DeleteVector {
+    type Target = RoaringTreemap;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
+
+impl DerefMut for DeleteVector {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl Extend<u64> for DeleteVector {
+    fn extend<I: IntoIterator<Item = u64>>(&mut self, iterator: I) {
+        self.inner.extend(iterator);
+    }
+}
+
+impl<'a> Extend<&'a u64> for DeleteVector {
+    fn extend<I: IntoIterator<Item = &'a u64>>(&mut self, iterator: I) {
+        self.inner.extend(iterator);
+    }
+}
+
+impl<const N: usize> From<[u64; N]> for DeleteVector {
+    fn from(arr: [u64; N]) -> Self {
+        DeleteVector::from_iter(arr)
+    }
+}
+
+impl FromIterator<u64> for DeleteVector {
+    fn from_iter<I: IntoIterator<Item = u64>>(iterator: I) -> DeleteVector {
+        let inner = RoaringTreemap::from_iter(iterator);
+        DeleteVector { inner }
+    }
+}
+
+macro_rules! impl_binary_op {
+    ($trait:ident, $method:ident, $op:tt) => {
+        impl $trait<DeleteVector> for DeleteVector {
+            type Output = DeleteVector;
+
+            fn $method(self, rhs: DeleteVector) -> Self::Output {
+                DeleteVector::new(self.inner $op rhs.inner)
+            }
+        }
+
+        impl $trait<&DeleteVector> for DeleteVector {
+            type Output = DeleteVector;
+
+            fn $method(self, rhs: &DeleteVector) -> Self::Output {
+                DeleteVector::new(self.inner $op &rhs.inner)
+            }
+        }
+
+        impl $trait<DeleteVector> for &DeleteVector {
+            type Output = DeleteVector;
+
+            fn $method(self, rhs: DeleteVector) -> Self::Output {
+                DeleteVector::new(&self.inner $op rhs.inner)
+            }
+        }
+
+        impl $trait<&DeleteVector> for &DeleteVector {
+            type Output = DeleteVector;
+
+            fn $method(self, rhs: &DeleteVector) -> Self::Output {
+                DeleteVector::new(&self.inner $op &rhs.inner)
+            }
+        }
+    };
+}
+
+macro_rules! impl_assign_op {
+    ($trait:ident, $method:ident, $op:tt) => {
+        impl $trait<DeleteVector> for DeleteVector {
+            fn $method(&mut self, rhs: DeleteVector) {
+                self.inner $op rhs.inner;
+            }
+        }
+
+        impl $trait<&DeleteVector> for DeleteVector {
+            fn $method(&mut self, rhs: &DeleteVector) {
+                self.inner $op &rhs.inner;
+            }
+        }
+    };
+}
+
+impl_binary_op!(BitOr, bitor, |);
+impl_binary_op!(BitAnd, bitand, &);
+impl_binary_op!(Sub, sub, -);
+impl_binary_op!(BitXor, bitxor, ^);
+
+impl_assign_op!(BitOrAssign, bitor_assign, |=);
+impl_assign_op!(BitAndAssign, bitand_assign, &=);
+impl_assign_op!(SubAssign, sub_assign, -=);
+impl_assign_op!(BitXorAssign, bitxor_assign, ^=);
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Borrow;
+
     use super::*;
 
     #[test]
@@ -332,6 +431,96 @@ mod tests {
         let mut collected: Vec<u64> = dv.iter().collect();
         collected.sort();
         assert_eq!(collected, positions);
+    }
+
+    #[test]
+    fn test_roaring_access_and_conversion() {
+        let high = 1_u64 << 40;
+        let mut dv = DeleteVector::default();
+
+        assert_eq!(dv.insert_range(2..5), 3);
+        assert!(dv.contains(3));
+        assert!(dv.remove(3));
+        assert_eq!(dv.rank(4), 2);
+        assert_eq!(dv.select(1), Some(4));
+        assert!(dv.insert(high));
+
+        let borrowed: &RoaringTreemap = dv.borrow();
+        assert!(borrowed.contains(high));
+
+        let roaring: RoaringTreemap = dv.clone().into();
+        let round_trip = DeleteVector::new(roaring);
+        assert_eq!(round_trip, dv);
+    }
+
+    #[test]
+    fn test_roaring_set_operations() {
+        let high = 1_u64 << 40;
+        let left: DeleteVector = [1, 2, high].into();
+        let right: DeleteVector = [2, 3, high + 1].into();
+        let union_expected: DeleteVector = [1, 2, 3, high, high + 1].into();
+        let intersection_expected: DeleteVector = [2].into();
+        let difference_expected: DeleteVector = [1, high].into();
+        let symmetric_difference_expected: DeleteVector = [1, 3, high, high + 1].into();
+
+        assert_eq!(left.clone() | right.clone(), union_expected);
+        assert_eq!(left.clone() | &right, union_expected);
+        assert_eq!(&left | right.clone(), union_expected);
+        assert_eq!(&left | &right, union_expected);
+
+        assert_eq!(left.clone() & right.clone(), intersection_expected);
+        assert_eq!(left.clone() & &right, intersection_expected);
+        assert_eq!(&left & right.clone(), intersection_expected);
+        assert_eq!(&left & &right, intersection_expected);
+
+        assert_eq!(left.clone() - right.clone(), difference_expected);
+        assert_eq!(left.clone() - &right, difference_expected);
+        assert_eq!(&left - right.clone(), difference_expected);
+        assert_eq!(&left - &right, difference_expected);
+
+        assert_eq!(left.clone() ^ right.clone(), symmetric_difference_expected);
+        assert_eq!(left.clone() ^ &right, symmetric_difference_expected);
+        assert_eq!(&left ^ right.clone(), symmetric_difference_expected);
+        assert_eq!(&left ^ &right, symmetric_difference_expected);
+
+        let mut union_owned = left.clone();
+        union_owned |= right.clone();
+        assert_eq!(union_owned, union_expected);
+        let mut union_borrowed = left.clone();
+        union_borrowed |= &right;
+        assert_eq!(union_borrowed, union_expected);
+
+        let mut intersection_owned = left.clone();
+        intersection_owned &= right.clone();
+        assert_eq!(intersection_owned, intersection_expected);
+        let mut intersection_borrowed = left.clone();
+        intersection_borrowed &= &right;
+        assert_eq!(intersection_borrowed, intersection_expected);
+
+        let mut difference_owned = left.clone();
+        difference_owned -= right.clone();
+        assert_eq!(difference_owned, difference_expected);
+        let mut difference_borrowed = left.clone();
+        difference_borrowed -= &right;
+        assert_eq!(difference_borrowed, difference_expected);
+
+        let mut symmetric_difference_owned = left.clone();
+        symmetric_difference_owned ^= right.clone();
+        assert_eq!(symmetric_difference_owned, symmetric_difference_expected);
+        let mut symmetric_difference_borrowed = left.clone();
+        symmetric_difference_borrowed ^= &right;
+        assert_eq!(symmetric_difference_borrowed, symmetric_difference_expected);
+    }
+
+    #[test]
+    fn test_advance_to_after_roaring_api_expansion() {
+        let high = 1_u64 << 40;
+        let dv: DeleteVector = [1, 3, high].into();
+        let mut iter = dv.iter();
+
+        assert_eq!(iter.next(), Some(1));
+        iter.advance_to(high);
+        assert_eq!(iter.next(), Some(high));
     }
 
     /// Testing scenario: bulk insertion fails because input positions are not strictly increasing.
