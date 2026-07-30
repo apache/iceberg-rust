@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["check_record_batches","test_runtime"]};
+window.SIDEBAR_ITEMS = {"fn":["check_record_batches","make_encrypted_table","test_runtime"]};
