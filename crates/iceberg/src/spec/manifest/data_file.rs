@@ -27,9 +27,9 @@ use super::_serde::DataFileSerde;
 use super::{
     Datum, FormatVersion, Schema, data_file_schema_v1, data_file_schema_v2, data_file_schema_v3,
 };
-use crate::error::Result;
+use crate::Error;
+use crate::error::{Result, invalid_data};
 use crate::spec::{DEFAULT_PARTITION_SPEC_ID, Struct, StructType};
-use crate::{Error, ErrorKind};
 
 /// Data file carries data file path, partition tuple, metrics, …
 #[derive(Debug, PartialEq, Clone, Eq, Builder)]
@@ -364,10 +364,7 @@ impl TryFrom<i32> for DataContentType {
             0 => Ok(DataContentType::Data),
             1 => Ok(DataContentType::PositionDeletes),
             2 => Ok(DataContentType::EqualityDeletes),
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("data content type {v} is invalid"),
-            )),
+            _ => Err(invalid_data!("data content type {v} is invalid")),
         }
     }
 }
@@ -394,10 +391,7 @@ impl FromStr for DataFileFormat {
             "orc" => Ok(Self::Orc),
             "parquet" => Ok(Self::Parquet),
             "puffin" => Ok(Self::Puffin),
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Unsupported data file format: {s}"),
-            )),
+            _ => Err(invalid_data!("Unsupported data file format: {s}")),
         }
     }
 }

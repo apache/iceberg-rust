@@ -21,13 +21,13 @@ use apache_avro::Schema as AvroSchema;
 use once_cell::sync::Lazy;
 use typed_builder::TypedBuilder;
 
+use crate::Error;
 use crate::avro::schema_to_avro_schema;
 use crate::error::Result;
 use crate::spec::{
     DataContentType, DataFile, INITIAL_SEQUENCE_NUMBER, ListType, Literal, ManifestFile, MapType,
     NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema, StructType, Type,
 };
-use crate::{Error, ErrorKind};
 
 /// Reference to [`ManifestEntry`].
 pub type ManifestEntryRef = Arc<ManifestEntry>;
@@ -170,15 +170,13 @@ impl TryFrom<i32> for ManifestStatus {
             0 => Ok(ManifestStatus::Existing),
             1 => Ok(ManifestStatus::Added),
             2 => Ok(ManifestStatus::Deleted),
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("manifest status {v} is invalid"),
-            )),
+            _ => Err(invalid_data!("manifest status {v} is invalid")),
         }
     }
 }
 
 use super::DataFileFormat;
+use crate::error::invalid_data;
 
 static STATUS: Lazy<NestedFieldRef> = {
     Lazy::new(|| {

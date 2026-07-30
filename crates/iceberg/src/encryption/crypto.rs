@@ -30,6 +30,7 @@ use zeroize::Zeroizing;
 /// from the underlying primitives, same as `Aes128Gcm` and `Aes256Gcm`.
 type Aes192Gcm = AesGcm<aes_gcm::aes::Aes192, U12>;
 
+use crate::error::invalid_data;
 use crate::{Error, ErrorKind, Result};
 
 /// Wrapper for sensitive byte data (encryption keys, DEKs, etc.) that:
@@ -243,13 +244,10 @@ impl AesGcmCipher {
     /// The decrypted plaintext.
     pub fn decrypt(&self, ciphertext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>> {
         if ciphertext.len() < Self::NONCE_LEN + Self::TAG_LEN {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Ciphertext too short: expected at least {} bytes, got {}",
-                    Self::NONCE_LEN + Self::TAG_LEN,
-                    ciphertext.len()
-                ),
+            return Err(invalid_data!(
+                "Ciphertext too short: expected at least {} bytes, got {}",
+                Self::NONCE_LEN + Self::TAG_LEN,
+                ciphertext.len()
             ));
         }
 
@@ -269,9 +267,8 @@ impl AesGcmCipher {
 
 fn encrypt_aes_gcm<C>(key_bytes: &[u8], plaintext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>>
 where C: Aead + AeadCore + KeyInit {
-    let cipher = C::new_from_slice(key_bytes).map_err(|e| {
-        Error::new(ErrorKind::DataInvalid, "Invalid AES key").with_source(anyhow::anyhow!(e))
-    })?;
+    let cipher = C::new_from_slice(key_bytes)
+        .map_err(|e| invalid_data!("Invalid AES key").with_source(anyhow::anyhow!(e)))?;
     let nonce = C::generate_nonce(&mut OsRng);
 
     let ciphertext = if let Some(aad) = aad {
@@ -296,9 +293,8 @@ where C: Aead + AeadCore + KeyInit {
 
 fn decrypt_aes_gcm<C>(key_bytes: &[u8], ciphertext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>>
 where C: Aead + AeadCore + KeyInit {
-    let cipher = C::new_from_slice(key_bytes).map_err(|e| {
-        Error::new(ErrorKind::DataInvalid, "Invalid AES key").with_source(anyhow::anyhow!(e))
-    })?;
+    let cipher = C::new_from_slice(key_bytes)
+        .map_err(|e| invalid_data!("Invalid AES key").with_source(anyhow::anyhow!(e)))?;
 
     let nonce = Nonce::from_slice(&ciphertext[..AesGcmCipher::NONCE_LEN]);
     let encrypted_data = &ciphertext[AesGcmCipher::NONCE_LEN..];

@@ -29,7 +29,7 @@ use super::{
     UNASSIGNED_SEQUENCE_NUMBER,
 };
 use crate::encryption::EncryptedOutputFile;
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::io::{FileWrite, OutputFile};
 use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
 use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2};
@@ -37,7 +37,6 @@ use crate::spec::{
     DataContentType, DataFile, FieldSummary, ManifestEntry, ManifestFile, ManifestMetadata,
     ManifestStatus, PrimitiveLiteral, SchemaRef, StructType,
 };
-use crate::{Error, ErrorKind};
 
 /// Placeholder for snapshot ID. The field with this value must be replaced
 /// with the actual snapshot ID before it is committed.
@@ -268,13 +267,10 @@ impl ManifestWriter {
         match self.metadata.content {
             ManifestContentType::Data => {
                 if data_file.content != DataContentType::Data {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Date file at path {} with manifest content type `data`, should have DataContentType `Data`, but has `{:?}`",
-                            data_file.file_path(),
-                            data_file.content
-                        ),
+                    return Err(invalid_data!(
+                        "Date file at path {} with manifest content type `data`, should have DataContentType `Data`, but has `{:?}`",
+                        data_file.file_path(),
+                        data_file.content
                     ));
                 }
             }
@@ -282,13 +278,10 @@ impl ManifestWriter {
                 if data_file.content != DataContentType::EqualityDeletes
                     && data_file.content != DataContentType::PositionDeletes
                 {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Date file at path {} with manifest content type `deletes`, should have DataContentType `Data`, but has `{:?}`",
-                            data_file.file_path(),
-                            data_file.content
-                        ),
+                    return Err(invalid_data!(
+                        "Date file at path {} with manifest content type `deletes`, should have DataContentType `Data`, but has `{:?}`",
+                        data_file.file_path(),
+                        data_file.content
                     ));
                 }
             }
@@ -408,9 +401,8 @@ impl ManifestWriter {
         if (entry.status == ManifestStatus::Deleted || entry.status == ManifestStatus::Existing)
             && (entry.sequence_number.is_none() || entry.file_sequence_number.is_none())
         {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Manifest entry with status Existing or Deleted should have sequence number",
+            return Err(invalid_data!(
+                "Manifest entry with status Existing or Deleted should have sequence number"
             ));
         }
 
@@ -454,10 +446,8 @@ impl ManifestWriter {
         let mut avro_writer = AvroWriter::new(&avro_schema, Vec::new());
         avro_writer.add_user_metadata(
             "schema".to_string(),
-            to_vec(table_schema).map_err(|err| {
-                Error::new(ErrorKind::DataInvalid, "Fail to serialize table schema")
-                    .with_source(err)
-            })?,
+            to_vec(table_schema)
+                .map_err(|err| invalid_data!("Fail to serialize table schema").with_source(err))?,
         )?;
         avro_writer.add_user_metadata(
             "schema-id".to_string(),
@@ -466,8 +456,7 @@ impl ManifestWriter {
         avro_writer.add_user_metadata(
             "partition-spec".to_string(),
             to_vec(&self.metadata.partition_spec.fields()).map_err(|err| {
-                Error::new(ErrorKind::DataInvalid, "Fail to serialize partition spec")
-                    .with_source(err)
+                invalid_data!("Fail to serialize partition spec").with_source(err)
             })?,
         )?;
         avro_writer.add_user_metadata(
@@ -557,10 +546,7 @@ impl PartitionFieldStats {
             return Ok(());
         };
         if !self.partition_type.compatible(&value) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "value is not compatible with type",
-            ));
+            return Err(invalid_data!("value is not compatible with type"));
         }
         let value = Datum::new(self.partition_type.clone(), value);
 

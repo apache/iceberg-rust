@@ -32,8 +32,7 @@ use uuid::Uuid;
 pub use super::view_metadata_builder::ViewMetadataBuilder;
 use super::view_version::{ViewVersionId, ViewVersionRef};
 use super::{SchemaId, SchemaRef};
-use crate::error::{Result, timestamp_ms_to_utc};
-use crate::{Error, ErrorKind};
+use crate::error::{Result, invalid_data, timestamp_ms_to_utc};
 
 /// Reference to [`ViewMetadata`].
 pub type ViewMetadataRef = Arc<ViewMetadata>;
@@ -170,12 +169,9 @@ impl ViewMetadata {
 
     fn validate_current_version_id(&self) -> Result<()> {
         if !self.versions.contains_key(&self.current_version_id) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "No version exists with the current version id {}.",
-                    self.current_version_id
-                ),
+            return Err(invalid_data!(
+                "No version exists with the current version id {}.",
+                self.current_version_id
             ));
         }
         Ok(())
@@ -184,9 +180,8 @@ impl ViewMetadata {
     fn validate_current_schema_id(&self) -> Result<()> {
         let schema_id = self.current_version().schema_id();
         if !self.schemas.contains_key(&schema_id) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("No schema exists with the schema id {schema_id}."),
+            return Err(invalid_data!(
+                "No schema exists with the schema id {schema_id}."
             ));
         }
         Ok(())

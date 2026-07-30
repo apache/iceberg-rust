@@ -36,10 +36,10 @@ use super::literal::Literal;
 use super::primitive::PrimitiveLiteral;
 use super::serde::_serde::RawLiteral;
 use super::temporal::{date, time, timestamp, timestamptz};
-use crate::error::Result;
+use crate::ensure_data_valid;
+use crate::error::{Result, invalid_data};
 use crate::spec::MAX_DECIMAL_PRECISION;
 use crate::spec::datatypes::{PrimitiveType, Type};
-use crate::{Error, ErrorKind, ensure_data_valid};
 
 /// Maximum value for [`PrimitiveType::Time`] type in microseconds, e.g. 23 hours 59 minutes 59 seconds 999999 microseconds.
 pub(crate) const MAX_TIME_VALUE: i64 = 24 * 60 * 60 * 1_000_000i64 - 1;
@@ -419,14 +419,10 @@ impl Datum {
             }
             PrimitiveType::Fixed(_) => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Binary => PrimitiveLiteral::Binary(Vec::from(bytes)),
-            PrimitiveType::Decimal { .. } => {
-                PrimitiveLiteral::Int128(i128_from_be_bytes(bytes).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Can't convert bytes to i128: {bytes:?}"),
-                    )
-                })?)
-            }
+            PrimitiveType::Decimal { .. } => PrimitiveLiteral::Int128(
+                i128_from_be_bytes(bytes)
+                    .ok_or_else(|| invalid_data!("Can't convert bytes to i128: {bytes:?}"))?,
+            ),
         };
         Ok(Datum::new(data_type, literal))
     }
@@ -452,23 +448,17 @@ impl Datum {
             PrimitiveLiteral::Binary(val) => ByteBuf::from(val.as_slice()),
             PrimitiveLiteral::Int128(val) => {
                 let PrimitiveType::Decimal { precision, .. } = self.r#type else {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "PrimitiveLiteral Int128 must be PrimitiveType Decimal but got {}",
-                            &self.r#type
-                        ),
+                    return Err(invalid_data!(
+                        "PrimitiveLiteral Int128 must be PrimitiveType Decimal but got {}",
+                        &self.r#type
                     ));
                 };
 
                 // It's required by iceberg spec that we must keep the minimum
                 // number of bytes for the value
                 let Ok(required_bytes) = Type::decimal_required_bytes(precision) else {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "PrimitiveType Decimal must has valid precision but got {precision}"
-                        ),
+                    return Err(invalid_data!(
+                        "PrimitiveType Decimal must has valid precision but got {precision}"
                     ));
                 };
 
@@ -481,9 +471,8 @@ impl Datum {
                 ByteBuf::from(bytes)
             }
             PrimitiveLiteral::AboveMax | PrimitiveLiteral::BelowMin => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot convert AboveMax or BelowMin to bytes".to_string(),
+                return Err(invalid_data!(
+                    "Cannot convert AboveMax or BelowMin to bytes".to_string()
                 ));
             }
         };
@@ -526,9 +515,10 @@ impl Datum {
     /// );
     /// ```
     pub fn bool_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
-        let v = s.as_ref().parse::<bool>().map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Can't parse string to bool.").with_source(e)
-        })?;
+        let v = s
+            .as_ref()
+            .parse::<bool>()
+            .map_err(|e| invalid_data!("Can't parse string to bool.").with_source(e))?;
         Ok(Self::bool(v))
     }
 
@@ -640,11 +630,7 @@ impl Datum {
     /// ```
     pub fn date_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let t = s.as_ref().parse::<NaiveDate>().map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Can't parse date from string: {}", s.as_ref()),
-            )
-            .with_source(e)
+            invalid_data!("Can't parse date from string: {}", s.as_ref()).with_source(e)
         })?;
 
         Ok(Self::date(date::date_from_naive_date(t)))
@@ -665,10 +651,7 @@ impl Datum {
     /// ```
     pub fn date_from_ymd(year: i32, month: u32, day: u32) -> Result<Self> {
         let t = NaiveDate::from_ymd_opt(year, month, day).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Can't create date from year: {year}, month: {month}, day: {day}"),
-            )
+            invalid_data!("Can't create date from year: {year}, month: {month}, day: {day}")
         })?;
 
         Ok(Self::date(date::date_from_naive_date(t)))
@@ -738,11 +721,7 @@ impl Datum {
     /// ```
     pub fn time_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let t = s.as_ref().parse::<NaiveTime>().map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Can't parse time from string: {}", s.as_ref()),
-            )
-            .with_source(e)
+            invalid_data!("Can't parse time from string: {}", s.as_ref()).with_source(e)
         })?;
 
         Ok(Self::time_from_naive_time(t))
@@ -761,10 +740,7 @@ impl Datum {
     /// ```
     pub fn time_from_hms_micro(hour: u32, min: u32, sec: u32, micro: u32) -> Result<Self> {
         let t = NaiveTime::from_hms_micro_opt(hour, min, sec, micro)
-            .ok_or_else(|| Error::new(
-                ErrorKind::DataInvalid,
-                format!("Can't create time from hour: {hour}, min: {min}, second: {sec}, microsecond: {micro}"),
-            ))?;
+            .ok_or_else(|| invalid_data!("Can't create time from hour: {hour}, min: {min}, second: {sec}, microsecond: {micro}"))?;
         Ok(Self::time_from_naive_time(t))
     }
 
@@ -836,9 +812,10 @@ impl Datum {
     /// assert_eq!(&format!("{t}"), "1992-03-01 01:02:03.000088");
     /// ```
     pub fn timestamp_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
-        let dt = s.as_ref().parse::<NaiveDateTime>().map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Can't parse timestamp.").with_source(e)
-        })?;
+        let dt = s
+            .as_ref()
+            .parse::<NaiveDateTime>()
+            .map_err(|e| invalid_data!("Can't parse timestamp.").with_source(e))?;
 
         Ok(Self::timestamp_from_datetime(dt))
     }
@@ -905,9 +882,8 @@ impl Datum {
     /// assert_eq!(&format!("{t}"), "1992-02-29 17:02:03.000088 UTC");
     /// ```
     pub fn timestamptz_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
-        let dt = DateTime::<Utc>::from_str(s.as_ref()).map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Can't parse datetime.").with_source(e)
-        })?;
+        let dt = DateTime::<Utc>::from_str(s.as_ref())
+            .map_err(|e| invalid_data!("Can't parse datetime.").with_source(e))?;
 
         Ok(Self::timestamptz_from_datetime(dt))
     }
@@ -959,11 +935,7 @@ impl Datum {
     /// ```
     pub fn uuid_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let uuid = uuid::Uuid::parse_str(s.as_ref()).map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Can't parse uuid from string: {}", s.as_ref()),
-            )
-            .with_source(e)
+            invalid_data!("Can't parse uuid from string: {}", s.as_ref()).with_source(e)
         })?;
         Ok(Self::uuid(uuid))
     }
@@ -1097,18 +1069,17 @@ impl Datum {
     }
 
     fn string_to_i128<S: AsRef<str>>(s: S) -> Result<i128> {
-        s.as_ref().parse::<i128>().map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Can't parse string to i128.").with_source(e)
-        })
+        s.as_ref()
+            .parse::<i128>()
+            .map_err(|e| invalid_data!("Can't parse string to i128.").with_source(e))
     }
 
     fn decimal_from_mantissa(mantissa: i128, precision: u32, scale: u32) -> Result<Self> {
         let r#type = Type::decimal(precision, scale)?;
         if decimal_precision(mantissa) > precision {
             let value = decimal_from_i128_with_scale(mantissa, scale);
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Decimal value {value} is too large for precision {precision}"),
+            return Err(invalid_data!(
+                "Decimal value {value} is too large for precision {precision}"
             ));
         }
 
@@ -1174,11 +1145,8 @@ impl Datum {
                             scale: target_scale,
                             ..
                         },
-                    ) => Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Decimal scale conversion is not supported: source scale {self_scale}, target scale {target_scale}"
-                        ),
+                    ) => Err(invalid_data!(
+                        "Decimal scale conversion is not supported: source scale {self_scale}, target scale {target_scale}"
                     )),
                     (PrimitiveLiteral::String(val), _, PrimitiveType::Boolean) => {
                         Datum::bool_from_str(val)
@@ -1198,21 +1166,17 @@ impl Datum {
 
                     // TODO: implement more type conversions
                     (_, self_type, target_type) if self_type == target_type => Ok(self),
-                    _ => Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Can't convert datum from {} type to {} type.",
-                            self.r#type, target_primitive_type
-                        ),
+                    _ => Err(invalid_data!(
+                        "Can't convert datum from {} type to {} type.",
+                        self.r#type,
+                        target_primitive_type
                     )),
                 }
             }
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Can't convert datum from {} type to {} type.",
-                    self.r#type, target_type
-                ),
+            _ => Err(invalid_data!(
+                "Can't convert datum from {} type to {} type.",
+                self.r#type,
+                target_type
             )),
         }
     }

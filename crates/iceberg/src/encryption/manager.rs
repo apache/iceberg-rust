@@ -40,6 +40,7 @@ use super::crypto::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
 use super::io::EncryptedOutputFile;
 use super::key_metadata::StandardKeyMetadata;
 use super::kms::KeyManagementClient;
+use crate::error::invalid_data;
 use crate::io::OutputFile;
 use crate::spec::{EncryptedKey, FormatVersion, TableMetadataRef};
 use crate::{Error, ErrorKind, Result};
@@ -207,20 +208,12 @@ impl EncryptionManager {
             .expect("encryption_keys lock poisoned")
             .get(encryption_key_id)
             .cloned()
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Encryption key '{encryption_key_id}' not found"),
-                )
-            })?;
+            .ok_or_else(|| invalid_data!("Encryption key '{encryption_key_id}' not found"))?;
 
         let kek_key_id = encrypted_key.encrypted_by_id().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "EncryptedKey '{}' has no encrypted_by_id",
-                    encrypted_key.key_id()
-                ),
+            invalid_data!(
+                "EncryptedKey '{}' has no encrypted_by_id",
+                encrypted_key.key_id()
             )
         })?;
 
@@ -333,12 +326,9 @@ impl EncryptionManager {
             return Ok(cached);
         }
 
-        let master_key_id = kek.encrypted_by_id().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("KEK '{}' has no encrypted_by_id", kek.key_id()),
-            )
-        })?;
+        let master_key_id = kek
+            .encrypted_by_id()
+            .ok_or_else(|| invalid_data!("KEK '{}' has no encrypted_by_id", kek.key_id()))?;
 
         let plaintext = self
             .kms_client
@@ -359,12 +349,7 @@ impl EncryptionManager {
             .expect("encryption_keys lock poisoned")
             .get(kek_key_id)
             .cloned()
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("KEK not found in encryption keys: {kek_key_id}"),
-                )
-            })?;
+            .ok_or_else(|| invalid_data!("KEK not found in encryption keys: {kek_key_id}"))?;
 
         // KEK timestamp as AAD prevents timestamp tampering.
         let aad = Self::kek_timestamp_aad(&kek)?;
@@ -386,13 +371,10 @@ impl EncryptionManager {
             .get(KEK_CREATED_AT_PROPERTY)
             .map(|ts| ts.as_bytes())
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "KEK '{}' is missing required '{}' property",
-                        kek.key_id(),
-                        KEK_CREATED_AT_PROPERTY
-                    ),
+                invalid_data!(
+                    "KEK '{}' is missing required '{}' property",
+                    kek.key_id(),
+                    KEK_CREATED_AT_PROPERTY
                 )
             })
     }

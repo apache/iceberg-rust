@@ -19,11 +19,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::Result;
 use crate::TableUpdate::UpgradeFormatVersion;
+use crate::error::invalid_data;
 use crate::spec::FormatVersion;
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
-use crate::{Error, ErrorKind, Result};
 
 /// A transaction action to upgrade a table's format version.
 ///
@@ -67,10 +68,7 @@ impl Default for UpgradeFormatVersionAction {
 impl TransactionAction for UpgradeFormatVersionAction {
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
         let format_version = self.format_version.ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "FormatVersion is not set for UpgradeFormatVersionAction!",
-            )
+            invalid_data!("FormatVersion is not set for UpgradeFormatVersionAction!")
         })?;
 
         Ok(ActionCommit::new(
