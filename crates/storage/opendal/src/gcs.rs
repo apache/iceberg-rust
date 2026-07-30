@@ -17,17 +17,20 @@
 //! Google Cloud Storage properties
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use iceberg::io::{
     GCS_ALLOW_ANONYMOUS, GCS_CREDENTIALS_JSON, GCS_DISABLE_CONFIG_LOAD, GCS_DISABLE_VM_METADATA,
-    GCS_NO_AUTH, GCS_SERVICE_PATH, GCS_TOKEN,
+    GCS_NO_AUTH, GCS_SERVICE_PATH, GCS_TOKEN, StorageCredentialKind, StorageCredentialProvider,
 };
 use iceberg::{Error, ErrorKind, Result};
-use opendal::Operator;
 use opendal::services::GcsConfig;
+use opendal::{Configurator, Operator};
+use reqsign_core::{Context, Error as ReqsignError, ProvideCredential, Result as ReqsignResult};
+use reqsign_google::{Credential as GoogleCredential, Token as GoogleToken};
 use url::Url;
 
-use crate::utils::{from_opendal_error, is_truthy};
+use crate::utils::{from_opendal_error, is_truthy, system_time_to_timestamp};
 
 /// Parse iceberg properties to [`GcsConfig`].
 pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConfig> {
@@ -45,7 +48,9 @@ pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConf
         cfg.endpoint = Some(endpoint);
     }
 
-    if m.remove(GCS_NO_AUTH).is_some() {
+    if let Some(no_auth) = m.remove(GCS_NO_AUTH)
+        && is_truthy(no_auth.to_lowercase().as_str())
+    {
         cfg.skip_signature = true;
         cfg.disable_vm_metadata = true;
         cfg.disable_config_load = true;
@@ -71,8 +76,18 @@ pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConf
 }
 
 /// Build a new OpenDAL [`Operator`] based on a provided [`GcsConfig`].
-pub(crate) fn gcs_config_build(cfg: &GcsConfig, path: &str) -> Result<Operator> {
+pub(crate) fn gcs_config_build(
+    cfg: &GcsConfig,
+    credential_provider: &Option<Arc<dyn StorageCredentialProvider>>,
+    path: &str,
+) -> Result<Operator> {
     let url = Url::parse(path)?;
+    if !matches!(url.scheme(), "gs" | "gcs") {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid gcs url: {path}, expected gs:// or gcs://"),
+        ));
+    }
     let bucket = url.host_str().ok_or_else(|| {
         Error::new(
             ErrorKind::DataInvalid,
@@ -82,7 +97,95 @@ pub(crate) fn gcs_config_build(cfg: &GcsConfig, path: &str) -> Result<Operator> 
 
     let mut cfg = cfg.clone();
     cfg.bucket = bucket.to_string();
-    Ok(Operator::from_config(cfg)
-        .map_err(from_opendal_error)?
-        .finish())
+
+    // When a catalog-supplied provider is present, make it the sole credential
+    // source. `reqsign_google` only prepends a custom provider (unlike S3, which
+    // replaces the chain) and its chain continues to the next provider on error,
+    // so without this a failed refresh would silently fall back to the stale seed
+    // token or ambient GCP credentials.
+    let credential_provider = credential_provider
+        .as_ref()
+        .filter(|provider| provider.supports_path(path));
+    if credential_provider.is_some() {
+        if cfg.skip_signature {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Invalid GCS auth settings: anonymous access cannot be combined with refreshable credentials",
+            ));
+        }
+        cfg.token = None;
+        cfg.credential = None;
+        cfg.disable_vm_metadata = true;
+        cfg.disable_config_load = true;
+    }
+
+    let mut builder = cfg.into_builder();
+
+    // A catalog-supplied provider re-fetches the vended OAuth2 token as it nears expiry
+    if let Some(provider) = credential_provider {
+        builder = builder.credential_provider(VendedGcsCredentialProvider::new(
+            Arc::clone(provider),
+            path.to_string(),
+        ));
+    }
+
+    Ok(Operator::new(builder).map_err(from_opendal_error)?.finish())
+}
+
+/// Adapts a generic [`StorageCredentialProvider`] into a `reqsign`
+/// [`ProvideCredential`], so the GCS signer can obtain and refresh vended OAuth2
+/// tokens.
+struct VendedGcsCredentialProvider {
+    provider: Arc<dyn StorageCredentialProvider>,
+    /// Absolute path this operator serves: handed back to the provider so it can
+    /// select the vended credential whose prefix best matches the location.
+    path: String,
+}
+
+impl std::fmt::Debug for VendedGcsCredentialProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VendedGcsCredentialProvider")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
+impl VendedGcsCredentialProvider {
+    fn new(provider: Arc<dyn StorageCredentialProvider>, path: String) -> Self {
+        Self { provider, path }
+    }
+}
+
+impl ProvideCredential for VendedGcsCredentialProvider {
+    type Credential = GoogleCredential;
+
+    async fn provide_credential(&self, _ctx: &Context) -> ReqsignResult<Option<GoogleCredential>> {
+        let credential = self
+            .provider
+            .load_credential(&self.path)
+            .await
+            .map_err(|e| {
+                ReqsignError::unexpected(format!(
+                    "failed to load vended GCS credential for {}",
+                    self.path
+                ))
+                .with_source(e)
+            })?;
+
+        let expires_at = credential
+            .expires_at
+            .map(system_time_to_timestamp)
+            .transpose()?;
+        match credential.kind {
+            StorageCredentialKind::Gcs(gcs) => {
+                Ok(Some(GoogleCredential::with_token(GoogleToken {
+                    access_token: gcs.token,
+                    expires_at,
+                })))
+            }
+            _ => Err(ReqsignError::unexpected(
+                "GCS storage received a non-GCS credential from the provider",
+            )),
+        }
+    }
 }

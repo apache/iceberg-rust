@@ -27,7 +27,7 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use iceberg::io::{
     FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
-    StorageFactory,
+    StorageCredentialProvider, StorageFactory,
 };
 use iceberg::{Error, ErrorKind, Result};
 use serde::{Deserialize, Serialize};
@@ -85,6 +85,9 @@ fn build_storage_for_scheme(
     scheme: &'static str,
     props: &HashMap<String, String>,
     #[cfg(feature = "opendal-s3")] customized_credential_load: &Option<CustomAwsCredentialLoader>,
+    #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))] credential_provider: &Option<
+        Arc<dyn StorageCredentialProvider>,
+    >,
 ) -> Result<OpenDalStorage> {
     match scheme {
         #[cfg(feature = "opendal-s3")]
@@ -93,6 +96,7 @@ fn build_storage_for_scheme(
             Ok(OpenDalStorage::S3 {
                 config: Arc::new(config),
                 customized_credential_load: customized_credential_load.clone(),
+                credential_provider: credential_provider.clone(),
             })
         }
         #[cfg(feature = "opendal-gcs")]
@@ -100,6 +104,7 @@ fn build_storage_for_scheme(
             let config = crate::gcs::gcs_config_parse(props.clone())?;
             Ok(OpenDalStorage::Gcs {
                 config: Arc::new(config),
+                credential_provider: credential_provider.clone(),
             })
         }
         #[cfg(feature = "opendal-oss")]
@@ -186,11 +191,22 @@ impl OpenDalResolvingStorageFactory {
 #[typetag::serde]
 impl StorageFactory for OpenDalResolvingStorageFactory {
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+        self.build_with_credentials(config, None)
+    }
+
+    #[allow(unused_variables)]
+    fn build_with_credentials(
+        &self,
+        config: &StorageConfig,
+        credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
+    ) -> Result<Arc<dyn Storage>> {
         Ok(Arc::new(OpenDalResolvingStorage {
             props: config.props().clone(),
             storages: RwLock::new(HashMap::new()),
             #[cfg(feature = "opendal-s3")]
             customized_credential_load: self.customized_credential_load.clone(),
+            #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+            credential_provider,
         }))
     }
 }
@@ -201,7 +217,7 @@ impl StorageFactory for OpenDalResolvingStorageFactory {
 /// Sub-storages are lazily created on first use for each scheme and cached
 /// for subsequent operations. Scheme aliases like `s3`/`s3a`/`s3n` map to
 /// the same canonical scheme, so they share a storage instance.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct OpenDalResolvingStorage {
     /// Configuration properties shared across all backends.
     props: HashMap<String, String>,
@@ -212,6 +228,20 @@ pub struct OpenDalResolvingStorage {
     #[cfg(feature = "opendal-s3")]
     #[serde(skip)]
     customized_credential_load: Option<CustomAwsCredentialLoader>,
+    /// Provider of refreshable vended credentials.
+    #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+    #[serde(skip)]
+    credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
+}
+
+impl std::fmt::Debug for OpenDalResolvingStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `props` can contain storage secrets, and a custom credential provider
+        // may carry secret state in its own Debug implementation
+        f.debug_struct("OpenDalResolvingStorage")
+            .field("property_keys", &self.props.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
 }
 
 impl OpenDalResolvingStorage {
@@ -247,6 +277,8 @@ impl OpenDalResolvingStorage {
             &self.props,
             #[cfg(feature = "opendal-s3")]
             &self.customized_credential_load,
+            #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+            &self.credential_provider,
         )?;
         let storage = Arc::new(storage);
         cache.insert(scheme, storage.clone());
@@ -334,6 +366,8 @@ mod tests {
             storages: RwLock::new(HashMap::new()),
             #[cfg(feature = "opendal-s3")]
             customized_credential_load: None,
+            #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+            credential_provider: None,
         }
     }
 

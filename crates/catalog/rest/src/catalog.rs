@@ -54,6 +54,8 @@ pub const REST_CATALOG_PROP_URI: &str = "uri";
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 /// Disable header redaction in error logs (defaults to false for security)
 pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
+/// Identifier for a server-side scan plan associated with credential requests.
+pub const REST_CATALOG_PROP_SCAN_PLAN_ID: &str = "rest.scan.plan-id";
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -164,7 +166,7 @@ impl RestCatalogBuilder {
 }
 
 /// Rest catalog configuration.
-#[derive(Clone, Debug, TypedBuilder)]
+#[derive(Clone, TypedBuilder)]
 pub(crate) struct RestCatalogConfig {
     #[builder(default, setter(strip_option))]
     name: Option<String>,
@@ -179,6 +181,19 @@ pub(crate) struct RestCatalogConfig {
 
     #[builder(default)]
     client: Option<Client>,
+}
+
+impl std::fmt::Debug for RestCatalogConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Catalog and table properties may contain OAuth credentials, delegated
+        // storage credentials, or arbitrary secret-bearing `header.*` values.
+        f.debug_struct("RestCatalogConfig")
+            .field("name", &self.name)
+            .field("uri", &self.uri)
+            .field("warehouse", &self.warehouse)
+            .field("property_keys", &self.props.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
 }
 
 impl RestCatalogConfig {
@@ -358,7 +373,7 @@ impl RestCatalogConfig {
 
 #[derive(Debug)]
 struct RestContext {
-    client: HttpClient,
+    client: Arc<HttpClient>,
     /// Runtime config is fetched from rest server and stored here.
     ///
     /// It's could be different from the user config.
@@ -447,7 +462,7 @@ impl RestCatalog {
 
                 Ok(RestContext {
                     config,
-                    client,
+                    client: Arc::new(client),
                     endpoints,
                 })
             })
@@ -510,17 +525,17 @@ impl RestCatalog {
         metadata_location: Option<&str>,
         extra_config: Option<HashMap<String, String>>,
     ) -> Result<FileIO> {
-        let mut props = self.context().await?.config.props.clone();
+        let context = self.context().await?;
+        let mut props = context.config.props.clone();
         if let Some(config) = extra_config {
             props.extend(config);
         }
 
         // If the warehouse is a logical identifier instead of a URL we don't want
         // to raise an exception
-        let warehouse_path = match self.context().await?.config.warehouse.as_deref() {
+        let warehouse_path = match context.config.warehouse.as_deref() {
             Some(url) if Url::parse(url).is_ok() => Some(url),
-            Some(_) => None,
-            None => None,
+            _ => None,
         };
 
         if metadata_location.or(warehouse_path).is_none() {
@@ -541,9 +556,20 @@ impl RestCatalog {
                 )
             })?;
 
-        let file_io = FileIOBuilder::new(factory).with_props(props).build();
+        // If the catalog vends refreshable credentials for this table's storage,
+        // attach a provider so the backend re-fetches them before they expire.
+        let credential_provider = crate::credential::build_vended_credential_provider(
+            context.client.clone(),
+            &context.config.uri,
+            &props,
+        )?;
 
-        Ok(file_io)
+        let mut builder = FileIOBuilder::new(factory).with_props(props);
+        if let Some(provider) = credential_provider {
+            builder = builder.with_credential_provider(provider);
+        }
+
+        Ok(builder.build())
     }
 
     /// Invalidate the current token without generating a new one. On the next request, the client
@@ -1048,7 +1074,14 @@ impl Catalog for RestCatalog {
             "Metadata location missing in `register_table` response!",
         ))?;
 
-        let file_io = self.load_file_io(Some(metadata_location), None).await?;
+        let config = response
+            .config
+            .into_iter()
+            .chain(self.user_config.props.clone())
+            .collect();
+        let file_io = self
+            .load_file_io(Some(metadata_location), Some(config))
+            .await?;
 
         let mut table_builder = Table::builder()
             .identifier(table_ident.clone())

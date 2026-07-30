@@ -27,3 +27,25 @@ pub(crate) fn from_opendal_error(e: opendal::Error) -> iceberg::Error {
     )
     .with_source(e)
 }
+
+/// Convert a [`SystemTime`](std::time::SystemTime) credential expiry into the
+/// `reqsign` [`Timestamp`](reqsign_core::time::Timestamp) used on backend
+/// credential types (e.g. `AwsCredential::expires_in`, `google::Token::expires_at`).
+#[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+pub(crate) fn system_time_to_timestamp(
+    time: std::time::SystemTime,
+) -> reqsign_core::Result<reqsign_core::time::Timestamp> {
+    let millis = time
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| {
+            reqsign_core::Error::unexpected(format!(
+                "credential expiry precedes the UNIX epoch: {e}"
+            ))
+        })?
+        .as_millis();
+    let millis = i64::try_from(millis).map_err(|_| {
+        reqsign_core::Error::unexpected("credential expiry overflows i64 milliseconds")
+    })?;
+    reqsign_core::time::Timestamp::from_millisecond(millis)
+        .map_err(|e| reqsign_core::Error::unexpected(format!("invalid credential expiry: {e}")))
+}

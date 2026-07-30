@@ -6,6 +6,7 @@ pub iceberg_storage_opendal::OpenDalStorage::Azdls
 pub iceberg_storage_opendal::OpenDalStorage::Azdls::config: alloc::sync::Arc<opendal_service_azdls::config::AzdlsConfig>
 pub iceberg_storage_opendal::OpenDalStorage::Gcs
 pub iceberg_storage_opendal::OpenDalStorage::Gcs::config: alloc::sync::Arc<opendal_service_gcs::config::GcsConfig>
+pub iceberg_storage_opendal::OpenDalStorage::Gcs::credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::storage::StorageCredentialProvider>>
 pub iceberg_storage_opendal::OpenDalStorage::Hf
 pub iceberg_storage_opendal::OpenDalStorage::Hf::config: alloc::sync::Arc<opendal_service_hf::config::HfConfig>
 pub iceberg_storage_opendal::OpenDalStorage::LocalFs
@@ -14,6 +15,7 @@ pub iceberg_storage_opendal::OpenDalStorage::Oss
 pub iceberg_storage_opendal::OpenDalStorage::Oss::config: alloc::sync::Arc<opendal_service_oss::config::OssConfig>
 pub iceberg_storage_opendal::OpenDalStorage::S3
 pub iceberg_storage_opendal::OpenDalStorage::S3::config: alloc::sync::Arc<opendal_service_s3::config::S3Config>
+pub iceberg_storage_opendal::OpenDalStorage::S3::credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::storage::StorageCredentialProvider>>
 pub iceberg_storage_opendal::OpenDalStorage::S3::customized_credential_load: core::option::Option<iceberg_storage_opendal::CustomAwsCredentialLoader>
 impl core::clone::Clone for iceberg_storage_opendal::OpenDalStorage
 pub fn iceberg_storage_opendal::OpenDalStorage::clone(&self) -> iceberg_storage_opendal::OpenDalStorage
@@ -50,6 +52,7 @@ impl core::fmt::Debug for iceberg_storage_opendal::OpenDalStorageFactory
 pub fn iceberg_storage_opendal::OpenDalStorageFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::io::storage::StorageFactory for iceberg_storage_opendal::OpenDalStorageFactory
 pub fn iceberg_storage_opendal::OpenDalStorageFactory::build(&self, config: &iceberg::io::storage::config::StorageConfig) -> iceberg::error::Result<alloc::sync::Arc<dyn iceberg::io::storage::Storage>>
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::build_with_credentials(&self, config: &iceberg::io::storage::config::StorageConfig, credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::storage::StorageCredentialProvider>>) -> iceberg::error::Result<alloc::sync::Arc<dyn iceberg::io::storage::Storage>>
 impl serde_core::ser::Serialize for iceberg_storage_opendal::OpenDalStorageFactory
 pub fn iceberg_storage_opendal::OpenDalStorageFactory::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_opendal::OpenDalStorageFactory
@@ -92,6 +95,7 @@ impl core::fmt::Debug for iceberg_storage_opendal::OpenDalResolvingStorageFactor
 pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::io::storage::StorageFactory for iceberg_storage_opendal::OpenDalResolvingStorageFactory
 pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::build(&self, config: &iceberg::io::storage::config::StorageConfig) -> iceberg::error::Result<alloc::sync::Arc<dyn iceberg::io::storage::Storage>>
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::build_with_credentials(&self, config: &iceberg::io::storage::config::StorageConfig, credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::storage::StorageCredentialProvider>>) -> iceberg::error::Result<alloc::sync::Arc<dyn iceberg::io::storage::Storage>>
 impl serde_core::ser::Serialize for iceberg_storage_opendal::OpenDalResolvingStorageFactory
 pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_opendal::OpenDalResolvingStorageFactory

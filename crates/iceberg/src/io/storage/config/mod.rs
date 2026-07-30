@@ -51,10 +51,20 @@ use serde::{Deserialize, Serialize};
 /// which storage backend to use. The storage type is determined by the
 /// explicit factory selection.
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct StorageConfig {
     /// Configuration properties for the storage backend
     props: HashMap<String, String>,
+}
+
+impl std::fmt::Debug for StorageConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Property values may hold vended credentials (e.g. `s3.secret-access-key`,
+        // `s3.session-token`)
+        f.debug_struct("StorageConfig")
+            .field("keys", &self.props.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
 }
 
 impl StorageConfig {

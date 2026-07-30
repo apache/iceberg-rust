@@ -22,7 +22,8 @@ use iceberg::io::{
     CLIENT_REGION, S3_ACCESS_KEY_ID, S3_ALLOW_ANONYMOUS, S3_ASSUME_ROLE_ARN,
     S3_ASSUME_ROLE_EXTERNAL_ID, S3_ASSUME_ROLE_SESSION_NAME, S3_DISABLE_CONFIG_LOAD,
     S3_DISABLE_EC2_METADATA, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
-    S3_SESSION_TOKEN, S3_SSE_KEY, S3_SSE_MD5, S3_SSE_TYPE,
+    S3_SESSION_TOKEN, S3_SSE_KEY, S3_SSE_MD5, S3_SSE_TYPE, StorageCredentialKind,
+    StorageCredentialProvider,
 };
 use iceberg::{Error, ErrorKind, Result};
 use opendal::services::S3Config;
@@ -31,10 +32,13 @@ use opendal::{Configurator, Operator};
 pub use reqsign_aws_v4::Credential as AwsCredential;
 /// Trait for types that can asynchronously supply [`AwsCredential`] to a [`CustomAwsCredentialLoader`].
 pub use reqsign_core::ProvideCredential;
-use reqsign_core::{ProvideCredentialChain, ProvideCredentialDyn};
+use reqsign_core::{
+    Context, Error as ReqsignError, ProvideCredentialChain, ProvideCredentialDyn,
+    Result as ReqsignResult,
+};
 use url::Url;
 
-use crate::utils::{from_opendal_error, is_truthy};
+use crate::utils::{from_opendal_error, is_truthy, system_time_to_timestamp};
 
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {
@@ -129,6 +133,7 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
 pub(crate) fn s3_config_build(
     cfg: &S3Config,
     customized_credential_load: &Option<CustomAwsCredentialLoader>,
+    credential_provider: &Option<Arc<dyn StorageCredentialProvider>>,
     path: &str,
 ) -> Result<Operator> {
     let url = Url::parse(path)?;
@@ -139,6 +144,19 @@ pub(crate) fn s3_config_build(
         )
     })?;
 
+    // Preserve the existing custom-loader precedence: an explicitly configured loader
+    // is the sole source, otherwise install the catalog provider as a replacement chain so
+    // refresh failures cannot fall through to broader ambient AWS credentials.
+    let credential_provider = credential_provider
+        .as_ref()
+        .filter(|provider| provider.supports_path(path));
+    if customized_credential_load.is_none() && credential_provider.is_some() && cfg.skip_signature {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Invalid S3 auth settings: anonymous access cannot be combined with refreshable credentials",
+        ));
+    }
+
     let mut builder = cfg
         .clone()
         .into_builder()
@@ -148,9 +166,73 @@ pub(crate) fn s3_config_build(
     if let Some(loader) = customized_credential_load {
         let chain = ProvideCredentialChain::new().push(Arc::clone(&loader.0));
         builder = builder.credential_provider_chain(chain);
+    } else if let Some(provider) = credential_provider {
+        let chain = ProvideCredentialChain::new().push(VendedS3CredentialProvider::new(
+            Arc::clone(provider),
+            path.to_string(),
+        ));
+        builder = builder.credential_provider_chain(chain);
     }
 
     Ok(Operator::new(builder).map_err(from_opendal_error)?.finish())
+}
+
+/// Adapts a generic [`StorageCredentialProvider`] into a reqsign
+/// [`ProvideCredential`], so the S3 signer can obtain and refresh vended
+/// credentials.
+struct VendedS3CredentialProvider {
+    provider: Arc<dyn StorageCredentialProvider>,
+    /// Absolute path this operator serves; handed back to the provider so it can
+    /// select the vended credential whose prefix best matches the location.
+    path: String,
+}
+
+impl std::fmt::Debug for VendedS3CredentialProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VendedS3CredentialProvider")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
+impl VendedS3CredentialProvider {
+    fn new(provider: Arc<dyn StorageCredentialProvider>, path: String) -> Self {
+        Self { provider, path }
+    }
+}
+
+impl ProvideCredential for VendedS3CredentialProvider {
+    type Credential = AwsCredential;
+
+    async fn provide_credential(&self, _ctx: &Context) -> ReqsignResult<Option<AwsCredential>> {
+        let credential = self
+            .provider
+            .load_credential(&self.path)
+            .await
+            .map_err(|e| {
+                ReqsignError::unexpected(format!(
+                    "failed to load vended S3 credential for {}",
+                    self.path
+                ))
+                .with_source(e)
+            })?;
+
+        let expires_in = credential
+            .expires_at
+            .map(system_time_to_timestamp)
+            .transpose()?;
+        match credential.kind {
+            StorageCredentialKind::S3(s3) => Ok(Some(AwsCredential {
+                access_key_id: s3.access_key_id,
+                secret_access_key: s3.secret_access_key,
+                session_token: s3.session_token,
+                expires_in,
+            })),
+            _ => Err(ReqsignError::unexpected(
+                "S3 storage received a non-S3 credential from the provider",
+            )),
+        }
+    }
 }
 
 /// Custom AWS credential loader.
@@ -176,7 +258,7 @@ impl std::fmt::Debug for CustomAwsCredentialLoader {
 impl CustomAwsCredentialLoader {
     /// Create a new custom AWS credential loader from any [`ProvideCredential`] implementation.
     pub fn new(provider: impl ProvideCredential<Credential = AwsCredential> + 'static) -> Self {
-        Self(Arc::new(provider) as Arc<dyn ProvideCredentialDyn<Credential = AwsCredential>>)
+        Self(Arc::new(provider))
     }
 }
 

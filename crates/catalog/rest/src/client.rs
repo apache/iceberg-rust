@@ -49,9 +49,13 @@ pub(crate) struct HttpClient {
 
 impl Debug for HttpClient {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Omit the reqwest client: injected clients may carry secret default
+        // headers. Explicit headers use the same redaction policy as errors.
         f.debug_struct("HttpClient")
-            .field("client", &self.client)
-            .field("extra_headers", &self.extra_headers)
+            .field(
+                "extra_headers",
+                &format_headers_redacted(&self.extra_headers, self.disable_header_redaction),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -69,6 +73,24 @@ impl HttpClient {
             extra_oauth_params: cfg.extra_oauth_params(),
             disable_header_redaction: cfg.disable_header_redaction(),
         })
+    }
+
+    /// Create a client for table-scoped resources while reusing this client's
+    /// underlying connection pool.
+    ///
+    /// A load-table response may supply a table token or `header.*` values that
+    /// must be used for subsequent table requests such as credential refresh.
+    pub(crate) fn for_table(
+        &self,
+        catalog_uri: &str,
+        props: HashMap<String, String>,
+    ) -> Result<Self> {
+        let cfg = RestCatalogConfig::builder()
+            .uri(catalog_uri.to_string())
+            .props(props)
+            .client(Some(self.client.clone()))
+            .build();
+        Self::new(&cfg)
     }
 
     /// Update the http client with new configuration.
@@ -156,7 +178,6 @@ impl HttpClient {
                 )
                 .with_context("operation", "auth")
                 .with_context("url", auth_url.to_string())
-                .with_context("json", String::from_utf8_lossy(&text))
                 .with_source(e)
             })?)
         } else {
@@ -170,7 +191,6 @@ impl HttpClient {
                     .with_context("code", code.to_string())
                     .with_context("operation", "auth")
                     .with_context("url", auth_url.to_string())
-                    .with_context("json", String::from_utf8_lossy(&text))
                     .with_source(e)
             })?;
             Err(Error::from(e))
@@ -278,29 +298,30 @@ pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
     let bytes = response.bytes().await?;
 
     serde_json::from_slice::<R>(&bytes).map_err(|e| {
+        // Successful REST responses can contain OAuth tokens and delegated
+        // storage credentials. Never copy an unparseable response into an error.
         Error::new(
             ErrorKind::Unexpected,
             "Failed to parse response from rest catalog server",
         )
-        .with_context("json", String::from_utf8_lossy(&bytes))
         .with_source(e)
     })
 }
 
-/// Headers that contain sensitive information and should be excluded from logs.
-const SENSITIVE_HEADERS: &[&str] = &[
-    "authorization",
-    "proxy-authorization",
-    "set-cookie",
-    "cookie",
-    "x-api-key",
-    "x-auth-token",
-];
-
-/// Returns true if the header name is considered sensitive.
+/// Returns true if the header may carry a secret.
 fn is_sensitive_header(name: &str) -> bool {
     let name_lower = name.to_lowercase();
-    SENSITIVE_HEADERS.iter().any(|h| name_lower == *h)
+    [
+        "auth",
+        "token",
+        "secret",
+        "key",
+        "password",
+        "cookie",
+        "credential",
+    ]
+    .iter()
+    .any(|pattern| name_lower.contains(pattern))
 }
 
 /// Redacts sensitive headers and returns a debug-formatted string.
@@ -386,6 +407,8 @@ mod tests {
     fn test_format_headers_redacted_filters_sensitive() {
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer secret-token".parse().unwrap());
+        headers.insert("x-client-secret", "private-value".parse().unwrap());
+        headers.insert("x-client-credential", "credential-value".parse().unwrap());
         headers.insert("content-type", "application/json".parse().unwrap());
 
         let result = format_headers_redacted(&headers, false);
@@ -395,6 +418,8 @@ mod tests {
         assert!(result.contains("[REDACTED]"));
         // Sensitive value should NOT be present
         assert!(!result.contains("secret-token"));
+        assert!(!result.contains("private-value"));
+        assert!(!result.contains("credential-value"));
         // Non-sensitive header should be present with actual value
         assert!(result.contains("content-type"));
         assert!(result.contains("application/json"));
