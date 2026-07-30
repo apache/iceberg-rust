@@ -36,13 +36,13 @@ http = { workspace = true }
 iceberg = { workspace = true }
 itertools = { workspace = true }
 reqwest = { workspace = true }
-zeroize = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 bytes = { workspace = true }
