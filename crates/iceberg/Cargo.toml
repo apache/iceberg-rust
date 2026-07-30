@@ -57,6 +57,7 @@ expect-test = { workspace = true }
 fastnum = { workspace = true }
 flate2 = { workspace = true }
 fnv = { workspace = true }
+form_urlencoded = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 moka = { version = "0.12.10", features = ["future"] }
@@ -82,7 +83,6 @@ url = { workspace = true }
 uuid = { workspace = true }
 zeroize = { workspace = true }
 zstd = { workspace = true }
-form_urlencoded = { workspace = true }
 
 [dev-dependencies]
 expect-test = { workspace = true }
