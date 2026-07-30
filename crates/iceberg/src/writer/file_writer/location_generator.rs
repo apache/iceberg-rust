@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::Result;
-use crate::spec::{DataFileFormat, PartitionKey, TableMetadata};
+use crate::spec::{DataFileFormat, PartitionKey, TableMetadata, TableProperties};
 
 /// `LocationGenerator` used to generate the location of data file.
 pub trait LocationGenerator: Clone + Send + Sync + 'static {
@@ -40,16 +40,6 @@ pub trait LocationGenerator: Clone + Send + Sync + 'static {
     /// "/table/data/part-00000.parquet"
     fn generate_location(&self, partition_key: Option<&PartitionKey>, file_name: &str) -> String;
 }
-
-const WRITE_DATA_LOCATION: &str = "write.data.path";
-const WRITE_FOLDER_STORAGE_LOCATION: &str = "write.folder-storage.path";
-const DEFAULT_DATA_DIR: &str = "/data";
-
-/// Deprecated object storage path property, kept as a fallback for compatibility.
-const WRITE_OBJECT_STORAGE_LOCATION: &str = "write.object-storage.path";
-/// Property controlling whether partition values are included in object storage paths.
-const WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &str = "write.object-storage.partitioned-paths";
-const WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool = true;
 
 /// Number of trailing hash bits used to build the entropy directories.
 const HASH_BINARY_STRING_BITS: usize = 20;
@@ -71,12 +61,12 @@ impl DefaultLocationGenerator {
         let table_location = table_metadata.location();
         let prop = table_metadata.properties();
         let configured_data_location = prop
-            .get(WRITE_DATA_LOCATION)
-            .or(prop.get(WRITE_FOLDER_STORAGE_LOCATION));
+            .get(TableProperties::PROPERTY_WRITE_DATA_LOCATION)
+            .or(prop.get(TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION));
         let data_location = if let Some(data_location) = configured_data_location {
             data_location.clone()
         } else {
-            format!("{table_location}{DEFAULT_DATA_DIR}")
+            format!("{table_location}{}", TableProperties::DEFAULT_DATA_DIR)
         };
         Ok(Self { data_location })
     }
@@ -144,9 +134,9 @@ impl ObjectStorageLocationGenerator {
         };
 
         let include_partition_paths = prop
-            .get(WRITE_OBJECT_STORAGE_PARTITIONED_PATHS)
+            .get(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS)
             .and_then(|value| value.parse::<bool>().ok())
-            .unwrap_or(WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT);
+            .unwrap_or(TableProperties::WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT);
 
         Ok(Self {
             storage_location,
@@ -246,11 +236,11 @@ fn resolve_data_location(
     table_location: &str,
 ) -> String {
     properties
-        .get(WRITE_DATA_LOCATION)
-        .or_else(|| properties.get(WRITE_OBJECT_STORAGE_LOCATION))
-        .or_else(|| properties.get(WRITE_FOLDER_STORAGE_LOCATION))
+        .get(TableProperties::PROPERTY_WRITE_DATA_LOCATION)
+        .or_else(|| properties.get(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION))
+        .or_else(|| properties.get(TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION))
         .cloned()
-        .unwrap_or_else(|| format!("{table_location}{DEFAULT_DATA_DIR}"))
+        .unwrap_or_else(|| format!("{table_location}{}", TableProperties::DEFAULT_DATA_DIR))
 }
 
 /// `FileNameGeneratorTrait` used to generate file name for data file. The file name can be passed to `LocationGenerator` to generate the location of the file.
@@ -310,11 +300,10 @@ pub(crate) mod test {
     use super::LocationGenerator;
     use crate::spec::{
         FormatVersion, Literal, NestedField, PartitionKey, PartitionSpec, PrimitiveType, Schema,
-        Struct, StructType, TableMetadata, Transform, Type,
+        Struct, StructType, TableMetadata, TableProperties, Transform, Type,
     };
     use crate::writer::file_writer::location_generator::{
         DefaultLocationGenerator, FileNameGenerator, ObjectStorageLocationGenerator,
-        WRITE_DATA_LOCATION, WRITE_FOLDER_STORAGE_LOCATION, WRITE_OBJECT_STORAGE_PARTITIONED_PATHS,
     };
 
     /// Build a minimal `TableMetadata` for location generator tests.
@@ -390,7 +379,7 @@ pub(crate) mod test {
 
         // test custom data location
         table_metadata.properties.insert(
-            WRITE_FOLDER_STORAGE_LOCATION.to_string(),
+            TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION.to_string(),
             "s3://data.db/table/data_1".to_string(),
         );
         let location_generator = DefaultLocationGenerator::new(&table_metadata).unwrap();
@@ -402,7 +391,7 @@ pub(crate) mod test {
         );
 
         table_metadata.properties.insert(
-            WRITE_DATA_LOCATION.to_string(),
+            TableProperties::PROPERTY_WRITE_DATA_LOCATION.to_string(),
             "s3://data.db/table/data_2".to_string(),
         );
         let location_generator = DefaultLocationGenerator::new(&table_metadata).unwrap();
@@ -414,7 +403,7 @@ pub(crate) mod test {
         );
 
         table_metadata.properties.insert(
-            WRITE_DATA_LOCATION.to_string(),
+            TableProperties::PROPERTY_WRITE_DATA_LOCATION.to_string(),
             // invalid table location
             "s3://data.db/data_3".to_string(),
         );
@@ -610,7 +599,7 @@ pub(crate) mod test {
         let table_metadata = table_metadata_with(
             "s3://data.db/table",
             HashMap::from([(
-                WRITE_OBJECT_STORAGE_PARTITIONED_PATHS.to_string(),
+                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS.to_string(),
                 "true".to_string(),
             )]),
         );
@@ -648,7 +637,7 @@ pub(crate) mod test {
         let table_metadata = table_metadata_with(
             "s3://data.db/table",
             HashMap::from([(
-                WRITE_OBJECT_STORAGE_PARTITIONED_PATHS.to_string(),
+                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS.to_string(),
                 "false".to_string(),
             )]),
         );
@@ -668,7 +657,7 @@ pub(crate) mod test {
         let table_metadata = table_metadata_with(
             "s3://data.db/table",
             HashMap::from([(
-                WRITE_DATA_LOCATION.to_string(),
+                TableProperties::PROPERTY_WRITE_DATA_LOCATION.to_string(),
                 "s3://custom-bucket/objects".to_string(),
             )]),
         );
@@ -689,11 +678,11 @@ pub(crate) mod test {
             "s3://data.db/table",
             HashMap::from([
                 (
-                    WRITE_DATA_LOCATION.to_string(),
+                    TableProperties::PROPERTY_WRITE_DATA_LOCATION.to_string(),
                     "s3://data.db/table/data_primary".to_string(),
                 ),
                 (
-                    WRITE_FOLDER_STORAGE_LOCATION.to_string(),
+                    TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION.to_string(),
                     "s3://data.db/table/data_legacy".to_string(),
                 ),
             ]),

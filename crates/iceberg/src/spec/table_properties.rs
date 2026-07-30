@@ -173,6 +173,14 @@ pub struct TableProperties {
     pub encryption_key_id: Option<String>,
     /// The encryption data encryption key length in bytes.
     pub encryption_data_key_length: usize,
+    /// Base directory for data files
+    pub write_data_location: Option<String>,
+    /// Deprecated and will be removed in Iceberg Java, use [write_data_location] instead.
+    pub write_folder_storage_location: Option<String>,
+    /// Deprecated object storage path property, kept as a fallback for compatibility,
+    pub write_object_storage_location: Option<String>,
+    /// Whether partition values are included in object storage paths.
+    pub write_object_storage_partitioned_paths: Option<String>,
 }
 
 impl TableProperties {
@@ -325,6 +333,19 @@ impl TableProperties {
     pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH: &str = "encryption.data-key-length";
     /// Default value for the encryption DEK length (16 bytes = AES-128).
     pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT: usize = 16;
+    /// Property key for the base directory for data files
+    pub const PROPERTY_WRITE_DATA_LOCATION: &str = "write.data.path";
+    /// Property key for deprecated [write_folder_storage_location]
+    pub const PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &str = "write.folder-storage.path";
+    /// Default directory for data files
+    pub const DEFAULT_DATA_DIR: &str = "/data";
+    /// Property key for deprecated object storage path, kept as a fallback for compatibility.
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &str = "write.object-storage.path";
+    /// Property key for controlling whether partition values are included in object storage paths.
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &str =
+        "write.object-storage.partitioned-paths";
+    /// Default value for [PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS]
+    pub const WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool = true;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
@@ -421,6 +442,18 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
                 TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT,
             )?,
+            write_data_location: props
+                .get(TableProperties::PROPERTY_WRITE_DATA_LOCATION)
+                .cloned(),
+            write_folder_storage_location: props
+                .get(TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION)
+                .cloned(),
+            write_object_storage_location: props
+                .get(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION)
+                .cloned(),
+            write_object_storage_partitioned_paths: props
+                .get(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS)
+                .cloned(),
         })
     }
 }
