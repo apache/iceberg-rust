@@ -1399,6 +1399,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use arrow_schema::extension::Uuid as DataTypeUuidExt;
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
 
     use super::*;
@@ -1703,6 +1704,27 @@ mod tests {
         let schema = iceberg_schema_for_arrow_schema_to_schema_test();
         let converted_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
         pretty_assertions::assert_eq!(converted_schema, schema);
+    }
+
+    #[test]
+    fn test_arrow_schema_to_schema_should_convert_uuids() {
+        let converted_schema = arrow_schema_to_schema(&ArrowSchema::new(vec![
+            simple_field("uuid_field", DataType::FixedSizeBinary(16), false, "1")
+                .with_extension_type(DataTypeUuidExt),
+        ]))
+        .unwrap();
+
+        let expected = Schema::builder()
+            .with_fields([NestedField::required(
+                1,
+                "uuid_field",
+                Type::Primitive(PrimitiveType::Uuid),
+            )
+            .into()])
+            .build()
+            .unwrap();
+
+        pretty_assertions::assert_eq!(expected, converted_schema);
     }
 
     fn arrow_schema_for_schema_to_arrow_schema_test() -> ArrowSchema {
