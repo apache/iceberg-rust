@@ -21,7 +21,7 @@ use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray,
     FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray,
     LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
-    Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
+    Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray, new_null_array,
 };
 use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, FieldRef, TimeUnit};
@@ -820,26 +820,15 @@ pub(crate) fn create_primitive_array_repeated(
     num_rows: usize,
 ) -> Result<ArrayRef> {
     Ok(match (data_type, prim_lit) {
+        // --- Primitive Some arms ---
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(value))) => {
             Arc::new(BooleanArray::from(vec![*value; num_rows]))
-        }
-        (DataType::Boolean, None) => {
-            let vals: Vec<Option<bool>> = vec![None; num_rows];
-            Arc::new(BooleanArray::from(vals))
         }
         (DataType::Int32, Some(PrimitiveLiteral::Int(value))) => {
             Arc::new(Int32Array::from(vec![*value; num_rows]))
         }
-        (DataType::Int32, None) => {
-            let vals: Vec<Option<i32>> = vec![None; num_rows];
-            Arc::new(Int32Array::from(vals))
-        }
         (DataType::Date32, Some(PrimitiveLiteral::Int(value))) => {
             Arc::new(Date32Array::from(vec![*value; num_rows]))
-        }
-        (DataType::Date32, None) => {
-            let vals: Vec<Option<i32>> = vec![None; num_rows];
-            Arc::new(Date32Array::from(vals))
         }
         (DataType::Int64, Some(PrimitiveLiteral::Int(value))) => {
             Arc::new(Int64Array::from(vec![i64::from(*value); num_rows]))
@@ -847,24 +836,11 @@ pub(crate) fn create_primitive_array_repeated(
         (DataType::Int64, Some(PrimitiveLiteral::Long(value))) => {
             Arc::new(Int64Array::from(vec![*value; num_rows]))
         }
-        (DataType::Int64, None) => {
-            let vals: Vec<Option<i64>> = vec![None; num_rows];
-            Arc::new(Int64Array::from(vals))
-        }
         (
             DataType::Timestamp(TimeUnit::Microsecond, timezone),
             Some(PrimitiveLiteral::Long(value)),
         ) => {
             let array = TimestampMicrosecondArray::from(vec![*value; num_rows]);
-            if let Some(timezone) = timezone {
-                Arc::new(array.with_timezone(timezone.clone()))
-            } else {
-                Arc::new(array)
-            }
-        }
-        (DataType::Timestamp(TimeUnit::Microsecond, timezone), None) => {
-            let vals: Vec<Option<i64>> = vec![None; num_rows];
-            let array = TimestampMicrosecondArray::from(vals);
             if let Some(timezone) = timezone {
                 Arc::new(array.with_timezone(timezone.clone()))
             } else {
@@ -882,42 +858,32 @@ pub(crate) fn create_primitive_array_repeated(
                 Arc::new(array)
             }
         }
-        (DataType::Timestamp(TimeUnit::Nanosecond, timezone), None) => {
-            let vals: Vec<Option<i64>> = vec![None; num_rows];
-            let array = TimestampNanosecondArray::from(vals);
-            if let Some(timezone) = timezone {
-                Arc::new(array.with_timezone(timezone.clone()))
-            } else {
-                Arc::new(array)
-            }
-        }
         (DataType::Float32, Some(PrimitiveLiteral::Float(value))) => {
             Arc::new(Float32Array::from(vec![value.0; num_rows]))
-        }
-        (DataType::Float32, None) => {
-            let vals: Vec<Option<f32>> = vec![None; num_rows];
-            Arc::new(Float32Array::from(vals))
         }
         (DataType::Float64, Some(PrimitiveLiteral::Double(value))) => {
             Arc::new(Float64Array::from(vec![value.0; num_rows]))
         }
-        (DataType::Float64, None) => {
-            let vals: Vec<Option<f64>> = vec![None; num_rows];
-            Arc::new(Float64Array::from(vals))
-        }
         (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => {
             Arc::new(StringArray::from(vec![value.clone(); num_rows]))
-        }
-        (DataType::Utf8, None) => {
-            let vals: Vec<Option<String>> = vec![None; num_rows];
-            Arc::new(StringArray::from(vals))
         }
         (DataType::Binary, Some(PrimitiveLiteral::Binary(value))) => {
             Arc::new(BinaryArray::from_vec(vec![value; num_rows]))
         }
-        (DataType::Binary, None) => {
-            let vals: Vec<Option<&[u8]>> = vec![None; num_rows];
-            Arc::new(BinaryArray::from_opt_vec(vals))
+        (DataType::LargeBinary, Some(PrimitiveLiteral::Binary(value))) => {
+            Arc::new(LargeBinaryArray::from_vec(vec![value; num_rows]))
+        }
+        (DataType::FixedSizeBinary(len), Some(PrimitiveLiteral::Binary(value))) => {
+            let repeated: Vec<&[u8]> = vec![value.as_slice(); num_rows];
+            Arc::new(FixedSizeBinaryArray::try_from_iter(repeated.into_iter()).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Failed to create FixedSizeBinary({len}) array: {e}"),
+                )
+            })?)
+        }
+        (DataType::Time64(TimeUnit::Microsecond), Some(PrimitiveLiteral::Long(value))) => {
+            Arc::new(Time64MicrosecondArray::from(vec![*value; num_rows]))
         }
         (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::Int128(value))) => {
             Arc::new(
@@ -947,6 +913,8 @@ pub(crate) fn create_primitive_array_repeated(
                     })?,
             )
         }
+
+        // --- Special-case None arms ---
         (DataType::Decimal128(precision, scale), None) => {
             let vals: Vec<Option<i128>> = vec![None; num_rows];
             Arc::new(
@@ -963,7 +931,7 @@ pub(crate) fn create_primitive_array_repeated(
             )
         }
         (DataType::Struct(fields), None) => {
-            // Create a StructArray filled with nulls
+            // Create a StructArray filled with nulls, recursively creating null children
             let null_arrays: Vec<ArrayRef> = fields
                 .iter()
                 .map(|field| create_primitive_array_repeated(field.data_type(), &None, num_rows))
@@ -976,6 +944,10 @@ pub(crate) fn create_primitive_array_repeated(
             ))
         }
         (DataType::Null, _) => Arc::new(arrow_array::NullArray::new(num_rows)),
+
+        // --- Catch-all null arm: use arrow-rs new_null_array for any remaining DataType ---
+        (dt, None) => new_null_array(dt, num_rows),
+
         (dt, _) => {
             return Err(Error::new(
                 ErrorKind::Unexpected,
