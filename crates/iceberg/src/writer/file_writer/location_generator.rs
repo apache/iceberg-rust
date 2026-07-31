@@ -166,10 +166,7 @@ impl ObjectStorageLocationGenerator {
     fn compute_hash(&self, name: &str) -> String {
         let mut bytes = name.as_bytes();
         let hash_code = murmur3::murmur3_32(&mut bytes, 0).unwrap();
-
-        // Force the top bit so the binary string always has 32 characters (Rust, like Java's
-        // Integer.toBinaryString, drops leading zeros otherwise), then keep the trailing bits.
-        let binary = format!("{:032b}", hash_code | 0x8000_0000);
+        let binary = format!("{:032b}", hash_code);
         let hash = &binary[binary.len() - HASH_BINARY_STRING_BITS..];
         dirs_from_hash(hash)
     }
