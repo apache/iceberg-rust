@@ -374,7 +374,16 @@ impl RestCatalogConfig {
         if let Some(auth_manager) = &self.auth_manager {
             return Ok(auth_manager.clone());
         }
-        match self.auth_type().as_str() {
+        let auth_type = self.auth_type();
+        // Java parity (`AuthManagers`): make the inference visible so users
+        // configure the type explicitly.
+        if auth_type == AUTH_TYPE_OAUTH2 && !self.props.contains_key(REST_CATALOG_PROP_AUTH_TYPE) {
+            tracing::warn!(
+                "Inferring {REST_CATALOG_PROP_AUTH_TYPE}={AUTH_TYPE_OAUTH2} from the configured \
+                 OAuth properties; set it explicitly to avoid this warning"
+            );
+        }
+        match auth_type.as_str() {
             AUTH_TYPE_NONE => Ok(Arc::new(NoopAuthManager)),
             AUTH_TYPE_OAUTH2 => Ok(Arc::new(OAuth2Manager::from_config(self)?)),
             other => Err(Error::new(
