@@ -50,6 +50,9 @@ const ENTROPY_DIR_LENGTH: usize = 4;
 /// Number of entropy directories generated from the hash.
 const ENTROPY_DIR_DEPTH: usize = 3;
 
+/// Default directory for data files
+const DEFAULT_DATA_DIR: &str = "/data";
+
 #[derive(Clone, Debug)]
 /// `DefaultLocationGenerator` used to generate the data dir location of data file.
 /// The location is generated based on the table location and the data location in table properties.
@@ -68,7 +71,7 @@ impl DefaultLocationGenerator {
         let data_location = if let Some(data_location) = configured_data_location {
             data_location.clone()
         } else {
-            format!("{table_location}{}", TableProperties::DEFAULT_DATA_DIR)
+            format!("{table_location}{DEFAULT_DATA_DIR}")
         };
         Ok(Self { data_location })
     }
@@ -138,7 +141,7 @@ impl ObjectStorageLocationGenerator {
         let include_partition_paths = prop
             .get(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS)
             .and_then(|value| value.parse::<bool>().ok())
-            .unwrap_or(TableProperties::WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT);
+            .unwrap_or(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT);
 
         Ok(Self {
             storage_location,
@@ -234,7 +237,7 @@ fn resolve_data_location(
         .or_else(|| properties.get(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION))
         .or_else(|| properties.get(TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION))
         .cloned()
-        .unwrap_or_else(|| format!("{table_location}{}", TableProperties::DEFAULT_DATA_DIR))
+        .unwrap_or_else(|| format!("{table_location}{DEFAULT_DATA_DIR}"))
 }
 
 /// `FileNameGeneratorTrait` used to generate file name for data file. The file name can be passed to `LocationGenerator` to generate the location of the file.

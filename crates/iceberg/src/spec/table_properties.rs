@@ -337,15 +337,13 @@ impl TableProperties {
     pub const PROPERTY_WRITE_DATA_LOCATION: &str = "write.data.path";
     /// Property key for deprecated [write_folder_storage_location]
     pub const PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &str = "write.folder-storage.path";
-    /// Default directory for data files
-    pub const DEFAULT_DATA_DIR: &str = "/data";
     /// Property key for deprecated object storage path, kept as a fallback for compatibility.
     pub const PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &str = "write.object-storage.path";
     /// Property key for controlling whether partition values are included in object storage paths.
     pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &str =
         "write.object-storage.partitioned-paths";
     /// Default value for [PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS]
-    pub const WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool = true;
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool = true;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
