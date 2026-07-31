@@ -102,7 +102,7 @@ impl ExtensionType for VariantExtensionType {
 
 /// A post order arrow schema visitor.
 ///
-/// For order of methods called, please refer to [`visit_schema`].
+/// For order of methods called, please refer to the internal `visit_schema` function.
 pub trait ArrowSchemaVisitor {
     /// Return type of this visitor on arrow field.
     type T;

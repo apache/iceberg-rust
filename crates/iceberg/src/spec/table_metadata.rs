@@ -1605,7 +1605,7 @@ pub struct SnapshotLog {
 }
 
 impl SnapshotLog {
-    /// Returns the last updated timestamp as a DateTime<Utc> with millisecond precision
+    /// Returns the last updated timestamp as a `DateTime<Utc>` with millisecond precision
     pub fn timestamp(self) -> Result<DateTime<Utc>> {
         timestamp_ms_to_utc(self.timestamp_ms)
     }

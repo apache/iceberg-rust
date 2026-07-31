@@ -26,7 +26,7 @@ use tokio::task;
 
 use crate::{Error, ErrorKind, Result};
 
-/// Wrapper around tokio's `JoinHandle` that converts task failures into
+/// Wrapper around tokio's [`tokio::task::JoinHandle`] that converts task failures into
 /// [`iceberg::Error`].
 ///
 /// Tokio's `JoinHandle<T>` resolves to `Result<T, JoinError>`, where a
@@ -53,7 +53,7 @@ impl<T: Send + 'static> Future for JoinHandle<T> {
 /// Wraps a [`tokio::runtime::Handle`], which is cheap to clone. The caller is
 /// responsible for keeping the underlying runtime alive while this handle is
 /// in use; spawning on a shut-down runtime will surface as a `JoinError` via
-/// [`JoinHandle`].
+/// the returned `JoinHandle`.
 #[derive(Clone)]
 pub struct RuntimeHandle {
     handle: tokio::runtime::Handle,
@@ -101,7 +101,7 @@ impl RuntimeHandle {
 /// A `Runtime` stores only `tokio::runtime::Handle`s (weak references). The
 /// caller owns the tokio runtime's lifetime. If the underlying runtime is
 /// dropped while iceberg is still using it, subsequent spawns will surface as
-/// task cancellation errors via [`JoinHandle`].
+/// task cancellation errors via the returned `JoinHandle`.
 ///
 /// Cloning is cheap.
 #[derive(Clone)]
