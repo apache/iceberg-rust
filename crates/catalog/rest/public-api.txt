@@ -249,9 +249,6 @@ pub fn iceberg_catalog_rest::RenameTableRequest::serialize<__S>(&self, __seriali
 impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::RenameTableRequest
 pub fn iceberg_catalog_rest::RenameTableRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::RestCatalog
-impl iceberg_catalog_rest::RestCatalog
-pub async fn iceberg_catalog_rest::RestCatalog::invalidate_token(&self) -> iceberg::error::Result<()>
-pub async fn iceberg_catalog_rest::RestCatalog::regenerate_token(&self) -> iceberg::error::Result<()>
 impl core::fmt::Debug for iceberg_catalog_rest::RestCatalog
 pub fn iceberg_catalog_rest::RestCatalog::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::catalog::Catalog for iceberg_catalog_rest::RestCatalog
@@ -347,5 +344,3 @@ pub fn iceberg_catalog_rest::OAuth2Manager::catalog_session<'life0, 'life1, 'asy
 pub fn iceberg_catalog_rest::OAuth2Manager::init_session<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::boxed::Box<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub trait iceberg_catalog_rest::AuthSession: core::fmt::Debug + core::marker::Send + core::marker::Sync
 pub fn iceberg_catalog_rest::AuthSession::authenticate<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, request: &'life1 mut iceberg_catalog_rest::AuthRequest<'life2>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
-pub fn iceberg_catalog_rest::AuthSession::invalidate<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-pub fn iceberg_catalog_rest::AuthSession::refresh<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
