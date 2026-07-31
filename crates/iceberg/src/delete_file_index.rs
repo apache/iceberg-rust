@@ -715,7 +715,7 @@ mod tests {
             1
         );
 
-        // No path bounds => goes to paritition bucker => spec_id does not match => should not be tied
+        // No path bounds => goes to partition bucket => spec_id does not match => should not be tied
         // to data file
         let mismatched_spec = index_of(vec![build_added_manifest_entry(
             2,
