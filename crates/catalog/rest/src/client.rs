@@ -103,6 +103,7 @@ impl HttpClient {
     }
 
     /// The session authenticating requests in the current phase.
+    #[cfg(test)]
     pub(crate) fn session(&self) -> &Arc<dyn AuthSession> {
         &self.session
     }

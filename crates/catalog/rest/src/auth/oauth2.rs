@@ -192,12 +192,12 @@ impl OAuth2Manager {
     ///
     /// - a `credential` yields a [`ClientCredentialsSession`] (its token cache
     ///   pre-seeded when a `token` is also set, and the token then takes
-    ///   precedence until invalidated);
+    ///   precedence over the credential);
     /// - otherwise a [`StaticTokenSession`], which attaches the configured
     ///   token as-is — or nothing when none is set.
     ///
     /// Both share the manager's token cell, so a cached token survives the
-    /// config handshake and `invalidate` is observed by later sessions.
+    /// config handshake.
     fn build_session(&self, params: OAuth2Params) -> Box<dyn AuthSession> {
         match params.credential {
             Some(credential) => Box::new(ClientCredentialsSession {
@@ -242,23 +242,10 @@ struct StaticTokenSession {
 #[async_trait]
 impl AuthSession for StaticTokenSession {
     async fn authenticate(&self, req: &mut AuthRequest<'_>) -> Result<()> {
-        // After `invalidate` there is nothing to fall back to: no auth is sent.
         match self.token.lock().await.clone() {
             Some(token) => attach_bearer(req, &token),
             None => Ok(()),
         }
-    }
-
-    async fn invalidate(&self) -> Result<()> {
-        *self.token.lock().await = None;
-        Ok(())
-    }
-
-    async fn refresh(&self) -> Result<()> {
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Credential must be provided for authentication",
-        ))
     }
 }
 
@@ -353,8 +340,8 @@ impl ClientCredentialsSession {
 #[async_trait]
 impl AuthSession for ClientCredentialsSession {
     /// Uses the cached token when present (a configured `token` takes
-    /// precedence over the credential until invalidated); otherwise exchanges
-    /// the credential for a token, caches it, then uses it.
+    /// precedence over the credential); otherwise exchanges the credential
+    /// for a token, caches it, then uses it.
     async fn authenticate(&self, req: &mut AuthRequest<'_>) -> Result<()> {
         // The lock is held across the exchange: waiters reuse a successful
         // result, and retry themselves after a failure.
@@ -372,24 +359,5 @@ impl AuthSession for ClientCredentialsSession {
         };
 
         attach_bearer(req, &token)
-    }
-
-    /// Invalidate the current token without generating a new one. On the next
-    /// request, the session will attempt to generate a new token.
-    async fn invalidate(&self) -> Result<()> {
-        *self.token.lock().await = None;
-        Ok(())
-    }
-
-    /// Invalidate the current token and set a new one. Generates a new token
-    /// before invalidating the current one, meaning the old token will be used
-    /// until this function acquires the lock and overwrites the token.
-    ///
-    /// If credential is invalid, or the request fails, this method will return
-    /// an error and leave the current token unchanged.
-    async fn refresh(&self) -> Result<()> {
-        let new_token = self.exchange_credential_for_token().await?;
-        *self.token.lock().await = Some(new_token.into());
-        Ok(())
     }
 }

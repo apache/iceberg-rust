@@ -56,7 +56,9 @@ pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 /// Disable header redaction in error logs and `Debug` output (defaults to
 /// false for security)
 pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
-/// Authentication scheme: `none` or `oauth2` (default).
+/// Authentication scheme: `none` or `oauth2`. When unset, `oauth2` is used
+/// if a `token`, `credential` or `oauth2-server-uri` is configured, `none`
+/// otherwise.
 pub const REST_CATALOG_PROP_AUTH_TYPE: &str = "rest.auth.type";
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
@@ -346,14 +348,24 @@ impl RestCatalogConfig {
             .unwrap_or(false)
     }
 
-    /// The configured auth scheme: explicit `rest.auth.type` or the default
-    /// `oauth2` (which behaves as no auth when neither `token` nor
-    /// `credential` is set).
+    /// The configured auth scheme: explicit `rest.auth.type` when set;
+    /// otherwise `oauth2` when a `token`, `credential` or `oauth2-server-uri`
+    /// is configured (preserving pre-`rest.auth.type` setups), `none` when
+    /// none is.
     fn auth_type(&self) -> String {
         self.props
             .get(REST_CATALOG_PROP_AUTH_TYPE)
             .cloned()
-            .unwrap_or_else(|| AUTH_TYPE_OAUTH2.to_string())
+            .unwrap_or_else(|| {
+                if self.token().is_some()
+                    || self.credential().is_some()
+                    || self.explicit_oauth2_server_uri().is_some()
+                {
+                    AUTH_TYPE_OAUTH2.to_string()
+                } else {
+                    AUTH_TYPE_NONE.to_string()
+                }
+            })
     }
 
     /// Resolves the auth manager: a `with_auth_manager` override wins,
@@ -367,7 +379,11 @@ impl RestCatalogConfig {
             AUTH_TYPE_OAUTH2 => Ok(Arc::new(OAuth2Manager::from_config(self)?)),
             other => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("unknown '{REST_CATALOG_PROP_AUTH_TYPE}': {other}"),
+                format!(
+                    "unknown '{REST_CATALOG_PROP_AUTH_TYPE}': {other}; use \
+                     `RestCatalogBuilder::with_auth_manager` to inject a \
+                     custom auth manager"
+                ),
             )),
         }
     }
@@ -681,28 +697,6 @@ impl RestCatalog {
         let file_io = FileIOBuilder::new(factory).with_props(props).build();
 
         Ok(file_io)
-    }
-
-    /// Invalidate the current token without generating a new one. On the next request, the client
-    /// will attempt to generate a new token.
-    ///
-    /// Sessions that don't manage a token (e.g. with `rest.auth.type` `none`,
-    /// or a custom [`AuthManager`]) may treat this as a no-op.
-    pub async fn invalidate_token(&self) -> Result<()> {
-        self.context().await?.client.session().invalidate().await
-    }
-
-    /// Invalidate the current token and set a new one. Generates a new token before invalidating
-    /// the current token, meaning the old token will be used until this function acquires the lock
-    /// and overwrites the token.
-    ///
-    /// If credential is invalid, or the request fails, this method will return an error and leave
-    /// the current token unchanged.
-    ///
-    /// Errors when the session has no credential to exchange (e.g. a static
-    /// token); a custom [`AuthManager`]'s session may treat this as a no-op.
-    pub async fn regenerate_token(&self) -> Result<()> {
-        self.context().await?.client.session().refresh().await
     }
 }
 
@@ -1582,152 +1576,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_invalidate_token() {
-        let mut server = Server::new_async().await;
-        let oauth_mock = create_oauth_mock(&mut server).await;
-        let config_mock = create_config_mock(&mut server).await;
-
-        let mut props = HashMap::new();
-        props.insert("credential".to_string(), "client1:secret1".to_string());
-
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder()
-                .uri(server.url())
-                .props(props)
-                .build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-            None,
-        );
-
-        let token = catalog.context().await.unwrap().client.token().await;
-        oauth_mock.assert_async().await;
-        config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
-
-        let oauth_mock =
-            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 200)
-                .await;
-        // The next request re-exchanges the credential and sends the new token.
-        let ns_mock = server
-            .mock("GET", "/v1/namespaces")
-            .match_header("authorization", "Bearer ey000000000001")
-            .with_body(r#"{"namespaces": []}"#)
-            .create_async()
-            .await;
-        catalog.invalidate_token().await.unwrap();
-        catalog.list_namespaces(None).await.unwrap();
-        oauth_mock.assert_async().await;
-        ns_mock.assert_async().await;
-        let token = catalog.context().await.unwrap().client.token().await;
-        assert_eq!(token, Some("ey000000000001".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_invalidate_token_failing_request() {
-        let mut server = Server::new_async().await;
-        let oauth_mock = create_oauth_mock(&mut server).await;
-        let config_mock = create_config_mock(&mut server).await;
-
-        let mut props = HashMap::new();
-        props.insert("credential".to_string(), "client1:secret1".to_string());
-
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder()
-                .uri(server.url())
-                .props(props)
-                .build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-            None,
-        );
-
-        let token = catalog.context().await.unwrap().client.token().await;
-        oauth_mock.assert_async().await;
-        config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
-
-        let oauth_mock =
-            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 500)
-                .await;
-        catalog.invalidate_token().await.unwrap();
-        // The failed re-exchange surfaces as an error and no token is cached.
-        assert!(catalog.list_namespaces(None).await.is_err());
-        oauth_mock.assert_async().await;
-        let token = catalog.context().await.unwrap().client.token().await;
-        assert_eq!(token, None);
-    }
-
-    #[tokio::test]
-    async fn test_regenerate_token() {
-        let mut server = Server::new_async().await;
-        let oauth_mock = create_oauth_mock(&mut server).await;
-        let config_mock = create_config_mock(&mut server).await;
-
-        let mut props = HashMap::new();
-        props.insert("credential".to_string(), "client1:secret1".to_string());
-
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder()
-                .uri(server.url())
-                .props(props)
-                .build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-            None,
-        );
-
-        let token = catalog.context().await.unwrap().client.token().await;
-        oauth_mock.assert_async().await;
-        config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
-
-        let oauth_mock =
-            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 200)
-                .await;
-        catalog.regenerate_token().await.unwrap();
-        oauth_mock.assert_async().await;
-        let token = catalog.context().await.unwrap().client.token().await;
-        assert_eq!(token, Some("ey000000000001".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_regenerate_token_failing_request() {
-        let mut server = Server::new_async().await;
-        let oauth_mock = create_oauth_mock(&mut server).await;
-        let config_mock = create_config_mock(&mut server).await;
-
-        let mut props = HashMap::new();
-        props.insert("credential".to_string(), "client1:secret1".to_string());
-
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder()
-                .uri(server.url())
-                .props(props)
-                .build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-            None,
-        );
-
-        let token = catalog.context().await.unwrap().client.token().await;
-        oauth_mock.assert_async().await;
-        config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
-
-        let oauth_mock =
-            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 500)
-                .await;
-        let invalidate_result = catalog.regenerate_token().await;
-        assert!(invalidate_result.is_err());
-        oauth_mock.assert_async().await;
-        let token = catalog.context().await.unwrap().client.token().await;
-
-        // original token is left intact
-        assert_eq!(token, Some("ey000000000000".to_string()));
-    }
-
-    #[tokio::test]
     async fn test_http_headers() {
         let server = Server::new_async().await;
         let mut props = HashMap::new();
@@ -1985,9 +1833,9 @@ mod tests {
     async fn test_builtin_oauth_endpoint_follows_uri_override() {
         // When `/v1/config` overrides `uri` (and no explicit `oauth2-server-uri`
         // is set), the built-in manager's default token endpoint must follow
-        // the merged URI: a refresh after the handshake posts to the new host.
+        // the merged URI.
         let mut bootstrap = Server::new_async().await;
-        let mut overridden = Server::new_async().await;
+        let overridden = Server::new_async().await;
 
         let config_mock = bootstrap
             .mock("GET", "/v1/config")
@@ -2001,9 +1849,6 @@ mod tests {
         // Handshake exchange still uses the bootstrap-derived default.
         let bootstrap_oauth_mock =
             create_oauth_mock_with_path(&mut bootstrap, "/v1/oauth/tokens", "tok-boot", 200).await;
-        // The refresh must follow the overridden URI.
-        let overridden_oauth_mock =
-            create_oauth_mock_with_path(&mut overridden, "/v1/oauth/tokens", "tok-new", 200).await;
 
         let props = HashMap::from([("credential".to_string(), "client1:secret1".to_string())]);
         let catalog = RestCatalog::new(
@@ -2016,14 +1861,13 @@ mod tests {
             None,
         );
 
-        catalog.context().await.unwrap();
-        catalog.regenerate_token().await.unwrap();
-
+        let context = catalog.context().await.unwrap();
         config_mock.assert_async().await;
         bootstrap_oauth_mock.assert_async().await;
-        overridden_oauth_mock.assert_async().await;
-        let token = catalog.context().await.unwrap().client.token().await;
-        assert_eq!(token, Some("tok-new".to_string()));
+        // The catalog session's endpoint follows the overridden URI (visible
+        // via the session's Debug, which prints its token endpoint).
+        let session_debug = format!("{:?}", context.client.session());
+        assert!(session_debug.contains(&format!("{}/v1/oauth/tokens", overridden.url())));
     }
 
     #[tokio::test]
@@ -2068,21 +1912,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_seeded_token_with_credential_exchanges_once_after_invalidate() {
-        // The seeded token is attached without an exchange; after
-        // invalidate() the credential is exchanged exactly once.
+    async fn test_seeded_token_takes_precedence_over_credential() {
+        // token + credential: the seeded token is attached without any
+        // credential exchange.
         let mut server = Server::new_async().await;
-        // create_oauth_mock_with_path expects exactly 1 hit.
-        let oauth_mock =
-            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "tok-new", 200).await;
+        let oauth_mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .expect(0)
+            .create_async()
+            .await;
 
         let manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()))
             .with_token("tok-seed")
             .with_credential(Some("client1".to_string()), "secret1".to_string());
         let session = manager.init_session().await.unwrap();
 
-        let client = Client::new();
-        let mut req = client
+        let mut req = Client::new()
             .get("https://rest.example.com/v1/config")
             .build()
             .unwrap();
@@ -2095,20 +1940,6 @@ mod tests {
             "Bearer tok-seed"
         );
 
-        session.invalidate().await.unwrap();
-        let mut req = client
-            .get("https://rest.example.com/v1/config")
-            .build()
-            .unwrap();
-        session
-            .authenticate(&mut crate::auth::AuthRequest::new(&mut req))
-            .await
-            .unwrap();
-        assert_eq!(
-            req.headers().get("authorization").unwrap(),
-            "Bearer tok-new"
-        );
-
         oauth_mock.assert_async().await;
     }
 
@@ -2118,7 +1949,14 @@ mod tests {
         // headers and OAuth params across the config handshake: only explicit
         // properties may override them, never synthesized defaults.
         let mut server = Server::new_async().await;
-        let config_mock = create_config_mock(&mut server).await;
+        // The server vends the credential, so the exchange runs through the
+        // post-handshake catalog session (exercising its property merging).
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(r#"{"defaults": {"credential": "client1:secret1"}, "overrides": {}}"#)
+            .create_async()
+            .await;
 
         // The catalog-host default endpoint must never see the credential.
         let default_endpoint_mock = server
@@ -2126,8 +1964,8 @@ mod tests {
             .expect(0)
             .create_async()
             .await;
-        // Both exchanges (handshake + regenerate) hit the injected endpoint,
-        // carrying the injected header and OAuth param.
+        // The exchange hits the injected endpoint, carrying the injected
+        // header and OAuth param.
         let custom_endpoint_mock = server
             .mock("POST", "/custom/oauth/tokens")
             .match_header("x-tenant", "t1")
@@ -2146,12 +1984,16 @@ mod tests {
                 "expires_in": 86400
                 }"#,
             )
-            .expect(2)
+            .create_async()
+            .await;
+        let ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .match_header("authorization", "Bearer ey000000000000")
+            .with_body(r#"{"namespaces": []}"#)
             .create_async()
             .await;
 
         let manager = OAuth2Manager::new(format!("{}/custom/oauth/tokens", server.url()))
-            .with_credential(Some("client1".to_string()), "secret1".to_string())
             .with_extra_headers(HeaderMap::from_iter([(
                 HeaderName::from_static("x-tenant"),
                 HeaderValue::from_static("t1"),
@@ -2170,14 +2012,12 @@ mod tests {
             None,
         );
 
-        // Handshake performs the first exchange; regenerate the second — both
-        // must use the injected endpoint/options.
-        catalog.context().await.unwrap();
-        catalog.regenerate_token().await.unwrap();
+        catalog.list_namespaces(None).await.unwrap();
 
         config_mock.assert_async().await;
         custom_endpoint_mock.assert_async().await;
         default_endpoint_mock.assert_async().await;
+        ns_mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -2384,6 +2224,38 @@ mod tests {
         assert!(!out.contains("cs-secret"));
         assert!(out.contains("[REDACTED]"));
         assert!(out.contains("wh1"));
+    }
+
+    #[test]
+    fn test_auth_type_defaults() {
+        // Unset `rest.auth.type`: `oauth2` when any OAuth material is
+        // configured (existing setups keep working), `none` otherwise.
+        let bare = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .build();
+        assert!(format!("{:?}", bare.resolve_auth_manager().unwrap()).contains("NoopAuthManager"));
+
+        let with_token = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([("token".to_string(), "tok".to_string())]))
+            .build();
+        assert!(
+            format!("{:?}", with_token.resolve_auth_manager().unwrap()).contains("OAuth2Manager")
+        );
+
+        // An explicit OAuth endpoint is oauth2 intent too: the manager can
+        // still pick up a server-supplied token from `/v1/config`.
+        let with_endpoint = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([(
+                "oauth2-server-uri".to_string(),
+                "http://auth.example.com/tokens".to_string(),
+            )]))
+            .build();
+        assert!(
+            format!("{:?}", with_endpoint.resolve_auth_manager().unwrap())
+                .contains("OAuth2Manager")
+        );
     }
 
     #[test]

@@ -138,26 +138,6 @@ impl<'a> AuthRequestBody<'a> {
 pub trait AuthSession: Debug + Send + Sync {
     /// Applies authentication to the request (adds headers, signs, ...).
     async fn authenticate(&self, request: &mut AuthRequest<'_>) -> Result<()>;
-
-    /// Drops any cached credentials so the next request re-authenticates.
-    ///
-    /// Backs the existing [`RestCatalog::invalidate_token`] API; not part of
-    /// the intended extension surface, and the default no-op is usually fine.
-    ///
-    /// [`RestCatalog::invalidate_token`]: crate::RestCatalog::invalidate_token
-    async fn invalidate(&self) -> Result<()> {
-        Ok(())
-    }
-
-    /// Proactively refreshes cached credentials (e.g. re-exchanges an OAuth2
-    /// client credential for a new token), leaving them intact on failure.
-    ///
-    /// Like [`Self::invalidate`], backs [`RestCatalog::regenerate_token`].
-    ///
-    /// [`RestCatalog::regenerate_token`]: crate::RestCatalog::regenerate_token
-    async fn refresh(&self) -> Result<()> {
-        Ok(())
-    }
 }
 
 /// A secret string: `Debug` prints `[REDACTED]` and the memory is zeroized on
@@ -222,14 +202,12 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_static_token_session_lifecycle() {
-        // Token-only config: attach as-is; refresh keeps erroring (no
-        // credential to exchange); after invalidate, no auth is sent.
+    async fn test_static_token_session_attaches_token() {
+        // Token-only config: the token is attached as-is.
         let manager = OAuth2Manager::new("http://localhost/unused").with_token("tok-static");
         let session = manager.init_session().await.unwrap();
-        let client = Client::new();
 
-        let mut req = client
+        let mut req = Client::new()
             .get("https://rest.example.com/v1/config")
             .build()
             .unwrap();
@@ -241,19 +219,6 @@ mod tests {
             req.headers().get("authorization").unwrap(),
             "Bearer tok-static"
         );
-
-        assert!(session.refresh().await.is_err());
-
-        session.invalidate().await.unwrap();
-        let mut req = client
-            .get("https://rest.example.com/v1/config")
-            .build()
-            .unwrap();
-        session
-            .authenticate(&mut AuthRequest::new(&mut req))
-            .await
-            .unwrap();
-        assert!(req.headers().get("authorization").is_none());
     }
 
     #[test]
