@@ -23,7 +23,7 @@ use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
 use uuid::Uuid;
 
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
     ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
@@ -139,16 +139,14 @@ impl<'a> SnapshotProducer<'a> {
     pub(crate) fn validate_added_data_files(&self) -> Result<()> {
         for data_file in &self.added_data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Only data content type is allowed for fast append",
+                return Err(invalid_data!(
+                    "Only data content type is allowed for fast append"
                 ));
             }
             // Check if the data file partition spec id matches the table default partition spec id.
             if self.table.metadata().default_partition_spec_id() != data_file.partition_spec_id {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Data file partition spec id does not match table default partition spec id",
+                return Err(invalid_data!(
+                    "Data file partition spec id does not match table default partition spec id"
                 ));
             }
             Self::validate_partition_value(
@@ -203,12 +201,9 @@ impl<'a> SnapshotProducer<'a> {
             .await?;
 
         if !referenced_files.is_empty() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot add files that are already referenced by table, files: {}",
-                    referenced_files.join(", ")
-                ),
+            return Err(invalid_data!(
+                "Cannot add files that are already referenced by table, files: {}",
+                referenced_files.join(", ")
             ));
         }
 
@@ -284,9 +279,8 @@ impl<'a> SnapshotProducer<'a> {
         partition_type: &StructType,
     ) -> Result<()> {
         if partition_value.fields().len() != partition_type.fields().len() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Partition value is not compatible with partition type",
+            return Err(invalid_data!(
+                "Partition value is not compatible with partition type"
             ));
         }
 
@@ -300,9 +294,8 @@ impl<'a> SnapshotProducer<'a> {
             if let Some(value) = value
                 && !field.compatible(&value.as_primitive_literal().unwrap())
             {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Partition value is not compatible partition type",
+                return Err(invalid_data!(
+                    "Partition value is not compatible partition type"
                 ));
             }
         }

@@ -20,7 +20,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 use crate::compression::CompressionCodec;
-use crate::error::{Error, ErrorKind, Result};
+use crate::error::{Error, Result, invalid_data};
 
 fn parse_property<T: FromStr>(
     properties: &HashMap<String, String>,
@@ -31,12 +31,9 @@ where
     <T as FromStr>::Err: Display,
 {
     properties.get(key).map_or(Ok(default), |value| {
-        value.parse::<T>().map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid value for {key}: {e}"),
-            )
-        })
+        value
+            .parse::<T>()
+            .map_err(|e| invalid_data!("Invalid value for {key}: {e}"))
     })
 }
 
@@ -60,9 +57,8 @@ fn parse_location_property(
         .get(key)
         .map(|path| {
             if path.is_empty() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Invalid value for {key}: path must not be empty"),
+                return Err(invalid_data!(
+                    "Invalid value for {key}: path must not be empty"
                 ));
             }
 
@@ -100,30 +96,22 @@ pub(crate) fn parse_metadata_file_compression(
     let lowercase_value = value.to_lowercase();
 
     // Use serde to parse the codec (which has rename_all = "lowercase")
-    let codec: CompressionCodec = serde_json::from_value(serde_json::Value::String(
-        lowercase_value,
-    ))
-    .map_err(|_| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!(
+    let codec: CompressionCodec =
+        serde_json::from_value(serde_json::Value::String(lowercase_value)).map_err(|_| {
+            invalid_data!(
                 "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported.",
                 CompressionCodec::None.name(),
                 CompressionCodec::gzip_default().name()
-            ),
-        )
-    })?;
+            )
+        })?;
 
     // Validate that only None and Gzip are used for metadata
     match codec {
         CompressionCodec::None | CompressionCodec::Gzip(_) => Ok(codec),
-        _ => Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported for metadata files.",
-                CompressionCodec::None.name(),
-                CompressionCodec::gzip_default().name()
-            ),
+        _ => Err(invalid_data!(
+            "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported for metadata files.",
+            CompressionCodec::None.name(),
+            CompressionCodec::gzip_default().name()
         )),
     }
 }
@@ -428,6 +416,7 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ErrorKind;
     use crate::compression::CompressionCodec;
 
     #[test]

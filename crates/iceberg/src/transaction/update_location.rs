@@ -19,9 +19,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::error::invalid_data;
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
-use crate::{Error, ErrorKind, Result, TableUpdate};
+use crate::{Result, TableUpdate};
 
 /// A transaction action that sets or updates the location of a table.
 ///
@@ -66,9 +67,8 @@ impl TransactionAction for UpdateLocationAction {
         if let Some(location) = self.location.clone() {
             updates = vec![TableUpdate::SetLocation { location }];
         } else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Location is not set for UpdateLocationAction!",
+            return Err(invalid_data!(
+                "Location is not set for UpdateLocationAction!"
             ));
         }
 

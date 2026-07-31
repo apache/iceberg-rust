@@ -27,7 +27,7 @@ use super::{
     StatisticsFile, StructType, TableMetadata, TableProperties, UNPARTITIONED_LAST_ASSIGNED_ID,
     UnboundPartitionSpec,
 };
-use crate::error::{Error, ErrorKind, Result};
+use crate::error::{Error, ErrorKind, Result, invalid_data};
 use crate::spec::{EncryptedKey, INITIAL_ROW_ID, MIN_FORMAT_VERSION_ROW_LINEAGE};
 use crate::{TableCreation, TableUpdate};
 
@@ -175,12 +175,8 @@ impl TableMetadataBuilder {
             format_version,
         } = table_creation;
 
-        let location = location.ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Can't create table without location",
-            )
-        })?;
+        let location =
+            location.ok_or_else(|| invalid_data!("Can't create table without location"))?;
         let partition_spec = partition_spec.unwrap_or(UnboundPartitionSpec {
             spec_id: None,
             fields: vec![],
@@ -212,12 +208,10 @@ impl TableMetadataBuilder {
     /// - Cannot downgrade to older format versions.
     pub fn upgrade_format_version(mut self, format_version: FormatVersion) -> Result<Self> {
         if format_version < self.metadata.format_version {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot downgrade FormatVersion from {} to {}",
-                    self.metadata.format_version, format_version
-                ),
+            return Err(invalid_data!(
+                "Cannot downgrade FormatVersion from {} to {}",
+                self.metadata.format_version,
+                format_version
             ));
         }
 
@@ -261,12 +255,9 @@ impl TableMetadataBuilder {
             .collect::<Vec<_>>();
 
         if !reserved_properties.is_empty() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Table properties should not contain reserved properties, but got: [{}]",
-                    reserved_properties.join(", ")
-                ),
+            return Err(invalid_data!(
+                "Table properties should not contain reserved properties, but got: [{}]",
+                reserved_properties.join(", ")
             ));
         }
 
@@ -299,12 +290,9 @@ impl TableMetadataBuilder {
             .collect::<Vec<_>>();
 
         if !reserved_properties.is_empty() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Table properties to remove contain reserved properties: [{}]",
-                    reserved_properties.join(", ")
-                ),
+            return Err(invalid_data!(
+                "Table properties to remove contain reserved properties: [{}]",
+                reserved_properties.join(", ")
             ));
         }
 
@@ -348,9 +336,9 @@ impl TableMetadataBuilder {
             .snapshots
             .contains_key(&snapshot.snapshot_id())
         {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Snapshot already exists for: '{}'", snapshot.snapshot_id()),
+            return Err(invalid_data!(
+                "Snapshot already exists for: '{}'",
+                snapshot.snapshot_id()
             ));
         }
 
@@ -358,13 +346,10 @@ impl TableMetadataBuilder {
             && snapshot.sequence_number() <= self.metadata.last_sequence_number
             && snapshot.parent_snapshot_id().is_some()
         {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot add snapshot with sequence number {} older than last sequence number {}",
-                    snapshot.sequence_number(),
-                    self.metadata.last_sequence_number
-                ),
+            return Err(invalid_data!(
+                "Cannot add snapshot with sequence number {} older than last sequence number {}",
+                snapshot.sequence_number(),
+                self.metadata.last_sequence_number
             ));
         }
 
@@ -372,13 +357,10 @@ impl TableMetadataBuilder {
             // commits can happen concurrently from different machines.
             // A tolerance helps us avoid failure for small clock skew
             if snapshot.timestamp_ms() - last.timestamp_ms < -ONE_MINUTE_MS {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Invalid snapshot timestamp {}: before last snapshot timestamp {}",
-                        snapshot.timestamp_ms(),
-                        last.timestamp_ms
-                    ),
+                return Err(invalid_data!(
+                    "Invalid snapshot timestamp {}: before last snapshot timestamp {}",
+                    snapshot.timestamp_ms(),
+                    last.timestamp_ms
                 ));
             }
         }
@@ -388,13 +370,10 @@ impl TableMetadataBuilder {
             .unwrap_or_default()
             .max(self.metadata.last_updated_ms);
         if snapshot.timestamp_ms() - max_last_updated < -ONE_MINUTE_MS {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid snapshot timestamp {}: before last updated timestamp {}",
-                    snapshot.timestamp_ms(),
-                    max_last_updated
-                ),
+            return Err(invalid_data!(
+                "Invalid snapshot timestamp {}: before last updated timestamp {}",
+                snapshot.timestamp_ms(),
+                max_last_updated
             ));
         }
 
@@ -402,22 +381,16 @@ impl TableMetadataBuilder {
         if self.metadata.format_version >= MIN_FORMAT_VERSION_ROW_LINEAGE {
             if let Some((first_row_id, added_rows_count)) = snapshot.row_range() {
                 if first_row_id < self.metadata.next_row_id {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Cannot add a snapshot, first-row-id is behind table next-row-id: {first_row_id} < {}",
-                            self.metadata.next_row_id
-                        ),
+                    return Err(invalid_data!(
+                        "Cannot add a snapshot, first-row-id is behind table next-row-id: {first_row_id} < {}",
+                        self.metadata.next_row_id
                     ));
                 }
 
                 added_rows = Some(added_rows_count);
             } else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot add a snapshot: first-row-id is null. first-row-id must be set for format version >= {MIN_FORMAT_VERSION_ROW_LINEAGE}",
-                    ),
+                return Err(invalid_data!(
+                    "Cannot add a snapshot: first-row-id is null. first-row-id must be set for format version >= {MIN_FORMAT_VERSION_ROW_LINEAGE}",
                 ));
             }
         }
@@ -428,9 +401,8 @@ impl TableMetadataBuilder {
                 .next_row_id
                 .checked_add(added_rows)
                 .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Cannot add snapshot: next-row-id overflowed when adding added-rows",
+                    invalid_data!(
+                        "Cannot add snapshot: next-row-id overflowed when adding added-rows"
                     )
                 })?;
         }
@@ -459,9 +431,8 @@ impl TableMetadataBuilder {
 
         let reference = if let Some(mut reference) = reference {
             if !reference.is_branch() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Cannot append snapshot to non-branch reference '{branch}'",),
+                return Err(invalid_data!(
+                    "Cannot append snapshot to non-branch reference '{branch}'",
                 ));
             }
 
@@ -525,12 +496,9 @@ impl TableMetadataBuilder {
         }
 
         let Some(snapshot) = self.metadata.snapshots.get(&reference.snapshot_id) else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot set '{ref_name}' to unknown snapshot: '{}'",
-                    reference.snapshot_id
-                ),
+            return Err(invalid_data!(
+                "Cannot set '{ref_name}' to unknown snapshot: '{}'",
+                reference.snapshot_id
             ));
         };
 
@@ -687,9 +655,8 @@ impl TableMetadataBuilder {
     pub fn set_current_schema(mut self, mut schema_id: i32) -> Result<Self> {
         if schema_id == Self::LAST_ADDED {
             schema_id = self.last_added_schema_id.ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot set current schema to last added schema: no schema has been added.",
+                invalid_data!(
+                    "Cannot set current schema to last added schema: no schema has been added."
                 )
             })?;
         };
@@ -700,10 +667,7 @@ impl TableMetadataBuilder {
         }
 
         let _schema = self.metadata.schemas.get(&schema_id).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot set current schema to unknown schema with id: '{schema_id}'"),
-            )
+            invalid_data!("Cannot set current schema to unknown schema with id: '{schema_id}'")
         })?;
 
         // Old partition specs and sort-orders should be preserved even if they are not compatible with the new schema,
@@ -749,12 +713,9 @@ impl TableMetadataBuilder {
             let is_new_field = !self.metadata.name_exists_in_any_schema(field_name);
 
             if has_partition_conflict && is_new_field {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot add schema field '{field_name}' because it conflicts with existing partition field name. \
+                return Err(invalid_data!(
+                    "Cannot add schema field '{field_name}' because it conflicts with existing partition field name. \
                          Schema evolution cannot introduce field names that match existing partition field names."
-                    ),
                 ));
             }
         }
@@ -794,23 +755,19 @@ impl TableMetadataBuilder {
                 let has_matching_source_id = schema_field.id == partition_field.source_id;
 
                 if !is_identity_transform {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Cannot create partition with name '{}' that conflicts with schema field and is not an identity transform.",
-                            partition_field.name
-                        ),
+                    return Err(invalid_data!(
+                        "Cannot create partition with name '{}' that conflicts with schema field and is not an identity transform.",
+                        partition_field.name
                     ));
                 }
 
                 if !has_matching_source_id {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Cannot create identity partition sourced from different field in schema. \
+                    return Err(invalid_data!(
+                        "Cannot create identity partition sourced from different field in schema. \
                              Field name '{}' has id `{}` in schema but partition source id is `{}`",
-                            partition_field.name, schema_field.id, partition_field.source_id
-                        ),
+                        partition_field.name,
+                        schema_field.id,
+                        partition_field.source_id
                     ));
                 }
             }
@@ -858,9 +815,8 @@ impl TableMetadataBuilder {
         }
 
         if self.metadata.format_version <= FormatVersion::V1 && !spec.has_sequential_ids() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot add partition spec with non-sequential field ids to format version 1 table",
+            return Err(invalid_data!(
+                "Cannot add partition spec with non-sequential field ids to format version 1 table"
             ));
         }
 
@@ -926,9 +882,8 @@ impl TableMetadataBuilder {
     pub fn set_default_partition_spec(mut self, mut spec_id: i32) -> Result<Self> {
         if spec_id == Self::LAST_ADDED {
             spec_id = self.last_added_spec_id.ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot set default partition spec to last added spec: no spec has been added.",
+                invalid_data!(
+                    "Cannot set default partition spec to last added spec: no spec has been added."
                 )
             })?;
         }
@@ -938,9 +893,8 @@ impl TableMetadataBuilder {
         }
 
         if !self.metadata.partition_specs.contains_key(&spec_id) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot set default partition spec to unknown spec with id: '{spec_id}'",),
+            return Err(invalid_data!(
+                "Cannot set default partition spec to unknown spec with id: '{spec_id}'",
             ));
         }
 
@@ -949,11 +903,8 @@ impl TableMetadataBuilder {
             .partition_specs
             .get(&spec_id)
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot set default partition spec to unknown spec with id: '{spec_id}'",
-                    ),
+                invalid_data!(
+                    "Cannot set default partition spec to unknown spec with id: '{spec_id}'",
                 )
             })?
             .clone();
@@ -987,10 +938,7 @@ impl TableMetadataBuilder {
     /// - Cannot remove the default partition spec.
     pub fn remove_partition_specs(mut self, spec_ids: &[i32]) -> Result<Self> {
         if spec_ids.contains(&self.metadata.default_spec.spec_id()) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot remove default partition spec",
-            ));
+            return Err(invalid_data!("Cannot remove default partition spec"));
         }
 
         let mut removed_specs = Vec::with_capacity(spec_ids.len());
@@ -1040,11 +988,8 @@ impl TableMetadataBuilder {
             .with_fields(sort_order.fields)
             .build(&schema)
             .map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Sort order to add is incompatible with current schema: {e}"),
-                )
-                .with_source(e)
+                invalid_data!("Sort order to add is incompatible with current schema: {e}")
+                    .with_source(e)
             })?;
 
         self.last_added_order_id = Some(new_order_id);
@@ -1064,9 +1009,8 @@ impl TableMetadataBuilder {
     pub fn set_default_sort_order(mut self, mut sort_order_id: i64) -> Result<Self> {
         if sort_order_id == Self::LAST_ADDED as i64 {
             sort_order_id = self.last_added_order_id.ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot set default sort order to last added order: no order has been added.",
+                invalid_data!(
+                    "Cannot set default sort order to last added order: no order has been added."
                 )
             })?;
         }
@@ -1076,11 +1020,8 @@ impl TableMetadataBuilder {
         }
 
         if !self.metadata.sort_orders.contains_key(&sort_order_id) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot set default sort order to unknown order with id: '{sort_order_id}'"
-                ),
+            return Err(invalid_data!(
+                "Cannot set default sort order to unknown order with id: '{sort_order_id}'"
             ));
         }
 
@@ -1217,9 +1158,8 @@ impl TableMetadataBuilder {
         if let Some(current_snapshot_id) = self.metadata.current_snapshot_id {
             let last_id = new_snapshot_log.last().map(|entry| entry.snapshot_id);
             if last_id != Some(current_snapshot_id) {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot set invalid snapshot log: latest entry is not the current snapshot",
+                return Err(invalid_data!(
+                    "Cannot set invalid snapshot log: latest entry is not the current snapshot"
                 ));
             }
         };
@@ -1289,12 +1229,10 @@ impl TableMetadataBuilder {
         let mut fresh_spec = PartitionSpecBuilder::new(fresh_schema.clone());
         for field in spec.fields() {
             let source_field_name = previous_id_to_name.get(&field.source_id).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot find source column with id {} for partition column {} in schema.",
-                        field.source_id, field.name
-                    ),
+                invalid_data!(
+                    "Cannot find source column with id {} for partition column {} in schema.",
+                    field.source_id,
+                    field.name
                 )
             })?;
             fresh_spec =
@@ -1306,12 +1244,9 @@ impl TableMetadataBuilder {
         let mut fresh_order = SortOrder::builder();
         for mut field in sort_order.fields {
             let source_field_name = previous_id_to_name.get(&field.source_id).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot find source column with id {} for sort column in schema.",
-                        field.source_id
-                    ),
+                invalid_data!(
+                    "Cannot find source column with id {} for sort column in schema.",
+                    field.source_id
                 )
             })?;
             let new_field_id = fresh_schema
@@ -1354,12 +1289,9 @@ impl TableMetadataBuilder {
             .schemas
             .get(&self.metadata.current_schema_id)
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Current schema with id '{}' not found in table metadata.",
-                        self.metadata.current_schema_id
-                    ),
+                invalid_data!(
+                    "Current schema with id '{}' not found in table metadata.",
+                    self.metadata.current_schema_id
                 )
             })
     }
@@ -1370,12 +1302,9 @@ impl TableMetadataBuilder {
             .get(&self.metadata.default_sort_order_id)
             .cloned()
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Default sort order with id '{}' not found in table metadata.",
-                        self.metadata.default_sort_order_id
-                    ),
+                invalid_data!(
+                    "Default sort order with id '{}' not found in table metadata.",
+                    self.metadata.default_sort_order_id
                 )
             })
     }
@@ -1424,10 +1353,7 @@ impl TableMetadataBuilder {
     /// Does nothing if a schema id is not present. Active schemas should not be removed.
     pub fn remove_schemas(mut self, schema_id_to_remove: &[i32]) -> Result<Self> {
         if schema_id_to_remove.contains(&self.metadata.current_schema_id) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot remove current schema",
-            ));
+            return Err(invalid_data!("Cannot remove current schema"));
         }
 
         if schema_id_to_remove.is_empty() {

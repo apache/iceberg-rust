@@ -27,6 +27,7 @@ use arrow_schema::{DataType, TimeUnit};
 use chrono::{DateTime, Datelike, Duration};
 
 use super::TransformFunction;
+use crate::error::invalid_data;
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 use crate::{Error, ErrorKind, Result};
 
@@ -49,12 +50,7 @@ impl Year {
     #[inline]
     fn timestamp_to_year_micros(timestamp: i64) -> Result<i32> {
         Ok(DateTime::from_timestamp_micros(timestamp)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Fail to convert timestamp to date in year transform",
-                )
-            })?
+            .ok_or_else(|| invalid_data!("Fail to convert timestamp to date in year transform"))?
             .year()
             - UNIX_EPOCH_YEAR)
     }
@@ -120,12 +116,8 @@ impl Month {
         // unix epoch date: 1970-01-01
         // if date > unix epoch date, delta month = (aa - 1) + 12 * (aaaa-1970)
         // if date < unix epoch date, delta month = (12 - (aa - 1)) + 12 * (1970-aaaa-1)
-        let date = DateTime::from_timestamp_micros(timestamp).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Fail to convert timestamp to date in month transform",
-            )
-        })?;
+        let date = DateTime::from_timestamp_micros(timestamp)
+            .ok_or_else(|| invalid_data!("Fail to convert timestamp to date in month transform"))?;
         let unix_epoch_date = DateTime::from_timestamp_micros(0)
             .expect("0 timestamp from unix epoch should be valid");
         if date > unix_epoch_date {
@@ -228,10 +220,7 @@ impl Day {
         };
 
         let delta = Duration::new(secs, nanos).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Failed to create 'TimeDelta' from seconds {secs} and nanos {nanos}"),
-            )
+            invalid_data!("Failed to create 'TimeDelta' from seconds {secs} and nanos {nanos}")
         })?;
 
         let days = (delta.num_days() - offset) as i32;
@@ -254,10 +243,7 @@ impl Day {
         };
 
         let delta = Duration::new(secs, nanos).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Failed to create 'TimeDelta' from seconds {secs} and nanos {nanos}"),
-            )
+            invalid_data!("Failed to create 'TimeDelta' from seconds {secs} and nanos {nanos}")
         })?;
 
         let days = (delta.num_days() - offset) as i32;

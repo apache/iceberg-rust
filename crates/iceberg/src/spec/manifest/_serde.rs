@@ -21,8 +21,9 @@ use serde_derive::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use super::{Datum, ManifestEntry, Schema, Struct};
+use crate::error::invalid_data;
 use crate::spec::{FormatVersion, Literal, RawLiteral, StructType, Type};
-use crate::{Error, ErrorKind, metadata_columns};
+use crate::{Error, metadata_columns};
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct ManifestEntryV2 {
@@ -176,10 +177,7 @@ impl DataFileSerde {
                 if let Literal::Struct(v) = v {
                     Ok(v)
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "partition value is not a struct",
-                    ))
+                    Err(invalid_data!("partition value is not a struct"))
                 }
             })
             .transpose()?
@@ -254,12 +252,7 @@ fn parse_bytes_entry(v: Vec<BytesEntry>, schema: &Schema) -> Result<HashMap<i32,
             let data_type = field
                 .field_type
                 .as_primitive_type()
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("field {} is not a primitive type", field.name),
-                    )
-                })?
+                .ok_or_else(|| invalid_data!("field {} is not a primitive type", field.name))?
                 .clone();
             m.insert(entry.key, Datum::try_from_bytes(&entry.value, data_type)?);
         }

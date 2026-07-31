@@ -34,6 +34,7 @@ pub use task::*;
 use crate::arrow::ArrowReaderBuilder;
 pub use crate::arrow::{ScanMetrics, ScanResult};
 use crate::delete_file_index::DeleteFileIndex;
+use crate::error::invalid_data;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
@@ -195,12 +196,7 @@ impl<'a> TableScanBuilder<'a> {
                 .table
                 .metadata()
                 .snapshot_by_id(snapshot_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Snapshot with id {snapshot_id} not found"),
-                    )
-                })?
+                .ok_or_else(|| invalid_data!("Snapshot with id {snapshot_id} not found"))?
                 .clone(),
             None => {
                 let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
@@ -231,9 +227,8 @@ impl<'a> TableScanBuilder<'a> {
                     continue;
                 }
                 if schema.field_by_name(column_name).is_none() {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Column {column_name} not found in table. Schema: {schema}"),
+                    return Err(invalid_data!(
+                        "Column {column_name} not found in table. Schema: {schema}"
                     ));
                 }
             }
@@ -257,10 +252,7 @@ impl<'a> TableScanBuilder<'a> {
             }
 
             let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Column {column_name} not found in table. Schema: {schema}"),
-                )
+                invalid_data!("Column {column_name} not found in table. Schema: {schema}")
             })?;
 
             schema
@@ -291,12 +283,9 @@ impl<'a> TableScanBuilder<'a> {
             .get(DEFAULT_SCHEMA_NAME_MAPPING)
             .map(|raw| {
                 serde_json::from_str::<NameMapping>(raw).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
+                    invalid_data!(
                             "Failed to parse table property {DEFAULT_SCHEMA_NAME_MAPPING} as a NameMapping"
-                        ),
-                    )
+                        )
                     .with_source(e)
                 })
             })

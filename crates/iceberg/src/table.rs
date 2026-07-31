@@ -22,13 +22,14 @@ use std::sync::Arc;
 use crate::arrow::ArrowReaderBuilder;
 use crate::encryption::EncryptionManager;
 use crate::encryption::kms::KeyManagementClient;
+use crate::error::invalid_data;
 use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
 use crate::runtime::Runtime;
 use crate::scan::TableScanBuilder;
 use crate::spec::{ManifestListReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef};
-use crate::{Error, ErrorKind, Result, TableIdent};
+use crate::{Result, TableIdent};
 
 /// Builder to create table scan.
 pub struct TableBuilder {
@@ -133,30 +134,26 @@ impl TableBuilder {
         } = self;
 
         let Some(file_io) = file_io else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "FileIO must be provided with TableBuilder.file_io()",
+            return Err(invalid_data!(
+                "FileIO must be provided with TableBuilder.file_io()"
             ));
         };
 
         let Some(metadata) = metadata else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "TableMetadataRef must be provided with TableBuilder.metadata()",
+            return Err(invalid_data!(
+                "TableMetadataRef must be provided with TableBuilder.metadata()"
             ));
         };
 
         let Some(identifier) = identifier else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "TableIdent must be provided with TableBuilder.identifier()",
+            return Err(invalid_data!(
+                "TableIdent must be provided with TableBuilder.identifier()"
             ));
         };
 
         let Some(runtime) = runtime else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Runtime must be provided with TableBuilder.runtime()",
+            return Err(invalid_data!(
+                "Runtime must be provided with TableBuilder.runtime()"
             ));
         };
 
@@ -246,12 +243,9 @@ impl Table {
 
     /// Returns current metadata location in a result.
     pub fn metadata_location_result(&self) -> Result<&str> {
-        self.metadata_location.as_deref().ok_or(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Metadata location does not exist for table: {}",
-                self.identifier
-            ),
+        self.metadata_location.as_deref().ok_or(invalid_data!(
+            "Metadata location does not exist for table: {}",
+            self.identifier
         ))
     }
 
@@ -408,6 +402,7 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::ErrorKind;
     use crate::encryption::SensitiveBytes;
     use crate::encryption::kms::MemoryKeyManagementClient;
     use crate::spec::TableProperties;

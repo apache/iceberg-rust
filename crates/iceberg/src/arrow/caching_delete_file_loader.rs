@@ -27,6 +27,7 @@ use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
 use crate::arrow::scan_metrics::ScanMetrics;
 use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
+use crate::error::invalid_data;
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Predicate, Reference};
 use crate::io::FileIO;
@@ -348,29 +349,23 @@ impl CachingDeleteFileLoader {
             let columns = batch.columns();
 
             let Some(file_paths) = columns[0].as_any().downcast_ref::<StringArray>() else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Could not downcast file paths array to StringArray",
+                return Err(invalid_data!(
+                    "Could not downcast file paths array to StringArray"
                 ));
             };
             let Some(positions) = columns[1].as_any().downcast_ref::<Int64Array>() else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Could not downcast positions array to Int64Array",
+                return Err(invalid_data!(
+                    "Could not downcast positions array to Int64Array"
                 ));
             };
 
             for (file_path, pos) in file_paths.iter().zip(positions.iter()) {
                 let (Some(file_path), Some(pos)) = (file_path, pos) else {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "null values in delete file",
-                    ));
+                    return Err(invalid_data!("null values in delete file"));
                 };
                 if pos < 0 {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("negative position in delete file {file_path}: {pos}"),
+                    return Err(invalid_data!(
+                        "negative position in delete file {file_path}: {pos}"
                     ));
                 }
 

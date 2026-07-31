@@ -28,6 +28,7 @@ use arrow_schema::{DataType, FieldRef, TimeUnit};
 use uuid::Uuid;
 
 use super::get_field_id_from_metadata;
+use crate::error::invalid_data;
 use crate::spec::{
     ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveLiteral, PrimitiveType,
     SchemaWithPartnerVisitor, Struct, StructType, Type, VariantType, visit_struct_with_partner,
@@ -57,12 +58,9 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
     ) -> Result<Vec<Option<Literal>>> {
         // Make there is no null value if the field is required
         if field.required && value.iter().any(Option::is_none) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The field is required but has null value",
-            )
-            .with_context("field_id", field.id.to_string())
-            .with_context("field_name", &field.name));
+            return Err(invalid_data!("The field is required but has null value")
+                .with_context("field_id", field.id.to_string())
+                .with_context("field_name", &field.name));
         }
         Ok(value)
     }
@@ -75,12 +73,11 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
     ) -> Result<Vec<Option<Literal>>> {
         let row_len = results.first().map(|column| column.len()).unwrap_or(0);
         if let Some(col) = results.iter().find(|col| col.len() != row_len) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The struct columns have different row length",
-            )
-            .with_context("first col length", row_len.to_string())
-            .with_context("actual col length", col.len().to_string()));
+            return Err(
+                invalid_data!("The struct columns have different row length")
+                    .with_context("first col length", row_len.to_string())
+                    .with_context("actual col length", col.len().to_string()),
+            );
         }
 
         let mut struct_literals = Vec::with_capacity(row_len);
@@ -111,19 +108,14 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
         elements: Vec<Option<Literal>>,
     ) -> Result<Vec<Option<Literal>>> {
         if list.element_field.required && elements.iter().any(Option::is_none) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The list should not have null value",
-            ));
+            return Err(invalid_data!("The list should not have null value"));
         }
         match array.data_type() {
             DataType::List(_) => {
                 let offset = array
                     .as_any()
                     .downcast_ref::<ListArray>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a list array")
-                    })?
+                    .ok_or_else(|| invalid_data!("The partner is not a list array"))?
                     .offsets();
                 // combine the result according to the offset
                 let mut result = Vec::with_capacity(offset.len() - 1);
@@ -138,12 +130,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 let offset = array
                     .as_any()
                     .downcast_ref::<LargeListArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The partner is not a large list array",
-                        )
-                    })?
+                    .ok_or_else(|| invalid_data!("The partner is not a large list array"))?
                     .offsets();
                 // combine the result according to the offset
                 let mut result = Vec::with_capacity(offset.len() - 1);
@@ -163,10 +150,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 }
                 Ok(result)
             }
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The partner is not a list type",
-            )),
+            _ => Err(invalid_data!("The partner is not a list type")),
         }
     }
 
@@ -179,16 +163,15 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
     ) -> Result<Vec<Option<Literal>>> {
         // Make sure key_value and value have the same row length
         if key_values.len() != values.len() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The key value and value of map should have the same row length",
+            return Err(invalid_data!(
+                "The key value and value of map should have the same row length"
             ));
         }
 
         let offsets = partner
             .as_any()
             .downcast_ref::<MapArray>()
-            .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "The partner is not a map array"))?
+            .ok_or_else(|| invalid_data!("The partner is not a map array"))?
             .offsets();
         // combine the result according to the offset
         let mut result = Vec::with_capacity(offsets.len() - 1);
@@ -210,65 +193,47 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 let array = partner
                     .as_any()
                     .downcast_ref::<BooleanArray>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a boolean array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a boolean array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::bool)).collect())
             }
             PrimitiveType::Int => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<Int32Array>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a int32 array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a int32 array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::int)).collect())
             }
             PrimitiveType::Long => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<Int64Array>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a int64 array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a int64 array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::long)).collect())
             }
             PrimitiveType::Float => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<Float32Array>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a float32 array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a float32 array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::float)).collect())
             }
             PrimitiveType::Double => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<Float64Array>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a float64 array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a float64 array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::double)).collect())
             }
             PrimitiveType::Decimal { precision, scale } => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<Decimal128Array>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The partner is not a decimal128 array",
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a decimal128 array"))?;
                 if let DataType::Decimal128(arrow_precision, arrow_scale) = array.data_type()
                     && (*arrow_precision as u32 != *precision || *arrow_scale as u32 != *scale)
                 {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "The precision or scale ({arrow_precision},{arrow_scale}) of arrow decimal128 array is not compatible with iceberg decimal type ({precision},{scale})"
-                        ),
+                    return Err(invalid_data!(
+                        "The precision or scale ({arrow_precision},{arrow_scale}) of arrow decimal128 array is not compatible with iceberg decimal type ({precision},{scale})"
                     ));
                 }
                 Ok(array.iter().map(|v| v.map(Literal::decimal)).collect())
@@ -277,54 +242,35 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 let array = partner
                     .as_any()
                     .downcast_ref::<Date32Array>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a date32 array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a date32 array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::date)).collect())
             }
             PrimitiveType::Time => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<Time64MicrosecondArray>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a time64 array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a time64 array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::time)).collect())
             }
             PrimitiveType::Timestamp => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<TimestampMicrosecondArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The partner is not a timestamp array",
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a timestamp array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::timestamp)).collect())
             }
             PrimitiveType::Timestamptz => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<TimestampMicrosecondArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The partner is not a timestamptz array",
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a timestamptz array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::timestamptz)).collect())
             }
             PrimitiveType::TimestampNs => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<TimestampNanosecondArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The partner is not a timestamp_ns array",
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a timestamp_ns array"))?;
                 Ok(array
                     .iter()
                     .map(|v| v.map(Literal::timestamp_nano))
@@ -334,12 +280,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 let array = partner
                     .as_any()
                     .downcast_ref::<TimestampNanosecondArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The partner is not a timestamptz_ns array",
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a timestamptz_ns array"))?;
                 Ok(array
                     .iter()
                     .map(|v| v.map(Literal::timestamptz_nano))
@@ -351,54 +292,37 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 } else if let Some(array) = partner.as_any().downcast_ref::<StringArray>() {
                     Ok(array.iter().map(|v| v.map(Literal::string)).collect())
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "The partner is not a string array",
-                    ))
+                    Err(invalid_data!("The partner is not a string array"))
                 }
             }
             PrimitiveType::Uuid => {
                 if let Some(array) = partner.as_any().downcast_ref::<FixedSizeBinaryArray>() {
                     if array.value_length() != 16 {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "The partner is not a uuid array",
-                        ));
+                        return Err(invalid_data!("The partner is not a uuid array"));
                     }
                     Ok(array
                         .iter()
                         .map(|v| {
                             v.map(|v| {
                                 Ok(Literal::uuid(Uuid::from_bytes(v.try_into().map_err(
-                                    |_| {
-                                        Error::new(
-                                            ErrorKind::DataInvalid,
-                                            "Failed to convert binary to uuid",
-                                        )
-                                    },
+                                    |_| invalid_data!("Failed to convert binary to uuid"),
                                 )?)))
                             })
                             .transpose()
                         })
                         .collect::<Result<Vec<_>>>()?)
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "The partner is not a uuid array",
-                    ))
+                    Err(invalid_data!("The partner is not a uuid array"))
                 }
             }
             PrimitiveType::Fixed(len) => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<FixedSizeBinaryArray>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a fixed array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a fixed array"))?;
                 if array.value_length() != *len as i32 {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "The length of fixed size binary array is not compatible with iceberg fixed type",
+                    return Err(invalid_data!(
+                        "The length of fixed size binary array is not compatible with iceberg fixed type"
                     ));
                 }
                 Ok(array
@@ -418,10 +342,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                         .map(|v| v.map(|v| Literal::binary(v.to_vec())))
                         .collect())
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "The partner is not a binary array",
-                    ))
+                    Err(invalid_data!("The partner is not a binary array"))
                 }
             }
         }
@@ -493,10 +414,7 @@ impl Default for ArrowArrayAccessor {
 impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
     fn struct_partner<'a>(&self, schema_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
         if !matches!(schema_partner.data_type(), DataType::Struct(_)) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The schema partner is not a struct type",
-            ));
+            return Err(invalid_data!("The schema partner is not a struct type"));
         }
 
         Ok(schema_partner)
@@ -511,11 +429,8 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
             .as_any()
             .downcast_ref::<StructArray>()
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "The struct partner is not a struct array, partner: {struct_partner:?}"
-                    ),
+                invalid_data!(
+                    "The struct partner is not a struct array, partner: {struct_partner:?}"
                 )
             })?;
 
@@ -523,12 +438,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
             .fields()
             .iter()
             .position(|arrow_field| self.match_mode.match_field(arrow_field, field))
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Field id {} not found in struct array", field.id),
-                )
-            })?;
+            .ok_or_else(|| invalid_data!("Field id {} not found in struct array", field.id))?;
 
         Ok(struct_array.column(field_pos))
     }
@@ -539,24 +449,14 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                 let list_array = list_partner
                     .as_any()
                     .downcast_ref::<ListArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The list partner is not a list array",
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_data!("The list partner is not a list array"))?;
                 Ok(list_array.values())
             }
             DataType::LargeList(_) => {
                 let list_array = list_partner
                     .as_any()
                     .downcast_ref::<LargeListArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The list partner is not a large list array",
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_data!("The list partner is not a large list array"))?;
                 Ok(list_array.values())
             }
             DataType::FixedSizeList(_, _) => {
@@ -564,17 +464,11 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                     .as_any()
                     .downcast_ref::<FixedSizeListArray>()
                     .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The list partner is not a fixed size list array",
-                        )
+                        invalid_data!("The list partner is not a fixed size list array")
                     })?;
                 Ok(list_array.values())
             }
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The list partner is not a list type",
-            )),
+            _ => Err(invalid_data!("The list partner is not a list type")),
         }
     }
 
@@ -582,9 +476,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
         let map_array = map_partner
             .as_any()
             .downcast_ref::<MapArray>()
-            .ok_or_else(|| {
-                Error::new(ErrorKind::DataInvalid, "The map partner is not a map array")
-            })?;
+            .ok_or_else(|| invalid_data!("The map partner is not a map array"))?;
         Ok(map_array.keys())
     }
 
@@ -592,9 +484,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
         let map_array = map_partner
             .as_any()
             .downcast_ref::<MapArray>()
-            .ok_or_else(|| {
-                Error::new(ErrorKind::DataInvalid, "The map partner is not a map array")
-            })?;
+            .ok_or_else(|| invalid_data!("The map partner is not a map array"))?;
         Ok(map_array.values())
     }
 }
@@ -706,12 +596,9 @@ pub(crate) fn create_primitive_array_single_element(
             let array = Decimal128Array::from(vec![{ *v }])
                 .with_precision_and_scale(*precision, *scale)
                 .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
+                    invalid_data!(
                             "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                        ),
-                    )
+                        )
                 })?;
             Ok(Arc::new(array))
         }
@@ -719,12 +606,9 @@ pub(crate) fn create_primitive_array_single_element(
             let array = Decimal128Array::from(vec![*v as i128])
                 .with_precision_and_scale(*precision, *scale)
                 .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
+                    invalid_data!(
                             "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                        ),
-                    )
+                        )
                 })?;
             Ok(Arc::new(array))
         }
@@ -732,12 +616,9 @@ pub(crate) fn create_primitive_array_single_element(
             let array = Decimal128Array::from(vec![Option::<i128>::None])
                 .with_precision_and_scale(*precision, *scale)
                 .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
+                    invalid_data!(
                             "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                        ),
-                    )
+                        )
                 })?;
             Ok(Arc::new(array))
         }
@@ -876,10 +757,7 @@ pub(crate) fn create_primitive_array_repeated(
         (DataType::FixedSizeBinary(len), Some(PrimitiveLiteral::Binary(value))) => {
             let repeated: Vec<&[u8]> = vec![value.as_slice(); num_rows];
             Arc::new(FixedSizeBinaryArray::try_from_iter(repeated.into_iter()).map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Failed to create FixedSizeBinary({len}) array: {e}"),
-                )
+                invalid_data!("Failed to create FixedSizeBinary({len}) array: {e}")
             })?)
         }
         (DataType::Time64(TimeUnit::Microsecond), Some(PrimitiveLiteral::Long(value))) => {
@@ -890,12 +768,9 @@ pub(crate) fn create_primitive_array_repeated(
                 Decimal128Array::from(vec![*value; num_rows])
                     .with_precision_and_scale(*precision, *scale)
                     .map_err(|e| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
+                        invalid_data!(
                                 "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                            ),
-                        )
+                            )
                     })?,
             )
         }
@@ -904,12 +779,9 @@ pub(crate) fn create_primitive_array_repeated(
                 Decimal128Array::from(vec![*value as i128; num_rows])
                     .with_precision_and_scale(*precision, *scale)
                     .map_err(|e| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
+                        invalid_data!(
                                 "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                            ),
-                        )
+                            )
                     })?,
             )
         }
@@ -921,12 +793,9 @@ pub(crate) fn create_primitive_array_repeated(
                 Decimal128Array::from(vals)
                     .with_precision_and_scale(*precision, *scale)
                     .map_err(|e| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
+                        invalid_data!(
                                 "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                            ),
-                        )
+                            )
                     })?,
             )
         }

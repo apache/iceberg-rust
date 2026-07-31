@@ -21,12 +21,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 
+use crate::error::invalid_data;
 use crate::spec::{
     MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMetadata, TableProperties,
 };
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
-use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
+use crate::{Error, Result, TableRequirement, TableUpdate};
 
 /// A transaction action that removes snapshots from table metadata.
 ///
@@ -102,9 +103,8 @@ impl ExpireSnapshotsAction {
     fn plan(&self, table: &Table, properties: &TableProperties) -> Result<ExpirePlan> {
         // Matches Java `RemoveSnapshots.retainLast`, which requires at least one snapshot.
         if self.retain_last == Some(0) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Number of snapshots to retain must be at least 1",
+            return Err(invalid_data!(
+                "Number of snapshots to retain must be at least 1"
             ));
         }
 
@@ -274,7 +274,7 @@ impl ExpireSnapshotsAction {
 
     fn reference_error(metadata: &TableMetadata, snapshot_id: i64) -> Error {
         if metadata.current_snapshot_id() == Some(snapshot_id) {
-            return Error::new(ErrorKind::DataInvalid, "Cannot expire the current snapshot");
+            return invalid_data!("Cannot expire the current snapshot");
         }
         let ref_names: Vec<&str> = metadata
             .refs
@@ -282,10 +282,7 @@ impl ExpireSnapshotsAction {
             .filter(|(_, snapshot_ref)| snapshot_ref.snapshot_id == snapshot_id)
             .map(|(ref_name, _)| ref_name.as_str())
             .collect();
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!("Cannot expire snapshot {snapshot_id}: still referenced by {ref_names:?}"),
-        )
+        invalid_data!("Cannot expire snapshot {snapshot_id}: still referenced by {ref_names:?}")
     }
 }
 
@@ -303,9 +300,8 @@ impl TransactionAction for ExpireSnapshotsAction {
 
         // Expiring metadata defeats a user's explicit decision to disable GC (Java refuses too).
         if !properties.gc_enabled {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot expire snapshots: gc.enabled is false",
+            return Err(invalid_data!(
+                "Cannot expire snapshots: gc.enabled is false"
             ));
         }
 

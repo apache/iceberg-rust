@@ -31,6 +31,7 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::value::{create_primitive_array_repeated, create_primitive_array_single_element};
 use crate::arrow::{datum_to_arrow_type_with_ree, schema_to_arrow_schema, type_to_arrow_type};
+use crate::error::invalid_data;
 use crate::metadata_columns::{
     RESERVED_COL_NAME_PARTITION, RESERVED_FIELD_ID_PARTITION, get_metadata_field,
 };
@@ -249,13 +250,10 @@ impl StructConstant {
     /// the same length.
     pub(crate) fn new(fields: Fields, child_values: Vec<Option<PrimitiveLiteral>>) -> Result<Self> {
         if fields.len() != child_values.len() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "StructConstant: fields length ({}) != child_values length ({})",
-                    fields.len(),
-                    child_values.len()
-                ),
+            return Err(invalid_data!(
+                "StructConstant: fields length ({}) != child_values length ({})",
+                fields.len(),
+                child_values.len()
             ));
         }
         Ok(Self {
@@ -740,10 +738,7 @@ impl RecordBatchTransformer {
                     // Iceberg-Java's Parquet readers (BaseParquetReaders / SparkParquetReaders),
                     // which raise "Missing required field: <name>".
                     if iceberg_field.initial_default.is_none() && iceberg_field.required {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Missing required field: {}", iceberg_field.name),
-                        ));
+                        return Err(invalid_data!("Missing required field: {}", iceberg_field.name));
                     }
 
                     let default_value = iceberg_field.initial_default.as_ref().and_then(|lit| {
@@ -772,12 +767,9 @@ impl RecordBatchTransformer {
         for (source_field_idx, source_field) in source_schema.fields.iter().enumerate() {
             // Check if field has a field ID in metadata
             if let Some(field_id_str) = source_field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
-                let this_field_id = field_id_str.parse().map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("field id not parseable as an i32: {e}"),
-                    )
-                })?;
+                let this_field_id = field_id_str
+                    .parse()
+                    .map_err(|e| invalid_data!("field id not parseable as an i32: {e}"))?;
 
                 field_id_to_source_schema
                     .insert(this_field_id, (source_field.clone(), source_field_idx));

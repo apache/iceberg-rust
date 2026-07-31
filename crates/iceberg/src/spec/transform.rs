@@ -27,7 +27,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use super::values::decimal_utils::decimal_from_i128_with_scale;
 use super::{Datum, PrimitiveLiteral};
 use crate::ErrorKind;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, invalid_data};
 use crate::expr::{
     BinaryExpression, BoundPredicate, BoundReference, Predicate, PredicateOperator, Reference,
     SetExpression, UnaryExpression,
@@ -163,9 +163,8 @@ impl Transform {
                 if matches!(input_type, Type::Primitive(_)) {
                     Ok(input_type.clone())
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("{input_type} is not a valid input type of identity transform",),
+                    Err(invalid_data!(
+                        "{input_type} is not a valid input type of identity transform",
                     ))
                 }
             }
@@ -187,15 +186,13 @@ impl Transform {
                         | PrimitiveType::Uuid
                         | PrimitiveType::Fixed(_)
                         | PrimitiveType::Binary => Ok(Type::Primitive(PrimitiveType::Int)),
-                        _ => Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("{input_type} is not a valid input type of bucket transform",),
+                        _ => Err(invalid_data!(
+                            "{input_type} is not a valid input type of bucket transform",
                         )),
                     }
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("{input_type} is not a valid input type of bucket transform",),
+                    Err(invalid_data!(
+                        "{input_type} is not a valid input type of bucket transform",
                     ))
                 }
             }
@@ -207,15 +204,13 @@ impl Transform {
                         | PrimitiveType::String
                         | PrimitiveType::Binary
                         | PrimitiveType::Decimal { .. } => Ok(input_type.clone()),
-                        _ => Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("{input_type} is not a valid input type of truncate transform",),
+                        _ => Err(invalid_data!(
+                            "{input_type} is not a valid input type of truncate transform",
                         )),
                     }
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("{input_type} is not a valid input type of truncate transform",),
+                    Err(invalid_data!(
+                        "{input_type} is not a valid input type of truncate transform",
                     ))
                 }
             }
@@ -227,15 +222,13 @@ impl Transform {
                         | PrimitiveType::TimestampNs
                         | PrimitiveType::TimestamptzNs
                         | PrimitiveType::Date => Ok(Type::Primitive(PrimitiveType::Int)),
-                        _ => Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("{input_type} is not a valid input type of {self} transform",),
+                        _ => Err(invalid_data!(
+                            "{input_type} is not a valid input type of {self} transform",
                         )),
                     }
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("{input_type} is not a valid input type of {self} transform",),
+                    Err(invalid_data!(
+                        "{input_type} is not a valid input type of {self} transform",
                     ))
                 }
             }
@@ -247,15 +240,13 @@ impl Transform {
                         | PrimitiveType::TimestampNs
                         | PrimitiveType::TimestamptzNs
                         | PrimitiveType::Date => Ok(Type::Primitive(PrimitiveType::Date)),
-                        _ => Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("{input_type} is not a valid input type of {self} transform",),
+                        _ => Err(invalid_data!(
+                            "{input_type} is not a valid input type of {self} transform",
                         )),
                     }
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("{input_type} is not a valid input type of {self} transform",),
+                    Err(invalid_data!(
+                        "{input_type} is not a valid input type of {self} transform",
                     ))
                 }
             }
@@ -266,15 +257,13 @@ impl Transform {
                         | PrimitiveType::Timestamptz
                         | PrimitiveType::TimestampNs
                         | PrimitiveType::TimestamptzNs => Ok(Type::Primitive(PrimitiveType::Int)),
-                        _ => Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("{input_type} is not a valid input type of {self} transform",),
+                        _ => Err(invalid_data!(
+                            "{input_type} is not a valid input type of {self} transform",
                         )),
                     }
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("{input_type} is not a valid input type of {self} transform",),
+                    Err(invalid_data!(
+                        "{input_type} is not a valid input type of {self} transform",
                     ))
                 }
             }
@@ -377,12 +366,9 @@ impl Transform {
                             PrimitiveLiteral::String(s) => s.len(),
                             PrimitiveLiteral::Binary(b) => b.len(),
                             _ => {
-                                return Err(Error::new(
-                                    ErrorKind::DataInvalid,
-                                    format!(
-                                        "Expected a string or binary literal, got: {:?}",
-                                        expr.literal()
-                                    ),
+                                return Err(invalid_data!(
+                                    "Expected a string or binary literal, got: {:?}",
+                                    expr.literal()
                                 ));
                             }
                         };
@@ -404,12 +390,9 @@ impl Transform {
                             PrimitiveLiteral::String(s) => s.len(),
                             PrimitiveLiteral::Binary(b) => b.len(),
                             _ => {
-                                return Err(Error::new(
-                                    ErrorKind::DataInvalid,
-                                    format!(
-                                        "Expected a string or binary literal, got: {:?}",
-                                        expr.literal()
-                                    ),
+                                return Err(invalid_data!(
+                                    "Expected a string or binary literal, got: {:?}",
+                                    expr.literal()
                                 ));
                             }
                         };
@@ -913,9 +896,8 @@ impl Transform {
                 | &PrimitiveType::TimestampNs
                 | &PrimitiveType::TimestamptzNs
         ) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Expected a numeric literal, got: {boundary:?}"),
+            return Err(invalid_data!(
+                "Expected a numeric literal, got: {boundary:?}"
             ));
         }
 
@@ -1020,11 +1002,7 @@ impl FromStr for Transform {
                     .trim_end_matches(']')
                     .parse()
                     .map_err(|err| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("transform bucket type {v:?} is invalid"),
-                        )
-                        .with_source(err)
+                        invalid_data!("transform bucket type {v:?} is invalid").with_source(err)
                     })?;
 
                 Transform::Bucket(length)
@@ -1037,20 +1015,13 @@ impl FromStr for Transform {
                     .trim_end_matches(']')
                     .parse()
                     .map_err(|err| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("transform truncate type {v:?} is invalid"),
-                        )
-                        .with_source(err)
+                        invalid_data!("transform truncate type {v:?} is invalid").with_source(err)
                     })?;
 
                 Transform::Truncate(width)
             }
             v => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("transform {v:?} is invalid"),
-                ));
+                return Err(invalid_data!("transform {v:?} is invalid"));
             }
         };
 

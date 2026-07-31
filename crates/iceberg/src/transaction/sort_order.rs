@@ -19,11 +19,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::spec::{NullOrder, SchemaRef, SortDirection, SortField, SortOrder, Transform};
 use crate::table::Table;
 use crate::transaction::{ActionCommit, TransactionAction};
-use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
+use crate::{TableRequirement, TableUpdate};
 
 /// Represents a sort field whose construction and validation are deferred until commit time.
 /// This avoids the need to pass a `Table` reference into methods like `asc` or `desc` when
@@ -37,12 +37,9 @@ struct PendingSortField {
 
 impl PendingSortField {
     fn to_sort_field(&self, schema: &SchemaRef) -> Result<SortField> {
-        let field_id = schema.field_id_by_name(self.name.as_str()).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot find field {} in table schema", self.name),
-            )
-        })?;
+        let field_id = schema
+            .field_id_by_name(self.name.as_str())
+            .ok_or_else(|| invalid_data!("Cannot find field {} in table schema", self.name))?;
 
         Ok(SortField::builder()
             .source_id(field_id)
