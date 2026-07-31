@@ -78,7 +78,7 @@
 //!     let table = catalog
 //!         .load_table(&TableIdent::from_strs(["hello", "world"])?)
 //!         .await?;
-//!     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+//!     let location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
 //!     let file_name_generator = DefaultFileNameGenerator::new(
 //!         "test".to_string(),
 //!         None,
@@ -207,7 +207,7 @@
 //!         table.metadata().current_schema().clone(),
 //!         Struct::from_iter(vec![Some(Literal::string("Seattle"))]),
 //!     );
-//!     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+//!     let location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
 //!     let file_name_generator = DefaultFileNameGenerator::new(
 //!         "test".to_string(),
 //!         None,
@@ -272,7 +272,7 @@
 //! #     .load("memory", HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), "file:///path/to/warehouse".to_string())]))
 //! #     .await?;
 //! # let table = catalog.load_table(&TableIdent::from_strs(["hello", "world"])?).await?;
-//! # let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+//! # let location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
 //! # let file_name_generator = DefaultFileNameGenerator::new("test".to_string(), None, iceberg::spec::DataFileFormat::Parquet);
 //! # let parquet_writer_builder = ParquetWriterBuilder::new(WriterProperties::default(), table.metadata().current_schema().clone());
 //! # let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
@@ -336,7 +336,7 @@
 //! #     .load("memory", HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), "file:///path/to/warehouse".to_string())]))
 //! #     .await?;
 //! # let table = catalog.load_table(&TableIdent::from_strs(["hello", "world"])?).await?;
-//! # let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+//! # let location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
 //! # let file_name_generator = DefaultFileNameGenerator::new("test".to_string(), None, iceberg::spec::DataFileFormat::Parquet);
 //! # let parquet_writer_builder = ParquetWriterBuilder::new(WriterProperties::default(), table.metadata().current_schema().clone());
 //! # let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(

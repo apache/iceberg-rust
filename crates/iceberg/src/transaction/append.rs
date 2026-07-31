@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -34,7 +34,6 @@ pub struct FastAppendAction {
     check_duplicate: bool,
     // below are properties used to create SnapshotProducer when commit
     commit_uuid: Option<Uuid>,
-    key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
 }
@@ -44,7 +43,6 @@ impl FastAppendAction {
         Self {
             check_duplicate: true,
             commit_uuid: None,
-            key_metadata: None,
             snapshot_properties: HashMap::default(),
             added_data_files: vec![],
         }
@@ -68,16 +66,22 @@ impl FastAppendAction {
         self
     }
 
-    /// Set key metadata for manifest files.
-    pub fn set_key_metadata(mut self, key_metadata: Vec<u8>) -> Self {
-        self.key_metadata = Some(key_metadata);
-        self
-    }
-
     /// Set snapshot summary properties.
     pub fn set_snapshot_properties(mut self, snapshot_properties: HashMap<String, String>) -> Self {
         self.snapshot_properties = snapshot_properties;
         self
+    }
+
+    /// Collapse files sharing a path to their first occurrence, so a single
+    /// manifest never references the same file twice. Always runs (unlike the
+    /// `check_duplicate`-gated cross-snapshot check) since it is in-memory only.
+    fn dedupe_added_files(&self) -> Vec<DataFile> {
+        let mut seen = HashSet::with_capacity(self.added_data_files.len());
+        self.added_data_files
+            .iter()
+            .filter(|data_file| seen.insert(data_file.file_path.as_str()))
+            .cloned()
+            .collect()
     }
 }
 
@@ -87,9 +91,8 @@ impl TransactionAction for FastAppendAction {
         let snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
-            self.key_metadata.clone(),
             self.snapshot_properties.clone(),
-            self.added_data_files.clone(),
+            self.dedupe_added_files(),
         );
 
         // validate added files
@@ -128,17 +131,21 @@ impl SnapshotProduceOperation for FastAppendOperation {
             return Ok(vec![]);
         };
 
-        let manifest_list = snapshot
-            .load_manifest_list(
-                snapshot_produce.table.file_io(),
-                &snapshot_produce.table.metadata_ref(),
-            )
+        let manifest_list = snapshot_produce
+            .table
+            .manifest_list_reader(snapshot)
+            .load()
             .await?;
 
         Ok(manifest_list
             .entries()
             .iter()
-            .filter(|entry| entry.has_added_files() || entry.has_existing_files())
+            .filter(|entry| {
+                // Keep delete-only manifests too: they record which files were removed and
+                // must persist across snapshots until `expire_snapshots` cleans them up.
+                // Dropping them lets the removed files reappear as live data (see #2148).
+                entry.has_added_files() || entry.has_existing_files() || entry.has_deleted_files()
+            })
             .cloned()
             .collect())
     }
@@ -147,14 +154,302 @@ impl SnapshotProduceOperation for FastAppendOperation {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::fs;
     use std::sync::Arc;
 
+    use minijinja::{AutoEscape, Environment, Value, context};
+    use tempfile::TempDir;
+    use uuid::Uuid;
+
+    use crate::encryption::kms::MemoryKeyManagementClient;
+    use crate::encryption::{SensitiveBytes, StandardKeyMetadata};
+    use crate::io::FileIO;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, Struct,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
+        ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, SnapshotRef,
+        Struct, TableMetadata,
     };
+    use crate::table::Table;
+    use crate::test_utils::{make_encrypted_table, test_runtime};
     use crate::transaction::tests::make_v2_minimal_table;
     use crate::transaction::{Transaction, TransactionAction};
-    use crate::{TableRequirement, TableUpdate};
+    use crate::{TableIdent, TableRequirement, TableUpdate};
+
+    fn render_template(template: &str, ctx: Value) -> String {
+        let mut env = Environment::new();
+        env.set_auto_escape_callback(|_| AutoEscape::None);
+        env.render_str(template, ctx).unwrap()
+    }
+
+    /// Builds a table whose current snapshot's manifest list contains a data manifest
+    /// followed by a delete-only manifest (one entry with `ManifestStatus::Deleted`,
+    /// so `deleted_files_count > 0` while `added_files_count == existing_files_count == 0`).
+    ///
+    /// Returns the table plus the `manifest_path` of the delete-only manifest so callers
+    /// can assert whether a subsequent append carries it forward.
+    async fn make_table_with_delete_only_manifest() -> (Table, TempDir, String) {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().join("table1");
+        let manifest_list_location = table_location.join("metadata/manifests_list_1.avro");
+        let table_metadata_location = table_location.join("metadata/v1.json");
+
+        let file_io = FileIO::new_with_fs();
+
+        let template = fs::read_to_string(format!(
+            "{}/testdata/example_table_metadata_v2.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        // The template has two snapshots; point the current one at our manifest list.
+        let metadata_json = render_template(&template, context! {
+            table_location => &table_location,
+            manifest_list_1_location => &manifest_list_location,
+            manifest_list_2_location => &manifest_list_location,
+            table_metadata_1_location => &table_metadata_location,
+        });
+        let table_metadata = serde_json::from_str::<TableMetadata>(&metadata_json).unwrap();
+
+        let table = Table::builder()
+            .metadata(table_metadata)
+            .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
+            .file_io(file_io)
+            .metadata_location(table_metadata_location.to_str().unwrap())
+            .runtime(test_runtime())
+            .build()
+            .unwrap();
+
+        let current_snapshot = table.metadata().current_snapshot().unwrap();
+        let schema = current_snapshot.schema(table.metadata()).unwrap();
+        let partition_spec = table.metadata().default_partition_spec();
+
+        let next_manifest_file = |location: &str| {
+            table
+                .file_io()
+                .new_output(format!(
+                    "{}/metadata/manifest_{}.avro",
+                    location,
+                    Uuid::new_v4()
+                ))
+                .unwrap()
+        };
+        let table_location_str = table_location.to_str().unwrap().to_string();
+
+        // Data manifest: one Added data file.
+        let mut data_writer = ManifestWriterBuilder::new(
+            next_manifest_file(&table_location_str),
+            Some(current_snapshot.snapshot_id()),
+            schema.clone(),
+            partition_spec.as_ref().clone(),
+        )
+        .build_v2_data();
+        data_writer
+            .add_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFileBuilder::default()
+                            .partition_spec_id(0)
+                            .content(DataContentType::Data)
+                            .file_path(format!("{table_location_str}/data.parquet"))
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(100))]))
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let data_manifest = data_writer.write_manifest_file().await.unwrap();
+
+        // Delete-only manifest: a single Deleted entry, nothing added or existing.
+        let mut delete_writer = ManifestWriterBuilder::new(
+            next_manifest_file(&table_location_str),
+            Some(current_snapshot.snapshot_id()),
+            schema.clone(),
+            partition_spec.as_ref().clone(),
+        )
+        .build_v2_data();
+        delete_writer
+            .add_delete_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Deleted)
+                    .sequence_number(0)
+                    .file_sequence_number(0)
+                    .data_file(
+                        DataFileBuilder::default()
+                            .partition_spec_id(0)
+                            .content(DataContentType::Data)
+                            .file_path(format!("{table_location_str}/removed.parquet"))
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(100))]))
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let delete_manifest = delete_writer.write_manifest_file().await.unwrap();
+        let delete_manifest_path = delete_manifest.manifest_path.clone();
+
+        // Sanity: the delete manifest really is delete-only.
+        assert!(delete_manifest.has_deleted_files());
+        assert!(!delete_manifest.has_added_files());
+        assert!(!delete_manifest.has_existing_files());
+
+        let mut manifest_list_writer = ManifestListWriter::v2(
+            table
+                .file_io()
+                .new_output(current_snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap(),
+            current_snapshot.snapshot_id(),
+            current_snapshot.parent_snapshot_id(),
+            current_snapshot.sequence_number(),
+        );
+        manifest_list_writer
+            .add_manifests(vec![data_manifest, delete_manifest].into_iter())
+            .unwrap();
+        manifest_list_writer.close().await.unwrap();
+
+        (table, tmp_dir, delete_manifest_path)
+    }
+
+    /// Regression test for #2148: a `fast_append` must carry delete-only manifests
+    /// forward into the new snapshot. Dropping them lets the files they mark as
+    /// removed reappear as live data on the next append.
+    #[tokio::test]
+    async fn test_fast_append_preserves_delete_only_manifest() {
+        let (table, _tmp_dir, delete_manifest_path) = make_table_with_delete_only_manifest().await;
+
+        // Append a new data file via the public transaction API.
+        let new_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(format!("{}/appended.parquet", table.metadata().location()))
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(100))]))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![new_file]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_snapshot: SnapshotRef = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            SnapshotRef::new(snapshot.clone())
+        } else {
+            unreachable!("first update of a fast append should be AddSnapshot")
+        };
+
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot)
+            .load()
+            .await
+            .unwrap();
+
+        assert!(
+            manifest_list
+                .entries()
+                .iter()
+                .any(|m| m.manifest_path == delete_manifest_path),
+            "delete-only manifest {delete_manifest_path} was dropped from the new snapshot's \
+             manifest list; the files it removed would reappear as live data"
+        );
+    }
+
+    /// Load the data files written by a single-manifest fast-append commit.
+    async fn committed_data_files(table: &Table, updates: &[TableUpdate]) -> Vec<DataFile> {
+        let TableUpdate::AddSnapshot { snapshot } = &updates[0] else {
+            unreachable!("first update is always AddSnapshot")
+        };
+        let manifest_list = table
+            .manifest_list_reader(&SnapshotRef::new(snapshot.clone()))
+            .load()
+            .await
+            .unwrap();
+        assert_eq!(1, manifest_list.entries().len());
+        manifest_list.entries()[0]
+            .load_manifest(table.file_io())
+            .await
+            .unwrap()
+            .entries()
+            .iter()
+            .map(|entry| entry.data_file().clone())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_fast_append_writes_encrypted_manifest() {
+        let table = make_encrypted_table().await;
+        assert!(
+            table.encryption_manager().is_some(),
+            "fixture table should have an EncryptionManager"
+        );
+
+        let new_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("memory:///table/data/00000.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::empty())
+            .record_count(100)
+            .file_size_in_bytes(4096)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![new_file]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_snapshot: SnapshotRef = updates
+            .iter()
+            .find_map(|u| match u {
+                TableUpdate::AddSnapshot { snapshot } => Some(SnapshotRef::new(snapshot.clone())),
+                _ => None,
+            })
+            .expect("a fast append should emit an AddSnapshot update");
+
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot)
+            .load()
+            .await
+            .unwrap();
+        let manifest_file = manifest_list
+            .entries()
+            .iter()
+            .find(|m| m.added_files_count.unwrap_or(0) > 0)
+            .expect("new snapshot should carry the appended data manifest");
+
+        // ManifestReader once it exists.
+        // The manifest list entry must carry decodable key metadata.
+        let key_metadata_bytes = manifest_file
+            .key_metadata
+            .as_ref()
+            .expect("encrypted manifest must record key metadata");
+        StandardKeyMetadata::decode(key_metadata_bytes)
+            .expect("recorded key metadata must decode as StandardKeyMetadata");
+
+        // load_manifest self-decrypts using the recorded key metadata and must
+        // recover the entry we appended. Because the read goes through
+        // decryption path, this succeeding also proves the bytes
+        // on disk were genuinely encrypted (not silently written as plaintext).
+        let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+        assert_eq!(manifest.entries().len(), 1);
+        assert_eq!(
+            manifest.entries()[0].data_file().file_path(),
+            "memory:///table/data/00000.parquet"
+        );
+    }
 
     #[tokio::test]
     async fn test_empty_data_append_action() {
@@ -162,6 +457,77 @@ mod tests {
         let tx = Transaction::new(&table);
         let action = tx.fast_append().add_data_files(vec![]);
         assert!(Arc::new(action).commit(&table).await.is_err());
+    }
+
+    /// A `fast_append` must write the manifest list and the manifest
+    /// files under the `write.metadata.path` prefix when configured,
+    /// rather than the default `<location>/metadata` directory.
+    #[tokio::test]
+    async fn test_fast_append_honors_write_metadata_path() {
+        let base = make_v2_minimal_table();
+        let metadata_root = format!("{}/custom-meta", base.metadata().location());
+        let metadata = base
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .set_properties(HashMap::from([(
+                "write.metadata.path".to_string(),
+                metadata_root.clone(),
+            )]))
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        let table = base.with_metadata(Arc::new(metadata));
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(format!("{}/data/1.parquet", table.metadata().location()))
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![data_file]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_snapshot: SnapshotRef = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            SnapshotRef::new(snapshot.clone())
+        } else {
+            unreachable!("first update of a fast append should be AddSnapshot")
+        };
+
+        let prefix = format!("{metadata_root}/");
+
+        // Manifest list
+        assert!(
+            new_snapshot.manifest_list().starts_with(prefix.as_str()),
+            "manifest list {} not under configured write.metadata.path {metadata_root}",
+            new_snapshot.manifest_list()
+        );
+
+        // Manifest files
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot)
+            .load()
+            .await
+            .unwrap();
+        assert!(
+            !manifest_list.entries().is_empty(),
+            "expected at least one manifest entry"
+        );
+        for entry in manifest_list.entries() {
+            assert!(
+                entry.manifest_path.starts_with(prefix.as_str()),
+                "manifest {} not under configured write.metadata.path {metadata_root}",
+                entry.manifest_path
+            );
+        }
     }
 
     #[tokio::test]
@@ -203,6 +569,169 @@ mod tests {
                 .get("key")
                 .unwrap(),
             "val"
+        );
+    }
+
+    /// See `testdata/manifests_lists/README.md`.
+    const FIXTURE_MASTER_KEY_ID: &str = "master-1";
+    const FIXTURE_MASTER_KEY_BYTES: [u8; 16] = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f,
+    ];
+
+    async fn make_v3_encrypted_table() -> Table {
+        let json = fs::read_to_string(format!(
+            "{}/testdata/table_metadata/TableMetadataV3ValidEncryption.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let metadata = serde_json::from_str::<TableMetadata>(&json).unwrap();
+
+        let kms = MemoryKeyManagementClient::new();
+        kms.add_master_key_bytes(
+            FIXTURE_MASTER_KEY_ID,
+            SensitiveBytes::new(FIXTURE_MASTER_KEY_BYTES),
+        )
+        .unwrap();
+
+        let file_io = FileIO::new_with_memory();
+
+        let manifest_list_bytes = fs::read(format!(
+            "{}/testdata/manifests_lists/manifest-list-v3-encrypted.avro",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let parent_manifest_list = metadata.current_snapshot().unwrap().manifest_list();
+        file_io
+            .new_output(parent_manifest_list)
+            .unwrap()
+            .write(manifest_list_bytes.into())
+            .await
+            .unwrap();
+
+        Table::builder()
+            .metadata(metadata)
+            .metadata_location("memory:///table/metadata/v1.json")
+            .identifier(TableIdent::from_strs(["ns1", "enc"]).unwrap())
+            .file_io(file_io)
+            .kms_client(Arc::new(kms))
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_commit_with_encryption_adds_keys_and_records_snapshot_key_id() {
+        let table = make_v3_encrypted_table().await;
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::empty())
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![data_file]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let added_key_ids: Vec<String> = updates
+            .iter()
+            .filter_map(|u| match u {
+                TableUpdate::AddEncryptionKey { encryption_key } => {
+                    Some(encryption_key.key_id().to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!added_key_ids.is_empty(), "got {updates:?}");
+
+        // Encryption keys are added before the snapshot, so it isn't updates[0] here.
+        let new_snapshot = updates
+            .iter()
+            .find_map(|u| match u {
+                TableUpdate::AddSnapshot { snapshot } => Some(snapshot),
+                _ => None,
+            })
+            .expect("commit should add a snapshot");
+
+        let snapshot_key_id = new_snapshot
+            .encryption_key_id()
+            .expect("encrypted snapshot should record its manifest-list key id");
+        assert!(
+            added_key_ids.iter().any(|id| id == snapshot_key_id),
+            "snapshot key id {snapshot_key_id} not in added keys {added_key_ids:?}"
+        );
+
+        let new_snapshot_ref: SnapshotRef = Arc::new(new_snapshot.clone());
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot_ref)
+            .load()
+            .await
+            .expect("newly written encrypted manifest list should decrypt and parse");
+        assert_eq!(
+            manifest_list.entries().len(),
+            1,
+            "append should record exactly the one new data manifest"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_properties_cannot_override_computed_metrics() {
+        // A user-supplied snapshot property must not shadow a computed metric key
+        // such as `added-data-files`. Matching iceberg-java, the computed value
+        // wins, so the summary reflects the real count and a bad value can neither
+        // corrupt the summary nor panic total computation (see #2184-adjacent fix).
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+
+        let mut snapshot_properties = HashMap::new();
+        // Both a benign-but-wrong value and a non-integer value collide with
+        // computed metric keys; neither should reach the final summary.
+        snapshot_properties.insert("added-data-files".to_string(), "9999".to_string());
+        snapshot_properties.insert("added-records".to_string(), "not-a-number".to_string());
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let action = tx
+            .fast_append()
+            .set_snapshot_properties(snapshot_properties)
+            .add_data_files(vec![data_file]);
+        // Must not panic during total computation.
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            snapshot
+        } else {
+            unreachable!()
+        };
+        let props = &new_snapshot.summary().additional_properties;
+
+        // Computed metric wins over the user's colliding values.
+        assert_eq!(
+            props.get("added-data-files").unwrap(),
+            "1",
+            "computed added-data-files must override the user-supplied value"
+        );
+        assert_eq!(
+            props.get("added-records").unwrap(),
+            "1",
+            "computed added-records must override the user-supplied non-integer value"
         );
     }
 
@@ -260,6 +789,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_fast_append_dedupes_intra_batch_duplicate_paths() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+
+        let make_file = |size: u64, records: u64| {
+            DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path("test/dup.parquet".to_string())
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(size)
+                .record_count(records)
+                .partition_spec_id(table.metadata().default_partition_spec_id())
+                .partition(Struct::from_iter([Some(Literal::long(1))]))
+                .build()
+                .unwrap()
+        };
+
+        // Same path three times: the manifest keeps a single entry, the first one.
+        let action = tx.fast_append().add_data_files(vec![
+            make_file(100, 10),
+            make_file(200, 20),
+            make_file(300, 30),
+        ]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let files = committed_data_files(&table, &action_commit.take_updates()).await;
+        assert_eq!(1, files.len());
+        assert_eq!(100, files[0].file_size_in_bytes());
+    }
+
+    #[tokio::test]
+    async fn test_fast_append_dedupes_regardless_of_check_duplicate_flag() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+
+        let make_file = || {
+            DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path("test/dup.parquet".to_string())
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(100)
+                .record_count(10)
+                .partition_spec_id(table.metadata().default_partition_spec_id())
+                .partition(Struct::from_iter([Some(Literal::long(1))]))
+                .build()
+                .unwrap()
+        };
+
+        // `check_duplicate` only gates the cross-snapshot check; intra-batch dedupe runs regardless.
+        let action = tx
+            .fast_append()
+            .with_check_duplicate(false)
+            .add_data_files(vec![make_file(), make_file()]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let files = committed_data_files(&table, &action_commit.take_updates()).await;
+        assert_eq!(1, files.len());
+    }
+
+    #[tokio::test]
     async fn test_fast_append() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
@@ -299,13 +886,14 @@ mod tests {
         );
 
         // check manifest list
-        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
+        let new_snapshot: SnapshotRef = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            SnapshotRef::new(snapshot.clone())
         } else {
             unreachable!()
         };
-        let manifest_list = new_snapshot
-            .load_manifest_list(table.file_io(), table.metadata())
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot)
+            .load()
             .await
             .unwrap();
         assert_eq!(1, manifest_list.entries().len());

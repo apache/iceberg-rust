@@ -226,6 +226,17 @@ pub(crate) fn get_default_table_location(
     }
 }
 
+/// Returns `true` if the given Glue table is an Iceberg table.
+///
+/// Iceberg tables are identified by the `table_type=ICEBERG` parameter
+/// (case-insensitive).
+pub(crate) fn is_iceberg_table(parameters: &Option<HashMap<String, String>>) -> bool {
+    parameters
+        .as_ref()
+        .and_then(|p| p.get(TABLE_TYPE))
+        .is_some_and(|v| v.eq_ignore_ascii_case(ICEBERG))
+}
+
 /// Get metadata location from `GlueTable` parameters
 pub(crate) fn get_metadata_location(
     parameters: &Option<HashMap<String, String>>,
@@ -303,9 +314,38 @@ mod tests {
     }
 
     #[test]
+    fn test_is_iceberg_table() {
+        // table_type=ICEBERG -> iceberg
+        let params_table_type = Some(HashMap::from([(
+            TABLE_TYPE.to_string(),
+            ICEBERG.to_string(),
+        )]));
+        assert!(is_iceberg_table(&params_table_type));
+
+        // table_type is case-insensitive
+        let params_table_type_lower = Some(HashMap::from([(
+            TABLE_TYPE.to_string(),
+            "iceberg".to_string(),
+        )]));
+        assert!(is_iceberg_table(&params_table_type_lower));
+
+        // Plain Hive table -> not iceberg
+        let params_hive = Some(HashMap::from([(
+            TABLE_TYPE.to_string(),
+            "EXTERNAL_TABLE".to_string(),
+        )]));
+        assert!(!is_iceberg_table(&params_hive));
+
+        // No parameters at all -> not iceberg
+        assert!(!is_iceberg_table(&None));
+
+        // Empty parameters -> not iceberg
+        assert!(!is_iceberg_table(&Some(HashMap::new())));
+    }
+
+    #[test]
     fn test_convert_to_glue_table() -> Result<()> {
         let table_name = "my_table".to_string();
-        let location = "s3a://warehouse/hive".to_string();
         let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
@@ -314,8 +354,7 @@ mod tests {
             .build()?;
 
         let metadata = create_metadata(schema)?;
-        let metadata_location =
-            MetadataLocation::new_with_metadata(location, &metadata).to_string();
+        let metadata_location = MetadataLocation::try_new_with_metadata(&metadata)?.to_string();
 
         let parameters = HashMap::from([
             (ICEBERG_FIELD_ID.to_string(), "1".to_string()),

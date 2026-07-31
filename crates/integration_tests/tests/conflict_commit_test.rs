@@ -70,7 +70,7 @@ async fn test_append_data_file_conflict() {
             .try_into()
             .unwrap(),
     );
-    let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    let location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
     let file_name_generator = DefaultFileNameGenerator::new(
         "test".to_string(),
         None,

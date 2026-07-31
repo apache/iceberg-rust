@@ -29,6 +29,11 @@ ignore = [
   #
   # Introduced by hive_metastore, tracked at https://github.com/cloudwego/pilota/issues/293
   "RUSTSEC-2024-0436",
+  # `generational-arena` is unmaintained; consider using an alternative
+  #
+  # Introduced by datafusion-ffi through abi_stable/async-ffi until upstream
+  # provides a replacement path.
+  "RUSTSEC-2024-0014",
   # `rustls-pemfile` is unmaintained
   #
   # Introduced by object_store, see https://github.com/apache/arrow-rs-object-store/issues/564
@@ -38,4 +43,25 @@ ignore = [
   # Direct dependency upgraded to 0.9.3+. Transitive rand 0.8.5 remains
   # from reqsign/sqllogictest/rustc-hash — no 0.8.x patch exists.
   "RUSTSEC-2026-0097",
+  # pyo3 < 0.29: out-of-bounds read in PyList/PyTuple `nth`/`nth_back`, and
+  # missing `Sync` bound on `PyCFunction::new_closure` closures.
+  #
+  # Pulled only transitively through arrow's `pyarrow` feature
+  # (arrow-pyarrow), which still pins pyo3 ^0.28 in its latest release; no
+  # arrow build supports the patched pyo3 0.29 yet. Remove once arrow-pyarrow
+  # moves to pyo3 >=0.29.
+  "RUSTSEC-2026-0176",
+  "RUSTSEC-2026-0177",
+  # `quick-xml` < 0.41.0 has quadratic duplicate-attribute validation and
+  # unbounded namespace-declaration allocation (parser DoS).
+  #
+  # It is transitive through object_store 0.13.2 (DataFusion 53 / Parquet 58),
+  # OpenDAL 0.57.0, and reqsign-aws-v4 3.0.0. Their released compatible
+  # versions cannot select the fixed quick-xml >=0.41.0 release.
+  #
+  # Per SECURITY-THREAT-MODEL.md, malformed-input parser CPU/memory DoS is
+  # hardening rather than an Iceberg Rust trust-boundary vulnerability. Remove
+  # once the transitive dependency set permits quick-xml >=0.41.0.
+  "RUSTSEC-2026-0194",
+  "RUSTSEC-2026-0195",
 ]

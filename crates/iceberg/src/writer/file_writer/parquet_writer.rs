@@ -28,7 +28,7 @@ use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{CdcOptions, WriterProperties};
 use parquet::file::statistics::Statistics;
 
 use super::{FileWriter, FileWriterBuilder};
@@ -40,7 +40,7 @@ use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
     NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
-    StructType, TableMetadata, Type, visit_schema,
+    StructType, TableMetadata, TableProperties, Type, VariantType, visit_schema,
 };
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
@@ -57,6 +57,10 @@ pub struct ParquetWriterBuilder {
 impl ParquetWriterBuilder {
     /// Create a new `ParquetWriterBuilder`
     /// To construct the write result, the schema should contain the `PARQUET_FIELD_ID_META_KEY` metadata for each field.
+    ///
+    /// When writing into an existing Iceberg table, prefer
+    /// [`Self::from_table_properties`], which derives `WriterProperties` from
+    /// the table's `write.parquet.*` properties.
     pub fn new(props: WriterProperties, schema: SchemaRef) -> Self {
         Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
     }
@@ -72,6 +76,37 @@ impl ParquetWriterBuilder {
             schema,
             match_mode,
         }
+    }
+
+    /// Build a `ParquetWriterBuilder` from Iceberg table properties and a
+    /// schema, translating `write.parquet.*` settings into `WriterProperties`
+    /// instead of using parquet-rs defaults.
+    ///
+    /// Currently translates the content-defined-chunking keys
+    /// (`write.parquet.content-defined-chunking.*`); other keys fall back to
+    /// parquet-rs defaults.
+    pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Self {
+        let cdc = table_props.cdc_enabled.then_some(CdcOptions {
+            min_chunk_size: table_props.cdc_min_chunk_size,
+            max_chunk_size: table_props.cdc_max_chunk_size,
+            norm_level: table_props.cdc_norm_level,
+        });
+        // TODO: translate the remaining write.parquet.* keys (e.g. compression-codec,
+        // row-group-size-bytes, page-size-bytes).
+        // This constructor is intended to be the single place that maps them.
+        let props = WriterProperties::builder()
+            .set_content_defined_chunking(cdc)
+            .build();
+        Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
+    }
+
+    /// Set the field match mode used to map Arrow fields to Iceberg fields.
+    ///
+    /// Defaults to [`FieldMatchMode::Id`]. Use [`FieldMatchMode::Name`] when the
+    /// incoming Arrow schema does not carry Iceberg field-id metadata.
+    pub fn with_match_mode(mut self, match_mode: FieldMatchMode) -> Self {
+        self.match_mode = match_mode;
+        self
     }
 }
 
@@ -205,6 +240,13 @@ impl SchemaVisitor for IndexByParquetPathName {
         }
 
         Ok(())
+    }
+
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Writing variant columns to Parquet is not supported yet",
+        ))
     }
 }
 
@@ -787,6 +829,21 @@ mod tests {
         assert_eq!(visitor.name_to_id, expect);
     }
 
+    #[test]
+    fn test_index_by_parquet_path_variant_is_unsupported() {
+        // Writing variant columns to Parquet is not supported yet; indexing a schema that
+        // contains one must error rather than silently miss-map columns.
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+        let mut visitor = IndexByParquetPathName::new();
+        let err = visit_schema(&schema, &mut visitor).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+    }
+
     #[tokio::test]
     async fn test_parquet_writer() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
@@ -893,11 +950,11 @@ mod tests {
             (0..1024).map(|n| n.to_string()),
         )) as ArrayRef;
         let col3 = Arc::new({
-            let list_parts = arrow_array::ListArray::from_iter_primitive::<Int64Type, _, _>(
+            let list_parts = ListArray::from_iter_primitive::<Int64Type, _, _>(
                 (0..1024).map(|n| Some(vec![Some(n)])),
             )
             .into_parts();
-            arrow_array::ListArray::new(
+            ListArray::new(
                 {
                     if let DataType::List(field) = arrow_schema.field(3).data_type() {
                         field.clone()
@@ -995,7 +1052,7 @@ mod tests {
                     nulls,
                 )
             };
-            arrow_array::MapArray::new(
+            MapArray::new(
                 {
                     if let DataType::Map(map_field, _) = arrow_schema.field(5).data_type() {
                         map_field.clone()
@@ -1030,7 +1087,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1106,13 +1163,13 @@ mod tests {
         ])) as ArrayRef;
         let col1 = Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(4)])) as ArrayRef;
         let col2 = Arc::new(Int64Array::from(vec![Some(1), Some(2), None, Some(4)])) as ArrayRef;
-        let col3 = Arc::new(arrow_array::Float32Array::from(vec![
+        let col3 = Arc::new(Float32Array::from(vec![
             Some(0.5),
             Some(2.0),
             None,
             Some(3.5),
         ])) as ArrayRef;
-        let col4 = Arc::new(arrow_array::Float64Array::from(vec![
+        let col4 = Arc::new(Float64Array::from(vec![
             Some(0.5),
             Some(2.0),
             None,
@@ -1163,7 +1220,7 @@ mod tests {
                 .with_timezone_utc(),
         ) as ArrayRef;
         let col13 = Arc::new(
-            arrow_array::Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
+            Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
                 .with_precision_and_scale(10, 5)
                 .unwrap(),
         ) as ArrayRef;
@@ -1194,7 +1251,7 @@ mod tests {
             .unwrap(),
         ) as ArrayRef;
         let col16 = Arc::new(
-            arrow_array::Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
+            Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
                 .with_precision_and_scale(38, 5)
                 .unwrap(),
         ) as ArrayRef;
@@ -1220,7 +1277,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1371,7 +1428,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1423,7 +1480,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1484,7 +1541,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1582,11 +1639,13 @@ mod tests {
 
         // Test that file will create if data to write
         let schema = {
-            let fields = vec![
-                arrow_schema::Field::new("col", arrow_schema::DataType::Int64, true).with_metadata(
-                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "0".to_string())]),
-                ),
-            ];
+            let fields =
+                vec![
+                    Field::new("col", DataType::Int64, true).with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "0".to_string(),
+                    )])),
+                ];
             Arc::new(arrow_schema::Schema::new(fields))
         };
         let col = Arc::new(Int64Array::from_iter_values(0..1024)) as ArrayRef;
@@ -1633,12 +1692,14 @@ mod tests {
         // prepare data
         let arrow_schema = {
             let fields = vec![
-                Field::new("col", arrow_schema::DataType::Float32, false).with_metadata(
-                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "0".to_string())]),
-                ),
-                Field::new("col2", arrow_schema::DataType::Float64, false).with_metadata(
-                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
-                ),
+                Field::new("col", DataType::Float32, false).with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "0".to_string(),
+                )])),
+                Field::new("col2", DataType::Float64, false).with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "1".to_string(),
+                )])),
             ];
             Arc::new(arrow_schema::Schema::new(fields))
         };
@@ -1675,7 +1736,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1735,7 +1796,7 @@ mod tests {
         let schema_struct_nested_fields = Fields::from(vec![
             Field::new(
                 "col6",
-                arrow_schema::DataType::Struct(schema_struct_nested_float_fields.clone()),
+                DataType::Struct(schema_struct_nested_float_fields.clone()),
                 false,
             )
             .with_metadata(HashMap::from([(
@@ -1749,7 +1810,7 @@ mod tests {
             let fields = vec![
                 Field::new(
                     "col3",
-                    arrow_schema::DataType::Struct(schema_struct_float_fields.clone()),
+                    DataType::Struct(schema_struct_float_fields.clone()),
                     false,
                 )
                 .with_metadata(HashMap::from([(
@@ -1758,7 +1819,7 @@ mod tests {
                 )])),
                 Field::new(
                     "col5",
-                    arrow_schema::DataType::Struct(schema_struct_nested_fields.clone()),
+                    DataType::Struct(schema_struct_nested_fields.clone()),
                     false,
                 )
                 .with_metadata(HashMap::from([(
@@ -1815,7 +1876,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1979,7 +2040,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -2160,7 +2221,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -2278,5 +2339,82 @@ mod tests {
 
         assert_eq!(lower_bounds, HashMap::from([(0, Datum::int(i32::MIN))]));
         assert_eq!(upper_bounds, HashMap::from([(0, Datum::int(i32::MAX))]));
+    }
+
+    // -----------------------------------------------------------------
+    // ParquetWriterBuilder::from_table_properties
+    // -----------------------------------------------------------------
+
+    fn cdc_test_schema() -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::required(2, "payload", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    fn table_props(entries: HashMap<String, String>) -> TableProperties {
+        TableProperties::try_from(&entries).unwrap()
+    }
+
+    #[test]
+    fn test_from_table_properties_no_cdc_by_default() {
+        let tp = table_props(HashMap::new());
+        let builder = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema());
+        assert!(builder.props.content_defined_chunking().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_from_table_properties_propagate_to_writer() {
+        // `build()` must carry the translated `WriterProperties` through to the
+        // `ParquetWriter` unchanged — otherwise the `write.parquet.*` settings
+        // derived in `from_table_properties` would never reach parquet-rs.
+        //
+        // Asserting on the writer's `WriterProperties` (rather than re-reading a
+        // written file) keeps this a direct propagation check: every future
+        // `write.parquet.*` option just adds an assertion on its corresponding
+        // `WriterProperties` getter here.
+        let tp = table_props(HashMap::from([
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_ENABLED.to_string(),
+                "true".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE.to_string(),
+                "4096".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE.to_string(),
+                "8192".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL.to_string(),
+                "2".to_string(),
+            ),
+        ]));
+
+        let tmp = TempDir::new().unwrap();
+        let output = FileIO::new_with_fs()
+            .new_output(format!("{}/cdc.parquet", tmp.path().to_str().unwrap()))
+            .unwrap();
+        let writer = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
+            .build(output)
+            .await
+            .unwrap();
+
+        let cdc = writer
+            .writer_properties
+            .content_defined_chunking()
+            .copied()
+            .expect("CDC should be enabled on the built writer");
+        assert_eq!(cdc.min_chunk_size, 4096);
+        assert_eq!(cdc.max_chunk_size, 8192);
+        assert_eq!(cdc.norm_level, 2);
     }
 }

@@ -32,6 +32,7 @@ mod reader;
 /// RecordBatch projection utilities
 pub mod record_batch_projector;
 pub(crate) mod record_batch_transformer;
+pub(crate) use record_batch_transformer::build_partition_constant;
 mod scan_metrics;
 mod value;
 
@@ -44,3 +45,6 @@ pub use partition_value_calculator::*;
 /// Record batch partition splitter for partitioned tables
 pub mod record_batch_partition_splitter;
 pub use record_batch_partition_splitter::*;
+
+#[cfg(test)]
+pub(crate) mod test_utils;

@@ -25,10 +25,15 @@ use iceberg::{
 };
 use serde_derive::{Deserialize, Serialize};
 
+use crate::endpoint::Endpoint;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct CatalogConfig {
     pub(super) overrides: HashMap<String, String>,
     pub(super) defaults: HashMap<String, String>,
+    /// Endpoints the server advertises support for; `None` when the field is
+    /// absent.
+    pub(super) endpoints: Option<Vec<Endpoint>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -251,14 +256,18 @@ pub struct CreateTableRequest {
     /// Name of the table to create
     pub name: String,
     /// Optional table location. If not provided, the server will choose a location.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
     /// Table schema
     pub schema: Schema,
     /// Optional partition specification. If not provided, the table will be unpartitioned.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub partition_spec: Option<UnboundPartitionSpec>,
     /// Optional sort order for the table
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub write_order: Option<SortOrder>,
     /// Whether to stage the create for a transaction (true) or create immediately (false)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_create: Option<bool>,
     /// Optional properties to set on the table
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -354,5 +363,146 @@ mod tests {
             serde_json::to_value(&ns_response_no_props).expect("Serialization failed"),
             json_no_props
         );
+    }
+
+    fn test_create_table_request_schema() -> Schema {
+        serde_json::from_value(serde_json::json!({
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [
+                {
+                    "id": 1,
+                    "name": "foo",
+                    "required": false,
+                    "type": "string"
+                },
+                {
+                    "id": 2,
+                    "name": "bar",
+                    "required": true,
+                    "type": "int"
+                }
+            ],
+            "identifier-field-ids": [2]
+        }))
+        .expect("Failed to deserialize test schema")
+    }
+
+    #[test]
+    fn test_create_table_request_minimal_serialization() {
+        let request = CreateTableRequest {
+            name: "tbl1".to_string(),
+            location: None,
+            schema: test_create_table_request_schema(),
+            partition_spec: None,
+            write_order: None,
+            stage_create: None,
+            properties: HashMap::new(),
+        };
+
+        let serialized = serde_json::to_value(&request).expect("Serialization failed");
+        let object = serialized.as_object().expect("Expected a JSON object");
+        assert!(object.contains_key("name"));
+        assert!(object.contains_key("schema"));
+        assert!(!object.contains_key("location"));
+        assert!(!object.contains_key("partition-spec"));
+        assert!(!object.contains_key("write-order"));
+        assert!(!object.contains_key("stage-create"));
+        assert!(!object.contains_key("properties"));
+    }
+
+    #[test]
+    fn test_create_table_request_full_serialization() {
+        let request: CreateTableRequest = serde_json::from_value(serde_json::json!({
+            "name": "tbl1",
+            "location": "s3://warehouse/tbl1",
+            "schema": test_create_table_request_schema(),
+            "partition-spec": {
+                "spec-id": 1,
+                "fields": [
+                    {
+                        "source-id": 2,
+                        "field-id": 1000,
+                        "name": "bar",
+                        "transform": "identity"
+                    }
+                ]
+            },
+            "write-order": {
+                "order-id": 1,
+                "fields": [
+                    {
+                        "transform": "identity",
+                        "source-id": 2,
+                        "direction": "asc",
+                        "null-order": "nulls-first"
+                    }
+                ]
+            },
+            "stage-create": true,
+            "properties": {
+                "owner": "test"
+            }
+        }))
+        .expect("Deserialization failed");
+
+        let serialized = serde_json::to_value(&request).expect("Serialization failed");
+        let object = serialized.as_object().expect("Expected a JSON object");
+        assert_eq!(
+            object.get("location"),
+            Some(&serde_json::json!("s3://warehouse/tbl1"))
+        );
+        assert!(object.contains_key("partition-spec"));
+        assert!(object.contains_key("write-order"));
+        assert_eq!(object.get("stage-create"), Some(&serde_json::json!(true)));
+        assert!(object.contains_key("properties"));
+    }
+
+    #[test]
+    fn test_create_table_request_deserialize_explicit_nulls() {
+        let request: CreateTableRequest = serde_json::from_value(serde_json::json!({
+            "name": "tbl1",
+            "location": null,
+            "schema": test_create_table_request_schema(),
+            "partition-spec": null,
+            "write-order": null,
+            "stage-create": null
+        }))
+        .expect("Deserialization failed");
+
+        assert_eq!(request.name, "tbl1");
+        assert_eq!(request.location, None);
+        assert_eq!(request.partition_spec, None);
+        assert_eq!(request.write_order, None);
+        assert_eq!(request.stage_create, None);
+        assert!(request.properties.is_empty());
+    }
+
+    #[test]
+    fn config_parses_advertised_endpoints() {
+        let json = r#"{"overrides":{},"defaults":{},
+            "endpoints":["GET /v1/{prefix}/namespaces","POST /v1/{prefix}/namespaces/{namespace}/tables"]}"#;
+        let config: CatalogConfig = serde_json::from_str(json).unwrap();
+        let endpoints = config.endpoints.expect("endpoints should be present");
+        assert_eq!(endpoints.len(), 2);
+        assert!(endpoints.contains(&"GET /v1/{prefix}/namespaces".parse().unwrap()));
+    }
+
+    #[test]
+    fn config_without_endpoints_field_deserializes_to_none() {
+        // `Option<Vec<Endpoint>>` defaults to `None` for a missing field without
+        // an explicit `#[serde(default)]`.
+        let config: CatalogConfig =
+            serde_json::from_str(r#"{"overrides":{},"defaults":{}}"#).unwrap();
+        assert!(config.endpoints.is_none());
+    }
+
+    #[test]
+    fn malformed_endpoint_fails_config_parse() {
+        // A single malformed endpoint string fails the whole config parse,
+        // matching the Java reference (`ConfigResponseParser` rejects it rather
+        // than silently dropping it).
+        let json = r#"{"overrides":{},"defaults":{},"endpoints":["GET_v1/namespaces"]}"#;
+        assert!(serde_json::from_str::<CatalogConfig>(json).is_err());
     }
 }

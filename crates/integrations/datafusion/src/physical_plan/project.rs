@@ -126,10 +126,6 @@ impl PartialEq for PartitionExpr {
 impl Eq for PartitionExpr {}
 
 impl PhysicalExpr for PartitionExpr {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &ArrowSchema) -> DFResult<DataType> {
         Ok(self.calculator.partition_arrow_type().clone())
     }
@@ -209,7 +205,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = iceberg::spec::PartitionSpec::builder(Arc::new(table_schema.clone()))
+        let partition_spec = PartitionSpec::builder(Arc::new(table_schema.clone()))
             .add_partition_field("id", "id_partition", Transform::Identity)
             .unwrap()
             .build()
@@ -234,7 +230,7 @@ mod tests {
             .unwrap();
 
         let partition_spec = Arc::new(
-            iceberg::spec::PartitionSpec::builder(Arc::new(table_schema.clone()))
+            PartitionSpec::builder(Arc::new(table_schema.clone()))
                 .add_partition_field("id", "id_partition", Transform::Identity)
                 .unwrap()
                 .build()
@@ -280,7 +276,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = iceberg::spec::PartitionSpec::builder(Arc::new(table_schema.clone()))
+        let partition_spec = PartitionSpec::builder(Arc::new(table_schema.clone()))
             .add_partition_field("id", "id_partition", Transform::Identity)
             .unwrap()
             .build()
@@ -341,7 +337,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = iceberg::spec::PartitionSpec::builder(Arc::new(table_schema.clone()))
+        let partition_spec = PartitionSpec::builder(Arc::new(table_schema.clone()))
             .add_partition_field("address.city", "city_partition", Transform::Identity)
             .unwrap()
             .build()
@@ -414,7 +410,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let partition_spec = iceberg::spec::PartitionSpec::builder(table_schema.clone())
+        let partition_spec = PartitionSpec::builder(table_schema.clone())
             .add_partition_field("id", "id_partition", Transform::Identity)
             .unwrap()
             .build()
@@ -444,7 +440,7 @@ mod tests {
 
         let input = Arc::new(EmptyExec::new(arrow_schema));
 
-        let table = iceberg::table::Table::builder()
+        let table = Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
             .file_io(FileIO::new_with_fs())
@@ -473,7 +469,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let partition_spec = iceberg::spec::PartitionSpec::builder(table_schema.clone())
+        let partition_spec = PartitionSpec::builder(table_schema.clone())
             .add_partition_field("id", "id_partition", Transform::Identity)
             .unwrap()
             .build()
@@ -503,7 +499,7 @@ mod tests {
 
         let input = Arc::new(EmptyExec::new(arrow_schema));
 
-        let table = iceberg::table::Table::builder()
+        let table = Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
             .file_io(FileIO::new_with_fs())
@@ -543,7 +539,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let partition_spec = iceberg::spec::PartitionSpec::builder(table_schema.clone())
+        let partition_spec = PartitionSpec::builder(table_schema.clone())
             .add_partition_field("id", "id_partition", Transform::Identity)
             .unwrap()
             .build()
@@ -559,7 +555,7 @@ mod tests {
             sort_order,
             "/test/table".to_string(),
             FormatVersion::V2,
-            std::collections::HashMap::new(),
+            HashMap::new(),
         )
         .unwrap();
 
@@ -576,7 +572,7 @@ mod tests {
 
         let input = Arc::new(EmptyExec::new(arrow_schema));
 
-        let table = iceberg::table::Table::builder()
+        let table = Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
             .file_io(FileIO::new_with_fs())

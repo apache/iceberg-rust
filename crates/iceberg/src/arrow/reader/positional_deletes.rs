@@ -435,28 +435,25 @@ mod tests {
         let file_io = FileIO::new_with_fs();
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
-        let task = FileScanTask {
-            file_size_in_bytes: std::fs::metadata(&data_file_path).unwrap().len(),
-            start: 0,
-            length: 0,
-            record_count: Some(200),
-            data_file_path: data_file_path.clone(),
-            data_file_format: DataFileFormat::Parquet,
-            schema: table_schema.clone(),
-            project_field_ids: vec![1],
-            predicate: None,
-            deletes: vec![FileScanTaskDeleteFile {
-                file_size_in_bytes: std::fs::metadata(&delete_file_path).unwrap().len(),
-                file_path: delete_file_path,
-                file_type: DataContentType::PositionDeletes,
-                partition_spec_id: 0,
-                equality_ids: None,
-            }],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            case_sensitive: false,
-        };
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&data_file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_record_count(Some(200))
+            .with_data_file_path(data_file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(table_schema.clone())
+            .with_project_field_ids(vec![1])
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
+                    .with_file_path(delete_file_path)
+                    .with_file_type(DataContentType::PositionDeletes)
+                    .with_partition_spec_id(0)
+                    .build(),
+            ])
+            .with_case_sensitive(false)
+            .build();
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result = reader
@@ -656,28 +653,25 @@ mod tests {
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         // Create FileScanTask that reads ONLY row group 1 via byte range filtering
-        let task = FileScanTask {
-            file_size_in_bytes: std::fs::metadata(&data_file_path).unwrap().len(),
-            start: rg1_start,
-            length: rg1_length,
-            record_count: Some(100), // Row group 1 has 100 rows
-            data_file_path: data_file_path.clone(),
-            data_file_format: DataFileFormat::Parquet,
-            schema: table_schema.clone(),
-            project_field_ids: vec![1],
-            predicate: None,
-            deletes: vec![FileScanTaskDeleteFile {
-                file_size_in_bytes: std::fs::metadata(&delete_file_path).unwrap().len(),
-                file_path: delete_file_path,
-                file_type: DataContentType::PositionDeletes,
-                partition_spec_id: 0,
-                equality_ids: None,
-            }],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            case_sensitive: false,
-        };
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&data_file_path).unwrap().len())
+            .with_start(rg1_start)
+            .with_length(rg1_length)
+            .with_record_count(Some(100)) // Row group 1 has 100 rows
+            .with_data_file_path(data_file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(table_schema.clone())
+            .with_project_field_ids(vec![1])
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
+                    .with_file_path(delete_file_path)
+                    .with_file_type(DataContentType::PositionDeletes)
+                    .with_partition_spec_id(0)
+                    .build(),
+            ])
+            .with_case_sensitive(false)
+            .build();
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result = reader
@@ -871,28 +865,25 @@ mod tests {
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         // Create FileScanTask that reads ONLY row group 1 via byte range filtering
-        let task = FileScanTask {
-            file_size_in_bytes: std::fs::metadata(&data_file_path).unwrap().len(),
-            start: rg1_start,
-            length: rg1_length,
-            record_count: Some(100), // Row group 1 has 100 rows
-            data_file_path: data_file_path.clone(),
-            data_file_format: DataFileFormat::Parquet,
-            schema: table_schema.clone(),
-            project_field_ids: vec![1],
-            predicate: None,
-            deletes: vec![FileScanTaskDeleteFile {
-                file_size_in_bytes: std::fs::metadata(&delete_file_path).unwrap().len(),
-                file_path: delete_file_path,
-                file_type: DataContentType::PositionDeletes,
-                partition_spec_id: 0,
-                equality_ids: None,
-            }],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            case_sensitive: false,
-        };
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&data_file_path).unwrap().len())
+            .with_start(rg1_start)
+            .with_length(rg1_length)
+            .with_record_count(Some(100)) // Row group 1 has 100 rows
+            .with_data_file_path(data_file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(table_schema.clone())
+            .with_project_field_ids(vec![1])
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
+                    .with_file_path(delete_file_path)
+                    .with_file_type(DataContentType::PositionDeletes)
+                    .with_partition_spec_id(0)
+                    .build(),
+            ])
+            .with_case_sensitive(false)
+            .build();
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result = reader

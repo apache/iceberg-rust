@@ -46,7 +46,7 @@ pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConf
     }
 
     if m.remove(GCS_NO_AUTH).is_some() {
-        cfg.allow_anonymous = true;
+        cfg.skip_signature = true;
         cfg.disable_vm_metadata = true;
         cfg.disable_config_load = true;
     }
@@ -54,7 +54,7 @@ pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConf
     if let Some(allow_anonymous) = m.remove(GCS_ALLOW_ANONYMOUS)
         && is_truthy(allow_anonymous.to_lowercase().as_str())
     {
-        cfg.allow_anonymous = true;
+        cfg.skip_signature = true;
     }
     if let Some(disable_ec2_metadata) = m.remove(GCS_DISABLE_VM_METADATA)
         && is_truthy(disable_ec2_metadata.to_lowercase().as_str())

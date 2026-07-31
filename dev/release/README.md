@@ -61,7 +61,7 @@ Defaults:
 `--check_deps 1` requires `cargo-deny`. Install it with:
 
 ```shell
-cargo install cargo-deny
+cargo install --locked cargo-deny
 ```
 
 ## Verify an RC

@@ -40,6 +40,37 @@ where
     })
 }
 
+/// Strips trailing slashes from a location, preserving a bare URI scheme root
+fn strip_trailing_slash(path: &str) -> &str {
+    let mut path = path;
+    while !path.ends_with("://") {
+        let Some(stripped) = path.strip_suffix('/') else {
+            break;
+        };
+        path = stripped;
+    }
+    path
+}
+
+fn parse_location_property(
+    properties: &HashMap<String, String>,
+    key: &str,
+) -> Result<Option<String>> {
+    properties
+        .get(key)
+        .map(|path| {
+            if path.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid value for {key}: path must not be empty"),
+                ));
+            }
+
+            Ok(strip_trailing_slash(path).to_string())
+        })
+        .transpose()
+}
+
 /// Parse compression codec for metadata files from table properties.
 /// Retrieves the compression codec property, applies defaults, and parses the value.
 /// Only "none" (or empty string) and "gzip" are supported for metadata compression.
@@ -112,6 +143,9 @@ pub struct TableProperties {
     pub write_format_default: String,
     /// The target file size for files.
     pub write_target_file_size_bytes: usize,
+    /// Base directory for metadata files (manifests, manifest lists), with any
+    /// trailing slash trimmed. `None` if `write.metadata.path` is not set.
+    pub write_metadata_path: Option<String>,
     /// Compression codec for metadata files (JSON)
     pub metadata_compression_codec: CompressionCodec,
     /// Whether to use `FanoutWriter` for partitioned tables.
@@ -119,6 +153,12 @@ pub struct TableProperties {
     /// Whether garbage collection is enabled on drop.
     /// When `false`, data files will not be deleted when a table is dropped.
     pub gc_enabled: bool,
+    /// Default maximum age of a snapshot to keep when expiring snapshots.
+    pub max_snapshot_age_ms: i64,
+    /// Default minimum number of snapshots to keep per branch when expiring snapshots.
+    pub min_snapshots_to_keep: usize,
+    /// Default maximum age of a snapshot reference to keep when expiring snapshots.
+    pub max_ref_age_ms: i64,
     /// Whether content-defined chunking is enabled.
     /// `true` only when `write.parquet.content-defined-chunking.enabled = "true"`.
     pub cdc_enabled: bool,
@@ -128,6 +168,11 @@ pub struct TableProperties {
     pub cdc_max_chunk_size: usize,
     /// Content-defined chunking normalization level (gearhash bit adjustment).
     pub cdc_norm_level: i32,
+    /// The master key id used to encrypt this table's manifest list and data
+    /// files. `None` if `encryption.key-id` is not set.
+    pub encryption_key_id: Option<String>,
+    /// The encryption data encryption key length in bytes.
+    pub encryption_data_key_length: usize,
 }
 
 impl TableProperties {
@@ -217,6 +262,11 @@ impl TableProperties {
     /// Default target file size
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
 
+    /// Base location for metadata files (manifests, manifest lists, table metadata).
+    /// When unset, metadata files default to the `metadata` directory under the table
+    /// location.
+    pub const PROPERTY_WRITE_METADATA_PATH: &str = "write.metadata.path";
+
     /// Compression codec for metadata files (JSON)
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
@@ -233,6 +283,19 @@ impl TableProperties {
     pub const PROPERTY_GC_ENABLED: &str = "gc.enabled";
     /// Default value for gc.enabled
     pub const PROPERTY_GC_ENABLED_DEFAULT: bool = true;
+
+    /// Property key for the default maximum age of a snapshot to keep when expiring snapshots.
+    pub const PROPERTY_MAX_SNAPSHOT_AGE_MS: &str = "history.expire.max-snapshot-age-ms";
+    /// Default value for history.expire.max-snapshot-age-ms (5 days).
+    pub const PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT: i64 = 5 * 24 * 60 * 60 * 1000;
+    /// Property key for the default minimum number of snapshots to keep when expiring snapshots.
+    pub const PROPERTY_MIN_SNAPSHOTS_TO_KEEP: &str = "history.expire.min-snapshots-to-keep";
+    /// Default value for history.expire.min-snapshots-to-keep.
+    pub const PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT: usize = 1;
+    /// Property key for the default maximum age of a snapshot reference to keep when expiring.
+    pub const PROPERTY_MAX_REF_AGE_MS: &str = "history.expire.max-ref-age-ms";
+    /// Default value for history.expire.max-ref-age-ms (effectively never expire refs).
+    pub const PROPERTY_MAX_REF_AGE_MS_DEFAULT: i64 = i64::MAX;
 
     /// Enable content-defined chunking with parquet defaults (or per-property overrides).
     pub const PROPERTY_PARQUET_CDC_ENABLED: &str = "write.parquet.content-defined-chunking.enabled";
@@ -253,6 +316,15 @@ impl TableProperties {
         "write.parquet.content-defined-chunking.norm-level";
     /// Default matches `parquet::file::properties::DEFAULT_CDC_NORM_LEVEL`.
     pub const PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32 = 0;
+
+    /// Property key for the master key id used to encrypt the table's manifest
+    /// list and data files as defined in https://iceberg.apache.org/docs/nightly/encryption/.
+    pub const PROPERTY_ENCRYPTION_KEY_ID: &str = "encryption.key-id";
+
+    /// Property key for the encryption data encryption key (DEK) length in bytes.
+    pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH: &str = "encryption.data-key-length";
+    /// Default value for the encryption DEK length (16 bytes = AES-128).
+    pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT: usize = 16;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
@@ -291,6 +363,10 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
+            write_metadata_path: parse_location_property(
+                props,
+                TableProperties::PROPERTY_WRITE_METADATA_PATH,
+            )?,
             metadata_compression_codec: parse_metadata_file_compression(props)?,
             write_datafusion_fanout_enabled: parse_property(
                 props,
@@ -301,6 +377,21 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 props,
                 TableProperties::PROPERTY_GC_ENABLED,
                 TableProperties::PROPERTY_GC_ENABLED_DEFAULT,
+            )?,
+            max_snapshot_age_ms: parse_property(
+                props,
+                TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS,
+                TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT,
+            )?,
+            min_snapshots_to_keep: parse_property(
+                props,
+                TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP,
+                TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT,
+            )?,
+            max_ref_age_ms: parse_property(
+                props,
+                TableProperties::PROPERTY_MAX_REF_AGE_MS,
+                TableProperties::PROPERTY_MAX_REF_AGE_MS_DEFAULT,
             )?,
             cdc_enabled: parse_property(
                 props,
@@ -321,6 +412,14 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 props,
                 TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL,
                 TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT,
+            )?,
+            encryption_key_id: props
+                .get(TableProperties::PROPERTY_ENCRYPTION_KEY_ID)
+                .cloned(),
+            encryption_data_key_length: parse_property(
+                props,
+                TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
+                TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT,
             )?,
         })
     }
@@ -364,6 +463,86 @@ mod tests {
             table_properties.gc_enabled,
             TableProperties::PROPERTY_GC_ENABLED_DEFAULT
         );
+        assert_eq!(
+            table_properties.max_snapshot_age_ms,
+            TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT
+        );
+        assert_eq!(
+            table_properties.min_snapshots_to_keep,
+            TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT
+        );
+        assert_eq!(
+            table_properties.max_ref_age_ms,
+            TableProperties::PROPERTY_MAX_REF_AGE_MS_DEFAULT
+        );
+    }
+
+    #[test]
+    fn test_table_properties_history_expire_overrides() {
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS.to_string(),
+                "1234".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP.to_string(),
+                "7".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_MAX_REF_AGE_MS.to_string(),
+                "5678".to_string(),
+            ),
+        ]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(table_properties.max_snapshot_age_ms, 1234);
+        assert_eq!(table_properties.min_snapshots_to_keep, 7);
+        assert_eq!(table_properties.max_ref_age_ms, 5678);
+    }
+
+    #[test]
+    fn test_table_properties_write_metadata_path() {
+        // Test unset
+        let table_properties = TableProperties::try_from(&HashMap::new()).unwrap();
+        assert_eq!(table_properties.write_metadata_path, None);
+
+        // Test empty path is invalid
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
+            String::new(),
+        )]);
+        let error = TableProperties::try_from(&props).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(
+            error
+                .message()
+                .contains(TableProperties::PROPERTY_WRITE_METADATA_PATH)
+        );
+
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
+            "s3://other-bucket/custom-meta/".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(
+            table_properties.write_metadata_path.as_deref(),
+            Some("s3://other-bucket/custom-meta")
+        );
+    }
+
+    #[test]
+    fn test_strip_trailing_slash() {
+        for (path, expected) in [
+            ("s3://bucket/db/tbl", "s3://bucket/db/tbl"),
+            ("s3://bucket/db/tbl/", "s3://bucket/db/tbl"),
+            ("s3://bucket/db/tbl////", "s3://bucket/db/tbl"),
+            ("blobstore://", "blobstore://"),
+            ("blobstore:///", "blobstore://"),
+            ("file:///", "file://"),
+            ("////", ""),
+            ("", ""),
+        ] {
+            assert_eq!(strip_trailing_slash(path), expected);
+        }
     }
 
     #[test]

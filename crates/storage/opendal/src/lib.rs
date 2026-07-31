@@ -18,8 +18,8 @@
 //! OpenDAL-based storage implementation for Apache Iceberg.
 //!
 //! This crate provides [`OpenDalStorage`] and [`OpenDalStorageFactory`],
-//! which implement the [`Storage`](iceberg::io::Storage) and
-//! [`StorageFactory`](iceberg::io::StorageFactory) traits from the `iceberg` crate
+//! which implement the [`Storage`](Storage) and
+//! [`StorageFactory`](StorageFactory) traits from the `iceberg` crate
 //! using [OpenDAL](https://opendal.apache.org/) as the backend.
 
 mod utils;
@@ -39,7 +39,7 @@ use iceberg::io::{
 };
 use iceberg::{Error, ErrorKind, Result};
 use opendal::Operator;
-use opendal::layers::RetryLayer;
+use opendal::layers::{RetryLayer, TimeoutLayer};
 use serde::{Deserialize, Serialize};
 use utils::from_opendal_error;
 
@@ -117,7 +117,7 @@ pub enum OpenDalStorageFactory {
     S3 {
         /// Custom AWS credential loader.
         #[serde(skip)]
-        customized_credential_load: Option<s3::CustomAwsCredentialLoader>,
+        customized_credential_load: Option<CustomAwsCredentialLoader>,
     },
     /// GCS storage factory.
     #[cfg(feature = "opendal-gcs")]
@@ -209,7 +209,7 @@ pub enum OpenDalStorage {
         config: Arc<S3Config>,
         /// Custom AWS credential loader.
         #[serde(skip)]
-        customized_credential_load: Option<s3::CustomAwsCredentialLoader>,
+        customized_credential_load: Option<CustomAwsCredentialLoader>,
     },
     /// GCS storage variant.
     #[cfg(feature = "opendal-gcs")]
@@ -355,9 +355,17 @@ impl OpenDalStorage {
             }
         };
 
-        // Transient errors are common for object stores; however there's no
-        // harm in retrying temporary failures for other storage backends as well.
-        let operator = operator.layer(RetryLayer::new());
+        // Apply observability/resilience layers. TimeoutLayer must be
+        // inside RetryLayer so each retry attempt is independently
+        // bounded — without a per-attempt timeout, a future parked on a
+        // silently dropped TCP connection never produces an `Err` and
+        // RetryLayer cannot retry, leaving the caller hung indefinitely.
+        // See: https://opendal.apache.org/docs/rust/opendal/layers/struct.TimeoutLayer.html
+        //
+        // Transient errors are common for object stores; we retry temporary
+        // failures with exponential backoff. The retry behavior also
+        // benefits non-object-store backends.
+        let operator = operator.layer(TimeoutLayer::new()).layer(RetryLayer::new());
         Ok((operator, relative_path))
     }
 
@@ -454,7 +462,7 @@ impl OpenDalStorage {
             }
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { .. } => {
-                let parsed = hf::HfUri::parse(path).ok_or_else(|| {
+                let parsed = HfUri::parse(path).ok_or_else(|| {
                     Error::new(ErrorKind::DataInvalid, format!("Invalid hf url: {path}"))
                 })?;
                 Ok(&path[path.len() - parsed.path.len()..])

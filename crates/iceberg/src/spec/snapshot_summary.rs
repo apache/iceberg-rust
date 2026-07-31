@@ -483,28 +483,56 @@ fn update_totals(
     added_property: &str,
     removed_property: &str,
 ) {
-    let previous_total = previous_summary.map_or(0, |previous_summary| {
-        previous_summary
-            .additional_properties
-            .get(total_property)
-            .map_or(0, |value| value.parse::<u64>().unwrap())
-    });
+    let previous_total = match previous_summary {
+        None => 0,
+        Some(prev_summary) => match prev_summary.additional_properties.get(total_property) {
+            Some(value_str) => match value_str.parse::<u64>() {
+                Ok(v) => v,
+                Err(parse_err) => {
+                    tracing::warn!(
+                        "Property '{total_property}' could not be parsed in the previous snapshot summary: {parse_err}. \
+                         Skipping total computation.",
+                    );
+                    return;
+                }
+            },
+            None => {
+                tracing::debug!(
+                    "Property '{total_property}' was not set in the previous snapshot summary. \
+                     Skipping total computation."
+                );
+                return;
+            }
+        },
+    };
 
-    let mut new_total = previous_total;
-    if let Some(value) = summary
-        .additional_properties
-        .get(added_property)
-        .map(|value| value.parse::<u64>().unwrap())
-    {
-        new_total += value;
-    }
-    if let Some(value) = summary
-        .additional_properties
-        .get(removed_property)
-        .map(|value| value.parse::<u64>().unwrap())
-    {
-        new_total -= value;
-    }
+    // Parse the added/removed deltas, tolerating an unparsable value by skipping
+    // the total entirely rather than panicking. Computed metrics always overwrite
+    // user-supplied summary properties (see `SnapshotProducer::summary`), so a bad
+    // value should only ever come from a previous snapshot's summary; matching
+    // iceberg-java's `updateTotal`, we ignore it instead of failing the commit.
+    let parse_delta = |property: &str| -> Option<u64> {
+        match summary.additional_properties.get(property) {
+            None => Some(0),
+            Some(value) => match value.parse::<u64>() {
+                Ok(v) => Some(v),
+                Err(parse_err) => {
+                    tracing::warn!(
+                        "Property '{property}' could not be parsed when computing '{total_property}': {parse_err}. \
+                         Skipping total computation.",
+                    );
+                    None
+                }
+            },
+        }
+    };
+
+    let (Some(added), Some(removed)) = (parse_delta(added_property), parse_delta(removed_property))
+    else {
+        return;
+    };
+
+    let new_total = previous_total + added - removed;
     summary
         .additional_properties
         .insert(total_property.to_string(), new_total.to_string());
@@ -1087,5 +1115,163 @@ mod tests {
                 .iter()
                 .all(|(k, _)| !k.starts_with(CHANGED_PARTITION_PREFIX))
         );
+    }
+
+    #[test]
+    fn test_update_totals_skipped_when_previous_summary_missing_totals() {
+        let prev_props: HashMap<String, String> = [(TOTAL_DATA_FILES, "8")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+
+        let previous_summary = Summary {
+            operation: Operation::Overwrite,
+            additional_properties: prev_props,
+        };
+
+        let new_props: HashMap<String, String> = [
+            (ADDED_DATA_FILES, "4"),
+            (ADDED_DELETE_FILES, "2"),
+            (ADDED_RECORDS, "40"),
+            (ADDED_FILE_SIZE, "400"),
+            (ADDED_POSITION_DELETES, "5"),
+            (ADDED_EQUALITY_DELETES, "3"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        let summary = Summary {
+            operation: Operation::Append,
+            additional_properties: new_props,
+        };
+
+        let updated = update_snapshot_summaries(summary, Some(&previous_summary), false).unwrap();
+        let props = &updated.additional_properties;
+
+        assert_eq!(props.get(TOTAL_DATA_FILES).unwrap(), "12");
+
+        for total_field in [
+            TOTAL_DELETE_FILES,
+            TOTAL_RECORDS,
+            TOTAL_FILE_SIZE,
+            TOTAL_POSITION_DELETES,
+            TOTAL_EQUALITY_DELETES,
+        ] {
+            assert!(
+                !props.contains_key(total_field),
+                "{total_field} should not be set when previous summary lacks it",
+            );
+        }
+    }
+
+    #[test]
+    fn test_update_totals_tolerates_unparsable_added_value() {
+        // A non-integer added value (which can survive in a previous snapshot's
+        // summary) must not panic the commit. Matching iceberg-java's `updateTotal`
+        // try/catch, the affected total is skipped while other totals still compute.
+        let prev_props: HashMap<String, String> = [(TOTAL_DATA_FILES, "8"), (TOTAL_RECORDS, "80")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+
+        let previous_summary = Summary {
+            operation: Operation::Append,
+            additional_properties: prev_props,
+        };
+
+        let new_props: HashMap<String, String> =
+            [(ADDED_DATA_FILES, "not-a-number"), (ADDED_RECORDS, "40")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+
+        let summary = Summary {
+            operation: Operation::Append,
+            additional_properties: new_props,
+        };
+
+        // Must not panic.
+        let updated = update_snapshot_summaries(summary, Some(&previous_summary), false).unwrap();
+        let props = &updated.additional_properties;
+
+        // The total whose added delta was unparsable is skipped...
+        assert!(
+            !props.contains_key(TOTAL_DATA_FILES),
+            "TOTAL_DATA_FILES should be skipped when its added value is unparsable",
+        );
+        // ...while a sibling total with valid deltas still computes.
+        assert_eq!(props.get(TOTAL_RECORDS).unwrap(), "120");
+    }
+
+    #[test]
+    fn test_update_totals_computed_when_no_previous_summary() {
+        let new_props: HashMap<String, String> = [
+            (ADDED_DATA_FILES, "4"),
+            (ADDED_RECORDS, "40"),
+            (ADDED_FILE_SIZE, "400"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        let summary = Summary {
+            operation: Operation::Append,
+            additional_properties: new_props,
+        };
+
+        let updated = update_snapshot_summaries(summary, None, false).unwrap();
+        let props = &updated.additional_properties;
+
+        assert_eq!(props.get(TOTAL_DATA_FILES).unwrap(), "4");
+        assert_eq!(props.get(TOTAL_RECORDS).unwrap(), "40");
+        assert_eq!(props.get(TOTAL_FILE_SIZE).unwrap(), "400");
+    }
+
+    #[test]
+    fn test_update_totals_with_removes_only() {
+        let prev_props: HashMap<String, String> = [
+            (TOTAL_DATA_FILES, "10"),
+            (TOTAL_DELETE_FILES, "5"),
+            (TOTAL_RECORDS, "100"),
+            (TOTAL_FILE_SIZE, "1000"),
+            (TOTAL_POSITION_DELETES, "3"),
+            (TOTAL_EQUALITY_DELETES, "2"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        let previous_summary = Summary {
+            operation: Operation::Overwrite,
+            additional_properties: prev_props,
+        };
+
+        let new_props: HashMap<String, String> = [
+            (DELETED_DATA_FILES, "2"),
+            (REMOVED_DELETE_FILES, "1"),
+            (DELETED_RECORDS, "20"),
+            (REMOVED_FILE_SIZE, "200"),
+            (REMOVED_POSITION_DELETES, "1"),
+            (REMOVED_EQUALITY_DELETES, "1"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        let summary = Summary {
+            operation: Operation::Delete,
+            additional_properties: new_props,
+        };
+
+        let updated = update_snapshot_summaries(summary, Some(&previous_summary), false).unwrap();
+        let props = &updated.additional_properties;
+
+        assert_eq!(props.get(TOTAL_DATA_FILES).unwrap(), "8");
+        assert_eq!(props.get(TOTAL_DELETE_FILES).unwrap(), "4");
+        assert_eq!(props.get(TOTAL_RECORDS).unwrap(), "80");
+        assert_eq!(props.get(TOTAL_FILE_SIZE).unwrap(), "800");
+        assert_eq!(props.get(TOTAL_POSITION_DELETES).unwrap(), "2");
+        assert_eq!(props.get(TOTAL_EQUALITY_DELETES).unwrap(), "1");
     }
 }

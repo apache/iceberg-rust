@@ -54,6 +54,7 @@ mod action;
 
 pub use action::*;
 mod append;
+mod expire_snapshots;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -73,13 +74,14 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
 use crate::transaction::update_schema::UpdateSchemaAction;
 use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
-use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
+use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
 #[derive(Clone)]
@@ -164,6 +166,11 @@ impl Transaction {
         UpdateStatisticsAction::new()
     }
 
+    /// Expire snapshots from the table metadata.
+    pub fn expire_snapshots(&self) -> ExpireSnapshotsAction {
+        ExpireSnapshotsAction::new()
+    }
+
     /// Commit transaction.
     pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
         if self.actions.is_empty() {
@@ -172,6 +179,14 @@ impl Transaction {
         }
 
         let table_props = self.table.metadata().table_properties()?;
+
+        // TODO(https://github.com/apache/iceberg-rust/issues/2034): remove once encrypted writes are supported
+        if table_props.encryption_key_id.is_some() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Cannot commit to an encrypted table: encrypted writes are not yet supported",
+            ));
+        }
 
         let backoff = Self::build_backoff(table_props)?;
         let tx = self;
@@ -250,7 +265,7 @@ mod tests {
         DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
     };
     use crate::table::Table;
-    use crate::test_utils::test_runtime;
+    use crate::test_utils::{make_encrypted_table, test_runtime};
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
 
@@ -520,7 +535,7 @@ mod tests {
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
 
         let mut file_seq = 0u32;
-        let mut append_file = |table: &crate::table::Table, record_count: u64, file_size: u64| {
+        let mut append_file = |table: &Table, record_count: u64, file_size: u64| {
             file_seq += 1;
             let file = DataFileBuilder::default()
                 .content(DataContentType::Data)
@@ -558,6 +573,31 @@ mod tests {
         assert_eq!(summary.get("total-records").unwrap(), "30");
         assert_eq!(summary.get("total-data-files").unwrap(), "2");
         assert_eq!(summary.get("total-files-size").unwrap(), "300");
+    }
+
+    #[tokio::test]
+    async fn test_commit_rejects_encrypted_table() {
+        let table = make_encrypted_table().await;
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_table_properties()
+            .set("test.key".to_string(), "test.value".to_string())
+            .apply(tx)
+            .unwrap();
+
+        let mock_catalog = MockCatalog::new();
+        let result = tx.commit(&mock_catalog).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(
+            err.message()
+                .contains("encrypted writes are not yet supported"),
+            "unexpected error message: {}",
+            err.message()
+        );
     }
 }
 
@@ -605,13 +645,8 @@ mod test_row_lineage {
         assert_eq!(table.metadata().next_row_id(), 30);
 
         // Check written manifest for first_row_id
-        let manifest_list = table
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .load_manifest_list(table.file_io(), table.metadata())
-            .await
-            .unwrap();
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
 
         assert_eq!(manifest_list.entries().len(), 1);
         let manifest_file = &manifest_list.entries()[0];
@@ -633,13 +668,7 @@ mod test_row_lineage {
         assert_eq!(table.metadata().next_row_id(), 30 + 17 + 11);
 
         // Check written manifest for first_row_id
-        let manifest_list = table
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .load_manifest_list(table.file_io(), table.metadata())
-            .await
-            .unwrap();
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
         assert_eq!(manifest_list.entries().len(), 2);
         let manifest_file = &manifest_list.entries()[1];
         assert_eq!(manifest_file.first_row_id, Some(30));
