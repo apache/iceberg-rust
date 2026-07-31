@@ -17,6 +17,7 @@
 
 use std::num::NonZeroUsize;
 
+pub(crate) mod location;
 /// Utilities for working with snapshots.
 pub mod snapshot;
 

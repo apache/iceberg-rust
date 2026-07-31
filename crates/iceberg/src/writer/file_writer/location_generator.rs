@@ -21,9 +21,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::Result;
-use crate::spec::{
-    DataFileFormat, PartitionKey, TableMetadata, TableProperties, strip_trailing_slash,
-};
+use crate::spec::{DataFileFormat, PartitionKey, TableMetadata, TableProperties};
+use crate::util::location::strip_trailing_slash;
 
 /// `LocationGenerator` used to generate the location of data file.
 pub trait LocationGenerator: Clone + Send + Sync + 'static {
@@ -43,15 +42,14 @@ pub trait LocationGenerator: Clone + Send + Sync + 'static {
     fn generate_location(&self, partition_key: Option<&PartitionKey>, file_name: &str) -> String;
 }
 
+/// Default directory for data files
+const DEFAULT_DATA_DIR: &str = "/data";
 /// Number of trailing hash bits used to build the entropy directories.
 const HASH_BINARY_STRING_BITS: usize = 20;
 /// Length of each entropy directory.
 const ENTROPY_DIR_LENGTH: usize = 4;
 /// Number of entropy directories generated from the hash.
 const ENTROPY_DIR_DEPTH: usize = 3;
-
-/// Default directory for data files
-const DEFAULT_DATA_DIR: &str = "/data";
 
 #[derive(Clone, Debug)]
 /// `DefaultLocationGenerator` used to generate the data dir location of data file.
