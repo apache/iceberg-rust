@@ -21,7 +21,7 @@ use std::str::FromStr;
 
 use crate::compression::CompressionCodec;
 use crate::error::{Error, ErrorKind, Result};
-use crate::util::location;
+use crate::util::location::strip_trailing_slash;
 
 fn parse_property<T: FromStr>(
     properties: &HashMap<String, String>,
@@ -55,7 +55,7 @@ fn parse_location_property(
                 ));
             }
 
-            Ok(location::strip_trailing_slash(path).to_string())
+            Ok(strip_trailing_slash(path).to_string())
         })
         .transpose()
 }
@@ -449,7 +449,6 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
 mod tests {
     use super::*;
     use crate::compression::CompressionCodec;
-    use crate::util::location::strip_trailing_slash;
 
     #[test]
     fn test_table_properties_default() {
