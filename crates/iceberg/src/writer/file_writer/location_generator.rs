@@ -21,7 +21,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::Result;
-use crate::spec::{DataFileFormat, PartitionKey, TableMetadata, TableProperties};
+use crate::spec::{
+    DataFileFormat, PartitionKey, TableMetadata, TableProperties, strip_trailing_slash,
+};
 
 /// `LocationGenerator` used to generate the location of data file.
 pub trait LocationGenerator: Clone + Send + Sync + 'static {
@@ -183,11 +185,6 @@ impl LocationGenerator for ObjectStorageLocationGenerator {
             };
         self.new_data_location(&name)
     }
-}
-
-/// Strip a single trailing slash from a location, if present.
-fn strip_trailing_slash(location: &str) -> &str {
-    location.strip_suffix('/').unwrap_or(location)
 }
 
 /// Derive the `{parent}/{name}` context from a table location, mirroring Hadoop's

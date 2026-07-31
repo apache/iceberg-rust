@@ -41,7 +41,7 @@ where
 }
 
 /// Strips trailing slashes from a location, preserving a bare URI scheme root
-fn strip_trailing_slash(path: &str) -> &str {
+pub(crate) fn strip_trailing_slash(path: &str) -> &str {
     let mut path = path;
     while !path.ends_with("://") {
         let Some(stripped) = path.strip_suffix('/') else {
