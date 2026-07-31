@@ -300,36 +300,6 @@ pub(crate) mod test {
         DefaultLocationGenerator, FileNameGenerator, ObjectStorageLocationGenerator,
     };
 
-    /// Build a minimal `TableMetadata` for location generator tests.
-    fn table_metadata_with(location: &str, properties: HashMap<String, String>) -> TableMetadata {
-        TableMetadata {
-            format_version: FormatVersion::V2,
-            table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
-            location: location.to_string(),
-            last_updated_ms: 1515100955770,
-            last_column_id: 1,
-            schemas: HashMap::new(),
-            current_schema_id: 1,
-            partition_specs: HashMap::new(),
-            default_spec: PartitionSpec::unpartition_spec().into(),
-            default_partition_type: StructType::new(vec![]),
-            last_partition_id: 1000,
-            default_sort_order_id: 0,
-            sort_orders: HashMap::from_iter(vec![]),
-            snapshots: HashMap::default(),
-            current_snapshot_id: None,
-            last_sequence_number: 1,
-            properties,
-            snapshot_log: Vec::new(),
-            metadata_log: vec![],
-            refs: HashMap::new(),
-            statistics: HashMap::new(),
-            partition_statistics: HashMap::new(),
-            encryption_keys: HashMap::new(),
-            next_row_id: 0,
-        }
-    }
-
     #[test]
     fn test_default_location_generate() {
         let mut table_metadata = TableMetadata {
@@ -483,36 +453,6 @@ pub(crate) mod test {
         );
     }
 
-    /// Build a minimal `TableMetadata` for location generator tests.
-    fn table_metadata_with(location: &str, properties: HashMap<String, String>) -> TableMetadata {
-        TableMetadata {
-            format_version: FormatVersion::V2,
-            table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
-            location: location.to_string(),
-            last_updated_ms: 1515100955770,
-            last_column_id: 2,
-            schemas: HashMap::new(),
-            current_schema_id: 1,
-            partition_specs: HashMap::new(),
-            default_spec: PartitionSpec::unpartition_spec().into(),
-            default_partition_type: StructType::new(vec![]),
-            last_partition_id: 1000,
-            default_sort_order_id: 0,
-            sort_orders: HashMap::from_iter(vec![]),
-            snapshots: HashMap::default(),
-            current_snapshot_id: None,
-            last_sequence_number: 1,
-            properties,
-            snapshot_log: Vec::new(),
-            metadata_log: vec![],
-            refs: HashMap::new(),
-            statistics: HashMap::new(),
-            partition_statistics: HashMap::new(),
-            encryption_keys: HashMap::new(),
-            next_row_id: 0,
-        }
-    }
-
     #[test]
     fn test_object_storage_hash_injection() {
         // Golden vectors ported from Java's TestLocationProvider#testHashInjection, verifying that
@@ -570,7 +510,6 @@ pub(crate) mod test {
         );
     }
 
-    #[ignore]
     #[test]
     fn test_object_storage_include_partition_paths_with_special_characters() {
         let schema = Arc::new(
@@ -688,5 +627,35 @@ pub(crate) mod test {
             location,
             "s3://data.db/table/data_primary/0101/0110/1001/10110010/a"
         );
+    }
+
+    /// Build a minimal `TableMetadata` for location generator tests.
+    fn table_metadata_with(location: &str, properties: HashMap<String, String>) -> TableMetadata {
+        TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
+            location: location.to_string(),
+            last_updated_ms: 1515100955770,
+            last_column_id: 2,
+            schemas: HashMap::new(),
+            current_schema_id: 1,
+            partition_specs: HashMap::new(),
+            default_spec: PartitionSpec::unpartition_spec().into(),
+            default_partition_type: StructType::new(vec![]),
+            last_partition_id: 1000,
+            default_sort_order_id: 0,
+            sort_orders: HashMap::from_iter(vec![]),
+            snapshots: HashMap::default(),
+            current_snapshot_id: None,
+            last_sequence_number: 1,
+            properties,
+            snapshot_log: Vec::new(),
+            metadata_log: vec![],
+            refs: HashMap::new(),
+            statistics: HashMap::new(),
+            partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
+            next_row_id: 0,
+        }
     }
 }
