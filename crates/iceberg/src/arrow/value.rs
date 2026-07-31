@@ -21,7 +21,7 @@ use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray,
     FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray,
     LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
-    Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
+    Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray, new_null_array,
 };
 use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, FieldRef, TimeUnit};
@@ -30,7 +30,7 @@ use uuid::Uuid;
 use super::get_field_id_from_metadata;
 use crate::spec::{
     ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveLiteral, PrimitiveType,
-    SchemaWithPartnerVisitor, Struct, StructType, Type, visit_struct_with_partner,
+    SchemaWithPartnerVisitor, Struct, StructType, Type, VariantType, visit_struct_with_partner,
     visit_type_with_partner,
 };
 use crate::{Error, ErrorKind, Result};
@@ -426,6 +426,13 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
             }
         }
     }
+
+    fn variant(&mut self, _v: &VariantType, _partner: &ArrayRef) -> Result<Vec<Option<Literal>>> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Converting variant Arrow array to Iceberg literal is not supported yet",
+        ))
+    }
 }
 
 /// Defines how Arrow fields are matched with Iceberg fields when converting data.
@@ -790,10 +797,10 @@ pub(crate) fn create_primitive_array_single_element(
                     }
                 })
                 .collect::<Result<Vec<_>>>()?;
-            Ok(Arc::new(arrow_array::StructArray::new(
+            Ok(Arc::new(StructArray::new(
                 fields.clone(),
                 null_arrays,
-                Some(arrow_buffer::NullBuffer::new_null(1)),
+                Some(NullBuffer::new_null(1)),
             )))
         }
         _ => Err(Error::new(
@@ -813,48 +820,27 @@ pub(crate) fn create_primitive_array_repeated(
     num_rows: usize,
 ) -> Result<ArrayRef> {
     Ok(match (data_type, prim_lit) {
+        // --- Primitive Some arms ---
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(value))) => {
             Arc::new(BooleanArray::from(vec![*value; num_rows]))
-        }
-        (DataType::Boolean, None) => {
-            let vals: Vec<Option<bool>> = vec![None; num_rows];
-            Arc::new(BooleanArray::from(vals))
         }
         (DataType::Int32, Some(PrimitiveLiteral::Int(value))) => {
             Arc::new(Int32Array::from(vec![*value; num_rows]))
         }
-        (DataType::Int32, None) => {
-            let vals: Vec<Option<i32>> = vec![None; num_rows];
-            Arc::new(Int32Array::from(vals))
-        }
         (DataType::Date32, Some(PrimitiveLiteral::Int(value))) => {
             Arc::new(Date32Array::from(vec![*value; num_rows]))
         }
-        (DataType::Date32, None) => {
-            let vals: Vec<Option<i32>> = vec![None; num_rows];
-            Arc::new(Date32Array::from(vals))
+        (DataType::Int64, Some(PrimitiveLiteral::Int(value))) => {
+            Arc::new(Int64Array::from(vec![i64::from(*value); num_rows]))
         }
         (DataType::Int64, Some(PrimitiveLiteral::Long(value))) => {
             Arc::new(Int64Array::from(vec![*value; num_rows]))
-        }
-        (DataType::Int64, None) => {
-            let vals: Vec<Option<i64>> = vec![None; num_rows];
-            Arc::new(Int64Array::from(vals))
         }
         (
             DataType::Timestamp(TimeUnit::Microsecond, timezone),
             Some(PrimitiveLiteral::Long(value)),
         ) => {
             let array = TimestampMicrosecondArray::from(vec![*value; num_rows]);
-            if let Some(timezone) = timezone {
-                Arc::new(array.with_timezone(timezone.clone()))
-            } else {
-                Arc::new(array)
-            }
-        }
-        (DataType::Timestamp(TimeUnit::Microsecond, timezone), None) => {
-            let vals: Vec<Option<i64>> = vec![None; num_rows];
-            let array = TimestampMicrosecondArray::from(vals);
             if let Some(timezone) = timezone {
                 Arc::new(array.with_timezone(timezone.clone()))
             } else {
@@ -872,42 +858,32 @@ pub(crate) fn create_primitive_array_repeated(
                 Arc::new(array)
             }
         }
-        (DataType::Timestamp(TimeUnit::Nanosecond, timezone), None) => {
-            let vals: Vec<Option<i64>> = vec![None; num_rows];
-            let array = TimestampNanosecondArray::from(vals);
-            if let Some(timezone) = timezone {
-                Arc::new(array.with_timezone(timezone.clone()))
-            } else {
-                Arc::new(array)
-            }
-        }
         (DataType::Float32, Some(PrimitiveLiteral::Float(value))) => {
             Arc::new(Float32Array::from(vec![value.0; num_rows]))
-        }
-        (DataType::Float32, None) => {
-            let vals: Vec<Option<f32>> = vec![None; num_rows];
-            Arc::new(Float32Array::from(vals))
         }
         (DataType::Float64, Some(PrimitiveLiteral::Double(value))) => {
             Arc::new(Float64Array::from(vec![value.0; num_rows]))
         }
-        (DataType::Float64, None) => {
-            let vals: Vec<Option<f64>> = vec![None; num_rows];
-            Arc::new(Float64Array::from(vals))
-        }
         (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => {
             Arc::new(StringArray::from(vec![value.clone(); num_rows]))
-        }
-        (DataType::Utf8, None) => {
-            let vals: Vec<Option<String>> = vec![None; num_rows];
-            Arc::new(StringArray::from(vals))
         }
         (DataType::Binary, Some(PrimitiveLiteral::Binary(value))) => {
             Arc::new(BinaryArray::from_vec(vec![value; num_rows]))
         }
-        (DataType::Binary, None) => {
-            let vals: Vec<Option<&[u8]>> = vec![None; num_rows];
-            Arc::new(BinaryArray::from_opt_vec(vals))
+        (DataType::LargeBinary, Some(PrimitiveLiteral::Binary(value))) => {
+            Arc::new(LargeBinaryArray::from_vec(vec![value; num_rows]))
+        }
+        (DataType::FixedSizeBinary(len), Some(PrimitiveLiteral::Binary(value))) => {
+            let repeated: Vec<&[u8]> = vec![value.as_slice(); num_rows];
+            Arc::new(FixedSizeBinaryArray::try_from_iter(repeated.into_iter()).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Failed to create FixedSizeBinary({len}) array: {e}"),
+                )
+            })?)
+        }
+        (DataType::Time64(TimeUnit::Microsecond), Some(PrimitiveLiteral::Long(value))) => {
+            Arc::new(Time64MicrosecondArray::from(vec![*value; num_rows]))
         }
         (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::Int128(value))) => {
             Arc::new(
@@ -937,6 +913,8 @@ pub(crate) fn create_primitive_array_repeated(
                     })?,
             )
         }
+
+        // --- Special-case None arms ---
         (DataType::Decimal128(precision, scale), None) => {
             let vals: Vec<Option<i128>> = vec![None; num_rows];
             Arc::new(
@@ -953,7 +931,7 @@ pub(crate) fn create_primitive_array_repeated(
             )
         }
         (DataType::Struct(fields), None) => {
-            // Create a StructArray filled with nulls
+            // Create a StructArray filled with nulls, recursively creating null children
             let null_arrays: Vec<ArrayRef> = fields
                 .iter()
                 .map(|field| create_primitive_array_repeated(field.data_type(), &None, num_rows))
@@ -966,10 +944,14 @@ pub(crate) fn create_primitive_array_repeated(
             ))
         }
         (DataType::Null, _) => Arc::new(arrow_array::NullArray::new(num_rows)),
+
+        // --- Catch-all null arm: use arrow-rs new_null_array for any remaining DataType ---
+        (dt, None) => new_null_array(dt, num_rows),
+
         (dt, _) => {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                format!("unexpected target column type {dt}"),
+                format!("unexpected target column type {dt}, prim_lit {prim_lit:?}"),
             ));
         }
     })
@@ -1319,6 +1301,43 @@ mod test {
         let iceberg_struct_type = StructType::new(vec![]);
         let result = arrow_struct_to_literal(&struct_array, &iceberg_struct_type).unwrap();
         assert_eq!(result, vec![None; 0]);
+    }
+
+    #[test]
+    fn test_arrow_variant_to_literal_is_unsupported() {
+        // Converting a variant Arrow array back to an Iceberg literal is not implemented;
+        // the visitor must reject it rather than silently decode it incorrectly.
+        let variant_child = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(Field::new("metadata", DataType::Binary, false)),
+                Arc::new(BinaryArray::from(vec![Some(b"m".as_ref())])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("value", DataType::Binary, false)),
+                Arc::new(BinaryArray::from(vec![Some(b"v".as_ref())])) as ArrayRef,
+            ),
+        ])) as ArrayRef;
+
+        let struct_array = Arc::new(StructArray::from(vec![(
+            Arc::new(
+                Field::new("v", variant_child.data_type().clone(), false).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+                ),
+            ),
+            variant_child,
+        )])) as ArrayRef;
+
+        let ty = StructType::new(vec![
+            NestedField::required(1, "v", Type::Variant(VariantType)).into(),
+        ]);
+
+        let err = arrow_struct_to_literal(&struct_array, &ty).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(
+            err.to_string()
+                .contains("Converting variant Arrow array to Iceberg literal is not supported yet"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -98,27 +98,27 @@ impl<'de> Deserialize<'de> for Datum {
 
         struct DatumVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for DatumVisitor {
+        impl<'de> de::Visitor<'de> for DatumVisitor {
             type Value = Datum;
 
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
                 formatter.write_str("struct Datum")
             }
 
             fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
-            where A: serde::de::SeqAccess<'de> {
+            where A: de::SeqAccess<'de> {
                 let r#type = seq
                     .next_element::<PrimitiveType>()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
                 let value = seq
                     .next_element::<RawLiteral>()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
                 let Literal::Primitive(primitive) = value
                     .try_into(&Type::Primitive(r#type.clone()))
-                    .map_err(serde::de::Error::custom)?
-                    .ok_or_else(|| serde::de::Error::custom("None value"))?
+                    .map_err(de::Error::custom)?
+                    .ok_or_else(|| de::Error::custom("None value"))?
                 else {
-                    return Err(serde::de::Error::custom("Invalid value"));
+                    return Err(de::Error::custom("Invalid value"));
                 };
 
                 Ok(Datum::new(r#type, primitive))
@@ -145,17 +145,17 @@ impl<'de> Deserialize<'de> for Datum {
                     }
                 }
                 let Some(r#type) = r#type else {
-                    return Err(serde::de::Error::missing_field("type"));
+                    return Err(de::Error::missing_field("type"));
                 };
                 let Some(raw_primitive) = raw_primitive else {
-                    return Err(serde::de::Error::missing_field("literal"));
+                    return Err(de::Error::missing_field("literal"));
                 };
                 let Literal::Primitive(primitive) = raw_primitive
                     .try_into(&Type::Primitive(r#type.clone()))
-                    .map_err(serde::de::Error::custom)?
-                    .ok_or_else(|| serde::de::Error::custom("None value"))?
+                    .map_err(de::Error::custom)?
+                    .ok_or_else(|| de::Error::custom("None value"))?
                 else {
-                    return Err(serde::de::Error::custom("Invalid value"));
+                    return Err(de::Error::custom("Invalid value"));
                 };
                 Ok(Datum::new(r#type, primitive))
             }

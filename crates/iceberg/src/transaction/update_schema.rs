@@ -181,6 +181,9 @@ fn assign_fresh_ids(field: &NestedField, next_id: &mut i32) -> NestedFieldRef {
 fn assign_fresh_ids_to_type(field_type: &Type, next_id: &mut i32) -> Type {
     match field_type {
         Type::Primitive(_) => field_type.clone(),
+        // Variant carries no nested fields, so there is nothing to reassign
+        // (matches id_reassigner.rs).
+        Type::Variant(v) => Type::Variant(*v),
         Type::Struct(struct_type) => {
             let new_fields: Vec<NestedFieldRef> = struct_type
                 .fields()
@@ -279,7 +282,7 @@ fn rebuild_field(
     delete_ids: &HashSet<i32>,
 ) -> NestedFieldRef {
     match field.field_type.as_ref() {
-        Type::Primitive(_) => field.clone(),
+        Type::Primitive(_) | Type::Variant(_) => field.clone(),
         Type::Struct(s) => {
             let new_fields = rebuild_fields(s.fields(), adds, delete_ids, Some(field.id));
             Arc::new(NestedField {
@@ -477,6 +480,7 @@ mod tests {
 
     use crate::spec::{
         DEFAULT_SCHEMA_ID, Literal, NestedField, PrimitiveType, StructType, TableMetadata, Type,
+        VariantType,
     };
     use crate::table::Table;
     use crate::transaction::Transaction;
@@ -591,6 +595,19 @@ mod tests {
     // -----------------------------------------------------------------------
     // Existing root-level tests
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_assign_fresh_ids_variant() {
+        // Variant carries no sub-fields, so fresh-id assignment only renames the field
+        // itself and leaves the type untouched.
+        let mut next_id = 10;
+        let field = NestedField::optional(1, "data", Type::Variant(VariantType));
+        let assigned = super::assign_fresh_ids(&field, &mut next_id);
+
+        assert_eq!(assigned.id, 11);
+        assert_eq!(*assigned.field_type, Type::Variant(VariantType));
+        assert_eq!(next_id, 11);
+    }
 
     #[tokio::test]
     async fn test_add_column() {

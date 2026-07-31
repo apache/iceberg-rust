@@ -39,7 +39,7 @@ pub struct JoinHandle<T>(task::JoinHandle<T>);
 impl<T> Unpin for JoinHandle<T> {}
 
 impl<T: Send + 'static> Future for JoinHandle<T> {
-    type Output = crate::Result<T>;
+    type Output = Result<T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.get_mut().0).poll(cx).map(|r| {

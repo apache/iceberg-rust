@@ -39,6 +39,7 @@ pub use self::prune_columns::prune_columns;
 use super::NestedField;
 use crate::error::Result;
 use crate::expr::accessor::StructAccessor;
+use crate::spec::FormatVersion;
 use crate::spec::datatypes::{
     LIST_FIELD_NAME, ListType, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType, NestedFieldRef,
     PrimitiveType, StructType, Type,
@@ -53,6 +54,9 @@ pub type SchemaRef = Arc<Schema>;
 pub const DEFAULT_SCHEMA_ID: SchemaId = 0;
 /// Delimiter for schema name, which denotes a nested struct.
 pub const SCHEMA_NAME_DELIMITER: &str = ".";
+/// Minimum format version that allows non-null field default values.
+/// Mirrors Java's `Schema.DEFAULT_VALUES_MIN_FORMAT_VERSION`.
+pub(crate) const DEFAULT_VALUES_MIN_FORMAT_VERSION: FormatVersion = FormatVersion::V3;
 
 /// Defines schema in iceberg.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -421,6 +425,90 @@ impl Schema {
     pub fn field_id_to_fields(&self) -> &HashMap<i32, NestedFieldRef> {
         &self.id_to_field
     }
+
+    /// Minimum [`FormatVersion`] required to represent all *types* in this schema.
+    ///
+    /// Walks the whole schema — every field, nested ones included — and returns the
+    /// highest per-type floor, so this is O(fields) rather than a cheap field read.
+    /// Types only; for initial-default version floors see [`Schema::check_format_compatibility`].
+    pub fn calc_min_compatible_format(&self) -> FormatVersion {
+        // `id_to_field` is flattened, so the max over all fields covers nested ones too.
+        self.id_to_field
+            .values()
+            .map(|f| f.field_type.min_format_version())
+            .max()
+            .unwrap_or(FormatVersion::V1)
+    }
+
+    /// Returns an error listing every field incompatible with `format_version`.
+    /// Mirrors Java's `Schema.checkCompatibility()`. Two checks per field:
+    ///
+    /// - **Type** — minimum format version required to support that type, without
+    ///   taking nested field types into account.
+    /// - **Initial default** — a non-null `initial_default` backfills pre-existing rows,
+    ///   so it requires `DEFAULT_VALUES_MIN_FORMAT_VERSION`; `write_default` is not
+    ///   checked, as it only affects newly written rows (read identically at any version).
+    pub fn check_format_compatibility(&self, format_version: FormatVersion) -> Result<()> {
+        // (field id, message); sorted by id below for a deterministic error.
+        let mut problems: Vec<(i32, String)> = Vec::new();
+
+        // `id_to_field` is flattened, so checking each field by its own type keeps the
+        // blame on the offending leaf, not its container (mirrors Java's `lazyIdToField`).
+        for field in self.id_to_field.values() {
+            let min_version = field.field_type.min_format_version();
+            if format_version < min_version {
+                // Every id in `id_to_field` is also indexed in `id_to_name`; a miss means
+                // the schema's indexes are inconsistent (a bug), so surface it rather than
+                // guessing an unqualified name.
+                let name = self.name_by_field_id(field.id).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        format!(
+                            "Field id {} is missing from the schema's name index",
+                            field.id
+                        ),
+                    )
+                })?;
+                problems.push((field.id, format!(
+                    "Invalid type for {name}: {} is not supported until {min_version} but format version is {format_version}.",
+                    field.field_type,
+                )));
+            }
+
+            if let Some(default) = &field.initial_default
+                && format_version < DEFAULT_VALUES_MIN_FORMAT_VERSION
+            {
+                let name = self.name_by_field_id(field.id).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        format!(
+                            "Field id {} is missing from the schema's name index",
+                            field.id
+                        ),
+                    )
+                })?;
+                problems.push((field.id, format!(
+                    "Invalid initial default for {name}: non-null default ({default:?}) is not supported until {DEFAULT_VALUES_MIN_FORMAT_VERSION} but format version is {format_version}."
+                )));
+            }
+        }
+
+        if problems.is_empty() {
+            return Ok(());
+        }
+
+        // Stable sort by id: HashMap order is nondeterministic, and stability keeps a
+        // field's type problem before its default problem (matches Java's TreeMap order).
+        let message = problems
+            .into_iter()
+            .sorted_by_key(|(id, _)| *id)
+            .map(|(_, msg)| msg)
+            .join("\n- ");
+        Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid schema for {format_version}:\n- {message}"),
+        ))
+    }
 }
 
 impl Display for Schema {
@@ -439,20 +527,194 @@ mod tests {
 
     use bimap::BiHashMap;
 
-    use crate::spec::datatypes::Type::{List, Map, Primitive, Struct};
+    use crate::spec::datatypes::Type::{List, Map, Primitive, Struct, Variant};
     use crate::spec::datatypes::{
-        ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
+        ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType,
     };
     use crate::spec::schema::Schema;
     use crate::spec::values::Map as MapValue;
     use crate::spec::{Datum, Literal};
 
     #[test]
+    fn test_check_format_compatibility() {
+        use crate::spec::{FormatVersion, PrimitiveLiteral, VariantType};
+
+        fn schema_with(fields: Vec<NestedFieldRef>) -> Schema {
+            Schema::builder().with_fields(fields).build().unwrap()
+        }
+
+        // Variant type requires v3.
+        let variant = schema_with(vec![
+            NestedField::optional(1, "v", Variant(VariantType)).into(),
+        ]);
+        assert!(
+            variant
+                .check_format_compatibility(FormatVersion::V2)
+                .is_err()
+        );
+        assert!(
+            variant
+                .check_format_compatibility(FormatVersion::V3)
+                .is_ok()
+        );
+
+        // A non-null initial default requires v3, even for a v1-compatible type.
+        let with_default = schema_with(vec![
+            NestedField::optional(1, "a", Primitive(PrimitiveType::Int))
+                .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(1)))
+                .into(),
+        ]);
+        let err = with_default
+            .check_format_compatibility(FormatVersion::V2)
+            .unwrap_err();
+        assert!(
+            err.message().contains("Invalid initial default for a"),
+            "{err}"
+        );
+        assert!(
+            with_default
+                .check_format_compatibility(FormatVersion::V3)
+                .is_ok()
+        );
+
+        // No default is fine at any version (an absent/null default never trips).
+        let no_default = schema_with(vec![
+            NestedField::optional(1, "a", Primitive(PrimitiveType::Int)).into(),
+        ]);
+        assert!(
+            no_default
+                .check_format_compatibility(FormatVersion::V1)
+                .is_ok()
+        );
+
+        // Recursion: a default on a field nested inside a struct is caught.
+        let nested = schema_with(vec![
+            NestedField::required(
+                1,
+                "s",
+                Struct(StructType::new(vec![
+                    NestedField::optional(2, "inner", Primitive(PrimitiveType::Long))
+                        .with_initial_default(Literal::Primitive(PrimitiveLiteral::Long(7)))
+                        .into(),
+                ])),
+            )
+            .into(),
+        ]);
+        let err = nested
+            .check_format_compatibility(FormatVersion::V2)
+            .unwrap_err();
+        assert!(err.message().contains("inner"), "{err}");
+
+        // A v3-only type nested in a container blames the leaf, never the container.
+        let nested_variant = schema_with(vec![
+            NestedField::required(
+                1,
+                "container",
+                Struct(StructType::new(vec![
+                    NestedField::optional(2, "v", Variant(VariantType)).into(),
+                ])),
+            )
+            .into(),
+        ]);
+        let err = nested_variant
+            .check_format_compatibility(FormatVersion::V2)
+            .unwrap_err();
+        assert!(err.message().contains("container.v"), "{err}");
+        assert!(
+            !err.message().contains("Invalid type for container:"),
+            "container must not be blamed: {err}"
+        );
+    }
+
+    #[test]
+    fn test_calc_min_compatible_format() {
+        use crate::spec::{FormatVersion, VariantType};
+
+        fn schema_with(fields: Vec<NestedFieldRef>) -> Schema {
+            Schema::builder().with_fields(fields).build().unwrap()
+        }
+
+        // All v1-compatible types → V1.
+        let v1 = schema_with(vec![
+            NestedField::required(1, "a", Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(2, "b", Primitive(PrimitiveType::String)).into(),
+        ]);
+        assert_eq!(v1.calc_min_compatible_format(), FormatVersion::V1);
+
+        // A top-level variant → V3.
+        let variant = schema_with(vec![
+            NestedField::optional(1, "v", Variant(VariantType)).into(),
+        ]);
+        assert_eq!(variant.calc_min_compatible_format(), FormatVersion::V3);
+
+        // A v3-only type nested inside a list inside a struct → V3 (flattened fields).
+        let nested = schema_with(vec![
+            NestedField::required(
+                1,
+                "s",
+                Struct(StructType::new(vec![
+                    NestedField::optional(
+                        2,
+                        "l",
+                        List(ListType::new(
+                            NestedField::required(
+                                3,
+                                "element",
+                                Primitive(PrimitiveType::TimestampNs),
+                            )
+                            .into(),
+                        )),
+                    )
+                    .into(),
+                ])),
+            )
+            .into(),
+        ]);
+        assert_eq!(nested.calc_min_compatible_format(), FormatVersion::V3);
+    }
+
+    #[test]
+    fn test_check_format_compatibility_message_order() {
+        use crate::spec::{FormatVersion, PrimitiveLiteral, VariantType};
+
+        // Fields declared out of id order; field 2 fails both checks (ts_ns type
+        // AND a non-null initial default). The error must list problems by field id,
+        // with the type problem before the initial-default problem for field 2.
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(3, "c", Variant(VariantType)).into(),
+                NestedField::optional(2, "b", Primitive(PrimitiveType::TimestampNs))
+                    .with_initial_default(Literal::Primitive(PrimitiveLiteral::Long(0)))
+                    .into(),
+                NestedField::required(1, "a", Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let message = schema
+            .check_format_compatibility(FormatVersion::V2)
+            .unwrap_err()
+            .message()
+            .to_string();
+
+        let lines: Vec<&str> = message.lines().skip(1).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "- Invalid type for b: timestamp_ns is not supported until v3 but format version is v2.",
+                "- Invalid initial default for b: non-null default (Primitive(Long(0))) is not supported until v3 but format version is v2.",
+                "- Invalid type for c: variant is not supported until v3 but format version is v2.",
+            ],
+            "{message}"
+        );
+    }
+
+    #[test]
     fn test_construct_schema() {
         let field1: NestedFieldRef =
-            NestedField::required(1, "f1", Type::Primitive(PrimitiveType::Boolean)).into();
+            NestedField::required(1, "f1", Primitive(PrimitiveType::Boolean)).into();
         let field2: NestedFieldRef =
-            NestedField::optional(2, "f2", Type::Primitive(PrimitiveType::Int)).into();
+            NestedField::optional(2, "f2", Primitive(PrimitiveType::Int)).into();
 
         let schema = Schema::builder()
             .with_fields(vec![field1.clone()])
@@ -473,9 +735,9 @@ mod tests {
             .with_schema_id(1)
             .with_identifier_field_ids(vec![2])
             .with_fields(vec![
-                NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::optional(1, "foo", Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "bar", Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(3, "baz", Primitive(PrimitiveType::Boolean)).into(),
             ])
             .build()
             .unwrap();
@@ -512,16 +774,16 @@ mod tests {
             .with_schema_id(1)
             .with_identifier_field_ids(vec![2])
             .with_fields(vec![
-                NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::optional(1, "foo", Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "bar", Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(3, "baz", Primitive(PrimitiveType::Boolean)).into(),
                 NestedField::required(
                     4,
                     "qux",
-                    Type::List(ListType {
+                    List(ListType {
                         element_field: NestedField::list_element(
                             5,
-                            Type::Primitive(PrimitiveType::String),
+                            Primitive(PrimitiveType::String),
                             true,
                         )
                         .into(),
@@ -531,23 +793,23 @@ mod tests {
                 NestedField::required(
                     6,
                     "quux",
-                    Type::Map(MapType {
+                    Map(MapType {
                         key_field: NestedField::map_key_element(
                             7,
-                            Type::Primitive(PrimitiveType::String),
+                            Primitive(PrimitiveType::String),
                         )
                         .into(),
                         value_field: NestedField::map_value_element(
                             8,
-                            Type::Map(MapType {
+                            Map(MapType {
                                 key_field: NestedField::map_key_element(
                                     9,
-                                    Type::Primitive(PrimitiveType::String),
+                                    Primitive(PrimitiveType::String),
                                 )
                                 .into(),
                                 value_field: NestedField::map_value_element(
                                     10,
-                                    Type::Primitive(PrimitiveType::Int),
+                                    Primitive(PrimitiveType::Int),
                                     true,
                                 )
                                 .into(),
@@ -561,20 +823,20 @@ mod tests {
                 NestedField::required(
                     11,
                     "location",
-                    Type::List(ListType {
+                    List(ListType {
                         element_field: NestedField::list_element(
                             12,
-                            Type::Struct(StructType::new(vec![
+                            Struct(StructType::new(vec![
                                 NestedField::optional(
                                     13,
                                     "latitude",
-                                    Type::Primitive(PrimitiveType::Float),
+                                    Primitive(PrimitiveType::Float),
                                 )
                                 .into(),
                                 NestedField::optional(
                                     14,
                                     "longitude",
-                                    Type::Primitive(PrimitiveType::Float),
+                                    Primitive(PrimitiveType::Float),
                                 )
                                 .into(),
                             ])),
@@ -587,11 +849,9 @@ mod tests {
                 NestedField::optional(
                     15,
                     "person",
-                    Type::Struct(StructType::new(vec![
-                        NestedField::optional(16, "name", Type::Primitive(PrimitiveType::String))
-                            .into(),
-                        NestedField::required(17, "age", Type::Primitive(PrimitiveType::Int))
-                            .into(),
+                    Struct(StructType::new(vec![
+                        NestedField::optional(16, "name", Primitive(PrimitiveType::String)).into(),
+                        NestedField::required(17, "age", Primitive(PrimitiveType::Int)).into(),
                     ])),
                 )
                 .into(),
@@ -801,10 +1061,10 @@ table {
                 NestedField::required(
                     4,
                     "qux",
-                    Type::List(ListType {
+                    List(ListType {
                         element_field: NestedField::list_element(
                             5,
-                            Type::Primitive(PrimitiveType::String),
+                            Primitive(PrimitiveType::String),
                             true,
                         )
                         .into(),
@@ -933,21 +1193,19 @@ table {
                 NestedField::optional(
                     15,
                     "person",
-                    Type::Struct(StructType::new(vec![
-                        NestedField::optional(16, "name", Type::Primitive(PrimitiveType::String))
-                            .into(),
-                        NestedField::required(17, "age", Type::Primitive(PrimitiveType::Int))
-                            .into(),
+                    Struct(StructType::new(vec![
+                        NestedField::optional(16, "name", Primitive(PrimitiveType::String)).into(),
+                        NestedField::required(17, "age", Primitive(PrimitiveType::Int)).into(),
                     ])),
                 ),
             ),
             (
                 16,
-                NestedField::optional(16, "name", Type::Primitive(PrimitiveType::String)),
+                NestedField::optional(16, "name", Primitive(PrimitiveType::String)),
             ),
             (
                 17,
-                NestedField::required(17, "age", Type::Primitive(PrimitiveType::Int)),
+                NestedField::required(17, "age", Primitive(PrimitiveType::Int)),
             ),
         ]);
 
@@ -1056,9 +1314,9 @@ table {
             .with_identifier_field_ids(vec![5])
             .with_alias(BiHashMap::from_iter(vec![("bar_alias".to_string(), 3)]))
             .with_fields(vec![
-                NestedField::required(5, "foo", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::optional(3, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::required(5, "foo", Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(3, "bar", Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(3, "baz", Primitive(PrimitiveType::Boolean)).into(),
             ])
             .build()
             .unwrap_err();
@@ -1091,12 +1349,12 @@ table {
                     NestedField::required(
                         1,
                         "Map",
-                        Type::Map(MapType::new(
-                            NestedField::map_key_element(2, Type::Primitive(PrimitiveType::String))
+                        Map(MapType::new(
+                            NestedField::map_key_element(2, Primitive(PrimitiveType::String))
                                 .into(),
                             NestedField::map_value_element(
                                 3,
-                                Type::Primitive(PrimitiveType::Boolean),
+                                Primitive(PrimitiveType::Boolean),
                                 true,
                             )
                             .into(),
@@ -1115,12 +1373,12 @@ table {
                     NestedField::required(
                         1,
                         "Map",
-                        Type::Map(MapType::new(
-                            NestedField::map_key_element(2, Type::Primitive(PrimitiveType::String))
+                        Map(MapType::new(
+                            NestedField::map_key_element(2, Primitive(PrimitiveType::String))
                                 .into(),
                             NestedField::map_value_element(
                                 3,
-                                Type::Primitive(PrimitiveType::Boolean),
+                                Primitive(PrimitiveType::Boolean),
                                 true,
                             )
                             .into(),
@@ -1141,13 +1399,9 @@ table {
                     NestedField::required(
                         1,
                         "List",
-                        Type::List(ListType::new(
-                            NestedField::list_element(
-                                2,
-                                Type::Primitive(PrimitiveType::String),
-                                true
-                            )
-                            .into(),
+                        List(ListType::new(
+                            NestedField::list_element(2, Primitive(PrimitiveType::String), true)
+                                .into(),
                         )),
                     )
                     .into()
@@ -1165,15 +1419,10 @@ table {
                     NestedField::optional(
                         1,
                         "Struct",
-                        Type::Struct(StructType::new(vec![
-                            NestedField::required(
-                                2,
-                                "name",
-                                Type::Primitive(PrimitiveType::String)
-                            )
-                            .into(),
-                            NestedField::optional(3, "age", Type::Primitive(PrimitiveType::Int))
+                        Struct(StructType::new(vec![
+                            NestedField::required(2, "name", Primitive(PrimitiveType::String))
                                 .into(),
+                            NestedField::optional(3, "age", Primitive(PrimitiveType::Int)).into(),
                         ])),
                     )
                     .into()
@@ -1188,8 +1437,7 @@ table {
                 .with_schema_id(1)
                 .with_identifier_field_ids(vec![1])
                 .with_fields(vec![
-                    NestedField::required(1, "Float", Type::Primitive(PrimitiveType::Float),)
-                        .into()
+                    NestedField::required(1, "Float", Primitive(PrimitiveType::Float),).into()
                 ])
                 .build()
                 .is_err()
@@ -1199,8 +1447,7 @@ table {
                 .with_schema_id(1)
                 .with_identifier_field_ids(vec![1])
                 .with_fields(vec![
-                    NestedField::required(1, "Double", Type::Primitive(PrimitiveType::Double),)
-                        .into()
+                    NestedField::required(1, "Double", Primitive(PrimitiveType::Double),).into()
                 ])
                 .build()
                 .is_err()
@@ -1212,8 +1459,7 @@ table {
                 .with_schema_id(1)
                 .with_identifier_field_ids(vec![1])
                 .with_fields(vec![
-                    NestedField::required(1, "Required", Type::Primitive(PrimitiveType::String),)
-                        .into()
+                    NestedField::required(1, "Required", Primitive(PrimitiveType::String),).into()
                 ])
                 .build()
                 .is_ok()
@@ -1223,8 +1469,7 @@ table {
                 .with_schema_id(1)
                 .with_identifier_field_ids(vec![1])
                 .with_fields(vec![
-                    NestedField::optional(1, "Optional", Type::Primitive(PrimitiveType::String),)
-                        .into()
+                    NestedField::optional(1, "Optional", Primitive(PrimitiveType::String),).into()
                 ])
                 .build()
                 .is_err()

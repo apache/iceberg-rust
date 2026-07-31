@@ -25,7 +25,7 @@ use crate::Result;
 use crate::expr::BoundPredicate;
 use crate::spec::{
     DataContentType, DataFileFormat, ManifestEntryRef, NameMapping, PartitionSpec, Schema,
-    SchemaRef, Struct,
+    SchemaRef, Struct, StructType,
 };
 
 /// A stream of [`FileScanTask`].
@@ -116,8 +116,37 @@ pub struct FileScanTask {
     #[builder(default)]
     pub name_mapping: Option<Arc<NameMapping>>,
 
+    /// The unified partition type across all specs in the table.
+    /// When `RESERVED_FIELD_ID_PARTITION` is in the projected field IDs, the reader
+    /// uses this type along with the task's partition_spec and partition data to
+    /// materialize the `_partition` struct column at read time.
+    ///
+    /// This is a table-level value (same for all tasks in a scan), stored per-task
+    /// so that readers are self-contained without needing back-pointers to table
+    /// metadata. The cost is one Arc clone per task.
+    /// Serde: not yet implemented (same pattern as partition, partition_spec, name_mapping).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_not_implemented")]
+    #[serde(deserialize_with = "deserialize_not_implemented")]
+    #[builder(default)]
+    pub unified_partition_type: Option<Arc<StructType>>,
+
     /// Whether this scan task should treat column names as case-sensitive when binding predicates.
     pub case_sensitive: bool,
+
+    /// Key metadata for encrypted data files (Parquet Modular Encryption).
+    /// When present, the reader uses this to build `FileDecryptionProperties`.
+    ///
+    /// Note on the trust boundary: for the standard encryption scheme this
+    /// carries `StandardKeyMetadata`, whose payload is the *plaintext* DEK.
+    /// Because `FileScanTask` derives `Serialize`, that plaintext DEK is part
+    /// of the serialized scan plan should these tasks ever be serialized and sent
+    /// over the network.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub key_metadata: Option<Box<[u8]>>,
 }
 
 impl FileScanTask {
@@ -161,6 +190,13 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
             .with_file_type(ctx.manifest_entry.content_type())
             .with_partition_spec_id(ctx.partition_spec_id)
             .with_equality_ids(ctx.manifest_entry.data_file.equality_ids.clone())
+            .with_key_metadata(
+                ctx.manifest_entry
+                    .data_file
+                    .key_metadata
+                    .as_deref()
+                    .map(Box::from),
+            )
             .build()
     }
 }
@@ -184,4 +220,15 @@ pub struct FileScanTaskDeleteFile {
     /// equality ids for equality deletes (null for anything other than equality-deletes)
     #[builder(default)]
     pub equality_ids: Option<Vec<i32>>,
+
+    /// Key metadata for encrypted delete files (Parquet Modular Encryption).
+    /// When present, the reader uses this to build `FileDecryptionProperties`.
+    ///
+    /// Same plaintext-DEK trust boundary as [`FileScanTask::key_metadata`]:
+    /// this is serialized into the scan plan and crosses the planner -> worker
+    /// channel in the clear for the standard encryption scheme.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub key_metadata: Option<Box<[u8]>>,
 }
