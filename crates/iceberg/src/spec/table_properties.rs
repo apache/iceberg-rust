@@ -534,7 +534,7 @@ impl TableProperties {
     pub const PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT: usize = 2 * 1024 * 1024;
 
     /// Property key for the master key id used to encrypt the table's manifest
-    /// list and data files as defined in https://iceberg.apache.org/docs/nightly/encryption/.
+    /// list and data files as defined in <https://iceberg.apache.org/docs/nightly/encryption/>.
     pub const PROPERTY_ENCRYPTION_KEY_ID: &str = "encryption.key-id";
 
     /// Property key for the encryption data encryption key (DEK) length in bytes.
