@@ -40,6 +40,7 @@ pub struct SessionContext {
     /// Note that the session_id may be used for caching session-scoped state
     /// and re-use of a session_id with different session context may result in
     /// unexpected behavior.
+    #[builder(default=Uuid::new_v4().to_string())]
     session_id: String,
 
     /// An optional user or principal associated with the session.
@@ -56,12 +57,7 @@ pub struct SessionContext {
 impl SessionContext {
     /// Creates a new unique but empty session.
     pub fn empty() -> Self {
-        Self {
-            session_id: Uuid::new_v4().to_string(),
-            identity: None,
-            properties: HashMap::new(),
-            credentials: HashMap::new(),
-        }
+        Self::builder().build()
     }
 
     /// Returns the identifier for this session.
@@ -252,7 +248,17 @@ pub trait SessionCatalogBuilder: Default + Debug + Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use crate::Credential;
+    use uuid::Uuid;
+
+    use crate::{Credential, SessionContext};
+
+    #[test]
+    fn test_empty_session_context_has_uuid_session_id() {
+        let session = SessionContext::empty();
+        let session_id = session.session_id();
+
+        assert!(Uuid::parse_str(session_id).is_ok());
+    }
 
     #[test]
     fn test_credential_redacts_value() {
