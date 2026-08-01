@@ -70,12 +70,6 @@ aws-sdk-s3tables = { version = "1.28", default-features = false, features = [
   "rt-tokio",
 ] }
 backon = "1.5.1"
-ballista = "54"
-ballista-core = "54"
-ballista-executor = { version = "54", default-features = false, features = [
-  "arrow-ipc-optimizations",
-] }
-ballista-scheduler = { version = "54", default-features = false }
 base64 = "0.22.1"
 bimap = "0.6"
 bytes = "1.11"
