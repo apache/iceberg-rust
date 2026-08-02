@@ -273,7 +273,7 @@ mod tests {
 
     use uuid::Uuid;
 
-    use crate::{Credential, SessionContext};
+    use crate::{Credential, SessionCatalog, SessionContext};
 
     #[test]
     fn test_empty_session_context_has_uuid_session_id() {
@@ -320,4 +320,15 @@ mod tests {
         let logged = format!("{:?}", Credential::from(sensitive_value.to_string()));
         assert!(!logged.contains(sensitive_value));
     }
+
+    #[test]
+    fn test_types_are_send_sync() {
+        assert_send_sync::<Credential>();
+        assert_send_sync::<SessionContext>();
+        assert_send_sync::<dyn SessionCatalog>();
+
+        fn _dyn_compatible(_: &dyn SessionCatalog) {}
+    }
+
+    fn assert_send_sync<T: Send + Sync + ?Sized>() {}
 }
