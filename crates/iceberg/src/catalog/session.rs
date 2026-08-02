@@ -33,6 +33,18 @@ use crate::table::Table;
 use crate::{Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent};
 
 /// Context for a session.
+///
+/// # Example
+/// ```rust
+/// use iceberg::SessionContext;
+///
+/// let session = SessionContext::builder()
+///     .identity("user123".to_string())
+///     .build();
+///
+/// assert_eq!(session.identity(), Some("user123"));
+/// assert!(!session.session_id().is_empty());
+/// ```
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct SessionContext {
     /// The unique identifier for this session.
@@ -254,6 +266,8 @@ pub trait SessionCatalogBuilder: Default + Debug + Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use uuid::Uuid;
 
     use crate::{Credential, SessionContext};
@@ -264,6 +278,36 @@ mod tests {
         let session_id = session.session_id();
 
         assert!(Uuid::parse_str(session_id).is_ok());
+    }
+
+    #[test]
+    fn test_empty_sessions_get_unique_id() {
+        let session1 = SessionContext::empty();
+        let session2 = SessionContext::empty();
+
+        assert_ne!(session1.session_id(), session2.session_id())
+    }
+
+    #[test]
+    fn test_empty_sessions_get_unique_id_via_builder() {
+        let session1 = SessionContext::builder().build();
+        let session2 = SessionContext::builder().build();
+
+        assert_ne!(session1.session_id(), session2.session_id());
+    }
+
+    #[test]
+    fn test_session_with_credentials_does_not_display_them() {
+        let sensitive_value = "my-pw-123456";
+        let session = SessionContext::builder()
+            .credentials(HashMap::from([(
+                "key".to_string(),
+                Credential::from(sensitive_value.to_string()),
+            )]))
+            .build();
+
+        let logged = format!("{:?}", session);
+        assert!(!logged.contains(sensitive_value))
     }
 
     #[test]
