@@ -49,3 +49,21 @@ pub(crate) fn system_time_to_timestamp(
     reqsign_core::time::Timestamp::from_millisecond(millis)
         .map_err(|e| reqsign_core::Error::unexpected(format!("invalid credential expiry: {e}")))
 }
+
+/// Validate that a provider's declared credential prefix covers the path for
+/// which the backend requested the credential.
+#[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+pub(crate) fn validate_credential_prefix(
+    path: &str,
+    prefix: Option<&str>,
+) -> reqsign_core::Result<()> {
+    match prefix {
+        Some("") => Err(reqsign_core::Error::unexpected(
+            "vended credential has an empty storage prefix",
+        )),
+        Some(prefix) if !path.starts_with(prefix) => Err(reqsign_core::Error::unexpected(format!(
+            "vended credential prefix {prefix:?} does not cover storage location {path:?}"
+        ))),
+        _ => Ok(()),
+    }
+}

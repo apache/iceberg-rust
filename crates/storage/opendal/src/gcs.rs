@@ -30,7 +30,9 @@ use reqsign_core::{Context, Error as ReqsignError, ProvideCredential, Result as 
 use reqsign_google::{Credential as GoogleCredential, Token as GoogleToken};
 use url::Url;
 
-use crate::utils::{from_opendal_error, is_truthy, system_time_to_timestamp};
+use crate::utils::{
+    from_opendal_error, is_truthy, system_time_to_timestamp, validate_credential_prefix,
+};
 
 /// Parse iceberg properties to [`GcsConfig`].
 pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConfig> {
@@ -171,6 +173,8 @@ impl ProvideCredential for VendedGcsCredentialProvider {
                 ))
                 .with_source(e)
             })?;
+
+        validate_credential_prefix(&self.path, credential.prefix.as_deref())?;
 
         let expires_at = credential
             .expires_at

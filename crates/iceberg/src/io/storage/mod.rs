@@ -188,13 +188,17 @@ pub trait StorageCredentialProvider: Debug + Send + Sync {
     /// `path` is the absolute location being accessed (e.g.
     /// `s3://bucket/warehouse/db/table/...`). Providers that vend distinct
     /// credentials per location prefix use it to select the most specific
-    /// match.
+    /// match. When the selected credential has a declared
+    /// [`StorageCredential::prefix`], it must cover `path`.
     async fn load_credential(&self, path: &str) -> Result<StorageCredential>;
 }
 
-/// A vended storage credential together with when it expires.
+/// A vended storage credential together with its scope and expiry.
 #[derive(Clone, Debug)]
 pub struct StorageCredential {
+    /// Storage-location prefix this credential is scoped to. `None` represents a
+    /// credential without a declared scope, sourced from flat storage properties.
+    pub prefix: Option<String>,
     /// The backend-specific credential material.
     pub kind: StorageCredentialKind,
     /// When the credential expires, if known. `None` means non-expiring and

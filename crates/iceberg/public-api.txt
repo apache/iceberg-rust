@@ -1019,6 +1019,7 @@ pub fn iceberg::io::StorageConfig::deserialize<__D>(__deserializer: __D) -> core
 pub struct iceberg::io::StorageCredential
 pub iceberg::io::StorageCredential::expires_at: core::option::Option<std::time::SystemTime>
 pub iceberg::io::StorageCredential::kind: iceberg::io::StorageCredentialKind
+pub iceberg::io::StorageCredential::prefix: core::option::Option<alloc::string::String>
 impl core::clone::Clone for iceberg::io::StorageCredential
 pub fn iceberg::io::StorageCredential::clone(&self) -> iceberg::io::StorageCredential
 impl core::fmt::Debug for iceberg::io::StorageCredential

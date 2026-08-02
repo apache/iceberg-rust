@@ -38,7 +38,9 @@ use reqsign_core::{
 };
 use url::Url;
 
-use crate::utils::{from_opendal_error, is_truthy, system_time_to_timestamp};
+use crate::utils::{
+    from_opendal_error, is_truthy, system_time_to_timestamp, validate_credential_prefix,
+};
 
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {
@@ -216,6 +218,8 @@ impl ProvideCredential for VendedS3CredentialProvider {
                 ))
                 .with_source(e)
             })?;
+
+        validate_credential_prefix(&self.path, credential.prefix.as_deref())?;
 
         let expires_in = credential
             .expires_at
