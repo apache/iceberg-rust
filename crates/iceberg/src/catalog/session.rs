@@ -23,6 +23,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[cfg(test)]
+use mockall::automock;
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -133,6 +135,7 @@ impl From<String> for Credential {
 
 /// The catalog API for Iceberg Rust that includes session handling.
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub trait SessionCatalog: Debug + Send + Sync {
     /// List namespaces inside the catalog.
     async fn list_namespaces(
