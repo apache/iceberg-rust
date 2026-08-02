@@ -86,15 +86,21 @@ impl SessionContext {
 /// A string-like type containing sensitive information such as passwords or tokens.
 ///
 /// It is redacted from logs and automatically zeroized.
+///
+/// # Example
+/// ```rust
+/// use iceberg::Credential;
+///
+/// let sensitive_value = "my-pw-12345";
+/// let credential = Credential::from(sensitive_value.to_string());
+///
+/// // Not contained in debug logs.
+/// assert!(!format!("{:?}", credential).contains(sensitive_value));
+/// ```
 #[derive(Clone)]
 pub struct Credential(Zeroizing<String>);
 
 impl Credential {
-    /// Creates a new [`Credential`] from a string.
-    pub fn new(value: String) -> Self {
-        Self(Zeroizing::new(value))
-    }
-
     /// Returns the raw value of the credential.
     pub fn expose(&self) -> &str {
         &self.0
@@ -109,7 +115,7 @@ impl Debug for Credential {
 
 impl From<String> for Credential {
     fn from(value: String) -> Self {
-        Self::new(value)
+        Self(Zeroizing::new(value))
     }
 }
 
@@ -264,7 +270,7 @@ mod tests {
     fn test_credential_redacts_value() {
         let sensitive_value = "my-pw-12346";
 
-        let logged = format!("{:?}", Credential::new(sensitive_value.to_string()));
+        let logged = format!("{:?}", Credential::from(sensitive_value.to_string()));
         assert!(!logged.contains(sensitive_value));
     }
 }

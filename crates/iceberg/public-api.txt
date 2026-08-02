@@ -3519,7 +3519,6 @@ pub fn iceberg::ViewUpdate::deserialize<__D>(__deserializer: __D) -> core::resul
 pub struct iceberg::Credential(_)
 impl iceberg::Credential
 pub fn iceberg::Credential::expose(&self) -> &str
-pub fn iceberg::Credential::new(value: alloc::string::String) -> Self
 impl core::clone::Clone for iceberg::Credential
 pub fn iceberg::Credential::clone(&self) -> iceberg::Credential
 impl core::convert::From<alloc::string::String> for iceberg::Credential
