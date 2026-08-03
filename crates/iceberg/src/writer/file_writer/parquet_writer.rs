@@ -47,9 +47,10 @@ use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
 use crate::{Error, ErrorKind, Result};
 
-/// Default compression levels, pinned to parquet-java's defaults so files are
-/// comparable across implementations rather than tracking the parquet-rs
-/// defaults, which may differ and could change without us noticing.
+// Default compression levels are pinned to parquet-java's defaults so files are
+// comparable across implementations, rather than tracking the parquet-rs
+// defaults, which may differ and could change without us noticing.
+
 /// Default zstd level (parquet-rs uses 1).
 const DEFAULT_ZSTD_COMPRESSION_LEVEL: i32 = 3;
 /// Default gzip level.
@@ -92,8 +93,6 @@ impl ParquetWriterBuilder {
     /// Build a `ParquetWriterBuilder` from Iceberg table properties and a
     /// schema, translating `write.parquet.*` settings into `WriterProperties`
     /// instead of using parquet-rs defaults.
-    ///
-    /// parquet-rs defaults.
     pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Result<Self> {
         let cdc = table_props.cdc_enabled.then_some(CdcOptions {
             min_chunk_size: table_props.cdc_min_chunk_size,
