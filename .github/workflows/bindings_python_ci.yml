@@ -109,8 +109,10 @@ jobs:
       - name: Install built wheel
         working-directory: "bindings/python"
         shell: bash
+        # --no-index keeps resolution inside dist/: --find-links alone only adds a
+        # source, so a newer PyPI release would win and be tested instead.
         run: |
-          uv pip install --no-build --reinstall --find-links dist/ pyiceberg-core
+          uv pip install --no-build --reinstall --no-index --find-links dist/ pyiceberg-core
       - name: Run tests
         working-directory: "bindings/python"
         shell: bash
