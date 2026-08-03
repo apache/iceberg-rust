@@ -136,10 +136,8 @@ impl ObjectStorageLocationGenerator {
             Some(path_context(table_location))
         };
 
-        let include_partition_paths = prop
-            .get(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS)
-            .and_then(|value| value.parse::<bool>().ok())
-            .unwrap_or(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT);
+        let include_partition_paths =
+            TableProperties::try_from(prop)?.write_object_storage_partitioned_paths;
 
         Ok(Self {
             storage_location,
@@ -226,6 +224,8 @@ fn dirs_from_hash(hash: &str) -> String {
 /// Precedence follows Java Iceberg: `write.data.path` first, then the deprecated
 /// `write.object-storage.path` and `write.folder-storage.path` properties, and finally the default
 /// `{table_location}/data`.
+///
+/// This function is ported from https://github.com/apache/iceberg/blob/apache-iceberg-1.11.0/core/src/main/java/org/apache/iceberg/LocationProviders.java#L158C27-L172
 fn resolve_data_location(
     properties: &std::collections::HashMap<String, String>,
     table_location: &str,
