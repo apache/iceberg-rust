@@ -122,6 +122,53 @@ fn wkb_edges_to_edge_interpolation_algorithm(edges: WkbEdges) -> EdgeInterpolati
     }
 }
 
+fn iceberg_crs_from_wkb_metadata(crs: Option<&serde_json::Value>) -> Result<Option<String>> {
+    let Some(crs) = crs else {
+        return Ok(None);
+    };
+
+    match crs {
+        serde_json::Value::String(crs) => Ok(Some(crs.clone())),
+        serde_json::Value::Object(_) => {
+            let id = crs
+                .get("id")
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "PROJJSON CRS must contain an id object",
+                    )
+                })?;
+            let authority = id
+                .get("authority")
+                .and_then(serde_json::Value::as_str)
+                .filter(|authority| !authority.is_empty())
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "PROJJSON CRS id must contain a non-empty authority",
+                    )
+                })?;
+            let code = match id.get("code") {
+                Some(serde_json::Value::String(code)) if !code.is_empty() => code.clone(),
+                Some(serde_json::Value::Number(code)) => code.to_string(),
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "PROJJSON CRS id must contain a string or numeric code",
+                    ));
+                }
+            };
+
+            Ok(Some(format!("{authority}:{code}")))
+        }
+        _ => Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Geospatial CRS metadata must be a string or PROJJSON object",
+        )),
+    }
+}
+
 /// A post order arrow schema visitor.
 ///
 /// For order of methods called, please refer to [`visit_schema`].
@@ -451,10 +498,14 @@ impl ArrowSchemaConverter {
             .with_source(err)
         })?;
 
-        let crs = wkb_type.metadata().crs.as_ref().map(|crs| match crs {
-            serde_json::Value::String(value) => value.clone(),
-            other => other.to_string(),
-        });
+        let crs =
+            iceberg_crs_from_wkb_metadata(wkb_type.metadata().crs.as_ref()).map_err(|err| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid geospatial CRS for field {}", field.name()),
+                )
+                .with_source(err)
+            })?;
 
         match wkb_type.metadata().type_hint() {
             WkbTypeHint::Geometry => Ok(Type::Primitive(PrimitiveType::Geometry(
@@ -2333,7 +2384,7 @@ mod tests {
                     1,
                     "geom",
                     Type::Primitive(PrimitiveType::Geometry(
-                        GeometryType::new(Some("srid:4326".to_string())).unwrap(),
+                        GeometryType::new(Some("EPSG:3857".to_string())).unwrap(),
                     )),
                 )
                 .into(),
@@ -2342,7 +2393,7 @@ mod tests {
                     "geog",
                     Type::Primitive(PrimitiveType::Geography(
                         GeographyType::new(
-                            Some("srid:3857".to_string()),
+                            Some("OGC:CRS27".to_string()),
                             IcebergEdgeInterpolationAlgorithm::Karney,
                         )
                         .unwrap(),
@@ -2351,10 +2402,22 @@ mod tests {
                 .into(),
                 NestedField::optional(
                     3,
+                    "default_geom",
+                    Type::Primitive(PrimitiveType::Geometry(GeometryType::default())),
+                )
+                .into(),
+                NestedField::optional(
+                    4,
+                    "default_geog",
+                    Type::Primitive(PrimitiveType::Geography(GeographyType::default())),
+                )
+                .into(),
+                NestedField::optional(
+                    5,
                     "geom_list",
                     Type::List(ListType::new(
                         NestedField::list_element(
-                            4,
+                            6,
                             Type::Primitive(PrimitiveType::Geometry(GeometryType::default())),
                             true,
                         )
@@ -2376,7 +2439,7 @@ mod tests {
                 .crs
                 .as_ref()
                 .and_then(|crs| crs.as_str()),
-            Some("srid:4326")
+            Some("EPSG:3857")
         );
         assert!(matches!(
             geom_wkb.metadata().type_hint(),
@@ -2392,7 +2455,7 @@ mod tests {
                 .crs
                 .as_ref()
                 .and_then(|crs| crs.as_str()),
-            Some("srid:3857")
+            Some("OGC:CRS27")
         );
         assert_eq!(geog_wkb.metadata().algorithm, Some(WkbEdges::Karney));
         assert!(matches!(
@@ -2400,7 +2463,28 @@ mod tests {
             WkbTypeHint::Geography
         ));
 
-        let list = arrow_schema.field(2);
+        let default_geom = arrow_schema.field(2);
+        let default_geom_wkb = default_geom.try_extension_type::<WkbType>().unwrap();
+        assert!(default_geom_wkb.metadata().crs.is_none());
+        assert!(default_geom_wkb.metadata().algorithm.is_none());
+        assert!(matches!(
+            default_geom_wkb.metadata().type_hint(),
+            WkbTypeHint::Geometry
+        ));
+
+        let default_geog = arrow_schema.field(3);
+        let default_geog_wkb = default_geog.try_extension_type::<WkbType>().unwrap();
+        assert!(default_geog_wkb.metadata().crs.is_none());
+        assert_eq!(
+            default_geog_wkb.metadata().algorithm,
+            Some(WkbEdges::Spherical)
+        );
+        assert!(matches!(
+            default_geog_wkb.metadata().type_hint(),
+            WkbTypeHint::Geography
+        ));
+
+        let list = arrow_schema.field(4);
         let DataType::List(element) = list.data_type() else {
             panic!("Expected list field");
         };
@@ -2419,6 +2503,38 @@ mod tests {
 
         let converted = arrow_schema_to_schema(&arrow_schema).unwrap();
         assert_eq!(converted.as_struct().fields(), schema.as_struct().fields());
+    }
+
+    #[test]
+    fn test_geospatial_arrow_projjson_crs_import() {
+        let mut geom = simple_field("geom", DataType::LargeBinary, true, "1");
+        geom.try_with_extension_type(WkbType::new(Some(WkbMetadata::new(
+            Some(r#"{"id":{"authority":"EPSG","code":3857}}"#),
+            None,
+        ))))
+        .unwrap();
+
+        let mut default_geog = simple_field("default_geog", DataType::LargeBinary, true, "2");
+        default_geog
+            .try_with_extension_type(WkbType::new(Some(WkbMetadata::new(
+                Some(r#"{"id":{"authority":"EPSG","code":"4326"}}"#),
+                Some(WkbEdges::Spherical),
+            ))))
+            .unwrap();
+
+        let arrow_schema = ArrowSchema::new(vec![geom, default_geog]);
+        let schema = arrow_schema_to_schema(&arrow_schema).unwrap();
+
+        assert_eq!(
+            schema.field_by_id(1).unwrap().field_type.as_ref(),
+            &Type::Primitive(PrimitiveType::Geometry(
+                GeometryType::new(Some("EPSG:3857".to_string())).unwrap()
+            ))
+        );
+        assert_eq!(
+            schema.field_by_id(2).unwrap().field_type.as_ref(),
+            &Type::Primitive(PrimitiveType::Geography(GeographyType::default()))
+        );
     }
 
     #[test]
