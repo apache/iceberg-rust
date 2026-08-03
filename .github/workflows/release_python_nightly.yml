@@ -136,7 +136,7 @@ jobs:
         working-directory: "bindings/python"
         shell: bash
         run: |
-          uv pip install --no-build --reinstall --system --find-links dist/ pyiceberg-core
+          uv pip install --no-build --reinstall --system --no-index --find-links dist/ pyiceberg-core
 
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
