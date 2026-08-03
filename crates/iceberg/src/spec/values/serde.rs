@@ -28,6 +28,30 @@ pub(crate) mod _serde {
     use crate::spec::{MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, PrimitiveType, Type};
     use crate::{Error, ErrorKind};
 
+    /// serde's `SerializeStruct::serialize_field` requires a `&'static str` field name,
+    /// but Iceberg record field names are runtime `String`s taken from the schema.
+    /// Previously this bound was satisfied with `Box::leak(k.clone().into_boxed_str())`
+    /// on every field of every record, which permanently leaked one allocation per
+    /// field per serialized record — memory growth of O(records × fields) for callers
+    /// that serialize many manifest entries (e.g. large appends or manifest rewrites).
+    ///
+    /// Instead, intern each distinct field name once and reuse the `'static` reference,
+    /// bounding total leaked memory to the (small, fixed) set of distinct field names.
+    fn intern_field_name(name: &str) -> &'static str {
+        use std::collections::HashMap;
+        use std::sync::{Mutex, OnceLock};
+
+        static INTERNED: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+        let interned = INTERNED.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut guard = interned.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(&s) = guard.get(name) {
+            return s;
+        }
+        let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+        guard.insert(name.to_owned(), leaked);
+        leaked
+    }
+
     #[derive(SerializeDerive, DeserializeDerive, Debug)]
     #[serde(transparent)]
     /// Raw literal representation used for serde. The serialize way is used for Avro serializer.
@@ -73,10 +97,10 @@ pub(crate) mod _serde {
             let len = self.required.len() + self.optional.len();
             let mut record = serializer.serialize_struct("", len)?;
             for (k, v) in &self.required {
-                record.serialize_field(Box::leak(k.clone().into_boxed_str()), &v)?;
+                record.serialize_field(intern_field_name(k), &v)?;
             }
             for (k, v) in &self.optional {
-                record.serialize_field(Box::leak(k.clone().into_boxed_str()), &v)?;
+                record.serialize_field(intern_field_name(k), &v)?;
             }
             record.end()
         }
@@ -713,6 +737,63 @@ pub(crate) mod _serde {
                     _ => Err(invalid_err("record")),
                 },
                 RawLiteralEnum::StringMap(_) => Err(invalid_err("string map")),
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod interning_tests {
+        use super::intern_field_name;
+
+        // Regression guards for the field-name interning in `Record::serialize`.
+        //
+        // `Record::serialize` previously called `Box::leak` on a fresh clone of every
+        // field name for every record, permanently leaking O(records x fields) memory.
+        // The fix interns each DISTINCT name once. These tests pin the two properties
+        // that together guarantee both the bounded leak and unchanged serialized output:
+        //   1. content-equality -> the interned name equals the original text, so the
+        //      bytes serde writes are identical to what the leaked copy produced.
+        //   2. pointer-stability -> a repeated name reuses one leaked allocation, so
+        //      total leaked memory is bounded by the set of distinct field names.
+
+        #[test]
+        fn interned_name_has_identical_content() {
+            assert_eq!(intern_field_name("record_count"), "record_count");
+            assert_eq!(intern_field_name("file_path"), "file_path");
+        }
+
+        #[test]
+        fn repeated_name_reuses_single_allocation() {
+            let a = intern_field_name("file_size_in_bytes");
+            let b = intern_field_name("file_size_in_bytes");
+            assert!(
+                std::ptr::eq(a, b),
+                "repeated field name must be interned to a single allocation"
+            );
+        }
+
+        #[test]
+        fn distinct_names_are_distinct() {
+            let a = intern_field_name("column_sizes");
+            let b = intern_field_name("value_counts");
+            assert_ne!(a, b);
+            assert!(!std::ptr::eq(a, b));
+        }
+
+        #[test]
+        fn leak_is_bounded_across_many_records() {
+            // Serializing many records that share the same field names must not grow
+            // the interned set: every call returns the SAME allocation established on
+            // the first pass. The absence of this property was the unbounded leak.
+            let names = ["file_path", "file_format", "record_count", "partition"];
+            let first: Vec<&'static str> = names.iter().map(|n| intern_field_name(n)).collect();
+            for _ in 0..10_000 {
+                for (i, n) in names.iter().enumerate() {
+                    assert!(
+                        std::ptr::eq(intern_field_name(n), first[i]),
+                        "field name `{n}` must reuse its original interned allocation"
+                    );
+                }
             }
         }
     }
