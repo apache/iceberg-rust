@@ -364,7 +364,7 @@ impl Schema {
             .and_then(|id| self.field_by_id(*id))
     }
 
-    /// Returns the `highest_field_id`.
+    /// Returns the highest field ID assigned in this schema.
     #[inline]
     pub fn highest_field_id(&self) -> i32 {
         self.highest_field_id

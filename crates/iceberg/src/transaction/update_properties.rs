@@ -37,7 +37,7 @@ pub struct UpdatePropertiesAction {
 
 impl UpdatePropertiesAction {
     /// Creates a new [`UpdatePropertiesAction`] with no updates or removals.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         UpdatePropertiesAction {
             updates: HashMap::default(),
             removals: HashSet::default(),

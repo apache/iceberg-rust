@@ -32,11 +32,11 @@ use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 // Default ID for a new column. This will be re-assigned to a fresh ID at commit time.
 const DEFAULT_FIELD_ID: i32 = 0;
 
-/// Declarative specification for adding a column in an `UpdateSchemaAction`.
+/// Declarative specification for adding a column in an [`UpdateSchemaAction`].
 ///
 /// Use helper constructors such as [`AddColumn::optional`] and [`AddColumn::required`],
 /// optionally combined with the builder's `parent` and `doc` setters via
-/// [`AddColumn::builder`], then pass the value to `UpdateSchemaAction::add_column`.
+/// [`AddColumn::builder`], then pass the value to [`UpdateSchemaAction::add_column`].
 #[derive(TypedBuilder)]
 pub struct AddColumn {
     #[builder(default = None, setter(strip_option, into))]

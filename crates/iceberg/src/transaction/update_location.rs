@@ -34,7 +34,7 @@ pub struct UpdateLocationAction {
 
 impl UpdateLocationAction {
     /// Creates a new [`UpdateLocationAction`] with no location set.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         UpdateLocationAction { location: None }
     }
 
