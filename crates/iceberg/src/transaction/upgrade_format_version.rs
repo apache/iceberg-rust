@@ -36,7 +36,7 @@ pub struct UpgradeFormatVersionAction {
 
 impl UpgradeFormatVersionAction {
     /// Creates a new `UpgradeFormatVersionAction` with no version set.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         UpgradeFormatVersionAction {
             format_version: None,
         }

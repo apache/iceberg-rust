@@ -81,7 +81,7 @@ use crate::transaction::update_properties::UpdatePropertiesAction;
 use crate::transaction::update_schema::UpdateSchemaAction;
 use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
-use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
+use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
 #[derive(Clone)]
