@@ -117,6 +117,9 @@ pub(crate) fn parse_metadata_file_compression(
     }
 }
 
+/// Parse boolean property case insensitively
+/// Rust standard library only accepts "true" and "false", see https://doc.rust-lang.org/std/primitive.bool.html#method.from_str
+/// Users might accidentally trigger fallback with valid configuration values such as "False" or "True"
 fn parse_property_bool(
     properties: &HashMap<String, String>,
     key: &str,
