@@ -301,18 +301,26 @@ fn read_session_config(
     }
 }
 
-async fn scan_partition_count(
+async fn scan_plan(
     ctx: &SessionContext,
     namespace: &NamespaceIdent,
     table_name: &str,
-) -> usize {
+) -> Arc<dyn ExecutionPlan> {
     let provider = ctx.catalog("catalog").unwrap();
     let namespace_name = &namespace[0];
     let schema = provider.schema(namespace_name).unwrap();
     let table = schema.table(table_name).await.unwrap().unwrap();
 
     let state = ctx.state();
-    let plan = table.scan(&state, None, &[], None).await.unwrap();
+    table.scan(&state, None, &[], None).await.unwrap()
+}
+
+async fn scan_partition_count(
+    ctx: &SessionContext,
+    namespace: &NamespaceIdent,
+    table_name: &str,
+) -> usize {
+    let plan = scan_plan(ctx, namespace, table_name).await;
     plan.downcast_ref::<IcebergTableScan>()
         .expect("Expected IcebergTableScan");
     plan.properties().output_partitioning().partition_count()
@@ -340,9 +348,23 @@ async fn test_multi_file_scan_produces_multiple_partitions() -> Result<()> {
     )
     .await?;
     let ctx = get_read_context(iceberg_catalog, target_partitions, Some(true)).await?;
-    let actual_partition_count = scan_partition_count(&ctx, &namespace, &table_name).await;
+    let plan = scan_plan(&ctx, &namespace, &table_name).await;
+    plan.downcast_ref::<IcebergTableScan>()
+        .expect("Expected IcebergTableScan");
 
+    let actual_partition_count = plan.properties().output_partitioning().partition_count();
     assert_eq!(actual_partition_count, data_file_count);
+
+    // Pins the eager plan's task-group accounting. The reader settings it derives from
+    // the retained TableScan are not introspectable, so their equivalence with the lazy
+    // path is covered behaviorally by test_multi_partition_scan_matches_single_partition_results.
+    let display = datafusion::physical_plan::displayable(plan.as_ref())
+        .one_line()
+        .to_string();
+    assert!(
+        display.contains("task_groups:[3] tasks:[3]"),
+        "unexpected eager scan display: {display}"
+    );
 
     Ok(())
 }

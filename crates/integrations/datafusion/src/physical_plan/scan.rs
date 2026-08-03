@@ -29,10 +29,10 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, Partitioning, PlanProperties};
 use futures::{Stream, TryStreamExt};
 use iceberg::expr::Predicate;
-use iceberg::scan::{FileScanTask, FileScanTaskStream};
+use iceberg::scan::FileScanTaskStream;
 use iceberg::table::Table;
 
-use super::scan_planning::{IcebergScanConfig, build_table_scan};
+use super::scan_planning::{EagerScanPlan, IcebergScanConfig, build_table_scan};
 use crate::to_datafusion_error;
 
 /// Manages the scanning process of an Iceberg [`Table`], encapsulating the
@@ -48,8 +48,9 @@ pub struct IcebergTableScan {
     plan_properties: Arc<PlanProperties>,
     /// Optional limit on the number of rows to return
     limit: Option<usize>,
-    /// Pre-planned file scan tasks, grouped by partition. `None` keeps planning lazy.
-    file_task_groups: Option<Vec<Arc<[FileScanTask]>>>,
+    /// Pre-planned file scan tasks and the scan that planned them. `None` keeps
+    /// planning lazy.
+    eager_plan: Option<EagerScanPlan>,
 }
 
 impl IcebergTableScan {
@@ -57,24 +58,20 @@ impl IcebergTableScan {
         table: Table,
         scan_config: IcebergScanConfig,
         limit: Option<usize>,
-        file_task_groups: Option<Vec<Vec<FileScanTask>>>,
+        eager_plan: Option<EagerScanPlan>,
     ) -> Self {
-        let partition_count = file_task_groups.as_ref().map_or(1, |groups| groups.len());
+        let partition_count = eager_plan
+            .as_ref()
+            .map_or(1, EagerScanPlan::partition_count);
         let plan_properties =
             IcebergTableScan::compute_properties(scan_config.output_schema(), partition_count);
-        let file_task_groups = file_task_groups.map(|groups| {
-            groups
-                .into_iter()
-                .map(Arc::<[FileScanTask]>::from)
-                .collect()
-        });
 
         Self {
             table,
             scan_config,
             plan_properties,
             limit,
-            file_task_groups,
+            eager_plan,
         }
     }
 
@@ -141,20 +138,20 @@ impl ExecutionPlan for IcebergTableScan {
         _context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
         let stream: Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>> = match &self
-            .file_task_groups
+            .eager_plan
         {
-            Some(file_task_groups) => {
-                let Some(file_task_group) = file_task_groups.get(partition).cloned() else {
+            Some(eager_plan) => {
+                let Some(file_task_group) = eager_plan.task_group(partition) else {
                     return Err(datafusion::common::DataFusionError::Internal(format!(
                         "IcebergTableScan partition {partition} does not exist; scan has {} partitions",
-                        file_task_groups.len()
+                        eager_plan.partition_count()
                     )));
                 };
 
                 let tasks: FileScanTaskStream = Box::pin(futures::stream::iter(
                     (0..file_task_group.len()).map(move |idx| Ok(file_task_group[idx].clone())),
                 ));
-                let stream = build_table_scan(&self.table, &self.scan_config)?
+                let stream = eager_plan
                     .arrow_reader_builder()
                     // Eager planning lets DataFusion drive scan concurrency via output
                     // partitions. Match DataFusion's FileStream model, where each
@@ -230,13 +227,12 @@ impl DisplayAs for IcebergTableScan {
             self.predicates()
                 .map_or(String::from(""), |p| format!("{p}")),
         )?;
-        if let Some(file_task_groups) = &self.file_task_groups {
-            let task_count: usize = file_task_groups.iter().map(|group| group.len()).sum();
+        if let Some(eager_plan) = &self.eager_plan {
             write!(
                 f,
                 " task_groups:[{}] tasks:[{}]",
-                file_task_groups.len(),
-                task_count,
+                eager_plan.partition_count(),
+                eager_plan.task_count(),
             )?;
         }
         if let Some(limit) = self.limit {

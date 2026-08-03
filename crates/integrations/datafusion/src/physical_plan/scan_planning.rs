@@ -21,6 +21,7 @@ use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::error::Result as DFResult;
 use datafusion::prelude::Expr;
 use futures::TryStreamExt;
+use iceberg::arrow::ArrowReaderBuilder;
 use iceberg::expr::Predicate;
 use iceberg::scan::{FileScanTask, TableScan};
 use iceberg::table::Table;
@@ -77,16 +78,58 @@ impl IcebergScanConfig {
     }
 }
 
-pub(crate) async fn plan_file_task_groups(
+/// Result of eager scan planning: the [`TableScan`] that planned the file scan
+/// tasks, alongside those tasks grouped per output partition.
+#[derive(Debug)]
+pub(crate) struct EagerScanPlan {
+    /// The [`TableScan`] used to plan `task_groups`. Retained so that every output
+    /// partition builds its reader from this same scan, instead of rebuilding a
+    /// throwaway `TableScan` on each `execute()` call.
+    table_scan: Arc<TableScan>,
+    /// Planned file scan tasks, one group per output partition.
+    task_groups: Vec<Arc<[FileScanTask]>>,
+}
+
+impl EagerScanPlan {
+    /// Number of output partitions, i.e. the number of task groups.
+    pub(crate) fn partition_count(&self) -> usize {
+        self.task_groups.len()
+    }
+
+    /// Total number of planned file scan tasks across all partitions.
+    pub(crate) fn task_count(&self) -> usize {
+        self.task_groups.iter().map(|group| group.len()).sum()
+    }
+
+    /// Returns the task group assigned to `partition`, or `None` if out of range.
+    pub(crate) fn task_group(&self, partition: usize) -> Option<Arc<[FileScanTask]>> {
+        self.task_groups.get(partition).cloned()
+    }
+
+    /// Returns an [`ArrowReaderBuilder`] configured for this scan.
+    ///
+    /// This deliberately routes through [`TableScan::arrow_reader_builder`] rather
+    /// than constructing an [`ArrowReaderBuilder`] directly: it keeps the reader
+    /// settings (batch size, row group filtering, row selection) sourced from the
+    /// same place as the lazy path's `TableScan::to_arrow`, so the two scan paths
+    /// cannot silently drift apart.
+    pub(crate) fn arrow_reader_builder(&self) -> ArrowReaderBuilder {
+        self.table_scan.arrow_reader_builder()
+    }
+}
+
+pub(crate) async fn plan_eager_scan(
     table: &Table,
     scan_config: &IcebergScanConfig,
     target_partitions: usize,
-) -> DFResult<Vec<Vec<FileScanTask>>> {
+) -> DFResult<EagerScanPlan> {
     // Do not cache planned FileScanTasks in the provider in v1. They are query-specific
     // because projection, predicate binding, snapshot schema, and delete planning can differ
     // between scans. Catalog-backed providers also need fresh metadata on each scan.
     // TODO: Revisit provider-level caching for static tables with a precise cache key.
-    let tasks: Vec<FileScanTask> = build_table_scan(table, scan_config)?
+    let table_scan = Arc::new(build_table_scan(table, scan_config)?);
+
+    let tasks: Vec<FileScanTask> = table_scan
         .plan_files()
         .await
         .map_err(to_datafusion_error)?
@@ -94,7 +137,15 @@ pub(crate) async fn plan_file_task_groups(
         .await
         .map_err(to_datafusion_error)?;
 
-    Ok(group_file_scan_tasks_round_robin(tasks, target_partitions))
+    let task_groups = group_file_scan_tasks_round_robin(tasks, target_partitions)
+        .into_iter()
+        .map(Arc::<[FileScanTask]>::from)
+        .collect();
+
+    Ok(EagerScanPlan {
+        table_scan,
+        task_groups,
+    })
 }
 
 fn get_column_names(

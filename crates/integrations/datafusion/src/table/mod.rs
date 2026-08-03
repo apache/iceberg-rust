@@ -54,7 +54,7 @@ use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::project::project_with_partition;
 use crate::physical_plan::repartition::repartition;
 use crate::physical_plan::scan::IcebergTableScan;
-use crate::physical_plan::scan_planning::{IcebergScanConfig, plan_file_task_groups};
+use crate::physical_plan::scan_planning::{IcebergScanConfig, plan_eager_scan};
 use crate::physical_plan::sort::sort_by_partition;
 use crate::physical_plan::write::IcebergWriteExec;
 
@@ -73,8 +73,8 @@ async fn create_scan_plan(
     scan_config: IcebergScanConfig,
     limit: Option<usize>,
 ) -> DFResult<Arc<dyn ExecutionPlan>> {
-    let file_task_groups = if enable_eager_scan_planning(state) {
-        Some(plan_file_task_groups(&table, &scan_config, state.config().target_partitions()).await?)
+    let eager_plan = if enable_eager_scan_planning(state) {
+        Some(plan_eager_scan(&table, &scan_config, state.config().target_partitions()).await?)
     } else {
         None
     };
@@ -83,7 +83,7 @@ async fn create_scan_plan(
         table,
         scan_config,
         limit,
-        file_task_groups,
+        eager_plan,
     )))
 }
 
