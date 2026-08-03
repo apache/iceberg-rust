@@ -454,6 +454,7 @@ pub(crate) mod test {
         );
     }
 
+    // This test is ported from https://github.com/apache/iceberg/blob/apache-iceberg-1.11.0/core/src/test/java/org/apache/iceberg/TestLocationProvider.java#L303
     #[test]
     fn test_object_storage_hash_injection() {
         // Golden vectors ported from Java's TestLocationProvider#testHashInjection, verifying that
@@ -511,6 +512,7 @@ pub(crate) mod test {
         );
     }
 
+    // This test is ported from https://github.com/apache/iceberg/blob/apache-iceberg-1.11.0/core/src/test/java/org/apache/iceberg/TestLocationProvider.java#L267
     #[test]
     fn test_object_storage_include_partition_paths_with_special_characters() {
         let schema = Arc::new(
@@ -546,6 +548,7 @@ pub(crate) mod test {
         );
     }
 
+    // This test is ported from https://github.com/apache/iceberg/blob/apache-iceberg-1.11.0/core/src/test/java/org/apache/iceberg/TestLocationProvider.java#L285
     #[test]
     fn test_object_storage_exclude_partition_paths() {
         // Golden vector ported from Java's TestLocationProvider#testExcludePartitionInPath. With
