@@ -182,9 +182,15 @@ pub struct TableProperties {
     pub encryption_data_key_length: usize,
     /// Base directory for data files
     pub write_data_location: Option<String>,
-    /// Deprecated and will be removed in Iceberg Java, use [write_data_location] instead.
+    /// Deprecated table property for data file write location.
+    ///
+    /// Property will be removed at a later date.
+    /// Superseded by [write_data_location].
     pub write_folder_storage_location: Option<String>,
-    /// Deprecated object storage path property, kept as a fallback for compatibility,
+    /// Deprecated table property for data file write location for object storage location generator.
+    ///
+    /// Property will be removed at a later date.
+    /// Superseded by [write_data_location].
     pub write_object_storage_location: Option<String>,
     /// Whether partition values are included in object storage paths.
     pub write_object_storage_partitioned_paths: bool,
