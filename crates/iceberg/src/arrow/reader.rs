@@ -348,7 +348,13 @@ impl ArrowReader {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
         }
 
-        let delete_filter = delete_filter_rx.await.unwrap()?;
+        let delete_filter = delete_filter_rx.await.map_err(|_| {
+            Error::new(
+                ErrorKind::Unexpected,
+                "Delete file loader ended without publishing a result",
+            )
+            .with_retryable(true)
+        })??;
         let delete_predicate = delete_filter.build_equality_delete_predicate(&task).await?;
 
         // In addition to the optional predicate supplied in the `FileScanTask`,

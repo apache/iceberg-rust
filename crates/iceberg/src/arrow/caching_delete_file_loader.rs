@@ -24,7 +24,7 @@ use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use tokio::sync::oneshot::{Receiver, channel};
 
-use super::delete_filter::{DeleteFilter, PosDelLoadAction};
+use super::delete_filter::{DeleteFilter, EqDelLoadGuard, PosDelLoadAction};
 use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
 use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::{DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE, DeleteVector};
@@ -68,7 +68,7 @@ enum DeleteFileContext {
     FreshEqDel {
         batch_stream: ArrowRecordBatchStream,
         equality_ids: HashSet<i32>,
-        sender: tokio::sync::oneshot::Sender<Predicate>,
+        load_guard: EqDelLoadGuard,
     },
 }
 
@@ -95,9 +95,9 @@ impl CachingDeleteFileLoader {
 
     /// Initiates loading of all deletes for all the specified tasks
     ///
-    /// Returned future completes once all positional deletes and delete vectors
-    /// have loaded. EQ deletes are not waited for in this method but the returned
-    /// DeleteFilter will await their loading when queried for them.
+    /// The returned future completes once all newly claimed delete files have loaded.
+    /// Equality deletes already being loaded by another concurrent call are shared; the
+    /// returned DeleteFilter awaits their published result when queried.
     ///
     ///  * Create a single stream of all delete file tasks irrespective of type,
     ///    so that we can respect the combined concurrency limit
@@ -106,18 +106,21 @@ impl CachingDeleteFileLoader {
     ///    stream the file contents out
     ///  * for eq deletes, we first check if the EQ delete is already loaded or being loaded by
     ///    another concurrently processing data file scan task. If it is, we skip it.
-    ///    If not, the DeleteFilter is updated to contain a notifier to prevent other data file
-    ///    tasks from starting to load the same equality delete file. We spawn a task to load
-    ///    the EQ delete's record batch stream, convert it to a predicate, update the delete filter,
-    ///    and notify any task that was waiting for it.
+    ///    If not, the DeleteFilter records a shared result receiver and returns a load guard that
+    ///    prevents other tasks from loading the same file. The task streams and parses the file,
+    ///    then uses the guard to publish success or failure to every waiter. Failures stay cached
+    ///    so that consumers arriving later still observe the original error: retryable failures
+    ///    (including cancelled loads) can be reclaimed and retried by a later call, while
+    ///    non-retryable failures keep serving the recorded error instead of re-reading a file
+    ///    that cannot be read successfully.
     ///  * When this gets updated to add support for delete vectors, the load phase will return
     ///    a PuffinReader for them.
     ///  * The parse phase parses each record batch stream according to its associated data type.
     ///    The result of this is a map of data file paths to delete vectors for the positional
     ///    delete tasks (and in future for the delete vector tasks). For equality delete
     ///    file tasks, this results in an unbound Predicate.
-    ///  * The unbound Predicates resulting from equality deletes are sent to their associated oneshot
-    ///    channel to store them in the right place in the delete file managers state.
+    ///  * The unbound Predicates resulting from equality deletes are committed through their load
+    ///    guards, which store successful predicates and publish the result to concurrent waiters.
     ///  * The results of all of these futures are awaited on in parallel with the specified
     ///    level of concurrency and collected into a vec. We then combine all the delete
     ///    vector maps that resulted from any positional delete or delete vector files into a
@@ -139,9 +142,9 @@ impl CachingDeleteFileLoader {
     ///                     Pos Del           Del Vec (Not yet Implemented)         EQ Del
     ///                       |                             |                          |
     ///              [parse pos del stream]         [parse del vec puffin]       [parse eq del]
-    ///          HashMap<String, RoaringTreeMap> HashMap<String, RoaringTreeMap>   (Predicate, Sender)
+    ///          HashMap<String, RoaringTreeMap> HashMap<String, RoaringTreeMap> (Predicate, LoadGuard)
     ///                       |                             |                          |
-    ///                       |                             |                 [persist to state]
+    ///                       |                             |              [publish result/state]
     ///                       |                             |                          ()
     ///                       |                             |                          |
     ///                       +-----------------------------+--------------------------+
@@ -274,30 +277,45 @@ impl CachingDeleteFileLoader {
             }
 
             DataContentType::EqualityDeletes => {
-                let Some(notify) = del_filter.try_start_eq_del_load(task.data_file_path()) else {
+                let Some(load_guard) = del_filter.try_start_eq_del_load(task.data_file_path())
+                else {
                     return Ok(DeleteFileContext::ExistingEqDel);
                 };
 
-                let (sender, receiver) = channel();
-                del_filter.insert_equality_delete(task.data_file_path(), receiver);
+                let load_result: Result<_> = async {
+                    // Per the Iceberg spec, evolve schema for equality deletes but only for the
+                    // equality_ids columns, not all table columns.
+                    let equality_ids_vec = task.equality_ids.clone().ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            "Equality delete file is missing equality IDs",
+                        )
+                        .with_context("file_path", task.data_file_path())
+                    })?;
+                    let evolved_stream = BasicDeleteFileLoader::evolve_schema(
+                        basic_delete_file_loader
+                            .parquet_to_batch_stream(task.data_file_path(), task.file_size_in_bytes)
+                            .await?,
+                        schema,
+                        &equality_ids_vec,
+                    )
+                    .await?;
 
-                // Per the Iceberg spec, evolve schema for equality deletes but only for the
-                // equality_ids columns, not all table columns.
-                let equality_ids_vec = task.equality_ids.clone().unwrap();
-                let evolved_stream = BasicDeleteFileLoader::evolve_schema(
-                    basic_delete_file_loader
-                        .parquet_to_batch_stream(task.data_file_path(), task.file_size_in_bytes)
-                        .await?,
-                    schema,
-                    &equality_ids_vec,
-                )
-                .await?;
+                    Ok((evolved_stream, HashSet::from_iter(equality_ids_vec)))
+                }
+                .await;
 
-                Ok(DeleteFileContext::FreshEqDel {
-                    batch_stream: evolved_stream,
-                    sender,
-                    equality_ids: HashSet::from_iter(equality_ids_vec),
-                })
+                match load_result {
+                    Ok((batch_stream, equality_ids)) => Ok(DeleteFileContext::FreshEqDel {
+                        batch_stream,
+                        equality_ids,
+                        load_guard,
+                    }),
+                    Err(error) => {
+                        load_guard.fail(&error);
+                        Err(error)
+                    }
+                }
             }
 
             DataContentType::Data => Err(Error::new(
@@ -348,23 +366,24 @@ impl CachingDeleteFileLoader {
                 })
             }
             DeleteFileContext::FreshEqDel {
-                sender,
                 batch_stream,
                 equality_ids,
+                load_guard,
             } => {
-                let predicate =
+                let result =
                     Self::parse_equality_deletes_record_batch_stream(batch_stream, equality_ids)
-                        .await?;
+                        .await;
 
-                sender
-                    .send(predicate)
-                    .map_err(|err| {
-                        Error::new(
-                            ErrorKind::Unexpected,
-                            "Could not send eq delete predicate to state",
-                        )
-                    })
-                    .map(|_| ParsedDeleteFileContext::EqDel)
+                match result {
+                    Ok(predicate) => {
+                        load_guard.finish(predicate);
+                        Ok(ParsedDeleteFileContext::EqDel)
+                    }
+                    Err(error) => {
+                        load_guard.fail(&error);
+                        Err(error)
+                    }
+                }
             }
         }
     }
@@ -714,6 +733,7 @@ mod tests {
     use std::collections::HashMap;
     use std::fs::File;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use arrow_array::cast::AsArray;
     use arrow_array::{
@@ -760,6 +780,150 @@ mod tests {
         let expected = "(((((y != 1) OR (z != 100)) OR (a != \"HELP\")) OR (sa != 4)) OR (b != 62696E6172795F64617461)) AND (((((y != 2) OR (z IS NOT NULL)) OR (a IS NOT NULL)) OR (sa != 5)) OR (b IS NOT NULL))".to_string();
 
         assert_eq!(parsed_eq_delete.to_string(), expected);
+    }
+
+    #[tokio::test]
+    async fn test_equality_delete_read_failure_is_cached_and_fresh_loader_retries() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+        let file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
+        let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    crate::spec::NestedField::optional(
+                        2,
+                        "y",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
+                    )
+                    .into(),
+                    crate::spec::NestedField::optional(
+                        3,
+                        "z",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let equality_delete_path = format!("{table_location}/equality-deletes-1.parquet");
+        let mut equality_delete_task = FileScanTask {
+            file_size_in_bytes: 0,
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: equality_delete_path.clone(),
+            referenced_data_file: None,
+            data_file_content: DataContentType::EqualityDeletes,
+            data_file_format: DataFileFormat::Parquet,
+            schema: table_schema.clone(),
+            project_field_ids: vec![],
+            predicate: None,
+            deletes: vec![],
+            sequence_number: 0,
+            equality_ids: Some(vec![2, 3]),
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
+        };
+
+        let first_error = tokio::time::timeout(
+            Duration::from_secs(5),
+            delete_file_loader.load_deletes(
+                &[Arc::new(equality_delete_task.clone())],
+                table_schema.clone(),
+            ),
+        )
+        .await
+        .expect("missing equality delete read hung")
+        .expect("delete loader task ended without a result")
+        .expect_err("reading a missing equality delete file should fail");
+
+        let make_data_file_task = |equality_delete_task: Arc<FileScanTask>| FileScanTask {
+            file_size_in_bytes: 0,
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: format!("{table_location}/data.parquet"),
+            referenced_data_file: None,
+            data_file_content: DataContentType::Data,
+            data_file_format: DataFileFormat::Parquet,
+            schema: table_schema.clone(),
+            project_field_ids: vec![2, 3],
+            predicate: None,
+            deletes: vec![equality_delete_task],
+            sequence_number: 0,
+            equality_ids: None,
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
+        };
+
+        // The read failure is not retryable, so the same loader keeps serving the
+        // original error to consumers that arrive after the failure — even though
+        // they never observed the `Loading` state — instead of a generic missing
+        // predicate error or a doomed re-read.
+        let late_filter = tokio::time::timeout(
+            Duration::from_secs(5),
+            delete_file_loader.load_deletes(
+                &[Arc::new(equality_delete_task.clone())],
+                table_schema.clone(),
+            ),
+        )
+        .await
+        .expect("second equality delete load hung")
+        .expect("delete loader task ended without a result")
+        .expect("skipping a cached failed load must not fail the load phase");
+        let cached_error = tokio::time::timeout(
+            Duration::from_secs(5),
+            late_filter.build_equality_delete_predicate(&make_data_file_task(Arc::new(
+                equality_delete_task.clone(),
+            ))),
+        )
+        .await
+        .expect("cached equality delete failure lookup hung")
+        .expect_err("cached equality delete failure should propagate to late consumers");
+        assert_eq!(cached_error.kind(), first_error.kind());
+        assert_eq!(cached_error.message(), first_error.message());
+        assert_eq!(cached_error.retryable(), first_error.retryable());
+
+        // A fresh loader (e.g. a new scan attempt) is unaffected by the cached
+        // failure and can load the file once it becomes readable.
+        assert_eq!(
+            setup_write_equality_delete_file_1(table_location),
+            equality_delete_path
+        );
+        equality_delete_task.file_size_in_bytes =
+            std::fs::metadata(&equality_delete_path).unwrap().len();
+        let equality_delete_task = Arc::new(equality_delete_task);
+
+        let fresh_loader = CachingDeleteFileLoader::new(file_io, 10);
+        let delete_filter = tokio::time::timeout(
+            Duration::from_secs(5),
+            fresh_loader.load_deletes(
+                std::slice::from_ref(&equality_delete_task),
+                table_schema.clone(),
+            ),
+        )
+        .await
+        .expect("equality delete retry hung")
+        .expect("delete loader task ended without a result")
+        .expect("equality delete retry failed");
+
+        let predicate = tokio::time::timeout(
+            Duration::from_secs(5),
+            delete_filter
+                .build_equality_delete_predicate(&make_data_file_task(equality_delete_task)),
+        )
+        .await
+        .expect("equality delete predicate build hung")
+        .expect("equality delete predicate build failed");
+        assert!(predicate.is_some());
     }
 
     /// Create a simple field with metadata.
