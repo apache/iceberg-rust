@@ -16,7 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::sync::Arc;
 
 use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
@@ -32,7 +32,7 @@ use pyo3::types::{PyAny, PyCapsule};
 
 use crate::runtime::runtime;
 
-// pyo3 0.28's CapsuleName only exposes `unsafe fn as_cstr() -> &CStr`,
+// CapsuleName only exposes `unsafe fn as_cstr() -> &CStr`,
 // so we accept &CStr to allow direct comparison without UTF-8 validation.
 pub(crate) fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &CStr) -> PyResult<()> {
     let capsule_name = capsule.name()?;
@@ -121,7 +121,7 @@ impl PyIcebergDataFusionTable {
         py: Python<'py>,
         session: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
-        let capsule_name = CString::new("datafusion_table_provider").unwrap();
+        let capsule_name = c"datafusion_table_provider";
 
         let logical_codec = ffi_logical_codec_from_pycapsule(session)?;
 
@@ -132,7 +132,7 @@ impl PyIcebergDataFusionTable {
             logical_codec,
         );
 
-        PyCapsule::new(py, ffi_provider, Some(capsule_name))
+        PyCapsule::new_with_value(py, ffi_provider, capsule_name)
     }
 }
 

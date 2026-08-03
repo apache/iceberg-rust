@@ -21,9 +21,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider, TableProviderFactory};
+use datafusion::common::TableReference;
 use datafusion::error::Result as DFResult;
 use datafusion::logical_expr::CreateExternalTable;
-use datafusion::sql::TableReference;
 use iceberg::io::{FileIOBuilder, LocalFsStorageFactory, StorageFactory};
 use iceberg::table::StaticTable;
 use iceberg::{Error, ErrorKind, Result, TableIdent};
@@ -41,9 +41,9 @@ use crate::to_datafusion_error;
 /// ```
 /// use std::sync::Arc;
 ///
+/// use datafusion::common::TableReference;
 /// use datafusion::execution::session_state::SessionStateBuilder;
 /// use datafusion::prelude::*;
-/// use datafusion::sql::TableReference;
 /// use iceberg_datafusion::IcebergTableProviderFactory;
 ///
 /// #[tokio::main]
@@ -123,10 +123,9 @@ impl TableProviderFactory for IcebergTableProviderFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DFResult<Arc<dyn TableProvider>> {
-        check_cmd(cmd).map_err(to_datafusion_error)?;
+        let metadata_file_path = check_cmd(cmd).map_err(to_datafusion_error)?;
 
         let table_name = &cmd.name;
-        let metadata_file_path = &cmd.location;
         let options = &cmd.options;
 
         let table_name_with_ns = complement_namespace_if_necessary(table_name);
@@ -154,7 +153,7 @@ impl TableProviderFactory for IcebergTableProviderFactory {
     }
 }
 
-fn check_cmd(cmd: &CreateExternalTable) -> Result<()> {
+fn check_cmd(cmd: &CreateExternalTable) -> Result<&str> {
     let CreateExternalTable {
         schema,
         table_partition_cols,
@@ -178,7 +177,13 @@ fn check_cmd(cmd: &CreateExternalTable) -> Result<()> {
         ));
     }
 
-    Ok(())
+    match cmd.locations.as_slice() {
+        [location] => Ok(location),
+        _ => Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Iceberg external tables require exactly one metadata location.",
+        )),
+    }
 }
 
 /// Complements the namespace of a table name if necessary.
@@ -218,12 +223,11 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::catalog::TableProviderFactory;
-    use datafusion::common::{Constraints, DFSchema};
+    use datafusion::common::{Constraints, DFSchema, TableReference};
     use datafusion::execution::session_state::SessionStateBuilder;
     use datafusion::logical_expr::CreateExternalTable;
     use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use datafusion::prelude::SessionContext;
-    use datafusion::sql::TableReference;
 
     use super::*;
 
@@ -257,7 +261,7 @@ mod tests {
 
         CreateExternalTable {
             name: TableReference::partial("static_ns", "static_table"),
-            location: metadata_file_path,
+            locations: vec![metadata_file_path],
             schema: Arc::new(DFSchema::empty()),
             file_type: "iceberg".to_string(),
             options: Default::default(),
