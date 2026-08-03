@@ -567,22 +567,6 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_trailing_slash() {
-        for (path, expected) in [
-            ("s3://bucket/db/tbl", "s3://bucket/db/tbl"),
-            ("s3://bucket/db/tbl/", "s3://bucket/db/tbl"),
-            ("s3://bucket/db/tbl////", "s3://bucket/db/tbl"),
-            ("blobstore://", "blobstore://"),
-            ("blobstore:///", "blobstore://"),
-            ("file:///", "file://"),
-            ("////", ""),
-            ("", ""),
-        ] {
-            assert_eq!(strip_trailing_slash(path), expected);
-        }
-    }
-
-    #[test]
     fn test_table_properties_compression() {
         let props = HashMap::from([(
             TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),

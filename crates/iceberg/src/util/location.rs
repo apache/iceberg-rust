@@ -26,3 +26,19 @@ pub(crate) fn strip_trailing_slash(path: &str) -> &str {
     }
     path
 }
+
+#[test]
+fn test_strip_trailing_slash() {
+    for (path, expected) in [
+        ("s3://bucket/db/tbl", "s3://bucket/db/tbl"),
+        ("s3://bucket/db/tbl/", "s3://bucket/db/tbl"),
+        ("s3://bucket/db/tbl////", "s3://bucket/db/tbl"),
+        ("blobstore://", "blobstore://"),
+        ("blobstore:///", "blobstore://"),
+        ("file:///", "file://"),
+        ("////", ""),
+        ("", ""),
+    ] {
+        assert_eq!(strip_trailing_slash(path), expected);
+    }
+}
