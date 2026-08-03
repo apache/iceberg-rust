@@ -45,6 +45,7 @@ pub const MAP_VALUE_FIELD_NAME: &str = "value";
 pub(crate) const MAX_DECIMAL_BYTES: u32 = 24;
 pub(crate) const MAX_DECIMAL_PRECISION: u32 = 38;
 const DEFAULT_GEOSPATIAL_CRS: &str = "OGC:CRS84";
+const EQUIVALENT_DEFAULT_GEOSPATIAL_CRS: &str = "EPSG:4326";
 
 mod _decimal {
     use once_cell::sync::Lazy;
@@ -316,7 +317,7 @@ fn normalize_crs(crs: Option<String>) -> Result<Option<String>> {
             "Geospatial CRS must not be empty",
         ));
     }
-    Ok((crs != DEFAULT_GEOSPATIAL_CRS).then_some(crs))
+    Ok((crs != DEFAULT_GEOSPATIAL_CRS && crs != EQUIVALENT_DEFAULT_GEOSPATIAL_CRS).then_some(crs))
 }
 
 fn edge_interpolation_algorithm_as_str(algorithm: EdgeInterpolationAlgorithm) -> &'static str {
@@ -1245,9 +1246,14 @@ mod tests {
                 "geometry",
             ),
             (
-                r#""geometry(srid:4326)""#,
-                PrimitiveType::Geometry(GeometryType::new(Some("srid:4326".to_string())).unwrap()),
-                "geometry(srid:4326)",
+                r#""geometry(EPSG:3857)""#,
+                PrimitiveType::Geometry(GeometryType::new(Some("EPSG:3857".to_string())).unwrap()),
+                "geometry(EPSG:3857)",
+            ),
+            (
+                r#""geometry(EPSG:4326)""#,
+                PrimitiveType::Geometry(GeometryType::default()),
+                "geometry",
             ),
             (
                 r#""geography""#,
@@ -1255,26 +1261,31 @@ mod tests {
                 "geography",
             ),
             (
-                r#""geography(srid:4326)""#,
+                r#""geography(OGC:CRS27)""#,
                 PrimitiveType::Geography(
                     GeographyType::new(
-                        Some("srid:4326".to_string()),
+                        Some("OGC:CRS27".to_string()),
                         EdgeInterpolationAlgorithm::Spherical,
                     )
                     .unwrap(),
                 ),
-                "geography(srid:4326)",
+                "geography(OGC:CRS27)",
             ),
             (
-                r#""geography(srid:4326,karney)""#,
+                r#""geography(OGC:CRS27,karney)""#,
                 PrimitiveType::Geography(
                     GeographyType::new(
-                        Some("srid:4326".to_string()),
+                        Some("OGC:CRS27".to_string()),
                         EdgeInterpolationAlgorithm::Karney,
                     )
                     .unwrap(),
                 ),
-                "geography(srid:4326, karney)",
+                "geography(OGC:CRS27, karney)",
+            ),
+            (
+                r#""geography(EPSG:4326)""#,
+                PrimitiveType::Geography(GeographyType::default()),
+                "geography",
             ),
         ];
 
@@ -1292,7 +1303,7 @@ mod tests {
             r#""geometry()""#,
             r#""geometry(a,b)""#,
             r#""geography()""#,
-            r#""geography(srid:4326,unknown)""#,
+            r#""geography(OGC:CRS27,unknown)""#,
             r#""geography(a,b,c)""#,
         ];
 
