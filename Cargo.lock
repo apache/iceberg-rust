@@ -3778,6 +3778,7 @@ dependencies = [
  "fastnum",
  "flate2",
  "fnv",
+ "form_urlencoded",
  "futures",
  "iceberg_test_utils",
  "itertools 0.13.0",

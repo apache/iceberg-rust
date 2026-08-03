@@ -1158,6 +1158,8 @@ pub fn iceberg::metadata_columns::partition_field(partition_fields: alloc::vec::
 pub fn iceberg::metadata_columns::pos_field() -> &'static iceberg::spec::NestedFieldRef
 pub fn iceberg::metadata_columns::row_id_field() -> &'static iceberg::spec::NestedFieldRef
 pub fn iceberg::metadata_columns::spec_id_field() -> &'static iceberg::spec::NestedFieldRef
+pub mod iceberg::partitioning
+pub fn iceberg::partitioning::compute_unified_partition_type<'a>(partition_specs: impl core::iter::traits::iterator::Iterator<Item = &'a iceberg::spec::PartitionSpec>, schema: &iceberg::spec::Schema) -> iceberg::Result<iceberg::spec::StructType>
 pub mod iceberg::puffin
 pub enum iceberg::puffin::CompressionCodec
 pub iceberg::puffin::CompressionCodec::Gzip(u8)
@@ -1248,12 +1250,14 @@ pub struct iceberg::puffin::PuffinReader
 impl iceberg::puffin::PuffinReader
 pub async fn iceberg::puffin::PuffinReader::blob(&self, blob_metadata: &iceberg::puffin::BlobMetadata) -> iceberg::Result<iceberg::puffin::Blob>
 pub async fn iceberg::puffin::PuffinReader::file_metadata(&self) -> iceberg::Result<&iceberg::puffin::FileMetadata>
-pub fn iceberg::puffin::PuffinReader::new(input_file: iceberg::io::InputFile) -> Self
+pub async fn iceberg::puffin::PuffinReader::new(input_file: iceberg::io::InputFile) -> iceberg::Result<Self>
+pub async fn iceberg::puffin::PuffinReader::new_from_encrypted(encrypted_input: iceberg::encryption::EncryptedInputFile) -> iceberg::Result<Self>
 pub struct iceberg::puffin::PuffinWriter
 impl iceberg::puffin::PuffinWriter
 pub async fn iceberg::puffin::PuffinWriter::add(&mut self, blob: iceberg::puffin::Blob, compression_codec: iceberg::compression::CompressionCodec) -> iceberg::Result<()>
 pub async fn iceberg::puffin::PuffinWriter::close(self) -> iceberg::Result<()>
 pub async fn iceberg::puffin::PuffinWriter::new(output_file: &iceberg::io::OutputFile, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, compress_footer: bool) -> iceberg::Result<Self>
+pub async fn iceberg::puffin::PuffinWriter::new_from_encrypted(encrypted_output: &iceberg::encryption::EncryptedOutputFile, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, compress_footer: bool) -> iceberg::Result<Self>
 pub const iceberg::puffin::APACHE_DATASKETCHES_THETA_V1: &str
 pub const iceberg::puffin::CREATED_BY_PROPERTY: &str
 pub const iceberg::puffin::DELETION_VECTOR_V1: &str
@@ -1274,6 +1278,7 @@ pub iceberg::scan::FileScanTask::project_field_ids: alloc::vec::Vec<i32>
 pub iceberg::scan::FileScanTask::record_count: core::option::Option<u64>
 pub iceberg::scan::FileScanTask::schema: iceberg::spec::SchemaRef
 pub iceberg::scan::FileScanTask::start: u64
+pub iceberg::scan::FileScanTask::unified_partition_type: core::option::Option<alloc::sync::Arc<iceberg::spec::StructType>>
 impl iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::data_file_path(&self) -> &str
 pub fn iceberg::scan::FileScanTask::predicate(&self) -> core::option::Option<&iceberg::expr::BoundPredicate>
@@ -1288,7 +1293,7 @@ impl core::fmt::Debug for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTask
 impl iceberg::scan::FileScanTask
-pub fn iceberg::scan::FileScanTask::builder() -> FileScanTaskBuilder<((), (), (), (), (), (), (), (), (), (), (), (), (), (), ())>
+pub fn iceberg::scan::FileScanTask::builder() -> FileScanTaskBuilder<((), (), (), (), (), (), (), (), (), (), (), (), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTask
@@ -3137,6 +3142,7 @@ pub fn iceberg::table::TableBuilder::readonly(self, readonly: bool) -> Self
 pub fn iceberg::table::TableBuilder::runtime(self, runtime: iceberg::Runtime) -> Self
 pub mod iceberg::test_utils
 pub fn iceberg::test_utils::check_record_batches(record_batches: alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, expected_schema: expect_test::Expect, expected_data: expect_test::Expect, ignore_check_columns: &[&str], sort_column: core::option::Option<&str>)
+pub async fn iceberg::test_utils::make_encrypted_table() -> iceberg::table::Table
 pub fn iceberg::test_utils::test_runtime() -> iceberg::Runtime
 pub mod iceberg::transaction
 pub struct iceberg::transaction::ActionCommit
