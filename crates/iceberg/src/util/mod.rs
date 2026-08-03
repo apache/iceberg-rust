@@ -17,7 +17,8 @@
 
 use std::num::NonZeroUsize;
 
-pub(crate) mod location;
+/// Utilities for working with data, metadata, database, table ...etc. locations
+pub mod location;
 /// Utilities for working with snapshots.
 pub mod snapshot;
 
