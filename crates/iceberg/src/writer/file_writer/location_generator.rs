@@ -303,32 +303,7 @@ pub(crate) mod test {
 
     #[test]
     fn test_default_location_generate() {
-        let mut table_metadata = TableMetadata {
-            format_version: FormatVersion::V2,
-            table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
-            location: "s3://data.db/table".to_string(),
-            last_updated_ms: 1515100955770,
-            last_column_id: 1,
-            schemas: HashMap::new(),
-            current_schema_id: 1,
-            partition_specs: HashMap::new(),
-            default_spec: PartitionSpec::unpartition_spec().into(),
-            default_partition_type: StructType::new(vec![]),
-            last_partition_id: 1000,
-            default_sort_order_id: 0,
-            sort_orders: HashMap::from_iter(vec![]),
-            snapshots: HashMap::default(),
-            current_snapshot_id: None,
-            last_sequence_number: 1,
-            properties: HashMap::new(),
-            snapshot_log: Vec::new(),
-            metadata_log: vec![],
-            refs: HashMap::new(),
-            statistics: HashMap::new(),
-            partition_statistics: HashMap::new(),
-            encryption_keys: HashMap::new(),
-            next_row_id: 0,
-        };
+        let mut table_metadata = table_metadata_with("s3://data.db/table", HashMap::new());
 
         let file_name_generator = super::DefaultFileNameGenerator::new(
             "part".to_string(),
