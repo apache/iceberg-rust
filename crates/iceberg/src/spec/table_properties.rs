@@ -117,6 +117,21 @@ pub(crate) fn parse_metadata_file_compression(
     }
 }
 
+fn parse_property_bool(
+    properties: &HashMap<String, String>,
+    key: &str,
+    default: bool,
+) -> Result<bool> {
+    properties.get(key).map_or(Ok(default), |value| {
+        value.to_lowercase().parse::<bool>().map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid value for {key}: {e}"),
+            )
+        })
+    })
+}
+
 /// TableProperties that contains the properties of a table.
 #[derive(Debug)]
 pub struct TableProperties {
@@ -169,7 +184,7 @@ pub struct TableProperties {
     /// Deprecated object storage path property, kept as a fallback for compatibility,
     pub write_object_storage_location: Option<String>,
     /// Whether partition values are included in object storage paths.
-    pub write_object_storage_partitioned_paths: Option<String>,
+    pub write_object_storage_partitioned_paths: bool,
 }
 
 impl TableProperties {
@@ -376,12 +391,12 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_METADATA_PATH,
             )?,
             metadata_compression_codec: parse_metadata_file_compression(props)?,
-            write_datafusion_fanout_enabled: parse_property(
+            write_datafusion_fanout_enabled: parse_property_bool(
                 props,
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT,
             )?,
-            gc_enabled: parse_property(
+            gc_enabled: parse_property_bool(
                 props,
                 TableProperties::PROPERTY_GC_ENABLED,
                 TableProperties::PROPERTY_GC_ENABLED_DEFAULT,
@@ -401,7 +416,7 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_MAX_REF_AGE_MS,
                 TableProperties::PROPERTY_MAX_REF_AGE_MS_DEFAULT,
             )?,
-            cdc_enabled: parse_property(
+            cdc_enabled: parse_property_bool(
                 props,
                 TableProperties::PROPERTY_PARQUET_CDC_ENABLED,
                 TableProperties::PROPERTY_PARQUET_CDC_ENABLED_DEFAULT,
@@ -438,9 +453,11 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
             write_object_storage_location: props
                 .get(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION)
                 .cloned(),
-            write_object_storage_partitioned_paths: props
-                .get(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS)
-                .cloned(),
+            write_object_storage_partitioned_paths: parse_property_bool(
+                props,
+                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS,
+                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT,
+            )?,
         })
     }
 }
@@ -966,5 +983,29 @@ mod tests {
         let props = HashMap::from([("some.other.property".to_string(), "value".to_string())]);
         let tp = TableProperties::try_from(&props).unwrap();
         assert!(!tp.cdc_enabled);
+    }
+
+    #[test]
+    fn test_parse_boolean_property_case_insensitive() {
+        let false_variants = ["False", "FALSE"];
+        let true_variants = ["True", "TRUE"];
+
+        for f in false_variants {
+            let props = HashMap::from([(
+                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS.to_string(),
+                f.to_string(),
+            )]);
+            let tp = TableProperties::try_from(&props).unwrap();
+            assert!(!tp.write_object_storage_partitioned_paths);
+        }
+
+        for t in true_variants {
+            let props = HashMap::from([(
+                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS.to_string(),
+                t.to_string(),
+            )]);
+            let tp = TableProperties::try_from(&props).unwrap();
+            assert!(tp.write_object_storage_partitioned_paths);
+        }
     }
 }

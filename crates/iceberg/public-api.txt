@@ -2768,7 +2768,7 @@ pub iceberg::spec::TableProperties::write_folder_storage_location: core::option:
 pub iceberg::spec::TableProperties::write_format_default: alloc::string::String
 pub iceberg::spec::TableProperties::write_metadata_path: core::option::Option<alloc::string::String>
 pub iceberg::spec::TableProperties::write_object_storage_location: core::option::Option<alloc::string::String>
-pub iceberg::spec::TableProperties::write_object_storage_partitioned_paths: core::option::Option<alloc::string::String>
+pub iceberg::spec::TableProperties::write_object_storage_partitioned_paths: bool
 pub iceberg::spec::TableProperties::write_target_file_size_bytes: usize
 impl iceberg::spec::TableProperties
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str
@@ -3188,6 +3188,7 @@ pub fn iceberg::transform::TransformFunction::transform_literal_result(&self, in
 pub fn iceberg::transform::create_transform_function(transform: &iceberg::spec::Transform) -> iceberg::Result<iceberg::transform::BoxedTransformFunction>
 pub type iceberg::transform::BoxedTransformFunction = alloc::boxed::Box<dyn iceberg::transform::TransformFunction>
 pub mod iceberg::util
+pub mod iceberg::util::location
 pub mod iceberg::util::snapshot
 pub fn iceberg::util::snapshot::ancestors_between(table_metadata: &iceberg::spec::TableMetadataRef, latest_snapshot_id: i64, oldest_snapshot_id: core::option::Option<i64>) -> impl core::iter::traits::iterator::Iterator<Item = iceberg::spec::SnapshotRef> + core::marker::Send
 pub fn iceberg::util::snapshot::ancestors_of(table_metadata: &iceberg::spec::TableMetadataRef, snapshot_id: i64) -> impl core::iter::traits::iterator::Iterator<Item = iceberg::spec::SnapshotRef> + core::marker::Send
