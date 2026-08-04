@@ -58,3 +58,30 @@ fn generates_defaults_getters_modifiers_and_serde() {
     assert_eq!(decoded.owner(), Some("iceberg".to_string()));
     assert_eq!(decoded.column_fpp()["id"], 0.01);
 }
+
+#[derive(Clone, Debug, Properties)]
+struct CommitProperties {
+    #[key = "commit.retry.num-retries"]
+    #[default = 4]
+    #[doc = "Number of times to retry a commit before failing."]
+    num_retries: u64,
+}
+
+#[derive(Debug, Properties)]
+struct NestedProperties {
+    #[nested]
+    #[doc = "Commit behavior properties."]
+    commit: CommitProperties,
+}
+
+#[test]
+fn nested_properties_use_a_flat_property_map() {
+    let properties =
+        NestedProperties::default().with_commit(CommitProperties::default().with_num_retries(9));
+
+    let json = serde_json::to_value(&properties).unwrap();
+    assert_eq!(json["commit.retry.num-retries"], "9");
+
+    let decoded: NestedProperties = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded.commit().num_retries(), 9);
+}

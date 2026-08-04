@@ -27,27 +27,28 @@ use syn::{
 
 /// Derive parsing, defaults, JSON serialization, and getters for a typed property map.
 ///
-/// Each field must declare the table-property key and its default:
+/// Leaf fields must declare the table-property key and its default:
 ///
 /// ```ignore
 /// #[derive(Properties)]
 /// struct Properties {
-///     #[key(TableProperties::DEFAULT_FILE_FORMAT)]
-///     #[default(DataFileFormat::Parquet)]
+///     #[key = "write.format.default"]
+///     #[default = DataFileFormat::Parquet]
 ///     #[doc = "Default file format"]
 ///     write_format_default: DataFileFormat,
 /// }
 /// ```
 ///
 /// `prefix` captures a family of properties in a `HashMap<String, T>`, keyed by the suffix after
-/// the declared prefix. `parse_with` may be used for exact-key property types that do not implement
+/// the declared prefix. `nested` embeds another `Properties` struct while keeping its serialized
+/// property map flat. `parse_with` may be used for exact-key property types that do not implement
 /// `FromStr` or need validation. `serialize_with` supplies their string representation in JSON.
 /// Optional fields are omitted from JSON when they are `None`. Fields must implement `Clone`; they
 /// also need `FromStr` and `ToString` unless the relevant custom parsing or serialization attribute
 /// is supplied.
 #[proc_macro_derive(
     Properties,
-    attributes(key, prefix, default, parse_with, serialize_with)
+    attributes(key, prefix, nested, default, parse_with, serialize_with)
 )]
 pub fn derive_properties(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -64,7 +65,8 @@ struct PropertyField {
     docs: Vec<Attribute>,
     key: Option<Expr>,
     prefix: Option<Expr>,
-    default: Expr,
+    nested: bool,
+    default: Option<Expr>,
     parse_with: Option<Path>,
     serialize_with: Option<Path>,
     option_inner_type: Option<Type>,
@@ -98,8 +100,12 @@ fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2> {
 
     let defaults = fields.iter().map(|field| {
         let ident = &field.ident;
-        let default = &field.default;
-        quote!(#ident: #default)
+        if field.nested {
+            quote!(#ident: ::std::default::Default::default())
+        } else {
+            let default = field.default.as_ref().expect("leaf fields have defaults");
+            quote!(#ident: #default)
+        }
     });
 
     let accessors = fields.iter().map(|field| {
@@ -130,7 +136,7 @@ fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2> {
 
     let parses = fields.iter().map(parse_field);
 
-    let serializes = fields.iter().map(serialize_field);
+    let property_writes = fields.iter().map(write_field);
 
     Ok(quote! {
         impl ::std::default::Default for #struct_name {
@@ -150,6 +156,27 @@ fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2> {
                 })
             }
 
+            pub(crate) fn write_properties(
+                &self,
+                properties: &mut ::std::collections::HashMap<
+                    ::std::string::String,
+                    ::std::string::String,
+                >,
+            ) {
+                #(#property_writes)*
+            }
+
+            fn to_properties(
+                &self,
+            ) -> ::std::collections::HashMap<
+                ::std::string::String,
+                ::std::string::String,
+            > {
+                let mut properties = ::std::collections::HashMap::new();
+                self.write_properties(&mut properties);
+                properties
+            }
+
             #(#accessors)*
         }
 
@@ -158,11 +185,7 @@ fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2> {
             where
                 S: ::serde::Serializer,
             {
-                use ::serde::ser::SerializeMap as _;
-
-                let mut map = serializer.serialize_map(None)?;
-                #(#serializes)*
-                map.end()
+                ::serde::Serialize::serialize(&self.to_properties(), serializer)
             }
         }
 
@@ -185,15 +208,26 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
         .ok_or_else(|| Error::new_spanned(field, "Properties fields must be named"))?;
     let key = attribute_expression_value(&field.attrs, "key")?;
     let prefix = attribute_expression_value(&field.attrs, "prefix")?;
-    if key.is_some() == prefix.is_some() {
+    let nested = marker_attribute(&field.attrs, "nested")?;
+    if usize::from(key.is_some()) + usize::from(prefix.is_some()) + usize::from(nested) != 1 {
         return Err(Error::new_spanned(
             field,
-            "Properties fields must declare exactly one of #[key(...)] or #[prefix(...)]",
+            "Properties fields must declare exactly one of #[key(...)], #[prefix(...)], or #[nested]",
         ));
     }
-    let default = attribute_expression_value(&field.attrs, "default")?.ok_or_else(|| {
-        Error::new_spanned(field, "Properties fields must declare #[default(...)]")
-    })?;
+    let default = attribute_expression_value(&field.attrs, "default")?;
+    if nested && default.is_some() {
+        return Err(Error::new_spanned(
+            field,
+            "#[nested] fields use the nested type's Default implementation and cannot declare #[default(...)]",
+        ));
+    }
+    if !nested && default.is_none() {
+        return Err(Error::new_spanned(
+            field,
+            "Properties leaf fields must declare #[default(...)]",
+        ));
+    }
 
     let map_value_type = map_value_type(&field.ty);
     if prefix.is_some() && map_value_type.is_none() {
@@ -202,13 +236,13 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
             "#[prefix(...)] fields must have type HashMap<String, T>",
         ));
     }
-    if prefix.is_some()
+    if (prefix.is_some() || nested)
         && (attribute_path_value(&field.attrs, "parse_with")?.is_some()
             || attribute_path_value(&field.attrs, "serialize_with")?.is_some())
     {
         return Err(Error::new_spanned(
             field,
-            "#[prefix(...)] fields do not support parse_with or serialize_with",
+            "#[prefix(...)] and #[nested] fields do not support parse_with or serialize_with",
         ));
     }
 
@@ -223,12 +257,27 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
             .collect(),
         key,
         prefix,
+        nested,
         default,
         parse_with: attribute_path_value(&field.attrs, "parse_with")?,
         serialize_with: attribute_path_value(&field.attrs, "serialize_with")?,
         option_inner_type: option_inner_type(&field.ty),
         map_value_type,
     })
+}
+
+fn marker_attribute(attributes: &[Attribute], name: &str) -> syn::Result<bool> {
+    let Some(attribute) = find_attribute(attributes, name)? else {
+        return Ok(false);
+    };
+
+    match &attribute.meta {
+        Meta::Path(_) => Ok(true),
+        _ => Err(Error::new_spanned(
+            attribute,
+            format!("{name} must use the form #[{name}]"),
+        )),
+    }
 }
 
 fn attribute_expression_value(attributes: &[Attribute], name: &str) -> syn::Result<Option<Expr>> {
@@ -279,7 +328,12 @@ fn find_attribute<'a>(
 
 fn parse_field(field: &PropertyField) -> TokenStream2 {
     let ident = &field.ident;
-    let default = &field.default;
+    if field.nested {
+        let ty = &field.ty;
+        return quote!(#ident: <#ty>::from_properties(properties)?);
+    }
+
+    let default = field.default.as_ref().expect("leaf fields have defaults");
 
     if let Some(prefix) = &field.prefix {
         let value_type = field
@@ -378,13 +432,19 @@ fn map_value_type(ty: &Type) -> Option<Type> {
     Some(value_type.clone())
 }
 
-fn serialize_field(field: &PropertyField) -> TokenStream2 {
+fn write_field(field: &PropertyField) -> TokenStream2 {
     let ident = &field.ident;
+    if field.nested {
+        return quote! {
+            self.#ident.write_properties(properties);
+        };
+    }
+
     if let Some(prefix) = &field.prefix {
         return quote! {
             for (suffix, value) in &self.#ident {
                 let key = format!("{}{}", #prefix, suffix);
-                map.serialize_entry(&key, &::std::string::ToString::to_string(value))?;
+                properties.insert(key, ::std::string::ToString::to_string(value));
             }
         };
     }
@@ -399,7 +459,7 @@ fn serialize_field(field: &PropertyField) -> TokenStream2 {
         };
         quote! {
             if self.#ident.is_some() {
-                map.serialize_entry(#key, &#value)?;
+                properties.insert((#key).to_string(), #value);
             }
         }
     } else {
@@ -408,7 +468,7 @@ fn serialize_field(field: &PropertyField) -> TokenStream2 {
             None => quote!(::std::string::ToString::to_string(&self.#ident)),
         };
         quote! {
-            map.serialize_entry(#key, &#value)?;
+            properties.insert((#key).to_string(), #value);
         }
     }
 }
