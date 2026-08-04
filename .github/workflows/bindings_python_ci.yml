@@ -47,10 +47,10 @@ jobs:
   check-python:
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.9.3"
           enable-cache: true
@@ -76,10 +76,10 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: 3.12
       # Linux maturin builds may run inside manylinux Docker, so host Rust caches only help Windows/macOS.
@@ -97,7 +97,7 @@ jobs:
           working-directory: "bindings/python"
           command: build
           args: --out dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.9.3"
           enable-cache: true
@@ -109,8 +109,10 @@ jobs:
       - name: Install built wheel
         working-directory: "bindings/python"
         shell: bash
+        # --no-index keeps resolution inside dist/: --find-links alone only adds a
+        # source, so a newer PyPI release would win and be tested instead.
         run: |
-          uv pip install --no-build --reinstall --find-links dist/ pyiceberg-core
+          uv pip install --no-build --reinstall --no-index --find-links dist/ pyiceberg-core
       - name: Run tests
         working-directory: "bindings/python"
         shell: bash

@@ -37,7 +37,11 @@ pub(crate) enum CachedItem {
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub(crate) enum CachedObjectKey {
     ManifestList((String, FormatVersion, SchemaId)),
-    Manifest(String),
+    // The manifest-level `first_row_id` is part of the key because the parsed
+    // manifest inherits it onto its entries: the same physical manifest can be
+    // referenced with different offsets across snapshots and branches, so it
+    // cannot be shared under the path alone.
+    Manifest((String, Option<u64>)),
 }
 
 /// Caches metadata objects deserialized from immutable files
@@ -109,7 +113,10 @@ impl ObjectCache {
                 .map(Arc::new);
         }
 
-        let key = CachedObjectKey::Manifest(manifest_file.manifest_path.clone());
+        let key = CachedObjectKey::Manifest((
+            manifest_file.manifest_path.clone(),
+            manifest_file.first_row_id,
+        ));
 
         let cache_entry = self
             .cache
@@ -528,6 +535,85 @@ mod tests {
             parsed.schema.as_ref().as_struct(),
             table_metadata.current_schema().as_struct(),
             "must not silently adopt a table schema the manifest never referenced"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_manifest_keys_on_first_row_id() {
+        use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SchemaRef, Type};
+
+        let io = FileIO::new_with_memory();
+        let path = "memory:///metadata/first_row_id_manifest.avro";
+
+        let schema: SchemaRef = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap()
+            .into();
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        let mut writer = ManifestWriterBuilder::new(
+            io.new_output(path).unwrap(),
+            Some(1),
+            schema,
+            partition_spec,
+        )
+        .build_v3_data();
+        writer
+            .add_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFileBuilder::default()
+                            .content(DataContentType::Data)
+                            .file_path(path.to_string())
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let manifest_file = writer.write_manifest_file().await.unwrap();
+
+        // Two manifest-list references to the same physical manifest carrying
+        // different offsets, as time travel or two branches would produce.
+        let mut manifest_file_a = manifest_file.clone();
+        manifest_file_a.first_row_id = Some(1000);
+        let mut manifest_file_b = manifest_file;
+        manifest_file_b.first_row_id = Some(2000);
+
+        let object_cache = ObjectCache::new(io, None);
+        // get_manifest takes the table metadata for schema/spec resolution;
+        // first_row_id inheritance is independent of it.
+        let fixture = TableTestFixture::new();
+        let table_metadata = fixture.table.metadata_ref();
+
+        let manifest_a = object_cache
+            .get_manifest(&manifest_file_a, &table_metadata)
+            .await
+            .unwrap();
+        let manifest_b = object_cache
+            .get_manifest(&manifest_file_b, &table_metadata)
+            .await
+            .unwrap();
+
+        // A cache keyed on path alone would serve manifest_a's inherited ids for
+        // the second read; keying on first_row_id keeps them distinct.
+        assert_eq!(
+            manifest_a.entries()[0].data_file().first_row_id(),
+            Some(1000)
+        );
+        assert_eq!(
+            manifest_b.entries()[0].data_file().first_row_id(),
+            Some(2000)
         );
     }
 }
