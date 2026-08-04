@@ -19,8 +19,6 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::future::Future;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 #[cfg(test)]
@@ -29,8 +27,6 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use crate::io::StorageFactory;
-use crate::runtime::Runtime;
 use crate::table::Table;
 use crate::{Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent};
 
@@ -235,36 +231,6 @@ pub trait SessionCatalog: Debug + Send + Sync {
 
     /// Update a table to the catalog.
     async fn update_table(&self, context: &SessionContext, commit: TableCommit) -> Result<Table>;
-}
-
-/// Common interface for all session catalog builders.
-pub trait SessionCatalogBuilder: Default + Debug + Send + Sync {
-    /// The session catalog type that this builder creates.
-    type C: SessionCatalog;
-
-    /// Set a custom StorageFactory to use for storage operations.
-    ///
-    /// When a StorageFactory is provided, the catalog will use it to build FileIO
-    /// instances for all storage operations instead of using the default factory.
-    ///
-    /// # Arguments
-    ///
-    /// * `storage_factory` - The StorageFactory to use for creating storage instances
-    fn with_storage_factory(self, storage_factory: Arc<dyn StorageFactory>) -> Self;
-
-    /// Set a custom tokio Runtime to use for spawning async tasks.
-    ///
-    /// When a Runtime is provided, the catalog will propagate it to all tables
-    /// it creates. Tasks such as scan planning and delete file processing
-    /// will be spawned on this runtime.
-    fn with_runtime(self, runtime: Runtime) -> Self;
-
-    /// Create a new session catalog instance.
-    fn load(
-        self,
-        name: impl Into<String>,
-        props: HashMap<String, String>,
-    ) -> impl Future<Output = Result<Self::C>> + Send;
 }
 
 #[cfg(test)]
