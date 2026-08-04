@@ -224,7 +224,7 @@ static COMMIT_SNAPSHOT_ID_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
 /// This field represents a unique long assigned for row lineage.
 static ROW_ID_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
     Arc::new(
-        NestedField::required(
+        NestedField::optional(
             RESERVED_FIELD_ID_ROW_ID,
             RESERVED_COL_NAME_ROW_ID,
             Type::Primitive(PrimitiveType::Long),
@@ -237,7 +237,7 @@ static ROW_ID_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
 /// This field represents the sequence number which last updated this row.
 static LAST_UPDATED_SEQUENCE_NUMBER_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
     Arc::new(
-        NestedField::required(
+        NestedField::optional(
             RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
             RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
             Type::Primitive(PrimitiveType::Long),
@@ -599,6 +599,15 @@ mod tests {
         assert!(get_metadata_field(RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID).is_ok());
         assert!(get_metadata_field(RESERVED_FIELD_ID_ROW_ID).is_ok());
         assert!(get_metadata_field(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER).is_ok());
+    }
+
+    #[test]
+    fn test_row_lineage_metadata_fields_are_optional() {
+        // The spec requires readers to produce null for these columns in
+        // legitimate cases (e.g. a data file with a null first_row_id), so the
+        // fields must be optional rather than required.
+        assert!(!row_id_field().required);
+        assert!(!last_updated_sequence_number_field().required);
     }
 
     #[test]
