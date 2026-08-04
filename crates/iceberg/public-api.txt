@@ -2764,9 +2764,13 @@ pub iceberg::spec::TableProperties::max_ref_age_ms: i64
 pub iceberg::spec::TableProperties::max_snapshot_age_ms: i64
 pub iceberg::spec::TableProperties::metadata_compression_codec: iceberg::compression::CompressionCodec
 pub iceberg::spec::TableProperties::min_snapshots_to_keep: usize
+pub iceberg::spec::TableProperties::write_data_location: core::option::Option<alloc::string::String>
 pub iceberg::spec::TableProperties::write_datafusion_fanout_enabled: bool
+pub iceberg::spec::TableProperties::write_folder_storage_location: core::option::Option<alloc::string::String>
 pub iceberg::spec::TableProperties::write_format_default: alloc::string::String
 pub iceberg::spec::TableProperties::write_metadata_path: core::option::Option<alloc::string::String>
+pub iceberg::spec::TableProperties::write_object_storage_location: core::option::Option<alloc::string::String>
+pub iceberg::spec::TableProperties::write_object_storage_partitioned_paths: bool
 pub iceberg::spec::TableProperties::write_target_file_size_bytes: usize
 impl iceberg::spec::TableProperties
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str
@@ -2814,7 +2818,12 @@ pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL: &str
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32
 pub const iceberg::spec::TableProperties::PROPERTY_SNAPSHOT_COUNT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_UUID: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_DATA_LOCATION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_METADATA_PATH: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str
@@ -3181,6 +3190,7 @@ pub fn iceberg::transform::TransformFunction::transform_literal_result(&self, in
 pub fn iceberg::transform::create_transform_function(transform: &iceberg::spec::Transform) -> iceberg::Result<iceberg::transform::BoxedTransformFunction>
 pub type iceberg::transform::BoxedTransformFunction = alloc::boxed::Box<dyn iceberg::transform::TransformFunction>
 pub mod iceberg::util
+pub mod iceberg::util::location
 pub mod iceberg::util::snapshot
 pub fn iceberg::util::snapshot::ancestors_between(table_metadata: &iceberg::spec::TableMetadataRef, latest_snapshot_id: i64, oldest_snapshot_id: core::option::Option<i64>) -> impl core::iter::traits::iterator::Iterator<Item = iceberg::spec::SnapshotRef> + core::marker::Send
 pub fn iceberg::util::snapshot::ancestors_of(table_metadata: &iceberg::spec::TableMetadataRef, snapshot_id: i64) -> impl core::iter::traits::iterator::Iterator<Item = iceberg::spec::SnapshotRef> + core::marker::Send
@@ -3247,6 +3257,15 @@ impl core::fmt::Debug for iceberg::writer::file_writer::location_generator::Defa
 pub fn iceberg::writer::file_writer::location_generator::DefaultLocationGenerator::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::writer::file_writer::location_generator::LocationGenerator for iceberg::writer::file_writer::location_generator::DefaultLocationGenerator
 pub fn iceberg::writer::file_writer::location_generator::DefaultLocationGenerator::generate_location(&self, partition_key: core::option::Option<&iceberg::spec::PartitionKey>, file_name: &str) -> alloc::string::String
+pub struct iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
+impl iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
+pub fn iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator::new(table_metadata: &iceberg::spec::TableMetadata) -> iceberg::Result<Self>
+impl core::clone::Clone for iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
+pub fn iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator::clone(&self) -> iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
+impl core::fmt::Debug for iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
+pub fn iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::writer::file_writer::location_generator::LocationGenerator for iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
+pub fn iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator::generate_location(&self, partition_key: core::option::Option<&iceberg::spec::PartitionKey>, file_name: &str) -> alloc::string::String
 pub trait iceberg::writer::file_writer::location_generator::FileNameGenerator: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
 pub fn iceberg::writer::file_writer::location_generator::FileNameGenerator::generate_file_name(&self) -> alloc::string::String
 impl iceberg::writer::file_writer::location_generator::FileNameGenerator for iceberg::writer::file_writer::location_generator::DefaultFileNameGenerator
@@ -3255,6 +3274,8 @@ pub trait iceberg::writer::file_writer::location_generator::LocationGenerator: c
 pub fn iceberg::writer::file_writer::location_generator::LocationGenerator::generate_location(&self, partition_key: core::option::Option<&iceberg::spec::PartitionKey>, file_name: &str) -> alloc::string::String
 impl iceberg::writer::file_writer::location_generator::LocationGenerator for iceberg::writer::file_writer::location_generator::DefaultLocationGenerator
 pub fn iceberg::writer::file_writer::location_generator::DefaultLocationGenerator::generate_location(&self, partition_key: core::option::Option<&iceberg::spec::PartitionKey>, file_name: &str) -> alloc::string::String
+impl iceberg::writer::file_writer::location_generator::LocationGenerator for iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
+pub fn iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator::generate_location(&self, partition_key: core::option::Option<&iceberg::spec::PartitionKey>, file_name: &str) -> alloc::string::String
 pub mod iceberg::writer::file_writer::rolling_writer
 pub struct iceberg::writer::file_writer::rolling_writer::RollingFileWriter<B: iceberg::writer::file_writer::FileWriterBuilder, L: iceberg::writer::file_writer::location_generator::LocationGenerator, F: iceberg::writer::file_writer::location_generator::FileNameGenerator>
 impl<B, L, F> iceberg::writer::file_writer::rolling_writer::RollingFileWriter<B, L, F> where B: iceberg::writer::file_writer::FileWriterBuilder, L: iceberg::writer::file_writer::location_generator::LocationGenerator, F: iceberg::writer::file_writer::location_generator::FileNameGenerator
