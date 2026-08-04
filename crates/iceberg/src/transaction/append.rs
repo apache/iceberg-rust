@@ -320,6 +320,88 @@ mod tests {
         (table, tmp_dir, delete_manifest_path)
     }
 
+    /// Rewrite a written manifest's avro USER METADATA so its self-described
+    /// `schema` key is non-conformant JSON (the foreign-writer class), while
+    /// the recorded `schema-id` / `partition-spec-id` keys stay intact. The
+    /// entries and writer schema are copied verbatim.
+    async fn corrupt_manifest_schema_metadata(io: &FileIO, manifest_path: &str) {
+        let bytes = io.new_input(manifest_path).unwrap().read().await.unwrap();
+        let reader = apache_avro::Reader::new(&bytes[..]).unwrap();
+        let writer_schema = reader.writer_schema().clone();
+        let user_metadata = reader.user_metadata().clone();
+        let mut writer = apache_avro::Writer::new(&writer_schema, Vec::new());
+        for (key, value) in &user_metadata {
+            if key == "schema" {
+                continue;
+            }
+            writer.add_user_metadata(key.clone(), &value[..]).unwrap();
+        }
+        writer
+            .add_user_metadata(
+                "schema".to_string(),
+                &br#"{"type":"struct","schema-id":0,"fields":[{"id":1,"name":"x","required":false,"type":{"kind":"not-an-iceberg-type"}}]}"#[..],
+            )
+            .unwrap();
+        for record in reader {
+            writer.append(record.unwrap()).unwrap();
+        }
+        let corrupted = writer.into_inner().unwrap();
+        io.new_output(manifest_path)
+            .unwrap()
+            .write(corrupted.into())
+            .await
+            .unwrap();
+    }
+
+    /// Regression test for the write-path half of the schema-resilience fix:
+    /// `validate_duplicate_files` loads every manifest of the current
+    /// snapshot, so a `fast_append` onto a table whose current snapshot
+    /// carries a manifest with non-conformant self-described `schema`
+    /// metadata (written by a foreign engine) must not fail — the recorded
+    /// `schema-id` resolves against the table metadata, same as the scan
+    /// path.
+    #[tokio::test]
+    async fn test_fast_append_duplicate_check_tolerates_foreign_schema_metadata() {
+        let (table, _tmp_dir, delete_manifest_path) = make_table_with_delete_only_manifest().await;
+
+        // Corrupt the delete manifest's self-described schema in place.
+        corrupt_manifest_schema_metadata(table.file_io(), &delete_manifest_path).await;
+
+        // The corruption is real: a self-describing load of that manifest fails.
+        let manifest_list = table
+            .manifest_list_reader(table.metadata().current_snapshot().unwrap())
+            .load()
+            .await
+            .unwrap();
+        let corrupted_entry = manifest_list
+            .entries()
+            .iter()
+            .find(|m| m.manifest_path == delete_manifest_path)
+            .unwrap();
+        corrupted_entry
+            .load_manifest(table.file_io())
+            .await
+            .expect_err("self-describing load of the corrupted manifest must fail");
+
+        // fast_append with the duplicate check ON (the default) must succeed.
+        let new_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(format!("{}/appended2.parquet", table.metadata().location()))
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(100))]))
+            .build()
+            .unwrap();
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![new_file]);
+        Arc::new(action)
+            .commit(&table)
+            .await
+            .expect("fast_append must tolerate a foreign manifest's self-described schema");
+    }
+
     /// Regression test for #2148: a `fast_append` must carry delete-only manifests
     /// forward into the new snapshot. Dropping them lets the files they mark as
     /// removed reappear as live data on the next append.
