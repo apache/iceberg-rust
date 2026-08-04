@@ -60,17 +60,22 @@ pub struct DefaultLocationGenerator {
 
 impl DefaultLocationGenerator {
     /// Create a new `DefaultLocationGenerator`.
+    /// Resolve the base data location from table properties, falling back to `{table_location}/data`.
+    ///
+    /// Precedence follows Java Iceberg: `write.data.path` first, then the deprecated
+    /// `write.folder-storage.path` properties, and finally the default
+    /// `{table_location}/data`.
     pub fn new(table_metadata: &TableMetadata) -> Result<Self> {
-        let table_location = table_metadata.location();
-        let prop = table_metadata.properties();
-        let configured_data_location = prop
-            .get(TableProperties::PROPERTY_WRITE_DATA_LOCATION)
-            .or(prop.get(TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION));
-        let data_location = if let Some(data_location) = configured_data_location {
-            data_location.clone()
-        } else {
-            format!("{table_location}{DEFAULT_DATA_DIR}")
-        };
+        let table_location = strip_trailing_slash(table_metadata.location());
+        let prop = TableProperties::try_from(table_metadata.properties())?;
+        let data_location = strip_trailing_slash(
+            prop.write_data_location
+                .or(prop.write_folder_storage_location)
+                .unwrap_or(format!("{table_location}{DEFAULT_DATA_DIR}"))
+                .as_ref(),
+        )
+        .to_string();
+
         Ok(Self { data_location })
     }
 
@@ -122,11 +127,22 @@ pub struct ObjectStorageLocationGenerator {
 
 impl ObjectStorageLocationGenerator {
     /// Create a new `ObjectStorageLocationGenerator` from table metadata.
+    /// Resolve the base data location from table properties, falling back to `{table_location}/data`.
+    ///
+    /// Precedence follows Java Iceberg: `write.data.path` first, then the deprecated
+    /// `write.object-storage.path` and `write.folder-storage.path` properties, and finally the default
+    /// `{table_location}/data`.
     pub fn new(table_metadata: &TableMetadata) -> Result<Self> {
         let table_location = strip_trailing_slash(table_metadata.location());
-        let prop = table_metadata.properties();
-        let storage_location =
-            strip_trailing_slash(&resolve_data_location(prop, table_location)).to_string();
+        let prop = TableProperties::try_from(table_metadata.properties())?;
+        let storage_location = strip_trailing_slash(
+            prop.write_data_location
+                .or(prop.write_object_storage_location)
+                .or(prop.write_folder_storage_location)
+                .unwrap_or(format!("{table_location}{DEFAULT_DATA_DIR}"))
+                .as_ref(),
+        )
+        .to_string();
 
         // If the storage location is within the table prefix, files are already scoped to this
         // table so there is no need to add database/table context to avoid collisions.
@@ -136,8 +152,7 @@ impl ObjectStorageLocationGenerator {
             Some(path_context(table_location))
         };
 
-        let include_partition_paths =
-            TableProperties::try_from(prop)?.write_object_storage_partitioned_paths;
+        let include_partition_paths = prop.write_object_storage_partitioned_paths;
 
         Ok(Self {
             storage_location,
@@ -217,25 +232,6 @@ fn dirs_from_hash(hash: &str) -> String {
     }
 
     result
-}
-
-/// Resolve the base data location from table properties, falling back to `{table_location}/data`.
-///
-/// Precedence follows Java Iceberg: `write.data.path` first, then the deprecated
-/// `write.object-storage.path` and `write.folder-storage.path` properties, and finally the default
-/// `{table_location}/data`.
-///
-/// This function is ported from https://github.com/apache/iceberg/blob/apache-iceberg-1.11.0/core/src/main/java/org/apache/iceberg/LocationProviders.java#L158C27-L172
-fn resolve_data_location(
-    properties: &std::collections::HashMap<String, String>,
-    table_location: &str,
-) -> String {
-    properties
-        .get(TableProperties::PROPERTY_WRITE_DATA_LOCATION)
-        .or_else(|| properties.get(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION))
-        .or_else(|| properties.get(TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION))
-        .cloned()
-        .unwrap_or_else(|| format!("{table_location}{DEFAULT_DATA_DIR}"))
 }
 
 /// `FileNameGeneratorTrait` used to generate file name for data file. The file name can be passed to `LocationGenerator` to generate the location of the file.
