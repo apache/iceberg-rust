@@ -371,7 +371,7 @@ impl TableMetadata {
     pub fn metadata_location(&self) -> Result<String> {
         Ok(self
             .table_properties()?
-            .write_metadata_path
+            .write_metadata_path()
             .unwrap_or_else(|| format!("{}/{}", self.location(), METADATA_FOLDER_NAME)))
     }
 
@@ -4043,11 +4043,11 @@ mod tests {
         let props = metadata.table_properties().unwrap();
 
         assert_eq!(
-            props.commit_num_retries,
+            props.commit_num_retries(),
             TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
         );
         assert_eq!(
-            props.write_target_file_size_bytes,
+            props.write_target_file_size_bytes(),
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
     }
@@ -4089,8 +4089,8 @@ mod tests {
 
         let props = metadata.table_properties().unwrap();
 
-        assert_eq!(props.commit_num_retries, 10);
-        assert_eq!(props.write_target_file_size_bytes, 1024);
+        assert_eq!(props.commit_num_retries(), 10);
+        assert_eq!(props.write_target_file_size_bytes(), 1024);
     }
 
     #[test]

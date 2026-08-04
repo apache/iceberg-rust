@@ -86,10 +86,10 @@ impl ParquetWriterBuilder {
     /// (`write.parquet.content-defined-chunking.*`); other keys fall back to
     /// parquet-rs defaults.
     pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Self {
-        let cdc = table_props.cdc_enabled.then_some(CdcOptions {
-            min_chunk_size: table_props.cdc_min_chunk_size,
-            max_chunk_size: table_props.cdc_max_chunk_size,
-            norm_level: table_props.cdc_norm_level,
+        let cdc = table_props.cdc_enabled().then_some(CdcOptions {
+            min_chunk_size: table_props.cdc_min_chunk_size(),
+            max_chunk_size: table_props.cdc_max_chunk_size(),
+            norm_level: table_props.cdc_norm_level(),
         });
         // TODO: translate the remaining write.parquet.* keys (e.g. compression-codec,
         // row-group-size-bytes, page-size-bytes).

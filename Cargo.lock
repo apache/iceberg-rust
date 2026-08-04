@@ -3779,6 +3779,7 @@ dependencies = [
  "flate2",
  "fnv",
  "futures",
+ "iceberg-property-macro",
  "iceberg_test_utils",
  "itertools 0.13.0",
  "minijinja",
@@ -3997,6 +3998,15 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "iceberg-property-macro"
+version = "0.10.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

@@ -2735,25 +2735,6 @@ pub fn iceberg::spec::TableMetadataBuilder::clone(&self) -> iceberg::spec::Table
 impl core::fmt::Debug for iceberg::spec::TableMetadataBuilder
 pub fn iceberg::spec::TableMetadataBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::spec::TableProperties
-pub iceberg::spec::TableProperties::cdc_enabled: bool
-pub iceberg::spec::TableProperties::cdc_max_chunk_size: usize
-pub iceberg::spec::TableProperties::cdc_min_chunk_size: usize
-pub iceberg::spec::TableProperties::cdc_norm_level: i32
-pub iceberg::spec::TableProperties::commit_max_retry_wait_ms: u64
-pub iceberg::spec::TableProperties::commit_min_retry_wait_ms: u64
-pub iceberg::spec::TableProperties::commit_num_retries: usize
-pub iceberg::spec::TableProperties::commit_total_retry_timeout_ms: u64
-pub iceberg::spec::TableProperties::encryption_data_key_length: usize
-pub iceberg::spec::TableProperties::encryption_key_id: core::option::Option<alloc::string::String>
-pub iceberg::spec::TableProperties::gc_enabled: bool
-pub iceberg::spec::TableProperties::max_ref_age_ms: i64
-pub iceberg::spec::TableProperties::max_snapshot_age_ms: i64
-pub iceberg::spec::TableProperties::metadata_compression_codec: iceberg::compression::CompressionCodec
-pub iceberg::spec::TableProperties::min_snapshots_to_keep: usize
-pub iceberg::spec::TableProperties::write_datafusion_fanout_enabled: bool
-pub iceberg::spec::TableProperties::write_format_default: alloc::string::String
-pub iceberg::spec::TableProperties::write_metadata_path: core::option::Option<alloc::string::String>
-pub iceberg::spec::TableProperties::write_target_file_size_bytes: usize
 impl iceberg::spec::TableProperties
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64
@@ -2806,11 +2787,37 @@ pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize
 pub const iceberg::spec::TableProperties::RESERVED_PROPERTIES: [&str; 9]
+impl iceberg::spec::TableProperties
+pub fn iceberg::spec::TableProperties::cdc_enabled(&self) -> bool
+pub fn iceberg::spec::TableProperties::cdc_max_chunk_size(&self) -> usize
+pub fn iceberg::spec::TableProperties::cdc_min_chunk_size(&self) -> usize
+pub fn iceberg::spec::TableProperties::cdc_norm_level(&self) -> i32
+pub fn iceberg::spec::TableProperties::commit_max_retry_wait_ms(&self) -> u64
+pub fn iceberg::spec::TableProperties::commit_min_retry_wait_ms(&self) -> u64
+pub fn iceberg::spec::TableProperties::commit_num_retries(&self) -> usize
+pub fn iceberg::spec::TableProperties::commit_total_retry_timeout_ms(&self) -> u64
+pub fn iceberg::spec::TableProperties::encryption_data_key_length(&self) -> usize
+pub fn iceberg::spec::TableProperties::encryption_key_id(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::TableProperties::gc_enabled(&self) -> bool
+pub fn iceberg::spec::TableProperties::max_ref_age_ms(&self) -> i64
+pub fn iceberg::spec::TableProperties::max_snapshot_age_ms(&self) -> i64
+pub fn iceberg::spec::TableProperties::metadata_compression_codec(&self) -> iceberg::compression::CompressionCodec
+pub fn iceberg::spec::TableProperties::min_snapshots_to_keep(&self) -> usize
+pub fn iceberg::spec::TableProperties::write_datafusion_fanout_enabled(&self) -> bool
+pub fn iceberg::spec::TableProperties::write_format_default(&self) -> iceberg::spec::DataFileFormat
+pub fn iceberg::spec::TableProperties::write_metadata_path(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::TableProperties::write_target_file_size_bytes(&self) -> usize
 impl core::convert::TryFrom<&std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>> for iceberg::spec::TableProperties
 pub type iceberg::spec::TableProperties::Error = iceberg::Error
 pub fn iceberg::spec::TableProperties::try_from(props: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<Self>
+impl core::default::Default for iceberg::spec::TableProperties
+pub fn iceberg::spec::TableProperties::default() -> Self
 impl core::fmt::Debug for iceberg::spec::TableProperties
 pub fn iceberg::spec::TableProperties::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for iceberg::spec::TableProperties
+pub fn iceberg::spec::TableProperties::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::TableProperties
+pub fn iceberg::spec::TableProperties::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
 pub struct iceberg::spec::UnboundPartitionField
 pub iceberg::spec::UnboundPartitionField::field_id: core::option::Option<i32>
 pub iceberg::spec::UnboundPartitionField::name: alloc::string::String

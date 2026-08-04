@@ -115,8 +115,10 @@ impl ExpireSnapshotsAction {
         // days) the age path always runs, so even an explicit-id-only call applies the default cutoff.
         let default_cutoff = self
             .older_than_ms
-            .unwrap_or_else(|| now.saturating_sub(properties.max_snapshot_age_ms));
-        let default_min_to_keep = self.retain_last.unwrap_or(properties.min_snapshots_to_keep);
+            .unwrap_or_else(|| now.saturating_sub(properties.max_snapshot_age_ms()));
+        let default_min_to_keep = self
+            .retain_last
+            .unwrap_or(properties.min_snapshots_to_keep());
 
         // Ref aging: `main` is always kept; any other ref whose head is older than its
         // `max_ref_age_ms` (defaulting to `history.expire.max-ref-age-ms`) is dropped, like Java's
@@ -125,7 +127,7 @@ impl ExpireSnapshotsAction {
         let mut retained_refs: Vec<&SnapshotReference> = vec![];
         for (ref_name, snapshot_ref) in &metadata.refs {
             if ref_name == MAIN_BRANCH
-                || !Self::ref_aged_out(metadata, snapshot_ref, now, properties.max_ref_age_ms)
+                || !Self::ref_aged_out(metadata, snapshot_ref, now, properties.max_ref_age_ms())
             {
                 retained_refs.push(snapshot_ref);
             } else {
@@ -302,7 +304,7 @@ impl TransactionAction for ExpireSnapshotsAction {
         let properties = metadata.table_properties()?;
 
         // Expiring metadata defeats a user's explicit decision to disable GC (Java refuses too).
-        if !properties.gc_enabled {
+        if !properties.gc_enabled() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "Cannot expire snapshots: gc.enabled is false",

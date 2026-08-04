@@ -21,6 +21,7 @@ members = [
   "crates/catalog/*",
   "crates/examples",
   "crates/iceberg",
+  "crates/property-macro",
   "crates/integration_tests",
   "crates/integrations/*",
   "crates/sqllogictest",
