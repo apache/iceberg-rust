@@ -61,11 +61,20 @@ jobs:
             exit 1
           fi
           echo "✅ Release tag format is valid: $RELEASE_TAG"
-          
+
+          # Verify that the workflow is being run on the same version as the release tag
+          DESIRED_REF="refs/tags/${RELEASE_TAG}"
+          if [[ "${GITHUB_REF}" != "${DESIRED_REF}" ]]; then
+            echo "❌ Error: expected workflow execution on ref ${DESIRED_REF}, got ref: ${GITHUB_REF}"
+            echo "Workflow must be dispatched against the tag ref for the desired release."
+            echo "Dispatching workflow from main or another branch is not supported."
+            exit 1
+          fi
+
           # Strip 'v' prefix for cargo version
           CARGO_VERSION="${RELEASE_TAG#v}"
           echo "Cargo version (without v prefix): $CARGO_VERSION"
-          
+
           # For manual triggers, validate that the tag matches the version in Cargo.toml
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             # Extract base version (without -rc.X suffix) for comparison with Cargo.toml
@@ -187,7 +196,7 @@ jobs:
           working-directory: "bindings/python"
           command: build
           args: --release -o dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.9.3"
           enable-cache: true
@@ -199,7 +208,7 @@ jobs:
         working-directory: "bindings/python"
         shell: bash
         run: |
-          uv pip install --no-build --reinstall --system --find-links dist/ pyiceberg-core
+          uv pip install --no-build --reinstall --system --no-index --find-links dist/ pyiceberg-core
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
