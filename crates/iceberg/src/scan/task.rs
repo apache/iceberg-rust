@@ -75,7 +75,10 @@ pub struct FileScanTask {
     #[builder(default)]
     pub first_row_id: Option<i64>,
 
-    /// The data sequence number of the data file.
+    /// The data sequence number of the file, as opposed to its file sequence
+    /// number: the sequence number preserved when a file is carried forward
+    /// across a rewrite. May be null for an existing entry in a malformed
+    /// manifest that lacks one.
     ///
     /// Used to derive the `_last_updated_sequence_number` metadata column.
     #[serde(skip_serializing_if = "Option::is_none")]

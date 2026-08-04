@@ -996,7 +996,7 @@ pub mod tests {
             manifest_list_write.close().await.unwrap();
         }
 
-        /// Writes a v3 data manifest with a manifest-level `first_row_id` of 0,
+        /// Writes a v3 data manifest with a manifest-level `first_row_id` of 42,
         /// so live entries inherit a per-file `first_row_id` on read. Upgrades the
         /// table to v3 first, so the manifest list is read as v3.
         pub async fn setup_v3_manifest_files(&mut self) {
@@ -1066,7 +1066,7 @@ pub mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
-                Some(0),
+                Some(42),
             );
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
@@ -1957,12 +1957,20 @@ pub mod tests {
             .await
             .unwrap();
 
-        tasks.sort_by_key(|task| task.data_file_path.to_string());
         assert_eq!(tasks.len(), 2);
+        tasks.sort_by_key(|task| task.data_file_path.to_string());
 
         // The added file inherits the current snapshot's data sequence number,
         // the existing file keeps the one it was written with.
+        assert_eq!(
+            tasks[0].data_file_path,
+            format!("{}/1.parquet", &fixture.table_location)
+        );
         assert_eq!(tasks[0].data_sequence_number, Some(1));
+        assert_eq!(
+            tasks[1].data_file_path,
+            format!("{}/3.parquet", &fixture.table_location)
+        );
         assert_eq!(tasks[1].data_sequence_number, Some(0));
 
         // first_row_id is a v3 concept; a v2 manifest carries none.
@@ -1970,7 +1978,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_plan_files_carries_inherited_first_row_id() {
+    async fn test_plan_files_carries_row_lineage_from_v3_manifest() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_v3_manifest_files().await;
 
@@ -1989,9 +1997,11 @@ pub mod tests {
             .next()
             .expect("expected one FileScanTask");
 
-        // The manifest-level first_row_id (0) is inherited onto the entry on
+        // The manifest-level first_row_id (42) is inherited onto the entry on
         // read, then carried onto the task.
-        assert_eq!(task.first_row_id, Some(0));
+        assert_eq!(task.first_row_id, Some(42));
+        // The data sequence number is threaded through the same v3 read path.
+        assert_eq!(task.data_sequence_number, Some(1));
     }
 
     #[tokio::test]
