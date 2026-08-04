@@ -150,7 +150,7 @@
 <a href=#150 id=150 data-nosnippet>150</a>        builder = builder.credential_provider_chain(chain);
 <a href=#151 id=151 data-nosnippet>151</a>    }
 <a href=#152 id=152 data-nosnippet>152</a>
-<a href=#153 id=153 data-nosnippet>153</a>    <span class="prelude-val">Ok</span>(Operator::new(builder).map_err(from_opendal_error)<span class="question-mark">?</span>.finish())
+<a href=#153 id=153 data-nosnippet>153</a>    Operator::new(builder).map_err(from_opendal_error)
 <a href=#154 id=154 data-nosnippet>154</a>}
 <a href=#155 id=155 data-nosnippet>155</a>
 <a href=#156 id=156 data-nosnippet>156</a><span class="doccomment">/// Custom AWS credential loader.

@@ -53,6 +53,6 @@
 <a href=#53 id=53 data-nosnippet>53</a>
 <a href=#54 id=54 data-nosnippet>54</a>    <span class="kw">let </span>builder = cfg.clone().into_builder().bucket(bucket);
 <a href=#55 id=55 data-nosnippet>55</a>
-<a href=#56 id=56 data-nosnippet>56</a>    <span class="prelude-val">Ok</span>(Operator::new(builder).map_err(from_opendal_error)<span class="question-mark">?</span>.finish())
+<a href=#56 id=56 data-nosnippet>56</a>    Operator::new(builder).map_err(from_opendal_error)
 <a href=#57 id=57 data-nosnippet>57</a>}
 </code></pre></div></section></main></body></html>
