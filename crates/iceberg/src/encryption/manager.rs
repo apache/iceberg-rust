@@ -118,7 +118,7 @@ impl EncryptionManager {
             return Ok(None);
         }
 
-        let table_properties = metadata.table_properties()?;
+        let table_properties = metadata.parsed_table_properties()?;
         let Some(table_key_id) = table_properties.encryption_key_id() else {
             if kms_client.is_some() {
                 tracing::warn!(

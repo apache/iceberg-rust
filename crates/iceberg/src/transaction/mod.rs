@@ -70,7 +70,7 @@ use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWi
 pub use update_schema::AddColumn;
 
 use crate::error::Result;
-use crate::spec::TableProperties;
+use crate::spec::ParsedTableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
@@ -178,7 +178,7 @@ impl Transaction {
             return Ok(self.table);
         }
 
-        let table_props = self.table.metadata().table_properties()?;
+        let table_props = self.table.metadata().parsed_table_properties()?;
 
         // TODO(https://github.com/apache/iceberg-rust/issues/2034): remove once encrypted writes are supported
         if table_props.encryption_key_id().is_some() {
@@ -203,7 +203,7 @@ impl Transaction {
         .1
     }
 
-    fn build_backoff(props: TableProperties) -> Result<ExponentialBackoff> {
+    fn build_backoff(props: ParsedTableProperties) -> Result<ExponentialBackoff> {
         Ok(ExponentialBuilder::new()
             .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms()))
             .with_max_delay(Duration::from_millis(props.commit_max_retry_wait_ms()))

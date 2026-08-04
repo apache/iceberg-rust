@@ -33,9 +33,9 @@ use uuid::Uuid;
 use super::snapshot::SnapshotReference;
 pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 use super::{
-    DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
-    SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
-    TableProperties, parse_metadata_file_compression,
+    DEFAULT_PARTITION_SPEC_ID, ParsedTableProperties, PartitionSpecRef, PartitionStatisticsFile,
+    SchemaId, SchemaRef, SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile,
+    StructType, TableProperties, parse_metadata_file_compression,
 };
 use crate::catalog::{METADATA_FOLDER_NAME, MetadataLocation};
 use crate::compression::CompressionCodec;
@@ -371,7 +371,7 @@ impl TableMetadata {
     pub fn metadata_location(&self) -> Result<String> {
         Ok(self
             .table_properties()?
-            .write_metadata_path()
+            .write_metadata_path
             .unwrap_or_else(|| format!("{}/{}", self.location(), METADATA_FOLDER_NAME)))
     }
 
@@ -387,11 +387,20 @@ impl TableMetadata {
         parse_metadata_file_compression(&self.properties)
     }
 
-    /// Returns typed table properties parsed from the raw properties map with defaults.
+    /// Returns the existing typed table properties parsed from the raw property map.
     pub fn table_properties(&self) -> Result<TableProperties> {
-        TableProperties::try_from(&self.properties).map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(e)
+        TableProperties::try_from(&self.properties).map_err(|error| {
+            Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(error)
         })
+    }
+
+    /// Returns all supported table properties parsed by the property framework.
+    pub fn parsed_table_properties(&self) -> Result<ParsedTableProperties> {
+        serde_json::to_value(&self.properties)
+            .and_then(serde_json::from_value)
+            .map_err(|error| {
+                Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(error)
+            })
     }
 
     /// Return location of statistics files.
@@ -4017,7 +4026,7 @@ mod tests {
     }
 
     #[test]
-    fn test_table_properties_with_defaults() {
+    fn test_parsed_table_properties_with_defaults() {
         use crate::spec::TableProperties;
 
         let schema = Schema::builder()
@@ -4040,7 +4049,7 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let props = metadata.table_properties().unwrap();
+        let props = metadata.parsed_table_properties().unwrap();
 
         assert_eq!(
             props.commit_num_retries(),
@@ -4050,10 +4059,16 @@ mod tests {
             props.write_target_file_size_bytes(),
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
+
+        let existing_props = metadata.table_properties().unwrap();
+        assert_eq!(
+            existing_props.commit_num_retries,
+            TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
+        );
     }
 
     #[test]
-    fn test_table_properties_with_custom_values() {
+    fn test_parsed_table_properties_with_custom_values() {
         use crate::spec::TableProperties;
 
         let schema = Schema::builder()
@@ -4087,14 +4102,14 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let props = metadata.table_properties().unwrap();
+        let props = metadata.parsed_table_properties().unwrap();
 
         assert_eq!(props.commit_num_retries(), 10);
         assert_eq!(props.write_target_file_size_bytes(), 1024);
     }
 
     #[test]
-    fn test_table_properties_with_invalid_value() {
+    fn test_parsed_table_properties_with_invalid_value() {
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
@@ -4120,7 +4135,7 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let err = metadata.table_properties().unwrap_err();
+        let err = metadata.parsed_table_properties().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.message().contains("Invalid table properties"));
     }

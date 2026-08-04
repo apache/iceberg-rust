@@ -205,7 +205,7 @@ impl ExecutionPlan for IcebergWriteExec {
         let table_props = self
             .table
             .metadata()
-            .table_properties()
+            .parsed_table_properties()
             .map_err(to_datafusion_error)?;
 
         // Check data file format
@@ -220,7 +220,7 @@ impl ExecutionPlan for IcebergWriteExec {
         // Build the writer from the already-parsed table properties so it honors
         // `write.parquet.*` settings (e.g. CDC). Arrow batches flowing through
         // DataFusion carry no field-id metadata, so match fields by name.
-        let parquet_file_writer_builder = ParquetWriterBuilder::from_table_properties(
+        let parquet_file_writer_builder = ParquetWriterBuilder::from_parsed_table_properties(
             &table_props,
             self.table.metadata().current_schema().clone(),
         )

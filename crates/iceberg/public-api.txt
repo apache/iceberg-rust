@@ -2244,6 +2244,258 @@ impl serde_core::ser::Serialize for iceberg::spec::NestedField
 pub fn iceberg::spec::NestedField::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::NestedField
 pub fn iceberg::spec::NestedField::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::spec::ParsedTableProperties
+impl iceberg::spec::ParsedTableProperties
+pub fn iceberg::spec::ParsedTableProperties::adaptive_split_size_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::avro_compression(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::avro_compression_level(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::cdc_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::cdc_max_chunk_size(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::cdc_min_chunk_size(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::cdc_norm_level(&self) -> i32
+pub fn iceberg::spec::ParsedTableProperties::comment(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::commit_max_retry_wait_ms(&self) -> u64
+pub fn iceberg::spec::ParsedTableProperties::commit_min_retry_wait_ms(&self) -> u64
+pub fn iceberg::spec::ParsedTableProperties::commit_num_retries(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::commit_num_status_checks(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::commit_status_checks_max_wait_ms(&self) -> u64
+pub fn iceberg::spec::ParsedTableProperties::commit_status_checks_min_wait_ms(&self) -> u64
+pub fn iceberg::spec::ParsedTableProperties::commit_status_checks_total_wait_ms(&self) -> u64
+pub fn iceberg::spec::ParsedTableProperties::commit_total_retry_timeout_ms(&self) -> u64
+pub fn iceberg::spec::ParsedTableProperties::data_planning_mode(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::default_name_mapping(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::default_write_metrics_mode(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::delete_avro_compression(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::delete_avro_compression_level(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::delete_distribution_mode(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::delete_format_default(&self) -> iceberg::spec::DataFileFormat
+pub fn iceberg::spec::ParsedTableProperties::delete_granularity(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::delete_isolation_level(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::delete_mode(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::delete_orc_block_size_bytes(&self) -> u64
+pub fn iceberg::spec::ParsedTableProperties::delete_orc_compression(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::delete_orc_compression_strategy(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::delete_orc_stripe_size_bytes(&self) -> u64
+pub fn iceberg::spec::ParsedTableProperties::delete_orc_write_batch_size(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::delete_parquet_compression(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::delete_parquet_compression_level(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::delete_parquet_dict_size_bytes(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::delete_parquet_page_row_limit(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::delete_parquet_page_size_bytes(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::delete_parquet_page_version(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::delete_parquet_row_group_check_max_record_count(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::delete_parquet_row_group_check_min_record_count(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::delete_parquet_row_group_size_bytes(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::delete_planning_mode(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::delete_target_file_size_bytes(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::encryption_data_key_length(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::encryption_key_id(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::engine_hive_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::gc_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::hive_lock_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::identifier_fields_rely(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::manifest_compression(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::manifest_compression_level(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::manifest_lists_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::manifest_merge_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::manifest_min_merge_count(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::manifest_target_size_bytes(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::max_ref_age_ms(&self) -> i64
+pub fn iceberg::spec::ParsedTableProperties::max_snapshot_age_ms(&self) -> i64
+pub fn iceberg::spec::ParsedTableProperties::merge_distribution_mode(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::merge_isolation_level(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::merge_mode(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::metadata_compression_codec(&self) -> iceberg::compression::CompressionCodec
+pub fn iceberg::spec::ParsedTableProperties::metadata_delete_after_commit_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::metadata_previous_versions_max(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::metadata_split_size(&self) -> u64
+pub fn iceberg::spec::ParsedTableProperties::metrics_max_inferred_column_defaults(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::metrics_mode_column_config(&self) -> std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::min_snapshots_to_keep(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::object_store_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::object_store_path(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::orc_batch_size(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::orc_block_size_bytes(&self) -> u64
+pub fn iceberg::spec::ParsedTableProperties::orc_bloom_filter_columns(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::orc_bloom_filter_fpp(&self) -> f64
+pub fn iceberg::spec::ParsedTableProperties::orc_compression(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::orc_compression_strategy(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::orc_stripe_size_bytes(&self) -> u64
+pub fn iceberg::spec::ParsedTableProperties::orc_vectorization_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::orc_write_batch_size(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::parquet_batch_size(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::parquet_bloom_filter_adaptive_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::parquet_bloom_filter_column_enabled(&self) -> std::collections::hash::map::HashMap<alloc::string::String, bool>
+pub fn iceberg::spec::ParsedTableProperties::parquet_bloom_filter_column_fpp(&self) -> std::collections::hash::map::HashMap<alloc::string::String, f64>
+pub fn iceberg::spec::ParsedTableProperties::parquet_bloom_filter_column_ndv(&self) -> std::collections::hash::map::HashMap<alloc::string::String, u64>
+pub fn iceberg::spec::ParsedTableProperties::parquet_bloom_filter_max_bytes(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::parquet_column_stats_enabled(&self) -> std::collections::hash::map::HashMap<alloc::string::String, bool>
+pub fn iceberg::spec::ParsedTableProperties::parquet_compression(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::parquet_compression_level(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::parquet_dict_encoding_enabled_column(&self) -> std::collections::hash::map::HashMap<alloc::string::String, bool>
+pub fn iceberg::spec::ParsedTableProperties::parquet_dict_size_bytes(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::parquet_page_row_limit(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::parquet_page_size_bytes(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::parquet_page_version(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::parquet_row_group_check_max_record_count(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::parquet_row_group_check_min_record_count(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::parquet_row_group_size_bytes(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::parquet_row_group_size_track_uncompressed(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::parquet_shred_variants(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::parquet_variant_buffer_size(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::parquet_vectorization_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::snapshot_id_inheritance_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::spark_write_accept_any_schema(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::spark_write_advisory_partition_size_bytes(&self) -> core::option::Option<u64>
+pub fn iceberg::spec::ParsedTableProperties::spark_write_auto_schema_evolution(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::spark_write_partitioned_fanout_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::split_lookback(&self) -> usize
+pub fn iceberg::spec::ParsedTableProperties::split_open_file_cost(&self) -> u64
+pub fn iceberg::spec::ParsedTableProperties::split_size(&self) -> u64
+pub fn iceberg::spec::ParsedTableProperties::update_distribution_mode(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::update_isolation_level(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::update_mode(&self) -> alloc::string::String
+pub fn iceberg::spec::ParsedTableProperties::upsert_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::with_adaptive_split_size_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_avro_compression(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_avro_compression_level(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_cdc_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_cdc_max_chunk_size(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_cdc_min_chunk_size(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_cdc_norm_level(self, value: i32) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_comment(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_commit_max_retry_wait_ms(self, value: u64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_commit_min_retry_wait_ms(self, value: u64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_commit_num_retries(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_commit_num_status_checks(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_commit_status_checks_max_wait_ms(self, value: u64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_commit_status_checks_min_wait_ms(self, value: u64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_commit_status_checks_total_wait_ms(self, value: u64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_commit_total_retry_timeout_ms(self, value: u64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_data_planning_mode(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_default_name_mapping(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_default_write_metrics_mode(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_avro_compression(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_avro_compression_level(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_distribution_mode(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_format_default(self, value: iceberg::spec::DataFileFormat) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_granularity(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_isolation_level(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_mode(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_orc_block_size_bytes(self, value: u64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_orc_compression(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_orc_compression_strategy(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_orc_stripe_size_bytes(self, value: u64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_orc_write_batch_size(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_parquet_compression(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_parquet_compression_level(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_parquet_dict_size_bytes(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_parquet_page_row_limit(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_parquet_page_size_bytes(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_parquet_page_version(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_parquet_row_group_check_max_record_count(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_parquet_row_group_check_min_record_count(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_parquet_row_group_size_bytes(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_planning_mode(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_delete_target_file_size_bytes(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_encryption_data_key_length(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_encryption_key_id(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_engine_hive_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_gc_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_hive_lock_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_identifier_fields_rely(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_manifest_compression(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_manifest_compression_level(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_manifest_lists_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_manifest_merge_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_manifest_min_merge_count(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_manifest_target_size_bytes(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_max_ref_age_ms(self, value: i64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_max_snapshot_age_ms(self, value: i64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_merge_distribution_mode(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_merge_isolation_level(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_merge_mode(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_metadata_compression_codec(self, value: iceberg::compression::CompressionCodec) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_metadata_delete_after_commit_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_metadata_previous_versions_max(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_metadata_split_size(self, value: u64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_metrics_max_inferred_column_defaults(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_metrics_mode_column_config(self, value: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_min_snapshots_to_keep(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_object_store_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_object_store_path(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_orc_batch_size(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_orc_block_size_bytes(self, value: u64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_orc_bloom_filter_columns(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_orc_bloom_filter_fpp(self, value: f64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_orc_compression(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_orc_compression_strategy(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_orc_stripe_size_bytes(self, value: u64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_orc_vectorization_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_orc_write_batch_size(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_batch_size(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_bloom_filter_adaptive_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_bloom_filter_column_enabled(self, value: std::collections::hash::map::HashMap<alloc::string::String, bool>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_bloom_filter_column_fpp(self, value: std::collections::hash::map::HashMap<alloc::string::String, f64>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_bloom_filter_column_ndv(self, value: std::collections::hash::map::HashMap<alloc::string::String, u64>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_bloom_filter_max_bytes(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_column_stats_enabled(self, value: std::collections::hash::map::HashMap<alloc::string::String, bool>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_compression(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_compression_level(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_dict_encoding_enabled_column(self, value: std::collections::hash::map::HashMap<alloc::string::String, bool>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_dict_size_bytes(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_page_row_limit(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_page_size_bytes(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_page_version(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_row_group_check_max_record_count(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_row_group_check_min_record_count(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_row_group_size_bytes(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_row_group_size_track_uncompressed(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_shred_variants(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_variant_buffer_size(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_parquet_vectorization_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_snapshot_id_inheritance_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_spark_write_accept_any_schema(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_spark_write_advisory_partition_size_bytes(self, value: core::option::Option<u64>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_spark_write_auto_schema_evolution(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_spark_write_partitioned_fanout_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_split_lookback(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_split_open_file_cost(self, value: u64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_split_size(self, value: u64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_update_distribution_mode(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_update_isolation_level(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_update_mode(self, value: alloc::string::String) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_upsert_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_write_audit_publish_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_write_data_location(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_write_datafusion_fanout_enabled(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_write_distribution_mode(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_write_folder_storage_location(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_write_format_default(self, value: iceberg::spec::DataFileFormat) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_write_location_provider_impl(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_write_metadata_path(self, value: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_write_object_store_partitioned_paths(self, value: bool) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_write_partition_summary_limit(self, value: u64) -> Self
+pub fn iceberg::spec::ParsedTableProperties::with_write_target_file_size_bytes(self, value: usize) -> Self
+pub fn iceberg::spec::ParsedTableProperties::write_audit_publish_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::write_data_location(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::write_datafusion_fanout_enabled(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::write_distribution_mode(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::write_folder_storage_location(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::write_format_default(&self) -> iceberg::spec::DataFileFormat
+pub fn iceberg::spec::ParsedTableProperties::write_location_provider_impl(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::write_metadata_path(&self) -> core::option::Option<alloc::string::String>
+pub fn iceberg::spec::ParsedTableProperties::write_object_store_partitioned_paths(&self) -> bool
+pub fn iceberg::spec::ParsedTableProperties::write_partition_summary_limit(&self) -> u64
+pub fn iceberg::spec::ParsedTableProperties::write_target_file_size_bytes(&self) -> usize
+impl core::default::Default for iceberg::spec::ParsedTableProperties
+pub fn iceberg::spec::ParsedTableProperties::default() -> Self
+impl core::fmt::Debug for iceberg::spec::ParsedTableProperties
+pub fn iceberg::spec::ParsedTableProperties::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for iceberg::spec::ParsedTableProperties
+pub fn iceberg::spec::ParsedTableProperties::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::ParsedTableProperties
+pub fn iceberg::spec::ParsedTableProperties::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
 pub struct iceberg::spec::PartitionField
 pub iceberg::spec::PartitionField::field_id: i32
 pub iceberg::spec::PartitionField::name: alloc::string::String
@@ -2652,6 +2904,7 @@ pub fn iceberg::spec::TableMetadata::metadata_location(&self) -> iceberg::Result
 pub fn iceberg::spec::TableMetadata::metadata_log(&self) -> &[iceberg::spec::MetadataLog]
 pub fn iceberg::spec::TableMetadata::next_row_id(&self) -> u64
 pub fn iceberg::spec::TableMetadata::next_sequence_number(&self) -> i64
+pub fn iceberg::spec::TableMetadata::parsed_table_properties(&self) -> iceberg::Result<iceberg::spec::ParsedTableProperties>
 pub fn iceberg::spec::TableMetadata::partition_spec_by_id(&self, spec_id: i32) -> core::option::Option<&iceberg::spec::PartitionSpecRef>
 pub fn iceberg::spec::TableMetadata::partition_specs_iter(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = &iceberg::spec::PartitionSpecRef>
 pub fn iceberg::spec::TableMetadata::partition_statistics_for_snapshot(&self, snapshot_id: i64) -> core::option::Option<&iceberg::spec::PartitionStatisticsFile>
@@ -2735,13 +2988,47 @@ pub fn iceberg::spec::TableMetadataBuilder::clone(&self) -> iceberg::spec::Table
 impl core::fmt::Debug for iceberg::spec::TableMetadataBuilder
 pub fn iceberg::spec::TableMetadataBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::spec::TableProperties
+pub iceberg::spec::TableProperties::cdc_enabled: bool
+pub iceberg::spec::TableProperties::cdc_max_chunk_size: usize
+pub iceberg::spec::TableProperties::cdc_min_chunk_size: usize
+pub iceberg::spec::TableProperties::cdc_norm_level: i32
+pub iceberg::spec::TableProperties::commit_max_retry_wait_ms: u64
+pub iceberg::spec::TableProperties::commit_min_retry_wait_ms: u64
+pub iceberg::spec::TableProperties::commit_num_retries: usize
+pub iceberg::spec::TableProperties::commit_total_retry_timeout_ms: u64
+pub iceberg::spec::TableProperties::encryption_data_key_length: usize
+pub iceberg::spec::TableProperties::encryption_key_id: core::option::Option<alloc::string::String>
+pub iceberg::spec::TableProperties::gc_enabled: bool
+pub iceberg::spec::TableProperties::max_ref_age_ms: i64
+pub iceberg::spec::TableProperties::max_snapshot_age_ms: i64
+pub iceberg::spec::TableProperties::metadata_compression_codec: iceberg::compression::CompressionCodec
+pub iceberg::spec::TableProperties::min_snapshots_to_keep: usize
+pub iceberg::spec::TableProperties::write_datafusion_fanout_enabled: bool
+pub iceberg::spec::TableProperties::write_format_default: alloc::string::String
+pub iceberg::spec::TableProperties::write_metadata_path: core::option::Option<alloc::string::String>
+pub iceberg::spec::TableProperties::write_target_file_size_bytes: usize
 impl iceberg::spec::TableProperties
+pub const iceberg::spec::TableProperties::PROPERTY_ADAPTIVE_SPLIT_SIZE_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ADAPTIVE_SPLIT_SIZE_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_AVRO_COMPRESSION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_AVRO_COMPRESSION_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL: &str
+pub const iceberg::spec::TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT: core::option::Option<&str>
+pub const iceberg::spec::TableProperties::PROPERTY_COMMENT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS: &str
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT: u64
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_NUM_RETRIES: &str
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_NUM_STATUS_CHECKS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_NUM_STATUS_CHECKS_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_STATUS_CHECKS_MAX_WAIT_MS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_STATUS_CHECKS_MAX_WAIT_MS_DEFAULT: u64
+pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_STATUS_CHECKS_MIN_WAIT_MS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_STATUS_CHECKS_MIN_WAIT_MS_DEFAULT: u64
+pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_STATUS_CHECKS_TOTAL_WAIT_MS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_STATUS_CHECKS_TOTAL_WAIT_MS_DEFAULT: u64
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS: &str
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT: u64
 pub const iceberg::spec::TableProperties::PROPERTY_CURRENT_SCHEMA: &str
@@ -2750,27 +3037,124 @@ pub const iceberg::spec::TableProperties::PROPERTY_CURRENT_SNAPSHOT_SUMMARY: &st
 pub const iceberg::spec::TableProperties::PROPERTY_CURRENT_SNAPSHOT_TIMESTAMP: &str
 pub const iceberg::spec::TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str
 pub const iceberg::spec::TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_DATA_PLANNING_MODE: &str
 pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_FILE_FORMAT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_NAME_MAPPING: &str
 pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_PARTITION_SPEC: &str
 pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_SORT_ORDER: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_WRITE_METRICS_MODE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_WRITE_METRICS_MODE_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_AVRO_COMPRESSION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_AVRO_COMPRESSION_LEVEL: &str
 pub const iceberg::spec::TableProperties::PROPERTY_DELETE_DEFAULT_FILE_FORMAT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_DISTRIBUTION_MODE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_GRANULARITY: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_GRANULARITY_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_ISOLATION_LEVEL: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_ISOLATION_LEVEL_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_MODE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_MODE_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_ORC_BLOCK_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_ORC_COMPRESSION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_ORC_COMPRESSION_STRATEGY: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_ORC_STRIPE_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_ORC_WRITE_BATCH_SIZE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_PARQUET_COMPRESSION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_PARQUET_COMPRESSION_LEVEL: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_PARQUET_DICT_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_PARQUET_PAGE_ROW_LIMIT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_PARQUET_PAGE_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_PARQUET_PAGE_VERSION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_PARQUET_ROW_GROUP_CHECK_MAX_RECORD_COUNT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_PARQUET_ROW_GROUP_CHECK_MIN_RECORD_COUNT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_PARQUET_ROW_GROUP_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_PLANNING_MODE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_TARGET_FILE_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DELETE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_ENCRYPTION_AAD_LENGTH_DEFAULT: usize
 pub const iceberg::spec::TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH: &str
 pub const iceberg::spec::TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_ENCRYPTION_DEK_LENGTH: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ENCRYPTION_DEK_LENGTH_DEFAULT: usize
 pub const iceberg::spec::TableProperties::PROPERTY_ENCRYPTION_KEY_ID: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ENCRYPTION_TABLE_KEY: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ENGINE_HIVE_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ENGINE_HIVE_ENABLED_DEFAULT: bool
 pub const iceberg::spec::TableProperties::PROPERTY_FORMAT_VERSION: &str
 pub const iceberg::spec::TableProperties::PROPERTY_GC_ENABLED: &str
 pub const iceberg::spec::TableProperties::PROPERTY_GC_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_HIVE_LOCK_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_HIVE_LOCK_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_IDENTIFIER_FIELDS_RELY: &str
+pub const iceberg::spec::TableProperties::PROPERTY_IDENTIFIER_FIELDS_RELY_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_MANIFEST_COMPRESSION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MANIFEST_COMPRESSION_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MANIFEST_COMPRESSION_LEVEL: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MANIFEST_COMPRESSION_LEVEL_DEFAULT: core::option::Option<&str>
+pub const iceberg::spec::TableProperties::PROPERTY_MANIFEST_LISTS_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MANIFEST_LISTS_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_MANIFEST_MERGE_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MANIFEST_MERGE_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_MANIFEST_MIN_MERGE_COUNT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MANIFEST_MIN_MERGE_COUNT_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_MANIFEST_TARGET_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MANIFEST_TARGET_SIZE_BYTES_DEFAULT: usize
 pub const iceberg::spec::TableProperties::PROPERTY_MAX_REF_AGE_MS: &str
 pub const iceberg::spec::TableProperties::PROPERTY_MAX_REF_AGE_MS_DEFAULT: i64
 pub const iceberg::spec::TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS: &str
 pub const iceberg::spec::TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT: i64
+pub const iceberg::spec::TableProperties::PROPERTY_MERGE_DISTRIBUTION_MODE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MERGE_ISOLATION_LEVEL: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MERGE_ISOLATION_LEVEL_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MERGE_MODE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MERGE_MODE_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_METADATA_COMPRESSION: &str
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC: &str
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_METADATA_COMPRESSION_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED_DEFAULT: bool
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &str
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_METADATA_SPLIT_SIZE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_METADATA_SPLIT_SIZE_DEFAULT: u64
+pub const iceberg::spec::TableProperties::PROPERTY_METRICS_MAX_INFERRED_COLUMN_DEFAULTS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_METRICS_MAX_INFERRED_COLUMN_DEFAULTS_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_METRICS_MODE_COLUMN_CONF_PREFIX: &str
 pub const iceberg::spec::TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP: &str
 pub const iceberg::spec::TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_OBJECT_STORE_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_OBJECT_STORE_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_OBJECT_STORE_PATH: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_BATCH_SIZE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_BATCH_SIZE_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_BLOCK_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_BLOCK_SIZE_BYTES_DEFAULT: u64
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_BLOOM_FILTER_COLUMNS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_BLOOM_FILTER_COLUMNS_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_BLOOM_FILTER_FPP: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_BLOOM_FILTER_FPP_DEFAULT: f64
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_COMPRESSION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_COMPRESSION_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_COMPRESSION_STRATEGY: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_COMPRESSION_STRATEGY_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_STRIPE_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_STRIPE_SIZE_BYTES_DEFAULT: u64
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_VECTORIZATION_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_VECTORIZATION_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_WRITE_BATCH_SIZE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ORC_WRITE_BATCH_SIZE_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_BATCH_SIZE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_BATCH_SIZE_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_ADAPTIVE_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_ADAPTIVE_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_ENABLED_PREFIX: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_FPP_DEFAULT: f64
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_FPP_PREFIX: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_NDV_PREFIX: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_MAX_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_MAX_BYTES_DEFAULT: usize
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_ENABLED: &str
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_ENABLED_DEFAULT: bool
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE: &str
@@ -2779,45 +3163,83 @@ pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE: &
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE_DEFAULT: usize
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL: &str
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_COLUMN_STATS_ENABLED_PREFIX: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_COMPRESSION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_COMPRESSION_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_COMPRESSION_DEFAULT_SINCE_1_4_0: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL_DEFAULT: core::option::Option<&str>
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_DICT_ENCODING_ENABLED_COLUMN_PREFIX: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_PAGE_VERSION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_PAGE_VERSION_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_ROW_GROUP_CHECK_MAX_RECORD_COUNT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_ROW_GROUP_CHECK_MAX_RECORD_COUNT_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_ROW_GROUP_CHECK_MIN_RECORD_COUNT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_ROW_GROUP_CHECK_MIN_RECORD_COUNT_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_TRACK_UNCOMPRESSED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_TRACK_UNCOMPRESSED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_SHRED_VARIANTS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_SHRED_VARIANTS_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_VARIANT_BUFFER_SIZE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_VARIANT_BUFFER_SIZE_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_VECTORIZATION_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_VECTORIZATION_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_PLANNING_MODE_DEFAULT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_SNAPSHOT_COUNT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_SNAPSHOT_ID_INHERITANCE_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_SNAPSHOT_ID_INHERITANCE_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_SPARK_WRITE_ACCEPT_ANY_SCHEMA: &str
+pub const iceberg::spec::TableProperties::PROPERTY_SPARK_WRITE_ACCEPT_ANY_SCHEMA_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_SPARK_WRITE_ADVISORY_PARTITION_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_SPARK_WRITE_AUTO_SCHEMA_EVOLUTION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_SPARK_WRITE_AUTO_SCHEMA_EVOLUTION_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_SPARK_WRITE_PARTITIONED_FANOUT_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_SPARK_WRITE_PARTITIONED_FANOUT_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_SPLIT_LOOKBACK: &str
+pub const iceberg::spec::TableProperties::PROPERTY_SPLIT_LOOKBACK_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_SPLIT_OPEN_FILE_COST: &str
+pub const iceberg::spec::TableProperties::PROPERTY_SPLIT_OPEN_FILE_COST_DEFAULT: u64
+pub const iceberg::spec::TableProperties::PROPERTY_SPLIT_SIZE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_SPLIT_SIZE_DEFAULT: u64
+pub const iceberg::spec::TableProperties::PROPERTY_UPDATE_DISTRIBUTION_MODE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_UPDATE_ISOLATION_LEVEL: &str
+pub const iceberg::spec::TableProperties::PROPERTY_UPDATE_ISOLATION_LEVEL_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_UPDATE_MODE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_UPDATE_MODE_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_UPSERT_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_UPSERT_ENABLED_DEFAULT: bool
 pub const iceberg::spec::TableProperties::PROPERTY_UUID: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_AUDIT_PUBLISH_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_AUDIT_PUBLISH_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_DATA_LOCATION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_DISTRIBUTION_MODE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_DISTRIBUTION_MODE_HASH: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_DISTRIBUTION_MODE_NONE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_DISTRIBUTION_MODE_RANGE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_LOCATION_PROVIDER_IMPL: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_METADATA_LOCATION: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_METADATA_PATH: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_OBJECT_STORE_PARTITIONED_PATHS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_OBJECT_STORE_PARTITIONED_PATHS_DEFAULT: bool
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize
 pub const iceberg::spec::TableProperties::RESERVED_PROPERTIES: [&str; 9]
-impl iceberg::spec::TableProperties
-pub fn iceberg::spec::TableProperties::cdc_enabled(&self) -> bool
-pub fn iceberg::spec::TableProperties::cdc_max_chunk_size(&self) -> usize
-pub fn iceberg::spec::TableProperties::cdc_min_chunk_size(&self) -> usize
-pub fn iceberg::spec::TableProperties::cdc_norm_level(&self) -> i32
-pub fn iceberg::spec::TableProperties::commit_max_retry_wait_ms(&self) -> u64
-pub fn iceberg::spec::TableProperties::commit_min_retry_wait_ms(&self) -> u64
-pub fn iceberg::spec::TableProperties::commit_num_retries(&self) -> usize
-pub fn iceberg::spec::TableProperties::commit_total_retry_timeout_ms(&self) -> u64
-pub fn iceberg::spec::TableProperties::encryption_data_key_length(&self) -> usize
-pub fn iceberg::spec::TableProperties::encryption_key_id(&self) -> core::option::Option<alloc::string::String>
-pub fn iceberg::spec::TableProperties::gc_enabled(&self) -> bool
-pub fn iceberg::spec::TableProperties::max_ref_age_ms(&self) -> i64
-pub fn iceberg::spec::TableProperties::max_snapshot_age_ms(&self) -> i64
-pub fn iceberg::spec::TableProperties::metadata_compression_codec(&self) -> iceberg::compression::CompressionCodec
-pub fn iceberg::spec::TableProperties::min_snapshots_to_keep(&self) -> usize
-pub fn iceberg::spec::TableProperties::write_datafusion_fanout_enabled(&self) -> bool
-pub fn iceberg::spec::TableProperties::write_format_default(&self) -> iceberg::spec::DataFileFormat
-pub fn iceberg::spec::TableProperties::write_metadata_path(&self) -> core::option::Option<alloc::string::String>
-pub fn iceberg::spec::TableProperties::write_target_file_size_bytes(&self) -> usize
 impl core::convert::TryFrom<&std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>> for iceberg::spec::TableProperties
 pub type iceberg::spec::TableProperties::Error = iceberg::Error
 pub fn iceberg::spec::TableProperties::try_from(props: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<Self>
-impl core::default::Default for iceberg::spec::TableProperties
-pub fn iceberg::spec::TableProperties::default() -> Self
 impl core::fmt::Debug for iceberg::spec::TableProperties
 pub fn iceberg::spec::TableProperties::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl serde_core::ser::Serialize for iceberg::spec::TableProperties
-pub fn iceberg::spec::TableProperties::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
-impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::TableProperties
-pub fn iceberg::spec::TableProperties::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
 pub struct iceberg::spec::UnboundPartitionField
 pub iceberg::spec::UnboundPartitionField::field_id: core::option::Option<i32>
 pub iceberg::spec::UnboundPartitionField::name: alloc::string::String
@@ -3277,6 +3699,7 @@ pub async fn iceberg::writer::file_writer::ParquetWriter::close(self) -> iceberg
 pub async fn iceberg::writer::file_writer::ParquetWriter::write(&mut self, batch: &arrow_array::record_batch::RecordBatch) -> iceberg::Result<()>
 pub struct iceberg::writer::file_writer::ParquetWriterBuilder
 impl iceberg::writer::file_writer::ParquetWriterBuilder
+pub fn iceberg::writer::file_writer::ParquetWriterBuilder::from_parsed_table_properties(table_props: &iceberg::spec::ParsedTableProperties, schema: iceberg::spec::SchemaRef) -> Self
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::from_table_properties(table_props: &iceberg::spec::TableProperties, schema: iceberg::spec::SchemaRef) -> Self
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::new(props: parquet::file::properties::WriterProperties, schema: iceberg::spec::SchemaRef) -> Self
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::new_with_match_mode(props: parquet::file::properties::WriterProperties, schema: iceberg::spec::SchemaRef, match_mode: iceberg::arrow::FieldMatchMode) -> Self

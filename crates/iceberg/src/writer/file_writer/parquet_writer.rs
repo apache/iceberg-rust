@@ -39,8 +39,9 @@ use crate::arrow::{
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
-    NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
-    StructType, TableMetadata, TableProperties, Type, VariantType, visit_schema,
+    NestedFieldRef, ParsedTableProperties, PartitionSpec, PrimitiveType, Schema, SchemaRef,
+    SchemaVisitor, Struct, StructType, TableMetadata, TableProperties, Type, VariantType,
+    visit_schema,
 };
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
@@ -86,11 +87,28 @@ impl ParquetWriterBuilder {
     /// (`write.parquet.content-defined-chunking.*`); other keys fall back to
     /// parquet-rs defaults.
     pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Self {
+        let cdc = table_props.cdc_enabled.then_some(CdcOptions {
+            min_chunk_size: table_props.cdc_min_chunk_size,
+            max_chunk_size: table_props.cdc_max_chunk_size,
+            norm_level: table_props.cdc_norm_level,
+        });
+        Self::from_cdc_options(cdc, schema)
+    }
+
+    /// Build a `ParquetWriterBuilder` from properties parsed by the property framework.
+    pub fn from_parsed_table_properties(
+        table_props: &ParsedTableProperties,
+        schema: SchemaRef,
+    ) -> Self {
         let cdc = table_props.cdc_enabled().then_some(CdcOptions {
             min_chunk_size: table_props.cdc_min_chunk_size(),
             max_chunk_size: table_props.cdc_max_chunk_size(),
             norm_level: table_props.cdc_norm_level(),
         });
+        Self::from_cdc_options(cdc, schema)
+    }
+
+    fn from_cdc_options(cdc: Option<CdcOptions>, schema: SchemaRef) -> Self {
         // TODO: translate the remaining write.parquet.* keys (e.g. compression-codec,
         // row-group-size-bytes, page-size-bytes).
         // This constructor is intended to be the single place that maps them.
@@ -2342,7 +2360,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // ParquetWriterBuilder::from_table_properties
+    // ParquetWriterBuilder property constructors
     // -----------------------------------------------------------------
 
     fn cdc_test_schema() -> SchemaRef {
@@ -2359,13 +2377,20 @@ mod tests {
         )
     }
 
-    fn table_props(entries: HashMap<String, String>) -> TableProperties {
-        TableProperties::try_from(&entries).unwrap()
+    fn table_props(entries: HashMap<String, String>) -> ParsedTableProperties {
+        serde_json::from_value(serde_json::to_value(entries).unwrap()).unwrap()
     }
 
     #[test]
     fn test_from_table_properties_no_cdc_by_default() {
         let tp = table_props(HashMap::new());
+        let builder = ParquetWriterBuilder::from_parsed_table_properties(&tp, cdc_test_schema());
+        assert!(builder.props.content_defined_chunking().is_none());
+    }
+
+    #[test]
+    fn test_existing_table_properties_constructor() {
+        let tp = TableProperties::try_from(&HashMap::new()).unwrap();
         let builder = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema());
         assert!(builder.props.content_defined_chunking().is_none());
     }
@@ -2374,7 +2399,7 @@ mod tests {
     async fn test_from_table_properties_propagate_to_writer() {
         // `build()` must carry the translated `WriterProperties` through to the
         // `ParquetWriter` unchanged — otherwise the `write.parquet.*` settings
-        // derived in `from_table_properties` would never reach parquet-rs.
+        // derived in `from_parsed_table_properties` would never reach parquet-rs.
         //
         // Asserting on the writer's `WriterProperties` (rather than re-reading a
         // written file) keeps this a direct propagation check: every future
@@ -2403,7 +2428,7 @@ mod tests {
         let output = FileIO::new_with_fs()
             .new_output(format!("{}/cdc.parquet", tmp.path().to_str().unwrap()))
             .unwrap();
-        let writer = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
+        let writer = ParquetWriterBuilder::from_parsed_table_properties(&tp, cdc_test_schema())
             .build(output)
             .await
             .unwrap();

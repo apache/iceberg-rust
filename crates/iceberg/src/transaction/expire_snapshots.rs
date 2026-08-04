@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 
 use crate::spec::{
-    MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMetadata, TableProperties,
+    MAIN_BRANCH, ParsedTableProperties, SnapshotReference, SnapshotRetention, TableMetadata,
 };
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
@@ -99,7 +99,7 @@ impl ExpireSnapshotsAction {
     }
 
     /// Resolves the snapshots and refs to remove, following Java `RemoveSnapshots.internalApply`.
-    fn plan(&self, table: &Table, properties: &TableProperties) -> Result<ExpirePlan> {
+    fn plan(&self, table: &Table, properties: &ParsedTableProperties) -> Result<ExpirePlan> {
         // Matches Java `RemoveSnapshots.retainLast`, which requires at least one snapshot.
         if self.retain_last == Some(0) {
             return Err(Error::new(
@@ -301,7 +301,7 @@ struct ExpirePlan {
 impl TransactionAction for ExpireSnapshotsAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
         let metadata = table.metadata();
-        let properties = metadata.table_properties()?;
+        let properties = metadata.parsed_table_properties()?;
 
         // Expiring metadata defeats a user's explicit decision to disable GC (Java refuses too).
         if !properties.gc_enabled() {
