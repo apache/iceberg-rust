@@ -67,6 +67,24 @@ pub struct FileScanTask {
     #[builder(default)]
     pub record_count: Option<u64>,
 
+    /// The first row id assigned to the data file.
+    ///
+    /// Used to derive the `_row_id` metadata column: for a row without an
+    /// explicit `_row_id`, it is this value plus the row's ordinal position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub first_row_id: Option<i64>,
+
+    /// The data sequence number of the file, as opposed to its file sequence
+    /// number: the sequence number preserved when a file is carried forward
+    /// across a rewrite. May be null for an existing entry in a malformed
+    /// manifest that lacks one.
+    ///
+    /// Used to derive the `_last_updated_sequence_number` metadata column.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub data_sequence_number: Option<i64>,
+
     /// The data file path corresponding to the task.
     pub data_file_path: String,
 
