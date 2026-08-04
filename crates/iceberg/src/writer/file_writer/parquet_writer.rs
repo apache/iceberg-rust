@@ -37,6 +37,7 @@ use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
     get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
 };
+use crate::compression::CompressionCodec;
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
@@ -46,17 +47,6 @@ use crate::spec::{
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
 use crate::{Error, ErrorKind, Result};
-
-// Default compression levels are pinned to parquet-java's defaults so files are
-// comparable across implementations, rather than tracking the parquet-rs
-// defaults, which may differ and could change without us noticing.
-
-/// Default zstd level (parquet-rs uses 1).
-const DEFAULT_ZSTD_COMPRESSION_LEVEL: i32 = 3;
-/// Default gzip level.
-const DEFAULT_GZIP_COMPRESSION_LEVEL: u32 = 6;
-/// Default brotli level.
-const DEFAULT_BROTLI_COMPRESSION_LEVEL: u32 = 1;
 
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
 #[derive(Clone, Debug)]
@@ -99,10 +89,7 @@ impl ParquetWriterBuilder {
             max_chunk_size: table_props.cdc_max_chunk_size,
             norm_level: table_props.cdc_norm_level,
         });
-        let compression = parquet_compression(
-            &table_props.parquet_compression_codec,
-            table_props.parquet_compression_level,
-        )?;
+        let compression = parquet_compression(table_props.parquet_compression_codec)?;
         let props = WriterProperties::builder()
             .set_content_defined_chunking(cdc)
             .set_compression(compression)
@@ -124,43 +111,27 @@ impl ParquetWriterBuilder {
     }
 }
 
-fn parquet_compression(codec: &str, level: Option<i32>) -> Result<Compression> {
-    let compression = match codec.to_lowercase().as_str() {
-        "uncompressed" | "none" => Compression::UNCOMPRESSED,
-        "snappy" => Compression::SNAPPY,
-        "lzo" => Compression::LZO,
-        "lz4" => Compression::LZ4,
-        "lz4_raw" => Compression::LZ4_RAW,
-        "gzip" => {
-            let level = match level {
-                Some(l) => level_as_u32("gzip", l)?,
-                None => DEFAULT_GZIP_COMPRESSION_LEVEL,
-            };
-            let level = GzipLevel::try_new(level).map_err(|e| invalid_level_error("gzip", e))?;
-            Compression::GZIP(level)
-        }
-        "brotli" => {
-            let level = match level {
-                Some(l) => level_as_u32("brotli", l)?,
-                None => DEFAULT_BROTLI_COMPRESSION_LEVEL,
-            };
+fn parquet_compression(codec: CompressionCodec) -> Result<Compression> {
+    let compression = match codec {
+        CompressionCodec::None => Compression::UNCOMPRESSED,
+        CompressionCodec::Snappy => Compression::SNAPPY,
+        CompressionCodec::Lzo => Compression::LZO,
+        CompressionCodec::Lz4 => Compression::LZ4,
+        CompressionCodec::Lz4Raw => Compression::LZ4_RAW,
+        CompressionCodec::Zstd(level) => {
             let level =
-                BrotliLevel::try_new(level).map_err(|e| invalid_level_error("brotli", e))?;
-            Compression::BROTLI(level)
-        }
-        "zstd" => {
-            let level = level.unwrap_or(DEFAULT_ZSTD_COMPRESSION_LEVEL);
-            let level = ZstdLevel::try_new(level).map_err(|e| invalid_level_error("zstd", e))?;
+                ZstdLevel::try_new(level as i32).map_err(|e| invalid_level_error("zstd", e))?;
             Compression::ZSTD(level)
         }
-        other => {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Unsupported Parquet compression codec: {other}. Supported codecs: \
-                     uncompressed, snappy, gzip, lzo, brotli, lz4, lz4_raw, zstd"
-                ),
-            ));
+        CompressionCodec::Gzip(level) => {
+            let level =
+                GzipLevel::try_new(level as u32).map_err(|e| invalid_level_error("gzip", e))?;
+            Compression::GZIP(level)
+        }
+        CompressionCodec::Brotli(level) => {
+            let level =
+                BrotliLevel::try_new(level as u32).map_err(|e| invalid_level_error("brotli", e))?;
+            Compression::BROTLI(level)
         }
     };
     Ok(compression)
@@ -172,12 +143,6 @@ fn invalid_level_error(codec: &str, source: impl Into<anyhow::Error>) -> Error {
         format!("Invalid {codec} compression level"),
     )
     .with_source(source)
-}
-
-/// Resolve a `u32` compression level for the gzip/brotli codecs, whose
-/// parquet-rs levels are unsigned. A negative level is invalid.
-fn level_as_u32(codec: &str, level: i32) -> Result<u32> {
-    u32::try_from(level).map_err(|e| invalid_level_error(codec, e))
 }
 
 impl FileWriterBuilder for ParquetWriterBuilder {
@@ -733,6 +698,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Fields, SchemaRef as ArrowSchemaRef};
     use arrow_select::concat::concat_batches;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
     use parquet::file::statistics::ValueStatistics;
     use parquet::schema::types::ColumnPath;
     use tempfile::TempDir;
@@ -2514,7 +2480,7 @@ mod tests {
         // Default codec is zstd at the Java-aligned default level (3).
         assert_eq!(
             props.compression(&ColumnPath::from("id")),
-            Compression::ZSTD(ZstdLevel::try_new(DEFAULT_ZSTD_COMPRESSION_LEVEL).unwrap())
+            Compression::ZSTD(ZstdLevel::try_new(3).unwrap())
         );
     }
 
@@ -2562,71 +2528,65 @@ mod tests {
 
     #[test]
     fn test_from_table_properties_invalid_codec_errors() {
-        let tp = table_props(HashMap::from([(
+        let entries = HashMap::from([(
             TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
             "bogus".to_string(),
-        )]));
-        let err = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema()).unwrap_err();
+        )]);
+        let err = TableProperties::try_from(&entries).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.to_string().contains("bogus"));
     }
 
     #[test]
-    fn test_parquet_compression_codec_mapping() {
+    fn test_parquet_compression_mapping() {
         // Codecs without a level.
         assert_eq!(
-            parquet_compression("uncompressed", None).unwrap(),
+            parquet_compression(CompressionCodec::None).unwrap(),
             Compression::UNCOMPRESSED
         );
         assert_eq!(
-            parquet_compression("snappy", None).unwrap(),
+            parquet_compression(CompressionCodec::Snappy).unwrap(),
             Compression::SNAPPY
         );
-        assert_eq!(parquet_compression("lz4", None).unwrap(), Compression::LZ4);
         assert_eq!(
-            parquet_compression("lz4_raw", None).unwrap(),
+            parquet_compression(CompressionCodec::Lz4).unwrap(),
+            Compression::LZ4
+        );
+        assert_eq!(
+            parquet_compression(CompressionCodec::Lz4Raw).unwrap(),
             Compression::LZ4_RAW
         );
-        assert_eq!(parquet_compression("lzo", None).unwrap(), Compression::LZO);
+        assert_eq!(
+            parquet_compression(CompressionCodec::Lzo).unwrap(),
+            Compression::LZO
+        );
 
-        // Case-insensitive codec names. With no level, each codec uses its
-        // parquet-java-aligned default, pinned explicitly rather than inherited
-        // from the parquet-rs.
+        // Level-carrying codecs at their defaults.
         assert_eq!(
-            parquet_compression("ZSTD", None).unwrap(),
-            Compression::ZSTD(ZstdLevel::try_new(DEFAULT_ZSTD_COMPRESSION_LEVEL).unwrap())
+            parquet_compression(CompressionCodec::zstd_default()).unwrap(),
+            Compression::ZSTD(ZstdLevel::try_new(3).unwrap())
         );
         assert_eq!(
-            parquet_compression("gzip", None).unwrap(),
-            Compression::GZIP(GzipLevel::try_new(DEFAULT_GZIP_COMPRESSION_LEVEL).unwrap())
+            parquet_compression(CompressionCodec::gzip_default()).unwrap(),
+            Compression::GZIP(GzipLevel::try_new(6).unwrap())
         );
         assert_eq!(
-            parquet_compression("brotli", None).unwrap(),
-            Compression::BROTLI(BrotliLevel::try_new(DEFAULT_BROTLI_COMPRESSION_LEVEL).unwrap())
+            parquet_compression(CompressionCodec::brotli_default()).unwrap(),
+            Compression::BROTLI(BrotliLevel::try_new(1).unwrap())
         );
 
         // Explicit levels are honored.
         assert_eq!(
-            parquet_compression("zstd", Some(10)).unwrap(),
+            parquet_compression(CompressionCodec::Zstd(10)).unwrap(),
             Compression::ZSTD(ZstdLevel::try_new(10).unwrap())
         );
     }
 
     #[test]
-    fn test_parquet_compression_invalid_inputs() {
-        // Unknown codec.
-        assert_eq!(
-            parquet_compression("bogus", None).unwrap_err().kind(),
-            ErrorKind::DataInvalid
-        );
-        // Level out of range for zstd (valid range is 1..=22).
-        assert_eq!(
-            parquet_compression("zstd", Some(99)).unwrap_err().kind(),
-            ErrorKind::DataInvalid
-        );
-        // Negative level for a u32-based codec.
-        let err = parquet_compression("gzip", Some(-1)).unwrap_err();
+    fn test_parquet_compression_invalid_level() {
+        // zstd valid range is 1..=22; 99 is out of range.
+        let err = parquet_compression(CompressionCodec::Zstd(99)).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.to_string().contains("gzip"));
+        assert!(err.to_string().contains("zstd"));
     }
 }

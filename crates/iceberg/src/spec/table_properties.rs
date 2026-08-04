@@ -150,6 +150,39 @@ pub(crate) fn parse_metadata_file_compression(
     }
 }
 
+/// Parse the Parquet data-file compression codec (`write.parquet.compression-codec`)
+/// and fold in the compression level (`write.parquet.compression-level`) for the
+/// codecs that accept one (`zstd`, `gzip`, `brotli`).
+fn parse_parquet_compression(properties: &HashMap<String, String>) -> Result<CompressionCodec> {
+    let value = properties
+        .get(TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC)
+        .map(|s| s.as_str())
+        .unwrap_or(TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT);
+
+    let codec: CompressionCodec =
+        serde_json::from_value(serde_json::Value::String(value.to_lowercase())).map_err(|_| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid Parquet compression codec: {value}. Supported codecs: \
+                     uncompressed, snappy, gzip, lzo, brotli, lz4, lz4_raw, zstd"
+                ),
+            )
+        })?;
+
+    let level: Option<u8> = parse_optional_property(
+        properties,
+        TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL,
+    )?;
+
+    Ok(match (codec, level) {
+        (CompressionCodec::Zstd(_), Some(level)) => CompressionCodec::Zstd(level),
+        (CompressionCodec::Gzip(_), Some(level)) => CompressionCodec::Gzip(level),
+        (CompressionCodec::Brotli(_), Some(level)) => CompressionCodec::Brotli(level),
+        (codec, _) => codec,
+    })
+}
+
 /// TableProperties that contains the properties of a table.
 #[derive(Debug)]
 pub struct TableProperties {
@@ -190,12 +223,10 @@ pub struct TableProperties {
     pub cdc_max_chunk_size: usize,
     /// Content-defined chunking normalization level (gearhash bit adjustment).
     pub cdc_norm_level: i32,
-    /// Parquet compression codec name (e.g. `zstd`, `gzip`). Validated when the
-    /// writer is built, not when properties are parsed.
-    pub parquet_compression_codec: String,
-    /// Parquet compression level for codecs that accept one. `None` uses the
-    /// codec's default level.
-    pub parquet_compression_level: Option<i32>,
+    /// Parquet compression codec for data files, with the resolved compression
+    /// level folded in (from `write.parquet.compression-level`, or the codec's
+    /// default when unset).
+    pub parquet_compression_codec: CompressionCodec,
     /// Approximate maximum Parquet row group size in bytes.
     pub parquet_row_group_size_bytes: usize,
     /// Approximate maximum Parquet data page size in bytes.
@@ -354,8 +385,9 @@ impl TableProperties {
     pub const PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32 = 0;
 
     /// Compression codec for Parquet data files (e.g. `zstd`, `gzip`, `snappy`,
-    /// `lz4`, `brotli`, `uncompressed`). The codec name is validated when the
-    /// writer is built, not when properties are parsed.
+    /// `lz4`, `lz4_raw`, `brotli`, `lzo`, `uncompressed`). The codec name is
+    /// parsed into a [`CompressionCodec`] when properties are parsed; the level's
+    /// range is validated when the writer is built.
     pub const PROPERTY_PARQUET_COMPRESSION_CODEC: &str = "write.parquet.compression-codec";
     /// Default Parquet compression codec.
     pub const PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT: &str = "zstd";
@@ -479,15 +511,7 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL,
                 TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT,
             )?,
-            parquet_compression_codec: parse_property(
-                props,
-                TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC,
-                TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT.to_string(),
-            )?,
-            parquet_compression_level: parse_optional_property(
-                props,
-                TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL,
-            )?,
+            parquet_compression_codec: parse_parquet_compression(props)?,
             parquet_row_group_size_bytes: parse_property(
                 props,
                 TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES,
@@ -1046,11 +1070,11 @@ mod tests {
     #[test]
     fn test_parquet_sizing_defaults() {
         let tp = TableProperties::try_from(&HashMap::new()).unwrap();
+        // Default codec is zstd at its default level.
         assert_eq!(
             tp.parquet_compression_codec,
-            TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT
+            CompressionCodec::zstd_default()
         );
-        assert_eq!(tp.parquet_compression_level, None);
         assert_eq!(
             tp.parquet_row_group_size_bytes,
             TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT
@@ -1098,8 +1122,8 @@ mod tests {
             ),
         ]);
         let tp = TableProperties::try_from(&props).unwrap();
-        assert_eq!(tp.parquet_compression_codec, "gzip");
-        assert_eq!(tp.parquet_compression_level, Some(4));
+        // Codec name and level are folded into a single CompressionCodec.
+        assert_eq!(tp.parquet_compression_codec, CompressionCodec::Gzip(4));
         assert_eq!(tp.parquet_row_group_size_bytes, 1048576);
         assert_eq!(tp.parquet_page_size_bytes, 65536);
         assert_eq!(tp.parquet_page_row_limit, 5000);
@@ -1118,5 +1142,46 @@ mod tests {
             err.to_string()
                 .contains(TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES)
         );
+    }
+
+    #[test]
+    fn test_parquet_all_codecs_parse() {
+        // Every codec name parquet-java supports must parse (parity with Java's
+        // `CompressionCodecName.valueOf`).
+        for (name, expected) in [
+            ("uncompressed", CompressionCodec::None),
+            ("snappy", CompressionCodec::Snappy),
+            ("gzip", CompressionCodec::gzip_default()),
+            ("lzo", CompressionCodec::Lzo),
+            ("brotli", CompressionCodec::brotli_default()),
+            ("lz4", CompressionCodec::Lz4),
+            ("lz4_raw", CompressionCodec::Lz4Raw),
+            ("zstd", CompressionCodec::zstd_default()),
+        ] {
+            let props = HashMap::from([(
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
+                name.to_string(),
+            )]);
+            let tp = TableProperties::try_from(&props).unwrap();
+            assert_eq!(tp.parquet_compression_codec, expected, "codec {name}");
+        }
+    }
+
+    #[test]
+    fn test_parquet_compression_level_ignored_for_levelless_codec() {
+        // A level set alongside a codec that carries none (e.g. snappy) is
+        // ignored rather than rejected, matching parquet-java.
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
+                "snappy".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL.to_string(),
+                "5".to_string(),
+            ),
+        ]);
+        let tp = TableProperties::try_from(&props).unwrap();
+        assert_eq!(tp.parquet_compression_codec, CompressionCodec::Snappy);
     }
 }

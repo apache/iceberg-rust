@@ -142,12 +142,16 @@ pub fn iceberg::cache::ObjectCacheProvide::manifest_list_cache(&self) -> &dyn ic
 pub type iceberg::cache::ObjectCacheProvider = alloc::sync::Arc<dyn iceberg::cache::ObjectCacheProvide>
 pub mod iceberg::compression
 pub enum iceberg::compression::CompressionCodec
+pub iceberg::compression::CompressionCodec::Brotli(u8)
 pub iceberg::compression::CompressionCodec::Gzip(u8)
 pub iceberg::compression::CompressionCodec::Lz4
+pub iceberg::compression::CompressionCodec::Lz4Raw
+pub iceberg::compression::CompressionCodec::Lzo
 pub iceberg::compression::CompressionCodec::None
 pub iceberg::compression::CompressionCodec::Snappy
 pub iceberg::compression::CompressionCodec::Zstd(u8)
 impl iceberg::compression::CompressionCodec
+pub const fn iceberg::compression::CompressionCodec::brotli_default() -> Self
 pub const fn iceberg::compression::CompressionCodec::gzip_default() -> Self
 pub fn iceberg::compression::CompressionCodec::name(&self) -> &'static str
 pub const fn iceberg::compression::CompressionCodec::zstd_default() -> Self
@@ -1162,12 +1166,16 @@ pub mod iceberg::partitioning
 pub fn iceberg::partitioning::compute_unified_partition_type<'a>(partition_specs: impl core::iter::traits::iterator::Iterator<Item = &'a iceberg::spec::PartitionSpec>, schema: &iceberg::spec::Schema) -> iceberg::Result<iceberg::spec::StructType>
 pub mod iceberg::puffin
 pub enum iceberg::puffin::CompressionCodec
+pub iceberg::puffin::CompressionCodec::Brotli(u8)
 pub iceberg::puffin::CompressionCodec::Gzip(u8)
 pub iceberg::puffin::CompressionCodec::Lz4
+pub iceberg::puffin::CompressionCodec::Lz4Raw
+pub iceberg::puffin::CompressionCodec::Lzo
 pub iceberg::puffin::CompressionCodec::None
 pub iceberg::puffin::CompressionCodec::Snappy
 pub iceberg::puffin::CompressionCodec::Zstd(u8)
 impl iceberg::compression::CompressionCodec
+pub const fn iceberg::compression::CompressionCodec::brotli_default() -> Self
 pub const fn iceberg::compression::CompressionCodec::gzip_default() -> Self
 pub fn iceberg::compression::CompressionCodec::name(&self) -> &'static str
 pub const fn iceberg::compression::CompressionCodec::zstd_default() -> Self
@@ -2762,8 +2770,7 @@ pub iceberg::spec::TableProperties::max_ref_age_ms: i64
 pub iceberg::spec::TableProperties::max_snapshot_age_ms: i64
 pub iceberg::spec::TableProperties::metadata_compression_codec: iceberg::compression::CompressionCodec
 pub iceberg::spec::TableProperties::min_snapshots_to_keep: usize
-pub iceberg::spec::TableProperties::parquet_compression_codec: alloc::string::String
-pub iceberg::spec::TableProperties::parquet_compression_level: core::option::Option<i32>
+pub iceberg::spec::TableProperties::parquet_compression_codec: iceberg::compression::CompressionCodec
 pub iceberg::spec::TableProperties::parquet_dict_size_bytes: usize
 pub iceberg::spec::TableProperties::parquet_page_row_limit: usize
 pub iceberg::spec::TableProperties::parquet_page_size_bytes: usize
