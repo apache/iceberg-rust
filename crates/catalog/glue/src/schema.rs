@@ -165,12 +165,10 @@ impl SchemaVisitor for GlueSchemaBuilder {
             PrimitiveType::Date => "date".to_string(),
             PrimitiveType::Timestamp => "timestamp".to_string(),
             PrimitiveType::TimestampNs => "timestamp_ns".to_string(),
-            PrimitiveType::Timestamptz | PrimitiveType::TimestamptzNs => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!("Conversion from {p:?} is not supported"),
-                ));
-            }
+            // Glue has no timezone-aware timestamp type; map to the equivalent non-tz type,
+            // matching the behavior of Spark's Glue catalog integration.
+            PrimitiveType::Timestamptz => "timestamp".to_string(),
+            PrimitiveType::TimestamptzNs => "timestamp_ns".to_string(),
             PrimitiveType::Time | PrimitiveType::String | PrimitiveType::Uuid => {
                 "string".to_string()
             }
