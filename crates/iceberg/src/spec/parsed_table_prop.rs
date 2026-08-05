@@ -87,6 +87,12 @@ pub const PARQUET_PAGE_VERSION_V1: &str = "v1";
 /// Parquet data page version 2.
 pub const PARQUET_PAGE_VERSION_V2: &str = "v2";
 
+/// ORC compression strategy that prioritizes speed.
+pub const ORC_COMPRESSION_STRATEGY_SPEED: &str = "speed";
+
+/// ORC compression strategy that prioritizes compression ratio.
+pub const ORC_COMPRESSION_STRATEGY_COMPRESSION: &str = "compression";
+
 /// Distribution applied to rows before writing files.
 #[derive(
     Debug,
@@ -234,6 +240,68 @@ fn serialize_compression_codec(codec: &CompressionCodec) -> String {
     codec.name().to_string()
 }
 
+fn compression_level_key(codec_key: &str) -> String {
+    format!(
+        "{}level",
+        codec_key
+            .strip_suffix("codec")
+            .expect("compression codec property keys end with 'codec'")
+    )
+}
+
+fn parse_compression_codec_properties(
+    properties: &HashMap<String, String>,
+    codec_key: &str,
+    default: CompressionCodec,
+) -> Result<CompressionCodec> {
+    let codec = properties
+        .get(codec_key)
+        .map(|value| parse_compression_codec(value))
+        .transpose()?
+        .unwrap_or(default);
+    let level_key = compression_level_key(codec_key);
+    let Some(level) = properties.get(&level_key) else {
+        return Ok(codec);
+    };
+    let level = level.parse::<u8>().map_err(|error| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid compression level for {level_key}: {level}"),
+        )
+        .with_source(error)
+    })?;
+
+    match codec {
+        CompressionCodec::Gzip(_) => Ok(CompressionCodec::Gzip(level)),
+        CompressionCodec::Zstd(_) => Ok(CompressionCodec::Zstd(level)),
+        _ => Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Compression level {level_key} is not supported for codec '{}'",
+                codec.name()
+            ),
+        )),
+    }
+}
+
+fn write_compression_codec_properties(
+    codec: &CompressionCodec,
+    properties: &mut HashMap<String, String>,
+    codec_key: &str,
+) {
+    properties.insert(codec_key.to_string(), serialize_compression_codec(codec));
+
+    let level_key = compression_level_key(codec_key);
+    match codec {
+        CompressionCodec::Gzip(level) | CompressionCodec::Zstd(level) => {
+            properties.insert(level_key, level.to_string());
+        }
+        _ => {
+            properties.remove(&level_key);
+        }
+    }
+}
+
 fn parse_comma_separated_strings(value: &str) -> Result<Vec<String>> {
     Ok(value
         .split(',')
@@ -245,17 +313,6 @@ fn parse_comma_separated_strings(value: &str) -> Result<Vec<String>> {
 
 fn serialize_comma_separated_strings(values: &[String]) -> String {
     values.join(",")
-}
-
-fn parse_name_mapping(value: &str) -> Result<Option<NameMapping>> {
-    serde_json::from_str(value).map(Some).map_err(|error| {
-        Error::new(ErrorKind::DataInvalid, "Invalid name mapping").with_source(error)
-    })
-}
-
-fn serialize_name_mapping(mapping: &Option<NameMapping>) -> String {
-    serde_json::to_string(mapping.as_ref().expect("checked is_some above"))
-        .expect("serializing a NameMapping cannot fail")
 }
 
 /// Typed Iceberg table properties organized into documented sections.
@@ -338,8 +395,8 @@ pub struct ParsedTableProperties {
 
     #[key = "write.manifest.compression-codec"]
     #[default(CompressionCodec::gzip_default())]
-    #[parse_with(parse_compression_codec)]
-    #[serialize_with(serialize_compression_codec)]
+    #[parse_properties_with(parse_compression_codec_properties)]
+    #[write_properties_with(write_compression_codec_properties)]
     #[doc = "Compression codec used for manifest files."]
     pub write_manifest_compression_codec: CompressionCodec,
 
@@ -405,9 +462,9 @@ pub struct ParsedTableProperties {
     pub write_wap_enabled: bool,
 
     #[key = "write.distribution-mode"]
-    #[default(None)]
-    #[doc = "Optional write distribution mode: none, hash, or range."]
-    pub write_distribution_mode: Option<DistributionMode>,
+    #[default(DistributionMode::None)]
+    #[doc = "Write distribution mode: none, hash, or range."]
+    pub write_distribution_mode: DistributionMode,
 
     #[key = "write.datafusion.fanout.enabled"]
     #[default(true)]
@@ -467,15 +524,15 @@ pub struct ParsedTableProperties {
 
     #[key = "write.parquet.compression-codec"]
     #[default(CompressionCodec::zstd_default())]
-    #[parse_with(parse_compression_codec)]
-    #[serialize_with(serialize_compression_codec)]
+    #[parse_properties_with(parse_compression_codec_properties)]
+    #[write_properties_with(write_compression_codec_properties)]
     #[doc = "Parquet compression codec used for data files."]
     pub write_parquet_compression_codec: CompressionCodec,
 
     #[key = "write.delete.parquet.compression-codec"]
     #[default(CompressionCodec::zstd_default())]
-    #[parse_with(parse_compression_codec)]
-    #[serialize_with(serialize_compression_codec)]
+    #[parse_properties_with(parse_compression_codec_properties)]
+    #[write_properties_with(write_compression_codec_properties)]
     #[doc = "Parquet compression codec used for delete files."]
     pub write_delete_parquet_compression_codec: CompressionCodec,
 
@@ -572,15 +629,15 @@ pub struct ParsedTableProperties {
     // Avro properties.
     #[key = "write.avro.compression-codec"]
     #[default(CompressionCodec::gzip_default())]
-    #[parse_with(parse_compression_codec)]
-    #[serialize_with(serialize_compression_codec)]
+    #[parse_properties_with(parse_compression_codec_properties)]
+    #[write_properties_with(write_compression_codec_properties)]
     #[doc = "Avro compression codec used for data files."]
     pub write_avro_compression_codec: CompressionCodec,
 
     #[key = "write.delete.avro.compression-codec"]
     #[default(CompressionCodec::gzip_default())]
-    #[parse_with(parse_compression_codec)]
-    #[serialize_with(serialize_compression_codec)]
+    #[parse_properties_with(parse_compression_codec_properties)]
+    #[write_properties_with(write_compression_codec_properties)]
     #[doc = "Avro compression codec used for delete files."]
     pub write_delete_avro_compression_codec: CompressionCodec,
 
@@ -642,12 +699,12 @@ pub struct ParsedTableProperties {
     pub write_delete_orc_compression_codec: CompressionCodec,
 
     #[key = "write.orc.compression-strategy"]
-    #[default("speed")]
+    #[default(ORC_COMPRESSION_STRATEGY_SPEED)]
     #[doc = "ORC compression strategy for data files: speed or compression."]
     pub write_orc_compression_strategy: String,
 
     #[key = "write.delete.orc.compression-strategy"]
-    #[default("speed")]
+    #[default(ORC_COMPRESSION_STRATEGY_SPEED)]
     #[doc = "ORC compression strategy for delete files: speed or compression."]
     pub write_delete_orc_compression_strategy: String,
 
@@ -753,8 +810,6 @@ pub struct ParsedTableProperties {
 
     #[key = "schema.name-mapping.default"]
     #[default(None)]
-    #[parse_with(parse_name_mapping)]
-    #[serialize_with(serialize_name_mapping)]
     #[doc = "Default JSON name mapping used to resolve columns in files without field IDs."]
     pub schema_name_mapping_default: Option<NameMapping>,
 
@@ -832,9 +887,9 @@ pub struct ParsedTableProperties {
     pub write_delete_mode: RowLevelOperationMode,
 
     #[key = "write.delete.distribution-mode"]
-    #[default(None)]
-    #[doc = "Optional distribution mode for delete command data."]
-    pub write_delete_distribution_mode: Option<DistributionMode>,
+    #[default(DistributionMode::None)]
+    #[doc = "Distribution mode for delete command data."]
+    pub write_delete_distribution_mode: DistributionMode,
 
     #[key = "write.update.isolation-level"]
     #[default(IsolationLevel::Serializable)]
@@ -847,9 +902,9 @@ pub struct ParsedTableProperties {
     pub write_update_mode: RowLevelOperationMode,
 
     #[key = "write.update.distribution-mode"]
-    #[default(None)]
-    #[doc = "Optional distribution mode for update command data."]
-    pub write_update_distribution_mode: Option<DistributionMode>,
+    #[default(DistributionMode::None)]
+    #[doc = "Distribution mode for update command data."]
+    pub write_update_distribution_mode: DistributionMode,
 
     #[key = "write.merge.isolation-level"]
     #[default(IsolationLevel::Serializable)]
@@ -862,9 +917,9 @@ pub struct ParsedTableProperties {
     pub write_merge_mode: RowLevelOperationMode,
 
     #[key = "write.merge.distribution-mode"]
-    #[default(None)]
-    #[doc = "Optional distribution mode for merge command data."]
-    pub write_merge_distribution_mode: Option<DistributionMode>,
+    #[default(DistributionMode::None)]
+    #[doc = "Distribution mode for merge command data."]
+    pub write_merge_distribution_mode: DistributionMode,
 
     #[key = "write.upsert.enabled"]
     #[default(false)]
@@ -915,7 +970,19 @@ mod tests {
             properties.write_orc_compression_codec,
             CompressionCodec::Zlib
         );
-        assert_eq!(properties.write_distribution_mode, None);
+        assert_eq!(properties.write_distribution_mode, DistributionMode::None);
+        assert_eq!(
+            properties.write_delete_distribution_mode,
+            DistributionMode::None
+        );
+        assert_eq!(
+            properties.write_update_distribution_mode,
+            DistributionMode::None
+        );
+        assert_eq!(
+            properties.write_merge_distribution_mode,
+            DistributionMode::None
+        );
         assert_eq!(
             properties.write_parquet_page_version,
             PARQUET_PAGE_VERSION_V1
@@ -925,6 +992,11 @@ mod tests {
             PARQUET_PAGE_VERSION_V1
         );
         assert_eq!(PARQUET_PAGE_VERSION_V2, "v2");
+        assert_eq!(
+            properties.write_orc_compression_strategy,
+            ORC_COMPRESSION_STRATEGY_SPEED
+        );
+        assert_eq!(ORC_COMPRESSION_STRATEGY_COMPRESSION, "compression");
         assert!(properties.write_orc_bloom_filter_columns.is_empty());
         assert_eq!(properties.schema_name_mapping_default, None);
         assert_eq!(
@@ -954,7 +1026,10 @@ mod tests {
             commit_retry_num_retries: 9,
             write_format_default: DataFileFormat::Orc,
             write_data_path: Some("s3://warehouse/table/data".to_string()),
-            write_distribution_mode: Some(DistributionMode::Range),
+            write_manifest_compression_codec: CompressionCodec::Gzip(9),
+            write_parquet_compression_codec: CompressionCodec::Zstd(5),
+            write_delete_avro_compression_codec: CompressionCodec::Gzip(4),
+            write_distribution_mode: DistributionMode::Range,
             write_orc_compression_codec: CompressionCodec::Lzo,
             write_orc_bloom_filter_columns: vec!["id".to_string(), "category".to_string()],
             schema_name_mapping_default: Some(NameMapping::new(vec![MappedField::new(
@@ -965,7 +1040,7 @@ mod tests {
             write_delete_granularity: DeleteGranularity::File,
             write_delete_isolation_level: IsolationLevel::Snapshot,
             write_delete_mode: RowLevelOperationMode::MergeOnRead,
-            write_update_distribution_mode: Some(DistributionMode::Hash),
+            write_update_distribution_mode: DistributionMode::Hash,
             write_parquet_bloom_filter_fpp_column: HashMap::from([(
                 "customer_id".to_string(),
                 0.02,
@@ -977,6 +1052,12 @@ mod tests {
         assert_eq!(json["commit.retry.num-retries"], "9");
         assert_eq!(json["write.format.default"], "orc");
         assert_eq!(json["write.data.path"], "s3://warehouse/table/data");
+        assert_eq!(json["write.manifest.compression-codec"], "gzip");
+        assert_eq!(json["write.manifest.compression-level"], "9");
+        assert_eq!(json["write.parquet.compression-codec"], "zstd");
+        assert_eq!(json["write.parquet.compression-level"], "5");
+        assert_eq!(json["write.delete.avro.compression-codec"], "gzip");
+        assert_eq!(json["write.delete.avro.compression-level"], "4");
         assert_eq!(json["write.distribution-mode"], "range");
         assert_eq!(json["write.orc.compression-codec"], "lzo");
         assert_eq!(json["write.orc.bloom.filter.columns"], "id,category");
@@ -995,15 +1076,6 @@ mod tests {
             json["write.parquet.bloom-filter-fpp.column.customer_id"],
             "0.02"
         );
-        for key in [
-            "write.manifest.compression-level",
-            "write.parquet.compression-level",
-            "write.delete.parquet.compression-level",
-            "write.avro.compression-level",
-            "write.delete.avro.compression-level",
-        ] {
-            assert!(json.get(key).is_none());
-        }
         assert!(json.get("commit").is_none());
         assert!(json.get("write").is_none());
     }
@@ -1014,6 +1086,9 @@ mod tests {
             "commit.retry.num-retries": "8",
             "write.format.default": "orc",
             "write.data.path": "s3://warehouse/table/data",
+            "write.manifest.compression-codec": "gzip",
+            "write.manifest.compression-level": "8",
+            "write.parquet.compression-level": "5",
             "write.distribution-mode": "HASH",
             "write.orc.bloom.filter.columns": "id, category",
             "schema.name-mapping.default": r#"[{"field-id":1,"names":["id"]}]"#,
@@ -1029,9 +1104,14 @@ mod tests {
             properties.write_data_path,
             Some("s3://warehouse/table/data".to_string())
         );
+        assert_eq!(properties.write_distribution_mode, DistributionMode::Hash);
         assert_eq!(
-            properties.write_distribution_mode,
-            Some(DistributionMode::Hash)
+            properties.write_manifest_compression_codec,
+            CompressionCodec::Gzip(8)
+        );
+        assert_eq!(
+            properties.write_parquet_compression_codec,
+            CompressionCodec::Zstd(5)
         );
         assert_eq!(properties.write_orc_bloom_filter_columns, vec![
             "id".to_string(),
@@ -1075,6 +1155,18 @@ mod tests {
             defaults.write_parquet_content_defined_chunking_max_chunk_size
         );
         assert_eq!(decoded.write_merge_mode, defaults.write_merge_mode);
+        assert_eq!(
+            decoded.write_manifest_compression_codec,
+            defaults.write_manifest_compression_codec
+        );
+        assert_eq!(
+            decoded.write_parquet_compression_codec,
+            defaults.write_parquet_compression_codec
+        );
+        assert_eq!(
+            decoded.write_avro_compression_codec,
+            defaults.write_avro_compression_codec
+        );
     }
 
     #[test]
@@ -1177,5 +1269,19 @@ mod tests {
         .unwrap_err();
 
         assert!(error.message().contains("schema.name-mapping.default"));
+
+        let error = parse(HashMap::from([
+            (
+                "write.parquet.compression-codec".to_string(),
+                "snappy".to_string(),
+            ),
+            (
+                "write.parquet.compression-level".to_string(),
+                "7".to_string(),
+            ),
+        ]))
+        .unwrap_err();
+
+        assert!(error.message().contains("write.parquet.compression-level"));
     }
 }

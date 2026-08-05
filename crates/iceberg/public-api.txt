@@ -2312,7 +2312,12 @@ impl core::cmp::PartialEq for iceberg::spec::NameMapping
 pub fn iceberg::spec::NameMapping::eq(&self, other: &iceberg::spec::NameMapping) -> bool
 impl core::fmt::Debug for iceberg::spec::NameMapping
 pub fn iceberg::spec::NameMapping::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg::spec::NameMapping
+pub fn iceberg::spec::NameMapping::fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::spec::NameMapping
+impl core::str::traits::FromStr for iceberg::spec::NameMapping
+pub type iceberg::spec::NameMapping::Err = iceberg::Error
+pub fn iceberg::spec::NameMapping::from_str(value: &str) -> core::result::Result<Self, Self::Err>
 impl serde_core::ser::Serialize for iceberg::spec::NameMapping
 pub fn iceberg::spec::NameMapping::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::NameMapping
@@ -2388,7 +2393,7 @@ pub iceberg::spec::ParsedTableProperties::write_avro_compression_codec: iceberg:
 pub iceberg::spec::ParsedTableProperties::write_data_path: core::option::Option<alloc::string::String>
 pub iceberg::spec::ParsedTableProperties::write_datafusion_fanout_enabled: bool
 pub iceberg::spec::ParsedTableProperties::write_delete_avro_compression_codec: iceberg::compression::CompressionCodec
-pub iceberg::spec::ParsedTableProperties::write_delete_distribution_mode: core::option::Option<iceberg::spec::DistributionMode>
+pub iceberg::spec::ParsedTableProperties::write_delete_distribution_mode: iceberg::spec::DistributionMode
 pub iceberg::spec::ParsedTableProperties::write_delete_format_default: iceberg::spec::DataFileFormat
 pub iceberg::spec::ParsedTableProperties::write_delete_granularity: iceberg::spec::DeleteGranularity
 pub iceberg::spec::ParsedTableProperties::write_delete_isolation_level: iceberg::spec::IsolationLevel
@@ -2407,13 +2412,13 @@ pub iceberg::spec::ParsedTableProperties::write_delete_parquet_row_group_check_m
 pub iceberg::spec::ParsedTableProperties::write_delete_parquet_row_group_check_min_record_count: usize
 pub iceberg::spec::ParsedTableProperties::write_delete_parquet_row_group_size_bytes: usize
 pub iceberg::spec::ParsedTableProperties::write_delete_target_file_size_bytes: usize
-pub iceberg::spec::ParsedTableProperties::write_distribution_mode: core::option::Option<iceberg::spec::DistributionMode>
+pub iceberg::spec::ParsedTableProperties::write_distribution_mode: iceberg::spec::DistributionMode
 pub iceberg::spec::ParsedTableProperties::write_folder_storage_path: core::option::Option<alloc::string::String>
 pub iceberg::spec::ParsedTableProperties::write_format_default: iceberg::spec::DataFileFormat
 pub iceberg::spec::ParsedTableProperties::write_location_provider_impl: core::option::Option<alloc::string::String>
 pub iceberg::spec::ParsedTableProperties::write_manifest_compression_codec: iceberg::compression::CompressionCodec
 pub iceberg::spec::ParsedTableProperties::write_manifest_lists_enabled: bool
-pub iceberg::spec::ParsedTableProperties::write_merge_distribution_mode: core::option::Option<iceberg::spec::DistributionMode>
+pub iceberg::spec::ParsedTableProperties::write_merge_distribution_mode: iceberg::spec::DistributionMode
 pub iceberg::spec::ParsedTableProperties::write_merge_isolation_level: iceberg::spec::IsolationLevel
 pub iceberg::spec::ParsedTableProperties::write_merge_mode: iceberg::spec::RowLevelOperationMode
 pub iceberg::spec::ParsedTableProperties::write_metadata_compression_codec: iceberg::compression::CompressionCodec
@@ -2461,7 +2466,7 @@ pub iceberg::spec::ParsedTableProperties::write_spark_auto_schema_evolution_enab
 pub iceberg::spec::ParsedTableProperties::write_spark_fanout_enabled: bool
 pub iceberg::spec::ParsedTableProperties::write_summary_partition_limit: u64
 pub iceberg::spec::ParsedTableProperties::write_target_file_size_bytes: usize
-pub iceberg::spec::ParsedTableProperties::write_update_distribution_mode: core::option::Option<iceberg::spec::DistributionMode>
+pub iceberg::spec::ParsedTableProperties::write_update_distribution_mode: iceberg::spec::DistributionMode
 pub iceberg::spec::ParsedTableProperties::write_update_isolation_level: iceberg::spec::IsolationLevel
 pub iceberg::spec::ParsedTableProperties::write_update_mode: iceberg::spec::RowLevelOperationMode
 pub iceberg::spec::ParsedTableProperties::write_upsert_enabled: bool
@@ -3239,6 +3244,8 @@ pub const iceberg::spec::MAIN_BRANCH: &str
 pub const iceberg::spec::MAP_KEY_FIELD_NAME: &str
 pub const iceberg::spec::MAP_VALUE_FIELD_NAME: &str
 pub const iceberg::spec::MIN_FORMAT_VERSION_ROW_LINEAGE: iceberg::spec::FormatVersion
+pub const iceberg::spec::ORC_COMPRESSION_STRATEGY_COMPRESSION: &str
+pub const iceberg::spec::ORC_COMPRESSION_STRATEGY_SPEED: &str
 pub const iceberg::spec::PARQUET_PAGE_VERSION_V1: &str
 pub const iceberg::spec::PARQUET_PAGE_VERSION_V2: &str
 pub const iceberg::spec::SCHEMA_NAME_DELIMITER: &str

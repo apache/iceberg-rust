@@ -48,12 +48,23 @@ use syn::{
 /// the declared prefix. `nested` embeds another `Properties` struct while keeping its serialized
 /// property map flat. `parse_with` may be used for exact-key property types that do not implement
 /// `FromStr` or need validation. `serialize_with` supplies their string representation in JSON.
+/// `parse_properties_with` and `write_properties_with` provide access to the complete property map
+/// for fields represented by more than one key.
 /// Optional fields are omitted from JSON when they are `None`. Fields need `FromStr` and `ToString`
 /// unless the relevant custom parsing or serialization attribute is supplied. String-literal and
 /// path defaults are converted into their field type with `Into`.
 #[proc_macro_derive(
     Properties,
-    attributes(key, prefix, nested, default, parse_with, serialize_with)
+    attributes(
+        key,
+        prefix,
+        nested,
+        default,
+        parse_with,
+        serialize_with,
+        parse_properties_with,
+        write_properties_with
+    )
 )]
 pub fn derive_properties(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -73,6 +84,8 @@ struct PropertyField {
     default: Option<Expr>,
     parse_with: Option<Path>,
     serialize_with: Option<Path>,
+    parse_properties_with: Option<Path>,
+    write_properties_with: Option<Path>,
     option_inner_type: Option<Type>,
     map_value_type: Option<Type>,
 }
@@ -214,13 +227,31 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
             "#[prefix(...)] fields must have type HashMap<String, T>",
         ));
     }
+    let parse_with = attribute_path_value(&field.attrs, "parse_with")?;
+    let serialize_with = attribute_path_value(&field.attrs, "serialize_with")?;
+    let parse_properties_with = attribute_path_value(&field.attrs, "parse_properties_with")?;
+    let write_properties_with = attribute_path_value(&field.attrs, "write_properties_with")?;
     if (prefix.is_some() || nested)
-        && (attribute_path_value(&field.attrs, "parse_with")?.is_some()
-            || attribute_path_value(&field.attrs, "serialize_with")?.is_some())
+        && (parse_with.is_some()
+            || serialize_with.is_some()
+            || parse_properties_with.is_some()
+            || write_properties_with.is_some())
     {
         return Err(Error::new_spanned(
             field,
-            "#[prefix(...)] and #[nested] fields do not support parse_with or serialize_with",
+            "#[prefix(...)] and #[nested] fields do not support custom parse or write functions",
+        ));
+    }
+    if parse_with.is_some() && parse_properties_with.is_some() {
+        return Err(Error::new_spanned(
+            field,
+            "fields cannot declare both parse_with and parse_properties_with",
+        ));
+    }
+    if serialize_with.is_some() && write_properties_with.is_some() {
+        return Err(Error::new_spanned(
+            field,
+            "fields cannot declare both serialize_with and write_properties_with",
         ));
     }
 
@@ -231,8 +262,10 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
         prefix,
         nested,
         default,
-        parse_with: attribute_path_value(&field.attrs, "parse_with")?,
-        serialize_with: attribute_path_value(&field.attrs, "serialize_with")?,
+        parse_with,
+        serialize_with,
+        parse_properties_with,
+        write_properties_with,
         option_inner_type: option_inner_type(&field.ty),
         map_value_type,
     })
@@ -309,6 +342,15 @@ fn parse_field(field: &PropertyField) -> TokenStream2 {
         field.default.as_ref().expect("leaf fields have defaults"),
         &field.ty,
     );
+
+    if let Some(parse_properties_with) = &field.parse_properties_with {
+        let key = field.key.as_ref().expect("exact-key fields have a key");
+        return quote! {
+            #ident: #parse_properties_with(properties, #key, #default).map_err(|error| {
+                format!("Invalid value for {}: {error}", #key)
+            })?
+        };
+    }
 
     if let Some(prefix) = &field.prefix {
         let value_type = field
@@ -426,6 +468,13 @@ fn write_field(field: &PropertyField) -> TokenStream2 {
     if field.nested {
         return quote! {
             self.#ident.write_properties(properties);
+        };
+    }
+
+    if let Some(write_properties_with) = &field.write_properties_with {
+        let key = field.key.as_ref().expect("exact-key fields have a key");
+        return quote! {
+            #write_properties_with(&self.#ident, properties, #key);
         };
     }
 

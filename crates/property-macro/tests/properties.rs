@@ -23,6 +23,29 @@ const RETRIES: &str = "commit.retry.num-retries";
 const OWNER: &str = "owner";
 const FORMAT: &str = "write.format.default";
 const COLUMN_FPP_PREFIX: &str = "write.parquet.bloom-filter-fpp.column.";
+const WIDTH: &str = "dimensions.width";
+const HEIGHT: &str = "dimensions.height";
+
+fn parse_dimensions(
+    properties: &HashMap<String, String>,
+    key: &str,
+    default: (u64, u64),
+) -> Result<(u64, u64), String> {
+    let parse = |property_key: &str, default| {
+        properties
+            .get(property_key)
+            .map(|value| value.parse::<u64>().map_err(|error| error.to_string()))
+            .transpose()
+            .map(|value| value.unwrap_or(default))
+    };
+
+    Ok((parse(key, default.0)?, parse(HEIGHT, default.1)?))
+}
+
+fn write_dimensions(dimensions: &(u64, u64), properties: &mut HashMap<String, String>, key: &str) {
+    properties.insert(key.to_string(), dimensions.0.to_string());
+    properties.insert(HEIGHT.to_string(), dimensions.1.to_string());
+}
 
 #[derive(Debug, Properties)]
 struct TestProperties {
@@ -42,6 +65,12 @@ struct TestProperties {
     #[prefix(COLUMN_FPP_PREFIX)]
     #[default(HashMap::new())]
     pub column_fpp: HashMap<String, f64>,
+
+    #[key(WIDTH)]
+    #[default((640, 480))]
+    #[parse_properties_with(parse_dimensions)]
+    #[write_properties_with(write_dimensions)]
+    pub dimensions: (u64, u64),
 }
 
 #[test]
@@ -53,24 +82,29 @@ fn generates_defaults_and_serde_for_public_fields() {
         owner: Some("iceberg".to_string()),
         format: "orc".to_string(),
         column_fpp: HashMap::from([("id".to_string(), 0.01)]),
+        dimensions: (1920, 1080),
     };
 
     assert_eq!(properties.retries, 8);
     assert_eq!(properties.owner, Some("iceberg".to_string()));
     assert_eq!(properties.format, "orc");
     assert_eq!(properties.column_fpp["id"], 0.01);
+    assert_eq!(properties.dimensions, (1920, 1080));
 
     let json = serde_json::to_value(&properties).unwrap();
     assert_eq!(json[RETRIES], "8");
     assert_eq!(json[OWNER], "iceberg");
     assert_eq!(json[FORMAT], "orc");
     assert_eq!(json[format!("{COLUMN_FPP_PREFIX}id")], "0.01");
+    assert_eq!(json[WIDTH], "1920");
+    assert_eq!(json[HEIGHT], "1080");
 
     let decoded: TestProperties = serde_json::from_value(json).unwrap();
     assert_eq!(decoded.retries, 8);
     assert_eq!(decoded.owner, Some("iceberg".to_string()));
     assert_eq!(decoded.format, "orc");
     assert_eq!(decoded.column_fpp["id"], 0.01);
+    assert_eq!(decoded.dimensions, (1920, 1080));
 }
 
 #[derive(Clone, Debug, Properties)]
