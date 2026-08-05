@@ -26,7 +26,7 @@ use std::collections::HashMap;
 
 use aws_sdk_glue::types::Column;
 use iceberg::spec::{PrimitiveType, SchemaVisitor, TableMetadata, VariantType, visit_schema};
-use iceberg::{Error, ErrorKind, Result};
+use iceberg::Result;
 
 use crate::error::from_aws_build_error;
 
@@ -158,7 +158,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
             PrimitiveType::Timestamp => "timestamp".to_string(),
             PrimitiveType::TimestampNs => "timestamp_ns".to_string(),
             // Glue has no timezone-aware timestamp type; map to the equivalent non-tz type,
-            // matching the behavior of Spark's Glue catalog integration.
+            // matching the behavior of the AWS Glue catalog module in apache/iceberg.
             PrimitiveType::Timestamptz => "timestamp".to_string(),
             PrimitiveType::TimestamptzNs => "timestamp_ns".to_string(),
             PrimitiveType::Time | PrimitiveType::String | PrimitiveType::Uuid => {
