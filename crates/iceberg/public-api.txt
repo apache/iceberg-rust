@@ -1409,6 +1409,55 @@ impl serde_core::ser::Serialize for iceberg::spec::DataFileFormat where Self: co
 pub fn iceberg::spec::DataFileFormat::serialize<__S>(&self, serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::DataFileFormat where Self: core::str::traits::FromStr, <Self as core::str::traits::FromStr>::Err: core::fmt::Display
 pub fn iceberg::spec::DataFileFormat::deserialize<__D>(deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub enum iceberg::spec::DeleteGranularity
+pub iceberg::spec::DeleteGranularity::File
+pub iceberg::spec::DeleteGranularity::Partition
+impl core::clone::Clone for iceberg::spec::DeleteGranularity
+pub fn iceberg::spec::DeleteGranularity::clone(&self) -> iceberg::spec::DeleteGranularity
+impl core::cmp::Eq for iceberg::spec::DeleteGranularity
+impl core::cmp::PartialEq for iceberg::spec::DeleteGranularity
+pub fn iceberg::spec::DeleteGranularity::eq(&self, other: &iceberg::spec::DeleteGranularity) -> bool
+impl core::convert::TryFrom<&str> for iceberg::spec::DeleteGranularity
+pub type iceberg::spec::DeleteGranularity::Error = strum::ParseError
+pub fn iceberg::spec::DeleteGranularity::try_from(s: &str) -> core::result::Result<iceberg::spec::DeleteGranularity, <Self as core::convert::TryFrom<&str>>::Error>
+impl core::fmt::Debug for iceberg::spec::DeleteGranularity
+pub fn iceberg::spec::DeleteGranularity::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg::spec::DeleteGranularity
+pub fn iceberg::spec::DeleteGranularity::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::result::Result<(), core::fmt::Error>
+impl core::marker::Copy for iceberg::spec::DeleteGranularity
+impl core::marker::StructuralPartialEq for iceberg::spec::DeleteGranularity
+impl core::str::traits::FromStr for iceberg::spec::DeleteGranularity
+pub type iceberg::spec::DeleteGranularity::Err = strum::ParseError
+pub fn iceberg::spec::DeleteGranularity::from_str(s: &str) -> core::result::Result<iceberg::spec::DeleteGranularity, <Self as core::str::traits::FromStr>::Err>
+impl serde_core::ser::Serialize for iceberg::spec::DeleteGranularity where Self: core::fmt::Display
+pub fn iceberg::spec::DeleteGranularity::serialize<__S>(&self, serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::DeleteGranularity where Self: core::str::traits::FromStr, <Self as core::str::traits::FromStr>::Err: core::fmt::Display
+pub fn iceberg::spec::DeleteGranularity::deserialize<__D>(deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub enum iceberg::spec::DistributionMode
+pub iceberg::spec::DistributionMode::Hash
+pub iceberg::spec::DistributionMode::None
+pub iceberg::spec::DistributionMode::Range
+impl core::clone::Clone for iceberg::spec::DistributionMode
+pub fn iceberg::spec::DistributionMode::clone(&self) -> iceberg::spec::DistributionMode
+impl core::cmp::Eq for iceberg::spec::DistributionMode
+impl core::cmp::PartialEq for iceberg::spec::DistributionMode
+pub fn iceberg::spec::DistributionMode::eq(&self, other: &iceberg::spec::DistributionMode) -> bool
+impl core::convert::TryFrom<&str> for iceberg::spec::DistributionMode
+pub type iceberg::spec::DistributionMode::Error = strum::ParseError
+pub fn iceberg::spec::DistributionMode::try_from(s: &str) -> core::result::Result<iceberg::spec::DistributionMode, <Self as core::convert::TryFrom<&str>>::Error>
+impl core::fmt::Debug for iceberg::spec::DistributionMode
+pub fn iceberg::spec::DistributionMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg::spec::DistributionMode
+pub fn iceberg::spec::DistributionMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::result::Result<(), core::fmt::Error>
+impl core::marker::Copy for iceberg::spec::DistributionMode
+impl core::marker::StructuralPartialEq for iceberg::spec::DistributionMode
+impl core::str::traits::FromStr for iceberg::spec::DistributionMode
+pub type iceberg::spec::DistributionMode::Err = strum::ParseError
+pub fn iceberg::spec::DistributionMode::from_str(s: &str) -> core::result::Result<iceberg::spec::DistributionMode, <Self as core::str::traits::FromStr>::Err>
+impl serde_core::ser::Serialize for iceberg::spec::DistributionMode where Self: core::fmt::Display
+pub fn iceberg::spec::DistributionMode::serialize<__S>(&self, serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::DistributionMode where Self: core::str::traits::FromStr, <Self as core::str::traits::FromStr>::Err: core::fmt::Display
+pub fn iceberg::spec::DistributionMode::deserialize<__D>(deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 #[repr(u8)] pub enum iceberg::spec::FormatVersion
 pub iceberg::spec::FormatVersion::V1 = 1
 pub iceberg::spec::FormatVersion::V2 = 2
@@ -1434,6 +1483,30 @@ impl serde_core::ser::Serialize for iceberg::spec::FormatVersion
 pub fn iceberg::spec::FormatVersion::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::FormatVersion
 pub fn iceberg::spec::FormatVersion::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
+pub enum iceberg::spec::IsolationLevel
+pub iceberg::spec::IsolationLevel::Serializable
+pub iceberg::spec::IsolationLevel::Snapshot
+impl core::clone::Clone for iceberg::spec::IsolationLevel
+pub fn iceberg::spec::IsolationLevel::clone(&self) -> iceberg::spec::IsolationLevel
+impl core::cmp::Eq for iceberg::spec::IsolationLevel
+impl core::cmp::PartialEq for iceberg::spec::IsolationLevel
+pub fn iceberg::spec::IsolationLevel::eq(&self, other: &iceberg::spec::IsolationLevel) -> bool
+impl core::convert::TryFrom<&str> for iceberg::spec::IsolationLevel
+pub type iceberg::spec::IsolationLevel::Error = strum::ParseError
+pub fn iceberg::spec::IsolationLevel::try_from(s: &str) -> core::result::Result<iceberg::spec::IsolationLevel, <Self as core::convert::TryFrom<&str>>::Error>
+impl core::fmt::Debug for iceberg::spec::IsolationLevel
+pub fn iceberg::spec::IsolationLevel::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg::spec::IsolationLevel
+pub fn iceberg::spec::IsolationLevel::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::result::Result<(), core::fmt::Error>
+impl core::marker::Copy for iceberg::spec::IsolationLevel
+impl core::marker::StructuralPartialEq for iceberg::spec::IsolationLevel
+impl core::str::traits::FromStr for iceberg::spec::IsolationLevel
+pub type iceberg::spec::IsolationLevel::Err = strum::ParseError
+pub fn iceberg::spec::IsolationLevel::from_str(s: &str) -> core::result::Result<iceberg::spec::IsolationLevel, <Self as core::str::traits::FromStr>::Err>
+impl serde_core::ser::Serialize for iceberg::spec::IsolationLevel where Self: core::fmt::Display
+pub fn iceberg::spec::IsolationLevel::serialize<__S>(&self, serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::IsolationLevel where Self: core::str::traits::FromStr, <Self as core::str::traits::FromStr>::Err: core::fmt::Display
+pub fn iceberg::spec::IsolationLevel::deserialize<__D>(deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub enum iceberg::spec::Literal
 pub iceberg::spec::Literal::List(alloc::vec::Vec<core::option::Option<iceberg::spec::Literal>>)
 pub iceberg::spec::Literal::Map(iceberg::spec::Map)
@@ -1631,6 +1704,30 @@ impl<'de> iceberg::spec::PrimitiveType
 pub fn iceberg::spec::PrimitiveType::deserialize<__D>(__deserializer: __D) -> core::result::Result<iceberg::spec::PrimitiveType, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::PrimitiveType
 pub fn iceberg::spec::PrimitiveType::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
+pub enum iceberg::spec::RowLevelOperationMode
+pub iceberg::spec::RowLevelOperationMode::CopyOnWrite
+pub iceberg::spec::RowLevelOperationMode::MergeOnRead
+impl core::clone::Clone for iceberg::spec::RowLevelOperationMode
+pub fn iceberg::spec::RowLevelOperationMode::clone(&self) -> iceberg::spec::RowLevelOperationMode
+impl core::cmp::Eq for iceberg::spec::RowLevelOperationMode
+impl core::cmp::PartialEq for iceberg::spec::RowLevelOperationMode
+pub fn iceberg::spec::RowLevelOperationMode::eq(&self, other: &iceberg::spec::RowLevelOperationMode) -> bool
+impl core::convert::TryFrom<&str> for iceberg::spec::RowLevelOperationMode
+pub type iceberg::spec::RowLevelOperationMode::Error = strum::ParseError
+pub fn iceberg::spec::RowLevelOperationMode::try_from(s: &str) -> core::result::Result<iceberg::spec::RowLevelOperationMode, <Self as core::convert::TryFrom<&str>>::Error>
+impl core::fmt::Debug for iceberg::spec::RowLevelOperationMode
+pub fn iceberg::spec::RowLevelOperationMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg::spec::RowLevelOperationMode
+pub fn iceberg::spec::RowLevelOperationMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::result::Result<(), core::fmt::Error>
+impl core::marker::Copy for iceberg::spec::RowLevelOperationMode
+impl core::marker::StructuralPartialEq for iceberg::spec::RowLevelOperationMode
+impl core::str::traits::FromStr for iceberg::spec::RowLevelOperationMode
+pub type iceberg::spec::RowLevelOperationMode::Err = strum::ParseError
+pub fn iceberg::spec::RowLevelOperationMode::from_str(s: &str) -> core::result::Result<iceberg::spec::RowLevelOperationMode, <Self as core::str::traits::FromStr>::Err>
+impl serde_core::ser::Serialize for iceberg::spec::RowLevelOperationMode where Self: core::fmt::Display
+pub fn iceberg::spec::RowLevelOperationMode::serialize<__S>(&self, serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::RowLevelOperationMode where Self: core::str::traits::FromStr, <Self as core::str::traits::FromStr>::Err: core::fmt::Display
+pub fn iceberg::spec::RowLevelOperationMode::deserialize<__D>(deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub enum iceberg::spec::SnapshotRetention
 pub iceberg::spec::SnapshotRetention::Branch
 pub iceberg::spec::SnapshotRetention::Branch::max_ref_age_ms: core::option::Option<i64>
@@ -2286,25 +2383,22 @@ pub iceberg::spec::ParsedTableProperties::read_split_metadata_target_size: u64
 pub iceberg::spec::ParsedTableProperties::read_split_open_file_cost: u64
 pub iceberg::spec::ParsedTableProperties::read_split_planning_lookback: usize
 pub iceberg::spec::ParsedTableProperties::read_split_target_size: u64
-pub iceberg::spec::ParsedTableProperties::schema_name_mapping_default: core::option::Option<alloc::string::String>
+pub iceberg::spec::ParsedTableProperties::schema_name_mapping_default: core::option::Option<iceberg::spec::NameMapping>
 pub iceberg::spec::ParsedTableProperties::write_avro_compression_codec: iceberg::compression::CompressionCodec
-pub iceberg::spec::ParsedTableProperties::write_avro_compression_level: core::option::Option<i32>
 pub iceberg::spec::ParsedTableProperties::write_data_path: core::option::Option<alloc::string::String>
 pub iceberg::spec::ParsedTableProperties::write_datafusion_fanout_enabled: bool
 pub iceberg::spec::ParsedTableProperties::write_delete_avro_compression_codec: iceberg::compression::CompressionCodec
-pub iceberg::spec::ParsedTableProperties::write_delete_avro_compression_level: core::option::Option<i32>
-pub iceberg::spec::ParsedTableProperties::write_delete_distribution_mode: core::option::Option<alloc::string::String>
+pub iceberg::spec::ParsedTableProperties::write_delete_distribution_mode: core::option::Option<iceberg::spec::DistributionMode>
 pub iceberg::spec::ParsedTableProperties::write_delete_format_default: iceberg::spec::DataFileFormat
-pub iceberg::spec::ParsedTableProperties::write_delete_granularity: alloc::string::String
-pub iceberg::spec::ParsedTableProperties::write_delete_isolation_level: alloc::string::String
-pub iceberg::spec::ParsedTableProperties::write_delete_mode: alloc::string::String
+pub iceberg::spec::ParsedTableProperties::write_delete_granularity: iceberg::spec::DeleteGranularity
+pub iceberg::spec::ParsedTableProperties::write_delete_isolation_level: iceberg::spec::IsolationLevel
+pub iceberg::spec::ParsedTableProperties::write_delete_mode: iceberg::spec::RowLevelOperationMode
 pub iceberg::spec::ParsedTableProperties::write_delete_orc_block_size_bytes: u64
 pub iceberg::spec::ParsedTableProperties::write_delete_orc_compression_codec: iceberg::compression::CompressionCodec
 pub iceberg::spec::ParsedTableProperties::write_delete_orc_compression_strategy: alloc::string::String
 pub iceberg::spec::ParsedTableProperties::write_delete_orc_stripe_size_bytes: u64
 pub iceberg::spec::ParsedTableProperties::write_delete_orc_vectorized_batch_size: usize
 pub iceberg::spec::ParsedTableProperties::write_delete_parquet_compression_codec: iceberg::compression::CompressionCodec
-pub iceberg::spec::ParsedTableProperties::write_delete_parquet_compression_level: core::option::Option<i32>
 pub iceberg::spec::ParsedTableProperties::write_delete_parquet_dict_size_bytes: usize
 pub iceberg::spec::ParsedTableProperties::write_delete_parquet_page_row_limit: usize
 pub iceberg::spec::ParsedTableProperties::write_delete_parquet_page_size_bytes: usize
@@ -2313,16 +2407,15 @@ pub iceberg::spec::ParsedTableProperties::write_delete_parquet_row_group_check_m
 pub iceberg::spec::ParsedTableProperties::write_delete_parquet_row_group_check_min_record_count: usize
 pub iceberg::spec::ParsedTableProperties::write_delete_parquet_row_group_size_bytes: usize
 pub iceberg::spec::ParsedTableProperties::write_delete_target_file_size_bytes: usize
-pub iceberg::spec::ParsedTableProperties::write_distribution_mode: core::option::Option<alloc::string::String>
+pub iceberg::spec::ParsedTableProperties::write_distribution_mode: core::option::Option<iceberg::spec::DistributionMode>
 pub iceberg::spec::ParsedTableProperties::write_folder_storage_path: core::option::Option<alloc::string::String>
 pub iceberg::spec::ParsedTableProperties::write_format_default: iceberg::spec::DataFileFormat
 pub iceberg::spec::ParsedTableProperties::write_location_provider_impl: core::option::Option<alloc::string::String>
 pub iceberg::spec::ParsedTableProperties::write_manifest_compression_codec: iceberg::compression::CompressionCodec
-pub iceberg::spec::ParsedTableProperties::write_manifest_compression_level: core::option::Option<i32>
 pub iceberg::spec::ParsedTableProperties::write_manifest_lists_enabled: bool
-pub iceberg::spec::ParsedTableProperties::write_merge_distribution_mode: core::option::Option<alloc::string::String>
-pub iceberg::spec::ParsedTableProperties::write_merge_isolation_level: alloc::string::String
-pub iceberg::spec::ParsedTableProperties::write_merge_mode: alloc::string::String
+pub iceberg::spec::ParsedTableProperties::write_merge_distribution_mode: core::option::Option<iceberg::spec::DistributionMode>
+pub iceberg::spec::ParsedTableProperties::write_merge_isolation_level: iceberg::spec::IsolationLevel
+pub iceberg::spec::ParsedTableProperties::write_merge_mode: iceberg::spec::RowLevelOperationMode
 pub iceberg::spec::ParsedTableProperties::write_metadata_compression_codec: iceberg::compression::CompressionCodec
 pub iceberg::spec::ParsedTableProperties::write_metadata_delete_after_commit_enabled: bool
 pub iceberg::spec::ParsedTableProperties::write_metadata_metrics_column: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
@@ -2334,7 +2427,7 @@ pub iceberg::spec::ParsedTableProperties::write_object_storage_enabled: bool
 pub iceberg::spec::ParsedTableProperties::write_object_storage_partitioned_paths: bool
 pub iceberg::spec::ParsedTableProperties::write_object_storage_path: core::option::Option<alloc::string::String>
 pub iceberg::spec::ParsedTableProperties::write_orc_block_size_bytes: u64
-pub iceberg::spec::ParsedTableProperties::write_orc_bloom_filter_columns: alloc::string::String
+pub iceberg::spec::ParsedTableProperties::write_orc_bloom_filter_columns: alloc::vec::Vec<alloc::string::String>
 pub iceberg::spec::ParsedTableProperties::write_orc_bloom_filter_fpp: f64
 pub iceberg::spec::ParsedTableProperties::write_orc_compression_codec: iceberg::compression::CompressionCodec
 pub iceberg::spec::ParsedTableProperties::write_orc_compression_strategy: alloc::string::String
@@ -2346,7 +2439,6 @@ pub iceberg::spec::ParsedTableProperties::write_parquet_bloom_filter_fpp_column:
 pub iceberg::spec::ParsedTableProperties::write_parquet_bloom_filter_max_bytes: usize
 pub iceberg::spec::ParsedTableProperties::write_parquet_bloom_filter_ndv_column: std::collections::hash::map::HashMap<alloc::string::String, u64>
 pub iceberg::spec::ParsedTableProperties::write_parquet_compression_codec: iceberg::compression::CompressionCodec
-pub iceberg::spec::ParsedTableProperties::write_parquet_compression_level: core::option::Option<i32>
 pub iceberg::spec::ParsedTableProperties::write_parquet_content_defined_chunking_enabled: bool
 pub iceberg::spec::ParsedTableProperties::write_parquet_content_defined_chunking_max_chunk_size: usize
 pub iceberg::spec::ParsedTableProperties::write_parquet_content_defined_chunking_min_chunk_size: usize
@@ -2369,9 +2461,9 @@ pub iceberg::spec::ParsedTableProperties::write_spark_auto_schema_evolution_enab
 pub iceberg::spec::ParsedTableProperties::write_spark_fanout_enabled: bool
 pub iceberg::spec::ParsedTableProperties::write_summary_partition_limit: u64
 pub iceberg::spec::ParsedTableProperties::write_target_file_size_bytes: usize
-pub iceberg::spec::ParsedTableProperties::write_update_distribution_mode: core::option::Option<alloc::string::String>
-pub iceberg::spec::ParsedTableProperties::write_update_isolation_level: alloc::string::String
-pub iceberg::spec::ParsedTableProperties::write_update_mode: alloc::string::String
+pub iceberg::spec::ParsedTableProperties::write_update_distribution_mode: core::option::Option<iceberg::spec::DistributionMode>
+pub iceberg::spec::ParsedTableProperties::write_update_isolation_level: iceberg::spec::IsolationLevel
+pub iceberg::spec::ParsedTableProperties::write_update_mode: iceberg::spec::RowLevelOperationMode
 pub iceberg::spec::ParsedTableProperties::write_upsert_enabled: bool
 pub iceberg::spec::ParsedTableProperties::write_wap_enabled: bool
 impl core::clone::Clone for iceberg::spec::ParsedTableProperties
@@ -3147,6 +3239,8 @@ pub const iceberg::spec::MAIN_BRANCH: &str
 pub const iceberg::spec::MAP_KEY_FIELD_NAME: &str
 pub const iceberg::spec::MAP_VALUE_FIELD_NAME: &str
 pub const iceberg::spec::MIN_FORMAT_VERSION_ROW_LINEAGE: iceberg::spec::FormatVersion
+pub const iceberg::spec::PARQUET_PAGE_VERSION_V1: &str
+pub const iceberg::spec::PARQUET_PAGE_VERSION_V2: &str
 pub const iceberg::spec::SCHEMA_NAME_DELIMITER: &str
 pub const iceberg::spec::UNASSIGNED_SEQUENCE_NUMBER: i64
 pub const iceberg::spec::VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED: &str

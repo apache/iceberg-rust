@@ -75,10 +75,99 @@
 use std::collections::HashMap;
 
 use iceberg_property_macro::Properties;
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use crate::compression::CompressionCodec;
 use crate::error::{Error, ErrorKind, Result};
-use crate::spec::DataFileFormat;
+use crate::spec::{DataFileFormat, NameMapping};
+
+/// Parquet data page version 1.
+pub const PARQUET_PAGE_VERSION_V1: &str = "v1";
+
+/// Parquet data page version 2.
+pub const PARQUET_PAGE_VERSION_V2: &str = "v2";
+
+/// Distribution applied to rows before writing files.
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    SerializeDisplay,
+    DeserializeFromStr,
+    strum::Display,
+    strum::EnumString,
+)]
+#[strum(ascii_case_insensitive, serialize_all = "kebab-case")]
+pub enum DistributionMode {
+    /// Do not redistribute rows.
+    None,
+    /// Hash-distribute rows by partition values.
+    Hash,
+    /// Range-distribute rows by partition or sort values.
+    Range,
+}
+
+/// Granularity used when creating position delete files.
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    SerializeDisplay,
+    DeserializeFromStr,
+    strum::Display,
+    strum::EnumString,
+)]
+#[strum(ascii_case_insensitive, serialize_all = "kebab-case")]
+pub enum DeleteGranularity {
+    /// Group deletes for each referenced data file separately.
+    File,
+    /// Group deletes for different data files within a partition.
+    Partition,
+}
+
+/// Isolation level used by row-level operations.
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    SerializeDisplay,
+    DeserializeFromStr,
+    strum::Display,
+    strum::EnumString,
+)]
+#[strum(ascii_case_insensitive, serialize_all = "kebab-case")]
+pub enum IsolationLevel {
+    /// Fail if concurrent changes may contain rows matching the operation.
+    Serializable,
+    /// Validate only against data visible in the operation's snapshot.
+    Snapshot,
+}
+
+/// Strategy used to apply row-level changes.
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    SerializeDisplay,
+    DeserializeFromStr,
+    strum::Display,
+    strum::EnumString,
+)]
+#[strum(ascii_case_insensitive, serialize_all = "kebab-case")]
+pub enum RowLevelOperationMode {
+    /// Replace affected data files immediately.
+    CopyOnWrite,
+    /// Write delete files and merge changes while reading.
+    MergeOnRead,
+}
 
 /// Strips trailing slashes from a location, preserving a bare URI scheme root.
 fn strip_trailing_slash(path: &str) -> &str {
@@ -143,6 +232,30 @@ fn parse_metadata_file_compression(value: &str) -> Result<CompressionCodec> {
 
 fn serialize_compression_codec(codec: &CompressionCodec) -> String {
     codec.name().to_string()
+}
+
+fn parse_comma_separated_strings(value: &str) -> Result<Vec<String>> {
+    Ok(value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn serialize_comma_separated_strings(values: &[String]) -> String {
+    values.join(",")
+}
+
+fn parse_name_mapping(value: &str) -> Result<Option<NameMapping>> {
+    serde_json::from_str(value).map(Some).map_err(|error| {
+        Error::new(ErrorKind::DataInvalid, "Invalid name mapping").with_source(error)
+    })
+}
+
+fn serialize_name_mapping(mapping: &Option<NameMapping>) -> String {
+    serde_json::to_string(mapping.as_ref().expect("checked is_some above"))
+        .expect("serializing a NameMapping cannot fail")
 }
 
 /// Typed Iceberg table properties organized into documented sections.
@@ -230,11 +343,6 @@ pub struct ParsedTableProperties {
     #[doc = "Compression codec used for manifest files."]
     pub write_manifest_compression_codec: CompressionCodec,
 
-    #[key = "write.manifest.compression-level"]
-    #[default(None)]
-    #[doc = "Optional compression level used for manifest files."]
-    pub write_manifest_compression_level: Option<i32>,
-
     #[key = "write.manifest-lists.enabled"]
     #[default(true)]
     #[doc = "Deprecated flag for writing manifest lists; manifest lists are always enabled."]
@@ -299,7 +407,7 @@ pub struct ParsedTableProperties {
     #[key = "write.distribution-mode"]
     #[default(None)]
     #[doc = "Optional write distribution mode: none, hash, or range."]
-    pub write_distribution_mode: Option<String>,
+    pub write_distribution_mode: Option<DistributionMode>,
 
     #[key = "write.datafusion.fanout.enabled"]
     #[default(true)]
@@ -328,12 +436,12 @@ pub struct ParsedTableProperties {
     pub write_delete_parquet_page_size_bytes: usize,
 
     #[key = "write.parquet.page-version"]
-    #[default("v1")]
+    #[default(PARQUET_PAGE_VERSION_V1)]
     #[doc = "Parquet data page version for data files: v1 or v2."]
     pub write_parquet_page_version: String,
 
     #[key = "write.delete.parquet.page-version"]
-    #[default("v1")]
+    #[default(PARQUET_PAGE_VERSION_V1)]
     #[doc = "Parquet data page version for delete files: v1 or v2."]
     pub write_delete_parquet_page_version: String,
 
@@ -370,16 +478,6 @@ pub struct ParsedTableProperties {
     #[serialize_with(serialize_compression_codec)]
     #[doc = "Parquet compression codec used for delete files."]
     pub write_delete_parquet_compression_codec: CompressionCodec,
-
-    #[key = "write.parquet.compression-level"]
-    #[default(None)]
-    #[doc = "Optional Parquet compression level for data files."]
-    pub write_parquet_compression_level: Option<i32>,
-
-    #[key = "write.delete.parquet.compression-level"]
-    #[default(None)]
-    #[doc = "Optional Parquet compression level for delete files."]
-    pub write_delete_parquet_compression_level: Option<i32>,
 
     #[key = "write.parquet.shred-variants"]
     #[default(false)]
@@ -486,16 +584,6 @@ pub struct ParsedTableProperties {
     #[doc = "Avro compression codec used for delete files."]
     pub write_delete_avro_compression_codec: CompressionCodec,
 
-    #[key = "write.avro.compression-level"]
-    #[default(None)]
-    #[doc = "Optional Avro compression level for data files."]
-    pub write_avro_compression_level: Option<i32>,
-
-    #[key = "write.delete.avro.compression-level"]
-    #[default(None)]
-    #[doc = "Optional Avro compression level for delete files."]
-    pub write_delete_avro_compression_level: Option<i32>,
-
     // ORC properties.
     #[key = "write.orc.stripe-size-bytes"]
     #[default(64 * 1024 * 1024)]
@@ -508,9 +596,11 @@ pub struct ParsedTableProperties {
     pub write_delete_orc_stripe_size_bytes: u64,
 
     #[key = "write.orc.bloom.filter.columns"]
-    #[default("")]
+    #[default(Vec::new())]
+    #[parse_with(parse_comma_separated_strings)]
+    #[serialize_with(serialize_comma_separated_strings)]
     #[doc = "Comma-separated column names for which ORC bloom filters are created."]
-    pub write_orc_bloom_filter_columns: String,
+    pub write_orc_bloom_filter_columns: Vec<String>,
 
     #[key = "write.orc.bloom.filter.fpp"]
     #[default(0.05)]
@@ -663,8 +753,10 @@ pub struct ParsedTableProperties {
 
     #[key = "schema.name-mapping.default"]
     #[default(None)]
+    #[parse_with(parse_name_mapping)]
+    #[serialize_with(serialize_name_mapping)]
     #[doc = "Default JSON name mapping used to resolve columns in files without field IDs."]
-    pub schema_name_mapping_default: Option<String>,
+    pub schema_name_mapping_default: Option<NameMapping>,
 
     // Compatibility properties.
     #[key = "write.spark.fanout.enabled"]
@@ -725,54 +817,54 @@ pub struct ParsedTableProperties {
 
     // Row-level operation properties.
     #[key = "write.delete.granularity"]
-    #[default("partition")]
+    #[default(DeleteGranularity::Partition)]
     #[doc = "Granularity of generated delete files: partition or file."]
-    pub write_delete_granularity: String,
+    pub write_delete_granularity: DeleteGranularity,
 
     #[key = "write.delete.isolation-level"]
-    #[default("serializable")]
+    #[default(IsolationLevel::Serializable)]
     #[doc = "Isolation level for delete commands: serializable or snapshot."]
-    pub write_delete_isolation_level: String,
+    pub write_delete_isolation_level: IsolationLevel,
 
     #[key = "write.delete.mode"]
-    #[default("copy-on-write")]
+    #[default(RowLevelOperationMode::CopyOnWrite)]
     #[doc = "Execution mode for delete commands: copy-on-write or merge-on-read."]
-    pub write_delete_mode: String,
+    pub write_delete_mode: RowLevelOperationMode,
 
     #[key = "write.delete.distribution-mode"]
     #[default(None)]
     #[doc = "Optional distribution mode for delete command data."]
-    pub write_delete_distribution_mode: Option<String>,
+    pub write_delete_distribution_mode: Option<DistributionMode>,
 
     #[key = "write.update.isolation-level"]
-    #[default("serializable")]
+    #[default(IsolationLevel::Serializable)]
     #[doc = "Isolation level for update commands: serializable or snapshot."]
-    pub write_update_isolation_level: String,
+    pub write_update_isolation_level: IsolationLevel,
 
     #[key = "write.update.mode"]
-    #[default("copy-on-write")]
+    #[default(RowLevelOperationMode::CopyOnWrite)]
     #[doc = "Execution mode for update commands: copy-on-write or merge-on-read."]
-    pub write_update_mode: String,
+    pub write_update_mode: RowLevelOperationMode,
 
     #[key = "write.update.distribution-mode"]
     #[default(None)]
     #[doc = "Optional distribution mode for update command data."]
-    pub write_update_distribution_mode: Option<String>,
+    pub write_update_distribution_mode: Option<DistributionMode>,
 
     #[key = "write.merge.isolation-level"]
-    #[default("serializable")]
+    #[default(IsolationLevel::Serializable)]
     #[doc = "Isolation level for merge commands: serializable or snapshot."]
-    pub write_merge_isolation_level: String,
+    pub write_merge_isolation_level: IsolationLevel,
 
     #[key = "write.merge.mode"]
-    #[default("copy-on-write")]
+    #[default(RowLevelOperationMode::CopyOnWrite)]
     #[doc = "Execution mode for merge commands: copy-on-write or merge-on-read."]
-    pub write_merge_mode: String,
+    pub write_merge_mode: RowLevelOperationMode,
 
     #[key = "write.merge.distribution-mode"]
     #[default(None)]
     #[doc = "Optional distribution mode for merge command data."]
-    pub write_merge_distribution_mode: Option<String>,
+    pub write_merge_distribution_mode: Option<DistributionMode>,
 
     #[key = "write.upsert.enabled"]
     #[default(false)]
@@ -794,6 +886,7 @@ pub struct ParsedTableProperties {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::MappedField;
 
     fn parse(properties: HashMap<String, String>) -> Result<ParsedTableProperties> {
         serde_json::from_value(serde_json::to_value(properties).unwrap())
@@ -822,9 +915,30 @@ mod tests {
             properties.write_orc_compression_codec,
             CompressionCodec::Zlib
         );
-        assert_eq!(properties.write_manifest_compression_level, None);
-        assert_eq!(properties.write_parquet_compression_level, None);
-        assert_eq!(properties.write_avro_compression_level, None);
+        assert_eq!(properties.write_distribution_mode, None);
+        assert_eq!(
+            properties.write_parquet_page_version,
+            PARQUET_PAGE_VERSION_V1
+        );
+        assert_eq!(
+            properties.write_delete_parquet_page_version,
+            PARQUET_PAGE_VERSION_V1
+        );
+        assert_eq!(PARQUET_PAGE_VERSION_V2, "v2");
+        assert!(properties.write_orc_bloom_filter_columns.is_empty());
+        assert_eq!(properties.schema_name_mapping_default, None);
+        assert_eq!(
+            properties.write_delete_granularity,
+            DeleteGranularity::Partition
+        );
+        assert_eq!(
+            properties.write_delete_isolation_level,
+            IsolationLevel::Serializable
+        );
+        assert_eq!(
+            properties.write_delete_mode,
+            RowLevelOperationMode::CopyOnWrite
+        );
         assert_eq!(
             properties.write_parquet_row_group_size_bytes,
             128 * 1024 * 1024
@@ -840,8 +954,18 @@ mod tests {
             commit_retry_num_retries: 9,
             write_format_default: DataFileFormat::Orc,
             write_data_path: Some("s3://warehouse/table/data".to_string()),
+            write_distribution_mode: Some(DistributionMode::Range),
             write_orc_compression_codec: CompressionCodec::Lzo,
-            write_parquet_compression_level: Some(5),
+            write_orc_bloom_filter_columns: vec!["id".to_string(), "category".to_string()],
+            schema_name_mapping_default: Some(NameMapping::new(vec![MappedField::new(
+                Some(1),
+                vec!["id".to_string()],
+                vec![],
+            )])),
+            write_delete_granularity: DeleteGranularity::File,
+            write_delete_isolation_level: IsolationLevel::Snapshot,
+            write_delete_mode: RowLevelOperationMode::MergeOnRead,
+            write_update_distribution_mode: Some(DistributionMode::Hash),
             write_parquet_bloom_filter_fpp_column: HashMap::from([(
                 "customer_id".to_string(),
                 0.02,
@@ -853,12 +977,33 @@ mod tests {
         assert_eq!(json["commit.retry.num-retries"], "9");
         assert_eq!(json["write.format.default"], "orc");
         assert_eq!(json["write.data.path"], "s3://warehouse/table/data");
+        assert_eq!(json["write.distribution-mode"], "range");
         assert_eq!(json["write.orc.compression-codec"], "lzo");
-        assert_eq!(json["write.parquet.compression-level"], "5");
+        assert_eq!(json["write.orc.bloom.filter.columns"], "id,category");
+        assert_eq!(json["write.delete.granularity"], "file");
+        assert_eq!(json["write.delete.isolation-level"], "snapshot");
+        assert_eq!(json["write.delete.mode"], "merge-on-read");
+        assert_eq!(json["write.update.distribution-mode"], "hash");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                json["schema.name-mapping.default"].as_str().unwrap()
+            )
+            .unwrap(),
+            serde_json::json!([{"field-id": 1, "names": ["id"]}])
+        );
         assert_eq!(
             json["write.parquet.bloom-filter-fpp.column.customer_id"],
             "0.02"
         );
+        for key in [
+            "write.manifest.compression-level",
+            "write.parquet.compression-level",
+            "write.delete.parquet.compression-level",
+            "write.avro.compression-level",
+            "write.delete.avro.compression-level",
+        ] {
+            assert!(json.get(key).is_none());
+        }
         assert!(json.get("commit").is_none());
         assert!(json.get("write").is_none());
     }
@@ -868,7 +1013,13 @@ mod tests {
         let properties: ParsedTableProperties = serde_json::from_value(serde_json::json!({
             "commit.retry.num-retries": "8",
             "write.format.default": "orc",
-            "write.data.path": "s3://warehouse/table/data"
+            "write.data.path": "s3://warehouse/table/data",
+            "write.distribution-mode": "HASH",
+            "write.orc.bloom.filter.columns": "id, category",
+            "schema.name-mapping.default": r#"[{"field-id":1,"names":["id"]}]"#,
+            "write.delete.granularity": "FILE",
+            "write.update.isolation-level": "snapshot",
+            "write.merge.mode": "merge-on-read"
         }))
         .unwrap();
 
@@ -877,6 +1028,31 @@ mod tests {
         assert_eq!(
             properties.write_data_path,
             Some("s3://warehouse/table/data".to_string())
+        );
+        assert_eq!(
+            properties.write_distribution_mode,
+            Some(DistributionMode::Hash)
+        );
+        assert_eq!(properties.write_orc_bloom_filter_columns, vec![
+            "id".to_string(),
+            "category".to_string()
+        ]);
+        assert_eq!(
+            properties.schema_name_mapping_default,
+            Some(NameMapping::new(vec![MappedField::new(
+                Some(1),
+                vec!["id".to_string()],
+                vec![],
+            )]))
+        );
+        assert_eq!(properties.write_delete_granularity, DeleteGranularity::File);
+        assert_eq!(
+            properties.write_update_isolation_level,
+            IsolationLevel::Snapshot
+        );
+        assert_eq!(
+            properties.write_merge_mode,
+            RowLevelOperationMode::MergeOnRead
         );
     }
 
@@ -913,10 +1089,6 @@ mod tests {
                 "write.delete.avro.compression-codec".to_string(),
                 "snappy".to_string(),
             ),
-            (
-                "write.delete.avro.compression-level".to_string(),
-                "7".to_string(),
-            ),
             ("read.split.planning-lookback".to_string(), "25".to_string()),
             (
                 "history.expire.min-snapshots-to-keep".to_string(),
@@ -933,10 +1105,12 @@ mod tests {
             properties.write_delete_avro_compression_codec,
             CompressionCodec::Snappy
         );
-        assert_eq!(properties.write_delete_avro_compression_level, Some(7));
         assert_eq!(properties.read_split_planning_lookback, 25);
         assert_eq!(properties.history_expire_min_snapshots_to_keep, 4);
-        assert_eq!(properties.write_delete_mode, "merge-on-read");
+        assert_eq!(
+            properties.write_delete_mode,
+            RowLevelOperationMode::MergeOnRead
+        );
         assert_eq!(properties.encryption_data_key_length, 32);
     }
 
@@ -984,5 +1158,24 @@ mod tests {
         .unwrap_err();
 
         assert!(error.message().contains("commit.retry.num-retries"));
+    }
+
+    #[test]
+    fn invalid_typed_value_reports_its_property_key() {
+        let error = parse(HashMap::from([(
+            "write.distribution-mode".to_string(),
+            "random".to_string(),
+        )]))
+        .unwrap_err();
+
+        assert!(error.message().contains("write.distribution-mode"));
+
+        let error = parse(HashMap::from([(
+            "schema.name-mapping.default".to_string(),
+            "not-json".to_string(),
+        )]))
+        .unwrap_err();
+
+        assert!(error.message().contains("schema.name-mapping.default"));
     }
 }

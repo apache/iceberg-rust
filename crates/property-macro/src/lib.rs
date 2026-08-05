@@ -49,8 +49,8 @@ use syn::{
 /// property map flat. `parse_with` may be used for exact-key property types that do not implement
 /// `FromStr` or need validation. `serialize_with` supplies their string representation in JSON.
 /// Optional fields are omitted from JSON when they are `None`. Fields need `FromStr` and `ToString`
-/// unless the relevant custom parsing or serialization attribute is supplied. String-literal
-/// defaults are converted into their field type with `Into`.
+/// unless the relevant custom parsing or serialization attribute is supplied. String-literal and
+/// path defaults are converted into their field type with `Into`.
 #[proc_macro_derive(
     Properties,
     attributes(key, prefix, nested, default, parse_with, serialize_with)
@@ -373,7 +373,7 @@ fn default_value(default: &Expr, ty: &Type) -> TokenStream2 {
         Expr::Lit(ExprLit {
             lit: Lit::Str(_),
             ..
-        })
+        }) | Expr::Path(_)
     ) {
         quote!(::std::convert::Into::<#ty>::into(#default))
     } else {
