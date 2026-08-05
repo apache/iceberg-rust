@@ -225,7 +225,9 @@ impl ExecutionPlan for IcebergWriteExec {
         let parquet_file_writer_builder = ParquetWriterBuilder::from_table_properties(
             &table_props,
             self.table.metadata().current_schema().clone(),
+            self.table.encryption_manager().cloned(),
         )
+        .map_err(to_datafusion_error)?
         .with_match_mode(FieldMatchMode::Name);
         let target_file_size = table_props.write_target_file_size_bytes;
 

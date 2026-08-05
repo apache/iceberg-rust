@@ -32,4 +32,6 @@ pub use io::{EncryptedInputFile, EncryptedOutputFile};
 pub use key_metadata::StandardKeyMetadata;
 pub use kms::{GeneratedKey, KeyManagementClient};
 pub use manager::EncryptionManager;
+#[cfg(test)]
+pub(crate) use manager::test_encryption_manager;
 pub use stream::{AesGcmFileRead, AesGcmFileWrite};

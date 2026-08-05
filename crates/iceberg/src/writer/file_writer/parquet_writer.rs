@@ -27,6 +27,7 @@ use itertools::Itertools;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
+use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{CdcOptions, WriterProperties};
 use parquet::file::statistics::Statistics;
@@ -36,6 +37,7 @@ use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
     get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
 };
+use crate::encryption::{EncryptionManager, StandardKeyMetadata};
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
@@ -52,20 +54,22 @@ pub struct ParquetWriterBuilder {
     props: WriterProperties,
     schema: SchemaRef,
     match_mode: FieldMatchMode,
+    encryption_manager: Option<Arc<EncryptionManager>>,
 }
 
 impl ParquetWriterBuilder {
     /// Create a new `ParquetWriterBuilder`
     /// To construct the write result, the schema should contain the `PARQUET_FIELD_ID_META_KEY` metadata for each field.
     ///
-    /// When writing into an existing Iceberg table, prefer
-    /// [`Self::from_table_properties`], which derives `WriterProperties` from
-    /// the table's `write.parquet.*` properties.
+    /// Does not support encrypted writing. When writing into an existing
+    /// Iceberg table, prefer [`Self::from_table_properties`].
     pub fn new(props: WriterProperties, schema: SchemaRef) -> Self {
         Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
     }
 
     /// Create a new `ParquetWriterBuilder` with custom match mode
+    ///
+    /// Does not support encrypted writing.
     pub fn new_with_match_mode(
         props: WriterProperties,
         schema: SchemaRef,
@@ -75,6 +79,7 @@ impl ParquetWriterBuilder {
             props,
             schema,
             match_mode,
+            encryption_manager: None,
         }
     }
 
@@ -85,19 +90,42 @@ impl ParquetWriterBuilder {
     /// Currently translates the content-defined-chunking keys
     /// (`write.parquet.content-defined-chunking.*`); other keys fall back to
     /// parquet-rs defaults.
-    pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Self {
+    ///
+    /// Pass the table's [`EncryptionManager`] to write encrypted files; it
+    /// mints a DEK per file in [`FileWriterBuilder::build`]. Errors if
+    /// `encryption.key-id` is set and no manager is supplied, since the
+    /// resulting DEKs would be recorded in plain-text manifests.
+    pub fn from_table_properties(
+        table_props: &TableProperties,
+        schema: SchemaRef,
+        encryption_manager: Option<Arc<EncryptionManager>>,
+    ) -> Result<Self> {
+        if table_props.encryption_key_id.is_some() && encryption_manager.is_none() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "Table has encryption.key-id set but no EncryptionManager was provided to ParquetWriterBuilder",
+            ));
+        }
+
         let cdc = table_props.cdc_enabled.then_some(CdcOptions {
             min_chunk_size: table_props.cdc_min_chunk_size,
             max_chunk_size: table_props.cdc_max_chunk_size,
             norm_level: table_props.cdc_norm_level,
         });
+
         // TODO: translate the remaining write.parquet.* keys (e.g. compression-codec,
         // row-group-size-bytes, page-size-bytes).
         // This constructor is intended to be the single place that maps them.
         let props = WriterProperties::builder()
             .set_content_defined_chunking(cdc)
             .build();
-        Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
+
+        Ok(Self {
+            props,
+            schema,
+            match_mode: FieldMatchMode::Id,
+            encryption_manager,
+        })
     }
 
     /// Set the field match mode used to map Arrow fields to Iceberg fields.
@@ -114,13 +142,19 @@ impl FileWriterBuilder for ParquetWriterBuilder {
     type R = ParquetWriter;
 
     async fn build(&self, output_file: OutputFile) -> Result<Self::R> {
+        let key_metadata = self
+            .encryption_manager
+            .as_ref()
+            .map(|em| em.generate_key_metadata());
+        let writer_properties = resolve_writer_properties(&self.props, key_metadata.as_ref())?;
         Ok(ParquetWriter {
             schema: self.schema.clone(),
             inner_writer: None,
-            writer_properties: self.props.clone(),
+            writer_properties,
             current_row_num: 0,
             output_file,
             nan_value_count_visitor: NanValueCountVisitor::new_with_match_mode(self.match_mode),
+            key_metadata,
         })
     }
 }
@@ -258,6 +292,7 @@ pub struct ParquetWriter {
     writer_properties: WriterProperties,
     current_row_num: usize,
     nan_value_count_visitor: NanValueCountVisitor,
+    key_metadata: Option<StandardKeyMetadata>,
 }
 
 /// Used to aggregate min and max value of each column.
@@ -349,7 +384,7 @@ impl MinMaxColAggregator {
 }
 
 impl ParquetWriter {
-    /// Converts parquet files to data files
+    /// Converts already-written parquet files into [`DataFile`]s.
     #[allow(dead_code)]
     pub(crate) async fn parquet_files_to_data_files(
         file_io: &FileIO,
@@ -379,6 +414,7 @@ impl ParquetWriter {
                 file_path,
                 // TODO: Implement nan_value_counts here
                 HashMap::new(),
+                None,
             )?;
             builder.partition_spec_id(table_metadata.default_partition_spec_id());
             let data_file = builder.build().unwrap();
@@ -395,6 +431,7 @@ impl ParquetWriter {
         written_size: usize,
         file_path: String,
         nan_value_counts: HashMap<i32, u64>,
+        key_metadata: Option<StandardKeyMetadata>,
     ) -> Result<DataFileBuilder> {
         let index_by_parquet_path = {
             let mut visitor = IndexByParquetPathName::new();
@@ -438,6 +475,11 @@ impl ParquetWriter {
             )
         };
 
+        let key_metadata = match key_metadata {
+            Some(m) => Some(m.encode()?.into_vec()),
+            None => None,
+        };
+
         let mut builder = DataFileBuilder::default();
         builder
             .content(DataContentType::Data)
@@ -454,6 +496,7 @@ impl ParquetWriter {
             // - We can ignore implementing distinct_counts due to this: https://lists.apache.org/thread/j52tsojv0x4bopxyzsp7m7bqt23n5fnd
             .lower_bounds(lower_bounds)
             .upper_bounds(upper_bounds)
+            .key_metadata(key_metadata)
             .split_offsets(Some(
                 metadata
                     .row_groups()
@@ -512,6 +555,41 @@ impl ParquetWriter {
 
         Ok(partition_struct)
     }
+}
+
+fn resolve_writer_properties(
+    writer_properties: &WriterProperties,
+    key_metadata: Option<&StandardKeyMetadata>,
+) -> Result<WriterProperties> {
+    let Some(key_metadata) = key_metadata else {
+        return Ok(writer_properties.clone());
+    };
+
+    if writer_properties.file_encryption_properties().is_some() {
+        return Err(Error::new(
+            ErrorKind::Unexpected,
+            "Parquet writer properties already have file encryption properties set",
+        ));
+    }
+
+    let mut builder =
+        FileEncryptionProperties::builder(key_metadata.encryption_key().as_bytes().to_vec());
+    if let Some(aad) = key_metadata.aad_prefix() {
+        builder = builder.with_aad_prefix(aad.to_vec());
+    }
+    let file_encryption_properties = builder.build().map_err(|e| {
+        Error::new(
+            ErrorKind::Unexpected,
+            "Failed to build parquet file encryption properties",
+        )
+        .with_source(e)
+    })?;
+
+    Ok(writer_properties
+        .clone()
+        .into_builder()
+        .with_file_encryption_properties(file_encryption_properties)
+        .build())
 }
 
 impl FileWriter for ParquetWriter {
@@ -588,6 +666,7 @@ impl FileWriter for ParquetWriter {
                 written_size,
                 self.output_file.location().to_string(),
                 self.nan_value_count_visitor.nan_value_counts,
+                self.key_metadata,
             )?])
         }
     }
@@ -662,14 +741,19 @@ mod tests {
     };
     use arrow_schema::{DataType, Field, Fields, SchemaRef as ArrowSchemaRef};
     use arrow_select::concat::concat_batches;
+    use futures::TryStreamExt;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::file::statistics::ValueStatistics;
     use tempfile::TempDir;
     use uuid::Uuid;
 
     use super::*;
-    use crate::arrow::schema_to_arrow_schema;
+    use crate::Runtime;
+    use crate::arrow::{ArrowReaderBuilder, schema_to_arrow_schema};
+    use crate::encryption::test_encryption_manager;
     use crate::io::FileIO;
+    use crate::scan::{FileScanTask, FileScanTaskStream};
     use crate::spec::decimal_utils::{decimal_mantissa, decimal_new, decimal_scale};
     use crate::spec::{PrimitiveLiteral, Struct, *};
     use crate::writer::file_writer::location_generator::{
@@ -914,6 +998,160 @@ mod tests {
         // check the written file
         let expect_batch = concat_batches(&schema, vec![&to_write, &to_write_null]).unwrap();
         check_parquet_data_file(&file_io, &data_file, &expect_batch).await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_writer_encrypted_write_path() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("col", DataType::Int64, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "0".to_string(),
+            )])),
+        ]));
+        let col = Arc::new(Int64Array::from_iter_values(0..1024)) as ArrayRef;
+        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![col]).unwrap();
+
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
+
+        let table_properties = table_props(HashMap::from([(
+            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+            "test-key".to_string(),
+        )]));
+        let mut parquet_writer = ParquetWriterBuilder::from_table_properties(
+            &table_properties,
+            Arc::new(to_write.schema().as_ref().try_into().unwrap()),
+            Some(test_encryption_manager("test-key")),
+        )?
+        .build(output_file)
+        .await?;
+        parquet_writer.write(&to_write).await?;
+        let data_file = parquet_writer
+            .close()
+            .await?
+            .into_iter()
+            .next()
+            .unwrap()
+            .content(DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert!(
+            data_file.key_metadata().is_some(),
+            "encrypted data file must carry key metadata"
+        );
+
+        let raw = file_io
+            .new_input(data_file.file_path.clone())?
+            .read()
+            .await?;
+        assert!(
+            ParquetRecordBatchReaderBuilder::try_new(raw).is_err(),
+            "an encrypted parquet file must not be readable without decryption"
+        );
+
+        let key_metadata = StandardKeyMetadata::decode(data_file.key_metadata().unwrap()).unwrap();
+        let batches = crate::arrow::test_utils::read_encrypted_parquet(
+            &data_file.file_path,
+            key_metadata.encryption_key().as_bytes(),
+            key_metadata.aad_prefix(),
+        );
+        let res = concat_batches(&arrow_schema, &batches).unwrap();
+        assert_eq!(to_write, res);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_writer_encrypted_roundtrip() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+        let iceberg_schema: SchemaRef = Arc::new(arrow_schema.as_ref().try_into().unwrap());
+        let batch = RecordBatch::try_new(arrow_schema, vec![Arc::new(Int32Array::from(vec![
+            10, 20, 30,
+        ])) as ArrayRef])
+        .unwrap();
+
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
+        let table_properties = table_props(HashMap::from([(
+            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+            "test-key".to_string(),
+        )]));
+        let mut parquet_writer = ParquetWriterBuilder::from_table_properties(
+            &table_properties,
+            iceberg_schema.clone(),
+            Some(test_encryption_manager("test-key")),
+        )?
+        .build(output_file)
+        .await?;
+        parquet_writer.write(&batch).await?;
+        let data_file = parquet_writer
+            .close()
+            .await?
+            .into_iter()
+            .next()
+            .unwrap()
+            .content(DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(data_file.file_size_in_bytes())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(data_file.file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(iceberg_schema)
+            .with_project_field_ids(vec![1])
+            .with_case_sensitive(false)
+            .with_key_metadata(data_file.key_metadata().map(Box::from))
+            .build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(batches.len(), 1);
+        let ids = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(ids.values(), &[10, 20, 30]);
 
         Ok(())
     }
@@ -2366,8 +2604,43 @@ mod tests {
     #[test]
     fn test_from_table_properties_no_cdc_by_default() {
         let tp = table_props(HashMap::new());
-        let builder = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema());
+        let builder =
+            ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema(), None).unwrap();
         assert!(builder.props.content_defined_chunking().is_none());
+    }
+
+    #[test]
+    fn test_from_table_properties_rejects_encryption_without_manager() {
+        // Falling back to plain text here would be a silent downgrade.
+        let tp = table_props(HashMap::from([(
+            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+            "test-key".to_string(),
+        )]));
+        let err = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema(), None)
+            .expect_err("encryption without an EncryptionManager must be rejected");
+        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+    }
+
+    #[tokio::test]
+    async fn test_from_table_properties_without_encryption_writes_plaintext() {
+        let tp = table_props(HashMap::new());
+        let tmp = TempDir::new().unwrap();
+        let output = FileIO::new_with_fs()
+            .new_output(format!("{}/plain.parquet", tmp.path().to_str().unwrap()))
+            .unwrap();
+        let writer = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema(), None)
+            .unwrap()
+            .build(output)
+            .await
+            .unwrap();
+
+        assert!(writer.key_metadata.is_none());
+        assert!(
+            writer
+                .writer_properties
+                .file_encryption_properties()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -2403,7 +2676,8 @@ mod tests {
         let output = FileIO::new_with_fs()
             .new_output(format!("{}/cdc.parquet", tmp.path().to_str().unwrap()))
             .unwrap();
-        let writer = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
+        let writer = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema(), None)
+            .unwrap()
             .build(output)
             .await
             .unwrap();
