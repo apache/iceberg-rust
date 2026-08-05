@@ -269,7 +269,7 @@ mod tests {
 
     use super::*;
     use crate::arrow::test_utils::read_encrypted_parquet;
-    use crate::encryption::StandardKeyMetadata;
+    use crate::encryption::{StandardKeyMetadata, test_encryption_manager};
     use crate::io::FileIO;
     use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, Type};
     use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
@@ -459,8 +459,11 @@ mod tests {
             TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
             "test-key".to_string(),
         )]))?;
-        let parquet_writer_builder =
-            ParquetWriterBuilder::from_table_properties(&table_properties, Arc::new(schema))?;
+        let parquet_writer_builder = ParquetWriterBuilder::from_table_properties(
+            &table_properties,
+            Arc::new(schema),
+            Some(test_encryption_manager("test-key")),
+        )?;
 
         // Set a very small target size to trigger rolling
         let rolling_writer_builder = RollingFileWriterBuilder::new(
@@ -521,7 +524,6 @@ mod tests {
             "Expected {expected_rows} total records across all files"
         );
 
-        // Every rolled file carries key metadata, and each file's DEK is distinct.
         let mut distinct_keys = HashSet::new();
         for data_file in &data_files {
             let key_metadata = StandardKeyMetadata::decode(
@@ -535,7 +537,6 @@ mod tests {
             );
         }
 
-        // One file decrypts and reads back with its own key metadata.
         let data_file = &data_files[0];
         let key_metadata = StandardKeyMetadata::decode(data_file.key_metadata().unwrap())?;
         let batches = read_encrypted_parquet(

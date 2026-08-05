@@ -113,7 +113,7 @@ impl EncryptionManager {
         }
 
         let table_properties = metadata.table_properties()?;
-        let Some(table_key_id) = table_properties.encryption_key_id else {
+        let Some(table_key_id) = table_properties.encryption_key_id.as_deref() else {
             if kms_client.is_some() {
                 tracing::warn!(
                     "KeyManagementClient provided but table does not have encryption.key-id set"
@@ -133,11 +133,15 @@ impl EncryptionManager {
             .kms_client(Arc::clone(kms_client))
             .table_key_id(table_key_id)
             .encryption_keys(metadata.encryption_keys.clone())
-            .key_size(AesKeySize::from_key_length(
-                table_properties.encryption_data_key_length,
-            )?)
+            .key_size(table_properties.data_encryption_key_size()?)
             .build();
         Ok(Some(Arc::new(em)))
+    }
+
+    /// Generate key metadata for a single file: a fresh DEK of the table's
+    /// configured key length together with a fresh AAD prefix.
+    pub fn generate_key_metadata(&self) -> StandardKeyMetadata {
+        StandardKeyMetadata::generate(self.key_size)
     }
 
     /// Encrypt a file with AGS1 stream encryption.
@@ -145,7 +149,7 @@ impl EncryptionManager {
     /// Returns an [`EncryptedOutputFile`] that transparently encrypts on
     /// write, along with key metadata for later decryption.
     pub fn encrypt(&self, raw_output: OutputFile) -> EncryptedOutputFile {
-        EncryptedOutputFile::new(raw_output, StandardKeyMetadata::generate(self.key_size))
+        EncryptedOutputFile::new(raw_output, self.generate_key_metadata())
     }
 
     /// Wrap a manifest list key metadata with a KEK for storage in table metadata.
@@ -411,6 +415,19 @@ impl EncryptionManager {
         let cipher = AesGcmCipher::new(key);
         cipher.decrypt(wrapped_dek, aad).map(SensitiveBytes::new)
     }
+}
+
+/// An [`EncryptionManager`] backed by an in-memory KMS holding `table_key_id`.
+#[cfg(test)]
+pub(crate) fn test_encryption_manager(table_key_id: &str) -> Arc<EncryptionManager> {
+    let kms = super::kms::MemoryKeyManagementClient::new();
+    kms.add_master_key(table_key_id).unwrap();
+    Arc::new(
+        EncryptionManager::builder()
+            .kms_client(Arc::new(kms) as Arc<dyn KeyManagementClient>)
+            .table_key_id(table_key_id)
+            .build(),
+    )
 }
 
 #[cfg(test)]

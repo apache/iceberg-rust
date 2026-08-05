@@ -42,19 +42,6 @@ where
     })
 }
 
-/// The AES key size to use when generating data encryption keys, derived from
-/// `encryption.data-key-length`.
-///
-/// Returns `None` when the table is not configured for encryption.
-/// Returns an error when `encryption.data-key-length` is not a valid AES key length.
-pub(crate) fn data_encryption_key_size(props: &TableProperties) -> Result<Option<AesKeySize>> {
-    props
-        .encryption_key_id
-        .is_some()
-        .then(|| AesKeySize::from_key_length(props.encryption_data_key_length))
-        .transpose()
-}
-
 fn parse_location_property(
     properties: &HashMap<String, String>,
     key: &str,
@@ -371,6 +358,15 @@ impl TableProperties {
         "write.object-storage.partitioned-paths";
     /// Default value for [PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS]
     pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool = true;
+
+    /// The AES key size to use when generating data encryption keys, derived
+    /// from `encryption.data-key-length`.
+    ///
+    /// Returns an error when `encryption.data-key-length` is not a valid AES
+    /// key length.
+    pub fn data_encryption_key_size(&self) -> Result<AesKeySize> {
+        AesKeySize::from_key_length(self.encryption_data_key_length)
+    }
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
