@@ -811,6 +811,89 @@ pub struct TableProperties {
     pub encryption_data_key_length: usize,
 }
 
+impl TableProperties {
+    /// Property key for the number of commit retries.
+    pub const PROPERTY_COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
+
+    /// Default number of commit retries.
+    pub const PROPERTY_COMMIT_NUM_RETRIES_DEFAULT: usize = 4;
+
+    /// Property key for enabling the DataFusion fanout writer.
+    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
+
+    /// Default value for enabling the DataFusion fanout writer.
+    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
+
+    /// Property key for the table encryption key identifier.
+    pub const PROPERTY_ENCRYPTION_KEY_ID: &str = "encryption.key-id";
+
+    /// Property key for the metadata compression codec.
+    pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
+
+    /// Property key for the maximum number of previous metadata versions to keep.
+    pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &str =
+        "write.metadata.previous-versions-max";
+
+    /// Default maximum number of previous metadata versions to keep.
+    pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize = 100;
+
+    /// Property key for enabling Parquet content-defined chunking.
+    pub const PROPERTY_PARQUET_CDC_ENABLED: &str = "write.parquet.content-defined-chunking.enabled";
+
+    /// Property key for the maximum Parquet content-defined chunk size.
+    pub const PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE: &str =
+        "write.parquet.content-defined-chunking.max-chunk-size";
+
+    /// Property key for the minimum Parquet content-defined chunk size.
+    pub const PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE: &str =
+        "write.parquet.content-defined-chunking.min-chunk-size";
+
+    /// Property key for the Parquet content-defined chunking normalization level.
+    pub const PROPERTY_PARQUET_CDC_NORM_LEVEL: &str =
+        "write.parquet.content-defined-chunking.norm-level";
+
+    /// Property key for the base data-file location.
+    pub const PROPERTY_WRITE_DATA_LOCATION: &str = "write.data.path";
+
+    /// Property key for the deprecated folder-storage location.
+    pub const PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &str = "write.folder-storage.path";
+
+    /// Property key for the base metadata-file location.
+    pub const PROPERTY_WRITE_METADATA_PATH: &str = "write.metadata.path";
+
+    /// Property key for the deprecated object-storage location.
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &str = "write.object-storage.path";
+
+    /// Property key for including partition values in object-storage paths.
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &str =
+        "write.object-storage.partitioned-paths";
+
+    /// Property key for the snapshot-summary partition limit.
+    pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &str = "write.summary.partition-limit";
+
+    /// Default snapshot-summary partition limit.
+    pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64 = 0;
+
+    /// Property key for the target data-file size.
+    pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-bytes";
+
+    /// Default target data-file size.
+    pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024;
+
+    /// Reserved table properties that must not be persisted in table metadata.
+    pub const RESERVED_PROPERTIES: [&str; 9] = [
+        "format-version",
+        "uuid",
+        "snapshot-count",
+        "current-snapshot-id",
+        "current-snapshot-summary",
+        "current-snapshot-timestamp-ms",
+        "current-schema",
+        "default-partition-spec",
+        "default-sort-order",
+    ];
+}
+
 impl TryFrom<&HashMap<String, String>> for TableProperties {
     type Error = crate::Error;
 

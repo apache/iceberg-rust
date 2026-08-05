@@ -1638,7 +1638,7 @@ mod tests {
         BlobMetadata, EncryptedKey, INITIAL_ROW_ID, Literal, NestedField, NullOrder, Operation,
         PartitionSpec, PartitionStatisticsFile, PrimitiveLiteral, PrimitiveType, Schema, Snapshot,
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile,
-        Summary, Transform, Type, UnboundPartitionField,
+        Summary, TableProperties, Transform, Type, UnboundPartitionField,
     };
     use crate::{ErrorKind, TableCreation};
 
@@ -3705,7 +3705,7 @@ mod tests {
         // Modify properties to enable gzip compression (using mixed case to test case-insensitive matching)
         let mut props = original_metadata.properties.clone();
         props.insert(
-            "write.metadata.compression-codec".to_string(),
+            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
             "GziP".to_string(),
         );
         // Use builder to create new metadata with updated properties
@@ -4018,6 +4018,8 @@ mod tests {
 
     #[test]
     fn test_table_properties_with_defaults() {
+        use crate::spec::TableProperties;
+
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
@@ -4040,12 +4042,20 @@ mod tests {
 
         let props = metadata.table_properties().unwrap();
 
-        assert_eq!(props.commit_retry_num_retries, 4);
-        assert_eq!(props.write_target_file_size_bytes, 512 * 1024 * 1024);
+        assert_eq!(
+            props.commit_retry_num_retries,
+            TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
+        );
+        assert_eq!(
+            props.write_target_file_size_bytes,
+            TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
+        );
     }
 
     #[test]
     fn test_table_properties_with_custom_values() {
+        use crate::spec::TableProperties;
+
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
@@ -4054,9 +4064,12 @@ mod tests {
             .unwrap();
 
         let properties = HashMap::from([
-            ("commit.retry.num-retries".to_string(), "10".to_string()),
             (
-                "write.target-file-size-bytes".to_string(),
+                TableProperties::PROPERTY_COMMIT_NUM_RETRIES.to_string(),
+                "10".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES.to_string(),
                 "1024".to_string(),
             ),
         ]);
@@ -4319,7 +4332,7 @@ mod tests {
         let metadata = get_test_table_metadata("TableMetadataV2Valid.json")
             .into_builder(None)
             .set_properties(HashMap::from([(
-                "write.metadata.path".to_string(),
+                TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
                 "s3://other-bucket/custom-meta".to_string(),
             )]))
             .unwrap()
@@ -4337,7 +4350,7 @@ mod tests {
         let metadata = get_test_table_metadata("TableMetadataV2Valid.json")
             .into_builder(None)
             .set_properties(HashMap::from([(
-                "write.metadata.path".to_string(),
+                TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
                 "s3://other-bucket/custom-meta/".to_string(),
             )]))
             .unwrap()

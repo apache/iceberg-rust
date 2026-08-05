@@ -93,10 +93,6 @@ impl ParquetWriterBuilder {
                 max_chunk_size: table_props.write_parquet_content_defined_chunking_max_chunk_size,
                 norm_level: table_props.write_parquet_content_defined_chunking_norm_level,
             });
-        Self::from_cdc_options(cdc, schema)
-    }
-
-    fn from_cdc_options(cdc: Option<CdcOptions>, schema: SchemaRef) -> Self {
         // TODO: translate the remaining write.parquet.* keys (e.g. compression-codec,
         // row-group-size-bytes, page-size-bytes).
         // This constructor is intended to be the single place that maps them.
@@ -2348,7 +2344,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // ParquetWriterBuilder property constructors
+    // ParquetWriterBuilder::from_table_properties
     // -----------------------------------------------------------------
 
     fn cdc_test_schema() -> SchemaRef {
@@ -2388,19 +2384,19 @@ mod tests {
         // `WriterProperties` getter here.
         let tp = table_props(HashMap::from([
             (
-                "write.parquet.content-defined-chunking.enabled".to_string(),
+                TableProperties::PROPERTY_PARQUET_CDC_ENABLED.to_string(),
                 "true".to_string(),
             ),
             (
-                "write.parquet.content-defined-chunking.min-chunk-size".to_string(),
+                TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE.to_string(),
                 "4096".to_string(),
             ),
             (
-                "write.parquet.content-defined-chunking.max-chunk-size".to_string(),
+                TableProperties::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE.to_string(),
                 "8192".to_string(),
             ),
             (
-                "write.parquet.content-defined-chunking.norm-level".to_string(),
+                TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL.to_string(),
                 "2".to_string(),
             ),
         ]));

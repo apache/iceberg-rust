@@ -291,7 +291,7 @@ pub(crate) mod test {
     use super::LocationGenerator;
     use crate::spec::{
         FormatVersion, Literal, NestedField, PartitionKey, PartitionSpec, PrimitiveType, Schema,
-        Struct, StructType, TableMetadata, Transform, Type,
+        Struct, StructType, TableMetadata, TableProperties, Transform, Type,
     };
     use crate::writer::file_writer::location_generator::{
         DefaultLocationGenerator, FileNameGenerator, ObjectStorageLocationGenerator,
@@ -315,7 +315,7 @@ pub(crate) mod test {
 
         // test custom data location
         table_metadata.properties.insert(
-            "write.folder-storage.path".to_string(),
+            TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION.to_string(),
             "s3://data.db/table/data_1".to_string(),
         );
         let location_generator = DefaultLocationGenerator::new(&table_metadata).unwrap();
@@ -327,7 +327,7 @@ pub(crate) mod test {
         );
 
         table_metadata.properties.insert(
-            "write.data.path".to_string(),
+            TableProperties::PROPERTY_WRITE_DATA_LOCATION.to_string(),
             "s3://data.db/table/data_2".to_string(),
         );
         let location_generator = DefaultLocationGenerator::new(&table_metadata).unwrap();
@@ -339,7 +339,7 @@ pub(crate) mod test {
         );
 
         table_metadata.properties.insert(
-            "write.data.path".to_string(),
+            TableProperties::PROPERTY_WRITE_DATA_LOCATION.to_string(),
             // invalid table location
             "s3://data.db/data_3".to_string(),
         );
@@ -506,7 +506,7 @@ pub(crate) mod test {
         let table_metadata = table_metadata_with(
             "s3://data.db/table",
             HashMap::from([(
-                "write.object-storage.partitioned-paths".to_string(),
+                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS.to_string(),
                 "true".to_string(),
             )]),
         );
@@ -545,7 +545,7 @@ pub(crate) mod test {
         let table_metadata = table_metadata_with(
             "s3://data.db/table",
             HashMap::from([(
-                "write.object-storage.partitioned-paths".to_string(),
+                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS.to_string(),
                 "false".to_string(),
             )]),
         );
@@ -565,7 +565,7 @@ pub(crate) mod test {
         let table_metadata = table_metadata_with(
             "s3://data.db/table",
             HashMap::from([(
-                "write.data.path".to_string(),
+                TableProperties::PROPERTY_WRITE_DATA_LOCATION.to_string(),
                 "s3://custom-bucket/objects".to_string(),
             )]),
         );
@@ -586,11 +586,11 @@ pub(crate) mod test {
             "s3://data.db/table",
             HashMap::from([
                 (
-                    "write.data.path".to_string(),
+                    TableProperties::PROPERTY_WRITE_DATA_LOCATION.to_string(),
                     "s3://data.db/table/data_primary".to_string(),
                 ),
                 (
-                    "write.folder-storage.path".to_string(),
+                    TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION.to_string(),
                     "s3://data.db/table/data_legacy".to_string(),
                 ),
             ]),

@@ -160,7 +160,7 @@ mod test {
     use uuid::Uuid;
 
     use crate::compression::CompressionCodec;
-    use crate::spec::{Schema, TableMetadata, TableMetadataBuilder};
+    use crate::spec::{Schema, TableMetadata, TableMetadataBuilder, TableProperties};
     use crate::{MetadataLocation, TableCreation};
 
     fn create_test_metadata(properties: HashMap<String, String>) -> TableMetadata {
@@ -425,7 +425,7 @@ mod test {
 
         // A configured `write.metadata.path` is honored on updates too
         let props = HashMap::from([(
-            "write.metadata.path".to_string(),
+            TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
             "s3://bucket/custom-meta".to_string(),
         )]);
         let with_meta_path = create_test_metadata(props);
@@ -450,7 +450,7 @@ mod test {
 
         // Test a configured `write.metadata.path` is honored
         let props = HashMap::from([(
-            "write.metadata.path".to_string(),
+            TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
             "s3://bucket/custom-meta".to_string(),
         )]);
         let custom_meta = create_test_metadata(props);

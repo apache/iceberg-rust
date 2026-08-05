@@ -2973,6 +2973,29 @@ pub iceberg::spec::TableProperties::write_update_isolation_level: iceberg::spec:
 pub iceberg::spec::TableProperties::write_update_mode: iceberg::spec::RowLevelOperationMode
 pub iceberg::spec::TableProperties::write_upsert_enabled: bool
 pub iceberg::spec::TableProperties::write_wap_enabled: bool
+impl iceberg::spec::TableProperties
+pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_NUM_RETRIES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_ENCRYPTION_KEY_ID: &str
+pub const iceberg::spec::TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC: &str
+pub const iceberg::spec::TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &str
+pub const iceberg::spec::TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_ENABLED: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_DATA_LOCATION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_METADATA_PATH: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize
+pub const iceberg::spec::TableProperties::RESERVED_PROPERTIES: [&str; 9]
 impl core::clone::Clone for iceberg::spec::TableProperties
 pub fn iceberg::spec::TableProperties::clone(&self) -> iceberg::spec::TableProperties
 impl core::convert::TryFrom<&std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>> for iceberg::spec::TableProperties

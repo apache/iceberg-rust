@@ -410,6 +410,7 @@ mod tests {
     use super::*;
     use crate::encryption::SensitiveBytes;
     use crate::encryption::kms::MemoryKeyManagementClient;
+    use crate::spec::TableProperties;
 
     fn load_test_metadata(filename: &str) -> TableMetadata {
         let path = format!(
@@ -567,9 +568,10 @@ mod tests {
         // Encryption is a v3 spec feature; pre-v3 tables silently skip
         // encryption even if encryption.key-id is set.
         let mut metadata: TableMetadata = load_test_metadata("TableMetadataV2ValidMinimal.json");
-        metadata
-            .properties
-            .insert("encryption.key-id".to_string(), "master-1".to_string());
+        metadata.properties.insert(
+            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+            "master-1".to_string(),
+        );
 
         let table = Table::builder()
             .file_io(FileIO::new_with_memory())

@@ -24,7 +24,7 @@ use super::{
     DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
     ONE_MINUTE_MS, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile, Schema, SchemaRef,
     Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef,
-    StatisticsFile, StructType, TableMetadata, UNPARTITIONED_LAST_ASSIGNED_ID,
+    StatisticsFile, StructType, TableMetadata, TableProperties, UNPARTITIONED_LAST_ASSIGNED_ID,
     UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result};
@@ -32,21 +32,6 @@ use crate::spec::{EncryptedKey, INITIAL_ROW_ID, MIN_FORMAT_VERSION_ROW_LINEAGE};
 use crate::{TableCreation, TableUpdate};
 
 pub(crate) const FIRST_FIELD_ID: i32 = 1;
-
-fn is_reserved_property(key: &str) -> bool {
-    matches!(
-        key,
-        "format-version"
-            | "uuid"
-            | "snapshot-count"
-            | "current-snapshot-id"
-            | "current-snapshot-summary"
-            | "current-snapshot-timestamp-ms"
-            | "current-schema"
-            | "default-partition-spec"
-            | "default-sort-order"
-    )
-}
 
 /// Manipulating table metadata.
 ///
@@ -271,7 +256,7 @@ impl TableMetadataBuilder {
         // List of specified properties that are RESERVED and should not be persisted.
         let reserved_properties = properties
             .keys()
-            .filter(|key| is_reserved_property(key))
+            .filter(|key| TableProperties::RESERVED_PROPERTIES.contains(&key.as_str()))
             .map(ToString::to_string)
             .collect::<Vec<_>>();
 
@@ -309,7 +294,7 @@ impl TableMetadataBuilder {
         // disallow removal of reserved properties
         let reserved_properties = properties
             .iter()
-            .filter(|key| is_reserved_property(key))
+            .filter(|key| TableProperties::RESERVED_PROPERTIES.contains(&key.as_str()))
             .map(ToString::to_string)
             .collect::<Vec<_>>();
 
@@ -1186,9 +1171,9 @@ impl TableMetadataBuilder {
         let max_size = self
             .metadata
             .properties
-            .get("write.metadata.previous-versions-max")
+            .get(TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX)
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(100)
+            .unwrap_or(TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT)
             .max(1);
 
         if self.metadata.metadata_log.len() > max_size {
@@ -1484,8 +1469,8 @@ mod tests {
     use crate::io::FileIO;
     use crate::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
-        SnapshotRetention, SortDirection, SortField, StructType, Summary, Transform, Type,
-        UnboundPartitionField,
+        SnapshotRetention, SortDirection, SortField, StructType, Summary, TableProperties,
+        Transform, Type, UnboundPartitionField,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -2491,7 +2476,7 @@ mod tests {
         let builder = builder_without_changes(FormatVersion::V2);
         let metadata = builder
             .set_properties(HashMap::from_iter(vec![(
-                "write.metadata.previous-versions-max".to_string(),
+                TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
                 "2".to_string(),
             )]))
             .unwrap()
