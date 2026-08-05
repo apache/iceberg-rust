@@ -368,6 +368,13 @@ pub(crate) fn visit_schema<V: ArrowSchemaVisitor>(
 /// Iceberg schema fields require a unique field id, and this function assumes that each field
 /// in the provided Arrow schema contains a field id in its metadata. If the metadata is missing
 /// or the field id is not set, the conversion will fail
+///
+/// # Geography compatibility
+///
+/// The current `parquet-geospatial` dependency predates arrow-rs 59.1.0 and expects the legacy
+/// `algorithm` key in WKB extension metadata instead of the GeoArrow `edges` key. As a result,
+/// standards-compliant GeoArrow Geography metadata may be interpreted as Geometry. This is fixed
+/// upstream by <https://github.com/apache/arrow-rs/pull/10065>.
 pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
     let mut visitor = ArrowSchemaConverter::new();
     visit_schema(schema, &mut visitor)
@@ -381,6 +388,9 @@ pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
 ///
 /// This is useful when converting Arrow schemas that don't originate from Iceberg tables,
 /// such as schemas from DataFusion or other Arrow-based systems.
+///
+/// The Geography compatibility limitation documented on [`arrow_schema_to_schema`] also applies
+/// to this function.
 pub fn arrow_schema_to_schema_auto_assign_ids(schema: &ArrowSchema) -> Result<Schema> {
     let mut visitor = ArrowSchemaConverter::new_with_field_ids_from(FIRST_FIELD_ID);
     visit_schema(schema, &mut visitor)
@@ -941,6 +951,14 @@ impl SchemaVisitor for ToArrowSchemaConverter {
 }
 
 /// Convert iceberg schema to an arrow schema.
+///
+/// # Geography compatibility
+///
+/// The current `parquet-geospatial` dependency predates arrow-rs 59.1.0 and emits the legacy
+/// `algorithm` key for Geography WKB extension metadata so parquet-rs 58.x can write the Geography
+/// logical type. This metadata is not valid GeoArrow Geography metadata and may be rejected or
+/// misinterpreted by standards-compliant Arrow readers. This is fixed upstream by
+/// <https://github.com/apache/arrow-rs/pull/10065>.
 pub fn schema_to_arrow_schema(schema: &Schema) -> Result<ArrowSchema> {
     let mut converter = ToArrowSchemaConverter;
     match crate::spec::visit_schema(schema, &mut converter)? {
