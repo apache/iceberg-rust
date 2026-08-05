@@ -161,6 +161,7 @@ impl ExecutionPlan for IcebergTableScan {
                     .with_data_file_concurrency_limit(1)
                     .build()
                     // TODO: Avoid cloning FileScanTasks here once ArrowReader can accept shared tasks.
+                    // Tracked in https://github.com/apache/iceberg-rust/issues/2964.
                     .read(tasks)
                     .map_err(to_datafusion_error)?
                     .stream()

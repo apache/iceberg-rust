@@ -123,10 +123,10 @@ pub(crate) async fn plan_eager_scan(
     scan_config: &IcebergScanConfig,
     target_partitions: usize,
 ) -> DFResult<EagerScanPlan> {
-    // Do not cache planned FileScanTasks in the provider in v1. They are query-specific
-    // because projection, predicate binding, snapshot schema, and delete planning can differ
-    // between scans. Catalog-backed providers also need fresh metadata on each scan.
-    // TODO: Revisit provider-level caching for static tables with a precise cache key.
+    // TODO: Cache eager scan planning results across equivalent provider scan calls with a
+    // precise cache key. Catalog-backed providers must still reload table metadata before
+    // cache lookup so that a new snapshot naturally causes a cache miss.
+    // Tracked in https://github.com/apache/iceberg-rust/issues/2963.
     let table_scan = Arc::new(build_table_scan(table, scan_config)?);
 
     let tasks: Vec<FileScanTask> = table_scan
@@ -163,6 +163,7 @@ fn get_column_names(
 /// round-robin assignment. Non-empty groups are bounded by `tasks.len()`.
 // TODO: Replace this naive round-robin grouping with size-based grouping once the
 // first parallel scan path is stable. Keep this v1 simple and deterministic.
+// Tracked in https://github.com/apache/iceberg-rust/issues/2962.
 fn group_file_scan_tasks_round_robin(
     tasks: Vec<FileScanTask>,
     target_partitions: usize,
