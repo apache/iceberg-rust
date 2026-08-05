@@ -181,7 +181,7 @@ impl Transaction {
         let table_props = self.table.metadata().parsed_table_properties()?;
 
         // TODO(https://github.com/apache/iceberg-rust/issues/2034): remove once encrypted writes are supported
-        if table_props.encryption.key_id.is_some() {
+        if table_props.encryption_key_id.is_some() {
             return Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "Cannot commit to an encrypted table: encrypted writes are not yet supported",
@@ -204,12 +204,13 @@ impl Transaction {
     }
 
     fn build_backoff(props: ParsedTableProperties) -> Result<ExponentialBackoff> {
-        let commit = props.commit;
         Ok(ExponentialBuilder::new()
-            .with_min_delay(Duration::from_millis(commit.min_retry_wait_ms))
-            .with_max_delay(Duration::from_millis(commit.max_retry_wait_ms))
-            .with_total_delay(Some(Duration::from_millis(commit.total_retry_timeout_ms)))
-            .with_max_times(commit.num_retries)
+            .with_min_delay(Duration::from_millis(props.commit_retry_min_wait_ms))
+            .with_max_delay(Duration::from_millis(props.commit_retry_max_wait_ms))
+            .with_total_delay(Some(Duration::from_millis(
+                props.commit_retry_total_timeout_ms,
+            )))
+            .with_max_times(props.commit_retry_num_retries)
             .with_factor(2.0)
             .build())
     }

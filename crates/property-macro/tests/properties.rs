@@ -29,9 +29,11 @@ struct TestProperties {
     #[default(4)]
     #[doc = "Number of retries."]
     pub retries: u64,
+
     #[key(OWNER)]
     #[default(None)]
     pub owner: Option<String>,
+
     #[prefix(COLUMN_FPP_PREFIX)]
     #[default(HashMap::new())]
     pub column_fpp: HashMap<String, f64>,
