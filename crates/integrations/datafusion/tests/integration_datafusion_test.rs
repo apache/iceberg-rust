@@ -431,6 +431,7 @@ async fn test_multi_partition_scan_enforces_global_limit() -> Result<()> {
 
     // The physical optimizer absorbs the initial GlobalLimitExec into
     // CoalescePartitionsExec; its fetch enforces the global bound in the final plan.
+    // After a DataFusion bump, failure here likely means the plan shape changed, not eager scanning.
     let global_limit_coalescer = plan
         .downcast_ref::<CoalescePartitionsExec>()
         .expect("Expected a globally limited CoalescePartitionsExec");
