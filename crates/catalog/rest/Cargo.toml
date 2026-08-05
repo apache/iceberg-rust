@@ -43,7 +43,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
-zeroize = { workspace = true }
 
 [dev-dependencies]
 bytes = { workspace = true }

@@ -21,12 +21,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use http::StatusCode;
-use iceberg::{Error, ErrorKind, Result};
+use iceberg::{Credential, Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
 use reqwest::{Client, Method};
 use tokio::sync::Mutex;
 
-use super::{AuthManager, AuthRequest, AuthSession, SensitiveString};
+use super::{AuthManager, AuthRequest, AuthSession};
 use crate::catalog::{
     REST_CATALOG_PROP_URI, RestCatalogConfig, credential_from_props, default_token_endpoint,
     explicit_headers_from_props,
@@ -38,7 +38,7 @@ use crate::types::{ErrorResponse, TokenResponse};
 struct OAuth2Params {
     extra_headers: HeaderMap,
     token_endpoint: String,
-    credential: Option<(Option<String>, SensitiveString)>,
+    credential: Option<(Option<String>, Credential)>,
     extra_oauth_params: HashMap<String, String>,
 }
 
@@ -50,7 +50,7 @@ struct OAuth2Params {
 /// across sessions so it survives the config handshake.
 pub struct OAuth2Manager {
     client: Client,
-    token: Arc<Mutex<Option<SensitiveString>>>,
+    token: Arc<Mutex<Option<Credential>>>,
     init_params: OAuth2Params,
     /// True when the token endpoint was derived from the catalog URI (not
     /// explicitly configured): it is then recomputed from the merged URI in
@@ -83,7 +83,7 @@ impl OAuth2Manager {
 
     /// Sets a bearer token used directly (takes precedence over `credential`).
     pub fn with_token(mut self, token: impl Into<String>) -> Self {
-        self.token = Arc::new(Mutex::new(Some(SensitiveString::from(token.into()))));
+        self.token = Arc::new(Mutex::new(Some(Credential::from(token.into()))));
         self
     }
 
@@ -116,7 +116,7 @@ impl OAuth2Manager {
     pub(crate) fn from_config(cfg: &RestCatalogConfig) -> Result<Self> {
         Ok(Self {
             client: cfg.client(),
-            token: Arc::new(Mutex::new(cfg.token().map(SensitiveString::from))),
+            token: Arc::new(Mutex::new(cfg.token().map(Credential::from))),
             init_params: OAuth2Params {
                 extra_headers: cfg.extra_headers()?,
                 token_endpoint: cfg.get_token_endpoint(),
@@ -148,7 +148,7 @@ impl AuthManager for OAuth2Manager {
     ) -> Result<Arc<dyn AuthSession>> {
         // The server config may carry a new token (or restate the user's).
         if let Some(token) = props.get("token") {
-            *self.token.lock().await = Some(SensitiveString::from(token.clone()));
+            *self.token.lock().await = Some(Credential::from(token.clone()));
         }
 
         // Explicit property overrides merge ONTO the manager's options, so an
@@ -217,7 +217,7 @@ impl OAuth2Manager {
 
 /// Attaches `token` as a `Authorization: Bearer <token>` header, marked
 /// sensitive so `Debug`-formatted requests redact it.
-fn attach_bearer(req: &mut AuthRequest<'_>, token: &SensitiveString) -> Result<()> {
+fn attach_bearer(req: &mut AuthRequest<'_>, token: &Credential) -> Result<()> {
     let mut value: http::HeaderValue =
         format!("Bearer {}", token.expose()).parse().map_err(|e| {
             Error::new(
@@ -236,7 +236,7 @@ fn attach_bearer(req: &mut AuthRequest<'_>, token: &SensitiveString) -> Result<(
 #[derive(Debug)]
 struct StaticTokenSession {
     /// Shared with the owning [`OAuth2Manager`].
-    token: Arc<Mutex<Option<SensitiveString>>>,
+    token: Arc<Mutex<Option<Credential>>>,
 }
 
 #[async_trait]
@@ -256,8 +256,8 @@ impl AuthSession for StaticTokenSession {
 struct ClientCredentialsSession {
     client: Client,
     /// Cached bearer token, shared with the owning [`OAuth2Manager`].
-    token: Arc<Mutex<Option<SensitiveString>>>,
-    credential: (Option<String>, SensitiveString),
+    token: Arc<Mutex<Option<Credential>>>,
+    credential: (Option<String>, Credential),
     token_endpoint: String,
     extra_headers: HeaderMap,
     extra_oauth_params: HashMap<String, String>,
@@ -350,8 +350,7 @@ impl AuthSession for ClientCredentialsSession {
             match &*token {
                 Some(token) => token.clone(),
                 None => {
-                    let new_token =
-                        SensitiveString::from(self.exchange_credential_for_token().await?);
+                    let new_token = Credential::from(self.exchange_credential_for_token().await?);
                     *token = Some(new_token.clone());
                     new_token
                 }
