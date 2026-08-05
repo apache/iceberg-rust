@@ -224,7 +224,7 @@
 <a href=#224 id=224 data-nosnippet>224</a>/// This field represents a unique long assigned for row lineage.
 <a href=#225 id=225 data-nosnippet>225</a></span><span class="kw">static </span>ROW_ID_FIELD: Lazy&lt;NestedFieldRef&gt; = Lazy::new(|| {
 <a href=#226 id=226 data-nosnippet>226</a>    Arc::new(
-<a href=#227 id=227 data-nosnippet>227</a>        NestedField::required(
+<a href=#227 id=227 data-nosnippet>227</a>        NestedField::optional(
 <a href=#228 id=228 data-nosnippet>228</a>            RESERVED_FIELD_ID_ROW_ID,
 <a href=#229 id=229 data-nosnippet>229</a>            RESERVED_COL_NAME_ROW_ID,
 <a href=#230 id=230 data-nosnippet>230</a>            Type::Primitive(PrimitiveType::Long),
@@ -237,7 +237,7 @@
 <a href=#237 id=237 data-nosnippet>237</a>/// This field represents the sequence number which last updated this row.
 <a href=#238 id=238 data-nosnippet>238</a></span><span class="kw">static </span>LAST_UPDATED_SEQUENCE_NUMBER_FIELD: Lazy&lt;NestedFieldRef&gt; = Lazy::new(|| {
 <a href=#239 id=239 data-nosnippet>239</a>    Arc::new(
-<a href=#240 id=240 data-nosnippet>240</a>        NestedField::required(
+<a href=#240 id=240 data-nosnippet>240</a>        NestedField::optional(
 <a href=#241 id=241 data-nosnippet>241</a>            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
 <a href=#242 id=242 data-nosnippet>242</a>            RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
 <a href=#243 id=243 data-nosnippet>243</a>            Type::Primitive(PrimitiveType::Long),
@@ -602,79 +602,88 @@
 <a href=#602 id=602 data-nosnippet>602</a>    }
 <a href=#603 id=603 data-nosnippet>603</a>
 <a href=#604 id=604 data-nosnippet>604</a>    <span class="attr">#[test]
-<a href=#605 id=605 data-nosnippet>605</a>    </span><span class="kw">fn </span>test_data_table_metadata_columns() {
-<a href=#606 id=606 data-nosnippet>606</a>        <span class="comment">// Both sides of the data-table metadata check (name and field id) must accept
-<a href=#607 id=607 data-nosnippet>607</a>        // these seven columns. On the name side Java keeps six in `META_COLUMNS` and
-<a href=#608 id=608 data-nosnippet>608</a>        // recognizes `_partition` via the `isMetadataColumn(String)` special case; on the
-<a href=#609 id=609 data-nosnippet>609</a>        // id side all seven are in `META_IDS`.
-<a href=#610 id=610 data-nosnippet>610</a>        </span><span class="macro">assert!</span>(is_metadata_column_name(RESERVED_COL_NAME_FILE));
-<a href=#611 id=611 data-nosnippet>611</a>        <span class="macro">assert!</span>(is_metadata_column_name(RESERVED_COL_NAME_POS));
-<a href=#612 id=612 data-nosnippet>612</a>        <span class="macro">assert!</span>(is_metadata_column_name(RESERVED_COL_NAME_DELETED));
-<a href=#613 id=613 data-nosnippet>613</a>        <span class="macro">assert!</span>(is_metadata_column_name(RESERVED_COL_NAME_SPEC_ID));
-<a href=#614 id=614 data-nosnippet>614</a>        <span class="macro">assert!</span>(is_metadata_column_name(RESERVED_COL_NAME_PARTITION));
-<a href=#615 id=615 data-nosnippet>615</a>        <span class="macro">assert!</span>(is_metadata_column_name(RESERVED_COL_NAME_ROW_ID));
-<a href=#616 id=616 data-nosnippet>616</a>        <span class="macro">assert!</span>(is_metadata_column_name(
-<a href=#617 id=617 data-nosnippet>617</a>            RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER
-<a href=#618 id=618 data-nosnippet>618</a>        ));
-<a href=#619 id=619 data-nosnippet>619</a>
-<a href=#620 id=620 data-nosnippet>620</a>        <span class="macro">assert!</span>(is_metadata_field(RESERVED_FIELD_ID_FILE));
-<a href=#621 id=621 data-nosnippet>621</a>        <span class="macro">assert!</span>(is_metadata_field(RESERVED_FIELD_ID_POS));
-<a href=#622 id=622 data-nosnippet>622</a>        <span class="macro">assert!</span>(is_metadata_field(RESERVED_FIELD_ID_DELETED));
-<a href=#623 id=623 data-nosnippet>623</a>        <span class="macro">assert!</span>(is_metadata_field(RESERVED_FIELD_ID_SPEC_ID));
-<a href=#624 id=624 data-nosnippet>624</a>        <span class="macro">assert!</span>(is_metadata_field(RESERVED_FIELD_ID_PARTITION));
-<a href=#625 id=625 data-nosnippet>625</a>        <span class="macro">assert!</span>(is_metadata_field(RESERVED_FIELD_ID_ROW_ID));
-<a href=#626 id=626 data-nosnippet>626</a>        <span class="macro">assert!</span>(is_metadata_field(
-<a href=#627 id=627 data-nosnippet>627</a>            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER
-<a href=#628 id=628 data-nosnippet>628</a>        ));
-<a href=#629 id=629 data-nosnippet>629</a>    }
-<a href=#630 id=630 data-nosnippet>630</a>
-<a href=#631 id=631 data-nosnippet>631</a>    <span class="attr">#[test]
-<a href=#632 id=632 data-nosnippet>632</a>    </span><span class="kw">fn </span>test_changelog_columns_are_not_data_table_metadata_columns() {
-<a href=#633 id=633 data-nosnippet>633</a>        <span class="comment">// Changelog columns are not in Java's `META_COLUMNS`, so they are not projectable
-<a href=#634 id=634 data-nosnippet>634</a>        // data-table metadata columns (`isMetadataColumn` is false for them).
-<a href=#635 id=635 data-nosnippet>635</a>        </span><span class="macro">assert!</span>(!is_metadata_column_name(RESERVED_COL_NAME_CHANGE_TYPE));
-<a href=#636 id=636 data-nosnippet>636</a>        <span class="macro">assert!</span>(!is_metadata_column_name(RESERVED_COL_NAME_CHANGE_ORDINAL));
-<a href=#637 id=637 data-nosnippet>637</a>        <span class="macro">assert!</span>(!is_metadata_column_name(
-<a href=#638 id=638 data-nosnippet>638</a>            RESERVED_COL_NAME_COMMIT_SNAPSHOT_ID
-<a href=#639 id=639 data-nosnippet>639</a>        ));
-<a href=#640 id=640 data-nosnippet>640</a>        <span class="macro">assert!</span>(!is_metadata_field(RESERVED_FIELD_ID_CHANGE_TYPE));
-<a href=#641 id=641 data-nosnippet>641</a>        <span class="macro">assert!</span>(!is_metadata_field(RESERVED_FIELD_ID_CHANGE_ORDINAL));
-<a href=#642 id=642 data-nosnippet>642</a>        <span class="macro">assert!</span>(!is_metadata_field(RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID));
-<a href=#643 id=643 data-nosnippet>643</a>    }
-<a href=#644 id=644 data-nosnippet>644</a>
-<a href=#645 id=645 data-nosnippet>645</a>    <span class="attr">#[test]
-<a href=#646 id=646 data-nosnippet>646</a>    </span><span class="kw">fn </span>test_delete_file_columns_are_not_data_table_metadata_columns() {
-<a href=#647 id=647 data-nosnippet>647</a>        <span class="comment">// `pos`, `file_path`, and `row` are the internal columns of a position-delete file,
-<a href=#648 id=648 data-nosnippet>648</a>        // not projectable metadata columns of a data table. They must not shadow real data
-<a href=#649 id=649 data-nosnippet>649</a>        // columns of the same name during a scan (issue #2837). Java returns false for both
-<a href=#650 id=650 data-nosnippet>650</a>        // their names and their field ids; mirror that on both sides here.
-<a href=#651 id=651 data-nosnippet>651</a>        </span><span class="macro">assert!</span>(!is_metadata_column_name(<span class="string">"pos"</span>));
-<a href=#652 id=652 data-nosnippet>652</a>        <span class="macro">assert!</span>(!is_metadata_column_name(<span class="string">"file_path"</span>));
-<a href=#653 id=653 data-nosnippet>653</a>        <span class="macro">assert!</span>(!is_metadata_column_name(<span class="string">"row"</span>));
-<a href=#654 id=654 data-nosnippet>654</a>        <span class="macro">assert!</span>(!is_metadata_field(RESERVED_FIELD_ID_DELETE_FILE_POS));
-<a href=#655 id=655 data-nosnippet>655</a>        <span class="macro">assert!</span>(!is_metadata_field(RESERVED_FIELD_ID_DELETE_FILE_PATH));
-<a href=#656 id=656 data-nosnippet>656</a>        <span class="comment">// `row` (Java's DELETE_FILE_ROW_FIELD_ID, i32::MAX - 103) has no reserved id in
-<a href=#657 id=657 data-nosnippet>657</a>        // this crate, so it is not a metadata field either.
-<a href=#658 id=658 data-nosnippet>658</a>        </span><span class="macro">assert!</span>(!is_metadata_field(i32::MAX - <span class="number">103</span>));
-<a href=#659 id=659 data-nosnippet>659</a>
-<a href=#660 id=660 data-nosnippet>660</a>        <span class="comment">// `get_metadata_field_id` intentionally still maps the two bare names it knows to
-<a href=#661 id=661 data-nosnippet>661</a>        // their reserved field ids; only the data-table membership check excludes them.
-<a href=#662 id=662 data-nosnippet>662</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#663 id=663 data-nosnippet>663</a>            get_metadata_field_id(RESERVED_COL_NAME_DELETE_FILE_POS).unwrap(),
-<a href=#664 id=664 data-nosnippet>664</a>            RESERVED_FIELD_ID_DELETE_FILE_POS
-<a href=#665 id=665 data-nosnippet>665</a>        );
-<a href=#666 id=666 data-nosnippet>666</a>        <span class="macro">assert_eq!</span>(
-<a href=#667 id=667 data-nosnippet>667</a>            get_metadata_field_id(RESERVED_COL_NAME_DELETE_FILE_PATH).unwrap(),
-<a href=#668 id=668 data-nosnippet>668</a>            RESERVED_FIELD_ID_DELETE_FILE_PATH
-<a href=#669 id=669 data-nosnippet>669</a>        );
-<a href=#670 id=670 data-nosnippet>670</a>    }
-<a href=#671 id=671 data-nosnippet>671</a>
-<a href=#672 id=672 data-nosnippet>672</a>    <span class="attr">#[test]
-<a href=#673 id=673 data-nosnippet>673</a>    </span><span class="kw">fn </span>test_ordinary_data_column_names_are_not_metadata_columns() {
-<a href=#674 id=674 data-nosnippet>674</a>        <span class="macro">assert!</span>(!is_metadata_column_name(<span class="string">"id"</span>));
-<a href=#675 id=675 data-nosnippet>675</a>        <span class="macro">assert!</span>(!is_metadata_column_name(<span class="string">"name"</span>));
-<a href=#676 id=676 data-nosnippet>676</a>        <span class="comment">// A user column that merely starts with an underscore but is not reserved.
-<a href=#677 id=677 data-nosnippet>677</a>        </span><span class="macro">assert!</span>(!is_metadata_column_name(<span class="string">"_custom"</span>));
-<a href=#678 id=678 data-nosnippet>678</a>    }
-<a href=#679 id=679 data-nosnippet>679</a>}
+<a href=#605 id=605 data-nosnippet>605</a>    </span><span class="kw">fn </span>test_row_lineage_metadata_fields_are_optional() {
+<a href=#606 id=606 data-nosnippet>606</a>        <span class="comment">// The spec requires readers to produce null for these columns in
+<a href=#607 id=607 data-nosnippet>607</a>        // legitimate cases (e.g. a data file with a null first_row_id), so the
+<a href=#608 id=608 data-nosnippet>608</a>        // fields must be optional rather than required.
+<a href=#609 id=609 data-nosnippet>609</a>        </span><span class="macro">assert!</span>(!row_id_field().required);
+<a href=#610 id=610 data-nosnippet>610</a>        <span class="macro">assert!</span>(!last_updated_sequence_number_field().required);
+<a href=#611 id=611 data-nosnippet>611</a>    }
+<a href=#612 id=612 data-nosnippet>612</a>
+<a href=#613 id=613 data-nosnippet>613</a>    <span class="attr">#[test]
+<a href=#614 id=614 data-nosnippet>614</a>    </span><span class="kw">fn </span>test_data_table_metadata_columns() {
+<a href=#615 id=615 data-nosnippet>615</a>        <span class="comment">// Both sides of the data-table metadata check (name and field id) must accept
+<a href=#616 id=616 data-nosnippet>616</a>        // these seven columns. On the name side Java keeps six in `META_COLUMNS` and
+<a href=#617 id=617 data-nosnippet>617</a>        // recognizes `_partition` via the `isMetadataColumn(String)` special case; on the
+<a href=#618 id=618 data-nosnippet>618</a>        // id side all seven are in `META_IDS`.
+<a href=#619 id=619 data-nosnippet>619</a>        </span><span class="macro">assert!</span>(is_metadata_column_name(RESERVED_COL_NAME_FILE));
+<a href=#620 id=620 data-nosnippet>620</a>        <span class="macro">assert!</span>(is_metadata_column_name(RESERVED_COL_NAME_POS));
+<a href=#621 id=621 data-nosnippet>621</a>        <span class="macro">assert!</span>(is_metadata_column_name(RESERVED_COL_NAME_DELETED));
+<a href=#622 id=622 data-nosnippet>622</a>        <span class="macro">assert!</span>(is_metadata_column_name(RESERVED_COL_NAME_SPEC_ID));
+<a href=#623 id=623 data-nosnippet>623</a>        <span class="macro">assert!</span>(is_metadata_column_name(RESERVED_COL_NAME_PARTITION));
+<a href=#624 id=624 data-nosnippet>624</a>        <span class="macro">assert!</span>(is_metadata_column_name(RESERVED_COL_NAME_ROW_ID));
+<a href=#625 id=625 data-nosnippet>625</a>        <span class="macro">assert!</span>(is_metadata_column_name(
+<a href=#626 id=626 data-nosnippet>626</a>            RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER
+<a href=#627 id=627 data-nosnippet>627</a>        ));
+<a href=#628 id=628 data-nosnippet>628</a>
+<a href=#629 id=629 data-nosnippet>629</a>        <span class="macro">assert!</span>(is_metadata_field(RESERVED_FIELD_ID_FILE));
+<a href=#630 id=630 data-nosnippet>630</a>        <span class="macro">assert!</span>(is_metadata_field(RESERVED_FIELD_ID_POS));
+<a href=#631 id=631 data-nosnippet>631</a>        <span class="macro">assert!</span>(is_metadata_field(RESERVED_FIELD_ID_DELETED));
+<a href=#632 id=632 data-nosnippet>632</a>        <span class="macro">assert!</span>(is_metadata_field(RESERVED_FIELD_ID_SPEC_ID));
+<a href=#633 id=633 data-nosnippet>633</a>        <span class="macro">assert!</span>(is_metadata_field(RESERVED_FIELD_ID_PARTITION));
+<a href=#634 id=634 data-nosnippet>634</a>        <span class="macro">assert!</span>(is_metadata_field(RESERVED_FIELD_ID_ROW_ID));
+<a href=#635 id=635 data-nosnippet>635</a>        <span class="macro">assert!</span>(is_metadata_field(
+<a href=#636 id=636 data-nosnippet>636</a>            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER
+<a href=#637 id=637 data-nosnippet>637</a>        ));
+<a href=#638 id=638 data-nosnippet>638</a>    }
+<a href=#639 id=639 data-nosnippet>639</a>
+<a href=#640 id=640 data-nosnippet>640</a>    <span class="attr">#[test]
+<a href=#641 id=641 data-nosnippet>641</a>    </span><span class="kw">fn </span>test_changelog_columns_are_not_data_table_metadata_columns() {
+<a href=#642 id=642 data-nosnippet>642</a>        <span class="comment">// Changelog columns are not in Java's `META_COLUMNS`, so they are not projectable
+<a href=#643 id=643 data-nosnippet>643</a>        // data-table metadata columns (`isMetadataColumn` is false for them).
+<a href=#644 id=644 data-nosnippet>644</a>        </span><span class="macro">assert!</span>(!is_metadata_column_name(RESERVED_COL_NAME_CHANGE_TYPE));
+<a href=#645 id=645 data-nosnippet>645</a>        <span class="macro">assert!</span>(!is_metadata_column_name(RESERVED_COL_NAME_CHANGE_ORDINAL));
+<a href=#646 id=646 data-nosnippet>646</a>        <span class="macro">assert!</span>(!is_metadata_column_name(
+<a href=#647 id=647 data-nosnippet>647</a>            RESERVED_COL_NAME_COMMIT_SNAPSHOT_ID
+<a href=#648 id=648 data-nosnippet>648</a>        ));
+<a href=#649 id=649 data-nosnippet>649</a>        <span class="macro">assert!</span>(!is_metadata_field(RESERVED_FIELD_ID_CHANGE_TYPE));
+<a href=#650 id=650 data-nosnippet>650</a>        <span class="macro">assert!</span>(!is_metadata_field(RESERVED_FIELD_ID_CHANGE_ORDINAL));
+<a href=#651 id=651 data-nosnippet>651</a>        <span class="macro">assert!</span>(!is_metadata_field(RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID));
+<a href=#652 id=652 data-nosnippet>652</a>    }
+<a href=#653 id=653 data-nosnippet>653</a>
+<a href=#654 id=654 data-nosnippet>654</a>    <span class="attr">#[test]
+<a href=#655 id=655 data-nosnippet>655</a>    </span><span class="kw">fn </span>test_delete_file_columns_are_not_data_table_metadata_columns() {
+<a href=#656 id=656 data-nosnippet>656</a>        <span class="comment">// `pos`, `file_path`, and `row` are the internal columns of a position-delete file,
+<a href=#657 id=657 data-nosnippet>657</a>        // not projectable metadata columns of a data table. They must not shadow real data
+<a href=#658 id=658 data-nosnippet>658</a>        // columns of the same name during a scan (issue #2837). Java returns false for both
+<a href=#659 id=659 data-nosnippet>659</a>        // their names and their field ids; mirror that on both sides here.
+<a href=#660 id=660 data-nosnippet>660</a>        </span><span class="macro">assert!</span>(!is_metadata_column_name(<span class="string">"pos"</span>));
+<a href=#661 id=661 data-nosnippet>661</a>        <span class="macro">assert!</span>(!is_metadata_column_name(<span class="string">"file_path"</span>));
+<a href=#662 id=662 data-nosnippet>662</a>        <span class="macro">assert!</span>(!is_metadata_column_name(<span class="string">"row"</span>));
+<a href=#663 id=663 data-nosnippet>663</a>        <span class="macro">assert!</span>(!is_metadata_field(RESERVED_FIELD_ID_DELETE_FILE_POS));
+<a href=#664 id=664 data-nosnippet>664</a>        <span class="macro">assert!</span>(!is_metadata_field(RESERVED_FIELD_ID_DELETE_FILE_PATH));
+<a href=#665 id=665 data-nosnippet>665</a>        <span class="comment">// `row` (Java's DELETE_FILE_ROW_FIELD_ID, i32::MAX - 103) has no reserved id in
+<a href=#666 id=666 data-nosnippet>666</a>        // this crate, so it is not a metadata field either.
+<a href=#667 id=667 data-nosnippet>667</a>        </span><span class="macro">assert!</span>(!is_metadata_field(i32::MAX - <span class="number">103</span>));
+<a href=#668 id=668 data-nosnippet>668</a>
+<a href=#669 id=669 data-nosnippet>669</a>        <span class="comment">// `get_metadata_field_id` intentionally still maps the two bare names it knows to
+<a href=#670 id=670 data-nosnippet>670</a>        // their reserved field ids; only the data-table membership check excludes them.
+<a href=#671 id=671 data-nosnippet>671</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#672 id=672 data-nosnippet>672</a>            get_metadata_field_id(RESERVED_COL_NAME_DELETE_FILE_POS).unwrap(),
+<a href=#673 id=673 data-nosnippet>673</a>            RESERVED_FIELD_ID_DELETE_FILE_POS
+<a href=#674 id=674 data-nosnippet>674</a>        );
+<a href=#675 id=675 data-nosnippet>675</a>        <span class="macro">assert_eq!</span>(
+<a href=#676 id=676 data-nosnippet>676</a>            get_metadata_field_id(RESERVED_COL_NAME_DELETE_FILE_PATH).unwrap(),
+<a href=#677 id=677 data-nosnippet>677</a>            RESERVED_FIELD_ID_DELETE_FILE_PATH
+<a href=#678 id=678 data-nosnippet>678</a>        );
+<a href=#679 id=679 data-nosnippet>679</a>    }
+<a href=#680 id=680 data-nosnippet>680</a>
+<a href=#681 id=681 data-nosnippet>681</a>    <span class="attr">#[test]
+<a href=#682 id=682 data-nosnippet>682</a>    </span><span class="kw">fn </span>test_ordinary_data_column_names_are_not_metadata_columns() {
+<a href=#683 id=683 data-nosnippet>683</a>        <span class="macro">assert!</span>(!is_metadata_column_name(<span class="string">"id"</span>));
+<a href=#684 id=684 data-nosnippet>684</a>        <span class="macro">assert!</span>(!is_metadata_column_name(<span class="string">"name"</span>));
+<a href=#685 id=685 data-nosnippet>685</a>        <span class="comment">// A user column that merely starts with an underscore but is not reserved.
+<a href=#686 id=686 data-nosnippet>686</a>        </span><span class="macro">assert!</span>(!is_metadata_column_name(<span class="string">"_custom"</span>));
+<a href=#687 id=687 data-nosnippet>687</a>    }
+<a href=#688 id=688 data-nosnippet>688</a>}
 </code></pre></div></section></main></body></html>
