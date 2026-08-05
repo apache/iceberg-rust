@@ -22,6 +22,7 @@ use iceberg_property_macro::Properties;
 const RETRIES: &str = "commit.retry.num-retries";
 const OWNER: &str = "owner";
 const FORMAT: &str = "write.format.default";
+const FANOUT_ENABLED: &str = "write.fanout.enabled";
 const COLUMN_FPP_PREFIX: &str = "write.parquet.bloom-filter-fpp.column.";
 const WIDTH: &str = "dimensions.width";
 const HEIGHT: &str = "dimensions.height";
@@ -68,6 +69,10 @@ struct TestProperties {
     #[default("parquet")]
     pub format: String,
 
+    #[key(FANOUT_ENABLED)]
+    #[default(true)]
+    pub fanout_enabled: bool,
+
     #[prefix(COLUMN_FPP_PREFIX)]
     #[default(HashMap::new())]
     pub column_fpp: HashMap<String, f64>,
@@ -93,6 +98,7 @@ fn generates_defaults_and_serde_for_public_fields() {
         retries: 8,
         owner: Some("iceberg".to_string()),
         format: "orc".to_string(),
+        fanout_enabled: false,
         column_fpp: HashMap::from([("id".to_string(), 0.01)]),
         dimensions: (1920, 1080),
     };
@@ -100,6 +106,7 @@ fn generates_defaults_and_serde_for_public_fields() {
     assert_eq!(properties.retries, 8);
     assert_eq!(properties.owner, Some("iceberg".to_string()));
     assert_eq!(properties.format, "orc");
+    assert!(!properties.fanout_enabled);
     assert_eq!(properties.column_fpp["id"], 0.01);
     assert_eq!(properties.dimensions, (1920, 1080));
 
@@ -107,14 +114,18 @@ fn generates_defaults_and_serde_for_public_fields() {
     assert_eq!(json[RETRIES], "8");
     assert_eq!(json[OWNER], "iceberg");
     assert_eq!(json[FORMAT], "orc");
+    assert_eq!(json[FANOUT_ENABLED], "false");
     assert_eq!(json[format!("{COLUMN_FPP_PREFIX}id")], "0.01");
     assert_eq!(json[WIDTH], "1920");
     assert_eq!(json[HEIGHT], "1080");
 
+    let mut json = json;
+    json[FANOUT_ENABLED] = "FALSE".into();
     let decoded: TestProperties = serde_json::from_value(json).unwrap();
     assert_eq!(decoded.retries, 8);
     assert_eq!(decoded.owner, Some("iceberg".to_string()));
     assert_eq!(decoded.format, "orc");
+    assert!(!decoded.fanout_enabled);
     assert_eq!(decoded.column_fpp["id"], 0.01);
     assert_eq!(decoded.dimensions, (1920, 1080));
 }

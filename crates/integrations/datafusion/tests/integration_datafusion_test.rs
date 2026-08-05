@@ -173,6 +173,7 @@ async fn test_provider_list_table_names() -> Result<()> {
             "my_table",
             "my_table$snapshots",
             "my_table$manifests",
+            "my_table$history",
         ]
     "#]]
     .assert_debug_eq(&result);

@@ -57,6 +57,7 @@ expect-test = { workspace = true }
 fastnum = { workspace = true }
 flate2 = { workspace = true }
 fnv = { workspace = true }
+form_urlencoded = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 iceberg-property-macro = { version = "0.10.0", path = "../property-macro" }

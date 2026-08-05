@@ -54,7 +54,8 @@ use syn::{
 /// Optional fields are omitted from JSON when they are `None`. Fields need `FromStr` and `ToString`
 /// unless the relevant custom parsing or serialization attribute is supplied. Leaf fields also
 /// need `PartialEq` so values equal to their defaults can be omitted from JSON. String-literal and
-/// path defaults are converted into their field type with `Into`.
+/// path defaults are converted into their field type with `Into`. Boolean property values are
+/// parsed case-insensitively.
 #[proc_macro_derive(
     Properties,
     attributes(
@@ -384,13 +385,18 @@ fn parse_field(field: &PropertyField) -> TokenStream2 {
             .map_value_type
             .as_ref()
             .expect("prefix fields are validated as maps");
+        let parse = if is_bool(value_type) {
+            quote!(value.to_ascii_lowercase().parse::<#value_type>())
+        } else {
+            quote!(value.parse::<#value_type>())
+        };
         return quote! {
             #ident: {
                 let parsed = properties
                     .iter()
                     .filter_map(|(key, value)| {
                         key.strip_prefix(#prefix).map(|suffix| {
-                            value.parse::<#value_type>()
+                            #parse
                                 .map(|parsed| (suffix.to_string(), parsed))
                                 .map_err(|error| format!("Invalid value for {key}: {error}"))
                         })
@@ -416,10 +422,20 @@ fn parse_field(field: &PropertyField) -> TokenStream2 {
                 format!("Invalid value for {}: {error}", #key)
             })?
         },
+        (None, Some(inner_type)) if is_bool(inner_type) => quote! {
+            Some(value.to_ascii_lowercase().parse::<#inner_type>().map_err(|error| {
+                format!("Invalid value for {}: {error}", #key)
+            })?)
+        },
         (None, Some(inner_type)) => quote! {
             Some(value.parse::<#inner_type>().map_err(|error| {
                 format!("Invalid value for {}: {error}", #key)
             })?)
+        },
+        (None, None) if is_bool(ty) => quote! {
+            value.to_ascii_lowercase().parse::<#ty>().map_err(|error| {
+                format!("Invalid value for {}: {error}", #key)
+            })?
         },
         (None, None) => quote! {
             value.parse::<#ty>().map_err(|error| {
@@ -488,6 +504,18 @@ fn map_value_type(ty: &Type) -> Option<Type> {
     };
 
     Some(value_type.clone())
+}
+
+fn is_bool(ty: &Type) -> bool {
+    let Type::Path(type_path) = ty else {
+        return false;
+    };
+
+    type_path
+        .path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "bool")
 }
 
 fn write_field(field: &PropertyField) -> TokenStream2 {

@@ -34,6 +34,7 @@ use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
     apply_name_mapping_to_arrow_schema,
 };
+use crate::arrow::build_partition_constant;
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::int96::coerce_int96_timestamps;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
@@ -42,11 +43,11 @@ use crate::encryption::StandardKeyMetadata;
 use crate::error::Result;
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::metadata_columns::{
-    RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_POS,
-    RESERVED_FIELD_ID_SPEC_ID, is_metadata_field,
+    RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_PARTITION,
+    RESERVED_FIELD_ID_POS, RESERVED_FIELD_ID_SPEC_ID, is_metadata_field,
 };
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-use crate::spec::Datum;
+use crate::spec::{Datum, PartitionSpec, Struct};
 use crate::{Error, ErrorKind};
 
 impl ArrowReader {
@@ -309,6 +310,35 @@ impl FileScanTaskReader {
         if project_pos {
             record_batch_transformer_builder =
                 record_batch_transformer_builder.with_virtual_field(RESERVED_FIELD_ID_POS);
+        }
+
+        // Add the _partition metadata struct column if it's in the projected fields.
+        // Computed lazily here at read time from the unified partition type + task's spec + data.
+        if task
+            .project_field_ids()
+            .contains(&RESERVED_FIELD_ID_PARTITION)
+            && let Some(unified_type) = &task.unified_partition_type
+        {
+            let (spec, partition_data) = match (&task.partition_spec, &task.partition) {
+                (Some(spec), Some(data)) => (spec.clone(), data.clone()),
+                // A missing spec/data is only acceptable when there are no partition
+                // fields to fill (unpartitioned table). If the unified type has fields
+                // but we lack a spec or data, the task is inconsistent and we cannot
+                // build the _partition column.
+                _ if unified_type.fields().is_empty() => {
+                    (Arc::new(PartitionSpec::unpartition_spec()), Struct::empty())
+                }
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::Unexpected,
+                        "cannot build _partition column: unified partition type has fields \
+                         but the scan task is missing its partition spec or data",
+                    ));
+                }
+            };
+            let constant = build_partition_constant(unified_type, &spec, &partition_data)?;
+            record_batch_transformer_builder =
+                record_batch_transformer_builder.with_partition_constant(constant);
         }
 
         let mut record_batch_transformer = record_batch_transformer_builder.build();
@@ -737,9 +767,10 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_read_encrypted_parquet() {
-        let encryption_key = b"0123456789abcdef";
+    /// Writes a single-column Parquet file encrypted with `encryption_key`, then reads it
+    /// back through `ArrowReader` and asserts the round-tripped values. The key length
+    /// selects the AES-GCM variant in arrow-rs (16 -> AES-128, 32 -> AES-256).
+    async fn assert_encrypted_parquet_roundtrip(encryption_key: &[u8]) {
         let aad_prefix = b"aad_prefix";
 
         let schema = Arc::new(
@@ -805,6 +836,16 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .unwrap();
         assert_eq!(ids.values(), &[10, 20, 30]);
+    }
+
+    #[tokio::test]
+    async fn test_read_encrypted_parquet_aes_128() {
+        assert_encrypted_parquet_roundtrip(b"0123456789abcdef").await;
+    }
+
+    #[tokio::test]
+    async fn test_read_encrypted_parquet_aes_256() {
+        assert_encrypted_parquet_roundtrip(b"0123456789abcdef0123456789abcdef").await;
     }
 
     #[tokio::test]

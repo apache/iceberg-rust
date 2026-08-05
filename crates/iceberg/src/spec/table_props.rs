@@ -980,6 +980,7 @@ mod tests {
             "write.manifest.compression-level": "8",
             "write.parquet.compression-level": "5",
             "write.distribution-mode": "HASH",
+            "write.object-storage.partitioned-paths": "FALSE",
             "write.orc.bloom.filter.columns": "id, category",
             "write.parquet.bloom-filter-ndv.column.customer_id": "1000000",
             "schema.name-mapping.default": r#"[{"field-id":1,"names":["id"]}]"#,
@@ -996,6 +997,7 @@ mod tests {
             Some("s3://warehouse/table/data".to_string())
         );
         assert_eq!(properties.write_distribution_mode, DistributionMode::Hash);
+        assert!(!properties.write_object_storage_partitioned_paths);
         assert_eq!(
             properties.write_manifest_compression_codec,
             CompressionCodec::Gzip(8)
