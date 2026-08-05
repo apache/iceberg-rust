@@ -17,7 +17,7 @@
 
 //! The module contains the file writer for parquet file format.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_schema::SchemaRef as ArrowSchemaRef;
@@ -28,7 +28,7 @@ use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::{CdcOptions, WriterProperties};
+use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics;
 
 use super::{FileWriter, FileWriterBuilder};
@@ -39,8 +39,8 @@ use crate::arrow::{
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
-    NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
-    StructType, TableMetadata, TableProperties, Type, VariantType, visit_schema,
+    NestedFieldRef, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema, SchemaRef,
+    SchemaVisitor, Struct, StructType, TableMetadata, Type, visit_schema,
 };
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
@@ -57,10 +57,6 @@ pub struct ParquetWriterBuilder {
 impl ParquetWriterBuilder {
     /// Create a new `ParquetWriterBuilder`
     /// To construct the write result, the schema should contain the `PARQUET_FIELD_ID_META_KEY` metadata for each field.
-    ///
-    /// When writing into an existing Iceberg table, prefer
-    /// [`Self::from_table_properties`], which derives `WriterProperties` from
-    /// the table's `write.parquet.*` properties.
     pub fn new(props: WriterProperties, schema: SchemaRef) -> Self {
         Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
     }
@@ -76,37 +72,6 @@ impl ParquetWriterBuilder {
             schema,
             match_mode,
         }
-    }
-
-    /// Build a `ParquetWriterBuilder` from Iceberg table properties and a
-    /// schema, translating `write.parquet.*` settings into `WriterProperties`
-    /// instead of using parquet-rs defaults.
-    ///
-    /// Currently translates the content-defined-chunking keys
-    /// (`write.parquet.content-defined-chunking.*`); other keys fall back to
-    /// parquet-rs defaults.
-    pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Self {
-        let cdc = table_props.cdc_enabled.then_some(CdcOptions {
-            min_chunk_size: table_props.cdc_min_chunk_size,
-            max_chunk_size: table_props.cdc_max_chunk_size,
-            norm_level: table_props.cdc_norm_level,
-        });
-        // TODO: translate the remaining write.parquet.* keys (e.g. compression-codec,
-        // row-group-size-bytes, page-size-bytes).
-        // This constructor is intended to be the single place that maps them.
-        let props = WriterProperties::builder()
-            .set_content_defined_chunking(cdc)
-            .build();
-        Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
-    }
-
-    /// Set the field match mode used to map Arrow fields to Iceberg fields.
-    ///
-    /// Defaults to [`FieldMatchMode::Id`]. Use [`FieldMatchMode::Name`] when the
-    /// incoming Arrow schema does not carry Iceberg field-id metadata.
-    pub fn with_match_mode(mut self, match_mode: FieldMatchMode) -> Self {
-        self.match_mode = match_mode;
-        self
     }
 }
 
@@ -241,13 +206,6 @@ impl SchemaVisitor for IndexByParquetPathName {
 
         Ok(())
     }
-
-    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Writing variant columns to Parquet is not supported yet",
-        ))
-    }
 }
 
 /// `ParquetWriter`` is used to write arrow data into parquet file on storage.
@@ -260,10 +218,130 @@ pub struct ParquetWriter {
     nan_value_count_visitor: NanValueCountVisitor,
 }
 
+/// Default Iceberg manifest bound truncation length, matching Java's
+/// `MetricsModes.Truncate(16)` default for STRING and the conventional
+/// 16-byte truncation for BINARY/FIXED.
+const ICEBERG_BOUND_TRUNCATE_LENGTH: usize = 16;
+
+/// Returns a string of at most `length` Unicode code points that is `<= input`.
+/// Mirrors `org.apache.iceberg.util.UnicodeUtil#truncateStringMin`.
+fn truncate_string_min(input: &str, length: usize) -> String {
+    match input.char_indices().nth(length) {
+        Some((byte_offset, _)) => input[..byte_offset].to_string(),
+        None => input.to_string(),
+    }
+}
+
+/// Returns a string of at most `length` Unicode code points that is `> input`,
+/// or `None` when no such bound exists (e.g. all `length` leading code points
+/// are `char::MAX`). Mirrors `org.apache.iceberg.util.UnicodeUtil#truncateStringMax`.
+///
+/// Note: when the last codepoint of the truncated prefix is `U+D7FF`, this
+/// implementation increments to `U+E000` (skipping the UTF-16 surrogate gap)
+/// because Rust strings cannot hold surrogates. Java's `incrementCodePoint`
+/// performs the same jump, so the produced bound matches Java for any input
+/// that itself contains no surrogates — i.e. every valid `&str`.
+fn truncate_string_max(input: &str, length: usize) -> Option<String> {
+    let mut prefix: Vec<char> = input.chars().take(length + 1).collect();
+    if prefix.len() <= length {
+        return Some(input.to_string());
+    }
+    prefix.truncate(length);
+    for i in (0..prefix.len()).rev() {
+        let mut next_cp = prefix[i] as u32 + 1;
+        while next_cp <= 0x10FFFF {
+            if let Some(c) = char::from_u32(next_cp) {
+                prefix[i] = c;
+                return Some(prefix.into_iter().take(i + 1).collect());
+            }
+            next_cp += 1;
+        }
+    }
+    None
+}
+
+/// Returns at most `length` bytes of `input` (a valid lower bound).
+/// Mirrors `org.apache.iceberg.util.BinaryUtil#truncateBinaryMin`.
+fn truncate_binary_min(input: &[u8], length: usize) -> Vec<u8> {
+    if input.len() <= length {
+        input.to_vec()
+    } else {
+        input[..length].to_vec()
+    }
+}
+
+/// Returns at most `length` bytes that compare strictly greater than `input`,
+/// or `None` when the leading `length` bytes are all `0xFF`.
+/// Mirrors `org.apache.iceberg.util.BinaryUtil#truncateBinaryMax`.
+fn truncate_binary_max(input: &[u8], length: usize) -> Option<Vec<u8>> {
+    if input.len() <= length {
+        return Some(input.to_vec());
+    }
+    let mut prefix = input[..length].to_vec();
+    for i in (0..prefix.len()).rev() {
+        if prefix[i] != u8::MAX {
+            prefix[i] += 1;
+            prefix.truncate(i + 1);
+            return Some(prefix);
+        }
+    }
+    None
+}
+
+/// Apply Iceberg manifest truncation for STRING/BINARY/FIXED lower bounds.
+/// Other primitive types are returned unchanged.
+///
+/// For `Fixed(N)`, the produced `Datum` keeps the column's declared type even
+/// when the byte length shrinks, so the in-memory bound continues to satisfy
+/// the schema (`Datum::fixed(bytes)` would re-type as `Fixed(bytes.len())`).
+fn truncate_lower_bound(ty: &PrimitiveType, datum: Datum) -> Datum {
+    match (ty, datum.literal()) {
+        (PrimitiveType::String, PrimitiveLiteral::String(s)) => {
+            Datum::string(truncate_string_min(s, ICEBERG_BOUND_TRUNCATE_LENGTH))
+        }
+        (PrimitiveType::Binary, PrimitiveLiteral::Binary(bytes)) => {
+            Datum::binary(truncate_binary_min(bytes, ICEBERG_BOUND_TRUNCATE_LENGTH))
+        }
+        (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(bytes)) => Datum::new(
+            ty.clone(),
+            PrimitiveLiteral::Binary(truncate_binary_min(bytes, ICEBERG_BOUND_TRUNCATE_LENGTH)),
+        ),
+        _ => datum,
+    }
+}
+
+/// Apply Iceberg manifest truncation for STRING/BINARY/FIXED upper bounds.
+/// Returns `None` only for STRING/BINARY/FIXED inputs whose truncated prefix
+/// cannot be incremented (no valid upper bound at the truncate length).
+///
+/// For `Fixed(N)`, the produced `Datum` keeps the column's declared type even
+/// when the byte length shrinks; see [`truncate_lower_bound`] for rationale.
+fn truncate_upper_bound(ty: &PrimitiveType, datum: Datum) -> Option<Datum> {
+    match (ty, datum.literal()) {
+        (PrimitiveType::String, PrimitiveLiteral::String(s)) => {
+            truncate_string_max(s, ICEBERG_BOUND_TRUNCATE_LENGTH).map(Datum::string)
+        }
+        (PrimitiveType::Binary, PrimitiveLiteral::Binary(bytes)) => {
+            truncate_binary_max(bytes, ICEBERG_BOUND_TRUNCATE_LENGTH).map(Datum::binary)
+        }
+        (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(bytes)) => {
+            truncate_binary_max(bytes, ICEBERG_BOUND_TRUNCATE_LENGTH)
+                .map(|truncated| Datum::new(ty.clone(), PrimitiveLiteral::Binary(truncated)))
+        }
+        _ => Some(datum),
+    }
+}
+
 /// Used to aggregate min and max value of each column.
 struct MinMaxColAggregator {
     lower_bounds: HashMap<i32, Datum>,
     upper_bounds: HashMap<i32, Datum>,
+    /// Fields whose upper bound was unboundable (truncate-and-increment
+    /// returned `None`) for at least one row group. The contributing row
+    /// group's true max may exceed any partial upper bound aggregated from
+    /// earlier row groups, so we drop the column's upper bound entirely
+    /// rather than emit one that could be `< true_max`.
+    upper_unbounded: HashSet<i32>,
     schema: SchemaRef,
 }
 
@@ -273,6 +351,7 @@ impl MinMaxColAggregator {
         Self {
             lower_bounds: HashMap::new(),
             upper_bounds: HashMap::new(),
+            upper_unbounded: HashSet::new(),
             schema,
         }
     }
@@ -300,6 +379,22 @@ impl MinMaxColAggregator {
     }
 
     /// Update statistics
+    ///
+    /// Java's `ParquetUtil#updateMin/updateMax` does not consult
+    /// `isMinExact`/`isMaxExact`; it always feeds the parquet-reported value
+    /// through `BinaryUtil`/`UnicodeUtil` truncation (gated only on
+    /// `hasNonNullValue`). We mirror that by using `min_bytes_opt`/
+    /// `max_bytes_opt` to detect presence and re-truncating to the Iceberg
+    /// manifest bound length. A parquet-prefix-truncated min is still
+    /// `<=` every value, and a parquet-truncated max is still `>=` every
+    /// value, so the secondary Iceberg truncation is sound.
+    ///
+    /// Note on truncate-then-compare: Java truncates then stores; we truncate
+    /// then min/max-merge across row groups. Both produce identical results
+    /// because prefix truncation is order-preserving (`a <= b` implies
+    /// `truncate_min(a) <= truncate_min(b)` and `truncate_max(a) <=
+    /// truncate_max(b)`), so merging truncated values is equivalent to
+    /// truncating the merged value.
     fn update(&mut self, field_id: i32, value: Statistics) -> Result<()> {
         let Some(ty) = self
             .schema
@@ -317,26 +412,38 @@ impl MinMaxColAggregator {
             ));
         };
 
-        if value.min_is_exact() {
+        if value.min_bytes_opt().is_some() {
             let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, &value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("Statistics {value} is not match with field type {ty}."),
                 ));
             };
-
-            self.update_state_min(field_id, min_datum);
+            self.update_state_min(field_id, truncate_lower_bound(&ty, min_datum));
         }
 
-        if value.max_is_exact() {
+        if value.max_bytes_opt().is_some() {
             let Some(max_datum) = get_parquet_stat_max_as_datum(&ty, &value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("Statistics {value} is not match with field type {ty}."),
                 ));
             };
-
-            self.update_state_max(field_id, max_datum);
+            match truncate_upper_bound(&ty, max_datum) {
+                Some(truncated) if !self.upper_unbounded.contains(&field_id) => {
+                    self.update_state_max(field_id, truncated);
+                }
+                Some(_) => {
+                    // Field already marked unbounded; ignore further upper updates.
+                }
+                None => {
+                    // No representable upper bound for this row group's max;
+                    // drop the column's aggregated upper bound entirely so we
+                    // never emit a bound that is `< true_max`.
+                    self.upper_bounds.remove(&field_id);
+                    self.upper_unbounded.insert(field_id);
+                }
+            }
         }
 
         Ok(())
@@ -829,21 +936,6 @@ mod tests {
         assert_eq!(visitor.name_to_id, expect);
     }
 
-    #[test]
-    fn test_index_by_parquet_path_variant_is_unsupported() {
-        // Writing variant columns to Parquet is not supported yet; indexing a schema that
-        // contains one must error rather than silently miss-map columns.
-        let schema = Schema::builder()
-            .with_fields(vec![
-                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
-            ])
-            .build()
-            .unwrap();
-        let mut visitor = IndexByParquetPathName::new();
-        let err = visit_schema(&schema, &mut visitor).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
-    }
-
     #[tokio::test]
     async fn test_parquet_writer() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
@@ -919,6 +1011,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_parquet_writer_truncates_long_string_bounds() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("s", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "0".to_string(),
+            )])),
+        ]));
+
+        // Strings ≫ 16 codepoints. The smallest sorts to "a..." and the largest
+        // to "z...", so manifest bounds must be 16-codepoint truncations of each.
+        let values = vec![
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmm".to_string(),
+            "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".to_string(),
+        ];
+        let col = Arc::new(arrow_array::StringArray::from(values)) as ArrayRef;
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![col]).unwrap();
+
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
+        let mut pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(arrow_schema.as_ref().try_into().unwrap()),
+        )
+        .build(output_file)
+        .await?;
+        pw.write(&batch).await?;
+        let res = pw.close().await?;
+        let data_file = res
+            .into_iter()
+            .next()
+            .unwrap()
+            .content(DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        let lower = data_file.lower_bounds().get(&0).expect("lower bound set");
+        let upper = data_file.upper_bounds().get(&0).expect("upper bound set");
+
+        // Lower: 16 'a's; Upper: 15 'z's followed by '{' (z+1).
+        assert_eq!(lower, &Datum::string("aaaaaaaaaaaaaaaa"));
+        assert_eq!(upper, &Datum::string("zzzzzzzzzzzzzzz{"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_parquet_writer_with_complex_schema() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIO::new_with_fs();
@@ -950,11 +1100,11 @@ mod tests {
             (0..1024).map(|n| n.to_string()),
         )) as ArrayRef;
         let col3 = Arc::new({
-            let list_parts = ListArray::from_iter_primitive::<Int64Type, _, _>(
+            let list_parts = arrow_array::ListArray::from_iter_primitive::<Int64Type, _, _>(
                 (0..1024).map(|n| Some(vec![Some(n)])),
             )
             .into_parts();
-            ListArray::new(
+            arrow_array::ListArray::new(
                 {
                     if let DataType::List(field) = arrow_schema.field(3).data_type() {
                         field.clone()
@@ -1052,7 +1202,7 @@ mod tests {
                     nulls,
                 )
             };
-            MapArray::new(
+            arrow_array::MapArray::new(
                 {
                     if let DataType::Map(map_field, _) = arrow_schema.field(5).data_type() {
                         map_field.clone()
@@ -1087,7 +1237,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(DataContentType::Data)
+            .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1163,13 +1313,13 @@ mod tests {
         ])) as ArrayRef;
         let col1 = Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(4)])) as ArrayRef;
         let col2 = Arc::new(Int64Array::from(vec![Some(1), Some(2), None, Some(4)])) as ArrayRef;
-        let col3 = Arc::new(Float32Array::from(vec![
+        let col3 = Arc::new(arrow_array::Float32Array::from(vec![
             Some(0.5),
             Some(2.0),
             None,
             Some(3.5),
         ])) as ArrayRef;
-        let col4 = Arc::new(Float64Array::from(vec![
+        let col4 = Arc::new(arrow_array::Float64Array::from(vec![
             Some(0.5),
             Some(2.0),
             None,
@@ -1220,7 +1370,7 @@ mod tests {
                 .with_timezone_utc(),
         ) as ArrayRef;
         let col13 = Arc::new(
-            Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
+            arrow_array::Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
                 .with_precision_and_scale(10, 5)
                 .unwrap(),
         ) as ArrayRef;
@@ -1251,7 +1401,7 @@ mod tests {
             .unwrap(),
         ) as ArrayRef;
         let col16 = Arc::new(
-            Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
+            arrow_array::Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
                 .with_precision_and_scale(38, 5)
                 .unwrap(),
         ) as ArrayRef;
@@ -1277,7 +1427,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(DataContentType::Data)
+            .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1428,7 +1578,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(DataContentType::Data)
+            .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1480,7 +1630,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(DataContentType::Data)
+            .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1541,7 +1691,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(DataContentType::Data)
+            .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1639,13 +1789,11 @@ mod tests {
 
         // Test that file will create if data to write
         let schema = {
-            let fields =
-                vec![
-                    Field::new("col", DataType::Int64, true).with_metadata(HashMap::from([(
-                        PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "0".to_string(),
-                    )])),
-                ];
+            let fields = vec![
+                arrow_schema::Field::new("col", arrow_schema::DataType::Int64, true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "0".to_string())]),
+                ),
+            ];
             Arc::new(arrow_schema::Schema::new(fields))
         };
         let col = Arc::new(Int64Array::from_iter_values(0..1024)) as ArrayRef;
@@ -1692,14 +1840,12 @@ mod tests {
         // prepare data
         let arrow_schema = {
             let fields = vec![
-                Field::new("col", DataType::Float32, false).with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "0".to_string(),
-                )])),
-                Field::new("col2", DataType::Float64, false).with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "1".to_string(),
-                )])),
+                Field::new("col", arrow_schema::DataType::Float32, false).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "0".to_string())]),
+                ),
+                Field::new("col2", arrow_schema::DataType::Float64, false).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+                ),
             ];
             Arc::new(arrow_schema::Schema::new(fields))
         };
@@ -1736,7 +1882,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(DataContentType::Data)
+            .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1796,7 +1942,7 @@ mod tests {
         let schema_struct_nested_fields = Fields::from(vec![
             Field::new(
                 "col6",
-                DataType::Struct(schema_struct_nested_float_fields.clone()),
+                arrow_schema::DataType::Struct(schema_struct_nested_float_fields.clone()),
                 false,
             )
             .with_metadata(HashMap::from([(
@@ -1810,7 +1956,7 @@ mod tests {
             let fields = vec![
                 Field::new(
                     "col3",
-                    DataType::Struct(schema_struct_float_fields.clone()),
+                    arrow_schema::DataType::Struct(schema_struct_float_fields.clone()),
                     false,
                 )
                 .with_metadata(HashMap::from([(
@@ -1819,7 +1965,7 @@ mod tests {
                 )])),
                 Field::new(
                     "col5",
-                    DataType::Struct(schema_struct_nested_fields.clone()),
+                    arrow_schema::DataType::Struct(schema_struct_nested_fields.clone()),
                     false,
                 )
                 .with_metadata(HashMap::from([(
@@ -1876,7 +2022,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(DataContentType::Data)
+            .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -2040,7 +2186,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(DataContentType::Data)
+            .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -2221,7 +2367,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(DataContentType::Data)
+            .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -2339,6 +2485,388 @@ mod tests {
 
         assert_eq!(lower_bounds, HashMap::from([(0, Datum::int(i32::MIN))]));
         assert_eq!(upper_bounds, HashMap::from([(0, Datum::int(i32::MAX))]));
+    }
+
+    fn single_primitive_field_schema(name: &str, ty: PrimitiveType) -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(0, name, Type::Primitive(ty))
+                        .with_id(0)
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn test_truncate_string_min_short_input_unchanged() {
+        // ≤ length code points: returned as-is.
+        assert_eq!(truncate_string_min("abc", 16), "abc");
+        assert_eq!(truncate_string_min("", 16), "");
+        let exactly_16 = "0123456789abcdef";
+        assert_eq!(truncate_string_min(exactly_16, 16), exactly_16);
+    }
+
+    #[test]
+    fn test_truncate_string_min_long_input_truncates_codepoints() {
+        let s = "0123456789abcdefXYZ"; // 19 ASCII
+        assert_eq!(truncate_string_min(s, 16), "0123456789abcdef");
+        // Multi-byte: each Greek letter is 2 UTF-8 bytes but 1 code point.
+        let greek = "α".repeat(20);
+        let truncated = truncate_string_min(&greek, 16);
+        assert_eq!(truncated.chars().count(), 16);
+        assert!(truncated.chars().all(|c| c == 'α'));
+        // 4-byte UTF-8 (emoji) at exact boundary.
+        let emoji_str = "😀".repeat(20);
+        let truncated = truncate_string_min(&emoji_str, 16);
+        assert_eq!(truncated.chars().count(), 16);
+    }
+
+    #[test]
+    fn test_truncate_string_max_short_input_unchanged() {
+        assert_eq!(truncate_string_max("abc", 16), Some("abc".to_string()));
+        let exactly_16 = "0123456789abcdef";
+        assert_eq!(
+            truncate_string_max(exactly_16, 16),
+            Some(exactly_16.to_string())
+        );
+    }
+
+    #[test]
+    fn test_truncate_string_max_long_input_increments_last_codepoint() {
+        // ASCII: last 'f' (0x66) → 'g' (0x67).
+        let s = "0123456789abcdefXYZ";
+        assert_eq!(
+            truncate_string_max(s, 16),
+            Some("0123456789abcdeg".to_string())
+        );
+        // Multi-byte: 'α' (U+03B1) → 'β' (U+03B2).
+        let s = "α".repeat(20);
+        let truncated = truncate_string_max(&s, 4).unwrap();
+        assert_eq!(truncated, "αααβ");
+    }
+
+    #[test]
+    fn test_truncate_string_max_overflow_drops_position() {
+        // Last code point is char::MAX (U+10FFFF). Increment fails → drop and try i-1.
+        let mut s = String::from("ab");
+        s.push(char::MAX);
+        s.push('x');
+        // length=3 code points; input has 4 → triggers truncation.
+        let truncated = truncate_string_max(&s, 3).unwrap();
+        // Position 2 fails to increment; position 1 ('b' → 'c'); result "ac" (length 2).
+        assert_eq!(truncated, "ac");
+    }
+
+    #[test]
+    fn test_truncate_string_max_skips_utf16_surrogates() {
+        // Last code point at U+D7FF; +1 lands on a surrogate (0xD800), which is
+        // not a Rust char. Helper must skip to U+E000 for a valid bound.
+        let mut s = String::from("a");
+        s.push(char::from_u32(0xD7FF).unwrap());
+        s.push('x');
+        let truncated = truncate_string_max(&s, 2).unwrap();
+        assert_eq!(truncated.chars().count(), 2);
+        let last = truncated.chars().nth(1).unwrap() as u32;
+        assert_eq!(last, 0xE000);
+    }
+
+    #[test]
+    fn test_truncate_string_max_all_max_returns_none() {
+        let s: String = std::iter::repeat_n(char::MAX, 20).collect();
+        assert_eq!(truncate_string_max(&s, 16), None);
+    }
+
+    #[test]
+    fn test_truncate_binary_min_short_input_unchanged() {
+        assert_eq!(truncate_binary_min(b"abc", 16), b"abc".to_vec());
+        let exactly_16: Vec<u8> = (0..16).collect();
+        assert_eq!(truncate_binary_min(&exactly_16, 16), exactly_16);
+    }
+
+    #[test]
+    fn test_truncate_binary_min_long_input_truncates() {
+        let bytes: Vec<u8> = (0..32).collect();
+        let truncated = truncate_binary_min(&bytes, 16);
+        assert_eq!(truncated, (0..16).collect::<Vec<u8>>());
+    }
+
+    #[test]
+    fn test_truncate_binary_max_short_input_unchanged() {
+        assert_eq!(truncate_binary_max(b"abc", 16), Some(b"abc".to_vec()));
+    }
+
+    #[test]
+    fn test_truncate_binary_max_long_input_increments_last_byte() {
+        let bytes: Vec<u8> = (0..32).collect();
+        // First 16 bytes are 0..15. Last byte 15 → 16.
+        let mut expected: Vec<u8> = (0..15).collect();
+        expected.push(16);
+        assert_eq!(truncate_binary_max(&bytes, 16), Some(expected));
+    }
+
+    #[test]
+    fn test_truncate_binary_max_drops_trailing_0xff() {
+        let mut bytes = vec![0xFEu8];
+        bytes.extend(std::iter::repeat_n(0xFFu8, 31));
+        // length=16. Prefix is [0xFE, 0xFF, 0xFF, ..., 0xFF].
+        // Walk from i=15 to i=0: positions 15..1 are 0xFF (skip), position 0 is 0xFE → 0xFF.
+        // Result is the 1-byte vec [0xFF].
+        assert_eq!(truncate_binary_max(&bytes, 16), Some(vec![0xFFu8]));
+    }
+
+    #[test]
+    fn test_truncate_binary_max_all_ff_returns_none() {
+        let bytes = vec![0xFFu8; 32];
+        assert_eq!(truncate_binary_max(&bytes, 16), None);
+    }
+
+    #[test]
+    fn test_min_max_aggregator_keeps_inexact_string_stats() {
+        // Regression: previously, inexact (Parquet-truncated) stats were
+        // dropped, leaving long-string columns with no manifest bounds.
+        let schema = single_primitive_field_schema("s", PrimitiveType::String);
+        let mut agg = MinMaxColAggregator::new(schema);
+        let stats = Statistics::ByteArray(
+            ValueStatistics::new(
+                Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaa".as_bytes().into()),
+                Some("zzzzzzzzzzzzzzzzzzzzzzzzzzzz".as_bytes().into()),
+                None,
+                None,
+                false,
+            )
+            .with_min_is_exact(false)
+            .with_max_is_exact(false),
+        );
+        agg.update(0, stats).unwrap();
+        let (lower, upper) = agg.produce();
+        assert_eq!(
+            lower.get(&0),
+            Some(&Datum::string("aaaaaaaaaaaaaaaa")) // 16 'a's
+        );
+        // 'z' (0x7A) → '{' (0x7B); 16 codepoints total.
+        assert_eq!(upper.get(&0), Some(&Datum::string("zzzzzzzzzzzzzzz{")));
+    }
+
+    #[test]
+    fn test_min_max_aggregator_truncates_long_string_bounds() {
+        let schema = single_primitive_field_schema("s", PrimitiveType::String);
+        let mut agg = MinMaxColAggregator::new(schema);
+        // Exact stats but values > 16 codepoints.
+        let stats = Statistics::ByteArray(ValueStatistics::new(
+            Some("0123456789abcdefXYZ".as_bytes().into()),
+            Some("0123456789abcdefXYZ".as_bytes().into()),
+            None,
+            None,
+            false,
+        ));
+        agg.update(0, stats).unwrap();
+        let (lower, upper) = agg.produce();
+        assert_eq!(lower.get(&0), Some(&Datum::string("0123456789abcdef")));
+        assert_eq!(upper.get(&0), Some(&Datum::string("0123456789abcdeg")));
+    }
+
+    #[test]
+    fn test_min_max_aggregator_truncates_long_binary_bounds() {
+        let schema = single_primitive_field_schema("b", PrimitiveType::Binary);
+        let mut agg = MinMaxColAggregator::new(schema);
+        let long: Vec<u8> = (0..32).collect();
+        let stats = Statistics::ByteArray(
+            ValueStatistics::new(
+                Some(long.clone().into()),
+                Some(long.clone().into()),
+                None,
+                None,
+                false,
+            )
+            .with_min_is_exact(false)
+            .with_max_is_exact(false),
+        );
+        agg.update(0, stats).unwrap();
+        let (lower, upper) = agg.produce();
+        assert_eq!(
+            lower.get(&0),
+            Some(&Datum::binary((0..16).collect::<Vec<u8>>()))
+        );
+        let mut expected_upper: Vec<u8> = (0..15).collect();
+        expected_upper.push(16);
+        assert_eq!(upper.get(&0), Some(&Datum::binary(expected_upper)));
+    }
+
+    #[test]
+    fn test_min_max_aggregator_drops_only_upper_when_unboundable() {
+        // String of all char::MAX: lower truncates fine, upper has no valid bound.
+        let schema = single_primitive_field_schema("s", PrimitiveType::String);
+        let mut agg = MinMaxColAggregator::new(schema);
+        let s: String = std::iter::repeat_n(char::MAX, 20).collect();
+        let stats = Statistics::ByteArray(ValueStatistics::new(
+            Some(s.as_bytes().into()),
+            Some(s.as_bytes().into()),
+            None,
+            None,
+            false,
+        ));
+        agg.update(0, stats).unwrap();
+        let (lower, upper) = agg.produce();
+        assert!(lower.contains_key(&0));
+        // No valid 16-codepoint upper bound exists.
+        assert!(!upper.contains_key(&0));
+    }
+
+    #[test]
+    fn test_min_max_aggregator_merges_truncated_strings_across_row_groups() {
+        // Two row groups produce different truncation outputs; aggregator must
+        // pick the lex-min lower and lex-max upper across both.
+        let schema = single_primitive_field_schema("s", PrimitiveType::String);
+        let mut agg = MinMaxColAggregator::new(schema);
+        let stats_a = Statistics::ByteArray(ValueStatistics::new(
+            Some("bbbbbbbbbbbbbbbbXX".as_bytes().into()),
+            Some("yyyyyyyyyyyyyyyyXX".as_bytes().into()),
+            None,
+            None,
+            false,
+        ));
+        let stats_b = Statistics::ByteArray(ValueStatistics::new(
+            Some("aaaaaaaaaaaaaaaaXX".as_bytes().into()),
+            Some("zzzzzzzzzzzzzzzzXX".as_bytes().into()),
+            None,
+            None,
+            false,
+        ));
+        agg.update(0, stats_a).unwrap();
+        agg.update(0, stats_b).unwrap();
+        let (lower, upper) = agg.produce();
+        assert_eq!(lower.get(&0), Some(&Datum::string("aaaaaaaaaaaaaaaa")));
+        assert_eq!(upper.get(&0), Some(&Datum::string("zzzzzzzzzzzzzzz{")));
+    }
+
+    #[test]
+    fn test_min_max_aggregator_drops_upper_after_unbounded_row_group() {
+        // First row group produces a normal upper; second row group's max is
+        // all char::MAX and cannot produce a 16-codepoint upper, which means
+        // the file's true max strictly exceeds anything we could safely emit.
+        // The aggregator must drop the column's upper bound entirely.
+        let schema = single_primitive_field_schema("s", PrimitiveType::String);
+        let mut agg = MinMaxColAggregator::new(schema);
+
+        let stats_a = Statistics::ByteArray(ValueStatistics::new(
+            Some("aaaaaaaaaaaaaaaaXX".as_bytes().into()),
+            Some("yyyyyyyyyyyyyyyyXX".as_bytes().into()),
+            None,
+            None,
+            false,
+        ));
+        let max_string: String = std::iter::repeat_n(char::MAX, 20).collect();
+        let stats_b = Statistics::ByteArray(ValueStatistics::new(
+            Some("aaaaaaaaaaaaaaaaXX".as_bytes().into()),
+            Some(max_string.as_bytes().into()),
+            None,
+            None,
+            false,
+        ));
+        agg.update(0, stats_a).unwrap();
+        agg.update(0, stats_b).unwrap();
+        let (lower, upper) = agg.produce();
+        assert_eq!(lower.get(&0), Some(&Datum::string("aaaaaaaaaaaaaaaa")));
+        assert!(!upper.contains_key(&0));
+
+        // Subsequent row groups with representable maxes must not re-add
+        // the upper bound after it has been declared unbounded.
+        let stats_c = Statistics::ByteArray(ValueStatistics::new(
+            Some("aaaaaaaaaaaaaaaaXX".as_bytes().into()),
+            Some("ccccccccccccccccXX".as_bytes().into()),
+            None,
+            None,
+            false,
+        ));
+        let mut agg =
+            MinMaxColAggregator::new(single_primitive_field_schema("s", PrimitiveType::String));
+        let max_first = Statistics::ByteArray(ValueStatistics::new(
+            Some("aaaaaaaaaaaaaaaaXX".as_bytes().into()),
+            Some(max_string.as_bytes().into()),
+            None,
+            None,
+            false,
+        ));
+        agg.update(0, max_first).unwrap();
+        agg.update(0, stats_c).unwrap();
+        let (_, upper) = agg.produce();
+        assert!(!upper.contains_key(&0));
+    }
+
+    #[test]
+    fn test_truncate_lower_upper_bound_fixed_preserves_declared_type() {
+        // Truncating a Fixed(20) value to 16 bytes must keep PrimitiveType::Fixed(20),
+        // not re-type as Fixed(16).
+        let ty = PrimitiveType::Fixed(20);
+        let input: Vec<u8> = (0..20).collect();
+        let lower = truncate_lower_bound(
+            &ty,
+            Datum::new(ty.clone(), PrimitiveLiteral::Binary(input.clone())),
+        );
+        assert_eq!(lower.data_type(), &ty);
+
+        let upper =
+            truncate_upper_bound(&ty, Datum::new(ty.clone(), PrimitiveLiteral::Binary(input)))
+                .expect("upper must be representable");
+        assert_eq!(upper.data_type(), &ty);
+    }
+
+    #[test]
+    fn test_min_max_aggregator_truncates_long_fixed_bounds() {
+        let ty = PrimitiveType::Fixed(20);
+        let schema = single_primitive_field_schema("f", ty.clone());
+        let mut agg = MinMaxColAggregator::new(schema);
+        let long: Vec<u8> = (0..20).collect();
+        let stats = Statistics::FixedLenByteArray(ValueStatistics::new(
+            Some(long.clone().into()),
+            Some(long.clone().into()),
+            None,
+            None,
+            false,
+        ));
+        agg.update(0, stats).unwrap();
+        let (lower, upper) = agg.produce();
+
+        let expected_lower = Datum::new(
+            ty.clone(),
+            PrimitiveLiteral::Binary((0..16).collect::<Vec<u8>>()),
+        );
+        let mut expected_upper_bytes: Vec<u8> = (0..15).collect();
+        expected_upper_bytes.push(16);
+        let expected_upper = Datum::new(ty.clone(), PrimitiveLiteral::Binary(expected_upper_bytes));
+
+        assert_eq!(lower.get(&0), Some(&expected_lower));
+        assert_eq!(upper.get(&0), Some(&expected_upper));
+        assert_eq!(lower.get(&0).unwrap().data_type(), &ty);
+        assert_eq!(upper.get(&0).unwrap().data_type(), &ty);
+    }
+
+    #[test]
+    fn test_truncated_fixed_datum_roundtrip() {
+        use std::cmp::Ordering;
+        // After truncation, a Fixed(N) Datum holds N-typed metadata but its
+        // literal carries fewer than N bytes. Verify the two paths that
+        // downstream consumers exercise — `to_bytes()` and `partial_cmp`
+        // (used by manifest serialization and the aggregator's update_state_*)
+        // — tolerate that mismatch and produce the truncated bytes verbatim.
+        let ty = PrimitiveType::Fixed(20);
+        let truncated = Datum::new(ty.clone(), PrimitiveLiteral::Binary((0..16).collect()));
+        let other_truncated = Datum::new(
+            ty.clone(),
+            PrimitiveLiteral::Binary((0..15).chain([16]).collect()),
+        );
+
+        // to_bytes serializes the literal bytes regardless of declared Fixed length.
+        let encoded = truncated.to_bytes().expect("to_bytes succeeds");
+        assert_eq!(encoded.as_slice(), &(0u8..16).collect::<Vec<u8>>()[..]);
+
+        // partial_cmp wildcards on Fixed length and compares lex on raw bytes.
+        assert!(truncated < other_truncated);
+        assert_eq!(truncated.partial_cmp(&truncated), Some(Ordering::Equal));
     }
 
     // -----------------------------------------------------------------
