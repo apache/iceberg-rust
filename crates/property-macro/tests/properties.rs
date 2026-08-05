@@ -28,25 +28,26 @@ struct TestProperties {
     #[key(RETRIES)]
     #[default(4)]
     #[doc = "Number of retries."]
-    retries: u64,
+    pub retries: u64,
     #[key(OWNER)]
     #[default(None)]
-    owner: Option<String>,
+    pub owner: Option<String>,
     #[prefix(COLUMN_FPP_PREFIX)]
     #[default(HashMap::new())]
-    column_fpp: HashMap<String, f64>,
+    pub column_fpp: HashMap<String, f64>,
 }
 
 #[test]
-fn generates_defaults_getters_modifiers_and_serde() {
-    let properties = TestProperties::default()
-        .with_retries(8)
-        .with_owner(Some("iceberg".to_string()))
-        .with_column_fpp(HashMap::from([("id".to_string(), 0.01)]));
+fn generates_defaults_and_serde_for_public_fields() {
+    let properties = TestProperties {
+        retries: 8,
+        owner: Some("iceberg".to_string()),
+        column_fpp: HashMap::from([("id".to_string(), 0.01)]),
+    };
 
-    assert_eq!(properties.retries(), 8);
-    assert_eq!(properties.owner(), Some("iceberg".to_string()));
-    assert_eq!(properties.column_fpp()["id"], 0.01);
+    assert_eq!(properties.retries, 8);
+    assert_eq!(properties.owner, Some("iceberg".to_string()));
+    assert_eq!(properties.column_fpp["id"], 0.01);
 
     let json = serde_json::to_value(&properties).unwrap();
     assert_eq!(json[RETRIES], "8");
@@ -54,9 +55,9 @@ fn generates_defaults_getters_modifiers_and_serde() {
     assert_eq!(json[format!("{COLUMN_FPP_PREFIX}id")], "0.01");
 
     let decoded: TestProperties = serde_json::from_value(json).unwrap();
-    assert_eq!(decoded.retries(), 8);
-    assert_eq!(decoded.owner(), Some("iceberg".to_string()));
-    assert_eq!(decoded.column_fpp()["id"], 0.01);
+    assert_eq!(decoded.retries, 8);
+    assert_eq!(decoded.owner, Some("iceberg".to_string()));
+    assert_eq!(decoded.column_fpp["id"], 0.01);
 }
 
 #[derive(Clone, Debug, Properties)]
@@ -64,24 +65,24 @@ struct CommitProperties {
     #[key = "commit.retry.num-retries"]
     #[default = 4]
     #[doc = "Number of times to retry a commit before failing."]
-    num_retries: u64,
+    pub num_retries: u64,
 }
 
 #[derive(Debug, Properties)]
 struct NestedProperties {
     #[nested]
     #[doc = "Commit behavior properties."]
-    commit: CommitProperties,
+    pub commit: CommitProperties,
 }
 
 #[test]
 fn nested_properties_use_a_flat_property_map() {
-    let properties =
-        NestedProperties::default().with_commit(CommitProperties::default().with_num_retries(9));
+    let mut properties = NestedProperties::default();
+    properties.commit.num_retries = 9;
 
     let json = serde_json::to_value(&properties).unwrap();
     assert_eq!(json["commit.retry.num-retries"], "9");
 
     let decoded: NestedProperties = serde_json::from_value(json).unwrap();
-    assert_eq!(decoded.commit().num_retries(), 9);
+    assert_eq!(decoded.commit.num_retries, 9);
 }

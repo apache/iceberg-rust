@@ -19,13 +19,13 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::{
     Attribute, Data, DeriveInput, Error, Expr, ExprPath, Field, Fields, Ident, Meta, Path, Type,
     parse_macro_input,
 };
 
-/// Derive parsing, defaults, JSON serialization, and getters for a typed property map.
+/// Derive parsing, defaults, and JSON serialization for a typed property map.
 ///
 /// Leaf fields must declare the table-property key and its default:
 ///
@@ -35,7 +35,7 @@ use syn::{
 ///     #[key = "write.format.default"]
 ///     #[default = DataFileFormat::Parquet]
 ///     #[doc = "Default file format"]
-///     write_format_default: DataFileFormat,
+///     pub write_format_default: DataFileFormat,
 /// }
 /// ```
 ///
@@ -43,9 +43,8 @@ use syn::{
 /// the declared prefix. `nested` embeds another `Properties` struct while keeping its serialized
 /// property map flat. `parse_with` may be used for exact-key property types that do not implement
 /// `FromStr` or need validation. `serialize_with` supplies their string representation in JSON.
-/// Optional fields are omitted from JSON when they are `None`. Fields must implement `Clone`; they
-/// also need `FromStr` and `ToString` unless the relevant custom parsing or serialization attribute
-/// is supplied.
+/// Optional fields are omitted from JSON when they are `None`. Fields need `FromStr` and `ToString`
+/// unless the relevant custom parsing or serialization attribute is supplied.
 #[proc_macro_derive(
     Properties,
     attributes(key, prefix, nested, default, parse_with, serialize_with)
@@ -62,7 +61,6 @@ pub fn derive_properties(input: TokenStream) -> TokenStream {
 struct PropertyField {
     ident: Ident,
     ty: Type,
-    docs: Vec<Attribute>,
     key: Option<Expr>,
     prefix: Option<Expr>,
     nested: bool,
@@ -108,32 +106,6 @@ fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     });
 
-    let accessors = fields.iter().map(|field| {
-        let ident = &field.ident;
-        let ty = &field.ty;
-        let docs = &field.docs;
-        let with_ident = format_ident!("with_{ident}");
-        let getter_doc = format!("Returns the `{ident}` property.");
-        let with_doc = format!("Sets the `{ident}` property.");
-        let getter_docs = if docs.is_empty() {
-            quote!(#[doc = #getter_doc])
-        } else {
-            quote!(#(#docs)*)
-        };
-        quote! {
-            #getter_docs
-            pub fn #ident(&self) -> #ty {
-                self.#ident.clone()
-            }
-
-            #[doc = #with_doc]
-            pub fn #with_ident(mut self, value: #ty) -> Self {
-                self.#ident = value;
-                self
-            }
-        }
-    });
-
     let parses = fields.iter().map(parse_field);
 
     let property_writes = fields.iter().map(write_field);
@@ -176,8 +148,6 @@ fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2> {
                 self.write_properties(&mut properties);
                 properties
             }
-
-            #(#accessors)*
         }
 
         impl ::serde::Serialize for #struct_name {
@@ -249,12 +219,6 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
     Ok(PropertyField {
         ident,
         ty: field.ty.clone(),
-        docs: field
-            .attrs
-            .iter()
-            .filter(|attribute| attribute.path().is_ident("doc"))
-            .cloned()
-            .collect(),
         key,
         prefix,
         nested,

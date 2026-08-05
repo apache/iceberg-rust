@@ -100,13 +100,13 @@ impl ParquetWriterBuilder {
         table_props: &ParsedTableProperties,
         schema: SchemaRef,
     ) -> Self {
-        let parquet = table_props.parquet();
+        let parquet = &table_props.parquet;
         let cdc = parquet
-            .content_defined_chunking_enabled()
+            .content_defined_chunking_enabled
             .then_some(CdcOptions {
-                min_chunk_size: parquet.content_defined_chunking_min_chunk_size(),
-                max_chunk_size: parquet.content_defined_chunking_max_chunk_size(),
-                norm_level: parquet.content_defined_chunking_norm_level(),
+                min_chunk_size: parquet.content_defined_chunking_min_chunk_size,
+                max_chunk_size: parquet.content_defined_chunking_max_chunk_size,
+                norm_level: parquet.content_defined_chunking_norm_level,
             });
         Self::from_cdc_options(cdc, schema)
     }

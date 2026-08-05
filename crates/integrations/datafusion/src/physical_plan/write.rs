@@ -209,8 +209,8 @@ impl ExecutionPlan for IcebergWriteExec {
             .map_err(to_datafusion_error)?;
 
         // Check data file format
-        let write_properties = table_props.write();
-        let file_format = write_properties.format_default();
+        let write_properties = &table_props.write;
+        let file_format = write_properties.format_default;
         if file_format != DataFileFormat::Parquet {
             return Err(to_datafusion_error(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -226,7 +226,7 @@ impl ExecutionPlan for IcebergWriteExec {
             self.table.metadata().current_schema().clone(),
         )
         .with_match_mode(FieldMatchMode::Name);
-        let target_file_size = write_properties.target_file_size_bytes();
+        let target_file_size = write_properties.target_file_size_bytes;
 
         let file_io = self.table.file_io().clone();
         // todo location_gen and file_name_gen should be configurable
@@ -245,7 +245,7 @@ impl ExecutionPlan for IcebergWriteExec {
         let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 
         // Create TaskWriter
-        let fanout_enabled = write_properties.datafusion_fanout_enabled();
+        let fanout_enabled = write_properties.datafusion_fanout_enabled;
         let schema = self.table.metadata().current_schema().clone();
         let partition_spec = self.table.metadata().default_partition_spec().clone();
         let task_writer = TaskWriter::try_new(

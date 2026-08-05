@@ -4052,11 +4052,11 @@ mod tests {
         let props = metadata.parsed_table_properties().unwrap();
 
         assert_eq!(
-            props.commit().num_retries(),
+            props.commit.num_retries,
             TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
         );
         assert_eq!(
-            props.write().target_file_size_bytes(),
+            props.write.target_file_size_bytes,
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
 
@@ -4104,8 +4104,8 @@ mod tests {
 
         let props = metadata.parsed_table_properties().unwrap();
 
-        assert_eq!(props.commit().num_retries(), 10);
-        assert_eq!(props.write().target_file_size_bytes(), 1024);
+        assert_eq!(props.commit.num_retries, 10);
+        assert_eq!(props.write.target_file_size_bytes, 1024);
     }
 
     #[test]

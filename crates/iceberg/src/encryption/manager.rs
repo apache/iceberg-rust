@@ -119,8 +119,8 @@ impl EncryptionManager {
         }
 
         let table_properties = metadata.parsed_table_properties()?;
-        let encryption = table_properties.encryption();
-        let Some(table_key_id) = encryption.key_id() else {
+        let encryption = table_properties.encryption;
+        let Some(table_key_id) = encryption.key_id else {
             if kms_client.is_some() {
                 tracing::warn!(
                     "KeyManagementClient provided but table does not have encryption.key-id set"
@@ -140,7 +140,7 @@ impl EncryptionManager {
             .kms_client(Arc::clone(kms_client))
             .table_key_id(table_key_id)
             .encryption_keys(metadata.encryption_keys.clone())
-            .key_size(AesKeySize::from_key_length(encryption.data_key_length())?)
+            .key_size(AesKeySize::from_key_length(encryption.data_key_length)?)
             .build();
         Ok(Some(Arc::new(em)))
     }
