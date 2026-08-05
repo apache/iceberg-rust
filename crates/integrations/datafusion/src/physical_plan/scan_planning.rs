@@ -198,3 +198,37 @@ pub(crate) fn build_table_scan(
     }
     builder.build().map_err(to_datafusion_error)
 }
+
+#[cfg(test)]
+mod tests {
+    use iceberg::spec::{DataFileFormat, Schema};
+
+    use super::*;
+
+    #[test]
+    fn test_group_file_scan_tasks_round_robin_uneven_split() {
+        let schema = Arc::new(Schema::builder().build().unwrap());
+        let tasks = (0..5)
+            .map(|i| {
+                FileScanTask::builder()
+                    .with_file_size_in_bytes(0)
+                    .with_start(0)
+                    .with_length(0)
+                    .with_data_file_path(i.to_string())
+                    .with_data_file_format(DataFileFormat::Parquet)
+                    .with_schema(schema.clone())
+                    .with_project_field_ids(vec![])
+                    .with_case_sensitive(false)
+                    .build()
+            })
+            .collect();
+
+        let groups = group_file_scan_tasks_round_robin(tasks, 3);
+        let paths: Vec<Vec<&str>> = groups
+            .iter()
+            .map(|group| group.iter().map(FileScanTask::data_file_path).collect())
+            .collect();
+
+        assert_eq!(paths, vec![vec!["0", "3"], vec!["1", "4"], vec!["2"]]);
+    }
+}
