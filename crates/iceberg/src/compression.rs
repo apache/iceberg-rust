@@ -41,8 +41,6 @@ pub enum CompressionCodec {
     #[default]
     /// No compression
     None,
-    /// Uncompressed file-format encoding
-    Uncompressed,
     /// Brotli compression
     Brotli,
     /// LZ4 single compression frame with content size present
@@ -77,7 +75,6 @@ impl CompressionCodec {
     pub fn name(&self) -> &'static str {
         match self {
             CompressionCodec::None => "none",
-            CompressionCodec::Uncompressed => "uncompressed",
             CompressionCodec::Brotli => "brotli",
             CompressionCodec::Lz4 => "lz4",
             CompressionCodec::Lzo => "lzo",
@@ -137,6 +134,7 @@ impl CompressionCodec {
     pub(crate) fn parse_properties(
         properties: &HashMap<String, String>,
         codec_key: &str,
+        level_key: &str,
         default: Self,
     ) -> Result<Self> {
         let codec = properties
@@ -144,8 +142,7 @@ impl CompressionCodec {
             .map(|value| Self::parse_property(value))
             .transpose()?
             .unwrap_or(default);
-        let level_key = compression_level_key(codec_key);
-        let Some(level) = properties.get(&level_key) else {
+        let Some(level) = properties.get(level_key) else {
             return Ok(codec);
         };
         let level = level.parse::<u8>().map_err(|error| {
@@ -174,28 +171,19 @@ impl CompressionCodec {
         &self,
         properties: &mut HashMap<String, String>,
         codec_key: &str,
+        level_key: &str,
     ) {
         properties.insert(codec_key.to_string(), self.property_value());
 
-        let level_key = compression_level_key(codec_key);
         match self {
             Self::Gzip(level) | Self::Zstd(level) => {
-                properties.insert(level_key, level.to_string());
+                properties.insert(level_key.to_string(), level.to_string());
             }
             _ => {
-                properties.remove(&level_key);
+                properties.remove(level_key);
             }
         }
     }
-}
-
-fn compression_level_key(codec_key: &str) -> String {
-    format!(
-        "{}level",
-        codec_key
-            .strip_suffix("codec")
-            .expect("compression codec property keys end with 'codec'")
-    )
 }
 
 // Note: serialize/deserialize do not round-trip the compression level. Iceberg configuration
@@ -212,8 +200,7 @@ impl<'de> Deserialize<'de> for CompressionCodec {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
         match s.to_lowercase().as_str() {
-            "none" => Ok(CompressionCodec::None),
-            "uncompressed" => Ok(CompressionCodec::Uncompressed),
+            "none" | "uncompressed" => Ok(CompressionCodec::None),
             "brotli" => Ok(CompressionCodec::Brotli),
             "lz4" => Ok(CompressionCodec::Lz4),
             "lzo" => Ok(CompressionCodec::Lzo),
@@ -240,7 +227,6 @@ impl fmt::Display for CompressionCodec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CompressionCodec::None => write!(f, "None"),
-            CompressionCodec::Uncompressed => write!(f, "Uncompressed"),
             CompressionCodec::Brotli => write!(f, "Brotli"),
             CompressionCodec::Lz4 => write!(f, "Lz4"),
             CompressionCodec::Lzo => write!(f, "Lzo"),
@@ -255,7 +241,7 @@ impl fmt::Display for CompressionCodec {
 impl CompressionCodec {
     pub(crate) fn decompress(&self, bytes: Vec<u8>) -> Result<Vec<u8>> {
         match self {
-            CompressionCodec::None | CompressionCodec::Uncompressed => Ok(bytes),
+            CompressionCodec::None => Ok(bytes),
             CompressionCodec::Lz4 => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "LZ4 decompression is not supported currently",
@@ -282,7 +268,7 @@ impl CompressionCodec {
 
     pub(crate) fn compress(&self, bytes: Vec<u8>) -> Result<Vec<u8>> {
         match self {
-            CompressionCodec::None | CompressionCodec::Uncompressed => Ok(bytes),
+            CompressionCodec::None => Ok(bytes),
             CompressionCodec::Lz4 => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "LZ4 compression is not supported currently",
@@ -315,10 +301,7 @@ impl CompressionCodec {
     }
 
     pub(crate) fn is_none(&self) -> bool {
-        matches!(
-            self,
-            CompressionCodec::None | CompressionCodec::Uncompressed
-        )
+        matches!(self, CompressionCodec::None)
     }
 
     /// Returns the file extension suffix for this compression codec.
@@ -329,7 +312,7 @@ impl CompressionCodec {
     /// Returns an error when the codec does not have a defined suffix.
     pub fn suffix(&self) -> Result<&'static str> {
         match self {
-            CompressionCodec::None | CompressionCodec::Uncompressed => Ok(""),
+            CompressionCodec::None => Ok(""),
             CompressionCodec::Gzip(_) => Ok(".gz"),
             codec @ (CompressionCodec::Brotli
             | CompressionCodec::Lz4
@@ -352,12 +335,10 @@ mod tests {
     async fn test_compression_codec_none() {
         let bytes_vec = [0_u8; 100].to_vec();
 
-        for codec in [CompressionCodec::None, CompressionCodec::Uncompressed] {
-            let compressed = codec.compress(bytes_vec.clone()).unwrap();
-            assert_eq!(bytes_vec, compressed);
-            let decompressed = codec.decompress(compressed).unwrap();
-            assert_eq!(bytes_vec, decompressed);
-        }
+        let compressed = CompressionCodec::None.compress(bytes_vec.clone()).unwrap();
+        assert_eq!(bytes_vec, compressed);
+        let decompressed = CompressionCodec::None.decompress(compressed).unwrap();
+        assert_eq!(bytes_vec, decompressed);
     }
 
     #[tokio::test]
@@ -438,7 +419,6 @@ mod tests {
     fn test_serde_names() {
         let codecs = [
             ("none", CompressionCodec::None),
-            ("uncompressed", CompressionCodec::Uncompressed),
             ("brotli", CompressionCodec::Brotli),
             ("lz4", CompressionCodec::Lz4),
             ("lzo", CompressionCodec::Lzo),
@@ -455,5 +435,10 @@ mod tests {
                 codec
             );
         }
+
+        assert_eq!(
+            serde_json::from_value::<CompressionCodec>(serde_json::json!("uncompressed")).unwrap(),
+            CompressionCodec::None
+        );
     }
 }

@@ -29,6 +29,7 @@ const HEIGHT: &str = "dimensions.height";
 fn parse_dimensions(
     properties: &HashMap<String, String>,
     key: &str,
+    height_key: &str,
     default: (u64, u64),
 ) -> Result<(u64, u64), String> {
     let parse = |property_key: &str, default| {
@@ -39,12 +40,17 @@ fn parse_dimensions(
             .map(|value| value.unwrap_or(default))
     };
 
-    Ok((parse(key, default.0)?, parse(HEIGHT, default.1)?))
+    Ok((parse(key, default.0)?, parse(height_key, default.1)?))
 }
 
-fn write_dimensions(dimensions: &(u64, u64), properties: &mut HashMap<String, String>, key: &str) {
+fn write_dimensions(
+    dimensions: &(u64, u64),
+    properties: &mut HashMap<String, String>,
+    key: &str,
+    height_key: &str,
+) {
     properties.insert(key.to_string(), dimensions.0.to_string());
-    properties.insert(HEIGHT.to_string(), dimensions.1.to_string());
+    properties.insert(height_key.to_string(), dimensions.1.to_string());
 }
 
 #[derive(Debug, Properties)]
@@ -67,6 +73,7 @@ struct TestProperties {
     pub column_fpp: HashMap<String, f64>,
 
     #[key(WIDTH)]
+    #[additional_key(HEIGHT)]
     #[default((640, 480))]
     #[parse_properties_with(parse_dimensions)]
     #[write_properties_with(write_dimensions)]

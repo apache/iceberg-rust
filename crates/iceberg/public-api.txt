@@ -148,7 +148,6 @@ pub iceberg::compression::CompressionCodec::Lz4
 pub iceberg::compression::CompressionCodec::Lzo
 pub iceberg::compression::CompressionCodec::None
 pub iceberg::compression::CompressionCodec::Snappy
-pub iceberg::compression::CompressionCodec::Uncompressed
 pub iceberg::compression::CompressionCodec::Zlib
 pub iceberg::compression::CompressionCodec::Zstd(u8)
 impl iceberg::compression::CompressionCodec
@@ -1163,7 +1162,6 @@ pub iceberg::puffin::CompressionCodec::Lz4
 pub iceberg::puffin::CompressionCodec::Lzo
 pub iceberg::puffin::CompressionCodec::None
 pub iceberg::puffin::CompressionCodec::Snappy
-pub iceberg::puffin::CompressionCodec::Uncompressed
 pub iceberg::puffin::CompressionCodec::Zlib
 pub iceberg::puffin::CompressionCodec::Zstd(u8)
 impl iceberg::compression::CompressionCodec

@@ -49,7 +49,8 @@ use syn::{
 /// property map flat. `parse_with` may be used for exact-key property types that do not implement
 /// `FromStr` or need validation. `serialize_with` supplies their string representation in JSON.
 /// `parse_properties_with` and `write_properties_with` provide access to the complete property map
-/// for fields represented by more than one key.
+/// for fields represented by more than one key. `additional_key` declares a second key and passes
+/// it to those hooks after the primary key.
 /// Optional fields are omitted from JSON when they are `None`. Fields need `FromStr` and `ToString`
 /// unless the relevant custom parsing or serialization attribute is supplied. String-literal and
 /// path defaults are converted into their field type with `Into`.
@@ -57,6 +58,7 @@ use syn::{
     Properties,
     attributes(
         key,
+        additional_key,
         prefix,
         nested,
         default,
@@ -79,6 +81,7 @@ struct PropertyField {
     ident: Ident,
     ty: Type,
     key: Option<Expr>,
+    additional_key: Option<Expr>,
     prefix: Option<Expr>,
     nested: bool,
     default: Option<Expr>,
@@ -198,6 +201,7 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
         .clone()
         .ok_or_else(|| Error::new_spanned(field, "Properties fields must be named"))?;
     let key = attribute_expression_value(&field.attrs, "key")?;
+    let additional_key = attribute_expression_value(&field.attrs, "additional_key")?;
     let prefix = attribute_expression_value(&field.attrs, "prefix")?;
     let nested = marker_attribute(&field.attrs, "nested")?;
     if usize::from(key.is_some()) + usize::from(prefix.is_some()) + usize::from(nested) != 1 {
@@ -231,8 +235,18 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
     let serialize_with = attribute_path_value(&field.attrs, "serialize_with")?;
     let parse_properties_with = attribute_path_value(&field.attrs, "parse_properties_with")?;
     let write_properties_with = attribute_path_value(&field.attrs, "write_properties_with")?;
+    if additional_key.is_some()
+        && parse_properties_with.is_none()
+        && write_properties_with.is_none()
+    {
+        return Err(Error::new_spanned(
+            field,
+            "#[additional_key(...)] requires parse_properties_with or write_properties_with",
+        ));
+    }
     if (prefix.is_some() || nested)
-        && (parse_with.is_some()
+        && (additional_key.is_some()
+            || parse_with.is_some()
             || serialize_with.is_some()
             || parse_properties_with.is_some()
             || write_properties_with.is_some())
@@ -259,6 +273,7 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
         ident,
         ty: field.ty.clone(),
         key,
+        additional_key,
         prefix,
         nested,
         default,
@@ -345,8 +360,14 @@ fn parse_field(field: &PropertyField) -> TokenStream2 {
 
     if let Some(parse_properties_with) = &field.parse_properties_with {
         let key = field.key.as_ref().expect("exact-key fields have a key");
+        let parse = match &field.additional_key {
+            Some(additional_key) => {
+                quote!(#parse_properties_with(properties, #key, #additional_key, #default))
+            }
+            None => quote!(#parse_properties_with(properties, #key, #default)),
+        };
         return quote! {
-            #ident: #parse_properties_with(properties, #key, #default).map_err(|error| {
+            #ident: #parse.map_err(|error| {
                 format!("Invalid value for {}: {error}", #key)
             })?
         };
@@ -473,8 +494,14 @@ fn write_field(field: &PropertyField) -> TokenStream2 {
 
     if let Some(write_properties_with) = &field.write_properties_with {
         let key = field.key.as_ref().expect("exact-key fields have a key");
+        let write = match &field.additional_key {
+            Some(additional_key) => {
+                quote!(#write_properties_with(&self.#ident, properties, #key, #additional_key))
+            }
+            None => quote!(#write_properties_with(&self.#ident, properties, #key)),
+        };
         return quote! {
-            #write_properties_with(&self.#ident, properties, #key);
+            #write;
         };
     }
 

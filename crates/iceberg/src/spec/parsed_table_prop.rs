@@ -41,16 +41,13 @@
 //! ```
 //! use iceberg::spec::{DataFileFormat, ParsedTableProperties};
 //!
-//! # fn main() -> Result<(), serde_json::Error> {
 //! let properties: ParsedTableProperties = serde_json::from_value(serde_json::json!({
 //!     "commit.retry.num-retries": "8",
 //!     "write.format.default": "orc"
-//! }))?;
+//! })).unwrap();
 //!
 //! assert_eq!(properties.commit_retry_num_retries, 8);
 //! assert_eq!(properties.write_format_default, DataFileFormat::Orc);
-//! # Ok(())
-//! # }
 //! ```
 //!
 //! # Serialize to JSON
@@ -60,16 +57,13 @@
 //! ```
 //! use iceberg::spec::ParsedTableProperties;
 //!
-//! # fn main() -> Result<(), serde_json::Error> {
 //! let mut properties = ParsedTableProperties::default();
 //! properties.commit_retry_num_retries = 8;
 //! properties.write_data_path = Some("s3://warehouse/table/data".to_string());
 //!
-//! let json = serde_json::to_value(&properties)?;
+//! let json = serde_json::to_value(&properties).unwrap();
 //! assert_eq!(json["commit.retry.num-retries"], "8");
 //! assert_eq!(json["write.data.path"], "s3://warehouse/table/data");
-//! # Ok(())
-//! # }
 //! ```
 
 use std::collections::HashMap;
@@ -77,7 +71,6 @@ use std::collections::HashMap;
 use iceberg_property_macro::Properties;
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
-use crate::catalog::MetadataLocation;
 use crate::compression::CompressionCodec;
 use crate::error::Result;
 use crate::spec::{DataFileFormat, NameMapping};
@@ -268,6 +261,7 @@ pub struct ParsedTableProperties {
     pub commit_manifest_merge_enabled: bool,
 
     #[key = "write.manifest.compression-codec"]
+    #[additional_key = "write.manifest.compression-level"]
     #[default(CompressionCodec::gzip_default())]
     #[parse_properties_with(CompressionCodec::parse_properties)]
     #[write_properties_with(CompressionCodec::write_properties)]
@@ -397,6 +391,7 @@ pub struct ParsedTableProperties {
     pub write_delete_parquet_dict_size_bytes: usize,
 
     #[key = "write.parquet.compression-codec"]
+    #[additional_key = "write.parquet.compression-level"]
     #[default(CompressionCodec::zstd_default())]
     #[parse_properties_with(CompressionCodec::parse_properties)]
     #[write_properties_with(CompressionCodec::write_properties)]
@@ -404,6 +399,7 @@ pub struct ParsedTableProperties {
     pub write_parquet_compression_codec: CompressionCodec,
 
     #[key = "write.delete.parquet.compression-codec"]
+    #[additional_key = "write.delete.parquet.compression-level"]
     #[default(CompressionCodec::zstd_default())]
     #[parse_properties_with(CompressionCodec::parse_properties)]
     #[write_properties_with(CompressionCodec::write_properties)]
@@ -502,6 +498,7 @@ pub struct ParsedTableProperties {
 
     // Avro properties.
     #[key = "write.avro.compression-codec"]
+    #[additional_key = "write.avro.compression-level"]
     #[default(CompressionCodec::gzip_default())]
     #[parse_properties_with(CompressionCodec::parse_properties)]
     #[write_properties_with(CompressionCodec::write_properties)]
@@ -509,6 +506,7 @@ pub struct ParsedTableProperties {
     pub write_avro_compression_codec: CompressionCodec,
 
     #[key = "write.delete.avro.compression-codec"]
+    #[additional_key = "write.delete.avro.compression-level"]
     #[default(CompressionCodec::gzip_default())]
     #[parse_properties_with(CompressionCodec::parse_properties)]
     #[write_properties_with(CompressionCodec::write_properties)]
@@ -641,8 +639,7 @@ pub struct ParsedTableProperties {
     // Metadata properties.
     #[key = "write.metadata.path"]
     #[default(None)]
-    #[parse_with(MetadataLocation::parse_write_metadata_path)]
-    #[doc = "Base location for metadata files written after this property is set, with trailing slashes removed."]
+    #[doc = "Base location for metadata files written after this property is set."]
     pub write_metadata_path: Option<String>,
 
     #[key = "write.summary.partition-limit"]
@@ -928,8 +925,7 @@ mod tests {
         };
 
         let json = serde_json::to_value(&properties).unwrap();
-        assert_eq!(
-            json,
+        let expected_parts = [
             serde_json::json!({
                 "commit.manifest-merge.enabled": "true",
                 "commit.manifest.min-count-to-merge": "100",
@@ -961,7 +957,9 @@ mod tests {
                 "read.split.metadata-target-size": "33554432",
                 "read.split.open-file-cost": "4194304",
                 "read.split.planning-lookback": "10",
-                "read.split.target-size": "134217728",
+                "read.split.target-size": "134217728"
+            }),
+            serde_json::json!({
                 "schema.name-mapping.default": r#"[{"field-id":1,"names":["id"]}]"#,
                 "write.avro.compression-codec": "gzip",
                 "write.avro.compression-level": "6",
@@ -988,7 +986,9 @@ mod tests {
                 "write.delete.parquet.row-group-check-max-record-count": "10000",
                 "write.delete.parquet.row-group-check-min-record-count": "100",
                 "write.delete.parquet.row-group-size-bytes": "134217728",
-                "write.delete.target-file-size-bytes": "67108864",
+                "write.delete.target-file-size-bytes": "67108864"
+            }),
+            serde_json::json!({
                 "write.distribution-mode": "range",
                 "write.format.default": "orc",
                 "write.manifest-lists.enabled": "true",
@@ -1010,7 +1010,9 @@ mod tests {
                 "write.orc.compression-codec": "lzo",
                 "write.orc.compression-strategy": "speed",
                 "write.orc.stripe-size-bytes": "67108864",
-                "write.orc.vectorized.batch-size": "1024",
+                "write.orc.vectorized.batch-size": "1024"
+            }),
+            serde_json::json!({
                 "write.parquet.bloom-filter-adaptive-enabled": "false",
                 "write.parquet.bloom-filter-fpp.column.customer_id": "0.02",
                 "write.parquet.bloom-filter-max-bytes": "1048576",
@@ -1041,8 +1043,14 @@ mod tests {
                 "write.update.mode": "copy-on-write",
                 "write.upsert.enabled": "false",
                 "write.wap.enabled": "false"
-            })
-        );
+            }),
+        ];
+        let mut expected = serde_json::Map::new();
+        for part in expected_parts {
+            expected.extend(part.as_object().unwrap().clone());
+        }
+
+        assert_eq!(json, serde_json::Value::Object(expected));
     }
 
     #[test]
