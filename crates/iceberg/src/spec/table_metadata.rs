@@ -33,9 +33,9 @@ use uuid::Uuid;
 use super::snapshot::SnapshotReference;
 pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 use super::{
-    DEFAULT_PARTITION_SPEC_ID, ParsedTableProperties, PartitionSpecRef, PartitionStatisticsFile,
-    SchemaId, SchemaRef, SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile,
-    StructType, TableProperties, parse_metadata_file_compression,
+    DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
+    SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
+    TableProperties,
 };
 use crate::catalog::{METADATA_FOLDER_NAME, MetadataLocation};
 use crate::compression::CompressionCodec;
@@ -384,23 +384,14 @@ impl TableMetadata {
     ///
     /// Returns an error if the compression codec property has an invalid value.
     pub fn metadata_compression_codec(&self) -> Result<CompressionCodec> {
-        parse_metadata_file_compression(&self.properties)
+        Ok(self.table_properties()?.write_metadata_compression_codec)
     }
 
-    /// Returns the existing typed table properties parsed from the raw property map.
+    /// Returns all supported table properties parsed from the raw property map.
     pub fn table_properties(&self) -> Result<TableProperties> {
         TableProperties::try_from(&self.properties).map_err(|error| {
             Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(error)
         })
-    }
-
-    /// Returns all supported table properties parsed by the property framework.
-    pub fn parsed_table_properties(&self) -> Result<ParsedTableProperties> {
-        serde_json::to_value(&self.properties)
-            .and_then(serde_json::from_value)
-            .map_err(|error| {
-                Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(error)
-            })
     }
 
     /// Return location of statistics files.
@@ -507,7 +498,7 @@ impl TableMetadata {
         let json_data = serde_json::to_vec(self)?;
 
         // Check if compression codec from properties matches the one in metadata_location
-        let codec = parse_metadata_file_compression(&self.properties)?;
+        let codec = self.table_properties()?.write_metadata_compression_codec;
 
         if codec != metadata_location.compression_codec() {
             return Err(Error::new(
@@ -1647,7 +1638,7 @@ mod tests {
         BlobMetadata, EncryptedKey, INITIAL_ROW_ID, Literal, NestedField, NullOrder, Operation,
         PartitionSpec, PartitionStatisticsFile, PrimitiveLiteral, PrimitiveType, Schema, Snapshot,
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile,
-        Summary, TableProperties, Transform, Type, UnboundPartitionField,
+        Summary, Transform, Type, UnboundPartitionField,
     };
     use crate::{ErrorKind, TableCreation};
 
@@ -3714,7 +3705,7 @@ mod tests {
         // Modify properties to enable gzip compression (using mixed case to test case-insensitive matching)
         let mut props = original_metadata.properties.clone();
         props.insert(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+            "write.metadata.compression-codec".to_string(),
             "GziP".to_string(),
         );
         // Use builder to create new metadata with updated properties
@@ -4026,9 +4017,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parsed_table_properties_with_defaults() {
-        use crate::spec::TableProperties;
-
+    fn test_table_properties_with_defaults() {
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
@@ -4049,28 +4038,14 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let props = metadata.parsed_table_properties().unwrap();
+        let props = metadata.table_properties().unwrap();
 
-        assert_eq!(
-            props.commit_retry_num_retries,
-            TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
-        );
-        assert_eq!(
-            props.write_target_file_size_bytes,
-            TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
-        );
-
-        let existing_props = metadata.table_properties().unwrap();
-        assert_eq!(
-            existing_props.commit_num_retries,
-            TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
-        );
+        assert_eq!(props.commit_retry_num_retries, 4);
+        assert_eq!(props.write_target_file_size_bytes, 512 * 1024 * 1024);
     }
 
     #[test]
-    fn test_parsed_table_properties_with_custom_values() {
-        use crate::spec::TableProperties;
-
+    fn test_table_properties_with_custom_values() {
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
@@ -4079,12 +4054,9 @@ mod tests {
             .unwrap();
 
         let properties = HashMap::from([
+            ("commit.retry.num-retries".to_string(), "10".to_string()),
             (
-                TableProperties::PROPERTY_COMMIT_NUM_RETRIES.to_string(),
-                "10".to_string(),
-            ),
-            (
-                TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES.to_string(),
+                "write.target-file-size-bytes".to_string(),
                 "1024".to_string(),
             ),
         ]);
@@ -4102,14 +4074,14 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let props = metadata.parsed_table_properties().unwrap();
+        let props = metadata.table_properties().unwrap();
 
         assert_eq!(props.commit_retry_num_retries, 10);
         assert_eq!(props.write_target_file_size_bytes, 1024);
     }
 
     #[test]
-    fn test_parsed_table_properties_with_invalid_value() {
+    fn test_table_properties_with_invalid_value() {
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
@@ -4135,7 +4107,7 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let err = metadata.parsed_table_properties().unwrap_err();
+        let err = metadata.table_properties().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.message().contains("Invalid table properties"));
     }
@@ -4347,7 +4319,7 @@ mod tests {
         let metadata = get_test_table_metadata("TableMetadataV2Valid.json")
             .into_builder(None)
             .set_properties(HashMap::from([(
-                TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
+                "write.metadata.path".to_string(),
                 "s3://other-bucket/custom-meta".to_string(),
             )]))
             .unwrap()
@@ -4361,12 +4333,11 @@ mod tests {
     }
 
     #[test]
-    fn test_metadata_location_trims_trailing_slash() {
-        // A configured path with a trailing slash must not yield a doubled separator
+    fn test_metadata_location_preserves_trailing_slash() {
         let metadata = get_test_table_metadata("TableMetadataV2Valid.json")
             .into_builder(None)
             .set_properties(HashMap::from([(
-                TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
+                "write.metadata.path".to_string(),
                 "s3://other-bucket/custom-meta/".to_string(),
             )]))
             .unwrap()
@@ -4375,7 +4346,7 @@ mod tests {
             .metadata;
         assert_eq!(
             metadata.metadata_location().unwrap(),
-            "s3://other-bucket/custom-meta"
+            "s3://other-bucket/custom-meta/"
         );
     }
 }

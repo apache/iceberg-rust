@@ -43,7 +43,6 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::inspect::MetadataTableType;
-use iceberg::spec::TableProperties;
 use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
@@ -192,25 +191,9 @@ impl TableProvider for IcebergTableProvider {
         // Apply sort node when it's not fanout mode
         let fanout_enabled = table
             .metadata()
-            .properties()
-            .get(TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED)
-            .map(|value| {
-                value
-                    .parse::<bool>()
-                    .map_err(|e| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Invalid value for {}, expected 'true' or 'false'",
-                                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED
-                            ),
-                        )
-                        .with_source(e)
-                    })
-                    .map_err(to_datafusion_error)
-            })
-            .transpose()?
-            .unwrap_or(TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT);
+            .table_properties()
+            .map_err(to_datafusion_error)?
+            .write_datafusion_fanout_enabled;
 
         let write_input = if fanout_enabled {
             repartitioned_plan
@@ -667,7 +650,7 @@ mod tests {
         let mut properties = HashMap::new();
         if let Some(enabled) = fanout_enabled {
             properties.insert(
-                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED.to_string(),
+                "write.datafusion.fanout.enabled".to_string(),
                 enabled.to_string(),
             );
         }

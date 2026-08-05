@@ -22,7 +22,7 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::compression::CompressionCodec;
-use crate::spec::{TableMetadata, parse_metadata_file_compression};
+use crate::spec::{TableMetadata, TableProperties};
 use crate::{Error, ErrorKind, Result};
 
 /// Default folder name for metadata files under the table location, used when the
@@ -46,7 +46,9 @@ impl MetadataLocation {
     /// Determines the compression codec from table properties.
     /// Parse errors result in CompressionCodec::None.
     fn compression_from_properties(properties: &HashMap<String, String>) -> CompressionCodec {
-        parse_metadata_file_compression(properties).unwrap_or(CompressionCodec::None)
+        TableProperties::try_from(properties)
+            .map(|properties| properties.write_metadata_compression_codec)
+            .unwrap_or(CompressionCodec::None)
     }
 
     /// Creates a completely new metadata location starting at version 0, deriving the
@@ -158,7 +160,7 @@ mod test {
     use uuid::Uuid;
 
     use crate::compression::CompressionCodec;
-    use crate::spec::{Schema, TableMetadata, TableMetadataBuilder, TableProperties};
+    use crate::spec::{Schema, TableMetadata, TableMetadataBuilder};
     use crate::{MetadataLocation, TableCreation};
 
     fn create_test_metadata(properties: HashMap<String, String>) -> TableMetadata {
@@ -423,7 +425,7 @@ mod test {
 
         // A configured `write.metadata.path` is honored on updates too
         let props = HashMap::from([(
-            TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
+            "write.metadata.path".to_string(),
             "s3://bucket/custom-meta".to_string(),
         )]);
         let with_meta_path = create_test_metadata(props);
@@ -448,7 +450,7 @@ mod test {
 
         // Test a configured `write.metadata.path` is honored
         let props = HashMap::from([(
-            TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
+            "write.metadata.path".to_string(),
             "s3://bucket/custom-meta".to_string(),
         )]);
         let custom_meta = create_test_metadata(props);

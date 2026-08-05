@@ -17,7 +17,7 @@
 
 //! Typed access to Iceberg table properties.
 //!
-//! [`ParsedTableProperties`] exposes Iceberg's string-keyed table properties as typed public
+//! [`TableProperties`] exposes Iceberg's string-keyed table properties as typed public
 //! fields. Its JSON representation is a flat object whose keys and values are strings.
 //!
 //! # Create from defaults
@@ -25,9 +25,9 @@
 //! Start with Iceberg's defaults and modify public fields directly:
 //!
 //! ```
-//! use iceberg::spec::{DataFileFormat, ParsedTableProperties};
+//! use iceberg::spec::{DataFileFormat, TableProperties};
 //!
-//! let mut properties = ParsedTableProperties::default();
+//! let mut properties = TableProperties::default();
 //! properties.write_format_default = DataFileFormat::Orc;
 //! properties.write_data_path = Some("s3://warehouse/table/data".to_string());
 //!
@@ -39,9 +39,9 @@
 //! JSON property values must be strings, matching Iceberg's table property map:
 //!
 //! ```
-//! use iceberg::spec::{DataFileFormat, ParsedTableProperties};
+//! use iceberg::spec::{DataFileFormat, TableProperties};
 //!
-//! let properties: ParsedTableProperties = serde_json::from_value(serde_json::json!({
+//! let properties: TableProperties = serde_json::from_value(serde_json::json!({
 //!     "commit.retry.num-retries": "8",
 //!     "write.format.default": "orc"
 //! })).unwrap();
@@ -52,18 +52,20 @@
 //!
 //! # Serialize to JSON
 //!
-//! Serialization converts the typed fields back into Iceberg property keys:
+//! Serialization converts non-default typed fields back into Iceberg property keys. Fields whose
+//! values match their defaults are omitted:
 //!
 //! ```
-//! use iceberg::spec::ParsedTableProperties;
+//! use iceberg::spec::TableProperties;
 //!
-//! let mut properties = ParsedTableProperties::default();
+//! let mut properties = TableProperties::default();
 //! properties.commit_retry_num_retries = 8;
 //! properties.write_data_path = Some("s3://warehouse/table/data".to_string());
 //!
 //! let json = serde_json::to_value(&properties).unwrap();
 //! assert_eq!(json["commit.retry.num-retries"], "8");
 //! assert_eq!(json["write.data.path"], "s3://warehouse/table/data");
+//! assert!(json.get("write.format.default").is_none());
 //! ```
 
 use std::collections::HashMap;
@@ -191,7 +193,7 @@ fn serialize_comma_separated_strings(values: &[String]) -> String {
 /// [Java TableProperties implementation]: https://github.com/apache/iceberg/blob/d8c10a1608170f0ba83be740d6ab0b6a3757cb3e/core/src/main/java/org/apache/iceberg/TableProperties.java
 /// [Apache Iceberg configuration documentation]: https://github.com/apache/iceberg/blob/d8c10a1608170f0ba83be740d6ab0b6a3757cb3e/docs/docs/configuration.md
 #[derive(Clone, Debug, Properties)]
-pub struct ParsedTableProperties {
+pub struct TableProperties {
     // General properties.
     #[key = "comment"]
     #[default(None)]
@@ -809,20 +811,29 @@ pub struct ParsedTableProperties {
     pub encryption_data_key_length: usize,
 }
 
+impl TryFrom<&HashMap<String, String>> for TableProperties {
+    type Error = crate::Error;
+
+    fn try_from(properties: &HashMap<String, String>) -> Result<Self> {
+        Self::from_properties(properties)
+            .map_err(|error| crate::Error::new(crate::ErrorKind::DataInvalid, error))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::error::{Error, ErrorKind};
     use crate::spec::MappedField;
 
-    fn parse(properties: HashMap<String, String>) -> Result<ParsedTableProperties> {
+    fn parse(properties: HashMap<String, String>) -> Result<TableProperties> {
         serde_json::from_value(serde_json::to_value(properties).unwrap())
             .map_err(|error| Error::new(ErrorKind::DataInvalid, error.to_string()))
     }
 
     #[test]
     fn creates_properties_from_defaults() {
-        let properties = ParsedTableProperties::default();
+        let properties = TableProperties::default();
 
         assert_eq!(properties.commit_retry_num_retries, 4);
         assert_eq!(properties.write_format_default, DataFileFormat::Parquet);
@@ -894,7 +905,7 @@ mod tests {
 
     #[test]
     fn serializes_to_flat_json_object() {
-        let properties = ParsedTableProperties {
+        let properties = TableProperties {
             commit_retry_num_retries: 9,
             write_format_default: DataFileFormat::Orc,
             write_data_path: Some("s3://warehouse/table/data".to_string()),
@@ -925,137 +936,43 @@ mod tests {
         };
 
         let json = serde_json::to_value(&properties).unwrap();
-        let expected_parts = [
+        assert_eq!(
+            json,
             serde_json::json!({
-                "commit.manifest-merge.enabled": "true",
-                "commit.manifest.min-count-to-merge": "100",
-                "commit.manifest.target-size-bytes": "8388608",
-                "commit.retry.max-wait-ms": "60000",
-                "commit.retry.min-wait-ms": "100",
                 "commit.retry.num-retries": "9",
-                "commit.retry.total-timeout-ms": "1800000",
-                "commit.status-check.max-wait-ms": "60000",
-                "commit.status-check.min-wait-ms": "1000",
-                "commit.status-check.num-retries": "3",
-                "commit.status-check.total-timeout-ms": "1800000",
-                "compatibility.snapshot-id-inheritance.enabled": "false",
-                "encryption.data-key-length": "16",
-                "engine.hive.enabled": "false",
-                "engine.hive.lock-enabled": "true",
-                "gc.enabled": "true",
-                "history.expire.max-ref-age-ms": "9223372036854775807",
-                "history.expire.max-snapshot-age-ms": "432000000",
-                "history.expire.min-snapshots-to-keep": "1",
-                "identifier-fields.rely": "false",
-                "read.data-planning-mode": "auto",
-                "read.delete-planning-mode": "auto",
-                "read.orc.vectorization.batch-size": "5000",
-                "read.orc.vectorization.enabled": "false",
-                "read.parquet.vectorization.batch-size": "5000",
-                "read.parquet.vectorization.enabled": "true",
-                "read.split.adaptive-size.enabled": "true",
-                "read.split.metadata-target-size": "33554432",
-                "read.split.open-file-cost": "4194304",
-                "read.split.planning-lookback": "10",
-                "read.split.target-size": "134217728"
-            }),
-            serde_json::json!({
                 "schema.name-mapping.default": r#"[{"field-id":1,"names":["id"]}]"#,
-                "write.avro.compression-codec": "gzip",
-                "write.avro.compression-level": "6",
                 "write.data.path": "s3://warehouse/table/data",
-                "write.datafusion.fanout.enabled": "true",
                 "write.delete.avro.compression-codec": "gzip",
                 "write.delete.avro.compression-level": "4",
-                "write.delete.distribution-mode": "none",
-                "write.delete.format.default": "parquet",
                 "write.delete.granularity": "file",
                 "write.delete.isolation-level": "snapshot",
                 "write.delete.mode": "merge-on-read",
-                "write.delete.orc.block-size-bytes": "268435456",
-                "write.delete.orc.compression-codec": "zlib",
-                "write.delete.orc.compression-strategy": "speed",
-                "write.delete.orc.stripe-size-bytes": "67108864",
-                "write.delete.orc.vectorized.batch-size": "1024",
-                "write.delete.parquet.compression-codec": "zstd",
-                "write.delete.parquet.compression-level": "3",
-                "write.delete.parquet.dict-size-bytes": "2097152",
-                "write.delete.parquet.page-row-limit": "20000",
-                "write.delete.parquet.page-size-bytes": "1048576",
-                "write.delete.parquet.page-version": "v1",
-                "write.delete.parquet.row-group-check-max-record-count": "10000",
-                "write.delete.parquet.row-group-check-min-record-count": "100",
-                "write.delete.parquet.row-group-size-bytes": "134217728",
-                "write.delete.target-file-size-bytes": "67108864"
-            }),
-            serde_json::json!({
                 "write.distribution-mode": "range",
                 "write.format.default": "orc",
-                "write.manifest-lists.enabled": "true",
                 "write.manifest.compression-codec": "gzip",
                 "write.manifest.compression-level": "9",
-                "write.merge.distribution-mode": "none",
-                "write.merge.isolation-level": "serializable",
-                "write.merge.mode": "copy-on-write",
-                "write.metadata.compression-codec": "none",
-                "write.metadata.delete-after-commit.enabled": "false",
-                "write.metadata.metrics.default": "truncate(16)",
-                "write.metadata.metrics.max-inferred-column-defaults": "100",
-                "write.metadata.previous-versions-max": "100",
-                "write.object-storage.enabled": "false",
-                "write.object-storage.partitioned-paths": "true",
-                "write.orc.block-size-bytes": "268435456",
                 "write.orc.bloom.filter.columns": "id,category",
-                "write.orc.bloom.filter.fpp": "0.05",
                 "write.orc.compression-codec": "lzo",
-                "write.orc.compression-strategy": "speed",
-                "write.orc.stripe-size-bytes": "67108864",
-                "write.orc.vectorized.batch-size": "1024"
-            }),
-            serde_json::json!({
-                "write.parquet.bloom-filter-adaptive-enabled": "false",
                 "write.parquet.bloom-filter-fpp.column.customer_id": "0.02",
-                "write.parquet.bloom-filter-max-bytes": "1048576",
                 "write.parquet.bloom-filter-ndv.column.customer_id": "1000000",
                 "write.parquet.compression-codec": "zstd",
                 "write.parquet.compression-level": "5",
-                "write.parquet.content-defined-chunking.enabled": "false",
-                "write.parquet.content-defined-chunking.max-chunk-size": "1048576",
-                "write.parquet.content-defined-chunking.min-chunk-size": "262144",
-                "write.parquet.content-defined-chunking.norm-level": "0",
-                "write.parquet.dict-size-bytes": "2097152",
-                "write.parquet.page-row-limit": "20000",
-                "write.parquet.page-size-bytes": "1048576",
-                "write.parquet.page-version": "v1",
-                "write.parquet.row-group-check-max-record-count": "10000",
-                "write.parquet.row-group-check-min-record-count": "100",
-                "write.parquet.row-group-size-bytes": "134217728",
-                "write.parquet.row-group-size-track-uncompressed": "false",
-                "write.parquet.shred-variants": "false",
-                "write.parquet.variant-inference-buffer-size": "100",
-                "write.spark.accept-any-schema": "false",
-                "write.spark.auto-schema-evolution.enabled": "true",
-                "write.spark.fanout.enabled": "false",
-                "write.summary.partition-limit": "0",
-                "write.target-file-size-bytes": "536870912",
-                "write.update.distribution-mode": "hash",
-                "write.update.isolation-level": "serializable",
-                "write.update.mode": "copy-on-write",
-                "write.upsert.enabled": "false",
-                "write.wap.enabled": "false"
-            }),
-        ];
-        let mut expected = serde_json::Map::new();
-        for part in expected_parts {
-            expected.extend(part.as_object().unwrap().clone());
-        }
+                "write.update.distribution-mode": "hash"
+            })
+        );
+    }
 
-        assert_eq!(json, serde_json::Value::Object(expected));
+    #[test]
+    fn omits_default_values_when_serializing() {
+        assert_eq!(
+            serde_json::to_value(TableProperties::default()).unwrap(),
+            serde_json::json!({})
+        );
     }
 
     #[test]
     fn deserializes_from_flat_json_object() {
-        let properties: ParsedTableProperties = serde_json::from_value(serde_json::json!({
+        let properties: TableProperties = serde_json::from_value(serde_json::json!({
             "commit.retry.num-retries": "8",
             "write.format.default": "orc",
             "write.data.path": "s3://warehouse/table/data",

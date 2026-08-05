@@ -52,7 +52,8 @@ use syn::{
 /// for fields represented by more than one key. `additional_key` declares a second key and passes
 /// it to those hooks after the primary key.
 /// Optional fields are omitted from JSON when they are `None`. Fields need `FromStr` and `ToString`
-/// unless the relevant custom parsing or serialization attribute is supplied. String-literal and
+/// unless the relevant custom parsing or serialization attribute is supplied. Leaf fields also
+/// need `PartialEq` so values equal to their defaults can be omitted from JSON. String-literal and
 /// path defaults are converted into their field type with `Into`.
 #[proc_macro_derive(
     Properties,
@@ -353,10 +354,15 @@ fn parse_field(field: &PropertyField) -> TokenStream2 {
         return quote!(#ident: <#ty>::from_properties(properties)?);
     }
 
+    let ty = &field.ty;
     let default = default_value(
         field.default.as_ref().expect("leaf fields have defaults"),
-        &field.ty,
+        ty,
     );
+    let default = quote!({
+        let value: #ty = #default;
+        value
+    });
 
     if let Some(parse_properties_with) = &field.parse_properties_with {
         let key = field.key.as_ref().expect("exact-key fields have a key");
@@ -492,6 +498,16 @@ fn write_field(field: &PropertyField) -> TokenStream2 {
         };
     }
 
+    let ty = &field.ty;
+    let default = default_value(
+        field.default.as_ref().expect("leaf fields have defaults"),
+        ty,
+    );
+    let default = quote!({
+        let value: #ty = #default;
+        value
+    });
+
     if let Some(write_properties_with) = &field.write_properties_with {
         let key = field.key.as_ref().expect("exact-key fields have a key");
         let write = match &field.additional_key {
@@ -501,15 +517,19 @@ fn write_field(field: &PropertyField) -> TokenStream2 {
             None => quote!(#write_properties_with(&self.#ident, properties, #key)),
         };
         return quote! {
-            #write;
+            if self.#ident != #default {
+                #write;
+            }
         };
     }
 
     if let Some(prefix) = &field.prefix {
         return quote! {
-            for (suffix, value) in &self.#ident {
-                let key = format!("{}{}", #prefix, suffix);
-                properties.insert(key, ::std::string::ToString::to_string(value));
+            if self.#ident != #default {
+                for (suffix, value) in &self.#ident {
+                    let key = format!("{}{}", #prefix, suffix);
+                    properties.insert(key, ::std::string::ToString::to_string(value));
+                }
             }
         };
     }
@@ -523,7 +543,7 @@ fn write_field(field: &PropertyField) -> TokenStream2 {
             )),
         };
         quote! {
-            if self.#ident.is_some() {
+            if self.#ident != #default && self.#ident.is_some() {
                 properties.insert((#key).to_string(), #value);
             }
         }
@@ -533,7 +553,9 @@ fn write_field(field: &PropertyField) -> TokenStream2 {
             None => quote!(::std::string::ToString::to_string(&self.#ident)),
         };
         quote! {
-            properties.insert((#key).to_string(), #value);
+            if self.#ident != #default {
+                properties.insert((#key).to_string(), #value);
+            }
         }
     }
 }

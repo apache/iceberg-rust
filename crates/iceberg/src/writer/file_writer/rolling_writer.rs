@@ -95,7 +95,7 @@ where
     ) -> Self {
         Self {
             inner_builder,
-            target_file_size: TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
+            target_file_size: TableProperties::default().write_target_file_size_bytes,
             file_io,
             location_generator,
             file_name_generator,

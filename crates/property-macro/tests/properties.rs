@@ -82,7 +82,12 @@ struct TestProperties {
 
 #[test]
 fn generates_defaults_and_serde_for_public_fields() {
-    assert_eq!(TestProperties::default().format, "parquet");
+    let defaults = TestProperties::default();
+    assert_eq!(defaults.format, "parquet");
+    assert_eq!(
+        serde_json::to_value(&defaults).unwrap(),
+        serde_json::json!({})
+    );
 
     let properties = TestProperties {
         retries: 8,
@@ -131,6 +136,11 @@ struct NestedProperties {
 
 #[test]
 fn nested_properties_use_a_flat_property_map() {
+    assert_eq!(
+        serde_json::to_value(NestedProperties::default()).unwrap(),
+        serde_json::json!({})
+    );
+
     let mut properties = NestedProperties::default();
     properties.commit.num_retries = 9;
 

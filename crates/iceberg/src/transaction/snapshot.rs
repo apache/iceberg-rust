@@ -28,7 +28,7 @@ use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
     ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
     SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
-    TableProperties, update_snapshot_summaries,
+    update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -374,18 +374,9 @@ impl<'a> SnapshotProducer<'a> {
         let mut summary_collector = SnapshotSummaryCollector::default();
         let table_metadata = self.table.metadata_ref();
 
-        let partition_summary_limit = if let Some(limit) = table_metadata
-            .properties()
-            .get(TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT)
-        {
-            if let Ok(limit) = limit.parse::<u64>() {
-                limit
-            } else {
-                TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
-            }
-        } else {
-            TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
-        };
+        let partition_summary_limit = table_metadata
+            .table_properties()?
+            .write_summary_partition_limit;
 
         summary_collector.set_partition_summary_limit(partition_summary_limit);
 
