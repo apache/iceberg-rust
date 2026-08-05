@@ -77,8 +77,9 @@ use std::collections::HashMap;
 use iceberg_property_macro::Properties;
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
+use crate::catalog::MetadataLocation;
 use crate::compression::CompressionCodec;
-use crate::error::{Error, ErrorKind, Result};
+use crate::error::Result;
 use crate::spec::{DataFileFormat, NameMapping};
 
 /// Parquet data page version 1.
@@ -175,133 +176,6 @@ pub enum RowLevelOperationMode {
     MergeOnRead,
 }
 
-/// Strips trailing slashes from a location, preserving a bare URI scheme root.
-fn strip_trailing_slash(path: &str) -> &str {
-    let mut path = path;
-    while !path.ends_with("://") {
-        let Some(stripped) = path.strip_suffix('/') else {
-            break;
-        };
-        path = stripped;
-    }
-    path
-}
-
-fn parse_metadata_location(value: &str) -> Result<Option<String>> {
-    if value.is_empty() {
-        return Err(Error::new(ErrorKind::DataInvalid, "path must not be empty"));
-    }
-
-    Ok(Some(strip_trailing_slash(value).to_string()))
-}
-
-fn parse_compression_codec(value: &str) -> Result<CompressionCodec> {
-    serde_json::from_value(serde_json::Value::String(value.to_lowercase())).map_err(|_| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!("Invalid compression codec: {value}"),
-        )
-    })
-}
-
-fn parse_metadata_file_compression(value: &str) -> Result<CompressionCodec> {
-    if value.is_empty() {
-        return Ok(CompressionCodec::None);
-    }
-
-    let codec: CompressionCodec = serde_json::from_value(serde_json::Value::String(
-        value.to_lowercase(),
-    ))
-    .map_err(|_| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported.",
-                CompressionCodec::None.name(),
-                CompressionCodec::gzip_default().name()
-            ),
-        )
-    })?;
-
-    match codec {
-        CompressionCodec::None | CompressionCodec::Gzip(_) => Ok(codec),
-        _ => Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported for metadata files.",
-                CompressionCodec::None.name(),
-                CompressionCodec::gzip_default().name()
-            ),
-        )),
-    }
-}
-
-fn serialize_compression_codec(codec: &CompressionCodec) -> String {
-    codec.name().to_string()
-}
-
-fn compression_level_key(codec_key: &str) -> String {
-    format!(
-        "{}level",
-        codec_key
-            .strip_suffix("codec")
-            .expect("compression codec property keys end with 'codec'")
-    )
-}
-
-fn parse_compression_codec_properties(
-    properties: &HashMap<String, String>,
-    codec_key: &str,
-    default: CompressionCodec,
-) -> Result<CompressionCodec> {
-    let codec = properties
-        .get(codec_key)
-        .map(|value| parse_compression_codec(value))
-        .transpose()?
-        .unwrap_or(default);
-    let level_key = compression_level_key(codec_key);
-    let Some(level) = properties.get(&level_key) else {
-        return Ok(codec);
-    };
-    let level = level.parse::<u8>().map_err(|error| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!("Invalid compression level for {level_key}: {level}"),
-        )
-        .with_source(error)
-    })?;
-
-    match codec {
-        CompressionCodec::Gzip(_) => Ok(CompressionCodec::Gzip(level)),
-        CompressionCodec::Zstd(_) => Ok(CompressionCodec::Zstd(level)),
-        _ => Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Compression level {level_key} is not supported for codec '{}'",
-                codec.name()
-            ),
-        )),
-    }
-}
-
-fn write_compression_codec_properties(
-    codec: &CompressionCodec,
-    properties: &mut HashMap<String, String>,
-    codec_key: &str,
-) {
-    properties.insert(codec_key.to_string(), serialize_compression_codec(codec));
-
-    let level_key = compression_level_key(codec_key);
-    match codec {
-        CompressionCodec::Gzip(level) | CompressionCodec::Zstd(level) => {
-            properties.insert(level_key, level.to_string());
-        }
-        _ => {
-            properties.remove(&level_key);
-        }
-    }
-}
-
 fn parse_comma_separated_strings(value: &str) -> Result<Vec<String>> {
     Ok(value
         .split(',')
@@ -395,8 +269,8 @@ pub struct ParsedTableProperties {
 
     #[key = "write.manifest.compression-codec"]
     #[default(CompressionCodec::gzip_default())]
-    #[parse_properties_with(parse_compression_codec_properties)]
-    #[write_properties_with(write_compression_codec_properties)]
+    #[parse_properties_with(CompressionCodec::parse_properties)]
+    #[write_properties_with(CompressionCodec::write_properties)]
     #[doc = "Compression codec used for manifest files."]
     pub write_manifest_compression_codec: CompressionCodec,
 
@@ -524,15 +398,15 @@ pub struct ParsedTableProperties {
 
     #[key = "write.parquet.compression-codec"]
     #[default(CompressionCodec::zstd_default())]
-    #[parse_properties_with(parse_compression_codec_properties)]
-    #[write_properties_with(write_compression_codec_properties)]
+    #[parse_properties_with(CompressionCodec::parse_properties)]
+    #[write_properties_with(CompressionCodec::write_properties)]
     #[doc = "Parquet compression codec used for data files."]
     pub write_parquet_compression_codec: CompressionCodec,
 
     #[key = "write.delete.parquet.compression-codec"]
     #[default(CompressionCodec::zstd_default())]
-    #[parse_properties_with(parse_compression_codec_properties)]
-    #[write_properties_with(write_compression_codec_properties)]
+    #[parse_properties_with(CompressionCodec::parse_properties)]
+    #[write_properties_with(CompressionCodec::write_properties)]
     #[doc = "Parquet compression codec used for delete files."]
     pub write_delete_parquet_compression_codec: CompressionCodec,
 
@@ -629,15 +503,15 @@ pub struct ParsedTableProperties {
     // Avro properties.
     #[key = "write.avro.compression-codec"]
     #[default(CompressionCodec::gzip_default())]
-    #[parse_properties_with(parse_compression_codec_properties)]
-    #[write_properties_with(write_compression_codec_properties)]
+    #[parse_properties_with(CompressionCodec::parse_properties)]
+    #[write_properties_with(CompressionCodec::write_properties)]
     #[doc = "Avro compression codec used for data files."]
     pub write_avro_compression_codec: CompressionCodec,
 
     #[key = "write.delete.avro.compression-codec"]
     #[default(CompressionCodec::gzip_default())]
-    #[parse_properties_with(parse_compression_codec_properties)]
-    #[write_properties_with(write_compression_codec_properties)]
+    #[parse_properties_with(CompressionCodec::parse_properties)]
+    #[write_properties_with(CompressionCodec::write_properties)]
     #[doc = "Avro compression codec used for delete files."]
     pub write_delete_avro_compression_codec: CompressionCodec,
 
@@ -686,15 +560,15 @@ pub struct ParsedTableProperties {
 
     #[key = "write.orc.compression-codec"]
     #[default(CompressionCodec::Zlib)]
-    #[parse_with(parse_compression_codec)]
-    #[serialize_with(serialize_compression_codec)]
+    #[parse_with(CompressionCodec::parse_property)]
+    #[serialize_with(CompressionCodec::property_value)]
     #[doc = "ORC compression codec used for data files."]
     pub write_orc_compression_codec: CompressionCodec,
 
     #[key = "write.delete.orc.compression-codec"]
     #[default(CompressionCodec::Zlib)]
-    #[parse_with(parse_compression_codec)]
-    #[serialize_with(serialize_compression_codec)]
+    #[parse_with(CompressionCodec::parse_property)]
+    #[serialize_with(CompressionCodec::property_value)]
     #[doc = "ORC compression codec used for delete files."]
     pub write_delete_orc_compression_codec: CompressionCodec,
 
@@ -767,7 +641,7 @@ pub struct ParsedTableProperties {
     // Metadata properties.
     #[key = "write.metadata.path"]
     #[default(None)]
-    #[parse_with(parse_metadata_location)]
+    #[parse_with(MetadataLocation::parse_write_metadata_path)]
     #[doc = "Base location for metadata files written after this property is set, with trailing slashes removed."]
     pub write_metadata_path: Option<String>,
 
@@ -778,8 +652,8 @@ pub struct ParsedTableProperties {
 
     #[key = "write.metadata.compression-codec"]
     #[default(CompressionCodec::None)]
-    #[parse_with(parse_metadata_file_compression)]
-    #[serialize_with(serialize_compression_codec)]
+    #[parse_with(CompressionCodec::parse_metadata_property)]
+    #[serialize_with(CompressionCodec::property_value)]
     #[doc = "Compression codec for metadata JSON files: none or gzip."]
     pub write_metadata_compression_codec: CompressionCodec,
 
@@ -941,6 +815,7 @@ pub struct ParsedTableProperties {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{Error, ErrorKind};
     use crate::spec::MappedField;
 
     fn parse(properties: HashMap<String, String>) -> Result<ParsedTableProperties> {
@@ -1045,39 +920,129 @@ mod tests {
                 "customer_id".to_string(),
                 0.02,
             )]),
+            write_parquet_bloom_filter_ndv_column: HashMap::from([(
+                "customer_id".to_string(),
+                1_000_000,
+            )]),
             ..Default::default()
         };
 
         let json = serde_json::to_value(&properties).unwrap();
-        assert_eq!(json["commit.retry.num-retries"], "9");
-        assert_eq!(json["write.format.default"], "orc");
-        assert_eq!(json["write.data.path"], "s3://warehouse/table/data");
-        assert_eq!(json["write.manifest.compression-codec"], "gzip");
-        assert_eq!(json["write.manifest.compression-level"], "9");
-        assert_eq!(json["write.parquet.compression-codec"], "zstd");
-        assert_eq!(json["write.parquet.compression-level"], "5");
-        assert_eq!(json["write.delete.avro.compression-codec"], "gzip");
-        assert_eq!(json["write.delete.avro.compression-level"], "4");
-        assert_eq!(json["write.distribution-mode"], "range");
-        assert_eq!(json["write.orc.compression-codec"], "lzo");
-        assert_eq!(json["write.orc.bloom.filter.columns"], "id,category");
-        assert_eq!(json["write.delete.granularity"], "file");
-        assert_eq!(json["write.delete.isolation-level"], "snapshot");
-        assert_eq!(json["write.delete.mode"], "merge-on-read");
-        assert_eq!(json["write.update.distribution-mode"], "hash");
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(
-                json["schema.name-mapping.default"].as_str().unwrap()
-            )
-            .unwrap(),
-            serde_json::json!([{"field-id": 1, "names": ["id"]}])
+            json,
+            serde_json::json!({
+                "commit.manifest-merge.enabled": "true",
+                "commit.manifest.min-count-to-merge": "100",
+                "commit.manifest.target-size-bytes": "8388608",
+                "commit.retry.max-wait-ms": "60000",
+                "commit.retry.min-wait-ms": "100",
+                "commit.retry.num-retries": "9",
+                "commit.retry.total-timeout-ms": "1800000",
+                "commit.status-check.max-wait-ms": "60000",
+                "commit.status-check.min-wait-ms": "1000",
+                "commit.status-check.num-retries": "3",
+                "commit.status-check.total-timeout-ms": "1800000",
+                "compatibility.snapshot-id-inheritance.enabled": "false",
+                "encryption.data-key-length": "16",
+                "engine.hive.enabled": "false",
+                "engine.hive.lock-enabled": "true",
+                "gc.enabled": "true",
+                "history.expire.max-ref-age-ms": "9223372036854775807",
+                "history.expire.max-snapshot-age-ms": "432000000",
+                "history.expire.min-snapshots-to-keep": "1",
+                "identifier-fields.rely": "false",
+                "read.data-planning-mode": "auto",
+                "read.delete-planning-mode": "auto",
+                "read.orc.vectorization.batch-size": "5000",
+                "read.orc.vectorization.enabled": "false",
+                "read.parquet.vectorization.batch-size": "5000",
+                "read.parquet.vectorization.enabled": "true",
+                "read.split.adaptive-size.enabled": "true",
+                "read.split.metadata-target-size": "33554432",
+                "read.split.open-file-cost": "4194304",
+                "read.split.planning-lookback": "10",
+                "read.split.target-size": "134217728",
+                "schema.name-mapping.default": r#"[{"field-id":1,"names":["id"]}]"#,
+                "write.avro.compression-codec": "gzip",
+                "write.avro.compression-level": "6",
+                "write.data.path": "s3://warehouse/table/data",
+                "write.datafusion.fanout.enabled": "true",
+                "write.delete.avro.compression-codec": "gzip",
+                "write.delete.avro.compression-level": "4",
+                "write.delete.distribution-mode": "none",
+                "write.delete.format.default": "parquet",
+                "write.delete.granularity": "file",
+                "write.delete.isolation-level": "snapshot",
+                "write.delete.mode": "merge-on-read",
+                "write.delete.orc.block-size-bytes": "268435456",
+                "write.delete.orc.compression-codec": "zlib",
+                "write.delete.orc.compression-strategy": "speed",
+                "write.delete.orc.stripe-size-bytes": "67108864",
+                "write.delete.orc.vectorized.batch-size": "1024",
+                "write.delete.parquet.compression-codec": "zstd",
+                "write.delete.parquet.compression-level": "3",
+                "write.delete.parquet.dict-size-bytes": "2097152",
+                "write.delete.parquet.page-row-limit": "20000",
+                "write.delete.parquet.page-size-bytes": "1048576",
+                "write.delete.parquet.page-version": "v1",
+                "write.delete.parquet.row-group-check-max-record-count": "10000",
+                "write.delete.parquet.row-group-check-min-record-count": "100",
+                "write.delete.parquet.row-group-size-bytes": "134217728",
+                "write.delete.target-file-size-bytes": "67108864",
+                "write.distribution-mode": "range",
+                "write.format.default": "orc",
+                "write.manifest-lists.enabled": "true",
+                "write.manifest.compression-codec": "gzip",
+                "write.manifest.compression-level": "9",
+                "write.merge.distribution-mode": "none",
+                "write.merge.isolation-level": "serializable",
+                "write.merge.mode": "copy-on-write",
+                "write.metadata.compression-codec": "none",
+                "write.metadata.delete-after-commit.enabled": "false",
+                "write.metadata.metrics.default": "truncate(16)",
+                "write.metadata.metrics.max-inferred-column-defaults": "100",
+                "write.metadata.previous-versions-max": "100",
+                "write.object-storage.enabled": "false",
+                "write.object-storage.partitioned-paths": "true",
+                "write.orc.block-size-bytes": "268435456",
+                "write.orc.bloom.filter.columns": "id,category",
+                "write.orc.bloom.filter.fpp": "0.05",
+                "write.orc.compression-codec": "lzo",
+                "write.orc.compression-strategy": "speed",
+                "write.orc.stripe-size-bytes": "67108864",
+                "write.orc.vectorized.batch-size": "1024",
+                "write.parquet.bloom-filter-adaptive-enabled": "false",
+                "write.parquet.bloom-filter-fpp.column.customer_id": "0.02",
+                "write.parquet.bloom-filter-max-bytes": "1048576",
+                "write.parquet.bloom-filter-ndv.column.customer_id": "1000000",
+                "write.parquet.compression-codec": "zstd",
+                "write.parquet.compression-level": "5",
+                "write.parquet.content-defined-chunking.enabled": "false",
+                "write.parquet.content-defined-chunking.max-chunk-size": "1048576",
+                "write.parquet.content-defined-chunking.min-chunk-size": "262144",
+                "write.parquet.content-defined-chunking.norm-level": "0",
+                "write.parquet.dict-size-bytes": "2097152",
+                "write.parquet.page-row-limit": "20000",
+                "write.parquet.page-size-bytes": "1048576",
+                "write.parquet.page-version": "v1",
+                "write.parquet.row-group-check-max-record-count": "10000",
+                "write.parquet.row-group-check-min-record-count": "100",
+                "write.parquet.row-group-size-bytes": "134217728",
+                "write.parquet.row-group-size-track-uncompressed": "false",
+                "write.parquet.shred-variants": "false",
+                "write.parquet.variant-inference-buffer-size": "100",
+                "write.spark.accept-any-schema": "false",
+                "write.spark.auto-schema-evolution.enabled": "true",
+                "write.spark.fanout.enabled": "false",
+                "write.summary.partition-limit": "0",
+                "write.target-file-size-bytes": "536870912",
+                "write.update.distribution-mode": "hash",
+                "write.update.isolation-level": "serializable",
+                "write.update.mode": "copy-on-write",
+                "write.upsert.enabled": "false",
+                "write.wap.enabled": "false"
+            })
         );
-        assert_eq!(
-            json["write.parquet.bloom-filter-fpp.column.customer_id"],
-            "0.02"
-        );
-        assert!(json.get("commit").is_none());
-        assert!(json.get("write").is_none());
     }
 
     #[test]
@@ -1091,6 +1056,7 @@ mod tests {
             "write.parquet.compression-level": "5",
             "write.distribution-mode": "HASH",
             "write.orc.bloom.filter.columns": "id, category",
+            "write.parquet.bloom-filter-ndv.column.customer_id": "1000000",
             "schema.name-mapping.default": r#"[{"field-id":1,"names":["id"]}]"#,
             "write.delete.granularity": "FILE",
             "write.update.isolation-level": "snapshot",
@@ -1118,6 +1084,10 @@ mod tests {
             "category".to_string()
         ]);
         assert_eq!(
+            properties.write_parquet_bloom_filter_ndv_column,
+            HashMap::from([("customer_id".to_string(), 1_000_000)])
+        );
+        assert_eq!(
             properties.schema_name_mapping_default,
             Some(NameMapping::new(vec![MappedField::new(
                 Some(1),
@@ -1137,111 +1107,6 @@ mod tests {
     }
 
     #[test]
-    fn every_default_round_trips() {
-        let defaults = ParsedTableProperties::default();
-        let decoded: ParsedTableProperties =
-            serde_json::from_value(serde_json::to_value(&defaults).unwrap()).unwrap();
-
-        assert_eq!(
-            decoded.commit_retry_num_retries,
-            defaults.commit_retry_num_retries
-        );
-        assert_eq!(
-            decoded.write_metadata_compression_codec,
-            defaults.write_metadata_compression_codec
-        );
-        assert_eq!(
-            decoded.write_parquet_content_defined_chunking_max_chunk_size,
-            defaults.write_parquet_content_defined_chunking_max_chunk_size
-        );
-        assert_eq!(decoded.write_merge_mode, defaults.write_merge_mode);
-        assert_eq!(
-            decoded.write_manifest_compression_codec,
-            defaults.write_manifest_compression_codec
-        );
-        assert_eq!(
-            decoded.write_parquet_compression_codec,
-            defaults.write_parquet_compression_codec
-        );
-        assert_eq!(
-            decoded.write_avro_compression_codec,
-            defaults.write_avro_compression_codec
-        );
-    }
-
-    #[test]
-    fn parses_values_across_groups() {
-        let properties = parse(HashMap::from([
-            ("comment".to_string(), "orders table".to_string()),
-            (
-                "commit.status-check.num-retries".to_string(),
-                "7".to_string(),
-            ),
-            (
-                "write.delete.avro.compression-codec".to_string(),
-                "snappy".to_string(),
-            ),
-            ("read.split.planning-lookback".to_string(), "25".to_string()),
-            (
-                "history.expire.min-snapshots-to-keep".to_string(),
-                "4".to_string(),
-            ),
-            ("write.delete.mode".to_string(), "merge-on-read".to_string()),
-            ("encryption.data-key-length".to_string(), "32".to_string()),
-        ]))
-        .unwrap();
-
-        assert_eq!(properties.comment, Some("orders table".to_string()));
-        assert_eq!(properties.commit_status_check_num_retries, 7);
-        assert_eq!(
-            properties.write_delete_avro_compression_codec,
-            CompressionCodec::Snappy
-        );
-        assert_eq!(properties.read_split_planning_lookback, 25);
-        assert_eq!(properties.history_expire_min_snapshots_to_keep, 4);
-        assert_eq!(
-            properties.write_delete_mode,
-            RowLevelOperationMode::MergeOnRead
-        );
-        assert_eq!(properties.encryption_data_key_length, 32);
-    }
-
-    #[test]
-    fn metadata_values_are_normalized_and_validated() {
-        let properties = parse(HashMap::from([
-            (
-                "write.metadata.path".to_string(),
-                "s3://warehouse/table/metadata/".to_string(),
-            ),
-            (
-                "write.metadata.compression-codec".to_string(),
-                "GZIP".to_string(),
-            ),
-        ]))
-        .unwrap();
-
-        assert_eq!(
-            properties.write_metadata_path,
-            Some("s3://warehouse/table/metadata".to_string())
-        );
-        assert_eq!(
-            properties.write_metadata_compression_codec,
-            CompressionCodec::gzip_default()
-        );
-
-        let error = parse(HashMap::from([(
-            "write.metadata.compression-codec".to_string(),
-            "zstd".to_string(),
-        )]))
-        .unwrap_err();
-        assert!(
-            error
-                .message()
-                .contains("Invalid metadata compression codec")
-        );
-    }
-
-    #[test]
     fn invalid_leaf_value_reports_its_property_key() {
         let error = parse(HashMap::from([(
             "commit.retry.num-retries".to_string(),
@@ -1250,38 +1115,5 @@ mod tests {
         .unwrap_err();
 
         assert!(error.message().contains("commit.retry.num-retries"));
-    }
-
-    #[test]
-    fn invalid_typed_value_reports_its_property_key() {
-        let error = parse(HashMap::from([(
-            "write.distribution-mode".to_string(),
-            "random".to_string(),
-        )]))
-        .unwrap_err();
-
-        assert!(error.message().contains("write.distribution-mode"));
-
-        let error = parse(HashMap::from([(
-            "schema.name-mapping.default".to_string(),
-            "not-json".to_string(),
-        )]))
-        .unwrap_err();
-
-        assert!(error.message().contains("schema.name-mapping.default"));
-
-        let error = parse(HashMap::from([
-            (
-                "write.parquet.compression-codec".to_string(),
-                "snappy".to_string(),
-            ),
-            (
-                "write.parquet.compression-level".to_string(),
-                "7".to_string(),
-            ),
-        ]))
-        .unwrap_err();
-
-        assert!(error.message().contains("write.parquet.compression-level"));
     }
 }

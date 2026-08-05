@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![cfg_attr(test, recursion_limit = "512")]
+
 //! Apache Iceberg Official Native Rust Implementation
 //!
 //! # Examples

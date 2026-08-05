@@ -17,6 +17,7 @@
 
 //! Compression codec support for data compression and decompression.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io::{Read, Write};
 
@@ -86,6 +87,115 @@ impl CompressionCodec {
             CompressionCodec::Zlib => "zlib",
         }
     }
+
+    /// Parses a compression codec name used by an Iceberg table property.
+    pub(crate) fn parse_property(value: &str) -> Result<Self> {
+        serde_json::from_value(serde_json::Value::String(value.to_lowercase())).map_err(|_| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid compression codec: {value}"),
+            )
+        })
+    }
+
+    /// Parses the metadata-file compression codec table property.
+    pub(crate) fn parse_metadata_property(value: &str) -> Result<Self> {
+        if value.is_empty() {
+            return Ok(Self::None);
+        }
+
+        let codec = Self::parse_property(value).map_err(|_| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported.",
+                    Self::None.name(),
+                    Self::gzip_default().name()
+                ),
+            )
+        })?;
+
+        match codec {
+            Self::None | Self::Gzip(_) => Ok(codec),
+            _ => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported for metadata files.",
+                    Self::None.name(),
+                    Self::gzip_default().name()
+                ),
+            )),
+        }
+    }
+
+    /// Returns the codec name used by an Iceberg table property.
+    pub(crate) fn property_value(&self) -> String {
+        self.name().to_string()
+    }
+
+    /// Parses a codec and its optional companion compression-level property.
+    pub(crate) fn parse_properties(
+        properties: &HashMap<String, String>,
+        codec_key: &str,
+        default: Self,
+    ) -> Result<Self> {
+        let codec = properties
+            .get(codec_key)
+            .map(|value| Self::parse_property(value))
+            .transpose()?
+            .unwrap_or(default);
+        let level_key = compression_level_key(codec_key);
+        let Some(level) = properties.get(&level_key) else {
+            return Ok(codec);
+        };
+        let level = level.parse::<u8>().map_err(|error| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid compression level for {level_key}: {level}"),
+            )
+            .with_source(error)
+        })?;
+
+        match codec {
+            Self::Gzip(_) => Ok(Self::Gzip(level)),
+            Self::Zstd(_) => Ok(Self::Zstd(level)),
+            _ => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Compression level {level_key} is not supported for codec '{}'",
+                    codec.name()
+                ),
+            )),
+        }
+    }
+
+    /// Writes a codec and its optional companion compression-level property.
+    pub(crate) fn write_properties(
+        &self,
+        properties: &mut HashMap<String, String>,
+        codec_key: &str,
+    ) {
+        properties.insert(codec_key.to_string(), self.property_value());
+
+        let level_key = compression_level_key(codec_key);
+        match self {
+            Self::Gzip(level) | Self::Zstd(level) => {
+                properties.insert(level_key, level.to_string());
+            }
+            _ => {
+                properties.remove(&level_key);
+            }
+        }
+    }
+}
+
+fn compression_level_key(codec_key: &str) -> String {
+    format!(
+        "{}level",
+        codec_key
+            .strip_suffix("codec")
+            .expect("compression codec property keys end with 'codec'")
+    )
 }
 
 // Note: serialize/deserialize do not round-trip the compression level. Iceberg configuration

@@ -43,6 +43,23 @@ pub struct MetadataLocation {
 }
 
 impl MetadataLocation {
+    /// Parses and normalizes the `write.metadata.path` table property.
+    pub(crate) fn parse_write_metadata_path(value: &str) -> Result<Option<String>> {
+        if value.is_empty() {
+            return Err(Error::new(ErrorKind::DataInvalid, "path must not be empty"));
+        }
+
+        let mut path = value;
+        while !path.ends_with("://") {
+            let Some(stripped) = path.strip_suffix('/') else {
+                break;
+            };
+            path = stripped;
+        }
+
+        Ok(Some(path.to_string()))
+    }
+
     /// Determines the compression codec from table properties.
     /// Parse errors result in CompressionCodec::None.
     fn compression_from_properties(properties: &HashMap<String, String>) -> CompressionCodec {
