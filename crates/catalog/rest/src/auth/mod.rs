@@ -140,32 +140,6 @@ pub trait AuthSession: Debug + Send + Sync {
     async fn authenticate(&self, request: &mut AuthRequest<'_>) -> Result<()>;
 }
 
-/// A secret string: `Debug` prints `[REDACTED]` and the memory is zeroized on
-/// drop. String-shaped counterpart of the core crate's `SensitiveBytes`; note
-/// that copies formatted into requests (form bodies, header values) are owned
-/// by the HTTP stack and outlive this wrapper.
-#[derive(Clone)]
-pub(crate) struct SensitiveString(zeroize::Zeroizing<String>);
-
-impl SensitiveString {
-    /// The wrapped secret.
-    pub(crate) fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<String> for SensitiveString {
-    fn from(secret: String) -> Self {
-        Self(zeroize::Zeroizing::new(secret))
-    }
-}
-
-impl Debug for SensitiveString {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("[REDACTED]")
-    }
-}
-
 /// [`AuthManager`] that performs no authentication.
 #[derive(Debug)]
 pub struct NoopAuthManager;
@@ -219,22 +193,6 @@ mod tests {
             req.headers().get("authorization").unwrap(),
             "Bearer tok-static"
         );
-    }
-
-    #[test]
-    fn test_sensitive_string_redacts_debug() {
-        let secret = SensitiveString::from("s3cret-value".to_string());
-        assert_eq!(format!("{secret:?}"), "[REDACTED]");
-
-        // Containers can safely derive Debug around it.
-        #[derive(Debug)]
-        #[allow(dead_code)]
-        struct Holder {
-            secret: SensitiveString,
-        }
-        let rendered = format!("{:?}", Holder { secret });
-        assert!(!rendered.contains("s3cret-value"), "leaked: {rendered}");
-        assert!(rendered.contains("[REDACTED]"));
     }
 
     #[test]
