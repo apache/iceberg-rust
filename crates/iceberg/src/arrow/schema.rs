@@ -136,7 +136,7 @@ fn iceberg_crs_from_wkb_metadata(crs: Option<&serde_json::Value>) -> Result<Opti
                 .ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        "PROJJSON CRS must contain an id object",
+                        "Cannot write PROJJSON CRS without an embedded authority/code to Iceberg",
                     )
                 })?;
             let authority = id
@@ -2541,6 +2541,26 @@ mod tests {
             schema.field_by_id(2).unwrap().field_type.as_ref(),
             &Type::Primitive(PrimitiveType::Geography(GeographyType::default()))
         );
+    }
+
+    #[test]
+    fn test_geospatial_arrow_invalid_crs_import() {
+        let cases = vec![
+            (
+                r#"{"type":"GeographicCRS"}"#.to_string(),
+                "Cannot write PROJJSON CRS without an embedded authority/code to Iceberg",
+            ),
+            ("x".repeat(129), "Geospatial CRS must be at most 128 bytes"),
+        ];
+
+        for (crs, expected_error) in cases {
+            let mut geom = simple_field("geom", DataType::LargeBinary, true, "1");
+            geom.try_with_extension_type(WkbType::new(Some(WkbMetadata::new(Some(&crs), None))))
+                .unwrap();
+
+            let error = arrow_schema_to_schema(&ArrowSchema::new(vec![geom])).unwrap_err();
+            assert!(error.to_string().contains(expected_error));
+        }
     }
 
     #[test]
