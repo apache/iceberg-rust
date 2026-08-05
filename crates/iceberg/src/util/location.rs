@@ -15,16 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use iceberg::Result;
-use opendal::Operator;
-use opendal::services::FsConfig;
+/// Strips trailing slashes from a location, preserving a bare URI scheme root
+pub(crate) fn strip_trailing_slash(path: &str) -> &str {
+    let mut path = path;
+    while !path.ends_with("://") {
+        let Some(stripped) = path.strip_suffix('/') else {
+            break;
+        };
+        path = stripped;
+    }
+    path
+}
 
-use crate::utils::from_opendal_error;
-
-/// Build new opendal operator from give path.
-pub(crate) fn fs_config_build() -> Result<Operator> {
-    let mut cfg = FsConfig::default();
-    cfg.root = Some("/".to_string());
-
-    Operator::from_config(cfg).map_err(from_opendal_error)
+#[test]
+fn test_strip_trailing_slash() {
+    for (path, expected) in [
+        ("s3://bucket/db/tbl", "s3://bucket/db/tbl"),
+        ("s3://bucket/db/tbl/", "s3://bucket/db/tbl"),
+        ("s3://bucket/db/tbl////", "s3://bucket/db/tbl"),
+        ("blobstore://", "blobstore://"),
+        ("blobstore:///", "blobstore://"),
+        ("file:///", "file://"),
+        ("////", ""),
+        ("", ""),
+    ] {
+        assert_eq!(strip_trailing_slash(path), expected);
+    }
 }

@@ -669,7 +669,7 @@ pub mod tests {
     use crate::scan::FileScanTask;
     use crate::spec::{
         DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, DataFileBuilder, DataFileFormat, Datum,
-        Literal, MAIN_BRANCH, ManifestEntry, ManifestListWriter, ManifestStatus,
+        FormatVersion, Literal, MAIN_BRANCH, ManifestEntry, ManifestListWriter, ManifestStatus,
         ManifestWriterBuilder, NestedField, Operation, PartitionSpec, PrimitiveType, Schema,
         Snapshot, Struct, StructType, Summary, TableMetadata, TableMetadataBuilder, Type,
         UnboundPartitionSpec,
@@ -989,6 +989,84 @@ pub mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
+            );
+            manifest_list_write
+                .add_manifests(vec![data_file_manifest].into_iter())
+                .unwrap();
+            manifest_list_write.close().await.unwrap();
+        }
+
+        /// Writes a v3 data manifest with a manifest-level `first_row_id` of 42,
+        /// so live entries inherit a per-file `first_row_id` on read. Upgrades the
+        /// table to v3 first, so the manifest list is read as v3.
+        pub async fn setup_v3_manifest_files(&mut self) {
+            let metadata = TableMetadataBuilder::new_from_metadata(
+                self.table.metadata().clone(),
+                self.table.metadata_location().map(str::to_string),
+            )
+            .upgrade_format_version(FormatVersion::V3)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+            self.table = Table::builder()
+                .metadata(metadata)
+                .identifier(self.table.identifier().clone())
+                .file_io(self.table.file_io().clone())
+                .metadata_location(self.table.metadata_location().unwrap().to_string())
+                .runtime(test_runtime())
+                .build()
+                .unwrap();
+
+            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+            let current_partition_spec = self.table.metadata().default_partition_spec();
+
+            let parquet_file_size = self.write_parquet_data_files();
+
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
+            )
+            .build_v3_data();
+            writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/1.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(parquet_file_size)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(100))]))
+                                .key_metadata(None)
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            let data_file_manifest = writer.write_manifest_file().await.unwrap();
+
+            let manifest_list_writer = self
+                .table
+                .file_io()
+                .new_output(current_snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap();
+            let mut manifest_list_write = ManifestListWriter::v3(
+                manifest_list_writer,
+                current_snapshot.snapshot_id(),
+                current_snapshot.parent_snapshot_id(),
+                current_snapshot.sequence_number(),
+                Some(42),
             );
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
@@ -1863,6 +1941,70 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn test_plan_files_carries_row_lineage_into_file_scan_task() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let mut tasks: Vec<_> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(tasks.len(), 2);
+        tasks.sort_by_key(|task| task.data_file_path.to_string());
+
+        // The added file inherits the current snapshot's data sequence number,
+        // the existing file keeps the one it was written with.
+        assert_eq!(
+            tasks[0].data_file_path,
+            format!("{}/1.parquet", &fixture.table_location)
+        );
+        assert_eq!(tasks[0].data_sequence_number, Some(1));
+        assert_eq!(
+            tasks[1].data_file_path,
+            format!("{}/3.parquet", &fixture.table_location)
+        );
+        assert_eq!(tasks[1].data_sequence_number, Some(0));
+
+        // first_row_id is a v3 concept; a v2 manifest carries none.
+        assert!(tasks.iter().all(|task| task.first_row_id.is_none()));
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_carries_row_lineage_from_v3_manifest() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_v3_manifest_files().await;
+
+        let task = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("expected one FileScanTask");
+
+        // The manifest-level first_row_id (42) is inherited onto the entry on
+        // read, then carried onto the task.
+        assert_eq!(task.first_row_id, Some(42));
+        // The data sequence number is threaded through the same v3 read path.
+        assert_eq!(task.data_sequence_number, Some(1));
+    }
+
+    #[tokio::test]
     async fn test_filtered_scan_with_dropped_partition_source_column() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
@@ -2441,6 +2583,8 @@ pub mod tests {
             assert_eq!(task.project_field_ids, deserialized.project_field_ids);
             assert_eq!(task.predicate, deserialized.predicate);
             assert_eq!(task.schema, deserialized.schema);
+            assert_eq!(task.first_row_id, deserialized.first_row_id);
+            assert_eq!(task.data_sequence_number, deserialized.data_sequence_number);
         };
 
         // without predicate
@@ -2462,6 +2606,8 @@ pub mod tests {
             .with_project_field_ids(vec![1, 2, 3])
             .with_schema(schema.clone())
             .with_record_count(Some(100))
+            .with_first_row_id(Some(1000))
+            .with_data_sequence_number(Some(5))
             .with_data_file_format(DataFileFormat::Parquet)
             .with_case_sensitive(false)
             .build();
