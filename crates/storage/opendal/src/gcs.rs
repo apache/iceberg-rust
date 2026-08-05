@@ -18,9 +18,11 @@
 
 use std::collections::HashMap;
 
+#[allow(deprecated)]
+use iceberg::io::GCS_SERVICE_PATH;
 use iceberg::io::{
     GCS_ALLOW_ANONYMOUS, GCS_CREDENTIALS_JSON, GCS_DISABLE_CONFIG_LOAD, GCS_DISABLE_VM_METADATA,
-    GCS_NO_AUTH, GCS_SERVICE_PATH, GCS_TOKEN,
+    GCS_NO_AUTH, GCS_SERVICE_HOST, GCS_TOKEN,
 };
 use iceberg::{Error, ErrorKind, Result};
 use opendal::Operator;
@@ -30,6 +32,7 @@ use url::Url;
 use crate::utils::{from_opendal_error, is_truthy};
 
 /// Parse iceberg properties to [`GcsConfig`].
+#[allow(deprecated)]
 pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConfig> {
     let mut cfg = GcsConfig::default();
 
@@ -41,7 +44,12 @@ pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConf
         cfg.token = Some(token);
     }
 
-    if let Some(endpoint) = m.remove(GCS_SERVICE_PATH) {
+    // Prefer the canonical `gcs.service.host`, falling back to the deprecated
+    // `gcs.service.path` for backwards compatibility.
+    if let Some(endpoint) = m
+        .remove(GCS_SERVICE_HOST)
+        .or_else(|| m.remove(GCS_SERVICE_PATH))
+    {
         cfg.endpoint = Some(endpoint);
     }
 
