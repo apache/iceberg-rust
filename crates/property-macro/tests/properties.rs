@@ -21,6 +21,7 @@ use iceberg_property_macro::Properties;
 
 const RETRIES: &str = "commit.retry.num-retries";
 const OWNER: &str = "owner";
+const FORMAT: &str = "write.format.default";
 const COLUMN_FPP_PREFIX: &str = "write.parquet.bloom-filter-fpp.column.";
 
 #[derive(Debug, Properties)]
@@ -34,6 +35,10 @@ struct TestProperties {
     #[default(None)]
     pub owner: Option<String>,
 
+    #[key(FORMAT)]
+    #[default("parquet")]
+    pub format: String,
+
     #[prefix(COLUMN_FPP_PREFIX)]
     #[default(HashMap::new())]
     pub column_fpp: HashMap<String, f64>,
@@ -41,24 +46,30 @@ struct TestProperties {
 
 #[test]
 fn generates_defaults_and_serde_for_public_fields() {
+    assert_eq!(TestProperties::default().format, "parquet");
+
     let properties = TestProperties {
         retries: 8,
         owner: Some("iceberg".to_string()),
+        format: "orc".to_string(),
         column_fpp: HashMap::from([("id".to_string(), 0.01)]),
     };
 
     assert_eq!(properties.retries, 8);
     assert_eq!(properties.owner, Some("iceberg".to_string()));
+    assert_eq!(properties.format, "orc");
     assert_eq!(properties.column_fpp["id"], 0.01);
 
     let json = serde_json::to_value(&properties).unwrap();
     assert_eq!(json[RETRIES], "8");
     assert_eq!(json[OWNER], "iceberg");
+    assert_eq!(json[FORMAT], "orc");
     assert_eq!(json[format!("{COLUMN_FPP_PREFIX}id")], "0.01");
 
     let decoded: TestProperties = serde_json::from_value(json).unwrap();
     assert_eq!(decoded.retries, 8);
     assert_eq!(decoded.owner, Some("iceberg".to_string()));
+    assert_eq!(decoded.format, "orc");
     assert_eq!(decoded.column_fpp["id"], 0.01);
 }
 

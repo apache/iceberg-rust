@@ -40,8 +40,14 @@ pub enum CompressionCodec {
     #[default]
     /// No compression
     None,
+    /// Uncompressed file-format encoding
+    Uncompressed,
+    /// Brotli compression
+    Brotli,
     /// LZ4 single compression frame with content size present
     Lz4,
+    /// LZO compression
+    Lzo,
     /// Zstandard single compression frame with content size present.
     /// Level range is 0–22, where 0 means default compression level (not no compression).
     /// Use [`CompressionCodec::zstd_default`] to construct with the default level.
@@ -51,6 +57,8 @@ pub enum CompressionCodec {
     Gzip(u8),
     /// Snappy compression
     Snappy,
+    /// Zlib compression
+    Zlib,
 }
 
 impl CompressionCodec {
@@ -68,10 +76,14 @@ impl CompressionCodec {
     pub fn name(&self) -> &'static str {
         match self {
             CompressionCodec::None => "none",
+            CompressionCodec::Uncompressed => "uncompressed",
+            CompressionCodec::Brotli => "brotli",
             CompressionCodec::Lz4 => "lz4",
+            CompressionCodec::Lzo => "lzo",
             CompressionCodec::Zstd(_) => "zstd",
             CompressionCodec::Gzip(_) => "gzip",
             CompressionCodec::Snappy => "snappy",
+            CompressionCodec::Zlib => "zlib",
         }
     }
 }
@@ -91,12 +103,24 @@ impl<'de> Deserialize<'de> for CompressionCodec {
         let s = String::deserialize(deserializer)?;
         match s.to_lowercase().as_str() {
             "none" => Ok(CompressionCodec::None),
+            "uncompressed" => Ok(CompressionCodec::Uncompressed),
+            "brotli" => Ok(CompressionCodec::Brotli),
             "lz4" => Ok(CompressionCodec::Lz4),
+            "lzo" => Ok(CompressionCodec::Lzo),
             "zstd" => Ok(CompressionCodec::zstd_default()),
             "gzip" => Ok(CompressionCodec::gzip_default()),
             "snappy" => Ok(CompressionCodec::Snappy),
+            "zlib" => Ok(CompressionCodec::Zlib),
             other => Err(serde::de::Error::unknown_variant(other, &[
-                "none", "lz4", "zstd", "gzip", "snappy",
+                "none",
+                "uncompressed",
+                "brotli",
+                "lz4",
+                "lzo",
+                "zstd",
+                "gzip",
+                "snappy",
+                "zlib",
             ])),
         }
     }
@@ -106,10 +130,14 @@ impl fmt::Display for CompressionCodec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CompressionCodec::None => write!(f, "None"),
+            CompressionCodec::Uncompressed => write!(f, "Uncompressed"),
+            CompressionCodec::Brotli => write!(f, "Brotli"),
             CompressionCodec::Lz4 => write!(f, "Lz4"),
+            CompressionCodec::Lzo => write!(f, "Lzo"),
             CompressionCodec::Zstd(level) => write!(f, "Zstd(level={level})"),
             CompressionCodec::Gzip(level) => write!(f, "Gzip(level={level})"),
             CompressionCodec::Snappy => write!(f, "Snappy"),
+            CompressionCodec::Zlib => write!(f, "Zlib"),
         }
     }
 }
@@ -117,11 +145,21 @@ impl fmt::Display for CompressionCodec {
 impl CompressionCodec {
     pub(crate) fn decompress(&self, bytes: Vec<u8>) -> Result<Vec<u8>> {
         match self {
-            CompressionCodec::None => Ok(bytes),
+            CompressionCodec::None | CompressionCodec::Uncompressed => Ok(bytes),
             CompressionCodec::Lz4 => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "LZ4 decompression is not supported currently",
             )),
+            CompressionCodec::Snappy => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Snappy decompression is not supported currently",
+            )),
+            codec @ (CompressionCodec::Brotli | CompressionCodec::Lzo | CompressionCodec::Zlib) => {
+                Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("{codec} decompression is not supported currently"),
+                ))
+            }
             CompressionCodec::Zstd(_) => Ok(zstd::stream::decode_all(&bytes[..])?),
             CompressionCodec::Gzip(_) => {
                 let mut decoder = GzDecoder::new(&bytes[..]);
@@ -129,20 +167,26 @@ impl CompressionCodec {
                 decoder.read_to_end(&mut decompressed)?;
                 Ok(decompressed)
             }
-            CompressionCodec::Snappy => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Snappy decompression is not supported currently",
-            )),
         }
     }
 
     pub(crate) fn compress(&self, bytes: Vec<u8>) -> Result<Vec<u8>> {
         match self {
-            CompressionCodec::None => Ok(bytes),
+            CompressionCodec::None | CompressionCodec::Uncompressed => Ok(bytes),
             CompressionCodec::Lz4 => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "LZ4 compression is not supported currently",
             )),
+            CompressionCodec::Snappy => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Snappy compression is not supported currently",
+            )),
+            codec @ (CompressionCodec::Brotli | CompressionCodec::Lzo | CompressionCodec::Zlib) => {
+                Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("{codec} compression is not supported currently"),
+                ))
+            }
             CompressionCodec::Zstd(level) => {
                 let writer = Vec::<u8>::new();
                 let mut encoder = zstd::stream::Encoder::new(writer, *level as i32)?;
@@ -157,15 +201,14 @@ impl CompressionCodec {
                 encoder.write_all(&bytes)?;
                 Ok(encoder.finish()?)
             }
-            CompressionCodec::Snappy => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Snappy compression is not supported currently",
-            )),
         }
     }
 
     pub(crate) fn is_none(&self) -> bool {
-        matches!(self, CompressionCodec::None)
+        matches!(
+            self,
+            CompressionCodec::None | CompressionCodec::Uncompressed
+        )
     }
 
     /// Returns the file extension suffix for this compression codec.
@@ -173,14 +216,17 @@ impl CompressionCodec {
     ///
     /// # Errors
     ///
-    /// Returns an error for Lz4 and Zstd as they are not fully supported.
+    /// Returns an error when the codec does not have a defined suffix.
     pub fn suffix(&self) -> Result<&'static str> {
         match self {
-            CompressionCodec::None => Ok(""),
+            CompressionCodec::None | CompressionCodec::Uncompressed => Ok(""),
             CompressionCodec::Gzip(_) => Ok(".gz"),
-            codec @ (CompressionCodec::Lz4
+            codec @ (CompressionCodec::Brotli
+            | CompressionCodec::Lz4
+            | CompressionCodec::Lzo
             | CompressionCodec::Zstd(_)
-            | CompressionCodec::Snappy) => Err(Error::new(
+            | CompressionCodec::Snappy
+            | CompressionCodec::Zlib) => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 format!("suffix not defined for {codec:?}"),
             )),
@@ -196,11 +242,12 @@ mod tests {
     async fn test_compression_codec_none() {
         let bytes_vec = [0_u8; 100].to_vec();
 
-        let codec = CompressionCodec::None;
-        let compressed = codec.compress(bytes_vec.clone()).unwrap();
-        assert_eq!(bytes_vec, compressed);
-        let decompressed = codec.decompress(compressed).unwrap();
-        assert_eq!(bytes_vec, decompressed);
+        for codec in [CompressionCodec::None, CompressionCodec::Uncompressed] {
+            let compressed = codec.compress(bytes_vec.clone()).unwrap();
+            assert_eq!(bytes_vec, compressed);
+            let decompressed = codec.decompress(compressed).unwrap();
+            assert_eq!(bytes_vec, decompressed);
+        }
     }
 
     #[tokio::test]
@@ -225,6 +272,9 @@ mod tests {
         let unsupported_codecs = [
             (CompressionCodec::Lz4, "LZ4"),
             (CompressionCodec::Snappy, "Snappy"),
+            (CompressionCodec::Brotli, "Brotli"),
+            (CompressionCodec::Lzo, "Lzo"),
+            (CompressionCodec::Zlib, "Zlib"),
         ];
         let bytes_vec = [0_u8; 100].to_vec();
 
@@ -272,5 +322,28 @@ mod tests {
         );
         assert_eq!(CompressionCodec::Gzip(9).to_string(), "Gzip(level=9)");
         assert_eq!(CompressionCodec::Snappy.to_string(), "Snappy");
+    }
+
+    #[test]
+    fn test_serde_names() {
+        let codecs = [
+            ("none", CompressionCodec::None),
+            ("uncompressed", CompressionCodec::Uncompressed),
+            ("brotli", CompressionCodec::Brotli),
+            ("lz4", CompressionCodec::Lz4),
+            ("lzo", CompressionCodec::Lzo),
+            ("zstd", CompressionCodec::zstd_default()),
+            ("gzip", CompressionCodec::gzip_default()),
+            ("snappy", CompressionCodec::Snappy),
+            ("zlib", CompressionCodec::Zlib),
+        ];
+
+        for (name, codec) in codecs {
+            assert_eq!(serde_json::to_value(codec).unwrap(), name);
+            assert_eq!(
+                serde_json::from_value::<CompressionCodec>(serde_json::json!(name)).unwrap(),
+                codec
+            );
+        }
     }
 }

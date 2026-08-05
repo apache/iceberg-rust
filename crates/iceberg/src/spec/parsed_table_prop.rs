@@ -100,6 +100,15 @@ fn parse_metadata_location(value: &str) -> Result<Option<String>> {
     Ok(Some(strip_trailing_slash(value).to_string()))
 }
 
+fn parse_compression_codec(value: &str) -> Result<CompressionCodec> {
+    serde_json::from_value(serde_json::Value::String(value.to_lowercase())).map_err(|_| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid compression codec: {value}"),
+        )
+    })
+}
+
 fn parse_metadata_file_compression(value: &str) -> Result<CompressionCodec> {
     if value.is_empty() {
         return Ok(CompressionCodec::None);
@@ -215,14 +224,16 @@ pub struct ParsedTableProperties {
     pub commit_manifest_merge_enabled: bool,
 
     #[key = "write.manifest.compression-codec"]
-    #[default("gzip".to_string())]
+    #[default(CompressionCodec::gzip_default())]
+    #[parse_with(parse_compression_codec)]
+    #[serialize_with(serialize_compression_codec)]
     #[doc = "Compression codec used for manifest files."]
-    pub write_manifest_compression_codec: String,
+    pub write_manifest_compression_codec: CompressionCodec,
 
     #[key = "write.manifest.compression-level"]
     #[default(None)]
     #[doc = "Optional compression level used for manifest files."]
-    pub write_manifest_compression_level: Option<String>,
+    pub write_manifest_compression_level: Option<i32>,
 
     #[key = "write.manifest-lists.enabled"]
     #[default(true)]
@@ -317,12 +328,12 @@ pub struct ParsedTableProperties {
     pub write_delete_parquet_page_size_bytes: usize,
 
     #[key = "write.parquet.page-version"]
-    #[default("v1".to_string())]
+    #[default("v1")]
     #[doc = "Parquet data page version for data files: v1 or v2."]
     pub write_parquet_page_version: String,
 
     #[key = "write.delete.parquet.page-version"]
-    #[default("v1".to_string())]
+    #[default("v1")]
     #[doc = "Parquet data page version for delete files: v1 or v2."]
     pub write_delete_parquet_page_version: String,
 
@@ -347,24 +358,28 @@ pub struct ParsedTableProperties {
     pub write_delete_parquet_dict_size_bytes: usize,
 
     #[key = "write.parquet.compression-codec"]
-    #[default("zstd".to_string())]
+    #[default(CompressionCodec::zstd_default())]
+    #[parse_with(parse_compression_codec)]
+    #[serialize_with(serialize_compression_codec)]
     #[doc = "Parquet compression codec used for data files."]
-    pub write_parquet_compression_codec: String,
+    pub write_parquet_compression_codec: CompressionCodec,
 
     #[key = "write.delete.parquet.compression-codec"]
-    #[default("zstd".to_string())]
+    #[default(CompressionCodec::zstd_default())]
+    #[parse_with(parse_compression_codec)]
+    #[serialize_with(serialize_compression_codec)]
     #[doc = "Parquet compression codec used for delete files."]
-    pub write_delete_parquet_compression_codec: String,
+    pub write_delete_parquet_compression_codec: CompressionCodec,
 
     #[key = "write.parquet.compression-level"]
     #[default(None)]
     #[doc = "Optional Parquet compression level for data files."]
-    pub write_parquet_compression_level: Option<String>,
+    pub write_parquet_compression_level: Option<i32>,
 
     #[key = "write.delete.parquet.compression-level"]
     #[default(None)]
     #[doc = "Optional Parquet compression level for delete files."]
-    pub write_delete_parquet_compression_level: Option<String>,
+    pub write_delete_parquet_compression_level: Option<i32>,
 
     #[key = "write.parquet.shred-variants"]
     #[default(false)]
@@ -458,24 +473,28 @@ pub struct ParsedTableProperties {
 
     // Avro properties.
     #[key = "write.avro.compression-codec"]
-    #[default("gzip".to_string())]
+    #[default(CompressionCodec::gzip_default())]
+    #[parse_with(parse_compression_codec)]
+    #[serialize_with(serialize_compression_codec)]
     #[doc = "Avro compression codec used for data files."]
-    pub write_avro_compression_codec: String,
+    pub write_avro_compression_codec: CompressionCodec,
 
     #[key = "write.delete.avro.compression-codec"]
-    #[default("gzip".to_string())]
+    #[default(CompressionCodec::gzip_default())]
+    #[parse_with(parse_compression_codec)]
+    #[serialize_with(serialize_compression_codec)]
     #[doc = "Avro compression codec used for delete files."]
-    pub write_delete_avro_compression_codec: String,
+    pub write_delete_avro_compression_codec: CompressionCodec,
 
     #[key = "write.avro.compression-level"]
     #[default(None)]
     #[doc = "Optional Avro compression level for data files."]
-    pub write_avro_compression_level: Option<String>,
+    pub write_avro_compression_level: Option<i32>,
 
     #[key = "write.delete.avro.compression-level"]
     #[default(None)]
     #[doc = "Optional Avro compression level for delete files."]
-    pub write_delete_avro_compression_level: Option<String>,
+    pub write_delete_avro_compression_level: Option<i32>,
 
     // ORC properties.
     #[key = "write.orc.stripe-size-bytes"]
@@ -489,7 +508,7 @@ pub struct ParsedTableProperties {
     pub write_delete_orc_stripe_size_bytes: u64,
 
     #[key = "write.orc.bloom.filter.columns"]
-    #[default(String::new())]
+    #[default("")]
     #[doc = "Comma-separated column names for which ORC bloom filters are created."]
     pub write_orc_bloom_filter_columns: String,
 
@@ -519,22 +538,26 @@ pub struct ParsedTableProperties {
     pub write_delete_orc_vectorized_batch_size: usize,
 
     #[key = "write.orc.compression-codec"]
-    #[default("zlib".to_string())]
+    #[default(CompressionCodec::Zlib)]
+    #[parse_with(parse_compression_codec)]
+    #[serialize_with(serialize_compression_codec)]
     #[doc = "ORC compression codec used for data files."]
-    pub write_orc_compression_codec: String,
+    pub write_orc_compression_codec: CompressionCodec,
 
     #[key = "write.delete.orc.compression-codec"]
-    #[default("zlib".to_string())]
+    #[default(CompressionCodec::Zlib)]
+    #[parse_with(parse_compression_codec)]
+    #[serialize_with(serialize_compression_codec)]
     #[doc = "ORC compression codec used for delete files."]
-    pub write_delete_orc_compression_codec: String,
+    pub write_delete_orc_compression_codec: CompressionCodec,
 
     #[key = "write.orc.compression-strategy"]
-    #[default("speed".to_string())]
+    #[default("speed")]
     #[doc = "ORC compression strategy for data files: speed or compression."]
     pub write_orc_compression_strategy: String,
 
     #[key = "write.delete.orc.compression-strategy"]
-    #[default("speed".to_string())]
+    #[default("speed")]
     #[doc = "ORC compression strategy for delete files: speed or compression."]
     pub write_delete_orc_compression_strategy: String,
 
@@ -585,12 +608,12 @@ pub struct ParsedTableProperties {
     pub read_orc_vectorization_batch_size: usize,
 
     #[key = "read.data-planning-mode"]
-    #[default("auto".to_string())]
+    #[default("auto")]
     #[doc = "Planning mode used for data files."]
     pub read_data_planning_mode: String,
 
     #[key = "read.delete-planning-mode"]
-    #[default("auto".to_string())]
+    #[default("auto")]
     #[doc = "Planning mode used for delete files."]
     pub read_delete_planning_mode: String,
 
@@ -634,7 +657,7 @@ pub struct ParsedTableProperties {
     pub write_metadata_metrics_column: HashMap<String, String>,
 
     #[key = "write.metadata.metrics.default"]
-    #[default("truncate(16)".to_string())]
+    #[default("truncate(16)")]
     #[doc = "Default metrics mode for table columns."]
     pub write_metadata_metrics_default: String,
 
@@ -702,17 +725,17 @@ pub struct ParsedTableProperties {
 
     // Row-level operation properties.
     #[key = "write.delete.granularity"]
-    #[default("partition".to_string())]
+    #[default("partition")]
     #[doc = "Granularity of generated delete files: partition or file."]
     pub write_delete_granularity: String,
 
     #[key = "write.delete.isolation-level"]
-    #[default("serializable".to_string())]
+    #[default("serializable")]
     #[doc = "Isolation level for delete commands: serializable or snapshot."]
     pub write_delete_isolation_level: String,
 
     #[key = "write.delete.mode"]
-    #[default("copy-on-write".to_string())]
+    #[default("copy-on-write")]
     #[doc = "Execution mode for delete commands: copy-on-write or merge-on-read."]
     pub write_delete_mode: String,
 
@@ -722,12 +745,12 @@ pub struct ParsedTableProperties {
     pub write_delete_distribution_mode: Option<String>,
 
     #[key = "write.update.isolation-level"]
-    #[default("serializable".to_string())]
+    #[default("serializable")]
     #[doc = "Isolation level for update commands: serializable or snapshot."]
     pub write_update_isolation_level: String,
 
     #[key = "write.update.mode"]
-    #[default("copy-on-write".to_string())]
+    #[default("copy-on-write")]
     #[doc = "Execution mode for update commands: copy-on-write or merge-on-read."]
     pub write_update_mode: String,
 
@@ -737,12 +760,12 @@ pub struct ParsedTableProperties {
     pub write_update_distribution_mode: Option<String>,
 
     #[key = "write.merge.isolation-level"]
-    #[default("serializable".to_string())]
+    #[default("serializable")]
     #[doc = "Isolation level for merge commands: serializable or snapshot."]
     pub write_merge_isolation_level: String,
 
     #[key = "write.merge.mode"]
-    #[default("copy-on-write".to_string())]
+    #[default("copy-on-write")]
     #[doc = "Execution mode for merge commands: copy-on-write or merge-on-read."]
     pub write_merge_mode: String,
 
@@ -784,6 +807,25 @@ mod tests {
         assert_eq!(properties.commit_retry_num_retries, 4);
         assert_eq!(properties.write_format_default, DataFileFormat::Parquet);
         assert_eq!(
+            properties.write_manifest_compression_codec,
+            CompressionCodec::gzip_default()
+        );
+        assert_eq!(
+            properties.write_parquet_compression_codec,
+            CompressionCodec::zstd_default()
+        );
+        assert_eq!(
+            properties.write_avro_compression_codec,
+            CompressionCodec::gzip_default()
+        );
+        assert_eq!(
+            properties.write_orc_compression_codec,
+            CompressionCodec::Zlib
+        );
+        assert_eq!(properties.write_manifest_compression_level, None);
+        assert_eq!(properties.write_parquet_compression_level, None);
+        assert_eq!(properties.write_avro_compression_level, None);
+        assert_eq!(
             properties.write_parquet_row_group_size_bytes,
             128 * 1024 * 1024
         );
@@ -798,6 +840,8 @@ mod tests {
             commit_retry_num_retries: 9,
             write_format_default: DataFileFormat::Orc,
             write_data_path: Some("s3://warehouse/table/data".to_string()),
+            write_orc_compression_codec: CompressionCodec::Lzo,
+            write_parquet_compression_level: Some(5),
             write_parquet_bloom_filter_fpp_column: HashMap::from([(
                 "customer_id".to_string(),
                 0.02,
@@ -809,6 +853,8 @@ mod tests {
         assert_eq!(json["commit.retry.num-retries"], "9");
         assert_eq!(json["write.format.default"], "orc");
         assert_eq!(json["write.data.path"], "s3://warehouse/table/data");
+        assert_eq!(json["write.orc.compression-codec"], "lzo");
+        assert_eq!(json["write.parquet.compression-level"], "5");
         assert_eq!(
             json["write.parquet.bloom-filter-fpp.column.customer_id"],
             "0.02"
@@ -867,6 +913,10 @@ mod tests {
                 "write.delete.avro.compression-codec".to_string(),
                 "snappy".to_string(),
             ),
+            (
+                "write.delete.avro.compression-level".to_string(),
+                "7".to_string(),
+            ),
             ("read.split.planning-lookback".to_string(), "25".to_string()),
             (
                 "history.expire.min-snapshots-to-keep".to_string(),
@@ -879,7 +929,11 @@ mod tests {
 
         assert_eq!(properties.comment, Some("orders table".to_string()));
         assert_eq!(properties.commit_status_check_num_retries, 7);
-        assert_eq!(properties.write_delete_avro_compression_codec, "snappy");
+        assert_eq!(
+            properties.write_delete_avro_compression_codec,
+            CompressionCodec::Snappy
+        );
+        assert_eq!(properties.write_delete_avro_compression_level, Some(7));
         assert_eq!(properties.read_split_planning_lookback, 25);
         assert_eq!(properties.history_expire_min_snapshots_to_keep, 4);
         assert_eq!(properties.write_delete_mode, "merge-on-read");

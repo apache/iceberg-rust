@@ -21,22 +21,27 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
-    Attribute, Data, DeriveInput, Error, Expr, ExprPath, Field, Fields, Ident, Meta, Path, Type,
-    parse_macro_input,
+    Attribute, Data, DeriveInput, Error, Expr, ExprLit, ExprPath, Field, Fields, Ident, Lit, Meta,
+    Path, Type, parse_macro_input,
 };
 
 /// Derive parsing, defaults, and JSON serialization for a typed property map.
 ///
 /// Leaf fields must declare the table-property key and its default:
 ///
-/// ```ignore
+/// ```
+/// use iceberg_property_macro::Properties;
+///
 /// #[derive(Properties)]
 /// struct Properties {
 ///     #[key = "write.format.default"]
-///     #[default = DataFileFormat::Parquet]
+///     #[default = "parquet"]
 ///     #[doc = "Default file format"]
-///     pub write_format_default: DataFileFormat,
+///     pub write_format_default: String,
 /// }
+///
+/// let properties = Properties::default();
+/// assert_eq!(properties.write_format_default, "parquet");
 /// ```
 ///
 /// `prefix` captures a family of properties in a `HashMap<String, T>`, keyed by the suffix after
@@ -44,7 +49,8 @@ use syn::{
 /// property map flat. `parse_with` may be used for exact-key property types that do not implement
 /// `FromStr` or need validation. `serialize_with` supplies their string representation in JSON.
 /// Optional fields are omitted from JSON when they are `None`. Fields need `FromStr` and `ToString`
-/// unless the relevant custom parsing or serialization attribute is supplied.
+/// unless the relevant custom parsing or serialization attribute is supplied. String-literal
+/// defaults are converted into their field type with `Into`.
 #[proc_macro_derive(
     Properties,
     attributes(key, prefix, nested, default, parse_with, serialize_with)
@@ -102,6 +108,8 @@ fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2> {
             quote!(#ident: ::std::default::Default::default())
         } else {
             let default = field.default.as_ref().expect("leaf fields have defaults");
+            let ty = &field.ty;
+            let default = default_value(default, ty);
             quote!(#ident: #default)
         }
     });
@@ -297,7 +305,10 @@ fn parse_field(field: &PropertyField) -> TokenStream2 {
         return quote!(#ident: <#ty>::from_properties(properties)?);
     }
 
-    let default = field.default.as_ref().expect("leaf fields have defaults");
+    let default = default_value(
+        field.default.as_ref().expect("leaf fields have defaults"),
+        &field.ty,
+    );
 
     if let Some(prefix) = &field.prefix {
         let value_type = field
@@ -353,6 +364,20 @@ fn parse_field(field: &PropertyField) -> TokenStream2 {
             Some(value) => #parse,
             None => #default,
         }
+    }
+}
+
+fn default_value(default: &Expr, ty: &Type) -> TokenStream2 {
+    if matches!(
+        default,
+        Expr::Lit(ExprLit {
+            lit: Lit::Str(_),
+            ..
+        })
+    ) {
+        quote!(::std::convert::Into::<#ty>::into(#default))
+    } else {
+        quote!(#default)
     }
 }
 
