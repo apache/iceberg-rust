@@ -141,14 +141,10 @@ fn position_delete_target(data_file: &DataFile) -> Option<String> {
 
 /// Whether a position delete file's sequence number lets it apply to a data file whose
 /// own sequence number is `data_file_seq_num`.
-///
-/// Defaults to true if any or both numbers are `None`: we cannot determine that the delete
-/// file does _not_ apply, so it should be tied to the file to avoid resurrecting rows.
 fn position_delete_applies(delete_seq_num: Option<i64>, data_file_seq_num: Option<i64>) -> bool {
-    match (delete_seq_num, data_file_seq_num) {
-        (Some(delete_seq_num), Some(data_file_seq_num)) => delete_seq_num >= data_file_seq_num,
-        _ => true,
-    }
+    data_file_seq_num
+        .map(|seq| delete_seq_num >= Some(seq))
+        .unwrap_or(true)
 }
 
 impl PopulatedDeleteFileIndex {
@@ -171,6 +167,14 @@ impl PopulatedDeleteFileIndex {
 
         files.into_iter().for_each(|ctx| {
             let arc_ctx = Arc::new(ctx);
+
+            if arc_ctx.manifest_entry.sequence_number().is_none() {
+                tracing::warn!(
+                    delete_file = arc_ctx.manifest_entry.data_file().file_path(),
+                    status = ?arc_ctx.manifest_entry.status(),
+                    "delete file manifest entry has no data sequence number. it will not be applied to any data file"
+                );
+            }
 
             let partition = arc_ctx.manifest_entry.data_file().partition();
 
@@ -741,61 +745,35 @@ mod tests {
     }
 
     #[test]
-    fn test_position_delete_without_sequence_number_applies() {
-        // An absent sequence number does not tell us that the delete file
-        // does _not_ apply, so it should be tied to the data file
+    fn test_position_delete_from_earlier_commit_does_not_apply() {
         let data_file = build_unpartitioned_data_file();
         let path = data_file.file_path();
 
-        let by_path = index_of(vec![
-            ManifestEntry::builder()
-                .status(ManifestStatus::Added)
-                .sequence_number_opt(None)
-                .data_file(build_pos_delete_with_bounds(
-                    path,
-                    path,
-                    &Struct::empty(),
-                    0,
-                ))
-                .build(),
-        ]);
-        assert_eq!(
-            by_path.get_deletes_for_data_file(&data_file, Some(5)).len(),
-            1
-        );
-
-        let by_partition = index_of(vec![
-            ManifestEntry::builder()
-                .status(ManifestStatus::Added)
-                .sequence_number_opt(None)
-                .data_file(build_unpartitioned_pos_delete())
-                .build(),
-        ]);
-        assert_eq!(
-            by_partition
-                .get_deletes_for_data_file(&data_file, Some(5))
-                .len(),
-            1
+        let by_path = index_of(vec![build_added_manifest_entry(
+            1,
+            &build_pos_delete_referencing(path),
+        )]);
+        assert!(
+            by_path
+                .get_deletes_for_data_file(&data_file, Some(2))
+                .is_empty(),
+            "position delete at seq 1 must not apply to a data file at seq 2"
         );
     }
 
     #[test]
-    fn test_equality_delete_without_sequence_number_is_skipped() {
-        // Absent sequence number of eq delete should not be tied
-        // to data file, otherwise it could delete data "in the future"
+    fn test_position_delete_from_same_commit_applies() {
         let data_file = build_unpartitioned_data_file();
-        let index = index_of(vec![
-            ManifestEntry::builder()
-                .status(ManifestStatus::Added)
-                .sequence_number_opt(None)
-                .data_file(build_unpartitioned_eq_delete())
-                .build(),
-        ]);
+        let path = data_file.file_path();
 
-        assert!(
-            index
-                .get_deletes_for_data_file(&data_file, Some(5))
-                .is_empty()
+        let by_path = index_of(vec![build_added_manifest_entry(
+            2,
+            &build_pos_delete_referencing(path),
+        )]);
+        assert_eq!(
+            by_path.get_deletes_for_data_file(&data_file, Some(2)).len(),
+            1,
+            "position delete at seq 2 must apply to a data file at seq 2 (same commit)"
         );
     }
 }
