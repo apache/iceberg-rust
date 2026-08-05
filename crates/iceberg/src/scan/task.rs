@@ -25,7 +25,7 @@ use crate::Result;
 use crate::expr::BoundPredicate;
 use crate::spec::{
     DataContentType, DataFileFormat, ManifestEntryRef, NameMapping, PartitionSpec, Schema,
-    SchemaRef, Struct,
+    SchemaRef, Struct, StructType,
 };
 
 /// A stream of [`FileScanTask`].
@@ -66,6 +66,24 @@ pub struct FileScanTask {
     /// reading the entire data file.
     #[builder(default)]
     pub record_count: Option<u64>,
+
+    /// The first row id assigned to the data file.
+    ///
+    /// Used to derive the `_row_id` metadata column: for a row without an
+    /// explicit `_row_id`, it is this value plus the row's ordinal position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub first_row_id: Option<i64>,
+
+    /// The data sequence number of the file, as opposed to its file sequence
+    /// number: the sequence number preserved when a file is carried forward
+    /// across a rewrite. May be null for an existing entry in a malformed
+    /// manifest that lacks one.
+    ///
+    /// Used to derive the `_last_updated_sequence_number` metadata column.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub data_sequence_number: Option<i64>,
 
     /// The data file path corresponding to the task.
     pub data_file_path: String,
@@ -115,6 +133,22 @@ pub struct FileScanTask {
     #[serde(deserialize_with = "deserialize_not_implemented")]
     #[builder(default)]
     pub name_mapping: Option<Arc<NameMapping>>,
+
+    /// The unified partition type across all specs in the table.
+    /// When `RESERVED_FIELD_ID_PARTITION` is in the projected field IDs, the reader
+    /// uses this type along with the task's partition_spec and partition data to
+    /// materialize the `_partition` struct column at read time.
+    ///
+    /// This is a table-level value (same for all tasks in a scan), stored per-task
+    /// so that readers are self-contained without needing back-pointers to table
+    /// metadata. The cost is one Arc clone per task.
+    /// Serde: not yet implemented (same pattern as partition, partition_spec, name_mapping).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_not_implemented")]
+    #[serde(deserialize_with = "deserialize_not_implemented")]
+    #[builder(default)]
+    pub unified_partition_type: Option<Arc<StructType>>,
 
     /// Whether this scan task should treat column names as case-sensitive when binding predicates.
     pub case_sensitive: bool,
