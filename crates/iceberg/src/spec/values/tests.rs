@@ -635,8 +635,8 @@ fn test_raw_literal_bytes_uuid_wrong_length() {
 }
 
 #[test]
-fn test_raw_literal_string_uuid_valid() {
-    let s = "f79c3e09-677c-4bbd-a479-3f349cb785e7";
+fn test_raw_literal_string_should_accept_hyphenated_uuid_as_value() {
+    let s = "a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8";
     check_raw_literal_string_serde_via_avro(
         s,
         Literal::uuid(Uuid::parse_str(s).unwrap()),
@@ -645,8 +645,26 @@ fn test_raw_literal_string_uuid_valid() {
 }
 
 #[test]
-fn test_raw_literal_string_uuid_invalid() {
+fn test_raw_literal_string_should_reject_a_uuid_with_an_invalid_string() {
     check_raw_literal_string_error_via_avro("not-a-uuid", &Primitive(PrimitiveType::Uuid));
+}
+
+#[test]
+fn test_raw_literal_string_should_reject_non_hyphenated_uuids() {
+    check_raw_literal_string_error_via_avro(
+        "a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8",
+        &Primitive(PrimitiveType::Uuid),
+    );
+
+    check_raw_literal_string_error_via_avro(
+        "urn:uuid:A1A2A3A4-B1B2-C1C2-D1D2-D3D4D5D6D7D8",
+        &Primitive(PrimitiveType::Uuid),
+    );
+
+    check_raw_literal_string_error_via_avro(
+        "{a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8}",
+        &Primitive(PrimitiveType::Uuid),
+    );
 }
 
 #[test]
