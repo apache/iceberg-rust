@@ -43,9 +43,11 @@ enum DeleteFileIndexState {
 #[derive(Debug)]
 struct PopulatedDeleteFileIndex {
     global_equality_deletes: Vec<Arc<DeleteFileContext>>,
-    /// eq and pos deletes keyed by (partition spec id, partition value):
-    eq_deletes_by_partition: HashMap<(i32, Struct), Vec<Arc<DeleteFileContext>>>,
-    pos_deletes_by_partition: HashMap<(i32, Struct), Vec<Arc<DeleteFileContext>>>,
+    /// Equality deletes keyed by partition spec id, then by partition value.
+    eq_deletes_by_partition: HashMap<i32, HashMap<Struct, Vec<Arc<DeleteFileContext>>>>,
+    /// Position deletes that name no single data file, keyed the same way.
+    pos_deletes_by_partition: HashMap<i32, HashMap<Struct, Vec<Arc<DeleteFileContext>>>>,
+    /// Position deletes keyed by the data file path they apply to.
     pos_deletes_by_path: HashMap<String, Vec<Arc<DeleteFileContext>>>,
     // TODO: Deletion Vector support
 }
@@ -154,12 +156,17 @@ impl PopulatedDeleteFileIndex {
     /// 1. The partition information is extracted from each delete file's manifest entry.
     /// 2. If the partition is empty and the delete file is not a positional delete,
     ///    it is added to the `global_equality_deletes` vector
-    /// 3. Otherwise, the delete file is added to one of two hash maps based on its content type.
+    /// 3. A positional delete that names a single data file is keyed by that path.
+    /// 4. Any other delete file is keyed by partition, in the map for its content type.
     fn new(files: Vec<DeleteFileContext>) -> PopulatedDeleteFileIndex {
-        let mut eq_deletes_by_partition: HashMap<(i32, Struct), Vec<Arc<DeleteFileContext>>> =
-            HashMap::default();
-        let mut pos_deletes_by_partition: HashMap<(i32, Struct), Vec<Arc<DeleteFileContext>>> =
-            HashMap::default();
+        let mut eq_deletes_by_partition: HashMap<
+            i32,
+            HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
+        > = HashMap::default();
+        let mut pos_deletes_by_partition: HashMap<
+            i32,
+            HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
+        > = HashMap::default();
         let mut pos_deletes_by_path: HashMap<String, Vec<Arc<DeleteFileContext>>> =
             HashMap::default();
 
@@ -190,10 +197,7 @@ impl PopulatedDeleteFileIndex {
             let destination_map = match arc_ctx.manifest_entry.content_type() {
                 DataContentType::PositionDeletes => {
                     if let Some(path) = position_delete_target(arc_ctx.manifest_entry.data_file()) {
-                        pos_deletes_by_path
-                            .entry(path)
-                            .or_default()
-                            .push(arc_ctx.clone());
+                        pos_deletes_by_path.entry(path).or_default().push(arc_ctx);
                         return;
                     }
                     &mut pos_deletes_by_partition
@@ -203,11 +207,11 @@ impl PopulatedDeleteFileIndex {
             };
 
             destination_map
-                .entry((arc_ctx.partition_spec_id, partition.clone()))
-                .and_modify(|entry| {
-                    entry.push(arc_ctx.clone());
-                })
-                .or_insert(vec![arc_ctx.clone()]);
+                .entry(arc_ctx.partition_spec_id)
+                .or_default()
+                .entry(partition.clone())
+                .or_default()
+                .push(arc_ctx);
         });
 
         // A large number of delete files that are attributed globally or partition-scoped
@@ -217,10 +221,12 @@ impl PopulatedDeleteFileIndex {
             pos_deletes_target_files = pos_deletes_by_path.len(),
             pos_deletes_partition_scoped = pos_deletes_by_partition
                 .values()
+                .flat_map(HashMap::values)
                 .map(Vec::len)
                 .sum::<usize>(),
             eq_deletes_partition_scoped = eq_deletes_by_partition
                 .values()
+                .flat_map(HashMap::values)
                 .map(Vec::len)
                 .sum::<usize>(),
             eq_deletes_global = global_equality_deletes.len(),
@@ -253,9 +259,11 @@ impl PopulatedDeleteFileIndex {
             })
             .for_each(|delete| results.push(delete.as_ref().into()));
 
-        let partition_key = (data_file.partition_spec_id, data_file.partition().clone());
-
-        if let Some(deletes) = self.eq_deletes_by_partition.get(&partition_key) {
+        if let Some(deletes) = self
+            .eq_deletes_by_partition
+            .get(&data_file.partition_spec_id)
+            .and_then(|by_partition| by_partition.get(data_file.partition()))
+        {
             deletes
                 .iter()
                 // filter that returns true if the provided delete file's sequence number is **greater than** `seq_num`
@@ -276,7 +284,11 @@ impl PopulatedDeleteFileIndex {
                 .for_each(|delete| results.push(delete.as_ref().into()));
         }
 
-        if let Some(deletes) = self.pos_deletes_by_partition.get(&partition_key) {
+        if let Some(deletes) = self
+            .pos_deletes_by_partition
+            .get(&data_file.partition_spec_id)
+            .and_then(|by_partition| by_partition.get(data_file.partition()))
+        {
             deletes
                 .iter()
                 .filter(|&delete| {
