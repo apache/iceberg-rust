@@ -370,19 +370,19 @@ impl Schema {
         self.highest_field_id
     }
 
-    /// Returns the `schema_id`.
+    /// Returns the Schema's ID.
     #[inline]
     pub fn schema_id(&self) -> SchemaId {
         self.schema_id
     }
 
-    /// Returns the `r#struct`.
+    /// Returns the type for the struct.
     #[inline]
     pub fn as_struct(&self) -> &StructType {
         &self.r#struct
     }
 
-    /// Returns the `identifier_field_ids`.
+    /// Returns the IDs of the fields.
     #[inline]
     pub fn identifier_field_ids(&self) -> impl ExactSizeIterator<Item = i32> + '_ {
         self.identifier_field_ids.iter().copied()
