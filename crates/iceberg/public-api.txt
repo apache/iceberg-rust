@@ -1387,12 +1387,17 @@ impl core::marker::StructuralPartialEq for iceberg::sensitive::SensitiveBytes
 pub struct iceberg::sensitive::SensitiveString(_)
 impl iceberg::sensitive::SensitiveString
 pub fn iceberg::sensitive::SensitiveString::expose(&self) -> &str
+pub fn iceberg::sensitive::SensitiveString::is_empty(&self) -> bool
 impl core::clone::Clone for iceberg::sensitive::SensitiveString
 pub fn iceberg::sensitive::SensitiveString::clone(&self) -> iceberg::sensitive::SensitiveString
+impl core::cmp::Eq for iceberg::sensitive::SensitiveString
+impl core::cmp::PartialEq for iceberg::sensitive::SensitiveString
+pub fn iceberg::sensitive::SensitiveString::eq(&self, other: &iceberg::sensitive::SensitiveString) -> bool
 impl core::convert::From<alloc::string::String> for iceberg::sensitive::SensitiveString
 pub fn iceberg::sensitive::SensitiveString::from(value: alloc::string::String) -> Self
 impl core::fmt::Debug for iceberg::sensitive::SensitiveString
 pub fn iceberg::sensitive::SensitiveString::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::sensitive::SensitiveString
 pub mod iceberg::spec
 pub use iceberg::spec::ByteBuf
 pub enum iceberg::spec::DataContentType
