@@ -56,9 +56,7 @@ pub(crate) fn azblob_create_operator<'a>(
     let mut config = config.clone();
     config.container = container;
 
-    let operator = Operator::from_config(config)
-        .map_err(from_opendal_error)?
-        .finish();
+    let operator = Operator::from_config(config).map_err(from_opendal_error)?;
     Ok((operator, relative_path))
 }
 

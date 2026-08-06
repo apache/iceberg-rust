@@ -689,6 +689,30 @@ pub fn iceberg::inspect::SnapshotsTable<'a>::new(table: &'a iceberg::table::Tabl
 pub async fn iceberg::inspect::SnapshotsTable<'a>::scan(&self) -> iceberg::Result<iceberg::scan::ArrowRecordBatchStream>
 pub fn iceberg::inspect::SnapshotsTable<'a>::schema(&self) -> iceberg::spec::Schema
 pub mod iceberg::io
+pub struct iceberg::io::AzblobConfig
+pub iceberg::io::AzblobConfig::account_key: core::option::Option<alloc::string::String>
+pub iceberg::io::AzblobConfig::account_name: core::option::Option<alloc::string::String>
+pub iceberg::io::AzblobConfig::endpoint: core::option::Option<alloc::string::String>
+pub iceberg::io::AzblobConfig::sas_token: core::option::Option<alloc::string::String>
+impl core::clone::Clone for iceberg::io::AzblobConfig
+pub fn iceberg::io::AzblobConfig::clone(&self) -> iceberg::io::AzblobConfig
+impl core::cmp::Eq for iceberg::io::AzblobConfig
+impl core::cmp::PartialEq for iceberg::io::AzblobConfig
+pub fn iceberg::io::AzblobConfig::eq(&self, other: &iceberg::io::AzblobConfig) -> bool
+impl core::convert::TryFrom<&iceberg::io::StorageConfig> for iceberg::io::AzblobConfig
+pub type iceberg::io::AzblobConfig::Error = iceberg::Error
+pub fn iceberg::io::AzblobConfig::try_from(config: &iceberg::io::StorageConfig) -> iceberg::Result<Self>
+impl core::default::Default for iceberg::io::AzblobConfig
+pub fn iceberg::io::AzblobConfig::default() -> iceberg::io::AzblobConfig
+impl core::fmt::Debug for iceberg::io::AzblobConfig
+pub fn iceberg::io::AzblobConfig::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::io::AzblobConfig
+impl iceberg::io::AzblobConfig
+pub fn iceberg::io::AzblobConfig::builder() -> AzblobConfigBuilder<((), (), (), ())>
+impl serde_core::ser::Serialize for iceberg::io::AzblobConfig
+pub fn iceberg::io::AzblobConfig::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::io::AzblobConfig
+pub fn iceberg::io::AzblobConfig::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::io::AzdlsConfig
 pub iceberg::io::AzdlsConfig::account_key: core::option::Option<alloc::string::String>
 pub iceberg::io::AzdlsConfig::account_name: core::option::Option<alloc::string::String>
@@ -968,6 +992,9 @@ pub fn iceberg::io::StorageConfig::clone(&self) -> iceberg::io::StorageConfig
 impl core::cmp::Eq for iceberg::io::StorageConfig
 impl core::cmp::PartialEq for iceberg::io::StorageConfig
 pub fn iceberg::io::StorageConfig::eq(&self, other: &iceberg::io::StorageConfig) -> bool
+impl core::convert::TryFrom<&iceberg::io::StorageConfig> for iceberg::io::AzblobConfig
+pub type iceberg::io::AzblobConfig::Error = iceberg::Error
+pub fn iceberg::io::AzblobConfig::try_from(config: &iceberg::io::StorageConfig) -> iceberg::Result<Self>
 impl core::convert::TryFrom<&iceberg::io::StorageConfig> for iceberg::io::AzdlsConfig
 pub type iceberg::io::AzdlsConfig::Error = iceberg::Error
 pub fn iceberg::io::AzdlsConfig::try_from(config: &iceberg::io::StorageConfig) -> iceberg::Result<Self>

@@ -5245,17 +5245,17 @@ dependencies = [
 
 [[package]]
 name = "opendal-service-azblob"
-version = "0.57.0"
+version = "0.58.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0030644366ef5d8cbe3a4a5822bf99a4aafddc1666e9d24b44d158d9062fc76a"
+checksum = "b3310fbbb48f111c6f590473c2cd15e1b7f8e384444b0d4e328f0464c864d767"
 dependencies = [
- "base64",
+ "base64 0.23.0",
  "bytes",
  "http 1.4.2",
  "log",
  "opendal-core",
  "opendal-service-azure-common",
- "quick-xml 0.39.4",
+ "quick-xml 0.41.0",
  "reqsign-azure-storage",
  "reqsign-core",
  "reqsign-file-read-tokio",
