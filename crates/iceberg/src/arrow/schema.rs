@@ -2133,6 +2133,27 @@ mod tests {
     }
 
     #[test]
+    fn test_schema_to_arrow_schema_should_convert_uuid_to_arrow_uuid() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "uuid_field", Type::Primitive(PrimitiveType::Uuid)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let arrow_schema = schema_to_arrow_schema(&schema).unwrap();
+        let field = arrow_schema.field_with_name("uuid_field").unwrap();
+
+        assert_eq!(field.extension_type_name(), Some(UuidExtensionType::NAME));
+        // Attaching the extension type must not clobber the Iceberg field id.
+        assert_eq!(
+            field.metadata().get(PARQUET_FIELD_ID_META_KEY),
+            Some(&"1".to_string())
+        );
+        assert_eq!(*field.data_type(), DataType::FixedSizeBinary(16));
+    }
+
+    #[test]
     fn test_variant_nested_in_list_and_map_carries_arrow_extension_type() {
         // A variant nested in a list element or map value keeps the arrow.parquet.variant
         // extension type. Regression guard: the list converter must not overwrite the
