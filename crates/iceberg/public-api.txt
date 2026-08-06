@@ -1364,6 +1364,16 @@ pub fn iceberg::scan::TableScanBuilder<'a>::with_row_group_filtering_enabled(sel
 pub fn iceberg::scan::TableScanBuilder<'a>::with_row_selection_enabled(self, row_selection_enabled: bool) -> Self
 pub type iceberg::scan::ArrowRecordBatchStream = futures_core::stream::BoxStream<'static, iceberg::Result<arrow_array::record_batch::RecordBatch>>
 pub type iceberg::scan::FileScanTaskStream = futures_core::stream::BoxStream<'static, iceberg::Result<iceberg::scan::FileScanTask>>
+pub mod iceberg::sensitive
+pub struct iceberg::sensitive::SensitiveString(_)
+impl iceberg::sensitive::SensitiveString
+pub fn iceberg::sensitive::SensitiveString::expose(&self) -> &str
+impl core::clone::Clone for iceberg::sensitive::SensitiveString
+pub fn iceberg::sensitive::SensitiveString::clone(&self) -> iceberg::sensitive::SensitiveString
+impl core::convert::From<alloc::string::String> for iceberg::sensitive::SensitiveString
+pub fn iceberg::sensitive::SensitiveString::from(value: alloc::string::String) -> Self
+impl core::fmt::Debug for iceberg::sensitive::SensitiveString
+pub fn iceberg::sensitive::SensitiveString::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub mod iceberg::spec
 pub use iceberg::spec::ByteBuf
 pub enum iceberg::spec::DataContentType
