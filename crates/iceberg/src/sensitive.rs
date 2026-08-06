@@ -125,13 +125,39 @@ impl fmt::Display for SensitiveBytes {
 
 #[cfg(test)]
 mod tests {
-    use crate::sensitive::SensitiveString;
+    use crate::sensitive::{SensitiveBytes, SensitiveString};
 
     #[test]
-    fn test_sensitive_string_redacts_value() {
+    fn test_sensitive_string_redacts_debug_value() {
         let sensitive_value = "my-pw-12346";
 
         let logged = format!("{:?}", SensitiveString::from(sensitive_value.to_string()));
         assert!(!logged.contains(sensitive_value));
+    }
+
+    #[test]
+    fn test_sensitive_bytes_redacts_debug_value() {
+        let sensitive_value = b"my-secret-bytes";
+
+        let logged = format!("{:?}", SensitiveBytes::new(&sensitive_value[..]));
+        assert!(
+            !logged
+                .as_bytes()
+                .windows(sensitive_value.len())
+                .any(|window| window == sensitive_value)
+        );
+    }
+
+    #[test]
+    fn test_sensitive_bytes_redacts_display_value() {
+        let sensitive_value = b"my-secret-bytes";
+
+        let logged = format!("{}", SensitiveBytes::new(&sensitive_value[..]));
+        assert!(
+            !logged
+                .as_bytes()
+                .windows(sensitive_value.len())
+                .any(|window| window == sensitive_value)
+        );
     }
 }
