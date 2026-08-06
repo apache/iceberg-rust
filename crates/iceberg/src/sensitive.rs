@@ -76,6 +76,53 @@ impl From<String> for SensitiveString {
     }
 }
 
+/// Wrapper for sensitive byte data (encryption keys, DEKs, etc.) that:
+/// - Zeroizes memory on drop
+/// - Redacts content in [`Debug`] and [`Display`] output
+/// - Provides only `&[u8]` access via [`as_bytes()`](Self::as_bytes)
+/// - Uses `Box<[u8]>` (immutable boxed slice) since key bytes never grow
+///
+/// Use this type for any struct field that holds plaintext key material.
+/// Because its [`Debug`] impl always prints `[N bytes REDACTED]`, structs
+/// containing `SensitiveBytes` can safely derive or implement `Debug`
+/// without risk of leaking key material.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SensitiveBytes(Zeroizing<Box<[u8]>>);
+
+impl SensitiveBytes {
+    /// Wraps the given bytes as sensitive material.
+    pub fn new(bytes: impl Into<Box<[u8]>>) -> Self {
+        Self(Zeroizing::new(bytes.into()))
+    }
+
+    /// Returns the underlying bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Returns the number of bytes.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns `true` if the byte slice is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Debug for SensitiveBytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{} bytes REDACTED]", self.0.len())
+    }
+}
+
+impl fmt::Display for SensitiveBytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{} bytes REDACTED]", self.0.len())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::sensitive::SensitiveString;
