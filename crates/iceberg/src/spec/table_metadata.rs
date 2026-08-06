@@ -35,7 +35,7 @@ pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataB
 use super::{
     DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
     SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
-    TableProperties, parse_metadata_file_compression,
+    TableProperties, parse_metadata_file_compression, parse_metadata_location_property,
 };
 use crate::catalog::{METADATA_FOLDER_NAME, MetadataLocation};
 use crate::compression::CompressionCodec;
@@ -369,9 +369,7 @@ impl TableMetadata {
     /// Honors the `write.metadata.path` table property when set, otherwise defaults
     /// to the `metadata` subdirectory under the table location.
     pub fn metadata_location(&self) -> Result<String> {
-        Ok(self
-            .table_properties()?
-            .write_metadata_path
+        Ok(parse_metadata_location_property(&self.properties)?
             .unwrap_or_else(|| format!("{}/{}", self.location(), METADATA_FOLDER_NAME)))
     }
 
@@ -387,10 +385,10 @@ impl TableMetadata {
         parse_metadata_file_compression(&self.properties)
     }
 
-    /// Returns typed table properties parsed from the raw properties map with defaults.
+    /// Returns all supported table properties parsed from the raw property map.
     pub fn table_properties(&self) -> Result<TableProperties> {
-        TableProperties::try_from(&self.properties).map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(e)
+        TableProperties::try_from(&self.properties).map_err(|error| {
+            Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(error)
         })
     }
 
@@ -4043,11 +4041,11 @@ mod tests {
         let props = metadata.table_properties().unwrap();
 
         assert_eq!(
-            props.commit_num_retries,
+            *props.commit_retry_num_retries(),
             TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
         );
         assert_eq!(
-            props.write_target_file_size_bytes,
+            *props.write_target_file_size_bytes(),
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
     }
@@ -4089,8 +4087,8 @@ mod tests {
 
         let props = metadata.table_properties().unwrap();
 
-        assert_eq!(props.commit_num_retries, 10);
-        assert_eq!(props.write_target_file_size_bytes, 1024);
+        assert_eq!(*props.commit_retry_num_retries(), 10);
+        assert_eq!(*props.write_target_file_size_bytes(), 1024);
     }
 
     #[test]
@@ -4347,7 +4345,6 @@ mod tests {
 
     #[test]
     fn test_metadata_location_trims_trailing_slash() {
-        // A configured path with a trailing slash must not yield a doubled separator
         let metadata = get_test_table_metadata("TableMetadataV2Valid.json")
             .into_builder(None)
             .set_properties(HashMap::from([(

@@ -67,10 +67,12 @@ impl DefaultLocationGenerator {
     /// `{table_location}/data`.
     pub fn new(table_metadata: &TableMetadata) -> Result<Self> {
         let table_location = strip_trailing_slash(table_metadata.location());
-        let prop = TableProperties::try_from(table_metadata.properties())?;
+        let properties = table_metadata.properties();
         let data_location = strip_trailing_slash(
-            prop.write_data_location
-                .or(prop.write_folder_storage_location)
+            properties
+                .get(TableProperties::PROPERTY_WRITE_DATA_LOCATION)
+                .or_else(|| properties.get(TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION))
+                .cloned()
                 .unwrap_or(format!("{table_location}{DEFAULT_DATA_DIR}"))
                 .as_ref(),
         )
@@ -134,11 +136,13 @@ impl ObjectStorageLocationGenerator {
     /// `{table_location}/data`.
     pub fn new(table_metadata: &TableMetadata) -> Result<Self> {
         let table_location = strip_trailing_slash(table_metadata.location());
-        let prop = TableProperties::try_from(table_metadata.properties())?;
+        let properties = table_metadata.properties();
         let storage_location = strip_trailing_slash(
-            prop.write_data_location
-                .or(prop.write_object_storage_location)
-                .or(prop.write_folder_storage_location)
+            properties
+                .get(TableProperties::PROPERTY_WRITE_DATA_LOCATION)
+                .or_else(|| properties.get(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION))
+                .or_else(|| properties.get(TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION))
+                .cloned()
                 .unwrap_or(format!("{table_location}{DEFAULT_DATA_DIR}"))
                 .as_ref(),
         )
@@ -152,7 +156,21 @@ impl ObjectStorageLocationGenerator {
             Some(path_context(table_location))
         };
 
-        let include_partition_paths = prop.write_object_storage_partitioned_paths;
+        let include_partition_paths = properties
+            .get(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS)
+            .map(|value| {
+                value.to_ascii_lowercase().parse::<bool>().map_err(|error| {
+                    crate::Error::new(
+                        crate::ErrorKind::DataInvalid,
+                        format!(
+                            "Invalid value for {}: {error}",
+                            TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS
+                        ),
+                    )
+                })
+            })
+            .transpose()?
+            .unwrap_or(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT);
 
         Ok(Self {
             storage_location,
