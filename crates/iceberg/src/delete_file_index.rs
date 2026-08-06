@@ -113,7 +113,7 @@ impl DeleteFileIndex {
     }
 }
 
-/// The single data file a position delete file applies to, `None` if it not tied
+/// The single data file a position delete file applies to, `None` if it is not tied
 /// to a single data file.
 fn position_delete_target(data_file: &DataFile) -> Option<String> {
     // data files is named directly
