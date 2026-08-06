@@ -30,6 +30,15 @@ use crate::io::is_truthy;
 /// Google Cloud Project ID.
 pub const GCS_PROJECT_ID: &str = "gcs.project-id";
 /// Google Cloud Storage endpoint.
+pub const GCS_SERVICE_HOST: &str = "gcs.service.host";
+/// Google Cloud Storage endpoint.
+///
+/// Deprecated: use [`GCS_SERVICE_HOST`] instead. This key never existed in the
+/// Iceberg Java or PyIceberg implementations (both use `gcs.service.host`), so
+/// endpoints vended by a REST catalog or copied from another engine were
+/// silently ignored. It is still read as a fallback for backwards
+/// compatibility.
+#[deprecated(since = "0.11.0", note = "use GCS_SERVICE_HOST instead")]
 pub const GCS_SERVICE_PATH: &str = "gcs.service.path";
 /// Google Cloud user project.
 pub const GCS_USER_PROJECT: &str = "gcs.user-project";
@@ -92,7 +101,13 @@ impl TryFrom<&StorageConfig> for GcsConfig {
         if let Some(project_id) = props.get(GCS_PROJECT_ID) {
             cfg.project_id = Some(project_id.clone());
         }
-        if let Some(endpoint) = props.get(GCS_SERVICE_PATH) {
+        // Prefer the canonical `gcs.service.host`, falling back to the
+        // deprecated `gcs.service.path` for backwards compatibility.
+        #[allow(deprecated)]
+        if let Some(endpoint) = props
+            .get(GCS_SERVICE_HOST)
+            .or_else(|| props.get(GCS_SERVICE_PATH))
+        {
             cfg.endpoint = Some(endpoint.clone());
         }
         if let Some(user_project) = props.get(GCS_USER_PROJECT) {
@@ -154,7 +169,7 @@ mod tests {
         let storage_config = StorageConfig::new()
             .with_prop(GCS_PROJECT_ID, "my-project")
             .with_prop(GCS_CREDENTIALS_JSON, "base64-creds")
-            .with_prop(GCS_SERVICE_PATH, "http://localhost:4443");
+            .with_prop(GCS_SERVICE_HOST, "http://localhost:4443");
 
         let gcs_config = GcsConfig::try_from(&storage_config).unwrap();
 
@@ -164,6 +179,34 @@ mod tests {
             gcs_config.endpoint.as_deref(),
             Some("http://localhost:4443")
         );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_gcs_config_service_path_fallback() {
+        // The deprecated `gcs.service.path` key is still honoured.
+        let storage_config =
+            StorageConfig::new().with_prop(GCS_SERVICE_PATH, "http://localhost:4443");
+
+        let gcs_config = GcsConfig::try_from(&storage_config).unwrap();
+
+        assert_eq!(
+            gcs_config.endpoint.as_deref(),
+            Some("http://localhost:4443")
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_gcs_config_service_host_takes_precedence() {
+        // When both are set, the canonical `gcs.service.host` wins.
+        let storage_config = StorageConfig::new()
+            .with_prop(GCS_SERVICE_HOST, "http://host:4443")
+            .with_prop(GCS_SERVICE_PATH, "http://path:4443");
+
+        let gcs_config = GcsConfig::try_from(&storage_config).unwrap();
+
+        assert_eq!(gcs_config.endpoint.as_deref(), Some("http://host:4443"));
     }
 
     #[test]
