@@ -331,7 +331,7 @@ pub struct TableProperties {
     /// Deprecated table property for data file write location, with any trailing slash trimmed.
     ///
     /// Property will be removed at a later date.
-    /// Superseded by [write_data_location].
+    /// Superseded by [`TableProperties::write_data_location`].
     #[property(
         key = Self::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION,
         default = None,
@@ -343,7 +343,7 @@ pub struct TableProperties {
     /// with any trailing slash trimmed.
     ///
     /// Property will be removed at a later date.
-    /// Superseded by [write_data_location].
+    /// Superseded by [`TableProperties::write_data_location`].
     #[property(
         key = Self::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION,
         default = None,
@@ -543,14 +543,14 @@ impl TableProperties {
     pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT: usize = 16;
     /// Property key for the base directory for data files
     pub const PROPERTY_WRITE_DATA_LOCATION: &str = "write.data.path";
-    /// Property key for deprecated [write_folder_storage_location]
+    /// Property key for deprecated [`TableProperties::write_folder_storage_location`]
     pub const PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &str = "write.folder-storage.path";
     /// Property key for deprecated object storage path, kept as a fallback for compatibility.
     pub const PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &str = "write.object-storage.path";
     /// Property key for controlling whether partition values are included in object storage paths.
     pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &str =
         "write.object-storage.partitioned-paths";
-    /// Default value for [PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS]
+    /// Default value for [`TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS`]
     pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool = true;
 
     /// The AES key size to use when generating data encryption keys, derived

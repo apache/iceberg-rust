@@ -131,7 +131,7 @@ impl UpdateSchemaAction {
     /// Add a column to the table schema.
     ///
     /// To add a root-level column, leave `AddColumn::parent` as `None`.
-    /// For nested additions, set a parent path (for example via [`AddColumn::with_parent`]).
+    /// For nested additions, set a parent path.
     /// If the parent resolves to a map/list, the column is added to map value/list element.
     pub fn add_column(mut self, add_column: AddColumn) -> Self {
         self.additions.push(add_column);

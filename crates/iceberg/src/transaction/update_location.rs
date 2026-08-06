@@ -27,7 +27,7 @@ use crate::{Error, ErrorKind, Result, TableUpdate};
 ///
 /// This action is used to explicitly set a new metadata location during a transaction,
 /// typically as part of advanced commit or recovery flows. The location is optional until
-/// explicitly set via [`set_location`].
+/// explicitly set via [`UpdateLocationAction::set_location`].
 pub struct UpdateLocationAction {
     location: Option<String>,
 }
