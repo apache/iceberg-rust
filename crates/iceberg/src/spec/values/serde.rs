@@ -19,6 +19,7 @@
 
 pub(crate) mod _serde {
     use std::collections::HashMap;
+    use std::str::FromStr;
 
     use serde::de::Visitor;
     use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
@@ -26,6 +27,7 @@ pub(crate) mod _serde {
     use serde_bytes::ByteBuf;
     use serde_derive::{Deserialize as DeserializeDerive, Serialize as SerializeDerive};
     use uuid::Uuid;
+    use uuid::fmt::Hyphenated;
 
     use crate::Error;
     use crate::error::invalid_data;
@@ -478,12 +480,11 @@ pub(crate) mod _serde {
                 },
                 RawLiteralEnum::String(v) => match ty {
                     Type::Primitive(PrimitiveType::String) => Ok(Some(Literal::string(v))),
-                    Type::Primitive(PrimitiveType::Uuid) => {
-                        let uuid = Uuid::parse_str(&v).map_err(|_| {
+                    Type::Primitive(PrimitiveType::Uuid) => Hyphenated::from_str(&v)
+                        .map(|hyphenated_uuid| Some(Literal::uuid(hyphenated_uuid.into_uuid())))
+                        .map_err(|_| {
                             invalid_err_with_reason("string", "UUID must be a valid UUID string")
-                        })?;
-                        Ok(Some(Literal::uuid(uuid)))
-                    }
+                        }),
                     _ => Err(invalid_err("string")),
                 },
                 RawLiteralEnum::Bytes(v) => match ty {
