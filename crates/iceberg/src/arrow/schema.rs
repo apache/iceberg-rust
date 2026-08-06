@@ -601,7 +601,20 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
         Ok(Type::Variant(VariantType))
     }
 
-    fn uuid(&mut self, _field: &FieldRef) -> Result<Self::T> {
+    fn uuid(&mut self, field: &FieldRef) -> Result<Self::T> {
+        // The extension expects a fixed size binary.
+        // See: Apache Arrow spec https://arrow.apache.org/docs/format/CanonicalExtensions.html#uuid
+        let field_data_type = field.data_type();
+        let expected_data_type = DataType::FixedSizeBinary(16);
+        if *field_data_type != expected_data_type {
+            let error_message = format!(
+                "{} extension requires {expected_data_type} storage, found {field_data_type}",
+                UuidExtensionType::NAME,
+            );
+
+            return Err(Error::new(ErrorKind::DataInvalid, error_message));
+        }
+
         Ok(Type::Primitive(PrimitiveType::Uuid))
     }
 }
@@ -1727,7 +1740,7 @@ mod tests {
     }
 
     #[test]
-    fn test_arrow_schema_to_schema_should_convert_uuids() {
+    fn test_arrow_schema_to_schema_should_convert_uuid_when_fixed_size_binary() {
         let converted_schema = arrow_schema_to_schema(&ArrowSchema::new(vec![
             simple_field("uuid_field", DataType::FixedSizeBinary(16), false, "1")
                 .with_extension_type(DataTypeUuidExt),
@@ -1745,6 +1758,27 @@ mod tests {
             .unwrap();
 
         pretty_assertions::assert_eq!(expected, converted_schema);
+    }
+
+    #[test]
+    fn test_arrow_schema_to_schema_should_reject_uuid_when_not_a_fixed_size_binary() {
+        // The field must be built correctly, and then changed to the wrong type,
+        // to avoid Arrow's own validation and panic.
+        let mut field = simple_field(
+            "incorrect_uuid_field",
+            DataType::FixedSizeBinary(16),
+            false,
+            "1",
+        )
+        .with_extension_type(DataTypeUuidExt);
+        field = field.with_data_type(DataType::Utf8);
+
+        let error = arrow_schema_to_schema(&ArrowSchema::new(vec![field])).unwrap_err();
+
+        pretty_assertions::assert_eq!(
+            "arrow.uuid extension requires FixedSizeBinary(16) storage, found Utf8",
+            error.message()
+        );
     }
 
     fn arrow_schema_for_schema_to_arrow_schema_test() -> ArrowSchema {
