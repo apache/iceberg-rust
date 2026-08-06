@@ -54,13 +54,18 @@ use zeroize::Zeroizing;
 ///     SensitiveString::from("token".to_string()).expose()
 /// );
 /// ```
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SensitiveString(Zeroizing<String>);
 
 impl SensitiveString {
     /// Returns the raw value of the sensitive string.
     pub fn expose(&self) -> &str {
         &self.0
+    }
+
+    /// Returns `true` if the string value is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
