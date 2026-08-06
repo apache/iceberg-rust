@@ -219,11 +219,24 @@ impl DeleteFilter {
             if sets.len() == 1 {
                 result.push(sets.pop().unwrap());
             } else {
-                let mut combined = (*sets[0]).clone();
-                for other in &sets[1..] {
-                    // `union` checks if `other`s' layout matches `combined`,
-                    // which is currently always the case. This fails should a change
-                    // break this current invariant.
+                let base = sets
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, set)| set.keys.len())
+                    .map(|(idx, _)| idx)
+                    .expect("group is non-empty");
+                let mut combined = (*sets.swap_remove(base)).clone();
+                for other in &sets {
+                    // The layouts always match here: every set in this group was parsed
+                    // after `BasicDeleteFileLoader::evolve_schema` normalised its batch
+                    // stream against the same `task.schema`, so one field id has one
+                    // recorded type across the scan. `union` re-checks rather than
+                    // trusting that, because the invariant lives in the caller: the
+                    // equality-delete cache is keyed by delete-file path alone, with no
+                    // record of the schema an entry was evolved against, and
+                    // `ArrowReader` is `Clone` with a caller-supplied
+                    // `FileScanTaskStream`. Two tasks with different schemas through one
+                    // reader would reach this point, and an error beats a wrong read.
                     combined.union(other)?;
                 }
                 result.push(Arc::new(combined));

@@ -108,6 +108,10 @@ impl ArrowReader {
                 .map(|(_, id, _)| field_id_map.get(id).copied())
                 .collect();
 
+            // Every key column may be absent from this file, leaving `column_indices`
+            // empty. `ProjectionMask::leaves(schema, [])` predicate with a zero-column
+            // batch carrying and correct row count, so the probe still returns one boolean
+            // per row and the selection.
             let mut column_indices: Vec<usize> = leaf_indices.iter().flatten().copied().collect();
             column_indices.sort_unstable();
             column_indices.dedup();
@@ -353,7 +357,8 @@ mod tests {
 
     use arrow_array::cast::AsArray;
     use arrow_array::{
-        ArrayRef, Int32Array, Int64Array, LargeStringArray, RecordBatch, StringArray,
+        ArrayRef, Decimal128Array, Float64Array, Int32Array, Int64Array, LargeStringArray,
+        RecordBatch, StringArray,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
@@ -371,7 +376,8 @@ mod tests {
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{
-        DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
+        DataContentType, DataFileFormat, Datum, Literal, NestedField, PrimitiveType, Schema,
+        SchemaRef, Type,
     };
 
     async fn test_perform_read(
@@ -1456,8 +1462,31 @@ mod tests {
         project_field_ids: Vec<i32>,
         deletes: Vec<FileScanTaskDeleteFile>,
     ) -> Vec<RecordBatch> {
+        eqd_read_with(
+            data_path,
+            table_schema,
+            project_field_ids,
+            deletes,
+            None,
+            false,
+        )
+        .await
+    }
+
+    /// `eqd_read` plus the two things that interact with equality-delete predicates: a
+    /// scan predicate (pushed as a second `ArrowPredicate`) and the row-selection path.
+    async fn eqd_read_with(
+        data_path: &str,
+        table_schema: SchemaRef,
+        project_field_ids: Vec<i32>,
+        deletes: Vec<FileScanTaskDeleteFile>,
+        predicate: Option<BoundPredicate>,
+        row_selection_enabled: bool,
+    ) -> Vec<RecordBatch> {
         let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
+            .with_row_selection_enabled(row_selection_enabled)
+            .build();
         let task = FileScanTask::builder()
             .with_file_size_in_bytes(std::fs::metadata(data_path).unwrap().len())
             .with_start(0)
@@ -1468,6 +1497,7 @@ mod tests {
             .with_project_field_ids(project_field_ids)
             .with_deletes(deletes)
             .with_case_sensitive(false)
+            .with_predicate(predicate)
             .build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         reader
@@ -1739,5 +1769,474 @@ mod tests {
         .await;
 
         assert_eq!(eqd_collect_i64(&result, 0), vec![3]);
+    }
+
+    // A scan predicate and an equality delete are pushed as two separate `ArrowPredicate`s
+    // (they used to be ANDed into one bound `Predicate`), so the result must be the
+    // intersection of both.
+    #[tokio::test]
+    async fn test_eq_delete_with_scan_predicate_intersects() {
+        let tmp = TempDir::new().unwrap();
+        let loc = tmp.path().to_str().unwrap();
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let data_path = format!("{loc}/data.parquet");
+        eqd_write(
+            &data_path,
+            Arc::new(ArrowSchema::new(vec![eqd_field(
+                "id",
+                DataType::Int64,
+                1,
+                false,
+            )])),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef],
+        );
+
+        let del_path = format!("{loc}/eq-del.parquet");
+        eqd_write(
+            &del_path,
+            Arc::new(ArrowSchema::new(vec![eqd_field(
+                "id",
+                DataType::Int64,
+                1,
+                false,
+            )])),
+            vec![Arc::new(Int64Array::from(vec![2, 5])) as ArrayRef],
+        );
+
+        for row_selection_enabled in [false, true] {
+            let predicate = Reference::new("id")
+                .greater_than_or_equal_to(Datum::long(3))
+                .bind(table_schema.clone(), false)
+                .unwrap();
+
+            let result = eqd_read_with(
+                &data_path,
+                table_schema.clone(),
+                vec![1],
+                vec![eqd_delete_file(&del_path, vec![1])],
+                Some(predicate),
+                row_selection_enabled,
+            )
+            .await;
+
+            assert_eq!(
+                eqd_collect_i64(&result, 0),
+                vec![3, 4, 6],
+                "row_selection_enabled={row_selection_enabled}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pos_and_eq_delete_with_scan_predicate() {
+        let tmp = TempDir::new().unwrap();
+        let loc = tmp.path().to_str().unwrap();
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let data_path = format!("{loc}/data.parquet");
+        eqd_write(
+            &data_path,
+            Arc::new(ArrowSchema::new(vec![eqd_field(
+                "id",
+                DataType::Int64,
+                1,
+                false,
+            )])),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef],
+        );
+
+        // Positional delete removes row 2 (id 3), equality delete removes id 5, and the
+        // predicate keeps id >= 2. Each removes something the others do not.
+        let pos_del_path = format!("{loc}/pos-del.parquet");
+        {
+            let pos_schema = crate::arrow::delete_filter::tests::create_pos_del_schema();
+            let batch = RecordBatch::try_new(pos_schema.clone(), vec![
+                Arc::new(StringArray::from(vec![data_path.as_str()])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![2i64])) as ArrayRef,
+            ])
+            .unwrap();
+            let file = File::create(&pos_del_path).unwrap();
+            let props = WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .build();
+            let mut writer = ArrowWriter::try_new(file, pos_schema, Some(props)).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        }
+
+        let eq_del_path = format!("{loc}/eq-del.parquet");
+        eqd_write(
+            &eq_del_path,
+            Arc::new(ArrowSchema::new(vec![eqd_field(
+                "id",
+                DataType::Int64,
+                1,
+                false,
+            )])),
+            vec![Arc::new(Int64Array::from(vec![5])) as ArrayRef],
+        );
+
+        let pos_del = FileScanTaskDeleteFile::builder()
+            .with_file_path(pos_del_path.clone())
+            .with_file_size_in_bytes(std::fs::metadata(&pos_del_path).unwrap().len())
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_partition_spec_id(0)
+            .build();
+
+        for row_selection_enabled in [false, true] {
+            let predicate = Reference::new("id")
+                .greater_than_or_equal_to(Datum::long(2))
+                .bind(table_schema.clone(), false)
+                .unwrap();
+
+            let result = eqd_read_with(
+                &data_path,
+                table_schema.clone(),
+                vec![1],
+                vec![pos_del.clone(), eqd_delete_file(&eq_del_path, vec![1])],
+                Some(predicate),
+                row_selection_enabled,
+            )
+            .await;
+
+            assert_eq!(
+                eqd_collect_i64(&result, 0),
+                vec![2, 4, 6],
+                "row_selection_enabled={row_selection_enabled}"
+            );
+        }
+    }
+
+    // An equality-delete key column absent from the data file (added by later schema
+    // evolution). The probe reads it as null for every row, so nothing matches and the
+    // delete file removes no rows -- it does NOT resolve `initial_default`, which the spec
+    // asks for via normal projection rules. Pinned here so the divergence is visible and a
+    // later fix has something to change.
+    #[tokio::test]
+    async fn test_eq_delete_on_column_absent_from_data_file() {
+        let tmp = TempDir::new().unwrap();
+        let loc = tmp.path().to_str().unwrap();
+
+        // `added` exists in the table schema but not in the data file below.
+        let required_with_default = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::required(2, "added", Type::Primitive(PrimitiveType::Long))
+                        .with_initial_default(Literal::long(7))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let optional_no_default = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "added", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let data_path = format!("{loc}/data.parquet");
+        eqd_write(
+            &data_path,
+            Arc::new(ArrowSchema::new(vec![eqd_field(
+                "id",
+                DataType::Int64,
+                1,
+                false,
+            )])),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef],
+        );
+
+        // Keyed on `added` with the value that IS the initial default: if the probe ever
+        // resolves defaults, every row matches and this expectation flips to empty.
+        let del_path = format!("{loc}/eq-del.parquet");
+        eqd_write(
+            &del_path,
+            Arc::new(ArrowSchema::new(vec![eqd_field(
+                "added",
+                DataType::Int64,
+                2,
+                false,
+            )])),
+            vec![Arc::new(Int64Array::from(vec![7])) as ArrayRef],
+        );
+
+        for (label, schema) in [
+            ("required with initial_default", required_with_default),
+            ("optional without default", optional_no_default),
+        ] {
+            let result = eqd_read(&data_path, schema, vec![1], vec![eqd_delete_file(
+                &del_path,
+                vec![2],
+            )])
+            .await;
+
+            assert_eq!(
+                eqd_collect_i64(&result, 0),
+                vec![1, 2, 3],
+                "{label}: absent key column probes as null, so nothing is deleted"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_eq_delete_files_with_different_physical_types_merge() {
+        let tmp = TempDir::new().unwrap();
+        let loc = tmp.path().to_str().unwrap();
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let data_path = format!("{loc}/data.parquet");
+        eqd_write(
+            &data_path,
+            Arc::new(ArrowSchema::new(vec![eqd_field(
+                "id",
+                DataType::Int64,
+                1,
+                false,
+            )])),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3, 4])) as ArrayRef],
+        );
+
+        let del_i64 = format!("{loc}/eq-del-i64.parquet");
+        eqd_write(
+            &del_i64,
+            Arc::new(ArrowSchema::new(vec![eqd_field(
+                "id",
+                DataType::Int64,
+                1,
+                false,
+            )])),
+            vec![Arc::new(Int64Array::from(vec![2])) as ArrayRef],
+        );
+
+        // Written as int32: an older file from before the column was widened to long.
+        let del_i32 = format!("{loc}/eq-del-i32.parquet");
+        eqd_write(
+            &del_i32,
+            Arc::new(ArrowSchema::new(vec![eqd_field(
+                "id",
+                DataType::Int32,
+                1,
+                false,
+            )])),
+            vec![Arc::new(Int32Array::from(vec![3])) as ArrayRef],
+        );
+
+        let result = eqd_read(&data_path, table_schema, vec![1], vec![
+            eqd_delete_file(&del_i64, vec![1]),
+            eqd_delete_file(&del_i32, vec![1]),
+        ])
+        .await;
+
+        // Both keys apply, so the two files really did end up in one group.
+        assert_eq!(eqd_collect_i64(&result, 0), vec![1, 4]);
+    }
+
+    // A decimal equality-delete key whose precision differs from the table's. Precision
+    // widening is legal Iceberg schema evolution and goes through a different `Datum::to`
+    // arm than the integer promotion already covered.
+    #[tokio::test]
+    async fn test_eq_delete_decimal_precision_widening() {
+        let tmp = TempDir::new().unwrap();
+        let loc = tmp.path().to_str().unwrap();
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::required(
+                        2,
+                        "amount",
+                        Type::Primitive(PrimitiveType::Decimal {
+                            precision: 18,
+                            scale: 2,
+                        }),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Data file written at the narrower precision it had when it was created.
+        let data_path = format!("{loc}/data.parquet");
+        eqd_write(
+            &data_path,
+            Arc::new(ArrowSchema::new(vec![
+                eqd_field("id", DataType::Int64, 1, false),
+                eqd_field("amount", DataType::Decimal128(9, 2), 2, false),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+                Arc::new(
+                    Decimal128Array::from(vec![100i128, 250, 375])
+                        .with_precision_and_scale(9, 2)
+                        .unwrap(),
+                ) as ArrayRef,
+            ],
+        );
+
+        let del_path = format!("{loc}/eq-del.parquet");
+        eqd_write(
+            &del_path,
+            Arc::new(ArrowSchema::new(vec![eqd_field(
+                "amount",
+                DataType::Decimal128(18, 2),
+                2,
+                false,
+            )])),
+            vec![Arc::new(
+                Decimal128Array::from(vec![250i128])
+                    .with_precision_and_scale(18, 2)
+                    .unwrap(),
+            ) as ArrayRef],
+        );
+
+        let result = eqd_read(&data_path, table_schema, vec![1, 2], vec![eqd_delete_file(
+            &del_path,
+            vec![2],
+        )])
+        .await;
+
+        assert_eq!(eqd_collect_i64(&result, 0), vec![1, 3]);
+    }
+
+    // Double delete columns are out of spec. Nothing rejects them today, so this
+    // pins what actually happens: `PrimitiveLiteral` stores doubles as
+    // `OrderedFloat`, whose `Hash`/`Eq` canonicalise NaN and signed zero.
+    // A NaN key therefore matches NaN data, and a -0.0 key also removes 0.0.
+    #[tokio::test]
+    async fn test_eq_delete_double_column_canonicalises_nan_and_signed_zero() {
+        let tmp = TempDir::new().unwrap();
+        let loc = tmp.path().to_str().unwrap();
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::required(2, "d", Type::Primitive(PrimitiveType::Double)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let data_path = format!("{loc}/data.parquet");
+        eqd_write(
+            &data_path,
+            Arc::new(ArrowSchema::new(vec![
+                eqd_field("id", DataType::Int64, 1, false),
+                eqd_field("d", DataType::Float64, 2, false),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![1.5, f64::NAN, 0.0, -0.0, 2.5])) as ArrayRef,
+            ],
+        );
+
+        // A NaN key matches the NaN row (IEEE-754 says NaN != NaN; OrderedFloat says
+        // otherwise), and a -0.0 key removes both signed zeros.
+        let del_path = format!("{loc}/eq-del.parquet");
+        eqd_write(
+            &del_path,
+            Arc::new(ArrowSchema::new(vec![eqd_field(
+                "d",
+                DataType::Float64,
+                2,
+                false,
+            )])),
+            vec![Arc::new(Float64Array::from(vec![f64::NAN, -0.0])) as ArrayRef],
+        );
+
+        let result = eqd_read(&data_path, table_schema, vec![1, 2], vec![eqd_delete_file(
+            &del_path,
+            vec![2],
+        )])
+        .await;
+
+        assert_eq!(eqd_collect_i64(&result, 0), vec![1, 5]);
+    }
+
+    #[tokio::test]
+    async fn test_empty_eq_delete_file_deletes_nothing() {
+        let tmp = TempDir::new().unwrap();
+        let loc = tmp.path().to_str().unwrap();
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let data_path = format!("{loc}/data.parquet");
+        eqd_write(
+            &data_path,
+            Arc::new(ArrowSchema::new(vec![eqd_field(
+                "id",
+                DataType::Int64,
+                1,
+                false,
+            )])),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef],
+        );
+
+        let del_path = format!("{loc}/eq-del-empty.parquet");
+        eqd_write(
+            &del_path,
+            Arc::new(ArrowSchema::new(vec![eqd_field(
+                "id",
+                DataType::Int64,
+                1,
+                false,
+            )])),
+            vec![Arc::new(Int64Array::from(Vec::<i64>::new())) as ArrayRef],
+        );
+
+        let result = eqd_read(&data_path, table_schema, vec![1], vec![eqd_delete_file(
+            &del_path,
+            vec![1],
+        )])
+        .await;
+
+        assert_eq!(eqd_collect_i64(&result, 0), vec![1, 2, 3]);
     }
 }
