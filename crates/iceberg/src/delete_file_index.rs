@@ -172,7 +172,7 @@ impl PopulatedDeleteFileIndex {
                 tracing::warn!(
                     delete_file = arc_ctx.manifest_entry.data_file().file_path(),
                     status = ?arc_ctx.manifest_entry.status(),
-                    "delete file manifest entry has no data sequence number. it will not be applied to any data file"
+                    "delete file manifest entry has no data sequence number. It will be skipped for data files with a known sequence number"
                 );
             }
 
