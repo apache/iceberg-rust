@@ -667,9 +667,17 @@ impl SchemaVisitor for ToArrowSchemaConverter {
         // `arrow.parquet.variant` extension type so consumers read it as a Variant, not a struct.
         let arrow_field = if field.field_type.is_variant() {
             arrow_field.with_extension_type(VariantExtensionType)
+        } else if matches!(
+            field.field_type.as_ref(),
+            Type::Primitive(PrimitiveType::Uuid)
+        ) {
+            // A uuid column's storage is FixedSizeBinary(16); tag the field with the canonical
+            // `arrow.uuid` extension type so consumers read it as a UUID, not opaque bytes.
+            arrow_field.with_extension_type(UuidExtensionType)
         } else {
             arrow_field
         };
+
         Ok(ArrowSchemaOrFieldOrType::Field(arrow_field))
     }
 
@@ -1740,6 +1748,32 @@ mod tests {
     }
 
     #[test]
+    fn test_converting_uuid_from_arrow_to_iceberg_to_arrow_should_give_uuid() {
+        let arrow_schema = ArrowSchema::new(vec![
+            simple_field("uuid_field", DataType::FixedSizeBinary(16), false, "1")
+                .with_extension_type(DataTypeUuidExt),
+        ]);
+        let output =
+            schema_to_arrow_schema(&arrow_schema_to_schema(&arrow_schema).unwrap()).unwrap();
+
+        assert_eq!(arrow_schema, output);
+    }
+
+    #[test]
+    fn test_converting_uuid_from_iceberg_to_arrow_to_iceberg_should_give_uuid() {
+        let iceberg_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "uuid_field", Type::Primitive(PrimitiveType::Uuid)).into(),
+            ])
+            .build()
+            .unwrap();
+        let output =
+            arrow_schema_to_schema(&schema_to_arrow_schema(&iceberg_schema).unwrap()).unwrap();
+
+        assert_eq!(iceberg_schema, output);
+    }
+
+    #[test]
     fn test_arrow_schema_to_schema_should_convert_uuid_when_fixed_size_binary() {
         let converted_schema = arrow_schema_to_schema(&ArrowSchema::new(vec![
             simple_field("uuid_field", DataType::FixedSizeBinary(16), false, "1")
@@ -1873,7 +1907,8 @@ mod tests {
             ),
             simple_field("map", map, false, "16"),
             simple_field("struct", r#struct, false, "17"),
-            simple_field("uuid", DataType::FixedSizeBinary(16), false, "30"),
+            simple_field("uuid", DataType::FixedSizeBinary(16), false, "30")
+                .with_extension_type(DataTypeUuidExt),
             Field::new(
                 "v",
                 DataType::Struct(Fields::from(vec![
@@ -2089,10 +2124,10 @@ mod tests {
 
     #[test]
     fn test_schema_to_arrow_schema() {
-        let arrow_schema = arrow_schema_for_schema_to_arrow_schema_test();
+        let expected_arrow_schema = arrow_schema_for_schema_to_arrow_schema_test();
         let schema = iceberg_schema_for_schema_to_arrow_schema();
         let converted_arrow_schema = schema_to_arrow_schema(&schema).unwrap();
-        assert_eq!(converted_arrow_schema, arrow_schema);
+        assert_eq!(converted_arrow_schema, expected_arrow_schema);
     }
 
     #[test]
