@@ -38,7 +38,16 @@ use crate::expr::BoundPredicate;
 use crate::expr::visitors::bound_predicate_visitor::visit;
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
-use crate::spec::{Datum, Schema, Type};
+use crate::spec::{Datum, Literal, PrimitiveType, Schema, Type};
+
+/// One equality-delete key column of a decoded batch
+struct KeyColumn {
+    literals: Vec<Option<Literal>>,
+    /// Iceberg type of the column as stored in this data file.
+    source_primitive: PrimitiveType,
+    /// Whether the file type differs from the table type, so values need `Datum::to`.
+    needs_promotion: bool,
+}
 
 impl ArrowReader {
     /// Builds the Arrow row-filter predicate for a bound scan predicate.
@@ -119,13 +128,11 @@ impl ArrowReader {
                 move |batch: RecordBatch| -> std::result::Result<BooleanArray, ArrowError> {
                     let num_rows = batch.num_rows();
 
-                    // Change each key column into `Datum`s once, promoting to the
-                    // table type so the keys match the parsed delete keys under schema
-                    // evolution. A column absent from this file reads as all-null.
-                    let mut columns: Vec<Vec<Option<Datum>>> = Vec::with_capacity(num_cols);
+                    let mut columns: Vec<Option<KeyColumn>> = Vec::with_capacity(num_cols);
                     for (i, target_type) in target_types.iter().enumerate() {
+                        // A column absent from this file (schema evolution)
                         let Some(pos) = batch_positions[i] else {
-                            columns.push(vec![None; num_rows]);
+                            columns.push(None);
                             continue;
                         };
                         let array = batch.column(pos);
@@ -140,36 +147,14 @@ impl ArrowReader {
                                 )
                             })?
                             .clone();
-                        let needs_promotion = source_type != *target_type;
-                        let literals = arrow_primitive_to_literal(array, &source_type)
-                            .map_err(|e| ArrowError::ComputeError(e.to_string()))?;
-
-                        let mut column = Vec::with_capacity(num_rows);
-                        for literal in literals {
-                            let datum = match literal {
-                                Some(literal) => {
-                                    let primitive =
-                                        literal.as_primitive_literal().ok_or_else(|| {
-                                            ArrowError::ComputeError(
-                                                "failed to convert to primitive literal"
-                                                    .to_string(),
-                                            )
-                                        })?;
-                                    let datum = Datum::new(source_primitive.clone(), primitive);
-                                    let datum = if needs_promotion {
-                                        datum
-                                            .to(target_type)
-                                            .map_err(|e| ArrowError::ComputeError(e.to_string()))?
-                                    } else {
-                                        datum
-                                    };
-                                    Some(datum)
-                                }
-                                None => None,
-                            };
-                            column.push(datum);
-                        }
-                        columns.push(column);
+                        columns.push(Some(KeyColumn {
+                            // Promotion to the table type keeps these comparable with the
+                            // parsed delete keys under schema evolution.
+                            needs_promotion: source_type != *target_type,
+                            literals: arrow_primitive_to_literal(array, &source_type)
+                                .map_err(|e| ArrowError::ComputeError(e.to_string()))?,
+                            source_primitive,
+                        }));
                     }
 
                     // One hash lookup per row.
@@ -177,8 +162,31 @@ impl ArrowReader {
                     let mut probe = EqDeleteKey(vec![None; num_cols]);
                     for row in 0..num_rows {
                         for (i, column) in columns.iter_mut().enumerate() {
+                            let Some(column) = column else {
+                                probe.0[i] = None;
+                                continue;
+                            };
                             // we can `take` because each cell is probed once.
-                            probe.0[i] = std::mem::take(&mut column[row]);
+                            probe.0[i] = match column.literals[row].take() {
+                                Some(Literal::Primitive(primitive)) => {
+                                    let datum =
+                                        Datum::new(column.source_primitive.clone(), primitive);
+                                    Some(if column.needs_promotion {
+                                        datum
+                                            .to(&target_types[i])
+                                            .map_err(|e| ArrowError::ComputeError(e.to_string()))?
+                                    } else {
+                                        datum
+                                    })
+                                }
+                                Some(other) => {
+                                    return Err(ArrowError::ComputeError(format!(
+                                        "equality delete key column {i} is not a primitive \
+                                         literal: {other:?}"
+                                    )));
+                                }
+                                None => None,
+                            };
                         }
                         keep.push(!set.keys.contains(&probe));
                     }
