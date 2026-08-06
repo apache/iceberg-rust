@@ -898,13 +898,6 @@ pub(crate) fn create_primitive_array_repeated(
         (DataType::Time64(TimeUnit::Microsecond), Some(PrimitiveLiteral::Long(value))) => {
             Arc::new(Time64MicrosecondArray::from(vec![*value; num_rows]))
         }
-        (DataType::LargeBinary, Some(PrimitiveLiteral::Binary(value))) => {
-            Arc::new(LargeBinaryArray::from_vec(vec![value; num_rows]))
-        }
-        (DataType::LargeBinary, None) => {
-            let vals: Vec<Option<&[u8]>> = vec![None; num_rows];
-            Arc::new(LargeBinaryArray::from_opt_vec(vals))
-        }
         (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::Int128(value))) => {
             Arc::new(
                 Decimal128Array::from(vec![*value; num_rows])
