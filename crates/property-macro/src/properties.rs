@@ -28,14 +28,14 @@ struct PropertyField {
     ident: Ident,
     ty: Type,
     key: Option<Expr>,
-    additional_key: Option<Expr>,
+    additional_keys: Option<Vec<Expr>>,
     prefix: Option<Expr>,
     nested: bool,
     default: Option<Expr>,
     parse_with: Option<Path>,
     serialize_with: Option<Path>,
     parse_properties_with: Option<Path>,
-    write_properties_with: Option<Path>,
+    serialize_properties_with: Option<Path>,
     option_inner_type: Option<Type>,
     map_value_type: Option<Type>,
     public_getter: bool,
@@ -50,28 +50,28 @@ enum PublicAccessor {
 
 enum PropertyOption {
     Key(Expr),
-    AdditionalKey(Expr),
+    AdditionalKeys(Vec<Expr>),
     Prefix(Expr),
     Nested,
     Default(Expr),
     ParseWith(Path),
     SerializeWith(Path),
     ParsePropertiesWith(Path),
-    WritePropertiesWith(Path),
+    SerializePropertiesWith(Path),
     Accessor(PublicAccessor),
 }
 
 #[derive(Default)]
 struct PropertyOptions {
     key: Option<Expr>,
-    additional_key: Option<Expr>,
+    additional_keys: Option<Vec<Expr>>,
     prefix: Option<Expr>,
     nested: bool,
     default: Option<Expr>,
     parse_with: Option<Path>,
     serialize_with: Option<Path>,
     parse_properties_with: Option<Path>,
-    write_properties_with: Option<Path>,
+    serialize_properties_with: Option<Path>,
     public_getter: bool,
     public_setter: bool,
 }
@@ -110,7 +110,9 @@ impl Parse for PropertyOption {
         let expression = input.parse::<Expr>()?;
         match option_name.as_str() {
             "key" => Ok(Self::Key(expression)),
-            "additional_key" => Ok(Self::AdditionalKey(expression)),
+            "additional_keys" => {
+                expression_list(expression, "additional_keys").map(Self::AdditionalKeys)
+            }
             "prefix" => Ok(Self::Prefix(expression)),
             "default" => Ok(Self::Default(expression)),
             "parse_with" => expression_path(expression, "parse_with").map(Self::ParseWith),
@@ -120,9 +122,8 @@ impl Parse for PropertyOption {
             "parse_properties_with" => {
                 expression_path(expression, "parse_properties_with").map(Self::ParsePropertiesWith)
             }
-            "write_properties_with" => {
-                expression_path(expression, "write_properties_with").map(Self::WritePropertiesWith)
-            }
+            "serialize_properties_with" => expression_path(expression, "serialize_properties_with")
+                .map(Self::SerializePropertiesWith),
             _ => Err(Error::new_spanned(name, "unknown property option")),
         }
     }
@@ -162,7 +163,7 @@ pub(crate) fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2>
         impl #impl_generics #struct_name #type_generics #where_clause {
             #(#accessors)*
 
-            pub(crate) fn from_properties(
+            pub fn from_properties(
                 properties: &::std::collections::HashMap<
                     ::std::string::String,
                     ::std::string::String,
@@ -173,14 +174,15 @@ pub(crate) fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2>
                 })
             }
 
-            pub(crate) fn write_properties(
+            pub fn write_properties(
                 &self,
                 properties: &mut ::std::collections::HashMap<
                     ::std::string::String,
                     ::std::string::String,
                 >,
-            ) {
+            ) -> ::std::result::Result<(), ::std::string::String> {
                 #(#property_writes)*
+                Ok(())
             }
         }
     })
@@ -198,11 +200,11 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
         field,
         "key",
     )?;
-    let additional_key = merge_attribute_option(
-        attribute_expression_value(&field.attrs, "additional_key")?,
-        property_options.additional_key,
+    let additional_keys = merge_attribute_option(
+        attribute_expression_list(&field.attrs, "additional_keys")?,
+        property_options.additional_keys,
         field,
-        "additional_key",
+        "additional_keys",
     )?;
     let prefix = merge_attribute_option(
         attribute_expression_value(&field.attrs, "prefix")?,
@@ -271,28 +273,28 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
         field,
         "parse_properties_with",
     )?;
-    let write_properties_with = merge_attribute_option(
-        attribute_path_value(&field.attrs, "write_properties_with")?,
-        property_options.write_properties_with,
+    let serialize_properties_with = merge_attribute_option(
+        attribute_path_value(&field.attrs, "serialize_properties_with")?,
+        property_options.serialize_properties_with,
         field,
-        "write_properties_with",
+        "serialize_properties_with",
     )?;
 
-    if additional_key.is_some()
+    if additional_keys.is_some()
         && parse_properties_with.is_none()
-        && write_properties_with.is_none()
+        && serialize_properties_with.is_none()
     {
         return Err(Error::new_spanned(
             field,
-            "#[additional_key(...)] requires parse_properties_with or write_properties_with",
+            "#[additional_keys(...)] requires parse_properties_with or serialize_properties_with",
         ));
     }
     if (prefix.is_some() || nested)
-        && (additional_key.is_some()
+        && (additional_keys.is_some()
             || parse_with.is_some()
             || serialize_with.is_some()
             || parse_properties_with.is_some()
-            || write_properties_with.is_some())
+            || serialize_properties_with.is_some())
     {
         return Err(Error::new_spanned(
             field,
@@ -305,10 +307,10 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
             "fields cannot declare both parse_with and parse_properties_with",
         ));
     }
-    if serialize_with.is_some() && write_properties_with.is_some() {
+    if serialize_with.is_some() && serialize_properties_with.is_some() {
         return Err(Error::new_spanned(
             field,
-            "fields cannot declare both serialize_with and write_properties_with",
+            "fields cannot declare both serialize_with and serialize_properties_with",
         ));
     }
 
@@ -316,14 +318,14 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
         ident,
         ty: field.ty.clone(),
         key,
-        additional_key,
+        additional_keys,
         prefix,
         nested,
         default,
         parse_with,
         serialize_with,
         parse_properties_with,
-        write_properties_with,
+        serialize_properties_with,
         option_inner_type: option_inner_type(&field.ty),
         map_value_type,
         public_getter: property_options.public_getter,
@@ -357,11 +359,11 @@ fn property_options(attributes: &[Attribute]) -> syn::Result<PropertyOptions> {
             PropertyOption::Key(value) => {
                 set_property_option(&mut options.key, value, attribute, "key")?
             }
-            PropertyOption::AdditionalKey(value) => set_property_option(
-                &mut options.additional_key,
+            PropertyOption::AdditionalKeys(value) => set_property_option(
+                &mut options.additional_keys,
                 value,
                 attribute,
-                "additional_key",
+                "additional_keys",
             )?,
             PropertyOption::Prefix(value) => {
                 set_property_option(&mut options.prefix, value, attribute, "prefix")?
@@ -393,11 +395,11 @@ fn property_options(attributes: &[Attribute]) -> syn::Result<PropertyOptions> {
                 attribute,
                 "parse_properties_with",
             )?,
-            PropertyOption::WritePropertiesWith(value) => set_property_option(
-                &mut options.write_properties_with,
+            PropertyOption::SerializePropertiesWith(value) => set_property_option(
+                &mut options.serialize_properties_with,
                 value,
                 attribute,
-                "write_properties_with",
+                "serialize_properties_with",
             )?,
             PropertyOption::Accessor(accessor) => {
                 let selected = match accessor {
@@ -505,6 +507,37 @@ fn attribute_expression_value(attributes: &[Attribute], name: &str) -> syn::Resu
     }
 }
 
+fn attribute_expression_list(
+    attributes: &[Attribute],
+    name: &str,
+) -> syn::Result<Option<Vec<Expr>>> {
+    let Some(attribute) = find_attribute(attributes, name)? else {
+        return Ok(None);
+    };
+
+    let expressions = match &attribute.meta {
+        Meta::NameValue(name_value) => expression_list(name_value.value.clone(), name)?,
+        Meta::List(_) => attribute
+            .parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated)?
+            .into_iter()
+            .collect(),
+        _ => {
+            return Err(Error::new_spanned(
+                attribute,
+                format!("{name} must contain a non-empty list of keys"),
+            ));
+        }
+    };
+
+    if expressions.is_empty() {
+        return Err(Error::new_spanned(
+            attribute,
+            format!("{name} must contain at least one key"),
+        ));
+    }
+    Ok(Some(expressions))
+}
+
 fn attribute_path_value(attributes: &[Attribute], name: &str) -> syn::Result<Option<Path>> {
     let Some(expression) = attribute_expression_value(attributes, name)? else {
         return Ok(None);
@@ -521,6 +554,22 @@ fn expression_path(expression: Expr, name: &str) -> syn::Result<Path> {
             format!("{name} must be a path"),
         )),
     }
+}
+
+fn expression_list(expression: Expr, name: &str) -> syn::Result<Vec<Expr>> {
+    let Expr::Array(array) = expression else {
+        return Err(Error::new_spanned(
+            expression,
+            format!("{name} must be an array of keys"),
+        ));
+    };
+    if array.elems.is_empty() {
+        return Err(Error::new_spanned(
+            array,
+            format!("{name} must contain at least one key"),
+        ));
+    }
+    Ok(array.elems.into_iter().collect())
 }
 
 fn find_attribute<'a>(
@@ -552,9 +601,9 @@ fn parse_field(field: &PropertyField) -> TokenStream2 {
 
     if let Some(parse_properties_with) = &field.parse_properties_with {
         let key = field.key.as_ref().expect("exact-key fields have a key");
-        let parse = match &field.additional_key {
-            Some(additional_key) => {
-                quote!(#parse_properties_with(properties, #key, #additional_key, #default))
+        let parse = match &field.additional_keys {
+            Some(additional_keys) => {
+                quote!(#parse_properties_with(properties, #key, &[#(#additional_keys),*], #default))
             }
             None => quote!(#parse_properties_with(properties, #key, #default)),
         };
@@ -729,22 +778,24 @@ fn write_field(field: &PropertyField) -> TokenStream2 {
     let ident = &field.ident;
     if field.nested {
         return quote! {
-            self.#ident.write_properties(properties);
+            self.#ident.write_properties(properties)?;
         };
     }
 
     let default = typed_default(field);
 
-    if let Some(write_properties_with) = &field.write_properties_with {
+    if let Some(serialize_properties_with) = &field.serialize_properties_with {
         let key = field.key.as_ref().expect("exact-key fields have a key");
-        let write = match &field.additional_key {
-            Some(additional_key) => {
-                quote!(#write_properties_with(&self.#ident, properties, #key, #additional_key, &#default))
+        let serialize = match &field.additional_keys {
+            Some(additional_keys) => {
+                quote!(#serialize_properties_with(&self.#ident, properties, #key, &[#(#additional_keys),*], &#default))
             }
-            None => quote!(#write_properties_with(&self.#ident, properties, #key, &#default)),
+            None => quote!(#serialize_properties_with(&self.#ident, properties, #key, &#default)),
         };
         return quote! {
-            #write;
+            #serialize.map_err(|error| {
+                format!("Failed to serialize {}: {error}", #key)
+            })?;
         };
     }
 
@@ -762,7 +813,9 @@ fn write_field(field: &PropertyField) -> TokenStream2 {
 
     let key = field.key.as_ref().expect("exact-key fields have a key");
     let value = match (&field.serialize_with, &field.option_inner_type) {
-        (Some(serialize_with), _) => quote!(#serialize_with(&self.#ident)),
+        (Some(serialize_with), _) => quote!(#serialize_with(&self.#ident).map_err(|error| {
+            format!("Failed to serialize {}: {error}", #key)
+        })?),
         (None, Some(_)) => quote!(::std::string::ToString::to_string(
             self.#ident.as_ref().expect("checked is_some above")
         )),

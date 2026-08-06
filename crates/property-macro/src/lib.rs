@@ -27,14 +27,14 @@ mod properties;
     Properties,
     attributes(
         key,
-        additional_key,
+        additional_keys,
         prefix,
         nested,
         default,
         parse_with,
         serialize_with,
         parse_properties_with,
-        write_properties_with,
+        serialize_properties_with,
         property
     )
 )]

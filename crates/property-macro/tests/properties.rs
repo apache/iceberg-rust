@@ -26,13 +26,17 @@ const FANOUT_ENABLED: &str = "write.fanout.enabled";
 const COLUMN_FPP_PREFIX: &str = "write.parquet.bloom-filter-fpp.column.";
 const WIDTH: &str = "dimensions.width";
 const HEIGHT: &str = "dimensions.height";
+const DEPTH: &str = "dimensions.depth";
 
 fn parse_dimensions(
     properties: &HashMap<String, String>,
     width_key: &str,
-    height_key: &str,
-    default: (u64, u64),
-) -> Result<(u64, u64), String> {
+    additional_keys: &[&str],
+    default: (u64, u64, u64),
+) -> Result<(u64, u64, u64), String> {
+    if additional_keys.len() != 2 {
+        return Err("dimensions require height and depth keys".to_string());
+    }
     let parse = |property_key: &str, default| {
         properties
             .get(property_key)
@@ -41,22 +45,35 @@ fn parse_dimensions(
             .map(|value| value.unwrap_or(default))
     };
 
-    Ok((parse(width_key, default.0)?, parse(height_key, default.1)?))
+    Ok((
+        parse(width_key, default.0)?,
+        parse(additional_keys[0], default.1)?,
+        parse(additional_keys[1], default.2)?,
+    ))
 }
 
-fn write_dimensions(
-    dimensions: &(u64, u64),
+fn serialize_dimensions(
+    dimensions: &(u64, u64, u64),
     properties: &mut HashMap<String, String>,
     width_key: &str,
-    height_key: &str,
-    default: &(u64, u64),
-) {
+    additional_keys: &[&str],
+    default: &(u64, u64, u64),
+) -> Result<(), String> {
+    if additional_keys.len() != 2 {
+        return Err("dimensions require height and depth keys".to_string());
+    }
+    if dimensions.0 == 0 || dimensions.1 == 0 || dimensions.2 == 0 {
+        return Err("dimensions must be positive".to_string());
+    }
     properties.remove(width_key);
-    properties.remove(height_key);
+    properties.remove(additional_keys[0]);
+    properties.remove(additional_keys[1]);
     if dimensions != default {
         properties.insert(width_key.to_string(), dimensions.0.to_string());
-        properties.insert(height_key.to_string(), dimensions.1.to_string());
+        properties.insert(additional_keys[0].to_string(), dimensions.1.to_string());
+        properties.insert(additional_keys[1].to_string(), dimensions.2.to_string());
     }
+    Ok(())
 }
 
 #[derive(Debug, Properties)]
@@ -82,11 +99,11 @@ struct TestProperties {
     pub column_fpp: HashMap<String, f64>,
 
     #[key(WIDTH)]
-    #[additional_key(HEIGHT)]
-    #[default((640, 480))]
+    #[additional_keys(HEIGHT, DEPTH)]
+    #[default((640, 480, 320))]
     #[parse_properties_with(parse_dimensions)]
-    #[write_properties_with(write_dimensions)]
-    pub dimensions: (u64, u64),
+    #[serialize_properties_with(serialize_dimensions)]
+    pub dimensions: (u64, u64, u64),
 }
 
 #[test]
@@ -97,7 +114,7 @@ fn reads_defaults_and_overrides() {
     assert_eq!(defaults.format, "parquet");
     assert!(defaults.fanout_enabled);
     assert!(defaults.column_fpp.is_empty());
-    assert_eq!(defaults.dimensions, (640, 480));
+    assert_eq!(defaults.dimensions, (640, 480, 320));
 
     let properties = HashMap::from([
         (RETRIES.to_string(), "8".to_string()),
@@ -107,6 +124,7 @@ fn reads_defaults_and_overrides() {
         (format!("{COLUMN_FPP_PREFIX}id"), "0.01".to_string()),
         (WIDTH.to_string(), "1920".to_string()),
         (HEIGHT.to_string(), "1080".to_string()),
+        (DEPTH.to_string(), "720".to_string()),
     ]);
     let parsed = TestProperties::from_properties(&properties).unwrap();
 
@@ -115,7 +133,7 @@ fn reads_defaults_and_overrides() {
     assert_eq!(parsed.format, "orc");
     assert!(!parsed.fanout_enabled);
     assert_eq!(parsed.column_fpp["id"], 0.01);
-    assert_eq!(parsed.dimensions, (1920, 1080));
+    assert_eq!(parsed.dimensions, (1920, 1080, 720));
 }
 
 #[test]
@@ -128,11 +146,12 @@ fn writes_overrides_and_preserves_unrelated_properties() {
         (format!("{COLUMN_FPP_PREFIX}id"), "0.01".to_string()),
         (WIDTH.to_string(), "1920".to_string()),
         (HEIGHT.to_string(), "1080".to_string()),
+        (DEPTH.to_string(), "720".to_string()),
     ]))
     .unwrap();
     let mut properties = HashMap::from([("unrelated".to_string(), "value".to_string())]);
 
-    parsed.write_properties(&mut properties);
+    parsed.write_properties(&mut properties).unwrap();
 
     assert_eq!(properties[RETRIES], "8");
     assert_eq!(properties[OWNER], "iceberg");
@@ -141,6 +160,7 @@ fn writes_overrides_and_preserves_unrelated_properties() {
     assert_eq!(properties[&format!("{COLUMN_FPP_PREFIX}id")], "0.01");
     assert_eq!(properties[WIDTH], "1920");
     assert_eq!(properties[HEIGHT], "1080");
+    assert_eq!(properties[DEPTH], "720");
     assert_eq!(properties["unrelated"], "value");
 }
 
@@ -155,10 +175,11 @@ fn writing_defaults_removes_modeled_properties() {
         (format!("{COLUMN_FPP_PREFIX}id"), "0.01".to_string()),
         (WIDTH.to_string(), "1920".to_string()),
         (HEIGHT.to_string(), "1080".to_string()),
+        (DEPTH.to_string(), "720".to_string()),
         ("unrelated".to_string(), "value".to_string()),
     ]);
 
-    defaults.write_properties(&mut properties);
+    defaults.write_properties(&mut properties).unwrap();
 
     assert_eq!(
         properties,
@@ -211,7 +232,7 @@ fn nested_properties_use_a_flat_property_map() {
 
     properties.commit.num_retries = 9;
     let mut written = HashMap::new();
-    properties.write_properties(&mut written);
+    properties.write_properties(&mut written).unwrap();
     assert_eq!(
         written,
         HashMap::from([("commit.retry.num-retries".to_string(), "9".to_string())])
@@ -230,8 +251,13 @@ fn parse_non_empty(value: &str) -> Result<String, &'static str> {
     }
 }
 
-fn serialize_trimmed(value: &str) -> String {
-    value.trim().to_string()
+fn serialize_trimmed(value: &str) -> Result<String, &'static str> {
+    let value = value.trim();
+    if value.is_empty() {
+        Err("value must not be empty")
+    } else {
+        Ok(value.to_string())
+    }
 }
 
 #[derive(Debug, Properties)]
@@ -263,8 +289,32 @@ fn custom_single_value_hooks_can_validate_and_normalize() {
         location: " normalized ".to_string(),
     };
     let mut written = HashMap::new();
-    properties.write_properties(&mut written);
+    properties.write_properties(&mut written).unwrap();
     assert_eq!(written["location"], "normalized");
+}
+
+#[test]
+fn reports_custom_serialization_errors() {
+    let invalid_location = ValidatedProperties {
+        location: " ".to_string(),
+    };
+    let error = invalid_location
+        .write_properties(&mut HashMap::new())
+        .unwrap_err();
+    assert_eq!(
+        error,
+        "Failed to serialize location: value must not be empty"
+    );
+
+    let mut invalid_dimensions = TestProperties::from_properties(&HashMap::new()).unwrap();
+    invalid_dimensions.dimensions = (0, 480, 320);
+    let error = invalid_dimensions
+        .write_properties(&mut HashMap::new())
+        .unwrap_err();
+    assert_eq!(
+        error,
+        "Failed to serialize dimensions.width: dimensions must be positive"
+    );
 }
 
 mod accessor_fixture {
