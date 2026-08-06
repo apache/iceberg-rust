@@ -17,14 +17,10 @@
 
 //! Iceberg name mapping.
 
-use std::fmt::{Display, Formatter};
-use std::str::FromStr;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_with::{DefaultOnNull, serde_as};
-
-use crate::{Error, ErrorKind};
 
 /// Property name for name mapping.
 pub const DEFAULT_SCHEMA_NAME_MAPPING: &str = "schema.name-mapping.default";
@@ -45,23 +41,6 @@ impl NameMapping {
     /// Get a reference to fields which are to be mapped from name to field ID.
     pub fn fields(&self) -> &[MappedField] {
         &self.root
-    }
-}
-
-impl FromStr for NameMapping {
-    type Err = Error;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        serde_json::from_str(value).map_err(|error| {
-            Error::new(ErrorKind::DataInvalid, "Invalid name mapping").with_source(error)
-        })
-    }
-}
-
-impl Display for NameMapping {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        let value = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
-        formatter.write_str(&value)
     }
 }
 

@@ -22,7 +22,7 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::compression::CompressionCodec;
-use crate::spec::{TableMetadata, TableProperties};
+use crate::spec::{TableMetadata, parse_metadata_file_compression};
 use crate::{Error, ErrorKind, Result};
 
 /// Default folder name for metadata files under the table location, used when the
@@ -46,9 +46,7 @@ impl MetadataLocation {
     /// Determines the compression codec from table properties.
     /// Parse errors result in CompressionCodec::None.
     fn compression_from_properties(properties: &HashMap<String, String>) -> CompressionCodec {
-        TableProperties::try_from(properties)
-            .map(|properties| properties.write_metadata_compression_codec)
-            .unwrap_or(CompressionCodec::None)
+        parse_metadata_file_compression(properties).unwrap_or(CompressionCodec::None)
     }
 
     /// Creates a completely new metadata location starting at version 0, deriving the

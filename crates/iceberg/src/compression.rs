@@ -97,23 +97,9 @@ impl CompressionCodec {
 
     /// Parses the metadata-file compression codec table property.
     pub(crate) fn parse_metadata_property(value: &str) -> Result<Self> {
-        if value.is_empty() {
-            return Ok(Self::None);
-        }
-
-        let codec = Self::parse_property(value).map_err(|_| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported.",
-                    Self::None.name(),
-                    Self::gzip_default().name()
-                ),
-            )
-        })?;
-
-        match codec {
-            Self::None | Self::Gzip(_) => Ok(codec),
+        match value.to_ascii_lowercase().as_str() {
+            "" | "none" => Ok(Self::None),
+            "gzip" => Ok(Self::gzip_default()),
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!(
@@ -163,25 +149,6 @@ impl CompressionCodec {
                     codec.name()
                 ),
             )),
-        }
-    }
-
-    /// Writes a codec and its optional companion compression-level property.
-    pub(crate) fn write_properties(
-        &self,
-        properties: &mut HashMap<String, String>,
-        codec_key: &str,
-        level_key: &str,
-    ) {
-        properties.insert(codec_key.to_string(), self.property_value());
-
-        match self {
-            Self::Gzip(level) | Self::Zstd(level) => {
-                properties.insert(level_key.to_string(), level.to_string());
-            }
-            _ => {
-                properties.remove(level_key);
-            }
         }
     }
 }

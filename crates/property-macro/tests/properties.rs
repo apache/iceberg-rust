@@ -49,9 +49,15 @@ fn write_dimensions(
     properties: &mut HashMap<String, String>,
     key: &str,
     height_key: &str,
+    default: &(u64, u64),
 ) {
-    properties.insert(key.to_string(), dimensions.0.to_string());
-    properties.insert(height_key.to_string(), dimensions.1.to_string());
+    if dimensions == default {
+        properties.remove(key);
+        properties.remove(height_key);
+    } else {
+        properties.insert(key.to_string(), dimensions.0.to_string());
+        properties.insert(height_key.to_string(), dimensions.1.to_string());
+    }
 }
 
 #[derive(Debug, Properties)]
@@ -160,4 +166,48 @@ fn nested_properties_use_a_flat_property_map() {
 
     let decoded: NestedProperties = serde_json::from_value(json).unwrap();
     assert_eq!(decoded.commit.num_retries, 9);
+}
+
+mod accessor_fixture {
+    use iceberg_property_macro::Properties;
+
+    #[derive(Debug, Properties)]
+    pub struct AccessorProperties {
+        #[key = "public.both"]
+        #[default = 1]
+        #[doc = "A property with public read and write access."]
+        #[property(pub(getter), pub(setter))]
+        both: u64,
+
+        #[key = "public.getter"]
+        #[default = "value"]
+        #[doc = "A property with public read access."]
+        #[property(pub(getter))]
+        getter_only: String,
+
+        #[key = "public.setter"]
+        #[default = false]
+        #[property(pub(setter))]
+        setter_only: bool,
+    }
+
+    impl AccessorProperties {
+        pub fn setter_only_for_test(&self) -> bool {
+            self.setter_only
+        }
+    }
+}
+
+#[test]
+fn generates_opt_in_public_accessors_for_private_fields() {
+    let mut properties = accessor_fixture::AccessorProperties::default();
+
+    assert_eq!(*properties.both(), 1);
+    properties.set_both(2);
+    assert_eq!(*properties.both(), 2);
+
+    assert_eq!(properties.getter_only(), "value");
+
+    properties.set_setter_only(true);
+    assert!(properties.setter_only_for_test());
 }

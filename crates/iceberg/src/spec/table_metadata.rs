@@ -35,7 +35,7 @@ pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataB
 use super::{
     DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
     SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
-    TableProperties,
+    TableProperties, parse_metadata_file_compression, parse_metadata_location_property,
 };
 use crate::catalog::{METADATA_FOLDER_NAME, MetadataLocation};
 use crate::compression::CompressionCodec;
@@ -369,9 +369,7 @@ impl TableMetadata {
     /// Honors the `write.metadata.path` table property when set, otherwise defaults
     /// to the `metadata` subdirectory under the table location.
     pub fn metadata_location(&self) -> Result<String> {
-        Ok(self
-            .table_properties()?
-            .write_metadata_path
+        Ok(parse_metadata_location_property(&self.properties)?
             .unwrap_or_else(|| format!("{}/{}", self.location(), METADATA_FOLDER_NAME)))
     }
 
@@ -384,7 +382,7 @@ impl TableMetadata {
     ///
     /// Returns an error if the compression codec property has an invalid value.
     pub fn metadata_compression_codec(&self) -> Result<CompressionCodec> {
-        Ok(self.table_properties()?.write_metadata_compression_codec)
+        parse_metadata_file_compression(&self.properties)
     }
 
     /// Returns all supported table properties parsed from the raw property map.
@@ -498,7 +496,7 @@ impl TableMetadata {
         let json_data = serde_json::to_vec(self)?;
 
         // Check if compression codec from properties matches the one in metadata_location
-        let codec = self.table_properties()?.write_metadata_compression_codec;
+        let codec = parse_metadata_file_compression(&self.properties)?;
 
         if codec != metadata_location.compression_codec() {
             return Err(Error::new(
@@ -4043,11 +4041,11 @@ mod tests {
         let props = metadata.table_properties().unwrap();
 
         assert_eq!(
-            props.commit_retry_num_retries,
+            *props.commit_retry_num_retries(),
             TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
         );
         assert_eq!(
-            props.write_target_file_size_bytes,
+            *props.write_target_file_size_bytes(),
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
     }
@@ -4089,8 +4087,8 @@ mod tests {
 
         let props = metadata.table_properties().unwrap();
 
-        assert_eq!(props.commit_retry_num_retries, 10);
-        assert_eq!(props.write_target_file_size_bytes, 1024);
+        assert_eq!(*props.commit_retry_num_retries(), 10);
+        assert_eq!(*props.write_target_file_size_bytes(), 1024);
     }
 
     #[test]
@@ -4346,7 +4344,7 @@ mod tests {
     }
 
     #[test]
-    fn test_metadata_location_preserves_trailing_slash() {
+    fn test_metadata_location_trims_trailing_slash() {
         let metadata = get_test_table_metadata("TableMetadataV2Valid.json")
             .into_builder(None)
             .set_properties(HashMap::from([(
@@ -4359,7 +4357,7 @@ mod tests {
             .metadata;
         assert_eq!(
             metadata.metadata_location().unwrap(),
-            "s3://other-bucket/custom-meta/"
+            "s3://other-bucket/custom-meta"
         );
     }
 }

@@ -19,10 +19,12 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
+use quote::{format_ident, quote};
+use syn::parse::{Parse, ParseStream};
+use syn::punctuated::Punctuated;
 use syn::{
     Attribute, Data, DeriveInput, Error, Expr, ExprLit, ExprPath, Field, Fields, Ident, Lit, Meta,
-    Path, Type, parse_macro_input,
+    Path, Token, Type, parenthesized, parse_macro_input,
 };
 
 /// Derive parsing, defaults, and JSON serialization for a typed property map.
@@ -37,11 +39,14 @@ use syn::{
 ///     #[key = "write.format.default"]
 ///     #[default = "parquet"]
 ///     #[doc = "Default file format"]
-///     pub write_format_default: String,
+///     #[property(pub(getter), pub(setter))]
+///     write_format_default: String,
 /// }
 ///
-/// let properties = Properties::default();
-/// assert_eq!(properties.write_format_default, "parquet");
+/// let mut properties = Properties::default();
+/// assert_eq!(properties.write_format_default(), "parquet");
+/// properties.set_write_format_default("orc".to_string());
+/// assert_eq!(properties.write_format_default(), "orc");
 /// ```
 ///
 /// `prefix` captures a family of properties in a `HashMap<String, T>`, keyed by the suffix after
@@ -50,12 +55,17 @@ use syn::{
 /// `FromStr` or need validation. `serialize_with` supplies their string representation in JSON.
 /// `parse_properties_with` and `write_properties_with` provide access to the complete property map
 /// for fields represented by more than one key. `additional_key` declares a second key and passes
-/// it to those hooks after the primary key.
+/// it to those hooks after the primary key. Write hooks are also passed the field default and are
+/// responsible for omitting or removing default-valued properties.
 /// Optional fields are omitted from JSON when they are `None`. Fields need `FromStr` and `ToString`
 /// unless the relevant custom parsing or serialization attribute is supplied. Leaf fields also
 /// need `PartialEq` so values equal to their defaults can be omitted from JSON. String-literal and
 /// path defaults are converted into their field type with `Into`. Boolean property values are
 /// parsed case-insensitively.
+///
+/// Fields remain private unless their struct declaration makes them public. The
+/// `#[property(pub(getter))]` and `#[property(pub(setter))]` options generate a public getter and
+/// setter respectively. Getters borrow the field, and setters are named `set_<field>`.
 #[proc_macro_derive(
     Properties,
     attributes(
@@ -67,7 +77,8 @@ use syn::{
         parse_with,
         serialize_with,
         parse_properties_with,
-        write_properties_with
+        write_properties_with,
+        property
     )
 )]
 pub fn derive_properties(input: TokenStream) -> TokenStream {
@@ -93,6 +104,32 @@ struct PropertyField {
     write_properties_with: Option<Path>,
     option_inner_type: Option<Type>,
     map_value_type: Option<Type>,
+    public_getter: bool,
+    public_setter: bool,
+    doc_attributes: Vec<Attribute>,
+}
+
+enum PublicAccessor {
+    Getter,
+    Setter,
+}
+
+impl Parse for PublicAccessor {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<Token![pub]>()?;
+        let content;
+        parenthesized!(content in input);
+        let accessor = content.parse::<Ident>()?;
+        if !content.is_empty() {
+            return Err(content.error("expected getter or setter"));
+        }
+
+        match accessor.to_string().as_str() {
+            "getter" => Ok(Self::Getter),
+            "setter" => Ok(Self::Setter),
+            _ => Err(Error::new_spanned(accessor, "expected getter or setter")),
+        }
+    }
 }
 
 fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2> {
@@ -136,6 +173,8 @@ fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2> {
 
     let property_writes = fields.iter().map(write_field);
 
+    let accessors = fields.iter().map(field_accessors);
+
     Ok(quote! {
         impl ::std::default::Default for #struct_name {
             fn default() -> Self {
@@ -146,6 +185,8 @@ fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
 
         impl #struct_name {
+            #(#accessors)*
+
             pub(crate) fn from_properties(
                 properties: &::std::collections::HashMap<::std::string::String, ::std::string::String>,
             ) -> ::std::result::Result<Self, ::std::string::String> {
@@ -270,6 +311,7 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
             "fields cannot declare both serialize_with and write_properties_with",
         ));
     }
+    let (public_getter, public_setter) = property_accessors(&field.attrs)?;
 
     Ok(PropertyField {
         ident,
@@ -285,7 +327,74 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
         write_properties_with,
         option_inner_type: option_inner_type(&field.ty),
         map_value_type,
+        public_getter,
+        public_setter,
+        doc_attributes: field
+            .attrs
+            .iter()
+            .filter(|attribute| attribute.path().is_ident("doc"))
+            .cloned()
+            .collect(),
     })
+}
+
+fn property_accessors(attributes: &[Attribute]) -> syn::Result<(bool, bool)> {
+    let Some(attribute) = find_attribute(attributes, "property")? else {
+        return Ok((false, false));
+    };
+
+    let accessors =
+        attribute.parse_args_with(Punctuated::<PublicAccessor, Token![,]>::parse_terminated)?;
+    if accessors.is_empty() {
+        return Err(Error::new_spanned(
+            attribute,
+            "property must declare pub(getter), pub(setter), or both",
+        ));
+    }
+
+    let mut public_getter = false;
+    let mut public_setter = false;
+    for accessor in accessors {
+        let selected = match accessor {
+            PublicAccessor::Getter => &mut public_getter,
+            PublicAccessor::Setter => &mut public_setter,
+        };
+        if *selected {
+            return Err(Error::new_spanned(attribute, "duplicate property accessor"));
+        }
+        *selected = true;
+    }
+
+    Ok((public_getter, public_setter))
+}
+
+fn field_accessors(field: &PropertyField) -> TokenStream2 {
+    let ident = &field.ident;
+    let ty = &field.ty;
+    let docs = &field.doc_attributes;
+    let getter = field.public_getter.then(|| {
+        quote! {
+            #(#docs)*
+            pub fn #ident(&self) -> &#ty {
+                &self.#ident
+            }
+        }
+    });
+    let setter = field.public_setter.then(|| {
+        let setter_ident = format_ident!("set_{}", ident);
+        let setter_doc = format!("Sets `{ident}`.");
+        quote! {
+            #[doc = #setter_doc]
+            pub fn #setter_ident(&mut self, value: #ty) {
+                self.#ident = value;
+            }
+        }
+    });
+
+    quote! {
+        #getter
+        #setter
+    }
 }
 
 fn marker_attribute(attributes: &[Attribute], name: &str) -> syn::Result<bool> {
@@ -540,14 +649,12 @@ fn write_field(field: &PropertyField) -> TokenStream2 {
         let key = field.key.as_ref().expect("exact-key fields have a key");
         let write = match &field.additional_key {
             Some(additional_key) => {
-                quote!(#write_properties_with(&self.#ident, properties, #key, #additional_key))
+                quote!(#write_properties_with(&self.#ident, properties, #key, #additional_key, &#default))
             }
-            None => quote!(#write_properties_with(&self.#ident, properties, #key)),
+            None => quote!(#write_properties_with(&self.#ident, properties, #key, &#default)),
         };
         return quote! {
-            if self.#ident != #default {
-                #write;
-            }
+            #write;
         };
     }
 

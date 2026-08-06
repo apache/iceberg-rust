@@ -19,7 +19,7 @@
 edition = { workspace = true }
 homepage = { workspace = true }
 name = "iceberg-property-macro"
-publish = false
+publish = true
 rust-version = { workspace = true }
 version = { workspace = true }
 
