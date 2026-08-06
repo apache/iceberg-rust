@@ -71,6 +71,8 @@ extern crate self as iceberg;
 mod error;
 pub use error::{Error, ErrorKind, Result};
 
+pub mod sensitive;
+
 mod catalog;
 
 pub use catalog::utils::drop_table_data;
