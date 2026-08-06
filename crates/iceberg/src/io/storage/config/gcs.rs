@@ -38,7 +38,7 @@ pub const GCS_SERVICE_HOST: &str = "gcs.service.host";
 /// endpoints vended by a REST catalog or copied from another engine were
 /// silently ignored. It is still read as a fallback for backwards
 /// compatibility.
-#[deprecated(since = "0.10.1", note = "use GCS_SERVICE_HOST instead")]
+#[deprecated(since = "0.11.0", note = "use GCS_SERVICE_HOST instead")]
 pub const GCS_SERVICE_PATH: &str = "gcs.service.path";
 /// Google Cloud user project.
 pub const GCS_USER_PROJECT: &str = "gcs.user-project";
