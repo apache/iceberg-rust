@@ -29,7 +29,7 @@ use crate::{Error, ErrorKind, Result};
 ///
 /// This action is used within a transaction to indicate that the
 /// table's format version should be upgraded to a specified version.
-/// The location remains optional until explicitly set via [`set_format_version`].
+/// The location remains optional until explicitly set via [`UpgradeFormatVersionAction::set_format_version`].
 pub struct UpgradeFormatVersionAction {
     format_version: Option<FormatVersion>,
 }
