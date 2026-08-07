@@ -22,7 +22,7 @@ use syn::{DeriveInput, parse_macro_input};
 
 mod properties;
 
-/// Derives property-map parsing, writing, and opt-in accessors for a struct.
+/// Derives property-map parsing and opt-in read-only accessors for a struct.
 #[proc_macro_derive(
     Properties,
     attributes(
@@ -32,9 +32,7 @@ mod properties;
         nested,
         default,
         parse_with,
-        serialize_with,
         parse_properties_with,
-        serialize_properties_with,
         property
     )
 )]

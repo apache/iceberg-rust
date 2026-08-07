@@ -16,7 +16,7 @@
 // under the License.
 
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{
@@ -33,20 +33,14 @@ struct PropertyField {
     nested: bool,
     default: Option<Expr>,
     parse_with: Option<Path>,
-    serialize_with: Option<Path>,
     parse_properties_with: Option<Path>,
-    serialize_properties_with: Option<Path>,
     option_inner_type: Option<Type>,
     map_value_type: Option<Type>,
     public_getter: bool,
-    public_setter: bool,
     doc_attributes: Vec<Attribute>,
 }
 
-enum PublicAccessor {
-    Getter,
-    Setter,
-}
+struct PublicGetter;
 
 enum PropertyOption {
     Key(Expr),
@@ -55,10 +49,8 @@ enum PropertyOption {
     Nested,
     Default(Expr),
     ParseWith(Path),
-    SerializeWith(Path),
     ParsePropertiesWith(Path),
-    SerializePropertiesWith(Path),
-    Accessor(PublicAccessor),
+    Getter(PublicGetter),
 }
 
 #[derive(Default)]
@@ -69,27 +61,24 @@ struct PropertyOptions {
     nested: bool,
     default: Option<Expr>,
     parse_with: Option<Path>,
-    serialize_with: Option<Path>,
     parse_properties_with: Option<Path>,
-    serialize_properties_with: Option<Path>,
     public_getter: bool,
-    public_setter: bool,
 }
 
-impl Parse for PublicAccessor {
+impl Parse for PublicGetter {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         input.parse::<Token![pub]>()?;
         let content;
         parenthesized!(content in input);
         let accessor = content.parse::<Ident>()?;
         if !content.is_empty() {
-            return Err(content.error("expected getter or setter"));
+            return Err(content.error("expected getter"));
         }
 
-        match accessor.to_string().as_str() {
-            "getter" => Ok(Self::Getter),
-            "setter" => Ok(Self::Setter),
-            _ => Err(Error::new_spanned(accessor, "expected getter or setter")),
+        if accessor == "getter" {
+            Ok(Self)
+        } else {
+            Err(Error::new_spanned(accessor, "expected getter"))
         }
     }
 }
@@ -97,7 +86,7 @@ impl Parse for PublicAccessor {
 impl Parse for PropertyOption {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         if input.peek(Token![pub]) {
-            return input.parse().map(Self::Accessor);
+            return input.parse().map(Self::Getter);
         }
 
         let name = input.parse::<Ident>()?;
@@ -116,14 +105,9 @@ impl Parse for PropertyOption {
             "prefix" => Ok(Self::Prefix(expression)),
             "default" => Ok(Self::Default(expression)),
             "parse_with" => expression_path(expression, "parse_with").map(Self::ParseWith),
-            "serialize_with" => {
-                expression_path(expression, "serialize_with").map(Self::SerializeWith)
-            }
             "parse_properties_with" => {
                 expression_path(expression, "parse_properties_with").map(Self::ParsePropertiesWith)
             }
-            "serialize_properties_with" => expression_path(expression, "serialize_properties_with")
-                .map(Self::SerializePropertiesWith),
             _ => Err(Error::new_spanned(name, "unknown property option")),
         }
     }
@@ -152,11 +136,10 @@ pub(crate) fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2>
 
     let fields = fields
         .iter()
-        .map(parse_property_field)
+        .map(|field| parse_property_field(field, property_options(&field.attrs)?))
         .collect::<syn::Result<Vec<_>>>()?;
     let parses = fields.iter().map(parse_field);
-    let property_writes = fields.iter().map(write_field);
-    let accessors = fields.iter().map(field_accessors);
+    let accessors = fields.iter().map(field_getter);
     let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
 
     Ok(quote! {
@@ -173,27 +156,18 @@ pub(crate) fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2>
                     #(#parses,)*
                 })
             }
-
-            pub fn write_properties(
-                &self,
-                properties: &mut ::std::collections::HashMap<
-                    ::std::string::String,
-                    ::std::string::String,
-                >,
-            ) -> ::std::result::Result<(), ::std::string::String> {
-                #(#property_writes)*
-                Ok(())
-            }
         }
     })
 }
 
-fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
+fn parse_property_field(
+    field: &Field,
+    property_options: PropertyOptions,
+) -> syn::Result<PropertyField> {
     let ident = field
         .ident
         .clone()
         .ok_or_else(|| Error::new_spanned(field, "Properties fields must be named"))?;
-    let property_options = property_options(&field.attrs)?;
     let key = merge_attribute_option(
         attribute_expression_value(&field.attrs, "key")?,
         property_options.key,
@@ -261,44 +235,25 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
         field,
         "parse_with",
     )?;
-    let serialize_with = merge_attribute_option(
-        attribute_path_value(&field.attrs, "serialize_with")?,
-        property_options.serialize_with,
-        field,
-        "serialize_with",
-    )?;
     let parse_properties_with = merge_attribute_option(
         attribute_path_value(&field.attrs, "parse_properties_with")?,
         property_options.parse_properties_with,
         field,
         "parse_properties_with",
     )?;
-    let serialize_properties_with = merge_attribute_option(
-        attribute_path_value(&field.attrs, "serialize_properties_with")?,
-        property_options.serialize_properties_with,
-        field,
-        "serialize_properties_with",
-    )?;
 
-    if additional_keys.is_some()
-        && parse_properties_with.is_none()
-        && serialize_properties_with.is_none()
-    {
+    if additional_keys.is_some() && parse_properties_with.is_none() {
         return Err(Error::new_spanned(
             field,
-            "#[additional_keys(...)] requires parse_properties_with or serialize_properties_with",
+            "#[additional_keys(...)] requires parse_properties_with",
         ));
     }
     if (prefix.is_some() || nested)
-        && (additional_keys.is_some()
-            || parse_with.is_some()
-            || serialize_with.is_some()
-            || parse_properties_with.is_some()
-            || serialize_properties_with.is_some())
+        && (additional_keys.is_some() || parse_with.is_some() || parse_properties_with.is_some())
     {
         return Err(Error::new_spanned(
             field,
-            "#[prefix(...)] and #[nested] fields do not support custom parse or write functions",
+            "#[prefix(...)] and #[nested] fields do not support custom parse functions",
         ));
     }
     if parse_with.is_some() && parse_properties_with.is_some() {
@@ -307,13 +262,6 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
             "fields cannot declare both parse_with and parse_properties_with",
         ));
     }
-    if serialize_with.is_some() && serialize_properties_with.is_some() {
-        return Err(Error::new_spanned(
-            field,
-            "fields cannot declare both serialize_with and serialize_properties_with",
-        ));
-    }
-
     Ok(PropertyField {
         ident,
         ty: field.ty.clone(),
@@ -323,13 +271,10 @@ fn parse_property_field(field: &Field) -> syn::Result<PropertyField> {
         nested,
         default,
         parse_with,
-        serialize_with,
         parse_properties_with,
-        serialize_properties_with,
         option_inner_type: option_inner_type(&field.ty),
         map_value_type,
         public_getter: property_options.public_getter,
-        public_setter: property_options.public_setter,
         doc_attributes: field
             .attrs
             .iter()
@@ -383,33 +328,17 @@ fn property_options(attributes: &[Attribute]) -> syn::Result<PropertyOptions> {
             PropertyOption::ParseWith(value) => {
                 set_property_option(&mut options.parse_with, value, attribute, "parse_with")?
             }
-            PropertyOption::SerializeWith(value) => set_property_option(
-                &mut options.serialize_with,
-                value,
-                attribute,
-                "serialize_with",
-            )?,
             PropertyOption::ParsePropertiesWith(value) => set_property_option(
                 &mut options.parse_properties_with,
                 value,
                 attribute,
                 "parse_properties_with",
             )?,
-            PropertyOption::SerializePropertiesWith(value) => set_property_option(
-                &mut options.serialize_properties_with,
-                value,
-                attribute,
-                "serialize_properties_with",
-            )?,
-            PropertyOption::Accessor(accessor) => {
-                let selected = match accessor {
-                    PublicAccessor::Getter => &mut options.public_getter,
-                    PublicAccessor::Setter => &mut options.public_setter,
-                };
-                if *selected {
+            PropertyOption::Getter(_) => {
+                if options.public_getter {
                     return Err(Error::new_spanned(attribute, "duplicate property accessor"));
                 }
-                *selected = true;
+                options.public_getter = true;
             }
         }
     }
@@ -449,32 +378,27 @@ fn merge_attribute_option<T>(
     }
 }
 
-fn field_accessors(field: &PropertyField) -> TokenStream2 {
+fn field_getter(field: &PropertyField) -> TokenStream2 {
+    if !field.public_getter {
+        return TokenStream2::new();
+    }
     let ident = &field.ident;
     let ty = &field.ty;
     let docs = &field.doc_attributes;
-    let getter = field.public_getter.then(|| {
+    if is_copy_type(ty) {
+        quote! {
+            #(#docs)*
+            pub fn #ident(&self) -> #ty {
+                self.#ident
+            }
+        }
+    } else {
         quote! {
             #(#docs)*
             pub fn #ident(&self) -> &#ty {
                 &self.#ident
             }
         }
-    });
-    let setter = field.public_setter.then(|| {
-        let setter_ident = format_ident!("set_{}", ident);
-        let setter_doc = format!("Sets `{ident}`.");
-        quote! {
-            #[doc = #setter_doc]
-            pub fn #setter_ident(&mut self, value: #ty) {
-                self.#ident = value;
-            }
-        }
-    });
-
-    quote! {
-        #getter
-        #setter
     }
 }
 
@@ -762,6 +686,55 @@ fn is_bool(ty: &Type) -> bool {
     is_named_type(ty, "bool")
 }
 
+fn is_copy_type(ty: &Type) -> bool {
+    match ty {
+        Type::Array(array) => is_copy_type(&array.elem),
+        Type::BareFn(_) | Type::Never(_) | Type::Ptr(_) => true,
+        Type::Group(group) => is_copy_type(&group.elem),
+        Type::Paren(paren) => is_copy_type(&paren.elem),
+        Type::Reference(reference) => reference.mutability.is_none(),
+        Type::Tuple(tuple) => tuple.elems.iter().all(is_copy_type),
+        Type::Path(type_path) if type_path.qself.is_none() => {
+            let Some(segment) = type_path.path.segments.last() else {
+                return false;
+            };
+            if matches!(
+                segment.ident.to_string().as_str(),
+                "bool"
+                    | "char"
+                    | "f32"
+                    | "f64"
+                    | "i8"
+                    | "i16"
+                    | "i32"
+                    | "i64"
+                    | "i128"
+                    | "isize"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "usize"
+            ) {
+                return true;
+            }
+            if segment.ident != "Option" && segment.ident != "Result" {
+                return false;
+            }
+            let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+                return false;
+            };
+            arguments.args.iter().all(|argument| match argument {
+                GenericArgument::Lifetime(_) => true,
+                GenericArgument::Type(ty) => is_copy_type(ty),
+                _ => false,
+            })
+        }
+        _ => false,
+    }
+}
+
 fn is_named_type(ty: &Type, name: &str) -> bool {
     let Type::Path(type_path) = ty else {
         return false;
@@ -772,71 +745,4 @@ fn is_named_type(ty: &Type, name: &str) -> bool {
         .segments
         .last()
         .is_some_and(|segment| segment.ident == name)
-}
-
-fn write_field(field: &PropertyField) -> TokenStream2 {
-    let ident = &field.ident;
-    if field.nested {
-        return quote! {
-            self.#ident.write_properties(properties)?;
-        };
-    }
-
-    let default = typed_default(field);
-
-    if let Some(serialize_properties_with) = &field.serialize_properties_with {
-        let key = field.key.as_ref().expect("exact-key fields have a key");
-        let serialize = match &field.additional_keys {
-            Some(additional_keys) => {
-                quote!(#serialize_properties_with(&self.#ident, properties, #key, &[#(#additional_keys),*], &#default))
-            }
-            None => quote!(#serialize_properties_with(&self.#ident, properties, #key, &#default)),
-        };
-        return quote! {
-            #serialize.map_err(|error| {
-                format!("Failed to serialize {}: {error}", #key)
-            })?;
-        };
-    }
-
-    if let Some(prefix) = &field.prefix {
-        return quote! {
-            properties.retain(|key, _| !key.starts_with(#prefix));
-            if self.#ident != #default {
-                for (suffix, value) in &self.#ident {
-                    let key = format!("{}{}", #prefix, suffix);
-                    properties.insert(key, ::std::string::ToString::to_string(value));
-                }
-            }
-        };
-    }
-
-    let key = field.key.as_ref().expect("exact-key fields have a key");
-    let value = match (&field.serialize_with, &field.option_inner_type) {
-        (Some(serialize_with), _) => quote!(#serialize_with(&self.#ident).map_err(|error| {
-            format!("Failed to serialize {}: {error}", #key)
-        })?),
-        (None, Some(_)) => quote!(::std::string::ToString::to_string(
-            self.#ident.as_ref().expect("checked is_some above")
-        )),
-        (None, None) => quote!(::std::string::ToString::to_string(&self.#ident)),
-    };
-    let insert = if field.option_inner_type.is_some() {
-        quote! {
-            if self.#ident != #default && self.#ident.is_some() {
-                properties.insert((#key).to_string(), #value);
-            }
-        }
-    } else {
-        quote! {
-            if self.#ident != #default {
-                properties.insert((#key).to_string(), #value);
-            }
-        }
-    };
-
-    quote! {
-        properties.remove(#key);
-        #insert
-    }
 }

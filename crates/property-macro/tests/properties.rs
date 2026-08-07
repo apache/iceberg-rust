@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use iceberg_property_macro::Properties;
+use serde::{Deserialize, Serialize};
 
 const RETRIES: &str = "commit.retry.num-retries";
 const OWNER: &str = "owner";
@@ -52,71 +53,54 @@ fn parse_dimensions(
     ))
 }
 
-fn serialize_dimensions(
-    dimensions: &(u64, u64, u64),
-    properties: &mut HashMap<String, String>,
-    width_key: &str,
-    additional_keys: &[&str],
-    default: &(u64, u64, u64),
-) -> Result<(), String> {
-    if additional_keys.len() != 2 {
-        return Err("dimensions require height and depth keys".to_string());
-    }
-    if dimensions.0 == 0 || dimensions.1 == 0 || dimensions.2 == 0 {
-        return Err("dimensions must be positive".to_string());
-    }
-    properties.remove(width_key);
-    properties.remove(additional_keys[0]);
-    properties.remove(additional_keys[1]);
-    if dimensions != default {
-        properties.insert(width_key.to_string(), dimensions.0.to_string());
-        properties.insert(additional_keys[0].to_string(), dimensions.1.to_string());
-        properties.insert(additional_keys[1].to_string(), dimensions.2.to_string());
-    }
-    Ok(())
-}
-
 #[derive(Debug, Properties)]
 struct TestProperties {
     #[key(RETRIES)]
     #[default(4)]
-    pub retries: u64,
+    #[property(pub(getter))]
+    retries: u64,
 
-    #[key(OWNER)]
-    #[default(None)]
-    pub owner: Option<String>,
+    #[property(key = OWNER, default = None, pub(getter))]
+    owner: Option<String>,
 
-    #[key(FORMAT)]
-    #[default("parquet")]
-    pub format: String,
+    #[property(key = FORMAT, default = "parquet", pub(getter))]
+    format: String,
 
-    #[key(FANOUT_ENABLED)]
-    #[default(true)]
-    pub fanout_enabled: bool,
+    #[property(key = FANOUT_ENABLED, default = true, pub(getter))]
+    fanout_enabled: bool,
 
-    #[prefix(COLUMN_FPP_PREFIX)]
-    #[default(HashMap::new())]
-    pub column_fpp: HashMap<String, f64>,
+    #[property(
+        prefix = COLUMN_FPP_PREFIX,
+        default = HashMap::new(),
+        pub(getter)
+    )]
+    column_fpp: HashMap<String, f64>,
 
-    #[key(WIDTH)]
-    #[additional_keys(HEIGHT, DEPTH)]
-    #[default((640, 480, 320))]
-    #[parse_properties_with(parse_dimensions)]
-    #[serialize_properties_with(serialize_dimensions)]
-    pub dimensions: (u64, u64, u64),
+    #[property(
+        key = WIDTH,
+        additional_keys = [HEIGHT, DEPTH],
+        default = (640, 480, 320),
+        parse_properties_with = parse_dimensions,
+        pub(getter)
+    )]
+    dimensions: (u64, u64, u64),
 }
 
 #[test]
-fn reads_defaults_and_overrides() {
-    let defaults = TestProperties::from_properties(&HashMap::new()).unwrap();
-    assert_eq!(defaults.retries, 4);
-    assert_eq!(defaults.owner, None);
-    assert_eq!(defaults.format, "parquet");
-    assert!(defaults.fanout_enabled);
-    assert!(defaults.column_fpp.is_empty());
-    assert_eq!(defaults.dimensions, (640, 480, 320));
+fn reads_defaults_through_generated_getters() {
+    let properties = TestProperties::from_properties(&HashMap::new()).unwrap();
 
-    let properties = HashMap::from([
+    assert_eq!(properties.retries(), 4);
+    assert_eq!(properties.owner(), &None);
+    assert_eq!(properties.format(), "parquet");
+    assert!(properties.fanout_enabled());
+    assert!(properties.column_fpp().is_empty());
+    assert_eq!(properties.dimensions(), (640, 480, 320));
+}
+
+#[test]
+fn reads_overrides_and_ignores_unknown_properties() {
+    let raw = HashMap::from([
         (RETRIES.to_string(), "8".to_string()),
         (OWNER.to_string(), "iceberg".to_string()),
         (FORMAT.to_string(), "orc".to_string()),
@@ -125,66 +109,16 @@ fn reads_defaults_and_overrides() {
         (WIDTH.to_string(), "1920".to_string()),
         (HEIGHT.to_string(), "1080".to_string()),
         (DEPTH.to_string(), "720".to_string()),
+        ("unknown".to_string(), "ignored".to_string()),
     ]);
-    let parsed = TestProperties::from_properties(&properties).unwrap();
+    let properties = TestProperties::from_properties(&raw).unwrap();
 
-    assert_eq!(parsed.retries, 8);
-    assert_eq!(parsed.owner.as_deref(), Some("iceberg"));
-    assert_eq!(parsed.format, "orc");
-    assert!(!parsed.fanout_enabled);
-    assert_eq!(parsed.column_fpp["id"], 0.01);
-    assert_eq!(parsed.dimensions, (1920, 1080, 720));
-}
-
-#[test]
-fn writes_overrides_and_preserves_unrelated_properties() {
-    let parsed = TestProperties::from_properties(&HashMap::from([
-        (RETRIES.to_string(), "8".to_string()),
-        (OWNER.to_string(), "iceberg".to_string()),
-        (FORMAT.to_string(), "orc".to_string()),
-        (FANOUT_ENABLED.to_string(), "false".to_string()),
-        (format!("{COLUMN_FPP_PREFIX}id"), "0.01".to_string()),
-        (WIDTH.to_string(), "1920".to_string()),
-        (HEIGHT.to_string(), "1080".to_string()),
-        (DEPTH.to_string(), "720".to_string()),
-    ]))
-    .unwrap();
-    let mut properties = HashMap::from([("unrelated".to_string(), "value".to_string())]);
-
-    parsed.write_properties(&mut properties).unwrap();
-
-    assert_eq!(properties[RETRIES], "8");
-    assert_eq!(properties[OWNER], "iceberg");
-    assert_eq!(properties[FORMAT], "orc");
-    assert_eq!(properties[FANOUT_ENABLED], "false");
-    assert_eq!(properties[&format!("{COLUMN_FPP_PREFIX}id")], "0.01");
-    assert_eq!(properties[WIDTH], "1920");
-    assert_eq!(properties[HEIGHT], "1080");
-    assert_eq!(properties[DEPTH], "720");
-    assert_eq!(properties["unrelated"], "value");
-}
-
-#[test]
-fn writing_defaults_removes_modeled_properties() {
-    let defaults = TestProperties::from_properties(&HashMap::new()).unwrap();
-    let mut properties = HashMap::from([
-        (RETRIES.to_string(), "8".to_string()),
-        (OWNER.to_string(), "iceberg".to_string()),
-        (FORMAT.to_string(), "orc".to_string()),
-        (FANOUT_ENABLED.to_string(), "false".to_string()),
-        (format!("{COLUMN_FPP_PREFIX}id"), "0.01".to_string()),
-        (WIDTH.to_string(), "1920".to_string()),
-        (HEIGHT.to_string(), "1080".to_string()),
-        (DEPTH.to_string(), "720".to_string()),
-        ("unrelated".to_string(), "value".to_string()),
-    ]);
-
-    defaults.write_properties(&mut properties).unwrap();
-
-    assert_eq!(
-        properties,
-        HashMap::from([("unrelated".to_string(), "value".to_string())])
-    );
+    assert_eq!(properties.retries(), 8);
+    assert_eq!(properties.owner().as_deref(), Some("iceberg"));
+    assert_eq!(properties.format(), "orc");
+    assert!(!properties.fanout_enabled());
+    assert_eq!(properties.column_fpp()["id"], 0.01);
+    assert_eq!(properties.dimensions(), (1920, 1080, 720));
 }
 
 #[test]
@@ -212,34 +146,25 @@ fn reports_the_property_with_an_invalid_value() {
     assert!(prefix_error.contains(&prefixed_key));
 }
 
-#[derive(Clone, Debug, Properties)]
+#[derive(Debug, Properties)]
 struct CommitProperties {
-    #[key = "commit.retry.num-retries"]
-    #[default = 4]
-    pub num_retries: u64,
+    /// Maximum number of times to retry a commit.
+    #[property(key = RETRIES, default = 4, pub(getter))]
+    retries: u64,
 }
 
 #[derive(Debug, Properties)]
 struct NestedProperties {
-    #[nested]
-    pub commit: CommitProperties,
+    #[property(nested, pub(getter))]
+    commit: CommitProperties,
 }
 
 #[test]
-fn nested_properties_use_a_flat_property_map() {
-    let mut properties = NestedProperties::from_properties(&HashMap::new()).unwrap();
-    assert_eq!(properties.commit.num_retries, 4);
+fn nested_properties_read_the_same_flat_map() {
+    let raw = HashMap::from([(RETRIES.to_string(), "9".to_string())]);
+    let properties = NestedProperties::from_properties(&raw).unwrap();
 
-    properties.commit.num_retries = 9;
-    let mut written = HashMap::new();
-    properties.write_properties(&mut written).unwrap();
-    assert_eq!(
-        written,
-        HashMap::from([("commit.retry.num-retries".to_string(), "9".to_string())])
-    );
-
-    let decoded = NestedProperties::from_properties(&written).unwrap();
-    assert_eq!(decoded.commit.num_retries, 9);
+    assert_eq!(properties.commit().retries(), 9);
 }
 
 fn parse_non_empty(value: &str) -> Result<String, &'static str> {
@@ -251,32 +176,25 @@ fn parse_non_empty(value: &str) -> Result<String, &'static str> {
     }
 }
 
-fn serialize_trimmed(value: &str) -> Result<String, &'static str> {
-    let value = value.trim();
-    if value.is_empty() {
-        Err("value must not be empty")
-    } else {
-        Ok(value.to_string())
-    }
-}
-
 #[derive(Debug, Properties)]
 struct ValidatedProperties {
-    #[key = "location"]
-    #[default = "default"]
-    #[parse_with(parse_non_empty)]
-    #[serialize_with(serialize_trimmed)]
+    #[property(
+        key = "location",
+        default = "default",
+        parse_with = parse_non_empty,
+        pub(getter)
+    )]
     location: String,
 }
 
 #[test]
-fn custom_single_value_hooks_can_validate_and_normalize() {
+fn custom_single_value_parser_can_validate_and_normalize() {
     let parsed = ValidatedProperties::from_properties(&HashMap::from([(
         "location".to_string(),
         " path ".to_string(),
     )]))
     .unwrap();
-    assert_eq!(parsed.location, "path");
+    assert_eq!(parsed.location(), "path");
 
     let error = ValidatedProperties::from_properties(&HashMap::from([(
         "location".to_string(),
@@ -284,71 +202,26 @@ fn custom_single_value_hooks_can_validate_and_normalize() {
     )]))
     .unwrap_err();
     assert_eq!(error, "Invalid value for location: value must not be empty");
+}
 
-    let properties = ValidatedProperties {
-        location: " normalized ".to_string(),
-    };
-    let mut written = HashMap::new();
-    properties.write_properties(&mut written).unwrap();
-    assert_eq!(written["location"], "normalized");
+#[derive(Debug, Default, Serialize, Deserialize, Properties)]
+struct DerivedTraitProperties {
+    #[property(key = RETRIES, default = 4, pub(getter))]
+    retries: u64,
 }
 
 #[test]
-fn reports_custom_serialization_errors() {
-    let invalid_location = ValidatedProperties {
-        location: " ".to_string(),
-    };
-    let error = invalid_location
-        .write_properties(&mut HashMap::new())
-        .unwrap_err();
+fn coexists_with_default_serialize_and_deserialize_derives() {
+    let defaults = DerivedTraitProperties::default();
+    assert_eq!(defaults.retries(), 0);
+
+    let properties = DerivedTraitProperties::from_properties(&HashMap::new()).unwrap();
+    assert_eq!(properties.retries(), 4);
     assert_eq!(
-        error,
-        "Failed to serialize location: value must not be empty"
+        serde_json::to_string(&properties).unwrap(),
+        r#"{"retries":4}"#
     );
 
-    let mut invalid_dimensions = TestProperties::from_properties(&HashMap::new()).unwrap();
-    invalid_dimensions.dimensions = (0, 480, 320);
-    let error = invalid_dimensions
-        .write_properties(&mut HashMap::new())
-        .unwrap_err();
-    assert_eq!(
-        error,
-        "Failed to serialize dimensions.width: dimensions must be positive"
-    );
-}
-
-mod accessor_fixture {
-    use iceberg_property_macro::Properties;
-
-    #[derive(Debug, Default, Properties)]
-    pub struct AccessorProperties {
-        #[doc = "A property with public read and write access."]
-        #[property(key = "public.both", default = 0, pub(getter), pub(setter))]
-        both: u64,
-
-        #[property(key = "public.getter", default = "", pub(getter))]
-        getter_only: String,
-
-        #[property(key = "public.setter", default = false, pub(setter))]
-        setter_only: bool,
-    }
-
-    impl AccessorProperties {
-        pub fn setter_only_for_test(&self) -> bool {
-            self.setter_only
-        }
-    }
-}
-
-#[test]
-fn coexists_with_derived_default_and_generates_opt_in_accessors() {
-    let mut properties = accessor_fixture::AccessorProperties::default();
-
-    assert_eq!(*properties.both(), 0);
-    properties.set_both(2);
-    assert_eq!(*properties.both(), 2);
-    assert_eq!(properties.getter_only(), "");
-
-    properties.set_setter_only(true);
-    assert!(properties.setter_only_for_test());
+    let decoded: DerivedTraitProperties = serde_json::from_str(r#"{"retries":7}"#).unwrap();
+    assert_eq!(decoded.retries(), 7);
 }
