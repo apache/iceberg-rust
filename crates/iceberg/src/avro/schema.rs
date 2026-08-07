@@ -38,6 +38,7 @@ const FIELD_ID_PROP: &str = "field-id";
 const KEY_ID: &str = "key-id";
 const VALUE_ID: &str = "value-id";
 const MAP_LOGICAL_TYPE: &str = "map";
+const UUID_LOGICAL_TYPE: &str = "uuid";
 // This const may better to maintain in avro-rs.
 const LOGICAL_TYPE: &str = "logicalType";
 
@@ -340,7 +341,10 @@ fn avro_uuid_schema() -> Result<AvroSchema> {
         aliases: None,
         doc: None,
         size: 16,
-        attributes: Default::default(),
+        attributes: BTreeMap::from_iter([(
+            LOGICAL_TYPE.to_string(),
+            Value::String(UUID_LOGICAL_TYPE.to_string()),
+        )]),
         default: None,
     }))
 }
