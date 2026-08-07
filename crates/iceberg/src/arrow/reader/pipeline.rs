@@ -26,7 +26,9 @@ use std::sync::atomic::AtomicU64;
 
 use arrow_schema::{DataType, Field};
 use futures::{StreamExt, TryStreamExt};
-use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+use parquet::arrow::arrow_reader::{
+    ArrowPredicate, ArrowReaderMetadata, ArrowReaderOptions, RowFilter,
+};
 use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder, RowNumber};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 
@@ -348,36 +350,24 @@ impl FileScanTaskReader {
         }
 
         let delete_filter = delete_filter_rx.await.unwrap()?;
-        let delete_predicate = delete_filter.build_equality_delete_predicate(&task).await?;
+        let eq_delete_sets = delete_filter.build_equality_delete_sets(&task).await?;
 
-        // In addition to the optional predicate supplied in the `FileScanTask`,
-        // we also have an optional predicate resulting from equality delete files.
-        // If both are present, we logical-AND them together to form a single filter
-        // predicate that we can pass to the `RecordBatchStreamBuilder`.
-        let final_predicate = match (&task.predicate, delete_predicate) {
-            (None, None) => None,
-            (Some(predicate), None) => Some(predicate.clone()),
-            (None, Some(ref predicate)) => Some(predicate.clone()),
-            (Some(filter_predicate), Some(delete_predicate)) => {
-                Some(filter_predicate.clone().and(delete_predicate))
-            }
-        };
+        // Equality deletes are applied as a row-filter predicate based on a hash-set (see below),
+        // so the scan-predicate carries only the optional predicate
+        let final_predicate = task.predicate.clone();
 
         // There are three possible sources for potential lists of selected RowGroup indices,
         // and two for `RowSelection`s.
-        // Selected RowGroup index lists can come from three sources:
+        // Selected RowGroup index lists can come from two sources:
         //   * When task.start and task.length specify a byte range (file splitting);
-        //   * When there are equality delete files that are applicable;
         //   * When there is a scan predicate and row_group_filtering_enabled = true.
         // `RowSelection`s can be created in either or both of the following cases:
         //   * When there are positional delete files that are applicable;
-        //   * When there is a scan predicate and row_selection_enabled = true
-        // Note that row group filtering from predicates only happens when
-        // there is a scan predicate AND row_group_filtering_enabled = true,
-        // but we perform row selection filtering if there are applicable
-        // equality delete files OR (there is a scan predicate AND row_selection_enabled),
-        // since the only implemented method of applying positional deletes is
-        // by using a `RowSelection`.
+        //   * When there is a scan predicate and row_selection_enabled = true.
+        // Equality deletes appear in neither list: they are applied as `RowFilter`
+        // predicates during decoding (see `build_equality_delete_predicates`), so they
+        // never contribute row-group indices or a `RowSelection`. Positional deletes
+        // still do, since a `RowSelection` remains the only way they are applied.
         let mut selected_row_group_indices = None;
         let mut row_selection = None;
 
@@ -392,6 +382,8 @@ impl FileScanTaskReader {
             selected_row_group_indices = Some(byte_range_filtered_row_groups);
         }
 
+        let mut row_filter_predicates: Vec<Box<dyn ArrowPredicate>> = Vec::new();
+
         if let Some(predicate) = final_predicate {
             let (iceberg_field_ids, field_id_map) = ArrowReader::build_field_id_set_and_map(
                 record_batch_stream_builder.parquet_schema(),
@@ -400,13 +392,12 @@ impl FileScanTaskReader {
                 use_position_fallback,
             )?;
 
-            let row_filter = ArrowReader::get_row_filter(
+            row_filter_predicates.push(ArrowReader::build_scan_predicate(
                 &predicate,
                 record_batch_stream_builder.parquet_schema(),
                 &iceberg_field_ids,
                 &field_id_map,
-            )?;
-            record_batch_stream_builder = record_batch_stream_builder.with_row_filter(row_filter);
+            )?);
 
             if self.row_group_filtering_enabled {
                 let predicate_filtered_row_groups = ArrowReader::get_selected_row_group_indices(
@@ -440,6 +431,20 @@ impl FileScanTaskReader {
                     &task.schema,
                 )?;
             }
+        }
+
+        if !eq_delete_sets.is_empty() {
+            row_filter_predicates.extend(ArrowReader::build_equality_delete_predicates(
+                &eq_delete_sets,
+                record_batch_stream_builder.parquet_schema(),
+                record_batch_stream_builder.schema(),
+                use_position_fallback,
+            )?);
+        }
+
+        if !row_filter_predicates.is_empty() {
+            record_batch_stream_builder =
+                record_batch_stream_builder.with_row_filter(RowFilter::new(row_filter_predicates));
         }
 
         let positional_delete_indexes = delete_filter.get_delete_vector(&task);
