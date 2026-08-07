@@ -237,7 +237,10 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
-    fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
+    pub(crate) fn new_manifest_writer(
+        &mut self,
+        content: ManifestContentType,
+    ) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
             "{}/{}-m{}.{}",
             self.table.metadata().metadata_location()?,
