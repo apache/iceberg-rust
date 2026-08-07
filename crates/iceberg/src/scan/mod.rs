@@ -662,9 +662,9 @@ pub mod tests {
     use crate::io::{FileIO, OutputFile};
     use crate::metadata_columns::{
         RESERVED_COL_NAME_DELETE_FILE_PATH, RESERVED_COL_NAME_DELETE_FILE_POS,
-        RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID,
-        RESERVED_FIELD_ID_DELETE_FILE_PATH, RESERVED_FIELD_ID_DELETE_FILE_POS,
-        RESERVED_FIELD_ID_POS,
+        RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
+        RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_DELETE_FILE_PATH,
+        RESERVED_FIELD_ID_DELETE_FILE_POS, RESERVED_FIELD_ID_POS,
     };
     use crate::scan::FileScanTask;
     use crate::spec::{
@@ -3147,6 +3147,92 @@ pub mod tests {
 
         // Verify 'z' column exists
         assert!(batches[0].column_by_name("z").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_select_with_last_updated_sequence_number_column() {
+        // A v2 fixture: data files have a null first_row_id. Per the spec's Row
+        // Lineage read rules, a file with a null first_row_id produces a null
+        // _last_updated_sequence_number for all rows; both lineage columns are
+        // gated on first_row_id.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        // Every row's value is null (v2 files have no first_row_id).
+        for batch in &batches {
+            let seq_col = batch
+                .column_by_name(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER)
+                .expect("_last_updated_sequence_number column should be present")
+                .as_any()
+                .downcast_ref::<RunArray<Int32Type>>()
+                .expect("_last_updated_sequence_number should be a RunArray");
+            let values = seq_col
+                .values()
+                .as_primitive::<arrow_array::types::Int64Type>();
+            assert!(
+                (0..values.len()).all(|i| values.is_null(i)),
+                "all values must be null for a file with null first_row_id"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_select_with_last_updated_sequence_number_column_v3() {
+        // A v3 fixture: the data file inherits first_row_id=42 and data
+        // sequence number=1 through manifest read. End to end, the projected
+        // _last_updated_sequence_number materializes to the data sequence
+        // number (1) for every row, exercising the full inherit, populate and
+        // materialize wiring, not just a hand-built task.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_v3_manifest_files().await;
+
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        for batch in &batches {
+            let seq_col = batch
+                .column_by_name(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER)
+                .expect("_last_updated_sequence_number column should be present")
+                .as_any()
+                .downcast_ref::<RunArray<Int32Type>>()
+                .expect("_last_updated_sequence_number should be a RunArray");
+            let values = seq_col
+                .values()
+                .as_primitive::<arrow_array::types::Int64Type>();
+            assert!(
+                (0..values.len()).all(|i| !values.is_null(i) && values.value(i) == 1),
+                "every row must equal the data sequence number (1)"
+            );
+        }
     }
 
     #[tokio::test]
