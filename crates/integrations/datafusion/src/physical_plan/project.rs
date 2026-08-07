@@ -30,7 +30,7 @@ use iceberg::arrow::{
     PROJECTED_PARTITION_VALUE_COLUMN, PartitionValueCalculator, schema_to_arrow_schema,
     strip_metadata_from_schema,
 };
-use iceberg::spec::PartitionSpec;
+use iceberg::spec::{PartitionSpec, SchemaRef};
 use iceberg::table::Table;
 
 use crate::to_datafusion_error;
@@ -79,10 +79,6 @@ pub fn project_with_partition(
         )));
     }
 
-    let calculator =
-        PartitionValueCalculator::try_new(partition_spec.as_ref(), table_schema.as_ref())
-            .map_err(to_datafusion_error)?;
-
     let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
         Vec::with_capacity(input_schema.fields().len() + 1);
 
@@ -91,26 +87,51 @@ pub fn project_with_partition(
         projection_exprs.push((column_expr, field.name().clone()));
     }
 
-    let partition_expr = Arc::new(PartitionExpr::new(calculator, partition_spec.clone()));
+    let partition_expr = Arc::new(PartitionExpr::try_new(
+        partition_spec.clone(),
+        table_schema.clone(),
+    )?);
     projection_exprs.push((partition_expr, PROJECTED_PARTITION_VALUE_COLUMN.to_string()));
 
     let projection = ProjectionExec::try_new(projection_exprs, input)?;
     Ok(Arc::new(projection))
 }
 
-/// PhysicalExpr implementation for partition value calculation
+/// `PhysicalExpr` that computes Iceberg partition values for each input row.
+///
+/// Alongside the live (non-serializable) [`PartitionValueCalculator`], it retains
+/// the [`PartitionSpec`] and table schema it was built from. A distributed engine
+/// can serialize those two — both are self-contained iceberg spec types — and
+/// rebuild an equivalent expression on a remote node via [`PartitionExpr::try_new`].
 #[derive(Debug, Clone)]
-struct PartitionExpr {
+pub struct PartitionExpr {
     calculator: Arc<PartitionValueCalculator>,
     partition_spec: Arc<PartitionSpec>,
+    table_schema: SchemaRef,
 }
 
 impl PartitionExpr {
-    fn new(calculator: PartitionValueCalculator, partition_spec: Arc<PartitionSpec>) -> Self {
-        Self {
+    /// Builds a partition expression from a partition spec and the table schema
+    /// it is bound to, constructing the underlying [`PartitionValueCalculator`].
+    pub fn try_new(partition_spec: Arc<PartitionSpec>, table_schema: SchemaRef) -> DFResult<Self> {
+        let calculator =
+            PartitionValueCalculator::try_new(partition_spec.as_ref(), table_schema.as_ref())
+                .map_err(to_datafusion_error)?;
+        Ok(Self {
             calculator: Arc::new(calculator),
             partition_spec,
-        }
+            table_schema,
+        })
+    }
+
+    /// The partition spec whose values this expression computes.
+    pub fn partition_spec(&self) -> &Arc<PartitionSpec> {
+        &self.partition_spec
+    }
+
+    /// The table schema the partition values are derived from.
+    pub fn table_schema(&self) -> &SchemaRef {
+        &self.table_schema
     }
 }
 
@@ -244,8 +265,6 @@ mod tests {
 
         let input = Arc::new(EmptyExec::new(arrow_schema.clone()));
 
-        let calculator = PartitionValueCalculator::try_new(&partition_spec, &table_schema).unwrap();
-
         let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
             Vec::with_capacity(arrow_schema.fields().len() + 1);
         for (i, field) in arrow_schema.fields().iter().enumerate() {
@@ -253,7 +272,9 @@ mod tests {
             projection_exprs.push((column_expr, field.name().clone()));
         }
 
-        let partition_expr = Arc::new(PartitionExpr::new(calculator, partition_spec));
+        let partition_expr = Arc::new(
+            PartitionExpr::try_new(partition_spec, Arc::new(table_schema.clone())).unwrap(),
+        );
         projection_exprs.push((partition_expr, PROJECTED_PARTITION_VALUE_COLUMN.to_string()));
 
         let projection = ProjectionExec::try_new(projection_exprs, input).unwrap();
@@ -298,7 +319,14 @@ mod tests {
         let partition_spec = Arc::new(partition_spec);
         let calculator = PartitionValueCalculator::try_new(&partition_spec, &table_schema).unwrap();
         let partition_type = calculator.partition_arrow_type().clone();
-        let expr = PartitionExpr::new(calculator, partition_spec);
+        let table_schema_ref = Arc::new(table_schema.clone());
+        let expr =
+            PartitionExpr::try_new(partition_spec.clone(), table_schema_ref.clone()).unwrap();
+
+        // The getters expose the spec and schema the expression was built from,
+        // which a distributed engine serializes and rebuilds via `try_new`.
+        assert!(Arc::ptr_eq(expr.partition_spec(), &partition_spec));
+        assert!(Arc::ptr_eq(expr.table_schema(), &table_schema_ref));
 
         assert_eq!(expr.data_type(&arrow_schema).unwrap(), partition_type);
         assert!(!expr.nullable(&arrow_schema).unwrap());
