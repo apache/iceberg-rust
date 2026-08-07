@@ -168,10 +168,10 @@ async fn test_catalog_create_table_schema(#[case] kind: CatalogKind) -> Result<(
 }
 
 // Common behavior: updating table properties persists through the catalog.
-// HMS is excluded because update_table is not supported yet.
 #[rstest]
 #[case::rest_catalog(CatalogKind::Rest)]
 #[case::glue_catalog(CatalogKind::Glue)]
+#[case::hms_catalog(CatalogKind::Hms)]
 #[case::sql_catalog(CatalogKind::Sql)]
 #[case::s3tables_catalog(CatalogKind::S3Tables)]
 #[case::memory_catalog(CatalogKind::Memory)]
@@ -211,10 +211,9 @@ async fn test_catalog_update_table_properties(#[case] kind: CatalogKind) -> Resu
 }
 
 // Common behavior: update_table_properties is rejected when unsupported.
-#[rstest]
-#[case::hms_catalog(CatalogKind::Hms)]
-#[tokio::test]
-async fn test_catalog_update_table_properties_unsupported(#[case] kind: CatalogKind) -> Result<()> {
+// Keep this helper for future catalogs that do not implement update_table.
+#[allow(dead_code)]
+async fn assert_catalog_update_table_properties_unsupported(kind: CatalogKind) -> Result<()> {
     let Some(harness) = load_catalog(kind).await else {
         return Ok(());
     };
