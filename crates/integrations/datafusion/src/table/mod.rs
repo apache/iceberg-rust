@@ -326,7 +326,7 @@ impl TableProvider for IcebergTableProvider {
         };
 
         let write_plan = Arc::new(
-            IcebergWriteExec::new(table.clone(), write_input, self.schema.clone())
+            IcebergWriteExec::new(table.clone(), write_input)
                 .with_catalog_config(self.config.clone()),
         );
 
