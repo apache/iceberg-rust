@@ -15,13 +15,33 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[type.rust]
-extend-ignore-identifiers-re = ["^bimap$"]
+[package]
+edition = { workspace = true }
+homepage = { workspace = true }
+name = "iceberg-property-macro"
+publish = true
+readme = "README.md"
+rust-version = { workspace = true }
+version = { workspace = true }
 
-[default.extend-words]
-AGS = "AGS"
-ags = "ags"
-ser = "ser"
+license = { workspace = true }
+repository = { workspace = true }
 
-[files]
-extend-exclude = ["**/testdata", "CHANGELOG.md", "**/public-api.txt"]
+categories = ["database"]
+description = "Property derive macro for Apache Iceberg Rust"
+keywords = ["iceberg"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
