@@ -180,14 +180,23 @@ impl<'a> SnapshotProducer<'a> {
             .await?;
 
         let new_files_ref = &new_files;
+        // `load_manifest_with`: prefer the table's schema/spec over the
+        // manifest's self-described metadata — same as the scan path. Without
+        // it, appending to a table whose current snapshot carries a manifest
+        // with non-conformant self-described `schema` metadata fails here even
+        // though the scan path reads it fine.
+        let table_metadata = self.table.metadata_ref();
         let referenced_files: Vec<String> = manifest_list
             .consume_entries()
             .into_iter()
             .map(|entry| {
                 let file_io = file_io.clone();
-                runtime
-                    .io()
-                    .spawn(async move { entry.load_manifest(&file_io).await })
+                let table_metadata = table_metadata.clone();
+                runtime.io().spawn(async move {
+                    entry
+                        .load_manifest_with(&file_io, Some(&table_metadata))
+                        .await
+                })
             })
             .collect::<FuturesUnordered<_>>()
             .try_fold(Vec::new(), |mut acc, manifest| async move {
