@@ -80,6 +80,17 @@ fn extract_scheme(path: &str) -> Result<&'static str> {
     parse_scheme(url.scheme())
 }
 
+#[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+fn supports_dynamic_credentials(scheme: &str) -> bool {
+    match scheme {
+        #[cfg(feature = "opendal-s3")]
+        "s3" => true,
+        #[cfg(feature = "opendal-gcs")]
+        "gcs" => true,
+        _ => false,
+    }
+}
+
 /// Build an [`OpenDalStorage`] variant for the given scheme and config properties.
 fn build_storage_for_scheme(
     scheme: &'static str,
@@ -200,6 +211,14 @@ impl StorageFactory for OpenDalResolvingStorageFactory {
         config: &StorageConfig,
         credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
     ) -> Result<Arc<dyn Storage>> {
+        #[cfg(not(any(feature = "opendal-s3", feature = "opendal-gcs")))]
+        if credential_provider.is_some() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "OpenDAL resolving storage does not support refreshable credentials because no compatible backend is enabled",
+            ));
+        }
+
         Ok(Arc::new(OpenDalResolvingStorage {
             props: config.props().clone(),
             storages: RwLock::new(HashMap::new()),
@@ -249,6 +268,21 @@ impl OpenDalResolvingStorage {
     /// returning the cached or newly-created [`OpenDalStorage`].
     fn resolve(&self, path: &str) -> Result<Arc<OpenDalStorage>> {
         let scheme = extract_scheme(path)?;
+
+        #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+        if self
+            .credential_provider
+            .as_ref()
+            .is_some_and(|provider| provider.supports_path(path))
+            && !supports_dynamic_credentials(scheme)
+        {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "OpenDAL resolving storage does not support refreshable credentials for scheme: {scheme}"
+                ),
+            ));
+        }
 
         // Fast path: check read lock first.
         {
@@ -358,8 +392,36 @@ impl Storage for OpenDalResolvingStorage {
 mod tests {
     use super::*;
 
+    #[derive(Debug)]
+    struct AllPathsCredentialProvider;
+
+    #[async_trait]
+    impl StorageCredentialProvider for AllPathsCredentialProvider {
+        async fn load_credential(&self, _path: &str) -> Result<iceberg::io::StorageCredential> {
+            unreachable!("unsupported backends must reject the provider before loading")
+        }
+    }
+
+    #[cfg(not(any(feature = "opendal-s3", feature = "opendal-gcs")))]
+    #[test]
+    fn test_factory_rejects_credentials_without_compatible_backend() {
+        let error = OpenDalResolvingStorageFactory::new()
+            .build_with_credentials(
+                &StorageConfig::new(),
+                Some(Arc::new(AllPathsCredentialProvider)),
+            )
+            .expect_err("a provider must not be silently discarded");
+
+        assert_eq!(error.kind(), ErrorKind::FeatureUnsupported);
+    }
+
     /// Builds a resolving storage with empty props, suitable for `resolve()`
     /// calls that don't actually hit any backend.
+    #[cfg(any(
+        feature = "opendal-s3",
+        feature = "opendal-gcs",
+        feature = "opendal-azdls"
+    ))]
     fn empty_resolving_storage() -> OpenDalResolvingStorage {
         OpenDalResolvingStorage {
             props: HashMap::new(),
@@ -385,6 +447,21 @@ mod tests {
 
         assert!(Arc::ptr_eq(&a, &b), "s3 and s3a should share one instance");
         assert!(Arc::ptr_eq(&a, &c), "s3 and s3n should share one instance");
+    }
+
+    #[cfg(all(
+        feature = "opendal-memory",
+        any(feature = "opendal-s3", feature = "opendal-gcs")
+    ))]
+    #[test]
+    fn test_resolver_rejects_credentials_for_unsupported_backend() {
+        let mut storage = empty_resolving_storage();
+        storage.credential_provider = Some(Arc::new(AllPathsCredentialProvider));
+
+        let error = storage
+            .resolve("memory:/key")
+            .expect_err("memory must reject a credential provider");
+        assert_eq!(error.kind(), ErrorKind::FeatureUnsupported);
     }
 
     #[cfg(feature = "opendal-azdls")]

@@ -198,12 +198,55 @@ pub trait StorageCredentialProvider: Debug + Send + Sync {
 pub struct StorageCredential {
     /// Storage-location prefix this credential is scoped to. `None` represents a
     /// credential without a declared scope, sourced from flat storage properties.
-    pub prefix: Option<String>,
+    prefix: Option<String>,
     /// The backend-specific credential material.
-    pub kind: StorageCredentialKind,
+    kind: StorageCredentialKind,
     /// When the credential expires, if known. `None` means non-expiring and
     /// backends treat such a credential as always valid and never refresh it.
-    pub expires_at: Option<SystemTime>,
+    expires_at: Option<SystemTime>,
+}
+
+impl StorageCredential {
+    /// Create a storage credential with no declared scope or expiration.
+    pub fn new(kind: StorageCredentialKind) -> Self {
+        Self {
+            prefix: None,
+            kind,
+            expires_at: None,
+        }
+    }
+
+    /// Set the storage-location prefix this credential is scoped to.
+    pub fn with_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.prefix = Some(prefix.into());
+        self
+    }
+
+    /// Set when this credential expires.
+    pub fn with_expiration(mut self, expires_at: SystemTime) -> Self {
+        self.expires_at = Some(expires_at);
+        self
+    }
+
+    /// Return the storage-location prefix this credential is scoped to.
+    pub fn prefix(&self) -> Option<&str> {
+        self.prefix.as_deref()
+    }
+
+    /// Return the backend-specific credential material.
+    pub fn kind(&self) -> &StorageCredentialKind {
+        &self.kind
+    }
+
+    /// Consume this credential and return its backend-specific material.
+    pub fn into_kind(self) -> StorageCredentialKind {
+        self.kind
+    }
+
+    /// Return when this credential expires.
+    pub fn expires_at(&self) -> Option<SystemTime> {
+        self.expires_at
+    }
 }
 
 /// Backend-specific credential material.
@@ -219,11 +262,51 @@ pub enum StorageCredentialKind {
 #[derive(Clone)]
 pub struct S3Credential {
     /// AWS access key ID.
-    pub access_key_id: String,
+    access_key_id: String,
     /// AWS secret access key.
-    pub secret_access_key: String,
+    secret_access_key: String,
     /// AWS session token, set for temporary (STS/vended) credentials.
-    pub session_token: Option<String>,
+    session_token: Option<String>,
+}
+
+impl S3Credential {
+    /// Create temporary Amazon S3 credentials.
+    pub fn new(
+        access_key_id: impl Into<String>,
+        secret_access_key: impl Into<String>,
+        session_token: Option<String>,
+    ) -> Self {
+        Self {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            session_token,
+        }
+    }
+
+    /// Return the AWS access key ID.
+    pub fn access_key_id(&self) -> &str {
+        &self.access_key_id
+    }
+
+    /// Return the AWS secret access key.
+    pub fn secret_access_key(&self) -> &str {
+        &self.secret_access_key
+    }
+
+    /// Return the AWS session token, if present.
+    pub fn session_token(&self) -> Option<&str> {
+        self.session_token.as_deref()
+    }
+
+    /// Consume these credentials and return their component values.
+    pub fn into_parts(self) -> (String, String, Option<String>) {
+        let Self {
+            access_key_id,
+            secret_access_key,
+            session_token,
+        } = self;
+        (access_key_id, secret_access_key, session_token)
+    }
 }
 
 impl Debug for S3Credential {
@@ -236,7 +319,26 @@ impl Debug for S3Credential {
 #[derive(Clone)]
 pub struct GcsCredential {
     /// OAuth2 bearer token used to access GCS.
-    pub token: String,
+    token: String,
+}
+
+impl GcsCredential {
+    /// Create a Google Cloud Storage credential.
+    pub fn new(token: impl Into<String>) -> Self {
+        Self {
+            token: token.into(),
+        }
+    }
+
+    /// Return the OAuth2 bearer token used to access GCS.
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    /// Consume this credential and return its OAuth2 bearer token.
+    pub fn into_token(self) -> String {
+        self.token
+    }
 }
 
 impl Debug for GcsCredential {

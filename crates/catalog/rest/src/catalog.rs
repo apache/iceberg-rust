@@ -41,6 +41,7 @@ use typed_builder::TypedBuilder;
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
+use crate::credential::build_vended_credential_provider;
 use crate::endpoint::{Endpoint, V1_NAMESPACE_EXISTS, V1_TABLE_EXISTS};
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
@@ -315,7 +316,7 @@ impl RestCatalogConfig {
                 HeaderValue::from_str(value).map_err(|e| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Invalid header value: {value}"),
+                        format!("Invalid value for header: {key}"),
                     )
                     .with_source(e)
                 })?,
@@ -524,6 +525,7 @@ impl RestCatalog {
         &self,
         metadata_location: Option<&str>,
         extra_config: Option<HashMap<String, String>>,
+        table_auth_config: Option<HashMap<String, String>>,
     ) -> Result<FileIO> {
         let context = self.context().await?;
         let mut props = context.config.props.clone();
@@ -558,10 +560,11 @@ impl RestCatalog {
 
         // If the catalog vends refreshable credentials for this table's storage,
         // attach a provider so the backend re-fetches them before they expire.
-        let credential_provider = crate::credential::build_vended_credential_provider(
+        let credential_provider = build_vended_credential_provider(
             context.client.clone(),
             &context.config.uri,
             &props,
+            table_auth_config.as_ref(),
         )?;
 
         let mut builder = FileIOBuilder::new(factory).with_props(props);
@@ -872,14 +875,15 @@ impl Catalog for RestCatalog {
             "Metadata location missing in `create_table` response!",
         ))?;
 
-        let config = response
-            .config
+        let table_config = response.config;
+        let config = table_config
+            .clone()
             .into_iter()
             .chain(self.user_config.props.clone())
             .collect();
 
         let file_io = self
-            .load_file_io(Some(metadata_location), Some(config))
+            .load_file_io(Some(metadata_location), Some(config), Some(table_config))
             .await?;
 
         let mut table_builder = Table::builder()
@@ -932,14 +936,19 @@ impl Catalog for RestCatalog {
             }
         };
 
-        let config = response
-            .config
+        let table_config = response.config;
+        let config = table_config
+            .clone()
             .into_iter()
             .chain(self.user_config.props.clone())
             .collect();
 
         let file_io = self
-            .load_file_io(response.metadata_location.as_deref(), Some(config))
+            .load_file_io(
+                response.metadata_location.as_deref(),
+                Some(config),
+                Some(table_config),
+            )
             .await?;
 
         let mut table_builder = Table::builder()
@@ -1074,13 +1083,14 @@ impl Catalog for RestCatalog {
             "Metadata location missing in `register_table` response!",
         ))?;
 
-        let config = response
-            .config
+        let table_config = response.config;
+        let config = table_config
+            .clone()
             .into_iter()
             .chain(self.user_config.props.clone())
             .collect();
         let file_io = self
-            .load_file_io(Some(metadata_location), Some(config))
+            .load_file_io(Some(metadata_location), Some(config), Some(table_config))
             .await?;
 
         let mut table_builder = Table::builder()
@@ -1156,7 +1166,7 @@ impl Catalog for RestCatalog {
         };
 
         let file_io = self
-            .load_file_io(Some(&response.metadata_location), None)
+            .load_file_io(Some(&response.metadata_location), None, None)
             .await?;
 
         let mut table_builder = Table::builder()

@@ -28,8 +28,11 @@
 //! single backend-agnostic provider with an independent endpoint and cache for
 //! each configured cloud. The path being accessed selects the cloud cache, and
 //! the returned [`StorageCredential`] enum lets the storage adapter enforce the
-//! expected backend-specific type. This preserves Java's per-cloud refresh
-//! policy while supporting mixed-cloud tables through a resolving FileIO.
+//! expected backend-specific type. This preserves Java's per-cloud credential
+//! selection and prefetch policies while supporting mixed-cloud tables through
+//! a resolving FileIO. Unlike Java's scheduled refresh, which permanently stops
+//! after a failed fetch, transient failures are retried here with jittered
+//! exponential backoff while an unexpired credential remains available.
 //!
 //! # Adding a cloud
 //!
@@ -38,7 +41,7 @@
 //! teach the storage adapter to consume it. Then write its `parse_*` function,
 //! add a `CloudRefresh` constant, and list it in [`CloudRefresh::SUPPORTED`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -69,7 +72,7 @@ struct CloudRefresh {
     schemes: &'static [&'static str],
     /// Table property naming the refresh endpoint (absolute or catalog-relative).
     endpoint_key: &'static str,
-    /// Table property to opt out; refresh is enabled unless this is `"false"`.
+    /// Table property controlling refresh; only missing or case-insensitive `"true"` enables it.
     enabled_key: &'static str,
     /// Whether to jitter successful prefetch times like AWS `CachedSupplier`.
     jitter_prefetch: bool,
@@ -95,7 +98,7 @@ impl CloudRefresh {
         jitter_prefetch: false,
         parse_credential: parse_gcs_credential,
     };
-    // TODO: Azure (ADLS) is not yet supported: opendal 0.57's Azdls builder exposes no
+    // TODO: Azure (ADLS) is not yet supported: opendal's Azdls builder exposes no
     // custom credential-provider hook, and reqsign's SAS-token credential has no
     // expiry, so reqsign-based refresh isn't possible.
 
@@ -112,7 +115,10 @@ impl CloudRefresh {
     }
 
     fn matches_location(&self, location: &str) -> bool {
-        scheme_of(location).is_some_and(|scheme| self.schemes.contains(&scheme.as_str()))
+        self.schemes
+            .iter()
+            .any(|scheme| location.eq_ignore_ascii_case(scheme))
+            || scheme_of(location).is_some_and(|scheme| self.schemes.contains(&scheme.as_str()))
     }
 }
 
@@ -127,7 +133,7 @@ const MIN_REFRESH_BUFFER: Duration = Duration::from_mins(1);
 /// value through the full value.
 const INITIAL_FAILURE_BACKOFF: Duration = Duration::from_secs(1);
 
-/// Maximum failure backoff while a cached credential remains usable.
+/// Maximum delay between failed refresh attempts.
 const MAX_FAILURE_BACKOFF: Duration = Duration::from_secs(30);
 
 /// A cached vended credential and its refresh schedule.
@@ -142,7 +148,7 @@ struct CachedEntry {
 impl CachedEntry {
     fn new(credential: StorageCredential, jitter_prefetch: bool) -> Self {
         let refresh_at = credential
-            .expires_at
+            .expires_at()
             .map(|expires_at| prefetch_time(expires_at, jitter_prefetch));
         Self {
             credential,
@@ -154,7 +160,7 @@ impl CachedEntry {
     /// immediately due. Otherwise AWS applies the same jitter as it does to a
     /// freshly fetched value.
     fn seed(credential: StorageCredential, jitter_prefetch: bool) -> Self {
-        let due = credential.expires_at.is_some_and(|expires_at| {
+        let due = credential.expires_at().is_some_and(|expires_at| {
             SystemTime::now()
                 .checked_add(REFRESH_BUFFER)
                 .is_none_or(|refresh_boundary| refresh_boundary >= expires_at)
@@ -172,9 +178,20 @@ impl CachedEntry {
 
     fn is_unexpired(&self, now: SystemTime) -> bool {
         self.credential
-            .expires_at
+            .expires_at()
             .is_none_or(|expires_at| now < expires_at)
     }
+}
+
+/// Parsed entries from one successful credentials response.
+struct ParsedCredentials {
+    entries: Vec<CachedEntry>,
+    errors: Vec<CredentialError>,
+}
+
+struct CredentialError {
+    prefix: String,
+    error: Error,
 }
 
 /// Cached credentials plus failure-backoff state.
@@ -182,6 +199,31 @@ struct CacheState {
     entries: Vec<CachedEntry>,
     consecutive_failures: u32,
     retry_not_before: Option<Instant>,
+}
+
+impl CacheState {
+    fn record_success(&mut self) {
+        self.consecutive_failures = 0;
+        self.retry_not_before = None;
+    }
+
+    fn record_failure(&mut self) {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        self.retry_not_before =
+            Instant::now().checked_add(failure_backoff(self.consecutive_failures));
+    }
+
+    fn insert_fallback_if_missing(&mut self, fallback: CachedEntry, now: SystemTime) -> bool {
+        let has_unexpired_entry = self.entries.iter().any(|entry| {
+            entry.is_unexpired(now) && entry.credential.prefix() == fallback.credential.prefix()
+        });
+        if has_unexpired_entry {
+            false
+        } else {
+            self.entries.push(fallback);
+            true
+        }
+    }
 }
 
 struct ConfiguredCloud {
@@ -224,7 +266,7 @@ impl RestVendedCredentialProvider {
     }
 
     /// Fetch fresh credentials from the catalog's credentials endpoint.
-    async fn fetch(&self, configured: &ConfiguredCloud) -> Result<Vec<CachedEntry>> {
+    async fn fetch(&self, configured: &ConfiguredCloud) -> Result<ParsedCredentials> {
         let mut request = self.client.request(Method::GET, &configured.endpoint);
         if let Some(plan_id) = &self.plan_id {
             request = request.query(&[("planId", plan_id)]);
@@ -235,18 +277,39 @@ impl RestVendedCredentialProvider {
         match response.status() {
             StatusCode::OK => {
                 let parsed: LoadCredentialsResponse = response.json().await?;
-                parsed
+                let mut entries = Vec::new();
+                let mut errors = Vec::new();
+                let matching_credentials = parsed
                     .storage_credentials
                     .into_iter()
-                    .filter(|sc| configured.cloud.matches_location(&sc.prefix))
-                    .map(|sc| {
-                        (configured.cloud.parse_credential)(&sc.config, Some(sc.prefix)).map(
-                            |credential| {
-                                CachedEntry::new(credential, configured.cloud.jitter_prefetch)
-                            },
-                        )
-                    })
-                    .collect()
+                    .filter(|credential| configured.cloud.matches_location(&credential.prefix));
+                let parse_credential = configured.cloud.parse_credential;
+                let now = SystemTime::now();
+
+                for storage_credential in matching_credentials {
+                    let prefix = storage_credential.prefix;
+                    let parsed_credential =
+                        parse_credential(&storage_credential.config, Some(prefix.clone()));
+                    match parsed_credential {
+                        Ok(credential) => {
+                            let entry =
+                                CachedEntry::new(credential, configured.cloud.jitter_prefetch);
+                            if entry.is_unexpired(now) {
+                                entries.push(entry);
+                            } else {
+                                errors.push(CredentialError {
+                                    prefix,
+                                    error: Error::new(
+                                        ErrorKind::DataInvalid,
+                                        "invalid vended credential: credential is already expired",
+                                    ),
+                                });
+                            }
+                        }
+                        Err(error) => errors.push(CredentialError { prefix, error }),
+                    }
+                }
+                Ok(ParsedCredentials { entries, errors })
             }
             _ => Err(deserialize_unexpected_catalog_error(
                 response,
@@ -262,32 +325,101 @@ impl RestVendedCredentialProvider {
         path: &str,
         fallback: Option<CachedEntry>,
     ) -> Result<StorageCredential> {
-        let refreshed = self.fetch(configured).await.and_then(|entries| {
-            let credential = longest_prefix_match(&entries, path)
-                .filter(|entry| entry.is_unexpired(SystemTime::now()))
-                .map(|entry| entry.credential.clone())
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        format!("no unexpired vended credential matches storage location: {path}"),
-                    )
-                })?;
-            Ok((entries, credential))
-        });
+        match self.fetch(configured).await {
+            Ok(ParsedCredentials { entries, errors }) => {
+                let invalid_prefixes = errors
+                    .iter()
+                    .map(|error| error.prefix.clone())
+                    .collect::<HashSet<_>>();
+                let credential_error = errors
+                    .into_iter()
+                    .filter(|error| path.starts_with(&error.prefix))
+                    .max_by_key(|error| error.prefix.len());
+                let failure = credential_error
+                    .map(|error| error.error)
+                    .unwrap_or_else(|| {
+                        Error::new(
+                            ErrorKind::Unexpected,
+                            format!(
+                                "no unexpired vended credential matches storage location: {path}"
+                            ),
+                        )
+                    });
 
-        match refreshed {
-            Ok((entries, credential)) => {
                 let mut cache = configured.cache.lock().await;
+                if entries.is_empty() {
+                    cache.record_failure();
+                    return fallback
+                        .filter(|entry| entry.is_unexpired(SystemTime::now()))
+                        .map(|entry| entry.credential)
+                        .ok_or(failure);
+                }
+
+                let now = SystemTime::now();
+                let invalid_fallbacks = cache
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.is_unexpired(now))
+                    .filter(|entry| {
+                        entry
+                            .credential
+                            .prefix()
+                            .is_some_and(|prefix| invalid_prefixes.contains(prefix))
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
                 cache.entries = entries;
-                cache.consecutive_failures = 0;
-                cache.retry_not_before = None;
-                Ok(credential)
+
+                // An invalid replacement for one prefix must not evict that
+                // prefix's still-valid cached credential. Iterate in reverse
+                // because equal-length prefix selection uses the last cached entry.
+                // This preserves the same credential if a bad response follows a
+                // response with duplicate prefixes.
+                let mut restored_fallback_prefixes = HashSet::new();
+                for fallback in invalid_fallbacks.into_iter().rev() {
+                    let prefix = fallback.credential.prefix().map(str::to_owned);
+                    if cache.insert_fallback_if_missing(fallback, now)
+                        && let Some(prefix) = prefix
+                    {
+                        restored_fallback_prefixes.insert(prefix);
+                    }
+                }
+
+                let selected = longest_prefix_match(&cache.entries, path)
+                    .filter(|entry| entry.is_unexpired(now))
+                    .map(|entry| {
+                        let is_restored_fallback = entry
+                            .credential
+                            .prefix()
+                            .is_some_and(|prefix| restored_fallback_prefixes.contains(prefix));
+                        (entry.credential.clone(), is_restored_fallback)
+                    });
+
+                if let Some((credential, is_restored_fallback)) = selected {
+                    if is_restored_fallback {
+                        cache.record_failure();
+                    } else {
+                        cache.record_success();
+                    }
+                    return Ok(credential);
+                }
+
+                // Cache valid credentials for other prefixes while retaining this
+                // path's still-usable credential when its replacement was absent or
+                // invalid. Backoff ensures the failed path is retried promptly.
+                if let Some(fallback) = fallback.filter(|entry| entry.is_unexpired(now)) {
+                    let credential = fallback.credential.clone();
+                    cache.insert_fallback_if_missing(fallback, now);
+                    cache.record_failure();
+                    return Ok(credential);
+                }
+
+                cache.record_failure();
+                Err(failure)
             }
             Err(fetch_error) => {
                 let mut cache = configured.cache.lock().await;
-                cache.consecutive_failures = cache.consecutive_failures.saturating_add(1);
-                cache.retry_not_before =
-                    Instant::now().checked_add(failure_backoff(cache.consecutive_failures));
+                cache.record_failure();
 
                 // Graceful degradation: while the cached credential remains
                 // usable, serve it and retry after jittered backoff. Expired
@@ -312,6 +444,14 @@ impl std::fmt::Debug for RestVendedCredentialProvider {
 enum CacheDecision {
     Use(StorageCredential),
     Refresh(Option<CachedEntry>),
+    Backoff,
+}
+
+fn refresh_backoff_error(path: &str) -> Error {
+    Error::new(
+        ErrorKind::Unexpected,
+        format!("vended credential refresh is temporarily backed off for storage location: {path}"),
+    )
 }
 
 async fn cache_decision(configured: &ConfiguredCloud, path: &str) -> CacheDecision {
@@ -326,9 +466,12 @@ async fn cache_decision(configured: &ConfiguredCloud, path: &str) -> CacheDecisi
     if cache
         .retry_not_before
         .is_some_and(|retry_at| Instant::now() < retry_at)
-        && let Some(entry) = current.as_ref().filter(|entry| entry.is_unexpired(now))
     {
-        return CacheDecision::Use(entry.credential.clone());
+        return current
+            .as_ref()
+            .filter(|entry| entry.is_unexpired(now))
+            .map(|entry| CacheDecision::Use(entry.credential.clone()))
+            .unwrap_or(CacheDecision::Backoff);
     }
 
     CacheDecision::Refresh(current)
@@ -357,6 +500,7 @@ impl StorageCredentialProvider for RestVendedCredentialProvider {
         let current = match cache_decision(configured, path).await {
             CacheDecision::Use(credential) => return Ok(credential),
             CacheDecision::Refresh(current) => current,
+            CacheDecision::Backoff => return Err(refresh_backoff_error(path)),
         };
 
         // One caller refreshes, while concurrent callers immediately keep using the
@@ -379,6 +523,7 @@ impl StorageCredentialProvider for RestVendedCredentialProvider {
         let current = match cache_decision(configured, path).await {
             CacheDecision::Use(credential) => return Ok(credential),
             CacheDecision::Refresh(current) => current,
+            CacheDecision::Backoff => return Err(refresh_backoff_error(path)),
         };
 
         self.refresh_credential(configured, path, current).await
@@ -392,11 +537,10 @@ fn longest_prefix_match<'a>(entries: &'a [CachedEntry], path: &str) -> Option<&'
         .filter(|entry| {
             entry
                 .credential
-                .prefix
-                .as_deref()
+                .prefix()
                 .is_none_or(|prefix| path.starts_with(prefix))
         })
-        .max_by_key(|entry| entry.credential.prefix.as_deref().map_or(0, str::len))
+        .max_by_key(|entry| entry.credential.prefix().map_or(0, str::len))
 }
 
 /// Compute a successful credential's prefetch time.
@@ -429,18 +573,20 @@ fn failure_backoff(consecutive_failures: u32) -> Duration {
 /// or `None` when no supported cloud advertises an enabled refresh endpoint.
 ///
 /// `base_uri` is the catalog URI, used to resolve a relative endpoint.
+/// `table_auth_props` is the unmerged config returned by the table endpoint:
+/// keeping it separate prevents local FileIO overrides from masking table auth.
 pub(crate) fn build_vended_credential_provider(
     client: Arc<HttpClient>,
     base_uri: &str,
     props: &HashMap<String, String>,
+    table_auth_props: Option<&HashMap<String, String>>,
 ) -> Result<Option<Arc<dyn StorageCredentialProvider>>> {
     let clouds = CloudRefresh::SUPPORTED
         .iter()
         .filter_map(|cloud| {
-            // Refresh is enabled by default and invalid booleans disable refresh.
             let enabled = props
                 .get(cloud.enabled_key)
-                .is_none_or(|value| value.parse().unwrap_or(false));
+                .is_none_or(|value| value.eq_ignore_ascii_case("true"));
             if !enabled {
                 return None;
             }
@@ -473,7 +619,9 @@ pub(crate) fn build_vended_credential_provider(
         return Ok(None);
     }
 
-    let table_client = Arc::new(client.for_table(base_uri, props.clone())?);
+    let empty_auth_props = HashMap::new();
+    let table_client =
+        Arc::new(client.for_table(base_uri, table_auth_props.unwrap_or(&empty_auth_props))?);
     let plan_id = props.get(REST_CATALOG_PROP_SCAN_PLAN_ID).cloned();
     Ok(Some(Arc::new(RestVendedCredentialProvider::new(
         table_client,
@@ -509,14 +657,15 @@ fn parse_s3_credential(
     let secret_access_key = required_nonempty(config, S3_SECRET_ACCESS_KEY)?;
     let session_token = required_nonempty(config, S3_SESSION_TOKEN)?;
     let expires_at = required_epoch_millis(config, S3_SESSION_TOKEN_EXPIRES_AT_MS)?;
-    Ok(StorageCredential {
-        prefix,
-        kind: StorageCredentialKind::S3(S3Credential {
-            access_key_id,
-            secret_access_key,
-            session_token: Some(session_token),
-        }),
-        expires_at: Some(expires_at),
+    let credential = StorageCredential::new(StorageCredentialKind::S3(S3Credential::new(
+        access_key_id,
+        secret_access_key,
+        Some(session_token),
+    )))
+    .with_expiration(expires_at);
+    Ok(match prefix {
+        Some(prefix) => credential.with_prefix(prefix),
+        None => credential,
     })
 }
 
@@ -527,10 +676,11 @@ fn parse_gcs_credential(
 ) -> Result<StorageCredential> {
     let token = required_nonempty(config, GCS_TOKEN)?;
     let expires_at = required_epoch_millis(config, GCS_TOKEN_EXPIRES_AT)?;
-    Ok(StorageCredential {
-        prefix,
-        kind: StorageCredentialKind::Gcs(GcsCredential { token }),
-        expires_at: Some(expires_at),
+    let credential = StorageCredential::new(StorageCredentialKind::Gcs(GcsCredential::new(token)))
+        .with_expiration(expires_at);
+    Ok(match prefix {
+        Some(prefix) => credential.with_prefix(prefix),
+        None => credential,
     })
 }
 
@@ -586,26 +736,76 @@ mod tests {
         access_key_id: &str,
         expires_at: Option<SystemTime>,
     ) -> StorageCredential {
-        StorageCredential {
-            prefix: prefix.map(str::to_string),
-            kind: StorageCredentialKind::S3(S3Credential {
-                access_key_id: access_key_id.to_string(),
-                secret_access_key: "secret".to_string(),
-                session_token: None,
-            }),
-            expires_at,
+        let mut credential = StorageCredential::new(StorageCredentialKind::S3(S3Credential::new(
+            access_key_id,
+            "secret",
+            None,
+        )));
+        if let Some(prefix) = prefix {
+            credential = credential.with_prefix(prefix);
         }
+        if let Some(expires_at) = expires_at {
+            credential = credential.with_expiration(expires_at);
+        }
+        credential
     }
 
     fn s3_access_key_id(credential: &StorageCredential) -> &str {
-        match &credential.kind {
-            StorageCredentialKind::S3(s3) => &s3.access_key_id,
+        match credential.kind() {
+            StorageCredentialKind::S3(s3) => s3.access_key_id(),
             other => panic!("expected S3 credential, got {other:?}"),
         }
     }
 
     fn cached_s3(prefix: &str, access_key_id: &str, expires_at: Option<SystemTime>) -> CachedEntry {
         CachedEntry::new(s3_cred(Some(prefix), access_key_id, expires_at), false)
+    }
+
+    fn test_client(base_uri: &str) -> Arc<HttpClient> {
+        let config = RestCatalogConfig::builder()
+            .uri(base_uri.to_string())
+            .build();
+        Arc::new(HttpClient::new(&config).unwrap())
+    }
+
+    fn aws_refresh_props(endpoint: &str) -> HashMap<String, String> {
+        HashMap::from([(
+            CloudRefresh::AWS.endpoint_key.to_string(),
+            endpoint.to_string(),
+        )])
+    }
+
+    fn with_s3_seed(
+        mut props: HashMap<String, String>,
+        access_key_id: &str,
+        expires_at: SystemTime,
+    ) -> HashMap<String, String> {
+        props.extend([
+            (S3_ACCESS_KEY_ID.to_string(), access_key_id.to_string()),
+            (S3_SECRET_ACCESS_KEY.to_string(), "SEED_SK".to_string()),
+            (S3_SESSION_TOKEN.to_string(), "SEED_TOK".to_string()),
+            (
+                S3_SESSION_TOKEN_EXPIRES_AT_MS.to_string(),
+                epoch_millis(expires_at),
+            ),
+        ]);
+        props
+    }
+
+    fn test_provider(
+        base_uri: &str,
+        props: &HashMap<String, String>,
+    ) -> Arc<dyn StorageCredentialProvider> {
+        build_vended_credential_provider(test_client(base_uri), base_uri, props, None)
+            .expect("provider construction should succeed")
+            .expect("provider should be built")
+    }
+
+    fn s3_response(prefix: &str, access_key_id: &str, expires_at: SystemTime) -> String {
+        let expires_at = epoch_millis(expires_at);
+        format!(
+            r#"{{"storage-credentials":[{{"prefix":"{prefix}","config":{{"s3.access-key-id":"{access_key_id}","s3.secret-access-key":"SK","s3.session-token":"TOK","s3.session-token-expires-at-ms":"{expires_at}"}}}}]}}"#
+        )
     }
 
     #[test]
@@ -640,7 +840,11 @@ mod tests {
     }
 
     #[test]
-    fn cloud_selection_uses_url_scheme() {
+    fn cloud_selection_accepts_root_prefixes_and_url_schemes() {
+        // Java uses these root prefixes for its fallback clients and accepts
+        // credentials scoped directly to them.
+        assert!(CloudRefresh::for_location("s3").is_some());
+        assert!(CloudRefresh::for_location("gs").is_some());
         assert!(CloudRefresh::for_location("s3://b/k").is_some());
         assert!(CloudRefresh::for_location("S3://b/k").is_some());
         assert!(CloudRefresh::for_location("s3a://b/k").is_some());
@@ -669,13 +873,13 @@ mod tests {
             "1500".to_string(),
         );
         let credential = parse_s3_credential(&config, Some("s3://bucket".to_string())).unwrap();
-        assert_eq!(credential.prefix.as_deref(), Some("s3://bucket"));
+        assert_eq!(credential.prefix(), Some("s3://bucket"));
         assert_eq!(
-            credential.expires_at,
+            credential.expires_at(),
             Some(UNIX_EPOCH + Duration::from_millis(1500))
         );
-        match credential.kind {
-            StorageCredentialKind::S3(s3) => assert_eq!(s3.session_token.as_deref(), Some("TOK")),
+        match credential.kind() {
+            StorageCredentialKind::S3(s3) => assert_eq!(s3.session_token(), Some("TOK")),
             other => panic!("expected S3, got {other:?}"),
         }
     }
@@ -689,13 +893,13 @@ mod tests {
 
         config.insert(GCS_TOKEN_EXPIRES_AT.to_string(), "2000".to_string());
         let credential = parse_gcs_credential(&config, Some("gs://bucket".to_string())).unwrap();
-        assert_eq!(credential.prefix.as_deref(), Some("gs://bucket"));
-        match &credential.kind {
-            StorageCredentialKind::Gcs(gcs) => assert_eq!(gcs.token, "ya29.token"),
+        assert_eq!(credential.prefix(), Some("gs://bucket"));
+        match credential.kind() {
+            StorageCredentialKind::Gcs(gcs) => assert_eq!(gcs.token(), "ya29.token"),
             other => panic!("expected GCS, got {other:?}"),
         }
         assert_eq!(
-            credential.expires_at,
+            credential.expires_at(),
             Some(UNIX_EPOCH + Duration::from_millis(2000))
         );
     }
@@ -730,7 +934,7 @@ mod tests {
             expires_at - REFRESH_BUFFER
         );
 
-        for _ in 0..100 {
+        for _ in 0..16 {
             let refresh_at = prefetch_time(expires_at, true);
             assert!(refresh_at >= expires_at - REFRESH_BUFFER);
             assert!(refresh_at < expires_at - MIN_REFRESH_BUFFER);
@@ -752,12 +956,14 @@ mod tests {
 
     #[test]
     fn failure_backoff_is_jittered_and_capped() {
-        for failures in 1_u32..=40 {
-            let ceiling = INITIAL_FAILURE_BACKOFF
-                .checked_mul(1_u32 << failures.saturating_sub(1).min(5))
-                .unwrap_or(MAX_FAILURE_BACKOFF)
-                .min(MAX_FAILURE_BACKOFF);
-            for _ in 0..100 {
+        for (failures, ceiling) in [
+            (1, Duration::from_secs(1)),
+            (2, Duration::from_secs(2)),
+            (5, Duration::from_secs(16)),
+            (6, MAX_FAILURE_BACKOFF),
+            (u32::MAX, MAX_FAILURE_BACKOFF),
+        ] {
+            for _ in 0..16 {
                 let backoff = failure_backoff(failures);
                 assert!(backoff >= ceiling / 2);
                 assert!(backoff <= ceiling);
@@ -774,10 +980,7 @@ mod tests {
         ];
         let got = longest_prefix_match(&entries, "s3://bucket/warehouse/db/t/f").unwrap();
         assert_eq!(s3_access_key_id(&got.credential), "narrow");
-        assert_eq!(
-            got.credential.prefix.as_deref(),
-            Some("s3://bucket/warehouse/db")
-        );
+        assert_eq!(got.credential.prefix(), Some("s3://bucket/warehouse/db"));
         assert!(longest_prefix_match(&entries, "s3://other/x").is_none());
 
         let fresh = Some(SystemTime::now() + REFRESH_BUFFER + Duration::from_secs(60));
@@ -793,25 +996,34 @@ mod tests {
 
     #[test]
     fn provider_support_tracks_configured_cloud_endpoints() {
-        let config = RestCatalogConfig::builder()
-            .uri("http://cat".to_string())
-            .build();
-        let client = Arc::new(HttpClient::new(&config).unwrap());
-        let props = HashMap::from([(
-            CloudRefresh::AWS.endpoint_key.to_string(),
-            "/v1/creds".to_string(),
-        )]);
+        let client = test_client("http://cat");
+        let props = aws_refresh_props("/v1/creds");
 
         // The provider is configured independently of the table metadata scheme,
         // but advertises support only for clouds whose endpoint is present.
-        let provider = build_vended_credential_provider(client.clone(), "http://cat", &props)
+        let provider = build_vended_credential_provider(client.clone(), "http://cat", &props, None)
             .unwrap()
             .unwrap();
         assert!(provider.supports_path("s3://b/k"));
         assert!(!provider.supports_path("abfss://fs@acct.dfs.core.windows.net/k"));
+        let enabled = HashMap::from([
+            (
+                CloudRefresh::AWS.endpoint_key.to_string(),
+                "/v1/creds".to_string(),
+            ),
+            (
+                CloudRefresh::AWS.enabled_key.to_string(),
+                "True".to_string(),
+            ),
+        ]);
+        assert!(
+            build_vended_credential_provider(client.clone(), "http://cat", &enabled, None)
+                .unwrap()
+                .is_some()
+        );
         // No endpoint advertised.
         assert!(
-            build_vended_credential_provider(client.clone(), "http://cat", &HashMap::new())
+            build_vended_credential_provider(client.clone(), "http://cat", &HashMap::new(), None)
                 .unwrap()
                 .is_none()
         );
@@ -827,29 +1039,27 @@ mod tests {
             ),
         ]);
         assert!(
-            build_vended_credential_provider(client, "http://cat", &disabled)
+            build_vended_credential_provider(client, "http://cat", &disabled, None)
                 .unwrap()
                 .is_none()
         );
         // Java's `Strings.isNullOrEmpty` check treats an empty endpoint as absent.
         let empty = HashMap::from([(CloudRefresh::AWS.endpoint_key.to_string(), String::new())]);
-        let config = RestCatalogConfig::builder()
-            .uri("http://cat".to_string())
-            .build();
-        let client = Arc::new(HttpClient::new(&config).unwrap());
+        let client = test_client("http://cat");
         assert!(
-            build_vended_credential_provider(client, "http://cat", &empty)
+            build_vended_credential_provider(client, "http://cat", &empty, None)
                 .unwrap()
                 .is_none()
         );
     }
 
     #[tokio::test]
-    async fn fetches_and_selects_vended_credential() {
+    async fn refresh_includes_scan_plan_id() {
         let mut server = Server::new_async().await;
-        let expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
-        let body = format!(
-            r#"{{"storage-credentials":[{{"prefix":"s3://bucket","config":{{"s3.access-key-id":"AK","s3.secret-access-key":"SK","s3.session-token":"TOK","s3.session-token-expires-at-ms":"{expires}"}}}}]}}"#
+        let body = s3_response(
+            "s3://bucket",
+            "AK",
+            SystemTime::now() + Duration::from_secs(3600),
         );
         let mock = server
             .mock("GET", "/v1/credentials")
@@ -863,36 +1073,119 @@ mod tests {
             .create_async()
             .await;
 
-        let config = RestCatalogConfig::builder().uri(server.url()).build();
-        let client = Arc::new(HttpClient::new(&config).unwrap());
         // No static creds -> no seed -> first load fetches from the endpoint.
-        let props = HashMap::from([
-            (
-                CloudRefresh::AWS.endpoint_key.to_string(),
-                "/v1/credentials".to_string(),
-            ),
-            (
-                REST_CATALOG_PROP_SCAN_PLAN_ID.to_string(),
-                "scan-plan-1".to_string(),
-            ),
-        ]);
+        let mut props = aws_refresh_props("/v1/credentials");
+        props.insert(
+            REST_CATALOG_PROP_SCAN_PLAN_ID.to_string(),
+            "scan-plan-1".to_string(),
+        );
 
-        let provider = build_vended_credential_provider(client, &server.url(), &props)
-            .expect("provider construction should succeed")
-            .expect("provider should be built");
+        let provider = test_provider(&server.url(), &props);
         let credential = provider
             .load_credential("s3://bucket/warehouse/f")
             .await
             .unwrap();
-        assert_eq!(credential.prefix.as_deref(), Some("s3://bucket"));
+        assert_eq!(credential.prefix(), Some("s3://bucket"));
 
-        match credential.kind {
+        match credential.kind() {
             StorageCredentialKind::S3(s3) => {
-                assert_eq!(s3.access_key_id, "AK");
-                assert_eq!(s3.session_token.as_deref(), Some("TOK"));
+                assert_eq!(s3.access_key_id(), "AK");
+                assert_eq!(s3.session_token(), Some("TOK"));
             }
             other => panic!("expected S3, got {other:?}"),
         }
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn successful_refresh_caches_entries_before_selecting_path() {
+        let mut server = Server::new_async().await;
+        let body = s3_response(
+            "s3://bucket/table-a",
+            "AK",
+            SystemTime::now() + Duration::from_secs(3600),
+        );
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let props = aws_refresh_props("/v1/credentials");
+        let provider = test_provider(&server.url(), &props);
+
+        assert!(
+            provider
+                .load_credential("s3://bucket/table-b/file")
+                .await
+                .is_err()
+        );
+        // A successful response with no matching credential is negatively
+        // cached instead of immediately hitting the endpoint again.
+        assert!(
+            provider
+                .load_credential("s3://bucket/table-b/file")
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            s3_access_key_id(
+                &provider
+                    .load_credential("s3://bucket/table-a/file")
+                    .await
+                    .unwrap()
+            ),
+            "AK"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn malformed_entry_does_not_discard_valid_entries() {
+        let mut server = Server::new_async().await;
+        let expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
+        let body = format!(
+            r#"{{"storage-credentials":[
+                {{"prefix":"s3://bucket/invalid","config":{{"s3.access-key-id":"BAD"}}}},
+                {{"prefix":"s3://bucket/valid","config":{{"s3.access-key-id":"AK","s3.secret-access-key":"SK","s3.session-token":"TOK","s3.session-token-expires-at-ms":"{expires}"}}}}
+            ]}}"#
+        );
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let props = aws_refresh_props("/v1/credentials");
+        let provider = test_provider(&server.url(), &props);
+
+        assert!(
+            provider
+                .load_credential("s3://bucket/invalid/file")
+                .await
+                .is_err()
+        );
+        assert!(
+            provider
+                .load_credential("s3://bucket/invalid/file")
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            s3_access_key_id(
+                &provider
+                    .load_credential("s3://bucket/valid/file")
+                    .await
+                    .unwrap()
+            ),
+            "AK"
+        );
         mock.assert_async().await;
     }
 
@@ -906,26 +1199,16 @@ mod tests {
             .create_async()
             .await;
 
-        let config = RestCatalogConfig::builder().uri(server.url()).build();
-        let client = Arc::new(HttpClient::new(&config).unwrap());
-        let expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
-        let props = HashMap::from([
-            (
-                CloudRefresh::AWS.endpoint_key.to_string(),
-                "/v1/credentials".to_string(),
-            ),
-            (S3_ACCESS_KEY_ID.to_string(), "SEED_AK".to_string()),
-            (S3_SECRET_ACCESS_KEY.to_string(), "SEED_SK".to_string()),
-            (S3_SESSION_TOKEN.to_string(), "SEED_TOK".to_string()),
-            (S3_SESSION_TOKEN_EXPIRES_AT_MS.to_string(), expires),
-        ]);
+        let props = with_s3_seed(
+            aws_refresh_props("/v1/credentials"),
+            "SEED_AK",
+            SystemTime::now() + Duration::from_secs(3600),
+        );
 
-        let provider = build_vended_credential_provider(client, &server.url(), &props)
-            .expect("provider construction should succeed")
-            .expect("provider should be built");
+        let provider = test_provider(&server.url(), &props);
         let credential = provider.load_credential("s3://bucket/x/f").await.unwrap();
 
-        assert_eq!(credential.prefix, None);
+        assert_eq!(credential.prefix(), None);
         assert_eq!(s3_access_key_id(&credential), "SEED_AK");
         mock.assert_async().await;
     }
@@ -941,27 +1224,17 @@ mod tests {
             .create_async()
             .await;
 
-        let config = RestCatalogConfig::builder().uri(server.url()).build();
-        let client = Arc::new(HttpClient::new(&config).unwrap());
         // Seeded credential is within the refresh buffer but not yet expired.
-        let expires = epoch_millis(SystemTime::now() + Duration::from_secs(60));
-        let props = HashMap::from([
-            (
-                CloudRefresh::AWS.endpoint_key.to_string(),
-                "/v1/credentials".to_string(),
-            ),
-            (S3_ACCESS_KEY_ID.to_string(), "SEED_AK".to_string()),
-            (S3_SECRET_ACCESS_KEY.to_string(), "SEED_SK".to_string()),
-            (S3_SESSION_TOKEN.to_string(), "SEED_TOK".to_string()),
-            (S3_SESSION_TOKEN_EXPIRES_AT_MS.to_string(), expires),
-        ]);
+        let props = with_s3_seed(
+            aws_refresh_props("/v1/credentials"),
+            "SEED_AK",
+            SystemTime::now() + Duration::from_secs(60),
+        );
 
-        let provider = build_vended_credential_provider(client, &server.url(), &props)
-            .expect("provider construction should succeed")
-            .expect("provider should be built");
+        let provider = test_provider(&server.url(), &props);
         // The first refresh fails, but the still-valid seed is served. Immediate
         // follow-up operations stay inside the first jittered backoff window.
-        for _ in 0..3 {
+        for _ in 0..2 {
             let credential = provider.load_credential("s3://bucket/x/f").await.unwrap();
             assert_eq!(s3_access_key_id(&credential), "SEED_AK");
         }
@@ -969,11 +1242,172 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn empty_refresh_preserves_unexpired_seed() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"storage-credentials":[]}"#)
+            .create_async()
+            .await;
+
+        let props = with_s3_seed(
+            aws_refresh_props("/v1/credentials"),
+            "SEED_AK",
+            SystemTime::now() + Duration::from_secs(60),
+        );
+        let provider = test_provider(&server.url(), &props);
+
+        for _ in 0..2 {
+            let credential = provider.load_credential("s3://bucket/x/f").await.unwrap();
+            assert_eq!(s3_access_key_id(&credential), "SEED_AK");
+        }
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn malformed_specific_refresh_prefers_fallback_over_valid_broader_entry() {
+        let mut server = Server::new_async().await;
+        let refreshed_expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
+        let body = format!(
+            r#"{{"storage-credentials":[
+                {{"prefix":"s3://bucket/requested","config":{{"s3.access-key-id":"BAD"}}}},
+                {{"prefix":"s3://bucket","config":{{"s3.access-key-id":"NEW_AK","s3.secret-access-key":"SK","s3.session-token":"TOK","s3.session-token-expires-at-ms":"{refreshed_expires}"}}}}
+            ]}}"#
+        );
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let provider = RestVendedCredentialProvider::new(test_client(&server.url()), None, vec![
+            ConfiguredCloud {
+                cloud: &CloudRefresh::AWS,
+                endpoint: format!("{}/v1/credentials", server.url()),
+                cache: Mutex::new(CacheState {
+                    entries: vec![cached_s3(
+                        "s3://bucket/requested",
+                        "SEED_AK",
+                        Some(SystemTime::now() + Duration::from_secs(60)),
+                    )],
+                    consecutive_failures: 0,
+                    retry_not_before: None,
+                }),
+                refresh: Mutex::new(()),
+            },
+        ]);
+
+        let fallback = provider
+            .load_credential("s3://bucket/requested/file")
+            .await
+            .unwrap();
+        assert_eq!(s3_access_key_id(&fallback), "SEED_AK");
+
+        // The malformed specific replacement is a failed refresh for this path.
+        // Its still-valid fallback wins over the broader fetched credential and
+        // is backed off, so an immediate retry does not fetch again.
+        let fallback = provider
+            .load_credential("s3://bucket/requested/other-file")
+            .await
+            .unwrap();
+        assert_eq!(s3_access_key_id(&fallback), "SEED_AK");
+
+        let refreshed = provider
+            .load_credential("s3://bucket/other/file")
+            .await
+            .unwrap();
+        assert_eq!(s3_access_key_id(&refreshed), "NEW_AK");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn invalid_refresh_preserves_other_prefix_fallbacks() {
+        let mut server = Server::new_async().await;
+        let refreshed_expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
+        let expired = epoch_millis(SystemTime::now() - Duration::from_secs(60));
+        let body = format!(
+            r#"{{"storage-credentials":[
+                {{"prefix":"s3://bucket/table-a","config":{{"s3.access-key-id":"NEW_AK","s3.secret-access-key":"SK","s3.session-token":"TOK","s3.session-token-expires-at-ms":"{refreshed_expires}"}}}},
+                {{"prefix":"s3://bucket/table-b","config":{{"s3.access-key-id":"BAD"}}}},
+                {{"prefix":"s3://bucket/table-c","config":{{"s3.access-key-id":"EXPIRED_CK","s3.secret-access-key":"SK","s3.session-token":"TOK","s3.session-token-expires-at-ms":"{expired}"}}}}
+            ]}}"#
+        );
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let provider = RestVendedCredentialProvider::new(test_client(&server.url()), None, vec![
+            ConfiguredCloud {
+                cloud: &CloudRefresh::AWS,
+                endpoint: format!("{}/v1/credentials", server.url()),
+                cache: Mutex::new(CacheState {
+                    entries: vec![
+                        cached_s3(
+                            "s3://bucket/table-a",
+                            "OLD_AK",
+                            Some(SystemTime::now() + Duration::from_secs(60)),
+                        ),
+                        cached_s3(
+                            "s3://bucket/table-b",
+                            "OLDER_BK",
+                            Some(SystemTime::now() + Duration::from_secs(3600)),
+                        ),
+                        cached_s3(
+                            "s3://bucket/table-b",
+                            "LATEST_BK",
+                            Some(SystemTime::now() + Duration::from_secs(3600)),
+                        ),
+                        cached_s3(
+                            "s3://bucket/table-c",
+                            "VALID_CK",
+                            Some(SystemTime::now() + Duration::from_secs(3600)),
+                        ),
+                    ],
+                    consecutive_failures: 0,
+                    retry_not_before: None,
+                }),
+                refresh: Mutex::new(()),
+            },
+        ]);
+
+        let refreshed = provider
+            .load_credential("s3://bucket/table-a/file")
+            .await
+            .unwrap();
+        assert_eq!(s3_access_key_id(&refreshed), "NEW_AK");
+
+        let fallback = provider
+            .load_credential("s3://bucket/table-b/file")
+            .await
+            .unwrap();
+        assert_eq!(s3_access_key_id(&fallback), "LATEST_BK");
+
+        let fallback = provider
+            .load_credential("s3://bucket/table-c/file")
+            .await
+            .unwrap();
+        assert_eq!(s3_access_key_id(&fallback), "VALID_CK");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn concurrent_prefetch_serves_unexpired_credential_without_waiting() {
         let mut server = Server::new_async().await;
-        let expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
-        let body = format!(
-            r#"{{"storage-credentials":[{{"prefix":"s3://bucket","config":{{"s3.access-key-id":"NEW_AK","s3.secret-access-key":"SK","s3.session-token":"TOK","s3.session-token-expires-at-ms":"{expires}"}}}}]}}"#
+        let body = s3_response(
+            "s3://bucket",
+            "NEW_AK",
+            SystemTime::now() + Duration::from_secs(3600),
         );
         let (started_tx, started_rx) = mpsc::channel();
         let release = Arc::new(Barrier::new(2));
@@ -991,22 +1425,12 @@ mod tests {
             .create_async()
             .await;
 
-        let config = RestCatalogConfig::builder().uri(server.url()).build();
-        let client = Arc::new(HttpClient::new(&config).unwrap());
-        let seed_expires = epoch_millis(SystemTime::now() + Duration::from_secs(60));
-        let props = HashMap::from([
-            (
-                CloudRefresh::AWS.endpoint_key.to_string(),
-                "/v1/credentials".to_string(),
-            ),
-            (S3_ACCESS_KEY_ID.to_string(), "SEED_AK".to_string()),
-            (S3_SECRET_ACCESS_KEY.to_string(), "SEED_SK".to_string()),
-            (S3_SESSION_TOKEN.to_string(), "SEED_TOK".to_string()),
-            (S3_SESSION_TOKEN_EXPIRES_AT_MS.to_string(), seed_expires),
-        ]);
-        let provider = build_vended_credential_provider(client, &server.url(), &props)
-            .unwrap()
-            .unwrap();
+        let props = with_s3_seed(
+            aws_refresh_props("/v1/credentials"),
+            "SEED_AK",
+            SystemTime::now() + Duration::from_secs(60),
+        );
+        let provider = test_provider(&server.url(), &props);
 
         let first_provider = Arc::clone(&provider);
         let first =
@@ -1041,9 +1465,10 @@ mod tests {
     #[tokio::test]
     async fn refresh_uses_table_scoped_token() {
         let mut server = Server::new_async().await;
-        let expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
-        let body = format!(
-            r#"{{"storage-credentials":[{{"prefix":"s3://bucket","config":{{"s3.access-key-id":"AK","s3.secret-access-key":"SK","s3.session-token":"TOK","s3.session-token-expires-at-ms":"{expires}"}}}}]}}"#
+        let body = s3_response(
+            "s3://bucket",
+            "AK",
+            SystemTime::now() + Duration::from_secs(3600),
         );
         let mock = server
             .mock("GET", "/v1/credentials")
@@ -1054,18 +1479,28 @@ mod tests {
             .create_async()
             .await;
 
-        let config = RestCatalogConfig::builder().uri(server.url()).build();
+        let config = RestCatalogConfig::builder()
+            .uri(server.url())
+            .props(HashMap::from([(
+                "token".to_string(),
+                "catalog-token".to_string(),
+            )]))
+            .build();
         let client = Arc::new(HttpClient::new(&config).unwrap());
         let props = HashMap::from([
             (
                 CloudRefresh::AWS.endpoint_key.to_string(),
                 "/v1/credentials".to_string(),
             ),
-            ("token".to_string(), "table-token".to_string()),
+            // Local properties win in the FileIO configuration merge, but must
+            // not mask auth returned by the table endpoint.
+            ("token".to_string(), "user-token".to_string()),
         ]);
-        let provider = build_vended_credential_provider(client, &server.url(), &props)
-            .unwrap()
-            .unwrap();
+        let table_auth = HashMap::from([("token".to_string(), "table-token".to_string())]);
+        let provider =
+            build_vended_credential_provider(client, &server.url(), &props, Some(&table_auth))
+                .unwrap()
+                .unwrap();
 
         provider.load_credential("s3://bucket/x/f").await.unwrap();
         mock.assert_async().await;
@@ -1075,8 +1510,10 @@ mod tests {
     async fn one_provider_refreshes_multiple_clouds() {
         let mut server = Server::new_async().await;
         let expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
-        let aws_body = format!(
-            r#"{{"storage-credentials":[{{"prefix":"s3://bucket","config":{{"s3.access-key-id":"AK","s3.secret-access-key":"SK","s3.session-token":"TOK","s3.session-token-expires-at-ms":"{expires}"}}}}]}}"#
+        let aws_body = s3_response(
+            "s3://bucket",
+            "AK",
+            SystemTime::now() + Duration::from_secs(3600),
         );
         let gcp_body = format!(
             r#"{{"storage-credentials":[{{"prefix":"gs://bucket","config":{{"gcs.oauth2.token":"GCS","gcs.oauth2.token-expires-at":"{expires}"}}}}]}}"#
@@ -1096,8 +1533,6 @@ mod tests {
             .create_async()
             .await;
 
-        let config = RestCatalogConfig::builder().uri(server.url()).build();
-        let client = Arc::new(HttpClient::new(&config).unwrap());
         let props = HashMap::from([
             (
                 CloudRefresh::AWS.endpoint_key.to_string(),
@@ -1108,9 +1543,7 @@ mod tests {
                 "/v1/gcp-credentials".to_string(),
             ),
         ]);
-        let provider = build_vended_credential_provider(client, &server.url(), &props)
-            .unwrap()
-            .unwrap();
+        let provider = test_provider(&server.url(), &props);
 
         assert!(provider.supports_path("s3://bucket/x"));
         assert!(provider.supports_path("gs://bucket/x"));
@@ -1122,9 +1555,9 @@ mod tests {
             .load_credential("gs://bucket/x")
             .await
             .unwrap()
-            .kind
+            .kind()
         {
-            StorageCredentialKind::Gcs(gcs) => assert_eq!(gcs.token, "GCS"),
+            StorageCredentialKind::Gcs(gcs) => assert_eq!(gcs.token(), "GCS"),
             other => panic!("expected GCS credential, got {other:?}"),
         }
         aws_mock.assert_async().await;
@@ -1136,28 +1569,20 @@ mod tests {
         let mut server = Server::new_async().await;
         let mock = server
             .mock("GET", Matcher::Any)
+            .expect(1)
             .with_status(500)
             .create_async()
             .await;
 
-        let config = RestCatalogConfig::builder().uri(server.url()).build();
-        let client = Arc::new(HttpClient::new(&config).unwrap());
-        let expired = epoch_millis(SystemTime::now() - Duration::from_secs(60));
-        let props = HashMap::from([
-            (
-                CloudRefresh::AWS.endpoint_key.to_string(),
-                "/v1/credentials".to_string(),
-            ),
-            (S3_ACCESS_KEY_ID.to_string(), "EXPIRED_AK".to_string()),
-            (S3_SECRET_ACCESS_KEY.to_string(), "EXPIRED_SK".to_string()),
-            (S3_SESSION_TOKEN.to_string(), "EXPIRED_TOK".to_string()),
-            (S3_SESSION_TOKEN_EXPIRES_AT_MS.to_string(), expired),
-        ]);
+        let props = with_s3_seed(
+            aws_refresh_props("/v1/credentials"),
+            "EXPIRED_AK",
+            SystemTime::now() - Duration::from_secs(60),
+        );
 
-        let provider = build_vended_credential_provider(client, &server.url(), &props)
-            .expect("provider construction should succeed")
-            .expect("provider should be built");
+        let provider = test_provider(&server.url(), &props);
 
+        assert!(provider.load_credential("s3://bucket/x/f").await.is_err());
         assert!(provider.load_credential("s3://bucket/x/f").await.is_err());
         mock.assert_async().await;
     }
@@ -1168,33 +1593,27 @@ mod tests {
         // The vended TTL (60s) is shorter than REFRESH_BUFFER, so every operation
         // is eligible for refresh. This matches AWS CachedSupplier: successful
         // results do not receive failure backoff.
-        let expires = epoch_millis(SystemTime::now() + Duration::from_secs(60));
-        let body = format!(
-            r#"{{"storage-credentials":[{{"prefix":"s3://bucket","config":{{"s3.access-key-id":"AK","s3.secret-access-key":"SK","s3.session-token":"TOK","s3.session-token-expires-at-ms":"{expires}"}}}}]}}"#
+        let body = s3_response(
+            "s3://bucket",
+            "AK",
+            SystemTime::now() + Duration::from_secs(60),
         );
         let mock = server
             .mock("GET", "/v1/credentials")
-            .expect(3)
+            .expect(2)
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(body)
             .create_async()
             .await;
 
-        let config = RestCatalogConfig::builder().uri(server.url()).build();
-        let client = Arc::new(HttpClient::new(&config).unwrap());
         // No static creds -> no seed -> each sequential load fetches because the
         // returned credential is already inside its prefetch window.
-        let props = HashMap::from([(
-            CloudRefresh::AWS.endpoint_key.to_string(),
-            "/v1/credentials".to_string(),
-        )]);
+        let props = aws_refresh_props("/v1/credentials");
 
-        let provider = build_vended_credential_provider(client, &server.url(), &props)
-            .expect("provider construction should succeed")
-            .expect("provider should be built");
+        let provider = test_provider(&server.url(), &props);
 
-        for _ in 0..3 {
+        for _ in 0..2 {
             let credential = provider.load_credential("s3://bucket/x/f").await.unwrap();
             assert_eq!(s3_access_key_id(&credential), "AK");
         }

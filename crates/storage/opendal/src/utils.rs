@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+use crate::DynamicCredentialScope;
+
 pub(crate) fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())
 }
@@ -56,6 +59,7 @@ pub(crate) fn system_time_to_timestamp(
 pub(crate) fn validate_credential_prefix(
     path: &str,
     prefix: Option<&str>,
+    credential_scope: Option<&DynamicCredentialScope>,
 ) -> reqsign_core::Result<()> {
     match prefix {
         Some("") => Err(reqsign_core::Error::unexpected(
@@ -64,6 +68,18 @@ pub(crate) fn validate_credential_prefix(
         Some(prefix) if !path.starts_with(prefix) => Err(reqsign_core::Error::unexpected(format!(
             "vended credential prefix {prefix:?} does not cover storage location {path:?}"
         ))),
-        _ => Ok(()),
+        _ => match credential_scope {
+            Some(DynamicCredentialScope::Unscoped) if prefix.is_some() => {
+                Err(reqsign_core::Error::unexpected(
+                    "vended credential scope changed while a bulk-delete operator was active",
+                ))
+            }
+            Some(DynamicCredentialScope::Prefix(expected)) if prefix != Some(expected.as_str()) => {
+                Err(reqsign_core::Error::unexpected(
+                    "vended credential scope changed while a bulk-delete operator was active",
+                ))
+            }
+            _ => Ok(()),
+        },
     }
 }
