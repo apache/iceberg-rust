@@ -226,15 +226,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Property options may be grouped under `#[property(...)]`, which avoids a
-collision between the standalone `#[default(...)]` helper and Rust's `Default`
-derive. The original standalone annotations remain supported.
+All field settings must be grouped under `#[property(...)]`. This keeps `key`,
+`default`, `prefix`, `nested`, parser hooks, additional keys, and getter
+generation in one attribute and avoids collisions with ordinary Rust derives.
 
-`#[prefix(...)]` requires `HashMap<String, T>`. `#[nested]` embeds another
-`Properties` struct while reading the same flat map. `#[parse_with(...)]`
-customizes parsing for one exact-key field. `#[parse_properties_with(...)]`
-receives the complete property map, and `#[additional_keys(...)]` supplies its
-list of secondary keys.
+The `prefix` setting requires `HashMap<String, T>`. `nested` embeds another
+`Properties` struct while reading the same flat map. `parse_with` customizes
+parsing for one exact-key field. `parse_properties_with` receives the complete
+property map, and `additional_keys` supplies its list of secondary keys.
 
 Boolean values are parsed case-insensitively. Other values require `FromStr`
 unless a custom parser is supplied. String-literal and path defaults are

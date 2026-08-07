@@ -21,7 +21,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{
     Attribute, Data, DeriveInput, Error, Expr, ExprLit, ExprPath, Field, Fields, GenericArgument,
-    Ident, Lit, Meta, Path, PathArguments, Token, Type, parenthesized,
+    Ident, Lit, Path, PathArguments, Token, Type, parenthesized,
 };
 
 struct PropertyField {
@@ -136,7 +136,7 @@ pub(crate) fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2>
 
     let fields = fields
         .iter()
-        .map(|field| parse_property_field(field, property_options(&field.attrs)?))
+        .map(|field| parse_property_field(field, property_options(field)?))
         .collect::<syn::Result<Vec<_>>>()?;
     let parses = fields.iter().map(parse_field);
     let accessors = fields.iter().map(field_getter);
@@ -168,56 +168,34 @@ fn parse_property_field(
         .ident
         .clone()
         .ok_or_else(|| Error::new_spanned(field, "Properties fields must be named"))?;
-    let key = merge_attribute_option(
-        attribute_expression_value(&field.attrs, "key")?,
-        property_options.key,
-        field,
-        "key",
-    )?;
-    let additional_keys = merge_attribute_option(
-        attribute_expression_list(&field.attrs, "additional_keys")?,
-        property_options.additional_keys,
-        field,
-        "additional_keys",
-    )?;
-    let prefix = merge_attribute_option(
-        attribute_expression_value(&field.attrs, "prefix")?,
-        property_options.prefix,
-        field,
-        "prefix",
-    )?;
-    let standalone_nested = marker_attribute(&field.attrs, "nested")?;
-    if standalone_nested && property_options.nested {
-        return Err(Error::new_spanned(
-            field,
-            "duplicate nested property option",
-        ));
-    }
-    let nested = standalone_nested || property_options.nested;
+    let PropertyOptions {
+        key,
+        additional_keys,
+        prefix,
+        nested,
+        default,
+        parse_with,
+        parse_properties_with,
+        public_getter,
+    } = property_options;
 
     if usize::from(key.is_some()) + usize::from(prefix.is_some()) + usize::from(nested) != 1 {
         return Err(Error::new_spanned(
             field,
-            "Properties fields must declare exactly one of #[key(...)], #[prefix(...)], or #[nested]",
+            "Properties fields must declare exactly one of key, prefix, or nested in #[property(...)]",
         ));
     }
 
-    let default = merge_attribute_option(
-        attribute_expression_value(&field.attrs, "default")?,
-        property_options.default,
-        field,
-        "default",
-    )?;
     if nested && default.is_some() {
         return Err(Error::new_spanned(
             field,
-            "#[nested] fields obtain defaults from their own property annotations and cannot declare #[default(...)]",
+            "nested fields obtain defaults from their own property annotations and cannot declare default in #[property(...)]",
         ));
     }
     if !nested && default.is_none() {
         return Err(Error::new_spanned(
             field,
-            "Properties leaf fields must declare #[default(...)]",
+            "Properties leaf fields must declare default in #[property(...)]",
         ));
     }
 
@@ -225,27 +203,14 @@ fn parse_property_field(
     if prefix.is_some() && map_value_type.is_none() {
         return Err(Error::new_spanned(
             &field.ty,
-            "#[prefix(...)] fields must have type HashMap<String, T>",
+            "property prefix fields must have type HashMap<String, T>",
         ));
     }
-
-    let parse_with = merge_attribute_option(
-        attribute_path_value(&field.attrs, "parse_with")?,
-        property_options.parse_with,
-        field,
-        "parse_with",
-    )?;
-    let parse_properties_with = merge_attribute_option(
-        attribute_path_value(&field.attrs, "parse_properties_with")?,
-        property_options.parse_properties_with,
-        field,
-        "parse_properties_with",
-    )?;
 
     if additional_keys.is_some() && parse_properties_with.is_none() {
         return Err(Error::new_spanned(
             field,
-            "#[additional_keys(...)] requires parse_properties_with",
+            "additional_keys requires parse_properties_with in #[property(...)]",
         ));
     }
     if (prefix.is_some() || nested)
@@ -253,7 +218,7 @@ fn parse_property_field(
     {
         return Err(Error::new_spanned(
             field,
-            "#[prefix(...)] and #[nested] fields do not support custom parse functions",
+            "prefix and nested fields do not support custom parse functions",
         ));
     }
     if parse_with.is_some() && parse_properties_with.is_some() {
@@ -274,7 +239,7 @@ fn parse_property_field(
         parse_properties_with,
         option_inner_type: option_inner_type(&field.ty),
         map_value_type,
-        public_getter: property_options.public_getter,
+        public_getter,
         doc_attributes: field
             .attrs
             .iter()
@@ -284,9 +249,12 @@ fn parse_property_field(
     })
 }
 
-fn property_options(attributes: &[Attribute]) -> syn::Result<PropertyOptions> {
-    let Some(attribute) = find_attribute(attributes, "property")? else {
-        return Ok(PropertyOptions::default());
+fn property_options(field: &Field) -> syn::Result<PropertyOptions> {
+    let Some(attribute) = find_attribute(&field.attrs, "property")? else {
+        return Err(Error::new_spanned(
+            field,
+            "Properties fields must declare #[property(...)]",
+        ));
     };
 
     let parsed =
@@ -362,22 +330,6 @@ fn set_property_option<T>(
     Ok(())
 }
 
-fn merge_attribute_option<T>(
-    standalone: Option<T>,
-    grouped: Option<T>,
-    field: &Field,
-    name: &str,
-) -> syn::Result<Option<T>> {
-    match (standalone, grouped) {
-        (Some(_), Some(_)) => Err(Error::new_spanned(
-            field,
-            format!("duplicate {name} property option"),
-        )),
-        (Some(value), None) | (None, Some(value)) => Ok(Some(value)),
-        (None, None) => Ok(None),
-    }
-}
-
 fn field_getter(field: &PropertyField) -> TokenStream2 {
     if !field.public_getter {
         return TokenStream2::new();
@@ -400,74 +352,6 @@ fn field_getter(field: &PropertyField) -> TokenStream2 {
             }
         }
     }
-}
-
-fn marker_attribute(attributes: &[Attribute], name: &str) -> syn::Result<bool> {
-    let Some(attribute) = find_attribute(attributes, name)? else {
-        return Ok(false);
-    };
-
-    match &attribute.meta {
-        Meta::Path(_) => Ok(true),
-        _ => Err(Error::new_spanned(
-            attribute,
-            format!("{name} must use the form #[{name}]"),
-        )),
-    }
-}
-
-fn attribute_expression_value(attributes: &[Attribute], name: &str) -> syn::Result<Option<Expr>> {
-    let Some(attribute) = find_attribute(attributes, name)? else {
-        return Ok(None);
-    };
-
-    match &attribute.meta {
-        Meta::NameValue(name_value) => Ok(Some(name_value.value.clone())),
-        Meta::List(_) => attribute.parse_args::<Expr>().map(Some),
-        _ => Err(Error::new_spanned(
-            attribute,
-            format!("{name} must use the form #[{name}(...)]"),
-        )),
-    }
-}
-
-fn attribute_expression_list(
-    attributes: &[Attribute],
-    name: &str,
-) -> syn::Result<Option<Vec<Expr>>> {
-    let Some(attribute) = find_attribute(attributes, name)? else {
-        return Ok(None);
-    };
-
-    let expressions = match &attribute.meta {
-        Meta::NameValue(name_value) => expression_list(name_value.value.clone(), name)?,
-        Meta::List(_) => attribute
-            .parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated)?
-            .into_iter()
-            .collect(),
-        _ => {
-            return Err(Error::new_spanned(
-                attribute,
-                format!("{name} must contain a non-empty list of keys"),
-            ));
-        }
-    };
-
-    if expressions.is_empty() {
-        return Err(Error::new_spanned(
-            attribute,
-            format!("{name} must contain at least one key"),
-        ));
-    }
-    Ok(Some(expressions))
-}
-
-fn attribute_path_value(attributes: &[Attribute], name: &str) -> syn::Result<Option<Path>> {
-    let Some(expression) = attribute_expression_value(attributes, name)? else {
-        return Ok(None);
-    };
-
-    expression_path(expression, name).map(Some)
 }
 
 fn expression_path(expression: Expr, name: &str) -> syn::Result<Path> {

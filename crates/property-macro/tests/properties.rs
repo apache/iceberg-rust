@@ -55,9 +55,7 @@ fn parse_dimensions(
 
 #[derive(Debug, Properties)]
 struct TestProperties {
-    #[key(RETRIES)]
-    #[default(4)]
-    #[property(pub(getter))]
+    #[property(key = RETRIES, default = 4, pub(getter))]
     retries: u64,
 
     #[property(key = OWNER, default = None, pub(getter))]

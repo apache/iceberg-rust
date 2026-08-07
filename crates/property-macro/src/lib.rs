@@ -23,19 +23,7 @@ use syn::{DeriveInput, parse_macro_input};
 mod properties;
 
 /// Derives property-map parsing and opt-in read-only accessors for a struct.
-#[proc_macro_derive(
-    Properties,
-    attributes(
-        key,
-        additional_keys,
-        prefix,
-        nested,
-        default,
-        parse_with,
-        parse_properties_with,
-        property
-    )
-)]
+#[proc_macro_derive(Properties, attributes(property))]
 pub fn derive_properties(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
