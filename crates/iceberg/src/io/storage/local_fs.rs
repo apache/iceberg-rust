@@ -34,10 +34,24 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
 use crate::io::{
-    FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
+    FileMetadata, FileRead, FileWrite, InputFile, ListEntry, OutputFile, Storage, StorageConfig,
     StorageFactory,
 };
 use crate::{Error, ErrorKind, Result};
+
+/// Recursively collect all files under `dir` into `out` as (path, metadata).
+fn walk_dir(dir: &std::path::Path, out: &mut Vec<(PathBuf, fs::Metadata)>) -> std::io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if meta.is_dir() {
+            walk_dir(&entry.path(), out)?;
+        } else {
+            out.push((entry.path(), meta));
+        }
+    }
+    Ok(())
+}
 
 /// Local filesystem storage implementation.
 ///
@@ -200,6 +214,48 @@ impl Storage for LocalFsStorage {
             })?;
         }
         Ok(())
+    }
+
+    async fn list_prefix(&self, path: &str) -> Result<Vec<ListEntry>> {
+        let root = Self::normalize_path(path);
+        if !root.is_dir() {
+            return Ok(vec![]);
+        }
+        let mut files = Vec::new();
+        walk_dir(&root, &mut files).map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("Failed to list directory {}: {}", root.display(), e),
+            )
+        })?;
+        let abs_prefix = if path.ends_with('/') {
+            path.to_string()
+        } else {
+            format!("{path}/")
+        };
+        let root_str = root.to_string_lossy().to_string();
+        let root_prefix = if root_str.ends_with('/') {
+            root_str
+        } else {
+            format!("{root_str}/")
+        };
+        Ok(files
+            .into_iter()
+            .map(|(p, meta)| {
+                let full = p.to_string_lossy();
+                let suffix = full.strip_prefix(&root_prefix).unwrap_or(&full).to_string();
+                ListEntry {
+                    // Reconstruct in the caller's prefix form so paths round-trip.
+                    path: format!("{abs_prefix}{suffix}"),
+                    size: meta.len(),
+                    last_modified_ms: meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as i64),
+                }
+            })
+            .collect())
     }
 
     async fn delete_stream(&self, mut paths: BoxStream<'static, String>) -> Result<()> {
@@ -599,5 +655,68 @@ mod tests {
         // Delete with empty stream should succeed
         let path_stream = stream::iter(Vec::<String>::new()).boxed();
         storage.delete_stream(path_stream).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_list_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap().to_string();
+        let storage = LocalFsStorage::new();
+        storage
+            .write(
+                &format!("{root}/t/data/a.parquet"),
+                Bytes::from_static(b"aa"),
+            )
+            .await
+            .unwrap();
+        storage
+            .write(
+                &format!("{root}/t/metadata/v1.json"),
+                Bytes::from_static(b"m"),
+            )
+            .await
+            .unwrap();
+        storage
+            .write(&format!("{root}/other.txt"), Bytes::from_static(b"x"))
+            .await
+            .unwrap();
+
+        let mut entries = storage.list_prefix(&format!("{root}/t")).await.unwrap();
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].path, format!("{root}/t/data/a.parquet"));
+        assert_eq!(entries[0].size, 2);
+        assert!(
+            entries[0].last_modified_ms.is_some(),
+            "local fs must report modification times"
+        );
+        // Listing a non-existent prefix is empty, not an error.
+        assert!(
+            storage
+                .list_prefix(&format!("{root}/missing"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_prefix_is_directory_style() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap().to_string();
+        let storage = LocalFsStorage::new();
+        let file = format!("{root}/t/data/a.parquet");
+        storage
+            .write(&file, Bytes::from_static(b"aa"))
+            .await
+            .unwrap();
+
+        // A trailing-slash prefix is equivalent to the non-slash form.
+        let entries = storage.list_prefix(&format!("{root}/t/")).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, format!("{root}/t/data/a.parquet"));
+
+        // A path naming an existing FILE is not matched as a raw prefix.
+        assert!(storage.list_prefix(&file).await.unwrap().is_empty());
     }
 }
