@@ -79,6 +79,7 @@ pub mod table;
 mod avro;
 pub mod cache;
 pub mod compression;
+pub mod cow_rewrite;
 pub mod io;
 pub mod spec;
 
