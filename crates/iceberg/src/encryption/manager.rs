@@ -36,11 +36,12 @@ use uuid::Uuid;
 
 const MILLIS_IN_DAY: i64 = 24 * 60 * 60 * 1000;
 
-use super::crypto::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
+use super::crypto::{AesGcmCipher, AesKeySize, SecureKey};
 use super::io::EncryptedOutputFile;
 use super::key_metadata::StandardKeyMetadata;
 use super::kms::KeyManagementClient;
 use crate::io::OutputFile;
+use crate::sensitive::SensitiveBytes;
 use crate::spec::{EncryptedKey, FormatVersion, TableMetadataRef};
 use crate::{Error, ErrorKind, Result};
 
