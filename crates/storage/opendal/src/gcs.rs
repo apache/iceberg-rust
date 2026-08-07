@@ -134,7 +134,7 @@ pub(crate) fn gcs_config_build(
         ));
     }
 
-    Ok(Operator::new(builder).map_err(from_opendal_error)?.finish())
+    Operator::new(builder).map_err(from_opendal_error)
 }
 
 /// Adapts a generic [`StorageCredentialProvider`] into a `reqsign`
