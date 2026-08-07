@@ -66,8 +66,8 @@ pub(crate) struct IcebergWriteExec {
 }
 
 impl IcebergWriteExec {
-    pub fn new(table: Table, input: Arc<dyn ExecutionPlan>, schema: ArrowSchemaRef) -> Self {
-        let plan_properties = Self::compute_properties(&input, schema);
+    pub fn new(table: Table, input: Arc<dyn ExecutionPlan>) -> Self {
+        let plan_properties = Self::compute_properties(&input, Self::make_result_schema());
 
         Self {
             table,
@@ -169,7 +169,6 @@ impl ExecutionPlan for IcebergWriteExec {
         Ok(Arc::new(Self::new(
             self.table.clone(),
             Arc::clone(&children[0]),
-            self.schema(),
         )))
     }
 
@@ -494,7 +493,7 @@ mod tests {
         ]));
 
         // 4. Create IcebergWriteExec
-        let write_exec = IcebergWriteExec::new(table.clone(), input_plan, arrow_schema);
+        let write_exec = IcebergWriteExec::new(table.clone(), input_plan);
 
         // 5. Execute the plan
         let task_ctx = Arc::new(TaskContext::default());
@@ -598,6 +597,33 @@ mod tests {
         // 7. Verify the file exists
         let file_io = table.file_io();
         assert!(file_io.exists(file_path).await?, "Data file should exist");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_iceberg_write_exec_advertises_result_schema() -> Result<()> {
+        let iceberg_catalog = get_iceberg_catalog().await;
+        let namespace = NamespaceIdent::new("test_namespace".to_string());
+        iceberg_catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await?;
+        let creation = get_table_creation(temp_path(), "test_table", get_test_schema()?);
+        let table = iceberg_catalog.create_table(&namespace, creation).await?;
+
+        let table_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+        let input = Arc::new(MockExecutionPlan::new(table_schema.clone(), vec![]));
+
+        let write_exec = IcebergWriteExec::new(table, input);
+
+        assert_eq!(
+            write_exec.schema().as_ref(),
+            &ArrowSchema::new(vec![Field::new(DATA_FILES_COL_NAME, DataType::Utf8, false)]),
+            "IcebergWriteExec should advertise the data_files schema, not the table schema"
+        );
 
         Ok(())
     }
