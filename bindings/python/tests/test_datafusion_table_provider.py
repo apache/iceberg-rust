@@ -28,9 +28,9 @@ from packaging.version import Version
 from pyiceberg.catalog import Catalog, load_catalog
 from pyiceberg_core.datafusion import IcebergDataFusionTable
 
-if Version(datafusion.__version__) < Version("53.0.0"):
+if Version(datafusion.__version__) < Version("55.0.0"):
     pytest.skip(
-        "Iceberg table provider requires datafusion>=53 for FFI compatibility",
+        "Iceberg table provider requires datafusion>=55 for FFI compatibility",
         allow_module_level=True,
     )
 

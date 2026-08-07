@@ -7,7 +7,7 @@ impl core::clone::Clone for iceberg_datafusion::metadata_table::IcebergMetadataT
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::clone(&self) -> iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
 impl core::fmt::Debug for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl datafusion_catalog::table::TableProvider for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl datafusion_session::table::TableProvider for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, _projection: core::option::Option<&'life2 alloc::vec::Vec<usize>>, _filters: &'life3 [datafusion_expr::expr::Expr], _limit: core::option::Option<usize>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::schema(&self) -> arrow_schema::schema::SchemaRef
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
@@ -40,7 +40,7 @@ impl core::clone::Clone for iceberg_datafusion::metadata_table::IcebergMetadataT
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::clone(&self) -> iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
 impl core::fmt::Debug for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl datafusion_catalog::table::TableProvider for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl datafusion_session::table::TableProvider for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, _projection: core::option::Option<&'life2 alloc::vec::Vec<usize>>, _filters: &'life3 [datafusion_expr::expr::Expr], _limit: core::option::Option<usize>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::schema(&self) -> arrow_schema::schema::SchemaRef
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
@@ -53,8 +53,8 @@ impl core::default::Default for iceberg_datafusion::table_provider_factory::Iceb
 pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::default() -> iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
 impl core::fmt::Debug for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
 pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl datafusion_catalog::table::TableProviderFactory for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
-pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::create<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, cmd: &'life2 datafusion_expr::logical_plan::ddl::CreateExternalTable) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_catalog::table::TableProvider>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl datafusion_session::table::TableProviderFactory for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::create<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, cmd: &'life2 datafusion_expr::logical_plan::ddl::CreateExternalTable) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_session::table::TableProvider>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub struct iceberg_datafusion::table::IcebergStaticTableProvider
 impl iceberg_datafusion::IcebergStaticTableProvider
 pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table(table: iceberg::table::Table) -> iceberg::error::Result<Self>
@@ -63,7 +63,7 @@ impl core::clone::Clone for iceberg_datafusion::IcebergStaticTableProvider
 pub fn iceberg_datafusion::IcebergStaticTableProvider::clone(&self) -> iceberg_datafusion::IcebergStaticTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergStaticTableProvider
 pub fn iceberg_datafusion::IcebergStaticTableProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl datafusion_catalog::table::TableProvider for iceberg_datafusion::IcebergStaticTableProvider
+impl datafusion_session::table::TableProvider for iceberg_datafusion::IcebergStaticTableProvider
 pub fn iceberg_datafusion::IcebergStaticTableProvider::insert_into<'life0, 'life1, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, _input: alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>, _insert_op: datafusion_expr::logical_plan::dml::InsertOp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg_datafusion::IcebergStaticTableProvider::scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, projection: core::option::Option<&'life2 alloc::vec::Vec<usize>>, filters: &'life3 [datafusion_expr::expr::Expr], limit: core::option::Option<usize>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn iceberg_datafusion::IcebergStaticTableProvider::schema(&self) -> arrow_schema::schema::SchemaRef
@@ -74,7 +74,7 @@ impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl datafusion_catalog::table::TableProvider for iceberg_datafusion::IcebergTableProvider
+impl datafusion_session::table::TableProvider for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::insert_into<'life0, 'life1, 'async_trait>(&'life0 self, state: &'life1 dyn datafusion_session::session::Session, input: alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>, _insert_op: datafusion_expr::logical_plan::dml::InsertOp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg_datafusion::IcebergTableProvider::scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, projection: core::option::Option<&'life2 alloc::vec::Vec<usize>>, filters: &'life3 [datafusion_expr::expr::Expr], limit: core::option::Option<usize>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn iceberg_datafusion::IcebergTableProvider::schema(&self) -> arrow_schema::schema::SchemaRef
@@ -89,15 +89,15 @@ impl core::default::Default for iceberg_datafusion::table_provider_factory::Iceb
 pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::default() -> iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
 impl core::fmt::Debug for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
 pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl datafusion_catalog::table::TableProviderFactory for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
-pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::create<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, cmd: &'life2 datafusion_expr::logical_plan::ddl::CreateExternalTable) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_catalog::table::TableProvider>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl datafusion_session::table::TableProviderFactory for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::create<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, cmd: &'life2 datafusion_expr::logical_plan::ddl::CreateExternalTable) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_session::table::TableProvider>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub struct iceberg_datafusion::IcebergCatalogProvider
 impl iceberg_datafusion::IcebergCatalogProvider
 pub async fn iceberg_datafusion::IcebergCatalogProvider::try_new(client: alloc::sync::Arc<dyn iceberg::catalog::Catalog>) -> iceberg::error::Result<Self>
 impl core::fmt::Debug for iceberg_datafusion::IcebergCatalogProvider
 pub fn iceberg_datafusion::IcebergCatalogProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl datafusion_catalog::catalog::CatalogProvider for iceberg_datafusion::IcebergCatalogProvider
-pub fn iceberg_datafusion::IcebergCatalogProvider::schema(&self, name: &str) -> core::option::Option<alloc::sync::Arc<dyn datafusion_catalog::schema::SchemaProvider>>
+impl datafusion_session::catalog::CatalogProvider for iceberg_datafusion::IcebergCatalogProvider
+pub fn iceberg_datafusion::IcebergCatalogProvider::schema(&self, name: &str) -> core::option::Option<alloc::sync::Arc<dyn datafusion_session::schema::SchemaProvider>>
 pub fn iceberg_datafusion::IcebergCatalogProvider::schema_names(&self) -> alloc::vec::Vec<alloc::string::String>
 pub struct iceberg_datafusion::IcebergStaticTableProvider
 impl iceberg_datafusion::IcebergStaticTableProvider
@@ -107,7 +107,7 @@ impl core::clone::Clone for iceberg_datafusion::IcebergStaticTableProvider
 pub fn iceberg_datafusion::IcebergStaticTableProvider::clone(&self) -> iceberg_datafusion::IcebergStaticTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergStaticTableProvider
 pub fn iceberg_datafusion::IcebergStaticTableProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl datafusion_catalog::table::TableProvider for iceberg_datafusion::IcebergStaticTableProvider
+impl datafusion_session::table::TableProvider for iceberg_datafusion::IcebergStaticTableProvider
 pub fn iceberg_datafusion::IcebergStaticTableProvider::insert_into<'life0, 'life1, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, _input: alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>, _insert_op: datafusion_expr::logical_plan::dml::InsertOp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg_datafusion::IcebergStaticTableProvider::scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, projection: core::option::Option<&'life2 alloc::vec::Vec<usize>>, filters: &'life3 [datafusion_expr::expr::Expr], limit: core::option::Option<usize>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn iceberg_datafusion::IcebergStaticTableProvider::schema(&self) -> arrow_schema::schema::SchemaRef
@@ -118,7 +118,7 @@ impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl datafusion_catalog::table::TableProvider for iceberg_datafusion::IcebergTableProvider
+impl datafusion_session::table::TableProvider for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::insert_into<'life0, 'life1, 'async_trait>(&'life0 self, state: &'life1 dyn datafusion_session::session::Session, input: alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>, _insert_op: datafusion_expr::logical_plan::dml::InsertOp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg_datafusion::IcebergTableProvider::scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, projection: core::option::Option<&'life2 alloc::vec::Vec<usize>>, filters: &'life3 [datafusion_expr::expr::Expr], limit: core::option::Option<usize>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn iceberg_datafusion::IcebergTableProvider::schema(&self) -> arrow_schema::schema::SchemaRef
@@ -132,7 +132,7 @@ impl core::default::Default for iceberg_datafusion::table_provider_factory::Iceb
 pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::default() -> iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
 impl core::fmt::Debug for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
 pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl datafusion_catalog::table::TableProviderFactory for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
-pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::create<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, cmd: &'life2 datafusion_expr::logical_plan::ddl::CreateExternalTable) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_catalog::table::TableProvider>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl datafusion_session::table::TableProviderFactory for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::create<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, cmd: &'life2 datafusion_expr::logical_plan::ddl::CreateExternalTable) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_session::table::TableProvider>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg_datafusion::from_datafusion_error(error: datafusion_common::error::DataFusionError) -> iceberg::error::Error
 pub fn iceberg_datafusion::to_datafusion_error(error: iceberg::error::Error) -> datafusion_common::error::DataFusionError
