@@ -534,6 +534,14 @@ impl TableMetadataBuilder {
             ));
         };
 
+        // The main branch must always be a branch, never a tag (Java `TableMetadata.Builder.setRef`).
+        if ref_name == MAIN_BRANCH && !reference.is_branch() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Cannot set {MAIN_BRANCH} to a tag, it must be a branch"),
+            ));
+        }
+
         // Update last_updated_ms to the exact timestamp of the snapshot if it was added in this commit
         let is_added_snapshot = self.changes.iter().any(|update| {
             matches!(update, TableUpdate::AddSnapshot { snapshot: snap } if snap.snapshot_id() == snapshot.snapshot_id())
@@ -2210,6 +2218,40 @@ mod tests {
             snapshot_id: 1,
             timestamp_ms: snapshot.timestamp_ms()
         }])
+    }
+
+    #[test]
+    fn test_set_main_ref_to_tag_fails() {
+        let builder = builder_without_changes(FormatVersion::V2);
+
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(builder.metadata.last_updated_ms + 1)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("/snap-1.avro")
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        // The main branch must be a branch; setting it to a tag is rejected (Java parity).
+        let err = builder
+            .add_snapshot(snapshot)
+            .unwrap()
+            .set_ref(MAIN_BRANCH, SnapshotReference {
+                snapshot_id: 1,
+                retention: SnapshotRetention::Tag {
+                    max_ref_age_ms: None,
+                },
+            })
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Cannot set main to a tag, it must be a branch"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
