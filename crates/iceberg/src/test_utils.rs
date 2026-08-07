@@ -34,7 +34,7 @@ use crate::spec::TableMetadata;
 use crate::table::Table;
 
 /// Returns a process-wide [`Runtime`] suitable for tests that need to construct
-/// a [`Table`](crate::table::Table) outside a tokio context.
+/// a [`Table`] outside a tokio context.
 ///
 /// The returned [`Runtime`] wraps a single shared multi-thread tokio runtime
 /// that is lazily built on first call and lives until process exit. Cloning is

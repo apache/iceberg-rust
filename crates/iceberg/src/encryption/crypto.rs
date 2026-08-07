@@ -34,7 +34,7 @@ use crate::{Error, ErrorKind, Result};
 
 /// Wrapper for sensitive byte data (encryption keys, DEKs, etc.) that:
 /// - Zeroizes memory on drop
-/// - Redacts content in [`Debug`] and [`Display`] output
+/// - Redacts content in [`Debug`](std::fmt::Debug) and [`Display`](std::fmt::Display) output
 /// - Provides only `&[u8]` access via [`as_bytes()`](Self::as_bytes)
 /// - Uses `Box<[u8]>` (immutable boxed slice) since key bytes never grow
 ///
@@ -217,7 +217,7 @@ impl AesGcmCipher {
     /// * `aad` - Additional authenticated data (optional)
     ///
     /// # Returns
-    /// The encrypted data in the format: [12-byte nonce][ciphertext][16-byte auth tag]
+    /// The encrypted data in the format: `[12-byte nonce][ciphertext][16-byte auth tag]`
     /// This matches the Java implementation format for compatibility.
     pub fn encrypt(&self, plaintext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>> {
         match self.key_size {
