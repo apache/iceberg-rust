@@ -848,6 +848,25 @@ fn avro_convert_test_string() {
 }
 
 #[test]
+fn test_avro_should_convert_uuid_as_uuid() {
+    check_convert_with_avro(
+        Literal::uuid(Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap()),
+        &Primitive(PrimitiveType::Uuid),
+    );
+}
+
+#[test]
+fn test_avro_should_serialize_uuid_as_fixed_16_bytes() {
+    let uuid = Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap();
+
+    check_serialize_avro(
+        Literal::uuid(uuid),
+        &Primitive(PrimitiveType::Uuid),
+        Value::Fixed(16, uuid.as_bytes().to_vec()),
+    );
+}
+
+#[test]
 fn avro_convert_test_date() {
     check_convert_with_avro(
         Literal::Primitive(PrimitiveLiteral::Int(17486)),

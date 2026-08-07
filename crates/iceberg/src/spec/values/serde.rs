@@ -242,11 +242,7 @@ pub(crate) mod _serde {
                     PrimitiveLiteral::Double(v) => RawLiteralEnum::Double(v.0),
                     PrimitiveLiteral::String(v) => RawLiteralEnum::String(v),
                     PrimitiveLiteral::UInt128(v) => {
-                        if *ty == Type::Primitive(PrimitiveType::Uuid) {
-                            RawLiteralEnum::String(Uuid::from_u128(v).hyphenated().to_string())
-                        } else {
-                            RawLiteralEnum::Bytes(ByteBuf::from(v.to_be_bytes()))
-                        }
+                        RawLiteralEnum::Bytes(ByteBuf::from(v.to_be_bytes()))
                     }
                     PrimitiveLiteral::Binary(v) => RawLiteralEnum::Bytes(ByteBuf::from(v)),
                     PrimitiveLiteral::Int128(v) => {
