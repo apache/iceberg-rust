@@ -22,7 +22,8 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 
 use super::storage::{
-    LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageFactory,
+    LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageCredentialProvider,
+    StorageFactory,
 };
 use crate::Result;
 
@@ -65,6 +66,8 @@ pub struct FileIO {
     config: StorageConfig,
     /// Factory for creating storage instances
     factory: Arc<dyn StorageFactory>,
+    /// Optional provider of refreshable, backend-specific credentials
+    credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
     /// Cached storage instance (lazily initialized)
     storage: Arc<OnceLock<Arc<dyn Storage>>>,
 }
@@ -77,6 +80,7 @@ impl FileIO {
         Self {
             config: StorageConfig::new(),
             factory: Arc::new(MemoryStorageFactory),
+            credential_provider: None,
             storage: Arc::new(OnceLock::new()),
         }
     }
@@ -88,6 +92,7 @@ impl FileIO {
         Self {
             config: StorageConfig::new(),
             factory: Arc::new(LocalFsStorageFactory),
+            credential_provider: None,
             storage: Arc::new(OnceLock::new()),
         }
     }
@@ -107,8 +112,11 @@ impl FileIO {
             return Ok(storage.clone());
         }
 
-        // Build the storage
-        let storage = self.factory.build(&self.config)?;
+        // Build the storage, passing any credential provider so backends that
+        // support refreshable credentials can wire it into their operators.
+        let storage = self
+            .factory
+            .build_with_credentials(&self.config, self.credential_provider.clone())?;
 
         // Try to set it (another thread might have set it first)
         let _ = self.storage.set(storage.clone());
@@ -191,6 +199,8 @@ pub struct FileIOBuilder {
     factory: Arc<dyn StorageFactory>,
     /// Storage configuration
     config: StorageConfig,
+    /// Optional provider of refreshable, backend-specific credentials
+    credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
 }
 
 impl FileIOBuilder {
@@ -199,6 +209,7 @@ impl FileIOBuilder {
         Self {
             factory,
             config: StorageConfig::new(),
+            credential_provider: None,
         }
     }
 
@@ -224,11 +235,21 @@ impl FileIOBuilder {
         &self.config
     }
 
+    /// Attach a provider of refreshable, backend-specific credentials.
+    pub fn with_credential_provider(
+        mut self,
+        provider: Arc<dyn StorageCredentialProvider>,
+    ) -> Self {
+        self.credential_provider = Some(provider);
+        self
+    }
+
     /// Builds [`FileIO`].
     pub fn build(self) -> FileIO {
         FileIO {
             config: self.config,
             factory: self.factory,
+            credential_provider: self.credential_provider,
             storage: Arc::new(OnceLock::new()),
         }
     }

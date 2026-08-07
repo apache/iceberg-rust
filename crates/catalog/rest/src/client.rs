@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
 use http::StatusCode;
 use iceberg::{Error, ErrorKind, Result};
@@ -34,7 +35,7 @@ pub(crate) struct HttpClient {
     /// The token to be used for authentication.
     ///
     /// It's possible to fetch the token from the server while needed.
-    token: Mutex<Option<String>>,
+    token: Arc<Mutex<Option<String>>>,
     /// The token endpoint to be used for authentication.
     token_endpoint: String,
     /// The credential to be used for authentication.
@@ -49,9 +50,13 @@ pub(crate) struct HttpClient {
 
 impl Debug for HttpClient {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Omit the reqwest client: injected clients may carry secret default
+        // headers. Explicit headers use the same redaction policy as errors.
         f.debug_struct("HttpClient")
-            .field("client", &self.client)
-            .field("extra_headers", &self.extra_headers)
+            .field(
+                "extra_headers",
+                &format_headers_redacted(&self.extra_headers, self.disable_header_redaction),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -62,12 +67,86 @@ impl HttpClient {
         let extra_headers = cfg.extra_headers()?;
         Ok(HttpClient {
             client: cfg.client().unwrap_or_default(),
-            token: Mutex::new(cfg.token()),
+            token: Arc::new(Mutex::new(cfg.token())),
             token_endpoint: cfg.get_token_endpoint(),
             credential: cfg.credential(),
             extra_headers,
             extra_oauth_params: cfg.extra_oauth_params(),
             disable_header_redaction: cfg.disable_header_redaction(),
+        })
+    }
+
+    /// Create a client for table-scoped resources while reusing this client's
+    /// underlying connection pool.
+    ///
+    /// A load-table response may supply a table token or `header.*` values that
+    /// must be used for subsequent table requests such as credential refresh.
+    pub(crate) fn for_table(
+        &self,
+        catalog_uri: &str,
+        props: &HashMap<String, String>,
+    ) -> Result<Self> {
+        let cfg = RestCatalogConfig::builder()
+            .uri(catalog_uri.to_string())
+            .props(props.clone())
+            .client(Some(self.client.clone()))
+            .build();
+        let table_token = cfg.token();
+        let configured_credential = cfg.credential();
+        let has_table_token = props.contains_key("token");
+        let has_table_credential = props.contains_key("credential");
+        let has_table_auth_header = props.keys().any(|key| {
+            key.strip_prefix("header.")
+                .is_some_and(|name| name.eq_ignore_ascii_case("authorization"))
+        });
+        let has_oauth_params = ["scope", "audience", "resource"]
+            .iter()
+            .any(|key| props.contains_key(*key));
+        let has_oauth_config = props.contains_key("oauth2-server-uri") || has_oauth_params;
+        let has_oauth_override =
+            has_table_credential || (has_oauth_config && self.credential.is_some());
+        let has_table_auth = has_table_token || has_table_auth_header || has_oauth_override;
+        let mut extra_headers = self.extra_headers.clone();
+        if has_table_auth && !has_table_auth_header {
+            // Authentication is applied after request headers are initially built, but
+            // `execute` reapplies `extra_headers`. Do not let an inherited catalog
+            // Authorization header overwrite table-scoped authentication at that point.
+            extra_headers.remove(http::header::AUTHORIZATION);
+        }
+        extra_headers.extend(cfg.extra_headers()?);
+
+        Ok(Self {
+            client: self.client.clone(),
+            token: if has_table_auth {
+                Arc::new(Mutex::new(table_token))
+            } else {
+                Arc::clone(&self.token)
+            },
+            token_endpoint: if has_oauth_override && props.contains_key("oauth2-server-uri") {
+                cfg.get_token_endpoint()
+            } else {
+                self.token_endpoint.clone()
+            },
+            credential: if has_table_token || has_table_auth_header {
+                None
+            } else if has_table_credential {
+                configured_credential
+            } else {
+                self.credential.clone()
+            },
+            extra_headers,
+            extra_oauth_params: if has_oauth_override && has_oauth_params {
+                cfg.extra_oauth_params()
+            } else {
+                self.extra_oauth_params.clone()
+            },
+            disable_header_redaction: if props
+                .contains_key(crate::REST_CATALOG_PROP_DISABLE_HEADER_REDACTION)
+            {
+                cfg.disable_header_redaction()
+            } else {
+                self.disable_header_redaction
+            },
         })
     }
 
@@ -82,7 +161,10 @@ impl HttpClient {
             .unwrap_or(self.extra_headers);
         Ok(HttpClient {
             client: cfg.client().unwrap_or(self.client),
-            token: Mutex::new(cfg.token().or_else(|| self.token.into_inner())),
+            token: match cfg.token() {
+                Some(token) => Arc::new(Mutex::new(Some(token))),
+                None => self.token,
+            },
             token_endpoint: if !cfg.get_token_endpoint().is_empty() {
                 cfg.get_token_endpoint()
             } else {
@@ -156,7 +238,6 @@ impl HttpClient {
                 )
                 .with_context("operation", "auth")
                 .with_context("url", auth_url.to_string())
-                .with_context("json", String::from_utf8_lossy(&text))
                 .with_source(e)
             })?)
         } else {
@@ -170,7 +251,6 @@ impl HttpClient {
                     .with_context("code", code.to_string())
                     .with_context("operation", "auth")
                     .with_context("url", auth_url.to_string())
-                    .with_context("json", String::from_utf8_lossy(&text))
                     .with_source(e)
             })?;
             Err(Error::from(e))
@@ -278,35 +358,20 @@ pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
     let bytes = response.bytes().await?;
 
     serde_json::from_slice::<R>(&bytes).map_err(|e| {
+        // Successful REST responses can contain OAuth tokens and delegated
+        // storage credentials. Never copy an unparsable response into an error.
         Error::new(
             ErrorKind::Unexpected,
             "Failed to parse response from rest catalog server",
         )
-        .with_context("json", String::from_utf8_lossy(&bytes))
         .with_source(e)
     })
 }
 
-/// Headers that contain sensitive information and should be excluded from logs.
-const SENSITIVE_HEADERS: &[&str] = &[
-    "authorization",
-    "proxy-authorization",
-    "set-cookie",
-    "cookie",
-    "x-api-key",
-    "x-auth-token",
-];
-
-/// Returns true if the header name is considered sensitive.
-fn is_sensitive_header(name: &str) -> bool {
-    let name_lower = name.to_lowercase();
-    SENSITIVE_HEADERS.iter().any(|h| name_lower == *h)
-}
-
-/// Redacts sensitive headers and returns a debug-formatted string.
+/// Redacts header values and returns a debug-formatted string.
 ///
 /// If `disable_redaction` is true, returns all headers without redaction.
-/// Otherwise, replaces sensitive header values with "[REDACTED]".
+/// Otherwise, redacts every header value.
 fn format_headers_redacted(headers: &HeaderMap, disable_redaction: bool) -> String {
     if disable_redaction {
         // Return all headers as-is without redaction
@@ -317,16 +382,10 @@ fn format_headers_redacted(headers: &HeaderMap, disable_redaction: bool) -> Stri
         return format!("{all:?}");
     }
 
-    // Redact sensitive headers by replacing their values with "[REDACTED]"
+    // Retain names for diagnostics but redact every value
     let redacted: HashMap<&str, &str> = headers
         .iter()
-        .filter_map(|(name, value)| {
-            if is_sensitive_header(name.as_str()) {
-                Some((name.as_str(), "[REDACTED]"))
-            } else {
-                value.to_str().ok().map(|v| (name.as_str(), v))
-            }
-        })
+        .map(|(name, _)| (name.as_str(), "[REDACTED]"))
         .collect();
     format!("{redacted:?}")
 }
@@ -369,92 +428,21 @@ mod tests {
     }
 
     #[test]
-    fn test_format_headers_redacted_non_sensitive() {
+    fn test_format_headers_redacts_all_values() {
         let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer secret-token".parse().unwrap());
         headers.insert("content-type", "application/json".parse().unwrap());
         headers.insert("x-request-id", "abc123".parse().unwrap());
 
         let result = format_headers_redacted(&headers, false);
 
-        assert!(result.contains("content-type"));
-        assert!(result.contains("application/json"));
-        assert!(result.contains("x-request-id"));
-        assert!(result.contains("abc123"));
-    }
-
-    #[test]
-    fn test_format_headers_redacted_filters_sensitive() {
-        let mut headers = HeaderMap::new();
-        headers.insert("authorization", "Bearer secret-token".parse().unwrap());
-        headers.insert("content-type", "application/json".parse().unwrap());
-
-        let result = format_headers_redacted(&headers, false);
-
-        // Sensitive header should be present but with redacted value
         assert!(result.contains("authorization"));
+        assert!(result.contains("content-type"));
+        assert!(result.contains("x-request-id"));
         assert!(result.contains("[REDACTED]"));
-        // Sensitive value should NOT be present
         assert!(!result.contains("secret-token"));
-        // Non-sensitive header should be present with actual value
-        assert!(result.contains("content-type"));
-        assert!(result.contains("application/json"));
-    }
-
-    #[test]
-    fn test_format_headers_redacted_filters_set_cookie() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "set-cookie",
-            "CF_Authorization=sensitive-session-token; Path=/; Secure;"
-                .parse()
-                .unwrap(),
-        );
-        headers.insert("server", "cloudflare".parse().unwrap());
-
-        let result = format_headers_redacted(&headers, false);
-
-        // Sensitive header should be present but with redacted value
-        assert!(result.contains("set-cookie"));
-        assert!(result.contains("[REDACTED]"));
-        // Sensitive value should NOT be present
-        assert!(!result.contains("sensitive-session-token"));
-        // Non-sensitive header should be present with actual value
-        assert!(result.contains("server"));
-        assert!(result.contains("cloudflare"));
-    }
-
-    #[test]
-    fn test_format_headers_redacted_filters_all_sensitive() {
-        let mut headers = HeaderMap::new();
-        headers.insert("authorization", "Bearer token".parse().unwrap());
-        headers.insert("proxy-authorization", "Basic creds".parse().unwrap());
-        headers.insert("set-cookie", "session=abc".parse().unwrap());
-        headers.insert("cookie", "session=abc".parse().unwrap());
-        headers.insert("x-api-key", "api-key-123".parse().unwrap());
-        headers.insert("x-auth-token", "auth-token-456".parse().unwrap());
-        headers.insert("x-request-id", "req-123".parse().unwrap());
-
-        let result = format_headers_redacted(&headers, false);
-
-        // All sensitive headers should be present but with redacted values
-        assert!(result.contains("authorization"));
-        assert!(result.contains("proxy-authorization"));
-        assert!(result.contains("set-cookie"));
-        assert!(result.contains("cookie"));
-        assert!(result.contains("x-api-key"));
-        assert!(result.contains("x-auth-token"));
-        assert!(result.contains("[REDACTED]"));
-
-        // Ensure no sensitive values leaked
-        assert!(!result.contains("Bearer token"));
-        assert!(!result.contains("Basic creds"));
-        assert!(!result.contains("session=abc"));
-        assert!(!result.contains("api-key-123"));
-        assert!(!result.contains("auth-token-456"));
-
-        // Non-sensitive header should be present with actual value
-        assert!(result.contains("x-request-id"));
-        assert!(result.contains("req-123"));
+        assert!(!result.contains("application/json"));
+        assert!(!result.contains("abc123"));
     }
 
     #[test]
@@ -475,5 +463,103 @@ mod tests {
         assert!(result.contains("application/json"));
         // [REDACTED] should NOT be present when redaction is disabled
         assert!(!result.contains("[REDACTED]"));
+    }
+
+    #[tokio::test]
+    async fn table_client_reuses_parent_token_unless_overridden() {
+        let inherited_props = HashMap::from([(
+            "credential".to_string(),
+            "client-id:client-secret".to_string(),
+        )]);
+        let config = RestCatalogConfig::builder()
+            .uri("https://catalog.example".to_string())
+            .props(inherited_props.clone())
+            .build();
+        let client = HttpClient::new(&config).unwrap();
+        *client.token.lock().await = Some("catalog-token".to_string());
+
+        let inherited = client
+            .for_table("https://catalog.example", &HashMap::new())
+            .unwrap();
+        assert!(Arc::ptr_eq(&client.token, &inherited.token));
+        assert_eq!(
+            inherited.token.lock().await.as_deref(),
+            Some("catalog-token")
+        );
+
+        let overridden = client
+            .for_table(
+                "https://catalog.example",
+                &HashMap::from([("token".to_string(), "table-token".to_string())]),
+            )
+            .unwrap();
+        assert!(!Arc::ptr_eq(&client.token, &overridden.token));
+        assert_eq!(
+            overridden.token.lock().await.as_deref(),
+            Some("table-token")
+        );
+    }
+
+    #[tokio::test]
+    async fn table_auth_removes_inherited_authorization_header() {
+        let config = RestCatalogConfig::builder()
+            .uri("https://catalog.example".to_string())
+            .props(HashMap::from([
+                ("token".to_string(), "catalog-token".to_string()),
+                (
+                    "header.Authorization".to_string(),
+                    "Bearer catalog-header-token".to_string(),
+                ),
+            ]))
+            .build();
+        let client = HttpClient::new(&config).unwrap();
+
+        let table_client = client
+            .for_table(
+                "https://catalog.example",
+                &HashMap::from([("token".to_string(), "table-token".to_string())]),
+            )
+            .unwrap();
+
+        assert!(
+            !table_client
+                .extra_headers
+                .contains_key(http::header::AUTHORIZATION)
+        );
+        assert_eq!(
+            table_client.token.lock().await.as_deref(),
+            Some("table-token")
+        );
+    }
+
+    #[tokio::test]
+    async fn table_oauth_options_without_credential_reuse_parent_token() {
+        let config = RestCatalogConfig::builder()
+            .uri("https://catalog.example".to_string())
+            .props(HashMap::from([(
+                "token".to_string(),
+                "catalog-token".to_string(),
+            )]))
+            .build();
+        let client = HttpClient::new(&config).unwrap();
+        let table_props = HashMap::from([
+            ("scope".to_string(), "table-scope".to_string()),
+            (
+                "oauth2-server-uri".to_string(),
+                "https://table-auth.example/token".to_string(),
+            ),
+        ]);
+
+        let table_client = client
+            .for_table("https://catalog.example", &table_props)
+            .unwrap();
+
+        assert!(Arc::ptr_eq(&client.token, &table_client.token));
+        assert_eq!(
+            table_client.token.lock().await.as_deref(),
+            Some("catalog-token")
+        );
+        assert_eq!(table_client.token_endpoint, client.token_endpoint);
+        assert_eq!(table_client.extra_oauth_params, client.extra_oauth_params);
     }
 }
