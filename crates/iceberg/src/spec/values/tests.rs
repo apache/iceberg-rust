@@ -99,8 +99,9 @@ fn check_convert_with_avro(expected_literal: Literal, expected_type: &Type) {
     let encoded = writer.into_inner().unwrap();
 
     let reader = apache_avro::Reader::new(&*encoded).unwrap();
-    for record in reader {
-        let result = apache_avro::from_value::<RawLiteral>(&record.unwrap()).unwrap();
+    for maybe_record in reader {
+        let record = maybe_record.unwrap();
+        let result = apache_avro::from_value::<RawLiteral>(&record).unwrap();
         let desered_literal = result.try_into(&struct_type).unwrap().unwrap();
         assert_eq!(desered_literal, struct_literal);
     }
