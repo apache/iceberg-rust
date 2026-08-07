@@ -29,6 +29,11 @@ keywords = ["iceberg", "rest", "catalog"]
 license = { workspace = true }
 repository = { workspace = true }
 
+[features]
+default = ["rustls-tls-native-roots"]
+rustls-tls = ["reqwest/rustls-tls"]
+rustls-tls-native-roots = ["reqwest/rustls-tls-native-roots"]
+
 [dependencies]
 async-trait = { workspace = true }
 chrono = { workspace = true }
