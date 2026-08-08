@@ -28,6 +28,7 @@
 pub mod metadata_table;
 pub mod table_provider_factory;
 
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -41,9 +42,12 @@ use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use iceberg::arrow::schema_to_arrow_schema;
+use datafusion::scalar::ScalarValue;
+use iceberg::arrow::{UTC_TIME_ZONE, schema_to_arrow_schema};
 use iceberg::inspect::MetadataTableType;
-use iceberg::spec::TableProperties;
+use iceberg::spec::{
+    Literal, PrimitiveLiteral, PrimitiveType, Schema as IcebergSchema, TableProperties, Type,
+};
 use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
@@ -72,6 +76,10 @@ pub struct IcebergTableProvider {
     table_ident: TableIdent,
     /// A reference-counted arrow `Schema` (cached at construction)
     schema: ArrowSchemaRef,
+    /// Column default expressions derived from the schema's `write-default` values
+    /// (cached at construction). Consulted by DataFusion's insert planner for
+    /// columns omitted from an `INSERT`.
+    column_defaults: HashMap<String, Expr>,
 }
 
 impl IcebergTableProvider {
@@ -88,12 +96,15 @@ impl IcebergTableProvider {
 
         // Load table once to get initial schema
         let table = catalog.load_table(&table_ident).await?;
-        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
+        let iceberg_schema = table.metadata().current_schema();
+        let schema = Arc::new(schema_to_arrow_schema(iceberg_schema)?);
+        let column_defaults = column_defaults_from_schema(iceberg_schema);
 
         Ok(IcebergTableProvider {
             catalog,
             table_ident,
             schema,
+            column_defaults,
         })
     }
 
@@ -148,6 +159,10 @@ impl TableProvider for IcebergTableProvider {
     ) -> DFResult<Vec<TableProviderFilterPushDown>> {
         // Push down all filters, as a single source of truth, the scanner will drop the filters which couldn't be push down
         Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
+    }
+
+    fn get_column_default(&self, column: &str) -> Option<&Expr> {
+        self.column_defaults.get(column)
     }
 
     async fn insert_into(
@@ -234,6 +249,77 @@ impl TableProvider for IcebergTableProvider {
             self.schema.clone(),
         )))
     }
+}
+
+/// Collects the `write-default` values of a schema's top-level columns as DataFusion
+/// expressions, keyed by column name.
+///
+/// Per the spec, writers must use `write-default` for columns that are not supplied;
+/// DataFusion's insert planner consults these defaults for columns omitted from an
+/// `INSERT` and falls back to `NULL` otherwise. Defaults of types that cannot be
+/// expressed as a DataFusion scalar are skipped.
+fn column_defaults_from_schema(schema: &IcebergSchema) -> HashMap<String, Expr> {
+    schema
+        .as_struct()
+        .fields()
+        .iter()
+        .filter_map(|field| {
+            let literal = field.write_default.as_ref()?;
+            let scalar = literal_to_scalar_value(&field.field_type, literal)?;
+            Some((field.name.clone(), Expr::Literal(scalar, None)))
+        })
+        .collect()
+}
+
+/// Converts an Iceberg literal of the given type into a DataFusion [`ScalarValue`].
+///
+/// Returns `None` for combinations that have no scalar representation; the insert
+/// planner casts the resulting expression to the target arrow type, so minor
+/// representation differences (e.g. timezone strings) are reconciled downstream.
+fn literal_to_scalar_value(field_type: &Type, literal: &Literal) -> Option<ScalarValue> {
+    let Type::Primitive(primitive_type) = field_type else {
+        return None;
+    };
+    let Literal::Primitive(primitive) = literal else {
+        return None;
+    };
+    Some(match (primitive_type, primitive) {
+        (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(v)) => ScalarValue::Boolean(Some(*v)),
+        (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => ScalarValue::Int32(Some(*v)),
+        (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => ScalarValue::Int64(Some(*v)),
+        (PrimitiveType::Float, PrimitiveLiteral::Float(v)) => ScalarValue::Float32(Some(v.0)),
+        (PrimitiveType::Double, PrimitiveLiteral::Double(v)) => ScalarValue::Float64(Some(v.0)),
+        (PrimitiveType::String, PrimitiveLiteral::String(v)) => ScalarValue::Utf8(Some(v.clone())),
+        (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => ScalarValue::Date32(Some(*v)),
+        (PrimitiveType::Time, PrimitiveLiteral::Long(v)) => {
+            ScalarValue::Time64Microsecond(Some(*v))
+        }
+        (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
+            ScalarValue::TimestampMicrosecond(Some(*v), None)
+        }
+        (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
+            ScalarValue::TimestampMicrosecond(Some(*v), Some(UTC_TIME_ZONE.into()))
+        }
+        (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
+            ScalarValue::TimestampNanosecond(Some(*v), None)
+        }
+        (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
+            ScalarValue::TimestampNanosecond(Some(*v), Some(UTC_TIME_ZONE.into()))
+        }
+        (PrimitiveType::Decimal { precision, scale }, PrimitiveLiteral::Int128(v)) => {
+            ScalarValue::Decimal128(Some(*v), *precision as u8, *scale as i8)
+        }
+        (PrimitiveType::Binary, PrimitiveLiteral::Binary(v)) => {
+            ScalarValue::Binary(Some(v.clone()))
+        }
+        (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(v)) => {
+            ScalarValue::FixedSizeBinary(v.len() as i32, Some(v.clone()))
+        }
+        (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(v)) => {
+            ScalarValue::FixedSizeBinary(16, Some(v.to_be_bytes().to_vec()))
+        }
+        _ => return None,
+    })
 }
 
 /// Static table provider for read-only snapshot access.
@@ -586,6 +672,148 @@ mod tests {
 
         // The execution should succeed
         assert!(execution_result.is_ok());
+    }
+
+    async fn get_test_catalog_and_table_with_write_defaults()
+    -> (Arc<dyn Catalog>, NamespaceIdent, String, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let warehouse_path = temp_dir.path().to_str().unwrap().to_string();
+
+        let catalog = MemoryCatalogBuilder::default()
+            .load(
+                "memory",
+                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse_path.clone())]),
+            )
+            .await
+            .unwrap();
+
+        let namespace = NamespaceIdent::new("test_ns".to_string());
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "category", Type::Primitive(PrimitiveType::String))
+                    .with_write_default(Literal::string("general"))
+                    .into(),
+                NestedField::optional(3, "score", Type::Primitive(PrimitiveType::Long))
+                    .with_write_default(Literal::long(100))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let table_creation = TableCreation::builder()
+            .name("test_table".to_string())
+            .location(format!("{warehouse_path}/test_table"))
+            .schema(schema)
+            .properties(HashMap::new())
+            .build();
+
+        catalog
+            .create_table(&namespace, table_creation)
+            .await
+            .unwrap();
+
+        (
+            Arc::new(catalog),
+            namespace,
+            "test_table".to_string(),
+            temp_dir,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_insert_fills_write_default_for_omitted_columns() {
+        let (catalog, namespace, table_name, _temp_dir) =
+            get_test_catalog_and_table_with_write_defaults().await;
+
+        let provider =
+            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+                .await
+                .unwrap();
+
+        let ctx = SessionContext::new();
+        ctx.register_table("test_table", Arc::new(provider))
+            .unwrap();
+
+        // Omitted columns must be filled with their write-default, not NULL
+        ctx.sql("INSERT INTO test_table (id) VALUES (1)")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        // Explicitly provided values must win over the defaults
+        ctx.sql("INSERT INTO test_table (id, category, score) VALUES (2, 'custom', 7)")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let batches = ctx
+            .sql("SELECT id, category, score FROM test_table ORDER BY id")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        datafusion::assert_batches_eq!(
+            [
+                "+----+----------+-------+",
+                "| id | category | score |",
+                "+----+----------+-------+",
+                "| 1  | general  | 100   |",
+                "| 2  | custom   | 7     |",
+                "+----+----------+-------+",
+            ],
+            &batches
+        );
+    }
+
+    #[test]
+    fn test_literal_to_scalar_value() {
+        assert_eq!(
+            literal_to_scalar_value(
+                &Type::Primitive(PrimitiveType::String),
+                &Literal::string("abc")
+            ),
+            Some(ScalarValue::Utf8(Some("abc".to_string())))
+        );
+        assert_eq!(
+            literal_to_scalar_value(&Type::Primitive(PrimitiveType::Int), &Literal::int(42)),
+            Some(ScalarValue::Int32(Some(42)))
+        );
+        assert_eq!(
+            literal_to_scalar_value(&Type::Primitive(PrimitiveType::Long), &Literal::long(42)),
+            Some(ScalarValue::Int64(Some(42)))
+        );
+        assert_eq!(
+            literal_to_scalar_value(
+                &Type::Primitive(PrimitiveType::Boolean),
+                &Literal::bool(true)
+            ),
+            Some(ScalarValue::Boolean(Some(true)))
+        );
+        assert_eq!(
+            literal_to_scalar_value(
+                &Type::Primitive(PrimitiveType::Double),
+                &Literal::double(1.5)
+            ),
+            Some(ScalarValue::Float64(Some(1.5)))
+        );
+        // a type/literal mismatch has no scalar representation
+        assert_eq!(
+            literal_to_scalar_value(&Type::Primitive(PrimitiveType::Int), &Literal::string("x")),
+            None
+        );
     }
 
     #[tokio::test]
