@@ -294,6 +294,18 @@ pub struct CommitTableRequest {
     pub updates: Vec<TableUpdate>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+/// Request to commit updates to multiple tables in an atomic operation.
+///
+/// Sent to `POST /v1/{prefix}/transactions/commit`. Each entry carries one
+/// table's requirements and updates; the catalog must apply all of the
+/// changes or none of them. Every entry's `identifier` must be present.
+pub struct CommitTransactionRequest {
+    /// Per-table changes to apply atomically.
+    pub table_changes: Vec<CommitTableRequest>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 /// Response returned when a table is successfully updated.
