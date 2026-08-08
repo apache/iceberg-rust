@@ -1013,37 +1013,11 @@ impl FromStr for Transform {
             "void" => Transform::Void,
             "unknown" => Transform::Unknown,
             v if v.starts_with("bucket") => {
-                let length = v
-                    .strip_prefix("bucket")
-                    .expect("transform must starts with `bucket`")
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .parse()
-                    .map_err(|err| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("transform bucket type {v:?} is invalid"),
-                        )
-                        .with_source(err)
-                    })?;
-
+                let length = parse_parameterized_transform(v, "bucket")?;
                 Transform::Bucket(length)
             }
             v if v.starts_with("truncate") => {
-                let width = v
-                    .strip_prefix("truncate")
-                    .expect("transform must starts with `truncate`")
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .parse()
-                    .map_err(|err| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("transform truncate type {v:?} is invalid"),
-                        )
-                        .with_source(err)
-                    })?;
-
+                let width = parse_parameterized_transform(v, "truncate")?;
                 Transform::Truncate(width)
             }
             v => {
@@ -1056,6 +1030,38 @@ impl FromStr for Transform {
 
         Ok(t)
     }
+}
+
+fn parse_parameterized_transform(value: &str, transform: &str) -> Result<u32> {
+    let parameter = value
+        .strip_prefix(transform)
+        .and_then(|v| v.strip_prefix('['))
+        .and_then(|v| v.strip_suffix(']'))
+        .ok_or_else(|| invalid_parameterized_transform(value, transform))?;
+
+    if parameter.is_empty() || !parameter.chars().all(|c| c.is_ascii_digit()) {
+        return Err(invalid_parameterized_transform(value, transform));
+    }
+
+    let parsed = parameter
+        .parse::<u32>()
+        .map_err(|err| invalid_parameterized_transform(value, transform).with_source(err))?;
+
+    if parsed == 0 {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("transform {transform} type {value:?} must be greater than 0"),
+        ));
+    }
+
+    Ok(parsed)
+}
+
+fn invalid_parameterized_transform(value: &str, transform: &str) -> Error {
+    Error::new(
+        ErrorKind::DataInvalid,
+        format!("transform {transform} type {value:?} is invalid"),
+    )
 }
 
 impl Serialize for Transform {
@@ -1088,6 +1094,49 @@ mod tests {
     fn check_boundary(op: PredicateOperator, input: Datum, expected: Datum) {
         let result = Transform::adjust_boundary(&op, &input).unwrap().unwrap();
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_should_parse_parameterized_transform_if_syntax_is_valid() {
+        assert_eq!(
+            "bucket[16]".parse::<Transform>().unwrap(),
+            Transform::Bucket(16)
+        );
+        assert_eq!(
+            "truncate[4]".parse::<Transform>().unwrap(),
+            Transform::Truncate(4)
+        );
+    }
+
+    #[test]
+    fn test_should_reject_parameterized_transform_if_value_is_zero() {
+        assert!("bucket[0]".parse::<Transform>().is_err());
+        assert!("truncate[0]".parse::<Transform>().is_err());
+    }
+
+    #[test]
+    fn test_should_reject_parameterized_transform_if_syntax_is_malformed() {
+        for transform in [
+            "bucket10",
+            "bucket[]",
+            "bucket[+1]",
+            "bucket[10",
+            "bucket10]",
+            "bucket[[10]]",
+            "bucket[10]extra",
+            "truncate10",
+            "truncate[]",
+            "truncate[+1]",
+            "truncate[10",
+            "truncate10]",
+            "truncate[[10]]",
+            "truncate[10]extra",
+        ] {
+            assert!(
+                transform.parse::<Transform>().is_err(),
+                "transform {transform:?} should be rejected"
+            );
+        }
     }
 
     #[test]
