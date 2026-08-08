@@ -109,7 +109,7 @@ services:
   # =============================================================================
   hive-metastore:
     build:
-      context: ./hms
+      context: ./containers/hms
       dockerfile: Dockerfile
     platform: ${DOCKER_DEFAULT_PLATFORM:-linux/amd64}
     depends_on:
@@ -163,7 +163,7 @@ services:
   # =============================================================================
   spark-iceberg:
     build:
-      context: ./spark
+      context: ./containers/spark
       dockerfile: Dockerfile
     networks:
       iceberg_test:
@@ -188,15 +188,15 @@ services:
 
   # Provision service - creates test data via Spark
   provision:
-    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    build:
+      context: ./containers/provision
+      dockerfile: Dockerfile
     networks:
       iceberg_test:
     depends_on:
       spark-iceberg:
         condition: service_healthy
-    entrypoint: ["/bin/sh", "-c", "uv run /opt/spark/provision.py && touch /tmp/provision_complete && tail -f /dev/null"]
     volumes:
-      - ./spark/provision.py:/opt/spark/provision.py:ro
       - uv-cache:/root/.cache/uv
     healthcheck:
       test: ["CMD-SHELL", "[ -f /tmp/provision_complete ]"]
