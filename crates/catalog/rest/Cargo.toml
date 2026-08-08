@@ -49,7 +49,7 @@ bytes = { workspace = true }
 futures = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
-# `stream` lets tests build a streaming body to exercise AuthRequestBody::Streaming.
+# `stream` lets tests build a streaming body to exercise HttpRequestBody::Streaming.
 reqwest = { workspace = true, features = ["stream"] }
 tokio = { workspace = true }
 
