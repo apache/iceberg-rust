@@ -289,6 +289,10 @@ impl Storage for OpenDalResolvingStorage {
         self.resolve(path)?.delete_prefix(path).await
     }
 
+    async fn list_prefix(&self, path: &str) -> Result<Vec<iceberg::io::ListEntry>> {
+        self.resolve(path)?.list_prefix(path).await
+    }
+
     async fn delete_stream(&self, mut paths: BoxStream<'static, String>) -> Result<()> {
         // Group paths by canonical scheme so each resolved storage receives a batch,
         // avoiding repeated operator creation per path.
