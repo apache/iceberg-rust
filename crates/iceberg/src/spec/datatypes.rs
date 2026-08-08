@@ -407,7 +407,7 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::TimestamptzNs => write!(f, "timestamptz_ns"),
             PrimitiveType::String => write!(f, "string"),
             PrimitiveType::Uuid => write!(f, "uuid"),
-            PrimitiveType::Fixed(size) => write!(f, "fixed({size})"),
+            PrimitiveType::Fixed(size) => write!(f, "fixed[{size}]"),
             PrimitiveType::Binary => write!(f, "binary"),
         }
     }
@@ -1308,6 +1308,65 @@ mod tests {
 
         assert_eq!(5, Type::decimal_required_bytes(10).unwrap());
         assert_eq!(16, Type::decimal_required_bytes(38).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_type_display() {
+        // `Display`, `Serialize`, and `Deserialize` must all agree on the
+        // canonical Iceberg type string (matching iceberg-go / iceberg-java).
+        // `fixed` uses square brackets — `fixed[N]`, not `fixed(N)` — and both
+        // `Display` and the custom `Serialize` impl embed that format string
+        // independently, so this test pins all three directions to catch drift.
+        let cases = [
+            (PrimitiveType::Boolean, "boolean"),
+            (PrimitiveType::Int, "int"),
+            (PrimitiveType::Long, "long"),
+            (PrimitiveType::Float, "float"),
+            (PrimitiveType::Double, "double"),
+            (
+                PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                },
+                "decimal(9, 2)",
+            ),
+            (
+                PrimitiveType::Decimal {
+                    precision: 38,
+                    scale: 0,
+                },
+                "decimal(38, 0)",
+            ),
+            (PrimitiveType::Date, "date"),
+            (PrimitiveType::Time, "time"),
+            (PrimitiveType::Timestamp, "timestamp"),
+            (PrimitiveType::Timestamptz, "timestamptz"),
+            (PrimitiveType::TimestampNs, "timestamp_ns"),
+            (PrimitiveType::TimestamptzNs, "timestamptz_ns"),
+            (PrimitiveType::String, "string"),
+            (PrimitiveType::Uuid, "uuid"),
+            (PrimitiveType::Fixed(4), "fixed[4]"),
+            (PrimitiveType::Fixed(0), "fixed[0]"),
+            (PrimitiveType::Binary, "binary"),
+        ];
+        for (ty, expected) in cases {
+            let quoted = serde_json::to_string(expected).unwrap();
+
+            // `Display` emits the canonical string.
+            assert_eq!(ty.to_string(), expected, "Display mismatch for {ty:?}");
+            // `Serialize` emits the same canonical string.
+            assert_eq!(
+                serde_json::to_string(&ty).unwrap(),
+                quoted,
+                "serialize mismatch for {ty:?}"
+            );
+            // `Deserialize` accepts it and yields the original type.
+            assert_eq!(
+                serde_json::from_str::<PrimitiveType>(&quoted).unwrap(),
+                ty,
+                "deserialize mismatch for {expected}"
+            );
+        }
     }
 
     #[test]
