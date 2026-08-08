@@ -148,8 +148,8 @@ impl PyManifestFile {
     fn partitions(&self) -> Vec<PyFieldSummary> {
         self.inner
             .partitions
-            .clone()
-            .unwrap()
+            .as_deref()
+            .unwrap_or_default()
             .iter()
             .map(|s| PyFieldSummary { inner: s.clone() })
             .collect()
@@ -237,4 +237,37 @@ pub fn register_module(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
     py.import("sys")?
         .getattr("modules")?
         .set_item("pyiceberg_core.manifest", this)
+}
+
+#[cfg(test)]
+mod tests {
+    use iceberg::spec::ManifestContentType;
+
+    use super::*;
+
+    #[test]
+    fn test_manifest_partitions_without_summaries() {
+        let manifest_file = PyManifestFile {
+            inner: ManifestFile {
+                manifest_path: "memory://manifest.avro".to_string(),
+                manifest_length: 1,
+                partition_spec_id: 0,
+                content: ManifestContentType::Data,
+                sequence_number: 0,
+                min_sequence_number: 0,
+                added_snapshot_id: 1,
+                added_files_count: Some(1),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
+                added_rows_count: Some(1),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: None,
+                key_metadata: None,
+                first_row_id: None,
+            },
+        };
+
+        assert!(manifest_file.partitions().is_empty());
+    }
 }
