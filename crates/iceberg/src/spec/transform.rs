@@ -24,7 +24,6 @@ use std::str::FromStr;
 use fnv::FnvHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::values::decimal_utils::decimal_from_i128_with_scale;
 use super::{Datum, PrimitiveLiteral};
 use crate::ErrorKind;
 use crate::error::{Error, Result};
@@ -660,8 +659,8 @@ impl Transform {
             PredicateOperator::LessThan => match (datum.data_type(), datum.literal()) {
                 (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Some(Datum::int(v - 1)),
                 (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Some(Datum::long(v - 1)),
-                (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => {
-                    Some(Datum::decimal(decimal_from_i128_with_scale(v - 1, 0))?)
+                (PrimitiveType::Decimal { precision, scale }, PrimitiveLiteral::Int128(v)) => {
+                    Some(Datum::decimal_from_mantissa(v - 1, *precision, *scale)?)
                 }
                 (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Some(Datum::date(v - 1)),
                 (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
@@ -681,8 +680,8 @@ impl Transform {
             PredicateOperator::GreaterThan => match (datum.data_type(), datum.literal()) {
                 (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Some(Datum::int(v + 1)),
                 (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Some(Datum::long(v + 1)),
-                (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => {
-                    Some(Datum::decimal(decimal_from_i128_with_scale(v + 1, 0))?)
+                (PrimitiveType::Decimal { precision, scale }, PrimitiveLiteral::Int128(v)) => {
+                    Some(Datum::decimal_from_mantissa(v + 1, *precision, *scale)?)
                 }
                 (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Some(Datum::date(v + 1)),
                 (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
@@ -825,8 +824,8 @@ impl Transform {
         match (datum.data_type(), datum.literal()) {
             (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Ok(Datum::int(v + 1)),
             (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Ok(Datum::long(v + 1)),
-            (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => {
-                Datum::decimal(decimal_from_i128_with_scale(v + 1, 0))
+            (PrimitiveType::Decimal { precision, scale }, PrimitiveLiteral::Int128(v)) => {
+                Datum::decimal_from_mantissa(v + 1, *precision, *scale)
             }
             (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Ok(Datum::date(v + 1)),
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
@@ -863,8 +862,8 @@ impl Transform {
         match (datum.data_type(), datum.literal()) {
             (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Ok(Datum::int(v - 1)),
             (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Ok(Datum::long(v - 1)),
-            (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => {
-                Datum::decimal(decimal_from_i128_with_scale(v - 1, 0))
+            (PrimitiveType::Decimal { precision, scale }, PrimitiveLiteral::Int128(v)) => {
+                Datum::decimal_from_mantissa(v - 1, *precision, *scale)
             }
             (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Ok(Datum::date(v - 1)),
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
@@ -1118,5 +1117,21 @@ mod tests {
             );
             check_boundary(PredicateOperator::GreaterThanOrEq, datum.clone(), datum);
         }
+    }
+
+    #[test]
+    fn test_adjust_boundary_preserves_decimal_type() {
+        let datum = Datum::decimal_from_mantissa(10_000, 9, 2).unwrap();
+
+        check_boundary(
+            PredicateOperator::LessThan,
+            datum.clone(),
+            Datum::decimal_from_mantissa(9_999, 9, 2).unwrap(),
+        );
+        check_boundary(
+            PredicateOperator::GreaterThan,
+            datum,
+            Datum::decimal_from_mantissa(10_001, 9, 2).unwrap(),
+        );
     }
 }
