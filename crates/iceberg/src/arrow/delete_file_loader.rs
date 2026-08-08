@@ -237,6 +237,9 @@ mod tests {
             partition_spec_id: 0,
             equality_ids: None,
             key_metadata: Some(Box::from(key_metadata.as_ref())),
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         };
 
         let scan_metrics = ScanMetrics::new();
@@ -311,6 +314,9 @@ mod tests {
             partition_spec_id: 0,
             equality_ids: Some(vec![1]),
             key_metadata: Some(Box::from(key_metadata.as_ref())),
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         };
 
         let scan_metrics = ScanMetrics::new();
