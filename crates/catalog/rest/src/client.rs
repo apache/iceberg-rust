@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 
 use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
@@ -25,7 +24,7 @@ use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
 
 use crate::RestCatalogConfig;
-use crate::auth::{AuthManager, AuthRequest, AuthSession};
+use crate::auth::{AuthSession, HttpRequest};
 
 pub(crate) struct HttpClient {
     client: Client,
@@ -34,10 +33,6 @@ pub(crate) struct HttpClient {
     extra_headers: HeaderMap,
     /// Whether to disable header redaction in error logs (defaults to false for security).
     disable_header_redaction: bool,
-    /// The auth manager living for the lifetime of the catalog.
-    auth_manager: Arc<dyn AuthManager>,
-    /// The session authenticating requests in the current phase.
-    session: Arc<dyn AuthSession>,
 }
 
 impl Debug for HttpClient {
@@ -56,15 +51,11 @@ impl Debug for HttpClient {
 
 impl HttpClient {
     /// Create a new http client.
-    pub async fn new(cfg: &RestCatalogConfig) -> Result<Self> {
-        let auth_manager = cfg.resolve_auth_manager()?;
-        let session = Arc::from(auth_manager.init_session().await?);
+    pub fn new(cfg: &RestCatalogConfig) -> Result<Self> {
         Ok(HttpClient {
             client: cfg.client(),
             extra_headers: cfg.extra_headers()?,
             disable_header_redaction: cfg.disable_header_redaction(),
-            auth_manager,
-            session,
         })
     }
 
@@ -72,56 +63,32 @@ impl HttpClient {
     ///
     /// If cfg carries new value, we will use cfg instead.
     /// Otherwise, we will keep the old value.
-    ///
-    /// The auth manager is kept; it derives a new session from the merged
-    /// properties (carrying over state such as a cached token).
-    pub async fn update_with(self, cfg: &RestCatalogConfig) -> Result<Self> {
-        let HttpClient {
-            // `cfg.client()` below returns this same shared client.
-            client: _,
-            extra_headers: current_headers,
-            disable_header_redaction: _,
-            auth_manager,
-            session: init_session,
-        } = self;
-        // Release the init session first, so a manager whose init session
-        // guards a one-shot resource can build its catalog session.
-        drop(init_session);
-
+    pub fn update_with(self, cfg: &RestCatalogConfig) -> Result<Self> {
         let extra_headers = (!cfg.extra_headers()?.is_empty())
             .then(|| cfg.extra_headers())
             .transpose()?
-            .unwrap_or(current_headers);
-        let session = auth_manager.catalog_session(&cfg.auth_props()).await?;
+            .unwrap_or(self.extra_headers);
         Ok(HttpClient {
+            // `cfg.client()` returns the same shared client.
             client: cfg.client(),
             extra_headers,
             disable_header_redaction: cfg.disable_header_redaction(),
-            auth_manager,
-            session,
         })
     }
 
-    /// The session authenticating requests in the current phase.
-    #[cfg(test)]
-    pub(crate) fn session(&self) -> &Arc<dyn AuthSession> {
-        &self.session
-    }
-
-    /// Testing only: the bearer token the current session would attach.
+    /// Testing only: the bearer token `session` would attach.
     ///
     /// Authenticates a throwaway request (never sent) and reads the header
-    /// back, so it works for any [`AuthSession`] without a test-only trait
-    /// method.
+    /// back, so it works for any [`AuthSession`].
     #[cfg(test)]
-    pub(crate) async fn token(&self) -> Option<String> {
+    pub(crate) async fn token(&self, session: &dyn AuthSession) -> Option<String> {
         let mut request = self
             .client
             .request(Method::GET, "http://localhost/token-probe")
             .build()
             .ok()?;
-        self.session
-            .authenticate(&mut AuthRequest::new(&mut request))
+        session
+            .authenticate(&mut HttpRequest::new(&mut request))
             .await
             .ok()?;
         request
@@ -142,11 +109,15 @@ impl HttpClient {
 
     // Queries the Iceberg REST catalog after authentication with the given `Request` and
     // returns a `Response`.
-    pub async fn query_catalog(&self, mut request: Request) -> Result<Response> {
+    pub async fn query_catalog(
+        &self,
+        mut request: Request,
+        session: &dyn AuthSession,
+    ) -> Result<Response> {
         // Authenticate first, then apply extra headers, so a configured
         // `header.authorization` keeps overriding a token (unchanged behavior).
-        self.session
-            .authenticate(&mut AuthRequest::new(&mut request))
+        session
+            .authenticate(&mut HttpRequest::new(&mut request))
             .await?;
         request.headers_mut().extend(self.extra_headers.clone());
         Ok(self.client.execute(request).await?)
@@ -288,7 +259,7 @@ mod tests {
                 ),
             ]))
             .build();
-        let client = HttpClient::new(&config).await.unwrap();
+        let client = HttpClient::new(&config).unwrap();
 
         let out = format!("{client:?}");
         assert!(!out.contains("Basic xyz"));

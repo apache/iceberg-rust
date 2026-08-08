@@ -28,7 +28,7 @@ use async_trait::async_trait;
 use http::{HeaderMap, Method};
 use iceberg::Result;
 pub use oauth2::OAuth2Manager;
-use reqwest::Request;
+use reqwest::{Client, Request};
 
 /// `rest.auth.type` value disabling authentication.
 pub const AUTH_TYPE_NONE: &str = "none";
@@ -38,16 +38,24 @@ pub const AUTH_TYPE_OAUTH2: &str = "oauth2";
 /// Creates the [`AuthSession`]s used to authenticate REST catalog requests.
 ///
 /// A manager is created once per catalog, either from the `rest.auth.type`
-/// property or injected through `RestCatalogBuilder::with_auth_manager`, and
-/// lives for the lifetime of the catalog.
+/// property or injected through `RestCatalogBuilder::with_auth_manager`. It
+/// builds the sessions the catalog then keeps.
+///
+/// Both methods are handed the catalog's HTTP client, which an implementation
+/// may reuse for its own requests (e.g. a token exchange) so that they share
+/// the catalog's connection pool.
 #[async_trait]
 pub trait AuthManager: Debug + Send + Sync {
-    /// Session used for the initial `/v1/config` handshake, built from the
-    /// user-supplied configuration.
+    /// Session used for the initial `/v1/config` handshake, given the
+    /// user-supplied properties.
     ///
     /// Returns a [`Box`]: an init session is used once and released, unlike
     /// the shared [`AuthManager::catalog_session`].
-    async fn init_session(&self) -> Result<Box<dyn AuthSession>>;
+    async fn init_session(
+        &self,
+        client: &Client,
+        props: &HashMap<String, String>,
+    ) -> Result<Box<dyn AuthSession>>;
 
     /// Session used for all subsequent catalog requests, given the properties
     /// merged from the user configuration and the server's config response.
@@ -57,20 +65,21 @@ pub trait AuthManager: Debug + Send + Sync {
     /// (e.g. a cached token) over from the init session.
     async fn catalog_session(
         &self,
+        client: &Client,
         props: &HashMap<String, String>,
     ) -> Result<Arc<dyn AuthSession>>;
 }
 
 /// An outgoing REST request being authenticated by an [`AuthSession`].
 ///
-/// Wraps the request so authentication implementations depend only on the
-/// stable `http` crate and standard types, not on the concrete HTTP client the
-/// REST catalog uses internally.
-pub struct AuthRequest<'a> {
+/// Wraps the request so an [`AuthSession`] mutates it through the stable
+/// `http` crate types rather than the concrete request type the REST catalog
+/// uses internally.
+pub struct HttpRequest<'a> {
     inner: &'a mut Request,
 }
 
-impl<'a> AuthRequest<'a> {
+impl<'a> HttpRequest<'a> {
     /// Wraps a request, e.g. to unit-test a custom [`AuthSession`].
     pub fn new(inner: &'a mut Request) -> Self {
         Self { inner }
@@ -97,22 +106,22 @@ impl<'a> AuthRequest<'a> {
     }
 
     /// The request body, distinguishing an absent body from a streaming one:
-    /// signers can sign [`AuthRequestBody::Empty`] (empty-payload hash) and
-    /// [`AuthRequestBody::Buffered`], but not [`AuthRequestBody::Streaming`].
-    pub fn body(&self) -> AuthRequestBody<'_> {
+    /// signers can sign [`HttpRequestBody::Empty`] (empty-payload hash) and
+    /// [`HttpRequestBody::Buffered`], but not [`HttpRequestBody::Streaming`].
+    pub fn body(&self) -> HttpRequestBody<'_> {
         match self.inner.body() {
-            None => AuthRequestBody::Empty,
+            None => HttpRequestBody::Empty,
             Some(body) => match body.as_bytes() {
-                Some(bytes) => AuthRequestBody::Buffered(bytes),
-                None => AuthRequestBody::Streaming,
+                Some(bytes) => HttpRequestBody::Buffered(bytes),
+                None => HttpRequestBody::Streaming,
             },
         }
     }
 }
 
-/// The body of an [`AuthRequest`], as seen by authentication.
+/// The body of an [`HttpRequest`], as seen by authentication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuthRequestBody<'a> {
+pub enum HttpRequestBody<'a> {
     /// No body is set.
     Empty,
     /// An in-memory body.
@@ -121,14 +130,14 @@ pub enum AuthRequestBody<'a> {
     Streaming,
 }
 
-impl<'a> AuthRequestBody<'a> {
+impl<'a> HttpRequestBody<'a> {
     /// The signable bytes: empty for [`Self::Empty`], the buffer for
     /// [`Self::Buffered`], and `None` for [`Self::Streaming`].
     pub fn as_bytes(&self) -> Option<&'a [u8]> {
         match self {
-            AuthRequestBody::Empty => Some(&[]),
-            AuthRequestBody::Buffered(bytes) => Some(bytes),
-            AuthRequestBody::Streaming => None,
+            HttpRequestBody::Empty => Some(&[]),
+            HttpRequestBody::Buffered(bytes) => Some(bytes),
+            HttpRequestBody::Streaming => None,
         }
     }
 }
@@ -137,7 +146,7 @@ impl<'a> AuthRequestBody<'a> {
 #[async_trait]
 pub trait AuthSession: Debug + Send + Sync {
     /// Applies authentication to the request (adds headers, signs, ...).
-    async fn authenticate(&self, request: &mut AuthRequest<'_>) -> Result<()>;
+    async fn authenticate(&self, request: &mut HttpRequest<'_>) -> Result<()>;
 }
 
 /// [`AuthManager`] that performs no authentication.
@@ -150,12 +159,17 @@ struct NoopSession;
 
 #[async_trait]
 impl AuthManager for NoopAuthManager {
-    async fn init_session(&self) -> Result<Box<dyn AuthSession>> {
+    async fn init_session(
+        &self,
+        _client: &Client,
+        _props: &HashMap<String, String>,
+    ) -> Result<Box<dyn AuthSession>> {
         Ok(Box::new(NoopSession))
     }
 
     async fn catalog_session(
         &self,
+        _client: &Client,
         _props: &HashMap<String, String>,
     ) -> Result<Arc<dyn AuthSession>> {
         Ok(Arc::new(NoopSession))
@@ -164,29 +178,30 @@ impl AuthManager for NoopAuthManager {
 
 #[async_trait]
 impl AuthSession for NoopSession {
-    async fn authenticate(&self, _request: &mut AuthRequest<'_>) -> Result<()> {
+    async fn authenticate(&self, _request: &mut HttpRequest<'_>) -> Result<()> {
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use reqwest::Client;
-
     use super::*;
 
     #[tokio::test]
     async fn test_static_token_session_attaches_token() {
         // Token-only config: the token is attached as-is.
         let manager = OAuth2Manager::new("http://localhost/unused").with_token("tok-static");
-        let session = manager.init_session().await.unwrap();
+        let session = manager
+            .init_session(&Client::new(), &HashMap::new())
+            .await
+            .unwrap();
 
         let mut req = Client::new()
             .get("https://rest.example.com/v1/config")
             .build()
             .unwrap();
         session
-            .authenticate(&mut AuthRequest::new(&mut req))
+            .authenticate(&mut HttpRequest::new(&mut req))
             .await
             .unwrap();
         assert_eq!(
@@ -204,9 +219,9 @@ mod tests {
             .get("https://rest.example.com/v1/config")
             .build()
             .unwrap();
-        let auth_req = AuthRequest::new(&mut req);
+        let auth_req = HttpRequest::new(&mut req);
         let body = auth_req.body();
-        assert_eq!(body, AuthRequestBody::Empty);
+        assert_eq!(body, HttpRequestBody::Empty);
         assert_eq!(body.as_bytes(), Some(&[] as &[u8]));
 
         // An in-memory body.
@@ -215,9 +230,9 @@ mod tests {
             .body("{}")
             .build()
             .unwrap();
-        let auth_req = AuthRequest::new(&mut req);
+        let auth_req = HttpRequest::new(&mut req);
         let body = auth_req.body();
-        assert_eq!(body, AuthRequestBody::Buffered(b"{}"));
+        assert_eq!(body, HttpRequestBody::Buffered(b"{}"));
         assert_eq!(body.as_bytes(), Some(b"{}" as &[u8]));
 
         // A streaming body: bytes are unavailable, so it must not sign as empty.
@@ -228,9 +243,9 @@ mod tests {
             })))
             .build()
             .unwrap();
-        let auth_req = AuthRequest::new(&mut req);
+        let auth_req = HttpRequest::new(&mut req);
         let body = auth_req.body();
-        assert_eq!(body, AuthRequestBody::Streaming);
+        assert_eq!(body, HttpRequestBody::Streaming);
         assert_eq!(body.as_bytes(), None);
     }
 }

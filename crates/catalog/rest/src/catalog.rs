@@ -18,6 +18,7 @@
 //! This module contains the iceberg REST catalog implementation.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
@@ -34,11 +35,13 @@ use itertools::Itertools;
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, {self},
 };
-use reqwest::{Client, Method, StatusCode, Url};
+use reqwest::{Client, Method, Request, Response, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
-use crate::auth::{AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, AuthManager, NoopAuthManager, OAuth2Manager};
+use crate::auth::{
+    AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, AuthManager, AuthSession, NoopAuthManager, OAuth2Manager,
+};
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
@@ -218,8 +221,8 @@ fn is_sensitive_prop(key: &str) -> bool {
 
 /// Redacts secret property values: this config is printed by
 /// [`RestCatalog`]'s derived `Debug`.
-impl std::fmt::Debug for RestCatalogConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for RestCatalogConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let props: HashMap<&str, &str> = self
             .props
             .iter()
@@ -326,14 +329,22 @@ impl RestCatalogConfig {
         oauth_params_from_props(&self.props)
     }
 
-    /// The properties handed to [`AuthManager::catalog_session`], with the
-    /// resolved catalog `uri` made explicit.
+    /// The properties handed to the [`AuthManager`], with the catalog `uri`
+    /// and `warehouse` made explicit.
     pub(crate) fn auth_props(&self) -> HashMap<String, String> {
         // `oauth2-server-uri` stays absent unless explicitly configured, so an
-        // injected manager keeps its own endpoint. The resolved `uri` IS passed
-        // so the built-in manager can recompute its default from it.
+        // injected manager keeps its own endpoint. The resolved `uri` and
+        // `warehouse` ARE passed: the builder moved them off the props, and
+        // the built-in manager recomputes its token endpoint from the URI.
         let mut props = self.props.clone();
         props.insert(REST_CATALOG_PROP_URI.to_string(), self.uri.clone());
+        if let Some(warehouse) = &self.warehouse {
+            // A fallback only: after the handshake the merged props hold
+            // the resolved warehouse, server override included.
+            props
+                .entry(REST_CATALOG_PROP_WAREHOUSE.to_string())
+                .or_insert_with(|| warehouse.clone());
+        }
         props
     }
 
@@ -348,14 +359,16 @@ impl RestCatalogConfig {
             .unwrap_or(false)
     }
 
-    /// The configured auth scheme: explicit `rest.auth.type` when set;
+    /// The configured auth scheme: explicit `rest.auth.type` (matched
+    /// case-insensitively) when set;
     /// otherwise `oauth2` when a `token`, `credential` or `oauth2-server-uri`
     /// is configured (preserving pre-`rest.auth.type` setups), `none` when
     /// none is.
     fn auth_type(&self) -> String {
         self.props
             .get(REST_CATALOG_PROP_AUTH_TYPE)
-            .cloned()
+            // Matched case-insensitively, as the other flag properties are.
+            .map(|auth_type| auth_type.to_ascii_lowercase())
             .unwrap_or_else(|| {
                 if self.token().is_some()
                     || self.credential().is_some()
@@ -518,15 +531,43 @@ pub(crate) fn oauth_params_from_props(props: &HashMap<String, String>) -> HashMa
     params
 }
 
-#[derive(Debug)]
 struct RestContext {
     client: HttpClient,
+    /// The session the catalog's auth manager derived from the merged
+    /// configuration; it authenticates every request below.
+    session: Arc<dyn AuthSession>,
     /// Runtime config is fetched from rest server and stored here.
     ///
     /// It's could be different from the user config.
     config: RestCatalogConfig,
     /// Capabilities the server advertises (see [`RestCatalog::supports_endpoint`]).
     endpoints: HashSet<Endpoint>,
+}
+
+impl Debug for RestContext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // The session is omitted: a custom one may print its credentials.
+        f.debug_struct("RestContext")
+            .field("client", &self.client)
+            .field("config", &self.config)
+            .field("endpoints", &self.endpoints)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RestContext {
+    /// Testing only: the bearer token the catalog session would attach.
+    #[cfg(test)]
+    async fn token(&self) -> Option<String> {
+        self.client.token(self.session.as_ref()).await
+    }
+
+    /// Sends `request` authenticated by the catalog session.
+    async fn query_catalog(&self, request: Request) -> Result<Response> {
+        self.client
+            .query_catalog(request, self.session.as_ref())
+            .await
+    }
 }
 
 /// Rest catalog implementation.
@@ -574,7 +615,7 @@ impl RestCatalog {
         }
 
         let request = request_builder.build()?;
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = context.query_catalog(request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
@@ -594,8 +635,18 @@ impl RestCatalog {
     async fn context(&self) -> Result<&RestContext> {
         self.ctx
             .get_or_try_init(|| async {
-                let client = HttpClient::new(&self.user_config).await?;
-                let catalog_config = RestCatalog::load_config(&client, &self.user_config).await?;
+                let client = HttpClient::new(&self.user_config)?;
+                let auth_manager = self.user_config.resolve_auth_manager()?;
+                // The init session lives only for the config handshake, so a
+                // manager whose session guards a one-shot resource can release
+                // it before deriving the catalog session.
+                let catalog_config = {
+                    let init_session = auth_manager
+                        .init_session(&self.user_config.client(), &self.user_config.auth_props())
+                        .await?;
+                    RestCatalog::load_config(&client, init_session.as_ref(), &self.user_config)
+                        .await?
+                };
                 // Use the advertised endpoints as-is, falling back to
                 // `DEFAULT_ENDPOINTS` when absent or empty.
                 let endpoints = match &catalog_config.endpoints {
@@ -605,11 +656,15 @@ impl RestCatalog {
                     _ => crate::endpoint::DEFAULT_ENDPOINTS.clone(),
                 };
                 let config = self.user_config.clone().merge_with_config(catalog_config);
-                let client = client.update_with(&config).await?;
+                let client = client.update_with(&config)?;
+                let session = auth_manager
+                    .catalog_session(&config.client(), &config.auth_props())
+                    .await?;
 
                 Ok(RestContext {
                     config,
                     client,
+                    session,
                     endpoints,
                 })
             })
@@ -627,7 +682,7 @@ impl RestCatalog {
     /// `2xx` means it exists, `404` means it doesn't.
     async fn check_exists_via_head(&self, context: &RestContext, url: String) -> Result<bool> {
         let request = context.client.request(Method::HEAD, url).build()?;
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = context.query_catalog(request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
@@ -645,6 +700,7 @@ impl RestCatalog {
     /// It's required for a REST catalog to update its config after creation.
     async fn load_config(
         client: &HttpClient,
+        session: &dyn AuthSession,
         user_config: &RestCatalogConfig,
     ) -> Result<CatalogConfig> {
         let mut request_builder = client.request(Method::GET, user_config.config_endpoint());
@@ -655,7 +711,7 @@ impl RestCatalog {
 
         let request = request_builder.build()?;
 
-        let http_response = client.query_catalog(request).await?;
+        let http_response = client.query_catalog(request, session).await?;
 
         match http_response.status() {
             StatusCode::OK => deserialize_catalog_response(http_response).await,
@@ -734,7 +790,7 @@ impl Catalog for RestCatalog {
                 request = request.query(&[("pageToken", token)]);
             }
 
-            let http_response = context.client.query_catalog(request.build()?).await?;
+            let http_response = context.query_catalog(request.build()?).await?;
 
             match http_response.status() {
                 StatusCode::OK => {
@@ -784,7 +840,7 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = context.query_catalog(request).await?;
 
         match http_response.status() {
             StatusCode::OK => {
@@ -812,7 +868,7 @@ impl Catalog for RestCatalog {
             .request(Method::GET, context.config.namespace_endpoint(namespace))
             .build()?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = context.query_catalog(request).await?;
 
         match http_response.status() {
             StatusCode::OK => {
@@ -869,7 +925,7 @@ impl Catalog for RestCatalog {
             .request(Method::DELETE, context.config.namespace_endpoint(namespace))
             .build()?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = context.query_catalog(request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
@@ -898,7 +954,7 @@ impl Catalog for RestCatalog {
                 request = request.query(&[("pageToken", token)]);
             }
 
-            let http_response = context.client.query_catalog(request.build()?).await?;
+            let http_response = context.query_catalog(request.build()?).await?;
 
             match http_response.status() {
                 StatusCode::OK => {
@@ -960,7 +1016,7 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = context.query_catalog(request).await?;
 
         let response = match http_response.status() {
             StatusCode::OK => {
@@ -1031,7 +1087,7 @@ impl Catalog for RestCatalog {
             .request(Method::GET, context.config.table_endpoint(table_ident))
             .build()?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = context.query_catalog(request).await?;
 
         let response = match http_response.status() {
             StatusCode::OK | StatusCode::NOT_MODIFIED => {
@@ -1120,7 +1176,7 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = context.query_catalog(request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
@@ -1162,7 +1218,7 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = context.query_catalog(request).await?;
 
         let response: LoadTableResult = match http_response.status() {
             StatusCode::OK => {
@@ -1224,7 +1280,7 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = context.query_catalog(request).await?;
 
         let response: CommitTableResponse = match http_response.status() {
             StatusCode::OK => deserialize_catalog_response(http_response).await?,
@@ -1305,6 +1361,7 @@ mod tests {
     use uuid::uuid;
 
     use super::*;
+    use crate::auth::HttpRequest;
 
     #[tokio::test]
     async fn test_update_config() {
@@ -1528,7 +1585,7 @@ mod tests {
             None,
         );
 
-        let token = catalog.context().await.unwrap().client.token().await;
+        let token = catalog.context().await.unwrap().token().await;
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
         assert_eq!(token, Some("ey000000000000".to_string()));
@@ -1577,7 +1634,7 @@ mod tests {
             None,
         );
 
-        let token = catalog.context().await.unwrap().client.token().await;
+        let token = catalog.context().await.unwrap().token().await;
 
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
@@ -1682,7 +1739,7 @@ mod tests {
             None,
         );
 
-        let token = catalog.context().await.unwrap().client.token().await;
+        let token = catalog.context().await.unwrap().token().await;
 
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
@@ -1791,7 +1848,7 @@ mod tests {
         let session = config
             .resolve_auth_manager()
             .unwrap()
-            .init_session()
+            .init_session(&Client::new(), &HashMap::new())
             .await
             .unwrap();
         let mut req = Client::new()
@@ -1799,7 +1856,7 @@ mod tests {
             .build()
             .unwrap();
         session
-            .authenticate(&mut crate::auth::AuthRequest::new(&mut req))
+            .authenticate(&mut HttpRequest::new(&mut req))
             .await
             .unwrap();
         assert!(req.headers().get("authorization").is_none());
@@ -1875,7 +1932,7 @@ mod tests {
         bootstrap_oauth_mock.assert_async().await;
         // The catalog session's endpoint follows the overridden URI (visible
         // via the session's Debug, which prints its token endpoint).
-        let session_debug = format!("{:?}", context.client.session());
+        let session_debug = format!("{:?}", context.session);
         assert!(session_debug.contains(&format!("{}/v1/oauth/tokens", overridden.url())));
     }
 
@@ -1890,8 +1947,12 @@ mod tests {
 
         let manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()))
             .with_credential(Some("client1".to_string()), "secret1".to_string());
-        let session: Arc<dyn crate::auth::AuthSession> =
-            Arc::from(manager.init_session().await.unwrap());
+        let session: Arc<dyn AuthSession> = Arc::from(
+            manager
+                .init_session(&Client::new(), &HashMap::new())
+                .await
+                .unwrap(),
+        );
 
         let client = Client::new();
         let attempts = (0..8).map(|_| {
@@ -1903,7 +1964,7 @@ mod tests {
                     .build()
                     .unwrap();
                 session
-                    .authenticate(&mut crate::auth::AuthRequest::new(&mut req))
+                    .authenticate(&mut HttpRequest::new(&mut req))
                     .await
                     .unwrap();
                 req.headers()
@@ -1934,14 +1995,17 @@ mod tests {
         let manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()))
             .with_token("tok-seed")
             .with_credential(Some("client1".to_string()), "secret1".to_string());
-        let session = manager.init_session().await.unwrap();
+        let session = manager
+            .init_session(&Client::new(), &HashMap::new())
+            .await
+            .unwrap();
 
         let mut req = Client::new()
             .get("https://rest.example.com/v1/config")
             .build()
             .unwrap();
         session
-            .authenticate(&mut crate::auth::AuthRequest::new(&mut req))
+            .authenticate(&mut HttpRequest::new(&mut req))
             .await
             .unwrap();
         assert_eq!(
@@ -2030,22 +2094,118 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_catalog_session_receives_resolved_warehouse() {
+    async fn test_props_token_takes_precedence_over_props_credential() {
+        // Both arriving through the properties rather than the builder.
+        let mut server = Server::new_async().await;
+        let oauth_mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()));
+        let session = manager
+            .init_session(
+                &Client::new(),
+                &HashMap::from([
+                    ("token".to_string(), "tok-props".to_string()),
+                    ("credential".to_string(), "client1:secret1".to_string()),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        let mut req = Client::new()
+            .get("https://rest.example.com/v1/config")
+            .build()
+            .unwrap();
+        session
+            .authenticate(&mut HttpRequest::new(&mut req))
+            .await
+            .unwrap();
+        assert_eq!(
+            req.headers().get("authorization").unwrap(),
+            "Bearer tok-props"
+        );
+        oauth_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_manager_uses_the_catalog_client_unless_overridden() {
+        // The manager exchanges the credential over the client it is
+        // handed, sharing the catalog's pool; `with_client` overrides it.
+        let mut server = Server::new_async().await;
+        let catalog_client_mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .match_header("x-from", "catalog-client")
+            .with_status(200)
+            .with_body(r#"{"access_token": "tok", "token_type": "Bearer"}"#)
+            .create_async()
+            .await;
+
+        let tagged = |tag: &'static str| {
+            Client::builder()
+                .default_headers(HeaderMap::from_iter([(
+                    HeaderName::from_static("x-from"),
+                    HeaderValue::from_static(tag),
+                )]))
+                .build()
+                .unwrap()
+        };
+
+        let manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()))
+            .with_credential(Some("client1".to_string()), "secret1".to_string());
+        let session = manager
+            .init_session(&tagged("catalog-client"), &HashMap::new())
+            .await
+            .unwrap();
+        let mut req = Client::new()
+            .get("https://rest.example.com/v1/namespaces")
+            .build()
+            .unwrap();
+        session
+            .authenticate(&mut HttpRequest::new(&mut req))
+            .await
+            .unwrap();
+        catalog_client_mock.assert_async().await;
+
+        // An explicit client wins over the catalog's.
+        let own_client_mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .match_header("x-from", "own-client")
+            .with_status(200)
+            .with_body(r#"{"access_token": "tok", "token_type": "Bearer"}"#)
+            .create_async()
+            .await;
+        let manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()))
+            .with_credential(Some("client1".to_string()), "secret1".to_string())
+            .with_client(tagged("own-client"));
+        let session = manager
+            .init_session(&tagged("catalog-client"), &HashMap::new())
+            .await
+            .unwrap();
+        let mut req = Client::new()
+            .get("https://rest.example.com/v1/namespaces")
+            .build()
+            .unwrap();
+        session
+            .authenticate(&mut HttpRequest::new(&mut req))
+            .await
+            .unwrap();
+        own_client_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_init_session_receives_user_props() {
         use tokio::sync::Mutex as AsyncMutex;
 
-        use crate::auth::AuthSession;
-
-        // A custom manager must receive the resolved warehouse in the props
-        // handed to `catalog_session`, with the standard precedence:
-        // server default < client-side warehouse < server override.
+        // A custom manager initializes from the user configuration: the
+        // props carry the catalog `uri` and the user's credentials.
         #[derive(Debug)]
         struct PlainSession;
         #[async_trait]
         impl AuthSession for PlainSession {
-            async fn authenticate(
-                &self,
-                _request: &mut crate::auth::AuthRequest<'_>,
-            ) -> Result<()> {
+            async fn authenticate(&self, _request: &mut HttpRequest<'_>) -> Result<()> {
                 Ok(())
             }
         }
@@ -2054,11 +2214,80 @@ mod tests {
         struct CapturingManager(Arc<AsyncMutex<Option<HashMap<String, String>>>>);
         #[async_trait]
         impl AuthManager for CapturingManager {
-            async fn init_session(&self) -> Result<Box<dyn AuthSession>> {
+            async fn init_session(
+                &self,
+                _client: &Client,
+                props: &HashMap<String, String>,
+            ) -> Result<Box<dyn AuthSession>> {
+                *self.0.lock().await = Some(props.clone());
                 Ok(Box::new(PlainSession))
             }
             async fn catalog_session(
                 &self,
+                _client: &Client,
+                _props: &HashMap<String, String>,
+            ) -> Result<Arc<dyn AuthSession>> {
+                Ok(Arc::new(PlainSession))
+            }
+        }
+
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let captured = Arc::new(AsyncMutex::new(None));
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(HashMap::from([(
+                    "token".to_string(),
+                    "tok-user".to_string(),
+                )]))
+                .auth_manager(Some(Arc::new(CapturingManager(captured.clone()))))
+                .build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        catalog.context().await.unwrap();
+        config_mock.assert_async().await;
+        let props = captured.lock().await.clone().unwrap();
+        assert_eq!(props.get("token").map(String::as_str), Some("tok-user"));
+        assert_eq!(
+            props.get(REST_CATALOG_PROP_URI).map(String::as_str),
+            Some(server.url().as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_catalog_session_receives_resolved_warehouse() {
+        use tokio::sync::Mutex as AsyncMutex;
+
+        // A custom manager must receive the resolved warehouse in the props
+        // handed to `catalog_session`, with the standard precedence:
+        // server default < client-side warehouse < server override.
+        #[derive(Debug)]
+        struct PlainSession;
+        #[async_trait]
+        impl AuthSession for PlainSession {
+            async fn authenticate(&self, _request: &mut HttpRequest<'_>) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        #[derive(Debug)]
+        struct CapturingManager(Arc<AsyncMutex<Option<HashMap<String, String>>>>);
+        #[async_trait]
+        impl AuthManager for CapturingManager {
+            async fn init_session(
+                &self,
+                _client: &Client,
+                _props: &HashMap<String, String>,
+            ) -> Result<Box<dyn AuthSession>> {
+                Ok(Box::new(PlainSession))
+            }
+            async fn catalog_session(
+                &self,
+                _client: &Client,
                 props: &HashMap<String, String>,
             ) -> Result<Arc<dyn AuthSession>> {
                 *self.0.lock().await = Some(props.clone());
@@ -2133,8 +2362,6 @@ mod tests {
     async fn test_init_session_dropped_before_catalog_session() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        use crate::auth::AuthSession;
-
         // A manager whose init session guards a one-shot resource (released on
         // drop) must see it released before `catalog_session` is invoked.
         #[derive(Debug)]
@@ -2146,10 +2373,7 @@ mod tests {
         }
         #[async_trait]
         impl AuthSession for GuardSession {
-            async fn authenticate(
-                &self,
-                _request: &mut crate::auth::AuthRequest<'_>,
-            ) -> Result<()> {
+            async fn authenticate(&self, _request: &mut HttpRequest<'_>) -> Result<()> {
                 Ok(())
             }
         }
@@ -2158,10 +2382,7 @@ mod tests {
         struct PlainSession;
         #[async_trait]
         impl AuthSession for PlainSession {
-            async fn authenticate(
-                &self,
-                _request: &mut crate::auth::AuthRequest<'_>,
-            ) -> Result<()> {
+            async fn authenticate(&self, _request: &mut HttpRequest<'_>) -> Result<()> {
                 Ok(())
             }
         }
@@ -2170,11 +2391,16 @@ mod tests {
         struct GuardManager(Arc<AtomicBool>);
         #[async_trait]
         impl AuthManager for GuardManager {
-            async fn init_session(&self) -> Result<Box<dyn AuthSession>> {
+            async fn init_session(
+                &self,
+                _client: &Client,
+                _props: &HashMap<String, String>,
+            ) -> Result<Box<dyn AuthSession>> {
                 Ok(Box::new(GuardSession(self.0.clone())))
             }
             async fn catalog_session(
                 &self,
+                _client: &Client,
                 _props: &HashMap<String, String>,
             ) -> Result<Arc<dyn AuthSession>> {
                 if !self.0.load(Ordering::SeqCst) {
@@ -2252,6 +2478,18 @@ mod tests {
             format!("{:?}", with_token.resolve_auth_manager().unwrap()).contains("OAuth2Manager")
         );
 
+        // An explicit type is matched case-insensitively.
+        let mixed_case = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([(
+                REST_CATALOG_PROP_AUTH_TYPE.to_string(),
+                "OAuth2".to_string(),
+            )]))
+            .build();
+        assert!(
+            format!("{:?}", mixed_case.resolve_auth_manager().unwrap()).contains("OAuth2Manager")
+        );
+
         // An explicit OAuth endpoint is oauth2 intent too: the manager can
         // still pick up a server-supplied token from `/v1/config`.
         let with_endpoint = RestCatalogConfig::builder()
@@ -2289,13 +2527,18 @@ mod tests {
         struct StubAuthManager;
         #[async_trait]
         impl AuthManager for StubAuthManager {
-            async fn init_session(&self) -> Result<Box<dyn crate::auth::AuthSession>> {
+            async fn init_session(
+                &self,
+                _client: &Client,
+                _props: &HashMap<String, String>,
+            ) -> Result<Box<dyn AuthSession>> {
                 unimplemented!()
             }
             async fn catalog_session(
                 &self,
+                _client: &Client,
                 _props: &HashMap<String, String>,
-            ) -> Result<Arc<dyn crate::auth::AuthSession>> {
+            ) -> Result<Arc<dyn AuthSession>> {
                 unimplemented!()
             }
         }
