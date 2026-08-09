@@ -43,9 +43,9 @@ use crate::encryption::StandardKeyMetadata;
 use crate::error::Result;
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::metadata_columns::{
-    RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
-    RESERVED_FIELD_ID_PARTITION, RESERVED_FIELD_ID_POS, RESERVED_FIELD_ID_SPEC_ID,
-    is_metadata_field,
+    RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER, RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_FILE,
+    RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER, RESERVED_FIELD_ID_PARTITION,
+    RESERVED_FIELD_ID_POS, RESERVED_FIELD_ID_SPEC_ID, is_metadata_field,
 };
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, PartitionSpec, Struct};
@@ -312,17 +312,28 @@ impl FileScanTaskReader {
             // null. That per-row coalesce is not implemented yet, so rather than silently
             // overwrite genuine per-row values with the derived value, reject the file
             // loudly. Checks the full pre-projection file schema, since the column is
-            // stripped from the projection mask.
-            let file_has_column = record_batch_stream_builder
-                .schema()
-                .fields()
-                .iter()
-                .any(|f| {
-                    f.metadata()
-                        .get(PARQUET_FIELD_ID_META_KEY)
-                        .and_then(|id| id.parse::<i32>().ok())
-                        == Some(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER)
-                });
+            // stripped from the projection mask. Matches on the embedded field id when
+            // present (propagating a malformed id rather than treating it as absent) and
+            // falls back to the column name, so a file read via name mapping or positional
+            // fallback ids (which never equal the reserved id) is still caught.
+            let mut file_has_column = false;
+            for field in record_batch_stream_builder.schema().fields() {
+                let field_id = match field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
+                    Some(id) => Some(id.parse::<i32>().map_err(|e| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("field id not parseable as an i32: {e}"),
+                        )
+                    })?),
+                    None => None,
+                };
+                if field_id == Some(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER)
+                    || field.name() == RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER
+                {
+                    file_has_column = true;
+                    break;
+                }
+            }
             if file_has_column {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
@@ -332,21 +343,32 @@ impl FileScanTaskReader {
                 ));
             }
 
-            // Derive the column from the data file's sequence number, gated on
-            // `first_row_id`: per the spec's Row Lineage read rules, a data file with a
-            // non-null `first_row_id` inherits `_last_updated_sequence_number` from its
-            // data sequence number, while a file with a null `first_row_id` (v1/v2, or a
-            // pre-upgrade v3 snapshot) produces null.
+            // Derive the column, gated on the data file's `first_row_id`. Java gates
+            // both lineage columns this way (`ValueReaders.lastUpdated` returns nulls
+            // when the base row id is null); the spec itself only says the column is
+            // assigned the manifest entry's sequence number on read.
             record_batch_transformer_builder = match (task.first_row_id, task.data_sequence_number)
             {
+                // Non-null first_row_id: inherit from the data sequence number.
                 (Some(_), Some(seq)) => record_batch_transformer_builder.with_constant(
                     RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
                     Datum::long(seq),
                 ),
-                // (None, _) is the null gate. (Some, None), first_row_id present but no
-                // data sequence number (a malformed manifest), also yields null.
-                _ => record_batch_transformer_builder
-                    .with_null_metadata_column(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER),
+                // Null first_row_id (v1/v2, or a pre-upgrade v3 snapshot): the column is null.
+                (None, _) => record_batch_transformer_builder
+                    .with_null_metadata_column(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER)?,
+                // first_row_id present but no data sequence number: after manifest
+                // inheritance a committed entry always has one, so this is a malformed
+                // manifest rather than a legitimate null.
+                (Some(_), None) => {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Data file {} has a first_row_id but no data sequence number",
+                            task.data_file_path
+                        ),
+                    ));
+                }
             };
         }
 
@@ -1023,6 +1045,29 @@ mod tests {
             .build()
     }
 
+    /// Asserts the logical per-row values of the `_last_updated_sequence_number`
+    /// column across all batches, independent of the physical (run-end) encoding.
+    fn assert_last_updated_seq_column(batches: &[RecordBatch], expected: &[Option<i64>]) {
+        use arrow_array::cast::AsArray;
+        use arrow_cast::cast;
+        use arrow_schema::DataType;
+
+        use crate::metadata_columns::RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER;
+
+        let mut actual = Vec::new();
+        for batch in batches {
+            let col = batch
+                .column_by_name(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER)
+                .expect("_last_updated_sequence_number column should be present");
+            let logical = cast(col, &DataType::Int64).unwrap();
+            let values = logical.as_primitive::<arrow_array::types::Int64Type>();
+            for i in 0..values.len() {
+                actual.push((!values.is_null(i)).then(|| values.value(i)));
+            }
+        }
+        assert_eq!(actual, expected);
+    }
+
     #[tokio::test]
     async fn test_last_updated_sequence_number_null_when_no_first_row_id() {
         let tmp_dir = TempDir::new().unwrap();
@@ -1044,64 +1089,35 @@ mod tests {
             .await
             .unwrap();
 
-        use crate::metadata_columns::RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER;
-        let seq_col = batches[0]
-            .column_by_name(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER)
-            .expect("column should be present")
-            .as_any()
-            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
-            .expect("_last_updated_sequence_number should be a RunArray");
-        assert_eq!(seq_col.len(), 3);
-        let values = seq_col
-            .values()
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("REE values should be Int64Array");
-        assert_eq!(values.len(), 1);
-        assert!(values.is_null(0));
+        assert_last_updated_seq_column(&batches, &[None, None, None]);
     }
 
     #[tokio::test]
-    async fn test_last_updated_sequence_number_null_when_no_data_seq() {
-        use crate::metadata_columns::RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER;
-
+    async fn test_last_updated_sequence_number_error_when_no_data_seq() {
         let tmp_dir = TempDir::new().unwrap();
         let dir = tmp_dir.path().to_str().unwrap();
         let file_path = write_plain_parquet(dir, "no_data_seq.parquet", vec![], vec![]);
 
-        // first_row_id present but data_sequence_number absent (a malformed manifest)
-        // also yields a null column, matching Java's dual gate. Pins the (Some, None)
-        // arm so a future match collapse cannot silently unwrap it.
+        // first_row_id present but data_sequence_number absent: after manifest
+        // inheritance a committed entry always has one, so this is a malformed
+        // manifest and must error rather than fabricate or null the column.
         let task = last_updated_seq_task(file_path, Some(42), None);
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-        let batches: Vec<RecordBatch> = reader
-            .read(tasks)
-            .unwrap()
-            .stream()
-            .try_collect()
-            .await
-            .unwrap();
+        let result: Result<Vec<RecordBatch>, _> =
+            reader.read(tasks).unwrap().stream().try_collect().await;
 
-        let seq_col = batches[0]
-            .column_by_name(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER)
-            .expect("column should be present")
-            .as_any()
-            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
-            .expect("_last_updated_sequence_number should be a RunArray");
-        let values = seq_col
-            .values()
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("REE values should be Int64Array");
-        assert!(values.is_null(0));
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), crate::ErrorKind::DataInvalid);
+        assert!(
+            format!("{err}").contains("no data sequence number"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]
     async fn test_last_updated_sequence_number_derived_from_data_seq() {
-        use crate::metadata_columns::RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER;
-
         let tmp_dir = TempDir::new().unwrap();
         let dir = tmp_dir.path().to_str().unwrap();
         let file_path = write_plain_parquet(dir, "with_first_row_id.parquet", vec![], vec![]);
@@ -1120,21 +1136,7 @@ mod tests {
             .await
             .unwrap();
 
-        let seq_col = batches[0]
-            .column_by_name(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER)
-            .expect("column should be present")
-            .as_any()
-            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
-            .expect("_last_updated_sequence_number should be a RunArray");
-        assert_eq!(seq_col.len(), 3);
-        let values = seq_col
-            .values()
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("REE values should be Int64Array");
-        assert_eq!(values.len(), 1);
-        assert!(!values.is_null(0));
-        assert_eq!(values.value(0), 7);
+        assert_last_updated_seq_column(&batches, &[Some(7), Some(7), Some(7)]);
     }
 
     #[tokio::test]

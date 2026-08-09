@@ -684,6 +684,25 @@ pub mod tests {
         env.render_str(template, ctx).unwrap()
     }
 
+    /// Asserts every row of the `_last_updated_sequence_number` column across all
+    /// batches equals `expected` (or is null when `expected` is `None`), decoding
+    /// the logical value independent of the physical (run-end) encoding.
+    fn assert_last_updated_seq_all(batches: &[RecordBatch], expected: Option<i64>) {
+        use arrow_cast::cast;
+        use arrow_schema::DataType;
+        for batch in batches {
+            let col = batch
+                .column_by_name(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER)
+                .expect("_last_updated_sequence_number column should be present");
+            let logical = cast(col, &DataType::Int64).unwrap();
+            let values = logical.as_primitive::<arrow_array::types::Int64Type>();
+            for i in 0..values.len() {
+                let actual = (!values.is_null(i)).then(|| values.value(i));
+                assert_eq!(actual, expected, "row {i}");
+            }
+        }
+    }
+
     pub struct TableTestFixture {
         pub table_location: String,
         pub table: Table,
@@ -3175,32 +3194,27 @@ pub mod tests {
             .unwrap();
 
         // Every row's value is null (v2 files have no first_row_id).
-        for batch in &batches {
-            let seq_col = batch
-                .column_by_name(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER)
-                .expect("_last_updated_sequence_number column should be present")
-                .as_any()
-                .downcast_ref::<RunArray<Int32Type>>()
-                .expect("_last_updated_sequence_number should be a RunArray");
-            let values = seq_col
-                .values()
-                .as_primitive::<arrow_array::types::Int64Type>();
-            assert!(
-                (0..values.len()).all(|i| values.is_null(i)),
-                "all values must be null for a file with null first_row_id"
-            );
-        }
+        assert_last_updated_seq_all(&batches, None);
     }
 
     #[tokio::test]
     async fn test_select_with_last_updated_sequence_number_column_v3() {
-        // A v3 fixture: the data file inherits first_row_id=42 and data
-        // sequence number=1 through manifest read. End to end, the projected
-        // _last_updated_sequence_number materializes to the data sequence
-        // number (1) for every row, exercising the full inherit, populate and
+        // A v3 fixture: the data file inherits a first_row_id and a data sequence
+        // number through manifest read. End to end, the projected
+        // _last_updated_sequence_number materializes to the file's data sequence
+        // number for every row, exercising the full inherit, populate and
         // materialize wiring, not just a hand-built task.
         let mut fixture = TableTestFixture::new();
         fixture.setup_v3_manifest_files().await;
+
+        // The added file inherits the current snapshot's sequence number; derive it
+        // from the fixture rather than hardcoding so the assertion tracks the fixture.
+        let expected_seq = fixture
+            .table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .sequence_number();
 
         let table_scan = fixture
             .table
@@ -3218,21 +3232,7 @@ pub mod tests {
             .await
             .unwrap();
 
-        for batch in &batches {
-            let seq_col = batch
-                .column_by_name(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER)
-                .expect("_last_updated_sequence_number column should be present")
-                .as_any()
-                .downcast_ref::<RunArray<Int32Type>>()
-                .expect("_last_updated_sequence_number should be a RunArray");
-            let values = seq_col
-                .values()
-                .as_primitive::<arrow_array::types::Int64Type>();
-            assert!(
-                (0..values.len()).all(|i| !values.is_null(i) && values.value(i) == 1),
-                "every row must equal the data sequence number (1)"
-            );
-        }
+        assert_last_updated_seq_all(&batches, Some(expected_seq));
     }
 
     #[tokio::test]
