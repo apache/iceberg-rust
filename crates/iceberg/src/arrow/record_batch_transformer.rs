@@ -308,15 +308,18 @@ impl RecordBatchTransformerBuilder {
     /// `_last_updated_sequence_number` when the file has a null `first_row_id`).
     pub(crate) fn with_null_metadata_column(mut self, field_id: i32) -> Result<Self> {
         let iceberg_field = get_metadata_field(field_id)?;
-        let prim_type = iceberg_field.field_type.as_primitive_type().ok_or_else(|| {
-            Error::new(
-                ErrorKind::Unexpected,
-                format!(
-                    "Metadata column {} has non-primitive type {:?}",
-                    iceberg_field.name, iceberg_field.field_type
-                ),
-            )
-        })?;
+        let prim_type = iceberg_field
+            .field_type
+            .as_primitive_type()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "Metadata column {} has non-primitive type {:?}",
+                        iceberg_field.name, iceberg_field.field_type
+                    ),
+                )
+            })?;
         // Use the same run-end-encoded type as the non-null constant path, so a
         // column keeps one Arrow type whether a given file resolves it to a value
         // or to null.
