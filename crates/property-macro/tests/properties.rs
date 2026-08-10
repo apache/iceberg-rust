@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use iceberg::ErrorKind;
 use iceberg_property_macro::Properties;
 use serde::{Deserialize, Serialize};
 
@@ -126,14 +127,16 @@ fn reports_the_property_with_an_invalid_value() {
         "many".to_string(),
     )]))
     .unwrap_err();
-    assert!(numeric_error.contains(RETRIES));
+    assert_eq!(numeric_error.kind(), ErrorKind::DataInvalid);
+    assert!(numeric_error.message().contains(RETRIES));
 
     let boolean_error = TestProperties::from_properties(&HashMap::from([(
         FANOUT_ENABLED.to_string(),
         "sometimes".to_string(),
     )]))
     .unwrap_err();
-    assert!(boolean_error.contains(FANOUT_ENABLED));
+    assert_eq!(boolean_error.kind(), ErrorKind::DataInvalid);
+    assert!(boolean_error.message().contains(FANOUT_ENABLED));
 
     let prefixed_key = format!("{COLUMN_FPP_PREFIX}id");
     let prefix_error = TestProperties::from_properties(&HashMap::from([(
@@ -141,7 +144,8 @@ fn reports_the_property_with_an_invalid_value() {
         "low".to_string(),
     )]))
     .unwrap_err();
-    assert!(prefix_error.contains(&prefixed_key));
+    assert_eq!(prefix_error.kind(), ErrorKind::DataInvalid);
+    assert!(prefix_error.message().contains(&prefixed_key));
 }
 
 #[derive(Debug, Properties)]
@@ -202,7 +206,11 @@ fn custom_single_value_parser_can_validate_and_normalize() {
         "  ".to_string(),
     )]))
     .unwrap_err();
-    assert_eq!(error, "Invalid value for location: value must not be empty");
+    assert_eq!(error.kind(), ErrorKind::DataInvalid);
+    assert_eq!(
+        error.message(),
+        "Invalid value for location: value must not be empty"
+    );
 }
 
 #[derive(Debug, Properties)]

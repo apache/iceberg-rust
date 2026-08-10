@@ -33,13 +33,14 @@ constructor:
 impl MyProperties {
     pub fn from_properties(
         properties: &HashMap<String, String>,
-    ) -> Result<Self, String>;
+    ) -> iceberg::Result<Self>;
 }
 ```
 
 `from_properties` borrows the source map, parses every modeled property, and
 uses its annotated default when a property is absent. Unknown keys are ignored.
-An invalid value returns an error containing its primary property key.
+An invalid value returns an `iceberg::Error` with `ErrorKind::DataInvalid` and a
+message containing its primary property key.
 
 Adding `getter` to a field generates a public immutable accessor with the field
 name. Primitive `Copy` types, references, pointers, and compositions of those
@@ -59,6 +60,7 @@ keys, and contextual errors.
 ```rust
 use std::collections::HashMap;
 
+use iceberg::ErrorKind;
 use iceberg_property_macro::Properties;
 
 const RETRIES: &str = "commit.retry.num-retries";
@@ -149,7 +151,7 @@ struct TableLikeProperties {
     dimensions: (u64, u64, u64),
 }
 
-fn main() -> Result<(), String> {
+fn main() -> iceberg::Result<()> {
     let defaults = TableLikeProperties::from_properties(&HashMap::new())?;
     assert_eq!(defaults.commit().retries(), 4);
     assert_eq!(defaults.owner(), &None);
@@ -183,7 +185,8 @@ fn main() -> Result<(), String> {
         "/".to_string(),
     )]))
     .unwrap_err();
-    assert!(error.contains(LOCATION));
+    assert_eq!(error.kind(), ErrorKind::DataInvalid);
+    assert!(error.message().contains(LOCATION));
 
     Ok(())
 }
@@ -246,7 +249,7 @@ Boolean values are parsed case-insensitively. Other values require `FromStr`
 unless a custom parser is supplied. String-literal and path defaults are
 converted into their field type with `Into`.
 
-`from_properties` currently returns errors as `String` so this standalone macro
-does not impose Iceberg's error type on catalog configuration consumers. The
-crate remains unpublished until a production consumer establishes the final
-error integration and public API.
+`from_properties` uses `iceberg::Result`, and generated parse failures use
+`ErrorKind::DataInvalid`. Custom parsers may return any error that implements
+`Display`; the macro converts it to the same Iceberg error kind and adds the
+primary property key to the message.

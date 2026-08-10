@@ -133,7 +133,7 @@ pub(crate) fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2>
                     ::std::string::String,
                     ::std::string::String,
                 >,
-            ) -> ::std::result::Result<Self, ::std::string::String> {
+            ) -> ::iceberg::Result<Self> {
                 Ok(Self {
                     #(#parses,)*
                 })
@@ -421,7 +421,10 @@ fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
                 &[#(#additional_keys),*],
                 #default,
             ).map_err(|error| {
-                format!("Invalid value for {}: {error}", #key)
+                ::iceberg::Error::new(
+                    ::iceberg::ErrorKind::DataInvalid,
+                    format!("Invalid value for {}: {error}", #key),
+                )
             })?
         });
     }
@@ -445,13 +448,15 @@ fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
                     key.strip_prefix(#prefix).map(|suffix| {
                         #parse
                             .map(|parsed| (suffix.to_string(), parsed))
-                            .map_err(|error| format!("Invalid value for {key}: {error}"))
+                            .map_err(|error| {
+                                ::iceberg::Error::new(
+                                    ::iceberg::ErrorKind::DataInvalid,
+                                    format!("Invalid value for {key}: {error}"),
+                                )
+                            })
                     })
                 })
-                .collect::<::std::result::Result<
-                    ::std::collections::HashMap<_, _>,
-                    ::std::string::String,
-                >>()?
+                .collect::<::iceberg::Result<::std::collections::HashMap<_, _>>>()?
         });
     }
 
@@ -463,32 +468,50 @@ fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
     let parse = match (&field.parse_with, &field.option_inner_type) {
         (Some(parse_with), Some(_)) => quote! {
             Some(#parse_with(value).map_err(|error| {
-                format!("Invalid value for {}: {error}", #key)
+                ::iceberg::Error::new(
+                    ::iceberg::ErrorKind::DataInvalid,
+                    format!("Invalid value for {}: {error}", #key),
+                )
             })?)
         },
         (Some(parse_with), None) => quote! {
             #parse_with(value).map_err(|error| {
-                format!("Invalid value for {}: {error}", #key)
+                ::iceberg::Error::new(
+                    ::iceberg::ErrorKind::DataInvalid,
+                    format!("Invalid value for {}: {error}", #key),
+                )
             })?
         },
         (None, Some(inner_type)) if is_bool(inner_type) => quote! {
             Some(value.to_ascii_lowercase().parse::<#inner_type>().map_err(|error| {
-                format!("Invalid value for {}: {error}", #key)
+                ::iceberg::Error::new(
+                    ::iceberg::ErrorKind::DataInvalid,
+                    format!("Invalid value for {}: {error}", #key),
+                )
             })?)
         },
         (None, Some(inner_type)) => quote! {
             Some(value.parse::<#inner_type>().map_err(|error| {
-                format!("Invalid value for {}: {error}", #key)
+                ::iceberg::Error::new(
+                    ::iceberg::ErrorKind::DataInvalid,
+                    format!("Invalid value for {}: {error}", #key),
+                )
             })?)
         },
         (None, None) if is_bool(ty) => quote! {
             value.to_ascii_lowercase().parse::<#ty>().map_err(|error| {
-                format!("Invalid value for {}: {error}", #key)
+                ::iceberg::Error::new(
+                    ::iceberg::ErrorKind::DataInvalid,
+                    format!("Invalid value for {}: {error}", #key),
+                )
             })?
         },
         (None, None) => quote! {
             value.parse::<#ty>().map_err(|error| {
-                format!("Invalid value for {}: {error}", #key)
+                ::iceberg::Error::new(
+                    ::iceberg::ErrorKind::DataInvalid,
+                    format!("Invalid value for {}: {error}", #key),
+                )
             })?
         },
     };

@@ -4011,6 +4011,7 @@ dependencies = [
 name = "iceberg-property-macro"
 version = "0.10.0"
 dependencies = [
+ "iceberg",
  "proc-macro2",
  "quote",
  "serde",
