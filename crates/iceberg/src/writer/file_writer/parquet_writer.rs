@@ -27,6 +27,7 @@ use itertools::Itertools;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
+use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{CdcOptions, WriterProperties};
@@ -37,6 +38,7 @@ use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
     get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
 };
+use crate::compression::CompressionCodec;
 use crate::encryption::{EncryptionManager, StandardKeyMetadata};
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
@@ -89,10 +91,6 @@ impl ParquetWriterBuilder {
     /// schema, translating `write.parquet.*` settings into `WriterProperties`
     /// instead of using parquet-rs defaults.
     ///
-    /// Currently translates the content-defined-chunking keys
-    /// (`write.parquet.content-defined-chunking.*`); other keys fall back to
-    /// parquet-rs defaults.
-    ///
     /// When the table has `encryption.key-id` set, pair this with
     /// [`Self::with_encryption_manager`]; [`FileWriterBuilder::build`] errors
     /// without it rather than writing plain text.
@@ -102,20 +100,18 @@ impl ParquetWriterBuilder {
             max_chunk_size: table_props.cdc_max_chunk_size,
             norm_level: table_props.cdc_norm_level,
         });
-
-        // TODO: translate the remaining write.parquet.* keys (e.g. compression-codec,
-        // row-group-size-bytes, page-size-bytes).
-        // This constructor is intended to be the single place that maps them.
+        let compression = parquet_compression(table_props.parquet_compression_codec)?;
         let props = WriterProperties::builder()
             .set_content_defined_chunking(cdc)
+            .set_compression(compression)
+            .set_max_row_group_bytes(Some(table_props.parquet_row_group_size_bytes))
+            .set_data_page_size_limit(table_props.parquet_page_size_bytes)
+            .set_data_page_row_count_limit(table_props.parquet_page_row_limit)
+            .set_dictionary_page_size_limit(table_props.parquet_dict_size_bytes)
             .build();
-
         Ok(Self {
-            props,
-            schema,
-            match_mode: FieldMatchMode::Id,
-            encryption_manager: None,
             requires_encryption: table_props.encryption_key_id.is_some(),
+            ..Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
         })
     }
 
@@ -133,6 +129,40 @@ impl ParquetWriterBuilder {
         self.encryption_manager = Some(encryption_manager);
         self
     }
+}
+
+fn parquet_compression(codec: CompressionCodec) -> Result<Compression> {
+    let compression = match codec {
+        CompressionCodec::None => Compression::UNCOMPRESSED,
+        CompressionCodec::Snappy => Compression::SNAPPY,
+        CompressionCodec::Lzo => Compression::LZO,
+        CompressionCodec::Lz4 => Compression::LZ4,
+        CompressionCodec::Lz4Raw => Compression::LZ4_RAW,
+        CompressionCodec::Zstd(level) => {
+            let level =
+                ZstdLevel::try_new(level as i32).map_err(|e| invalid_level_error("zstd", e))?;
+            Compression::ZSTD(level)
+        }
+        CompressionCodec::Gzip(level) => {
+            let level =
+                GzipLevel::try_new(level as u32).map_err(|e| invalid_level_error("gzip", e))?;
+            Compression::GZIP(level)
+        }
+        CompressionCodec::Brotli(level) => {
+            let level =
+                BrotliLevel::try_new(level as u32).map_err(|e| invalid_level_error("brotli", e))?;
+            Compression::BROTLI(level)
+        }
+    };
+    Ok(compression)
+}
+
+fn invalid_level_error(codec: &str, source: impl Into<anyhow::Error>) -> Error {
+    Error::new(
+        ErrorKind::DataInvalid,
+        format!("Invalid {codec} compression level"),
+    )
+    .with_source(source)
 }
 
 impl FileWriterBuilder for ParquetWriterBuilder {
@@ -748,7 +778,9 @@ mod tests {
     use futures::TryStreamExt;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
     use parquet::file::statistics::ValueStatistics;
+    use parquet::schema::types::ColumnPath;
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -2517,10 +2549,6 @@ mod tests {
         assert_eq!(upper_bounds, HashMap::from([(0, Datum::int(i32::MAX))]));
     }
 
-    // -----------------------------------------------------------------
-    // ParquetWriterBuilder::from_table_properties
-    // -----------------------------------------------------------------
-
     fn cdc_test_schema() -> SchemaRef {
         Arc::new(
             Schema::builder()
@@ -2634,5 +2662,143 @@ mod tests {
         assert_eq!(cdc.min_chunk_size, 4096);
         assert_eq!(cdc.max_chunk_size, 8192);
         assert_eq!(cdc.norm_level, 2);
+    }
+
+    #[test]
+    fn test_from_table_properties_sizing_defaults() {
+        // With no properties set, the writer must use Iceberg's defaults (which
+        // differ from parquet-rs's own defaults), not parquet-rs's.
+        let tp = table_props(HashMap::new());
+        let props = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
+            .unwrap()
+            .props;
+
+        assert_eq!(
+            props.max_row_group_bytes(),
+            Some(TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT)
+        );
+        assert_eq!(
+            props.data_page_size_limit(),
+            TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT
+        );
+        assert_eq!(
+            props.data_page_row_count_limit(),
+            TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT
+        );
+        assert_eq!(
+            props.dictionary_page_size_limit(),
+            TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT
+        );
+        // Default codec is zstd at the Java-aligned default level (3).
+        assert_eq!(
+            props.compression(&ColumnPath::from("id")),
+            Compression::ZSTD(ZstdLevel::try_new(3).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_from_table_properties_sizing_and_compression_overrides() {
+        let tp = table_props(HashMap::from([
+            (
+                TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES.to_string(),
+                "1048576".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES.to_string(),
+                "65536".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT.to_string(),
+                "5000".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES.to_string(),
+                "131072".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
+                "gzip".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL.to_string(),
+                "9".to_string(),
+            ),
+        ]));
+        let props = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
+            .unwrap()
+            .props;
+
+        assert_eq!(props.max_row_group_bytes(), Some(1048576));
+        assert_eq!(props.data_page_size_limit(), 65536);
+        assert_eq!(props.data_page_row_count_limit(), 5000);
+        assert_eq!(props.dictionary_page_size_limit(), 131072);
+        assert_eq!(
+            props.compression(&ColumnPath::from("id")),
+            Compression::GZIP(GzipLevel::try_new(9).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_from_table_properties_invalid_codec_errors() {
+        let entries = HashMap::from([(
+            TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
+            "bogus".to_string(),
+        )]);
+        let err = TableProperties::try_from(&entries).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.to_string().contains("bogus"));
+    }
+
+    #[test]
+    fn test_parquet_compression_mapping() {
+        // Codecs without a level.
+        assert_eq!(
+            parquet_compression(CompressionCodec::None).unwrap(),
+            Compression::UNCOMPRESSED
+        );
+        assert_eq!(
+            parquet_compression(CompressionCodec::Snappy).unwrap(),
+            Compression::SNAPPY
+        );
+        assert_eq!(
+            parquet_compression(CompressionCodec::Lz4).unwrap(),
+            Compression::LZ4
+        );
+        assert_eq!(
+            parquet_compression(CompressionCodec::Lz4Raw).unwrap(),
+            Compression::LZ4_RAW
+        );
+        assert_eq!(
+            parquet_compression(CompressionCodec::Lzo).unwrap(),
+            Compression::LZO
+        );
+
+        // Level-carrying codecs at their defaults.
+        assert_eq!(
+            parquet_compression(CompressionCodec::zstd_default()).unwrap(),
+            Compression::ZSTD(ZstdLevel::try_new(3).unwrap())
+        );
+        assert_eq!(
+            parquet_compression(CompressionCodec::gzip_default()).unwrap(),
+            Compression::GZIP(GzipLevel::try_new(6).unwrap())
+        );
+        assert_eq!(
+            parquet_compression(CompressionCodec::brotli_default()).unwrap(),
+            Compression::BROTLI(BrotliLevel::try_new(1).unwrap())
+        );
+
+        // Explicit levels are honored.
+        assert_eq!(
+            parquet_compression(CompressionCodec::Zstd(10)).unwrap(),
+            Compression::ZSTD(ZstdLevel::try_new(10).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_parquet_compression_invalid_level() {
+        // zstd valid range is 1..=22; 99 is out of range.
+        let err = parquet_compression(CompressionCodec::Zstd(99)).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.to_string().contains("zstd"));
     }
 }
