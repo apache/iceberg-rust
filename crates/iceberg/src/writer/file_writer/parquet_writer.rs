@@ -91,9 +91,9 @@ impl ParquetWriterBuilder {
     /// schema, translating `write.parquet.*` settings into `WriterProperties`
     /// instead of using parquet-rs defaults.
     ///
-    /// When the table has `encryption.key-id` set, pair this with
+    /// Tables with `encryption.key-id` set must also call
     /// [`Self::with_encryption_manager`]; [`FileWriterBuilder::build`] errors
-    /// without it rather than writing plain text.
+    /// otherwise.
     pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Result<Self> {
         let cdc = table_props.cdc_enabled.then_some(CdcOptions {
             min_chunk_size: table_props.cdc_min_chunk_size,
@@ -124,7 +124,7 @@ impl ParquetWriterBuilder {
         self
     }
 
-    /// Encrypt written files, minting a DEK per file from `encryption_manager`.
+    /// Encrypt written files, generating a DEK per file from `encryption_manager`.
     pub fn with_encryption_manager(mut self, encryption_manager: Arc<EncryptionManager>) -> Self {
         self.encryption_manager = Some(encryption_manager);
         self

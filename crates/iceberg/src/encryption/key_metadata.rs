@@ -65,7 +65,7 @@ impl StandardKeyMetadata {
     /// Generates a `StandardKeyMetadata` carrying a fresh random DEK of
     /// `key_size` together with a fresh random AAD prefix.
     ///
-    /// Callers outside this crate mint keys via
+    /// Outside this crate, use
     /// [`EncryptionManager::generate_key_metadata`](crate::encryption::EncryptionManager::generate_key_metadata).
     pub(crate) fn generate(key_size: AesKeySize) -> Self {
         Self::from(SecureKey::generate(key_size)).with_aad_prefix(&generate_aad_prefix())
