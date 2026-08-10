@@ -41,8 +41,10 @@ impl MyProperties {
 uses its annotated default when a property is absent. Unknown keys are ignored.
 An invalid value returns an error containing its primary property key.
 
-Adding `pub(getter)` to a field generates an immutable accessor with the field
-name. Structurally known `Copy` types return `T`; other types return `&T`.
+Adding `getter` to a field generates a public immutable accessor with the field
+name. Primitive `Copy` types, references, pointers, and compositions of those
+types return `T`; other types return `&T`. Because a procedural macro cannot
+resolve trait implementations, a user-defined `Copy` type returns `&T`.
 Documentation attributes on the field are copied to the generated getter. The
 macro generates no setters, backing fields, or conversion back to a property
 map.
@@ -61,7 +63,7 @@ use iceberg_property_macro::Properties;
 
 const RETRIES: &str = "commit.retry.num-retries";
 const OWNER: &str = "owner";
-const FANOUT: &str = "write.fanout.enabled";
+const FANOUT: &str = "write.datafusion.fanout.enabled";
 const COLUMN_FPP_PREFIX: &str = "write.parquet.bloom-filter-fpp.column.";
 const LOCATION: &str = "write.data.path";
 const WIDTH: &str = "dimensions.width";
@@ -104,26 +106,27 @@ fn parse_dimensions(
 #[derive(Debug, Properties)]
 struct CommitProperties {
     /// Maximum number of times to retry a commit.
-    #[property(key = RETRIES, default = 4, pub(getter))]
+    #[property(key = RETRIES, default = 4, getter)]
     retries: usize,
 }
 
 #[derive(Debug, Properties)]
 struct TableLikeProperties {
     /// Nested groups parse from the same flat property map.
-    #[property(nested, pub(getter))]
+    #[property(nested, getter)]
     commit: CommitProperties,
 
     /// Option<T> distinguishes an absent property from a present value.
-    #[property(key = OWNER, default = None, pub(getter))]
+    #[property(key = OWNER, default = None, getter)]
     owner: Option<String>,
 
-    /// Boolean values are parsed case-insensitively.
-    #[property(key = FANOUT, default = true, pub(getter))]
+    /// This DataFusion-specific boolean is parsed case-insensitively.
+    /// Its `true` default is engine-specific, rather than an Iceberg-wide default.
+    #[property(key = FANOUT, default = true, getter)]
     fanout_enabled: bool,
 
     /// A prefix captures suffix/value pairs into a typed map.
-    #[property(prefix = COLUMN_FPP_PREFIX, default = HashMap::new(), pub(getter))]
+    #[property(prefix = COLUMN_FPP_PREFIX, getter)]
     column_fpp: HashMap<String, f64>,
 
     /// A single-key parser can validate and normalize a property value.
@@ -131,7 +134,7 @@ struct TableLikeProperties {
         key = LOCATION,
         default = "warehouse",
         parse_with = parse_location,
-        pub(getter)
+        getter
     )]
     location: String,
 
@@ -141,7 +144,7 @@ struct TableLikeProperties {
         additional_keys = [HEIGHT, DEPTH],
         default = (640, 480, 320),
         parse_properties_with = parse_dimensions,
-        pub(getter)
+        getter
     )]
     dimensions: (u64, u64, u64),
 }
@@ -203,7 +206,7 @@ struct ReadProperties {
     #[property(
         key = "commit.retry.num-retries",
         default = 4,
-        pub(getter)
+        getter
     )]
     retries: u64,
 }
@@ -230,11 +233,20 @@ All field settings must be grouped under `#[property(...)]`. This keeps `key`,
 `default`, `prefix`, `nested`, parser hooks, additional keys, and getter
 generation in one attribute and avoids collisions with ordinary Rust derives.
 
-The `prefix` setting requires `HashMap<String, T>`. `nested` embeds another
-`Properties` struct while reading the same flat map. `parse_with` customizes
-parsing for one exact-key field. `parse_properties_with` receives the complete
-property map, and `additional_keys` supplies its list of secondary keys.
+Exact-key fields require a `default`. The `prefix` setting requires
+`HashMap<String, T>` and returns the entries matched by the prefix, or an empty
+map when none match. `nested` embeds another `Properties` struct while reading
+the same flat map. Neither prefix nor nested fields accept a `default`.
+`parse_with` customizes parsing for one exact-key field; on an `Option<T>` field,
+the parser produces `T` and the macro wraps a present value in `Some`.
+`parse_properties_with` receives the complete property map, and its required
+`additional_keys` setting supplies the list of secondary keys.
 
 Boolean values are parsed case-insensitively. Other values require `FromStr`
 unless a custom parser is supplied. String-literal and path defaults are
 converted into their field type with `Into`.
+
+`from_properties` currently returns errors as `String` so this standalone macro
+does not impose Iceberg's error type on catalog configuration consumers. The
+crate remains unpublished until a production consumer establishes the final
+error integration and public API.

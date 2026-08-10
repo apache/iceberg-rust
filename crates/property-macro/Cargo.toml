@@ -19,7 +19,7 @@
 edition = { workspace = true }
 homepage = { workspace = true }
 name = "iceberg-property-macro"
-publish = true
+publish = false
 readme = "README.md"
 rust-version = { workspace = true }
 version = { workspace = true }
@@ -42,6 +42,7 @@ syn = { version = "2", features = ["full"] }
 [dev-dependencies]
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+trybuild = "1"
 
 [lints]
 workspace = true

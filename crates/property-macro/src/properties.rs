@@ -21,7 +21,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{
     Attribute, Data, DeriveInput, Error, Expr, ExprLit, ExprPath, Field, Fields, GenericArgument,
-    Ident, Lit, Path, PathArguments, Token, Type, parenthesized,
+    Ident, Lit, Path, PathArguments, Token, Type,
 };
 
 struct PropertyField {
@@ -40,8 +40,6 @@ struct PropertyField {
     doc_attributes: Vec<Attribute>,
 }
 
-struct PublicGetter;
-
 enum PropertyOption {
     Key(Expr),
     AdditionalKeys(Vec<Expr>),
@@ -50,7 +48,7 @@ enum PropertyOption {
     Default(Expr),
     ParseWith(Path),
     ParsePropertiesWith(Path),
-    Getter(PublicGetter),
+    Getter,
 }
 
 #[derive(Default)]
@@ -65,34 +63,15 @@ struct PropertyOptions {
     public_getter: bool,
 }
 
-impl Parse for PublicGetter {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        input.parse::<Token![pub]>()?;
-        let content;
-        parenthesized!(content in input);
-        let accessor = content.parse::<Ident>()?;
-        if !content.is_empty() {
-            return Err(content.error("expected getter"));
-        }
-
-        if accessor == "getter" {
-            Ok(Self)
-        } else {
-            Err(Error::new_spanned(accessor, "expected getter"))
-        }
-    }
-}
-
 impl Parse for PropertyOption {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        if input.peek(Token![pub]) {
-            return input.parse().map(Self::Getter);
-        }
-
         let name = input.parse::<Ident>()?;
         let option_name = name.to_string();
         if option_name == "nested" {
             return Ok(Self::Nested);
+        }
+        if option_name == "getter" {
+            return Ok(Self::Getter);
         }
 
         input.parse::<Token![=]>()?;
@@ -138,7 +117,10 @@ pub(crate) fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2>
         .iter()
         .map(|field| parse_property_field(field, property_options(field)?))
         .collect::<syn::Result<Vec<_>>>()?;
-    let parses = fields.iter().map(parse_field);
+    let parses = fields
+        .iter()
+        .map(parse_field)
+        .collect::<syn::Result<Vec<_>>>()?;
     let accessors = fields.iter().map(field_getter);
     let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
 
@@ -192,10 +174,16 @@ fn parse_property_field(
             "nested fields obtain defaults from their own property annotations and cannot declare default in #[property(...)]",
         ));
     }
-    if !nested && default.is_none() {
+    if prefix.is_some() && default.is_some() {
         return Err(Error::new_spanned(
             field,
-            "Properties leaf fields must declare default in #[property(...)]",
+            "prefix fields collect matching properties and cannot declare default in #[property(...)]",
+        ));
+    }
+    if key.is_some() && default.is_none() {
+        return Err(Error::new_spanned(
+            field,
+            "Properties key fields must declare default in #[property(...)]",
         ));
     }
 
@@ -211,6 +199,12 @@ fn parse_property_field(
         return Err(Error::new_spanned(
             field,
             "additional_keys requires parse_properties_with in #[property(...)]",
+        ));
+    }
+    if parse_properties_with.is_some() && additional_keys.is_none() {
+        return Err(Error::new_spanned(
+            field,
+            "parse_properties_with requires additional_keys in #[property(...)]",
         ));
     }
     if (prefix.is_some() || nested)
@@ -302,7 +296,7 @@ fn property_options(field: &Field) -> syn::Result<PropertyOptions> {
                 attribute,
                 "parse_properties_with",
             )?,
-            PropertyOption::Getter(_) => {
+            PropertyOption::Getter => {
                 if options.public_getter {
                     return Err(Error::new_spanned(attribute, "duplicate property accessor"));
                 }
@@ -397,68 +391,82 @@ fn find_attribute<'a>(
     Ok(first)
 }
 
-fn parse_field(field: &PropertyField) -> TokenStream2 {
+fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
     let ident = &field.ident;
     if field.nested {
         let ty = &field.ty;
-        return quote!(#ident: <#ty>::from_properties(properties)?);
+        return Ok(quote!(#ident: <#ty>::from_properties(properties)?));
     }
 
     let ty = &field.ty;
-    let default = typed_default(field);
 
     if let Some(parse_properties_with) = &field.parse_properties_with {
-        let key = field.key.as_ref().expect("exact-key fields have a key");
-        let parse = match &field.additional_keys {
-            Some(additional_keys) => {
-                quote!(#parse_properties_with(properties, #key, &[#(#additional_keys),*], #default))
-            }
-            None => quote!(#parse_properties_with(properties, #key, #default)),
-        };
-        return quote! {
-            #ident: #parse.map_err(|error| {
+        let key = field.key.as_ref().ok_or_else(|| {
+            Error::new_spanned(
+                &field.ident,
+                "parse_properties_with fields must declare key",
+            )
+        })?;
+        let additional_keys = field.additional_keys.as_ref().ok_or_else(|| {
+            Error::new_spanned(
+                &field.ident,
+                "parse_properties_with fields must declare additional_keys",
+            )
+        })?;
+        let default = typed_default(field)?;
+        return Ok(quote! {
+            #ident: #parse_properties_with(
+                properties,
+                #key,
+                &[#(#additional_keys),*],
+                #default,
+            ).map_err(|error| {
                 format!("Invalid value for {}: {error}", #key)
             })?
-        };
+        });
     }
 
     if let Some(prefix) = &field.prefix {
-        let value_type = field
-            .map_value_type
-            .as_ref()
-            .expect("prefix fields are validated as maps");
+        let value_type = field.map_value_type.as_ref().ok_or_else(|| {
+            Error::new_spanned(
+                &field.ty,
+                "property prefix fields must have type HashMap<String, T>",
+            )
+        })?;
         let parse = if is_bool(value_type) {
             quote!(value.to_ascii_lowercase().parse::<#value_type>())
         } else {
             quote!(value.parse::<#value_type>())
         };
-        return quote! {
-            #ident: {
-                let parsed = properties
-                    .iter()
-                    .filter_map(|(key, value)| {
-                        key.strip_prefix(#prefix).map(|suffix| {
-                            #parse
-                                .map(|parsed| (suffix.to_string(), parsed))
-                                .map_err(|error| format!("Invalid value for {key}: {error}"))
-                        })
+        return Ok(quote! {
+            #ident: properties
+                .iter()
+                .filter_map(|(key, value)| {
+                    key.strip_prefix(#prefix).map(|suffix| {
+                        #parse
+                            .map(|parsed| (suffix.to_string(), parsed))
+                            .map_err(|error| format!("Invalid value for {key}: {error}"))
                     })
-                    .collect::<::std::result::Result<
-                        ::std::collections::HashMap<_, _>,
-                        ::std::string::String,
-                    >>()?;
-                if parsed.is_empty() {
-                    #default
-                } else {
-                    parsed
-                }
-            }
-        };
+                })
+                .collect::<::std::result::Result<
+                    ::std::collections::HashMap<_, _>,
+                    ::std::string::String,
+                >>()?
+        });
     }
 
-    let key = field.key.as_ref().expect("exact-key fields have a key");
+    let key = field
+        .key
+        .as_ref()
+        .ok_or_else(|| Error::new_spanned(&field.ident, "property fields must declare key"))?;
+    let default = typed_default(field)?;
     let parse = match (&field.parse_with, &field.option_inner_type) {
-        (Some(parse_with), _) => quote! {
+        (Some(parse_with), Some(_)) => quote! {
+            Some(#parse_with(value).map_err(|error| {
+                format!("Invalid value for {}: {error}", #key)
+            })?)
+        },
+        (Some(parse_with), None) => quote! {
             #parse_with(value).map_err(|error| {
                 format!("Invalid value for {}: {error}", #key)
             })?
@@ -485,24 +493,24 @@ fn parse_field(field: &PropertyField) -> TokenStream2 {
         },
     };
 
-    quote! {
+    Ok(quote! {
         #ident: match properties.get(#key) {
             Some(value) => #parse,
             None => #default,
         }
-    }
+    })
 }
 
-fn typed_default(field: &PropertyField) -> TokenStream2 {
+fn typed_default(field: &PropertyField) -> syn::Result<TokenStream2> {
     let ty = &field.ty;
-    let default = default_value(
-        field.default.as_ref().expect("leaf fields have defaults"),
-        ty,
-    );
-    quote!({
+    let default = field.default.as_ref().ok_or_else(|| {
+        Error::new_spanned(&field.ident, "property key fields must declare default")
+    })?;
+    let default = default_value(default, ty);
+    Ok(quote!({
         let value: #ty = #default;
         value
-    })
+    }))
 }
 
 fn default_value(default: &Expr, ty: &Type) -> TokenStream2 {

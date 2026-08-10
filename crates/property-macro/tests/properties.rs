@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use iceberg_property_macro::Properties;
 use serde::{Deserialize, Serialize};
@@ -23,7 +24,7 @@ use serde::{Deserialize, Serialize};
 const RETRIES: &str = "commit.retry.num-retries";
 const OWNER: &str = "owner";
 const FORMAT: &str = "write.format.default";
-const FANOUT_ENABLED: &str = "write.fanout.enabled";
+const FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
 const COLUMN_FPP_PREFIX: &str = "write.parquet.bloom-filter-fpp.column.";
 const WIDTH: &str = "dimensions.width";
 const HEIGHT: &str = "dimensions.height";
@@ -55,22 +56,21 @@ fn parse_dimensions(
 
 #[derive(Debug, Properties)]
 struct TestProperties {
-    #[property(key = RETRIES, default = 4, pub(getter))]
+    #[property(key = RETRIES, default = 4, getter)]
     retries: u64,
 
-    #[property(key = OWNER, default = None, pub(getter))]
+    #[property(key = OWNER, default = None, getter)]
     owner: Option<String>,
 
-    #[property(key = FORMAT, default = "parquet", pub(getter))]
+    #[property(key = FORMAT, default = "parquet", getter)]
     format: String,
 
-    #[property(key = FANOUT_ENABLED, default = true, pub(getter))]
+    #[property(key = FANOUT_ENABLED, default = true, getter)]
     fanout_enabled: bool,
 
     #[property(
         prefix = COLUMN_FPP_PREFIX,
-        default = HashMap::new(),
-        pub(getter)
+        getter
     )]
     column_fpp: HashMap<String, f64>,
 
@@ -79,7 +79,7 @@ struct TestProperties {
         additional_keys = [HEIGHT, DEPTH],
         default = (640, 480, 320),
         parse_properties_with = parse_dimensions,
-        pub(getter)
+        getter
     )]
     dimensions: (u64, u64, u64),
 }
@@ -147,13 +147,13 @@ fn reports_the_property_with_an_invalid_value() {
 #[derive(Debug, Properties)]
 struct CommitProperties {
     /// Maximum number of times to retry a commit.
-    #[property(key = RETRIES, default = 4, pub(getter))]
+    #[property(key = RETRIES, default = 4, getter)]
     retries: u64,
 }
 
 #[derive(Debug, Properties)]
 struct NestedProperties {
-    #[property(nested, pub(getter))]
+    #[property(nested, getter)]
     commit: CommitProperties,
 }
 
@@ -180,13 +180,16 @@ struct ValidatedProperties {
         key = "location",
         default = "default",
         parse_with = parse_non_empty,
-        pub(getter)
+        getter
     )]
     location: String,
 }
 
 #[test]
 fn custom_single_value_parser_can_validate_and_normalize() {
+    let defaults = ValidatedProperties::from_properties(&HashMap::new()).unwrap();
+    assert_eq!(defaults.location(), "default");
+
     let parsed = ValidatedProperties::from_properties(&HashMap::from([(
         "location".to_string(),
         " path ".to_string(),
@@ -202,9 +205,63 @@ fn custom_single_value_parser_can_validate_and_normalize() {
     assert_eq!(error, "Invalid value for location: value must not be empty");
 }
 
+#[derive(Debug, Properties)]
+struct OptionalValidatedProperties {
+    #[property(
+        key = "optional-location",
+        default = None,
+        parse_with = parse_non_empty,
+        getter
+    )]
+    location: Option<String>,
+}
+
+#[test]
+fn custom_single_value_parser_wraps_present_optional_values() {
+    let defaults = OptionalValidatedProperties::from_properties(&HashMap::new()).unwrap();
+    assert_eq!(defaults.location(), &None);
+
+    let parsed = OptionalValidatedProperties::from_properties(&HashMap::from([(
+        "optional-location".to_string(),
+        " path ".to_string(),
+    )]))
+    .unwrap();
+    assert_eq!(parsed.location().as_deref(), Some("path"));
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Meters(u64);
+
+impl FromStr for Meters {
+    type Err = <u64 as FromStr>::Err;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value.parse().map(Self)
+    }
+}
+
+#[derive(Debug, Properties)]
+struct CopyGetterProperties {
+    #[property(key = "distance", default = Meters(1), getter)]
+    distance: Meters,
+
+    #[property(key = "count", default = Some(2), getter)]
+    count: Option<u64>,
+}
+
+#[test]
+fn returns_only_structurally_known_copy_types_by_value() {
+    let properties = CopyGetterProperties::from_properties(&HashMap::new()).unwrap();
+
+    let _: &Meters = properties.distance();
+    let _: Option<u64> = properties.count();
+    assert_eq!(properties.distance(), &Meters(1));
+    assert_eq!(properties.count(), Some(2));
+}
+
 #[derive(Debug, Default, Serialize, Deserialize, Properties)]
 struct DerivedTraitProperties {
-    #[property(key = RETRIES, default = 4, pub(getter))]
+    #[property(key = RETRIES, default = 4, getter)]
     retries: u64,
 }
 
