@@ -273,7 +273,7 @@ impl FileScanTaskReader {
         };
 
         // Present by name but not by the embedded id (only meaningful when no by-id column
-        // was found) -- an unthreadable shape we reject rather than mis-coalesce.
+        // was found). An unthreadable shape we reject rather than coalesce incorrectly.
         let last_updated_seq_present_by_name_only = project_last_updated_seq
             && phys_last_updated_seq_leaf.is_none()
             && record_batch_stream_builder
