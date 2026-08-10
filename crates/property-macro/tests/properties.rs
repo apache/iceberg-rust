@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use iceberg::ErrorKind;
+use iceberg::{Error, ErrorKind};
 use iceberg_property_macro::Properties;
 use serde::{Deserialize, Serialize};
 
@@ -36,14 +36,21 @@ fn parse_dimensions(
     width_key: &str,
     additional_keys: &[&str],
     default: (u64, u64, u64),
-) -> Result<(u64, u64, u64), String> {
+) -> iceberg::Result<(u64, u64, u64)> {
     if additional_keys.len() != 2 {
-        return Err("dimensions require height and depth keys".to_string());
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            "dimensions require height and depth keys",
+        ));
     }
     let parse = |property_key: &str, default| {
         properties
             .get(property_key)
-            .map(|value| value.parse::<u64>().map_err(|error| error.to_string()))
+            .map(|value| {
+                value
+                    .parse::<u64>()
+                    .map_err(|error| Error::new(ErrorKind::DataInvalid, error.to_string()))
+            })
             .transpose()
             .map(|value| value.unwrap_or(default))
     };
@@ -146,6 +153,12 @@ fn reports_the_property_with_an_invalid_value() {
     .unwrap_err();
     assert_eq!(prefix_error.kind(), ErrorKind::DataInvalid);
     assert!(prefix_error.message().contains(&prefixed_key));
+
+    let dimensions_error =
+        TestProperties::from_properties(&HashMap::from([(WIDTH.to_string(), "wide".to_string())]))
+            .unwrap_err();
+    assert_eq!(dimensions_error.kind(), ErrorKind::DataInvalid);
+    assert!(format!("{dimensions_error}").contains(WIDTH));
 }
 
 #[derive(Debug, Properties)]
@@ -169,10 +182,13 @@ fn nested_properties_read_the_same_flat_map() {
     assert_eq!(properties.commit().retries(), 9);
 }
 
-fn parse_non_empty(value: &str) -> Result<String, &'static str> {
+fn parse_non_empty(value: &str) -> iceberg::Result<String> {
     let value = value.trim();
     if value.is_empty() {
-        Err("value must not be empty")
+        Err(Error::new(
+            ErrorKind::DataInvalid,
+            "value must not be empty",
+        ))
     } else {
         Ok(value.to_string())
     }
@@ -207,10 +223,8 @@ fn custom_single_value_parser_can_validate_and_normalize() {
     )]))
     .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::DataInvalid);
-    assert_eq!(
-        error.message(),
-        "Invalid value for location: value must not be empty"
-    );
+    assert_eq!(error.message(), "value must not be empty");
+    assert!(format!("{error}").contains("property: location"));
 }
 
 #[derive(Debug, Properties)]

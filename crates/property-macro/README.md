@@ -60,7 +60,7 @@ keys, and contextual errors.
 ```rust
 use std::collections::HashMap;
 
-use iceberg::ErrorKind;
+use iceberg::{Error, ErrorKind};
 use iceberg_property_macro::Properties;
 
 const RETRIES: &str = "commit.retry.num-retries";
@@ -72,10 +72,13 @@ const WIDTH: &str = "dimensions.width";
 const HEIGHT: &str = "dimensions.height";
 const DEPTH: &str = "dimensions.depth";
 
-fn parse_location(value: &str) -> Result<String, &'static str> {
+fn parse_location(value: &str) -> iceberg::Result<String> {
     let location = value.trim().trim_end_matches('/');
     if location.is_empty() {
-        Err("location must not be empty")
+        Err(Error::new(
+            ErrorKind::DataInvalid,
+            "location must not be empty",
+        ))
     } else {
         Ok(location.to_string())
     }
@@ -86,14 +89,21 @@ fn parse_dimensions(
     width_key: &str,
     additional_keys: &[&str],
     default: (u64, u64, u64),
-) -> Result<(u64, u64, u64), String> {
+) -> iceberg::Result<(u64, u64, u64)> {
     if additional_keys.len() != 2 {
-        return Err("dimensions require height and depth keys".to_string());
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            "dimensions require height and depth keys",
+        ));
     }
     let parse = |key: &str, default| {
         properties
             .get(key)
-            .map(|value| value.parse::<u64>().map_err(|error| error.to_string()))
+            .map(|value| {
+                value.parse::<u64>().map_err(|error| {
+                    Error::new(ErrorKind::DataInvalid, error.to_string())
+                })
+            })
             .transpose()
             .map(|value| value.unwrap_or(default))
     };
@@ -186,7 +196,7 @@ fn main() -> iceberg::Result<()> {
     )]))
     .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::DataInvalid);
-    assert!(error.message().contains(LOCATION));
+    assert!(format!("{error}").contains(LOCATION));
 
     Ok(())
 }
@@ -249,7 +259,6 @@ Boolean values are parsed case-insensitively. Other values require `FromStr`
 unless a custom parser is supplied. String-literal and path defaults are
 converted into their field type with `Into`.
 
-`from_properties` uses `iceberg::Result`, and generated parse failures use
-`ErrorKind::DataInvalid`. Custom parsers may return any error that implements
-`Display`; the macro converts it to the same Iceberg error kind and adds the
-primary property key to the message.
+`from_properties` and both custom parser hooks use `iceberg::Result`. Generated
+`FromStr` failures use `ErrorKind::DataInvalid`. The macro preserves errors from
+custom parsers and adds the primary property key as error context.

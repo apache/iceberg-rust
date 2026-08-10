@@ -415,17 +415,15 @@ fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
         })?;
         let default = typed_default(field)?;
         return Ok(quote! {
-            #ident: #parse_properties_with(
-                properties,
-                #key,
-                &[#(#additional_keys),*],
-                #default,
-            ).map_err(|error| {
-                ::iceberg::Error::new(
-                    ::iceberg::ErrorKind::DataInvalid,
-                    format!("Invalid value for {}: {error}", #key),
-                )
-            })?
+            #ident: {
+                let parsed: ::iceberg::Result<#ty> = #parse_properties_with(
+                    properties,
+                    #key,
+                    &[#(#additional_keys),*],
+                    #default,
+                );
+                parsed.map_err(|error| error.with_context("property", #key))?
+            }
         });
     }
 
@@ -466,21 +464,17 @@ fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
         .ok_or_else(|| Error::new_spanned(&field.ident, "property fields must declare key"))?;
     let default = typed_default(field)?;
     let parse = match (&field.parse_with, &field.option_inner_type) {
-        (Some(parse_with), Some(_)) => quote! {
-            Some(#parse_with(value).map_err(|error| {
-                ::iceberg::Error::new(
-                    ::iceberg::ErrorKind::DataInvalid,
-                    format!("Invalid value for {}: {error}", #key),
-                )
-            })?)
+        (Some(parse_with), Some(inner_type)) => quote! {
+            {
+                let parsed: ::iceberg::Result<#inner_type> = #parse_with(value);
+                Some(parsed.map_err(|error| error.with_context("property", #key))?)
+            }
         },
         (Some(parse_with), None) => quote! {
-            #parse_with(value).map_err(|error| {
-                ::iceberg::Error::new(
-                    ::iceberg::ErrorKind::DataInvalid,
-                    format!("Invalid value for {}: {error}", #key),
-                )
-            })?
+            {
+                let parsed: ::iceberg::Result<#ty> = #parse_with(value);
+                parsed.map_err(|error| error.with_context("property", #key))?
+            }
         },
         (None, Some(inner_type)) if is_bool(inner_type) => quote! {
             Some(value.to_ascii_lowercase().parse::<#inner_type>().map_err(|error| {

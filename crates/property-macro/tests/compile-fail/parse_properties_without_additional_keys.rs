@@ -25,7 +25,7 @@ fn parse_all(
     _key: &str,
     _additional_keys: &[&str],
     default: u64,
-) -> Result<u64, String> {
+) -> iceberg::Result<u64> {
     Ok(default)
 }
 
