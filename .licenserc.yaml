@@ -31,6 +31,8 @@ header:
     - "**/DEPENDENCIES.*.tsv"
     # Generated content by cargo-public-api
     - "**/public-api.txt"
+    # Generated content by trybuild
+    - "**/*.stderr"
     # Release distributions
     - "dist/*"
     - "target"
