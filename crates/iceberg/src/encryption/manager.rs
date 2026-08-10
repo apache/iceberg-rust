@@ -417,19 +417,6 @@ impl EncryptionManager {
     }
 }
 
-/// An [`EncryptionManager`] backed by an in-memory KMS holding `table_key_id`.
-#[cfg(test)]
-pub(crate) fn test_encryption_manager(table_key_id: &str) -> Arc<EncryptionManager> {
-    let kms = super::kms::MemoryKeyManagementClient::new();
-    kms.add_master_key(table_key_id).unwrap();
-    Arc::new(
-        EncryptionManager::builder()
-            .kms_client(Arc::new(kms) as Arc<dyn KeyManagementClient>)
-            .table_key_id(table_key_id)
-            .build(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

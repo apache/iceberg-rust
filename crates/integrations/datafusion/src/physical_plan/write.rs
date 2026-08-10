@@ -222,13 +222,16 @@ impl ExecutionPlan for IcebergWriteExec {
         // Build the writer from the already-parsed table properties so it honors
         // `write.parquet.*` settings (e.g. CDC). Arrow batches flowing through
         // DataFusion carry no field-id metadata, so match fields by name.
-        let parquet_file_writer_builder = ParquetWriterBuilder::from_table_properties(
+        let mut parquet_file_writer_builder = ParquetWriterBuilder::from_table_properties(
             &table_props,
             self.table.metadata().current_schema().clone(),
-            self.table.encryption_manager().cloned(),
         )
         .map_err(to_datafusion_error)?
         .with_match_mode(FieldMatchMode::Name);
+        if let Some(encryption_manager) = self.table.encryption_manager() {
+            parquet_file_writer_builder =
+                parquet_file_writer_builder.with_encryption_manager(encryption_manager.clone());
+        }
         let target_file_size = table_props.write_target_file_size_bytes;
 
         let file_io = self.table.file_io().clone();

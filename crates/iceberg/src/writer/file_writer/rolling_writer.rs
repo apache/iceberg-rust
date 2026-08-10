@@ -269,9 +269,10 @@ mod tests {
 
     use super::*;
     use crate::arrow::test_utils::read_encrypted_parquet;
-    use crate::encryption::{StandardKeyMetadata, test_encryption_manager};
+    use crate::encryption::StandardKeyMetadata;
     use crate::io::FileIO;
     use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, Type};
+    use crate::test_utils::make_encryption_manager;
     use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
     use crate::writer::file_writer::ParquetWriterBuilder;
     use crate::writer::file_writer::location_generator::{
@@ -459,11 +460,9 @@ mod tests {
             TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
             "test-key".to_string(),
         )]))?;
-        let parquet_writer_builder = ParquetWriterBuilder::from_table_properties(
-            &table_properties,
-            Arc::new(schema),
-            Some(test_encryption_manager("test-key")),
-        )?;
+        let parquet_writer_builder =
+            ParquetWriterBuilder::from_table_properties(&table_properties, Arc::new(schema))?
+                .with_encryption_manager(make_encryption_manager("test-key"));
 
         // Set a very small target size to trigger rolling
         let rolling_writer_builder = RollingFileWriterBuilder::new(

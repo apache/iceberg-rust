@@ -26,8 +26,8 @@ use expect_test::Expect;
 use itertools::Itertools;
 
 use crate::TableIdent;
-use crate::encryption::SensitiveBytes;
 use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
+use crate::encryption::{EncryptionManager, SensitiveBytes};
 use crate::io::FileIO;
 use crate::runtime::Runtime;
 use crate::spec::TableMetadata;
@@ -105,8 +105,20 @@ pub fn check_record_batches(
     ));
 }
 
+/// An [`EncryptionManager`] backed by an in-memory KMS holding `table_key_id`.
+pub fn make_encryption_manager(table_key_id: &str) -> Arc<EncryptionManager> {
+    let kms = MemoryKeyManagementClient::new();
+    kms.add_master_key(table_key_id).unwrap();
+    Arc::new(
+        EncryptionManager::builder()
+            .kms_client(Arc::new(kms) as Arc<dyn KeyManagementClient>)
+            .table_key_id(table_key_id)
+            .build(),
+    )
+}
+
 /// Build a table backed by the V3 encryption fixture and an in-memory KMS,
-/// so it has an [`EncryptionManager`](crate::encryption::EncryptionManager).
+/// so it has an [`EncryptionManager`].
 ///
 /// The fixture's snapshot references an encrypted manifest list; its bytes
 /// (the `manifest-list-v3-encrypted.avro` testdata, an encrypted empty list)
