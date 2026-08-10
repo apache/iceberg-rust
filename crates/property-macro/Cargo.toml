@@ -35,15 +35,15 @@ keywords = ["iceberg"]
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1"
-quote = "1"
-syn = { version = "2", features = ["full"] }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 iceberg = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-trybuild = "1"
+trybuild = { workspace = true }
 
 [lints]
 workspace = true
