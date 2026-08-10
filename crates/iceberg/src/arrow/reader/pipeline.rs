@@ -43,7 +43,8 @@ use crate::encryption::StandardKeyMetadata;
 use crate::error::Result;
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::metadata_columns::{
-    RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_PARTITION,
+    RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER, RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_FILE,
+    RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER, RESERVED_FIELD_ID_PARTITION,
     RESERVED_FIELD_ID_POS, RESERVED_FIELD_ID_SPEC_ID, is_metadata_field,
 };
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
@@ -298,6 +299,77 @@ impl FileScanTaskReader {
             let spec_id_datum = Datum::int(partition_spec.spec_id());
             record_batch_transformer_builder = record_batch_transformer_builder
                 .with_constant(RESERVED_FIELD_ID_SPEC_ID, spec_id_datum);
+        }
+
+        if task
+            .project_field_ids()
+            .contains(&RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER)
+        {
+            // A data file may physically carry a per-row `_last_updated_sequence_number`
+            // column, e.g. one written by another engine such as Iceberg Java when carrying
+            // rows forward across a rewrite. The spec requires reading such non-null
+            // per-row values unmodified, falling back to the derived value only where
+            // null. That per-row coalesce is not implemented yet, so rather than silently
+            // overwrite genuine per-row values with the derived value, reject the file
+            // loudly. Checks the full pre-projection file schema, since the column is
+            // stripped from the projection mask. Matches on the embedded field id when
+            // present (propagating a malformed id rather than treating it as absent) and
+            // falls back to the column name, so a file read via name mapping or positional
+            // fallback ids (which never equal the reserved id) is still caught.
+            let mut file_has_column = false;
+            for field in record_batch_stream_builder.schema().fields() {
+                let field_id = match field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
+                    Some(id) => Some(id.parse::<i32>().map_err(|e| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("field id not parseable as an i32: {e}"),
+                        )
+                    })?),
+                    None => None,
+                };
+                if field_id == Some(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER)
+                    || field.name() == RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER
+                {
+                    file_has_column = true;
+                    break;
+                }
+            }
+            if file_has_column {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Reading a physically-stored _last_updated_sequence_number column is \
+                     not yet supported; only the derived (data-sequence-number) value is \
+                     implemented",
+                ));
+            }
+
+            // Derive the column, gated on the data file's `first_row_id`. Java gates
+            // both lineage columns this way (`ValueReaders.lastUpdated` returns nulls
+            // when the base row id is null); the spec itself only says the column is
+            // assigned the manifest entry's sequence number on read.
+            record_batch_transformer_builder = match (task.first_row_id, task.data_sequence_number)
+            {
+                // Non-null first_row_id: inherit from the data sequence number.
+                (Some(_), Some(seq)) => record_batch_transformer_builder.with_constant(
+                    RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+                    Datum::long(seq),
+                ),
+                // Null first_row_id (v1/v2, or a pre-upgrade v3 snapshot): the column is null.
+                (None, _) => record_batch_transformer_builder
+                    .with_null_metadata_column(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER)?,
+                // first_row_id present but no data sequence number: after manifest
+                // inheritance a committed entry always has one, so this is a malformed
+                // manifest rather than a legitimate null.
+                (Some(_), None) => {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Data file {} has a first_row_id but no data sequence number",
+                            task.data_file_path
+                        ),
+                    ));
+                }
+            };
         }
 
         if let (Some(partition_spec), Some(partition_data)) =
@@ -576,7 +648,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{Array, ArrayRef, Int32Array, RecordBatch};
+    use arrow_array::{Array, ArrayRef, Int32Array, Int64Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
@@ -906,6 +978,237 @@ mod tests {
         assert!(
             err_str.contains("decryption properties were not provided"),
             "Expected error about missing decryption properties, got: {err_str}"
+        );
+    }
+
+    /// Writes a plain (unencrypted) single-column Int32 "id" parquet file with the
+    /// given extra Arrow fields/columns appended, returning the file path.
+    fn write_plain_parquet(
+        dir: &str,
+        name: &str,
+        extra_fields: Vec<Field>,
+        extra_columns: Vec<ArrayRef>,
+    ) -> String {
+        let mut fields =
+            vec![
+                Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "1".to_string(),
+                )])),
+            ];
+        fields.extend(extra_fields);
+        let arrow_schema = Arc::new(ArrowSchema::new(fields));
+
+        let mut columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1, 2, 3]))];
+        columns.extend(extra_columns);
+        let batch = RecordBatch::try_new(arrow_schema.clone(), columns).unwrap();
+
+        let file_path = format!("{dir}/{name}");
+        let file = File::create(&file_path).unwrap();
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        file_path
+    }
+
+    fn last_updated_seq_task(
+        file_path: String,
+        first_row_id: Option<i64>,
+        data_sequence_number: Option<i64>,
+    ) -> FileScanTask {
+        use crate::metadata_columns::RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER;
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema)
+            .with_project_field_ids(vec![1, RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER])
+            .with_first_row_id(first_row_id)
+            .with_data_sequence_number(data_sequence_number)
+            .with_case_sensitive(false)
+            .build()
+    }
+
+    /// Asserts the logical per-row values of the `_last_updated_sequence_number`
+    /// column across all batches, independent of the physical (run-end) encoding.
+    fn assert_last_updated_seq_column(batches: &[RecordBatch], expected: &[Option<i64>]) {
+        use arrow_array::cast::AsArray;
+        use arrow_cast::cast;
+        use arrow_schema::DataType;
+
+        use crate::metadata_columns::RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER;
+
+        let mut actual = Vec::new();
+        for batch in batches {
+            let col = batch
+                .column_by_name(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER)
+                .expect("_last_updated_sequence_number column should be present");
+            let logical = cast(col, &DataType::Int64).unwrap();
+            let values = logical.as_primitive::<arrow_array::types::Int64Type>();
+            for i in 0..values.len() {
+                actual.push((!values.is_null(i)).then(|| values.value(i)));
+            }
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn test_last_updated_sequence_number_null_when_no_first_row_id() {
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+        let file_path = write_plain_parquet(dir, "no_first_row_id.parquet", vec![], vec![]);
+
+        // A file with a null first_row_id (v1/v2, or a pre-upgrade v3 snapshot) produces
+        // a null _last_updated_sequence_number column, even though it has a data
+        // sequence number; the spec gates both lineage columns on first_row_id.
+        let task = last_updated_seq_task(file_path, None, Some(9));
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_last_updated_seq_column(&batches, &[None, None, None]);
+    }
+
+    #[tokio::test]
+    async fn test_last_updated_sequence_number_error_when_no_data_seq() {
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+        let file_path = write_plain_parquet(dir, "no_data_seq.parquet", vec![], vec![]);
+
+        // first_row_id present but data_sequence_number absent: after manifest
+        // inheritance a committed entry always has one, so this is a malformed
+        // manifest and must error rather than fabricate or null the column.
+        let task = last_updated_seq_task(file_path, Some(42), None);
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let result: Result<Vec<RecordBatch>, _> =
+            reader.read(tasks).unwrap().stream().try_collect().await;
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), crate::ErrorKind::DataInvalid);
+        assert!(
+            format!("{err}").contains("no data sequence number"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_last_updated_sequence_number_derived_from_data_seq() {
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+        let file_path = write_plain_parquet(dir, "with_first_row_id.parquet", vec![], vec![]);
+
+        // Non-null first_row_id + data sequence number -> the derived value (the data
+        // sequence number) for every row. This is the only value-producing arm.
+        let task = last_updated_seq_task(file_path, Some(42), Some(7));
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_last_updated_seq_column(&batches, &[Some(7), Some(7), Some(7)]);
+    }
+
+    #[tokio::test]
+    async fn test_last_updated_sequence_number_mixed_files_share_schema() {
+        use arrow_select::concat::concat_batches;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+
+        // Two files in one scan: one with first_row_id (derived value -> REE constant),
+        // one without (null gate -> REE null). Both must produce the same Arrow type for
+        // the column, or concatenation fails; the regression this branch fixes.
+        let with_id = last_updated_seq_task(
+            write_plain_parquet(dir, "with_id.parquet", vec![], vec![]),
+            Some(42),
+            Some(7),
+        );
+        let without_id = last_updated_seq_task(
+            write_plain_parquet(dir, "without_id.parquet", vec![], vec![]),
+            None,
+            Some(7),
+        );
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(with_id), Ok(without_id)]))
+            as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(batches.len(), 2);
+        // Identical schema across files -> concat succeeds.
+        let schema = batches[0].schema();
+        concat_batches(&schema, &batches)
+            .expect("batches from value and null files must share one schema");
+    }
+
+    #[tokio::test]
+    async fn test_last_updated_sequence_number_physical_column_unsupported() {
+        use crate::metadata_columns::RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+        // A file that physically carries the _last_updated_sequence_number column, as
+        // Iceberg Java writes when carrying rows forward across a rewrite.
+        let seq_field = Field::new("_last_updated_sequence_number", DataType::Int64, true)
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER.to_string(),
+            )]));
+        let seq_col = Arc::new(Int64Array::from(vec![Some(5), None, Some(8)])) as ArrayRef;
+        let file_path =
+            write_plain_parquet(dir, "with_seq.parquet", vec![seq_field], vec![seq_col]);
+
+        // first_row_id present so the gate would otherwise materialize the constant;
+        // the physically-present column must trigger the fail-loud guard first.
+        let task = last_updated_seq_task(file_path, Some(100), Some(9));
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let result: Result<Vec<RecordBatch>, _> =
+            reader.read(tasks).unwrap().stream().try_collect().await;
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), crate::ErrorKind::FeatureUnsupported);
+        assert!(
+            format!("{err}").contains("physically-stored _last_updated_sequence_number"),
+            "unexpected error: {err}"
         );
     }
 
