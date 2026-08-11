@@ -57,7 +57,6 @@ pub struct ParquetWriterBuilder {
     schema: SchemaRef,
     match_mode: FieldMatchMode,
     encryption_manager: Option<Arc<EncryptionManager>>,
-    requires_encryption: bool,
 }
 
 impl ParquetWriterBuilder {
@@ -83,7 +82,6 @@ impl ParquetWriterBuilder {
             schema,
             match_mode,
             encryption_manager: None,
-            requires_encryption: false,
         }
     }
 
@@ -91,9 +89,7 @@ impl ParquetWriterBuilder {
     /// schema, translating `write.parquet.*` settings into `WriterProperties`
     /// instead of using parquet-rs defaults.
     ///
-    /// Tables with `encryption.key-id` set must also call
-    /// [`Self::with_encryption_manager`]; [`FileWriterBuilder::build`] errors
-    /// otherwise.
+    /// Call [`Self::with_encryption_manager`] as well to write encrypted files.
     pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Result<Self> {
         let cdc = table_props.cdc_enabled.then_some(CdcOptions {
             min_chunk_size: table_props.cdc_min_chunk_size,
@@ -109,10 +105,7 @@ impl ParquetWriterBuilder {
             .set_data_page_row_count_limit(table_props.parquet_page_row_limit)
             .set_dictionary_page_size_limit(table_props.parquet_dict_size_bytes)
             .build();
-        Ok(Self {
-            requires_encryption: table_props.encryption_key_id.is_some(),
-            ..Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
-        })
+        Ok(Self::new_with_match_mode(props, schema, FieldMatchMode::Id))
     }
 
     /// Set the field match mode used to map Arrow fields to Iceberg fields.
@@ -169,13 +162,6 @@ impl FileWriterBuilder for ParquetWriterBuilder {
     type R = ParquetWriter;
 
     async fn build(&self, output_file: OutputFile) -> Result<Self::R> {
-        if self.requires_encryption && self.encryption_manager.is_none() {
-            return Err(Error::new(
-                ErrorKind::PreconditionFailed,
-                "Table has encryption.key-id set but no EncryptionManager was given to ParquetWriterBuilder",
-            ));
-        }
-
         let key_metadata = self
             .encryption_manager
             .as_ref()
@@ -2572,25 +2558,6 @@ mod tests {
         let tp = table_props(HashMap::new());
         let builder = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema()).unwrap();
         assert!(builder.props.content_defined_chunking().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_build_rejects_encryption_without_manager() {
-        let tp = table_props(HashMap::from([(
-            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
-            "test-key".to_string(),
-        )]));
-        let tmp = TempDir::new().unwrap();
-        let output = FileIO::new_with_fs()
-            .new_output(format!("{}/enc.parquet", tmp.path().to_str().unwrap()))
-            .unwrap();
-        let err = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
-            .unwrap()
-            .build(output)
-            .await
-            .err()
-            .expect("encryption without an EncryptionManager must be rejected");
-        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
     }
 
     #[tokio::test]
