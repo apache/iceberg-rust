@@ -665,9 +665,9 @@ pub mod tests {
     use crate::io::{FileIO, OutputFile};
     use crate::metadata_columns::{
         RESERVED_COL_NAME_DELETE_FILE_PATH, RESERVED_COL_NAME_DELETE_FILE_POS,
-        RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID,
-        RESERVED_FIELD_ID_DELETE_FILE_PATH, RESERVED_FIELD_ID_DELETE_FILE_POS,
-        RESERVED_FIELD_ID_POS,
+        RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
+        RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_DELETE_FILE_PATH,
+        RESERVED_FIELD_ID_DELETE_FILE_POS, RESERVED_FIELD_ID_POS,
     };
     use crate::scan::FileScanTask;
     use crate::spec::{
@@ -685,6 +685,25 @@ pub mod tests {
         let mut env = Environment::new();
         env.set_auto_escape_callback(|_| AutoEscape::None);
         env.render_str(template, ctx).unwrap()
+    }
+
+    /// Asserts every row of the `_last_updated_sequence_number` column across all
+    /// batches equals `expected` (or is null when `expected` is `None`), decoding
+    /// the logical value independent of the physical (run-end) encoding.
+    fn assert_last_updated_seq_all(batches: &[RecordBatch], expected: Option<i64>) {
+        use arrow_cast::cast;
+        use arrow_schema::DataType;
+        for batch in batches {
+            let col = batch
+                .column_by_name(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER)
+                .expect("_last_updated_sequence_number column should be present");
+            let logical = cast(col, &DataType::Int64).unwrap();
+            let values = logical.as_primitive::<arrow_array::types::Int64Type>();
+            for i in 0..values.len() {
+                let actual = (!values.is_null(i)).then(|| values.value(i));
+                assert_eq!(actual, expected, "row {i}");
+            }
+        }
     }
 
     pub struct TableTestFixture {
@@ -3229,6 +3248,73 @@ pub mod tests {
 
         // Verify 'z' column exists
         assert!(batches[0].column_by_name("z").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_select_with_last_updated_sequence_number_column() {
+        // A v2 fixture: data files have a null first_row_id. Per the spec's Row
+        // Lineage read rules, a file with a null first_row_id produces a null
+        // _last_updated_sequence_number for all rows; both lineage columns are
+        // gated on first_row_id.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        // Every row's value is null (v2 files have no first_row_id).
+        assert_last_updated_seq_all(&batches, None);
+    }
+
+    #[tokio::test]
+    async fn test_select_with_last_updated_sequence_number_column_v3() {
+        // A v3 fixture: the data file inherits a first_row_id and a data sequence
+        // number through manifest read. End to end, the projected
+        // _last_updated_sequence_number materializes to the file's data sequence
+        // number for every row, exercising the full inherit, populate and
+        // materialize wiring, not just a hand-built task.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_v3_manifest_files().await;
+
+        // The added file inherits the current snapshot's sequence number; derive it
+        // from the fixture rather than hardcoding so the assertion tracks the fixture.
+        let expected_seq = fixture
+            .table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .sequence_number();
+
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_last_updated_seq_all(&batches, Some(expected_seq));
     }
 
     #[tokio::test]
