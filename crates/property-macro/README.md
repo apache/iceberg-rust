@@ -50,6 +50,10 @@ Documentation attributes on the field are copied to the generated getter. The
 macro generates no setters, backing fields, or conversion back to a property
 map.
 
+`Option<T>` key fields and `HashMap<String, T>` prefix fields must use the
+corresponding types from `std`. The macro recognizes those field shapes
+syntactically and generates code using the standard-library variants.
+
 ## Complete example
 
 This example covers exact keys and defaults, optional values, case-insensitive
@@ -144,7 +148,9 @@ struct TableLikeProperties {
     /// A single-key parser can validate and normalize a property value.
     #[property(
         key = LOCATION,
-        default = "warehouse",
+        // Iceberg computes the real absent case as `<table-location>/data`.
+        // This literal is only an illustrative default for the macro example.
+        default = "<table-location>/data",
         parse_with = parse_location,
         getter
     )]
@@ -167,7 +173,7 @@ fn main() -> iceberg::Result<()> {
     assert_eq!(defaults.owner(), &None);
     assert!(defaults.fanout_enabled());
     assert!(defaults.column_fpp().is_empty());
-    assert_eq!(defaults.location(), "warehouse");
+    assert_eq!(defaults.location(), "<table-location>/data");
     assert_eq!(defaults.dimensions(), (640, 480, 320));
 
     let raw = HashMap::from([
