@@ -21,8 +21,6 @@ use serde_derive::{Deserialize, Serialize};
 
 use super::ByteBuf;
 use crate::error::Result;
-use crate::io::FileIO;
-use crate::spec::{Manifest, ManifestReader};
 use crate::{Error, ErrorKind};
 
 /// Entry in a manifest list.
@@ -173,15 +171,6 @@ impl TryFrom<i32> for ManifestContentType {
     }
 }
 
-impl ManifestFile {
-    /// Load [`Manifest`].
-    ///
-    /// This method will also initialize inherited values of [`ManifestEntry`](crate::spec::ManifestEntry), such as `sequence_number`.
-    pub async fn load_manifest(&self, file_io: &FileIO) -> Result<Manifest> {
-        ManifestReader::new(file_io.clone()).read(self).await
-    }
-}
-
 /// Field summary for partition field in the spec.
 ///
 /// Each field in the list corresponds to a field in the manifest file’s partition spec.
@@ -215,8 +204,9 @@ mod test {
     use crate::encryption::{EncryptedOutputFile, StandardKeyMetadata};
     use crate::io::FileIO;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, ManifestEntry, ManifestStatus,
-        ManifestWriterBuilder, NestedField, PartitionSpec, PrimitiveType, Schema, SchemaRef, Type,
+        DataContentType, DataFileBuilder, DataFileFormat, ManifestEntry, ManifestReader,
+        ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec, PrimitiveType, Schema,
+        SchemaRef, Type,
     };
 
     #[test]
@@ -307,7 +297,7 @@ mod test {
         let manifest_file = write_encrypted_manifest(&io, path, key_metadata).await;
         assert_eq!(manifest_file.key_metadata, Some(encoded_key_metadata));
 
-        let manifest = manifest_file.load_manifest(&io).await.unwrap();
+        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
         assert_eq!(manifest.entries().len(), 1);
         assert_eq!(
             manifest.entries()[0].file_path(),
@@ -335,10 +325,10 @@ mod test {
             .with_aad_prefix(b"test-aad-prefix!");
         manifest_file.key_metadata = Some(wrong_key_metadata.encode().unwrap().to_vec());
 
-        let err = manifest_file
-            .load_manifest(&io)
+        let err = ManifestReader::new(io)
+            .read(&manifest_file)
             .await
-            .expect_err("load_manifest must fail when decrypting with the wrong key");
+            .expect_err("read must fail when decrypting with the wrong key");
         assert_eq!(err.kind(), ErrorKind::Unexpected);
     }
 
@@ -360,10 +350,10 @@ mod test {
             .with_aad_prefix(b"wrong-aad-prefix");
         manifest_file.key_metadata = Some(wrong_aad_metadata.encode().unwrap().to_vec());
 
-        let err = manifest_file
-            .load_manifest(&io)
+        let err = ManifestReader::new(io)
+            .read(&manifest_file)
             .await
-            .expect_err("load_manifest must fail when decrypting with the wrong AAD prefix");
+            .expect_err("read must fail when decrypting with the wrong AAD prefix");
         assert_eq!(err.kind(), ErrorKind::Unexpected);
     }
 
@@ -390,110 +380,6 @@ mod test {
             .build()
     }
 
-    /// Builds a manifest file with the given content type and manifest-level
-    /// `first_row_id`. Other fields are irrelevant to row-id assignment.
-    fn manifest_file(content: ManifestContentType, first_row_id: Option<u64>) -> ManifestFile {
-        ManifestFile {
-            manifest_path: "memory:///m.avro".to_string(),
-            manifest_length: 0,
-            partition_spec_id: 0,
-            content,
-            sequence_number: 0,
-            min_sequence_number: 0,
-            added_snapshot_id: 0,
-            added_files_count: None,
-            existing_files_count: None,
-            deleted_files_count: None,
-            added_rows_count: None,
-            existing_rows_count: None,
-            deleted_rows_count: None,
-            partitions: None,
-            key_metadata: None,
-            first_row_id,
-        }
-    }
-
-    #[test]
-    fn test_assign_first_row_ids_interleaved() {
-        let manifest = manifest_file(ManifestContentType::Data, Some(10));
-        let mut entries = vec![
-            data_entry(ManifestStatus::Added, 3, None),
-            // A pre-assigned entry between two assigned ones: it keeps its id and
-            // must not advance the running counter.
-            data_entry(ManifestStatus::Added, 5, Some(100)),
-            // A deleted entry with a pre-set id: it is skipped, so the id is
-            // preserved verbatim and does not advance the counter.
-            data_entry(ManifestStatus::Deleted, 7, Some(999)),
-            data_entry(ManifestStatus::Existing, 2, None),
-        ];
-
-        manifest.assign_first_row_ids(&mut entries).unwrap();
-
-        assert_eq!(entries[0].data_file.first_row_id, Some(10));
-        assert_eq!(entries[1].data_file.first_row_id, Some(100));
-        assert_eq!(entries[2].data_file.first_row_id, Some(999));
-        // 10 + 3 = 13; the preserved and deleted entries in between do not move it.
-        assert_eq!(entries[3].data_file.first_row_id, Some(13));
-    }
-
-    #[test]
-    fn test_assign_first_row_ids_clears_without_manifest_first_row_id() {
-        // A data manifest with no manifest-level first_row_id predates row
-        // lineage: any per-entry value inherited from an earlier read is cleared
-        // so callers never observe a stale id.
-        let manifest = manifest_file(ManifestContentType::Data, None);
-        let mut entries = vec![
-            data_entry(ManifestStatus::Added, 3, None),
-            data_entry(ManifestStatus::Existing, 5, Some(100)),
-        ];
-
-        manifest.assign_first_row_ids(&mut entries).unwrap();
-
-        assert_eq!(entries[0].data_file.first_row_id, None);
-        assert_eq!(entries[1].data_file.first_row_id, None);
-    }
-
-    #[test]
-    fn test_assign_first_row_ids_ignores_delete_manifest() {
-        // A stray first_row_id on a delete manifest is a writer-side spec
-        // violation; the read ignores it rather than failing, and does not
-        // assign ids to the entries.
-        let manifest = manifest_file(ManifestContentType::Deletes, Some(10));
-        let mut entries = vec![data_entry(ManifestStatus::Added, 3, None)];
-
-        manifest.assign_first_row_ids(&mut entries).unwrap();
-
-        assert_eq!(entries[0].data_file.first_row_id, None);
-    }
-
-    #[test]
-    fn test_assign_first_row_ids_rejects_oversized_manifest_first_row_id() {
-        // A manifest-level first_row_id above i64::MAX cannot be represented as the
-        // signed running counter and must be rejected.
-        let manifest = manifest_file(ManifestContentType::Data, Some(i64::MAX as u64 + 1));
-        let mut entries = vec![data_entry(ManifestStatus::Added, 3, None)];
-
-        let err = manifest
-            .assign_first_row_ids(&mut entries)
-            .expect_err("an oversized manifest first_row_id must be rejected");
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("Invalid first_row_id"));
-    }
-
-    #[test]
-    fn test_assign_first_row_ids_rejects_counter_overflow() {
-        // Advancing the running counter past i64::MAX must be rejected rather than
-        // wrapping to a negative value that would corrupt subsequent assignments.
-        let manifest = manifest_file(ManifestContentType::Data, Some(i64::MAX as u64));
-        let mut entries = vec![data_entry(ManifestStatus::Added, 1, None)];
-
-        let err = manifest
-            .assign_first_row_ids(&mut entries)
-            .expect_err("counter overflow past i64::MAX must be rejected");
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("Row ID overflow"));
-    }
-
     #[tokio::test]
     async fn test_load_manifest_reads_written_entries() {
         let io = FileIO::new_with_memory();
@@ -501,7 +387,7 @@ mod test {
         let manifest_file = write_manifest(&io, path).await;
         assert_eq!(manifest_file.key_metadata, None);
 
-        let manifest = manifest_file.load_manifest(&io).await.unwrap();
+        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
         assert_eq!(manifest.entries().len(), 1);
         assert_eq!(
             manifest.entries()[0].file_path(),
@@ -512,7 +398,7 @@ mod test {
 
     /// End-to-end: writing a v3 data manifest, stamping a manifest-level
     /// `first_row_id`, and loading it must assign inherited `first_row_id`s to
-    /// the entries. This exercises the wiring in `load_manifest` and the
+    /// the entries. This exercises the wiring in [`ManifestReader`] and the
     /// write/read round-trip that leaves per-file `first_row_id` as `None`.
     #[tokio::test]
     async fn test_load_manifest_assigns_first_row_ids() {
@@ -523,7 +409,7 @@ mod test {
         // Stamp a manifest-level first_row_id, as the manifest-list writer would.
         manifest_file.first_row_id = Some(1000);
 
-        let manifest = manifest_file.load_manifest(&io).await.unwrap();
+        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
         assert_eq!(manifest.entries().len(), 1);
         assert_eq!(manifest.entries()[0].data_file().first_row_id(), Some(1000));
     }

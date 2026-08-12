@@ -24,7 +24,7 @@ pub use entry::*;
 mod metadata;
 pub use metadata::*;
 mod reader;
-pub(crate) use reader::*;
+pub use reader::*;
 mod writer;
 use std::sync::Arc;
 

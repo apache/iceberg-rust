@@ -2065,8 +2065,6 @@ impl iceberg::spec::ManifestFile
 pub fn iceberg::spec::ManifestFile::has_added_files(&self) -> bool
 pub fn iceberg::spec::ManifestFile::has_deleted_files(&self) -> bool
 pub fn iceberg::spec::ManifestFile::has_existing_files(&self) -> bool
-impl iceberg::spec::ManifestFile
-pub async fn iceberg::spec::ManifestFile::load_manifest(&self, file_io: &iceberg::io::FileIO) -> iceberg::Result<iceberg::spec::Manifest>
 impl core::clone::Clone for iceberg::spec::ManifestFile
 pub fn iceberg::spec::ManifestFile::clone(&self) -> iceberg::spec::ManifestFile
 impl core::cmp::Eq for iceberg::spec::ManifestFile
@@ -2125,6 +2123,9 @@ pub fn iceberg::spec::ManifestMetadata::fmt(&self, f: &mut core::fmt::Formatter<
 impl core::marker::StructuralPartialEq for iceberg::spec::ManifestMetadata
 impl iceberg::spec::ManifestMetadata
 pub fn iceberg::spec::ManifestMetadata::builder() -> ManifestMetadataBuilder<((), (), (), (), ())>
+pub struct iceberg::spec::ManifestReader
+impl iceberg::spec::ManifestReader
+pub async fn iceberg::spec::ManifestReader::read(self, manifest_file: &iceberg::spec::ManifestFile) -> iceberg::Result<iceberg::spec::Manifest>
 pub struct iceberg::spec::ManifestWriter
 impl iceberg::spec::ManifestWriter
 pub fn iceberg::spec::ManifestWriter::add_delete_file(&mut self, data_file: iceberg::spec::DataFile, sequence_number: i64, file_sequence_number: core::option::Option<i64>) -> iceberg::Result<()>
@@ -3149,6 +3150,7 @@ pub fn iceberg::table::Table::file_io(&self) -> &iceberg::io::FileIO
 pub fn iceberg::table::Table::identifier(&self) -> &iceberg::TableIdent
 pub fn iceberg::table::Table::inspect(&self) -> iceberg::inspect::MetadataTable<'_>
 pub fn iceberg::table::Table::manifest_list_reader(&self, snapshot: &iceberg::spec::SnapshotRef) -> iceberg::spec::ManifestListReader
+pub fn iceberg::table::Table::manifest_reader(&self) -> iceberg::spec::ManifestReader
 pub fn iceberg::table::Table::metadata(&self) -> &iceberg::spec::TableMetadata
 pub fn iceberg::table::Table::metadata_location(&self) -> core::option::Option<&str>
 pub fn iceberg::table::Table::metadata_location_result(&self) -> iceberg::Result<&str>

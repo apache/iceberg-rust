@@ -26,9 +26,9 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
-    TableProperties, update_snapshot_summaries,
+    ManifestFile, ManifestListWriter, ManifestReader, ManifestWriter, ManifestWriterBuilder,
+    Operation, Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct,
+    StructType, Summary, TableProperties, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -187,7 +187,7 @@ impl<'a> SnapshotProducer<'a> {
                 let file_io = file_io.clone();
                 runtime
                     .io()
-                    .spawn(async move { entry.load_manifest(&file_io).await })
+                    .spawn(async move { ManifestReader::new(file_io).read(&entry).await })
             })
             .collect::<FuturesUnordered<_>>()
             .try_fold(Vec::new(), |mut acc, manifest| async move {
