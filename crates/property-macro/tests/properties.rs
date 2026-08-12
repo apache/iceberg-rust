@@ -249,6 +249,15 @@ fn custom_single_value_parser_wraps_present_optional_values() {
     )]))
     .unwrap();
     assert_eq!(parsed.location().as_deref(), Some("path"));
+
+    let error = OptionalValidatedProperties::from_properties(&HashMap::from([(
+        "optional-location".to_string(),
+        "  ".to_string(),
+    )]))
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::DataInvalid);
+    assert_eq!(error.message(), "value must not be empty");
+    assert!(format!("{error}").contains("property: optional-location"));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
