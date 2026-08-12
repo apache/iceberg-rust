@@ -63,15 +63,14 @@ impl ParquetWriterBuilder {
     /// Create a new `ParquetWriterBuilder`
     /// To construct the write result, the schema should contain the `PARQUET_FIELD_ID_META_KEY` metadata for each field.
     ///
-    /// Does not support encrypted writing. When writing into an existing
-    /// Iceberg table, prefer [`Self::from_table_properties`].
+    /// When writing into an existing Iceberg table, prefer
+    /// [`Self::from_table_properties`], which derives `WriterProperties` from
+    /// the table's `write.parquet.*` properties.
     pub fn new(props: WriterProperties, schema: SchemaRef) -> Self {
         Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
     }
 
     /// Create a new `ParquetWriterBuilder` with custom match mode
-    ///
-    /// Does not support encrypted writing.
     pub fn new_with_match_mode(
         props: WriterProperties,
         schema: SchemaRef,
@@ -88,8 +87,6 @@ impl ParquetWriterBuilder {
     /// Build a `ParquetWriterBuilder` from Iceberg table properties and a
     /// schema, translating `write.parquet.*` settings into `WriterProperties`
     /// instead of using parquet-rs defaults.
-    ///
-    /// Call [`Self::with_encryption_manager`] as well to write encrypted files.
     pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Result<Self> {
         let cdc = table_props.cdc_enabled.then_some(CdcOptions {
             min_chunk_size: table_props.cdc_min_chunk_size,
@@ -117,7 +114,7 @@ impl ParquetWriterBuilder {
         self
     }
 
-    /// Encrypt written files, generating a DEK per file from `encryption_manager`.
+    /// Set the [`EncryptionManager`] used to encrypt written files.
     pub fn with_encryption_manager(mut self, encryption_manager: Arc<EncryptionManager>) -> Self {
         self.encryption_manager = Some(encryption_manager);
         self
@@ -405,7 +402,7 @@ impl MinMaxColAggregator {
 }
 
 impl ParquetWriter {
-    /// Converts already-written parquet files into [`DataFile`]s.
+    /// Converts parquet files to data files
     #[allow(dead_code)]
     pub(crate) async fn parquet_files_to_data_files(
         file_io: &FileIO,

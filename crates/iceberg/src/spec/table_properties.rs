@@ -459,9 +459,6 @@ impl TableProperties {
 
     /// The AES key size to use when generating data encryption keys, derived
     /// from `encryption.data-key-length`.
-    ///
-    /// Returns an error when `encryption.data-key-length` is not a valid AES
-    /// key length.
     pub fn data_encryption_key_size(&self) -> Result<AesKeySize> {
         AesKeySize::from_key_length(self.encryption_data_key_length)
     }
