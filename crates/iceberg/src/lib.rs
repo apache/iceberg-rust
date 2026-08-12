@@ -65,6 +65,7 @@
 #[macro_use]
 extern crate derive_builder;
 extern crate core;
+extern crate self as iceberg;
 
 mod error;
 pub use error::{Error, ErrorKind, Result};
