@@ -54,16 +54,6 @@ impl GlobalTestFixture {
 
         GlobalTestFixture { catalog_config }
     }
-
-    pub async fn rest_catalog(&self) -> RestCatalog {
-        RestCatalogBuilder::default()
-            .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
-                customized_credential_load: None,
-            }))
-            .load("rest", self.catalog_config.clone())
-            .await
-            .unwrap()
-    }
 }
 
 /// Returns a reference to the global test fixture.
