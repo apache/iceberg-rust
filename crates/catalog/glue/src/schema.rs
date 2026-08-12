@@ -25,8 +25,8 @@ pub(crate) const ICEBERG_FIELD_CURRENT: &str = "iceberg.field.current";
 use std::collections::HashMap;
 
 use aws_sdk_glue::types::Column;
-use iceberg::spec::{PrimitiveType, SchemaVisitor, TableMetadata, VariantType, visit_schema};
 use iceberg::Result;
+use iceberg::spec::{PrimitiveType, SchemaVisitor, TableMetadata, VariantType, visit_schema};
 
 use crate::error::from_aws_build_error;
 
@@ -310,6 +310,12 @@ mod tests {
                     "name": "c13",
                     "required": true,
                     "type": "binary"
+                },
+                {
+                    "id": 14,
+                    "name": "c14",
+                    "required": true,
+                    "type": "timestamptz"
                 }
             ]
         }"#;
@@ -333,6 +339,7 @@ mod tests {
             create_column("c11", "string", "11", false)?,
             create_column("c12", "binary", "12", false)?,
             create_column("c13", "binary", "13", false)?,
+            create_column("c14", "timestamp", "14", false)?,
         ];
 
         assert_eq!(result, expected);
@@ -341,20 +348,20 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_with_timestamptz_fields() -> Result<()> {
+    fn test_schema_with_nanosecond_timestamps() -> Result<()> {
         let record = r#"{
             "type": "struct",
             "schema-id": 1,
             "fields": [
                 {
                     "id": 1,
-                    "name": "ts_tz",
+                    "name": "c1",
                     "required": true,
-                    "type": "timestamptz"
+                    "type": "timestamp_ns"
                 },
                 {
                     "id": 2,
-                    "name": "ts_tz_ns",
+                    "name": "c2",
                     "required": true,
                     "type": "timestamptz_ns"
                 }
@@ -362,13 +369,14 @@ mod tests {
         }"#;
 
         let schema = serde_json::from_str::<Schema>(record)?;
-        let metadata = create_metadata(schema)?;
+        // Nanosecond timestamps are only valid from format version 3 onwards.
+        let metadata = create_metadata_with_format_version(schema, FormatVersion::V3)?;
 
         let result = GlueSchemaBuilder::from_iceberg(&metadata)?.build();
 
         let expected = vec![
-            create_column("ts_tz", "timestamp", "1", false)?,
-            create_column("ts_tz_ns", "timestamp_ns", "2", false)?,
+            create_column("c1", "timestamp_ns", "1", false)?,
+            create_column("c2", "timestamp_ns", "2", false)?,
         ];
 
         assert_eq!(result, expected);
