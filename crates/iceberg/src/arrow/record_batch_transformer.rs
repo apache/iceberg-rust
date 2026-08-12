@@ -2346,10 +2346,7 @@ mod test {
 
         // Every row's logical value is 7 (the data sequence number), regardless of
         // the physical (run-end) encoding.
-        let seq_col = cast(result.column(1), &DataType::Int64).unwrap();
-        let seq_col = seq_col.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(seq_col.len(), 3);
-        assert!((0..3).all(|i| !seq_col.is_null(i) && seq_col.value(i) == 7));
+        assert_last_updated_seq_column(&result, &[Some(7), Some(7), Some(7)]);
     }
 
     #[test]
@@ -2391,10 +2388,7 @@ mod test {
         let result = transformer.process_record_batch(parquet_batch).unwrap();
 
         // Every row's logical value is null.
-        let seq_col = cast(result.column(1), &DataType::Int64).unwrap();
-        let seq_col = seq_col.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(seq_col.len(), 3);
-        assert!((0..3).all(|i| seq_col.is_null(i)));
+        assert_last_updated_seq_column(&result, &[None, None, None]);
     }
 
     /// Builds a transformer + a file batch for the coalesce case: `id` plus a physical
@@ -2443,10 +2437,9 @@ mod test {
         (transformer, batch)
     }
 
-    /// Reads the coalesced `_last_updated_sequence_number` column by name (encoding-
-    /// agnostic: casts through the run-end-encoding to logical Int64) and asserts its
-    /// per-row values.
-    fn assert_coalesced_seq_column(result: &RecordBatch, expected: &[Option<i64>]) {
+    /// Reads the `_last_updated_sequence_number` column by name (encoding-agnostic: casts
+    /// through the run-end-encoding to logical Int64) and asserts its per-row values.
+    fn assert_last_updated_seq_column(result: &RecordBatch, expected: &[Option<i64>]) {
         use crate::metadata_columns::RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER;
 
         let col = result
@@ -2467,7 +2460,7 @@ mod test {
         let result = transformer.process_record_batch(batch).unwrap();
 
         // Per-row value where non-null; the fallback (9) where null.
-        assert_coalesced_seq_column(&result, &[Some(5), Some(9), Some(8)]);
+        assert_last_updated_seq_column(&result, &[Some(5), Some(9), Some(8)]);
     }
 
     #[test]
@@ -2478,7 +2471,7 @@ mod test {
             coalesce_transformer_and_batch(vec![None, None, None], vec![10, 20, 30], 9);
         let result = transformer.process_record_batch(batch).unwrap();
 
-        assert_coalesced_seq_column(&result, &[Some(9), Some(9), Some(9)]);
+        assert_last_updated_seq_column(&result, &[Some(9), Some(9), Some(9)]);
     }
 
     #[test]
@@ -2489,7 +2482,7 @@ mod test {
             coalesce_transformer_and_batch(vec![Some(5), Some(6), Some(7)], vec![10, 20, 30], 9);
         let result = transformer.process_record_batch(batch).unwrap();
 
-        assert_coalesced_seq_column(&result, &[Some(5), Some(6), Some(7)]);
+        assert_last_updated_seq_column(&result, &[Some(5), Some(6), Some(7)]);
     }
 
     #[test]
@@ -2500,7 +2493,7 @@ mod test {
         let result = transformer.process_record_batch(batch).unwrap();
 
         assert_eq!(result.num_rows(), 0);
-        assert_coalesced_seq_column(&result, &[]);
+        assert_last_updated_seq_column(&result, &[]);
     }
 
     /// field 1 and RESERVED_FIELD_ID_POS are of identical type
