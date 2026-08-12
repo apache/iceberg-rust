@@ -176,7 +176,7 @@ pub(crate) enum ColumnSource {
     // Used for `_last_updated_sequence_number` when the file physically carries
     // the per-row column. The result is cast to `target_type` so it matches the
     // (run-end-encoded) type the constant and null paths produce for the column.
-    Coalesce {
+    CoalesceLastUpdatedSeq {
         source_index: usize,
         fallback: PrimitiveLiteral,
         target_type: DataType,
@@ -262,7 +262,7 @@ pub(crate) enum ColumnConstant {
     /// a per-file fallback: read the per-row value, substitute this Datum where the
     /// per-row value is null (e.g. `_last_updated_sequence_number` on a file that
     /// carries the column, falling back to the data sequence number).
-    Coalesce(Datum),
+    CoalesceLastUpdatedSeq(Datum),
 }
 
 /// Pre-computed data for a struct constant column.
@@ -322,12 +322,16 @@ impl RecordBatchTransformerBuilder {
         self
     }
 
-    /// Add a coalesced metadata column for a specific field ID: the file's per-row
-    /// value where non-null, falling back to `datum` where null. Used for
-    /// `_last_updated_sequence_number` when the file physically carries the column.
-    pub(crate) fn with_coalesced_metadata_column(mut self, field_id: i32, datum: Datum) -> Self {
+    /// Add a coalesced `_last_updated_sequence_number` column for a specific field ID:
+    /// the file's per-row value where non-null, falling back to `datum` where null.
+    /// Used when the file physically carries the column.
+    pub(crate) fn with_coalesced_last_updated_seq_column(
+        mut self,
+        field_id: i32,
+        datum: Datum,
+    ) -> Self {
         self.constant_fields
-            .insert(field_id, ColumnConstant::Coalesce(datum));
+            .insert(field_id, ColumnConstant::CoalesceLastUpdatedSeq(datum));
         self
     }
 
@@ -569,7 +573,7 @@ impl RecordBatchTransformer {
                         );
                         return Ok(Arc::new(arrow_field));
                     }
-                    Some(ColumnConstant::Coalesce(datum)) => {
+                    Some(ColumnConstant::CoalesceLastUpdatedSeq(datum)) => {
                         // Same run-end-encoded type as the constant/null paths, so the
                         // column has one Arrow type whether a file coalesces, uses the
                         // constant, or is nulled.
@@ -757,9 +761,10 @@ impl RecordBatchTransformer {
                             target_type: arrow_type.clone(),
                         });
                     }
-                    Some(ColumnConstant::Coalesce(datum)) => {
-                        // The physical column must be present in the file (the pipeline only
-                        // registers a coalesce when it detected the embedded field id).
+                    Some(ColumnConstant::CoalesceLastUpdatedSeq(datum)) => {
+                        // Registered only for `_last_updated_sequence_number`, and only after
+                        // the pipeline detects the embedded field id, so the source column is
+                        // always present in the file.
                         let (_, source_index) =
                             field_id_to_source_schema_map.get(field_id).ok_or_else(|| {
                                 Error::new(
@@ -770,7 +775,7 @@ impl RecordBatchTransformer {
                                     ),
                                 )
                             })?;
-                        return Ok(ColumnSource::Coalesce {
+                        return Ok(ColumnSource::CoalesceLastUpdatedSeq {
                             source_index: *source_index,
                             fallback: datum.literal().clone(),
                             target_type: datum_to_arrow_type_with_ree(datum),
@@ -931,7 +936,7 @@ impl RecordBatchTransformer {
                         child_values,
                     } => Self::create_struct_column(fields, child_values, num_rows)?,
 
-                    ColumnSource::Coalesce {
+                    ColumnSource::CoalesceLastUpdatedSeq {
                         source_index,
                         fallback,
                         target_type,
@@ -955,11 +960,8 @@ impl RecordBatchTransformer {
     ) -> Result<ArrayRef> {
         if source.data_type() != &DataType::Int64 {
             return Err(Error::new(
-                ErrorKind::Unexpected,
-                format!(
-                    "coalesce source must be Int64, got {:?}",
-                    source.data_type()
-                ),
+                ErrorKind::DataInvalid,
+                format!("coalesce source must be Int64, got {}", source.data_type()),
             ));
         }
         let PrimitiveLiteral::Long(seq) = fallback else {
@@ -2428,7 +2430,7 @@ mod test {
         ]));
         let projected_field_ids = [1, RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER];
         let transformer = RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
-            .with_coalesced_metadata_column(
+            .with_coalesced_last_updated_seq_column(
                 RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
                 Datum::long(fallback),
             )
@@ -2441,6 +2443,23 @@ mod test {
         (transformer, batch)
     }
 
+    /// Reads the coalesced `_last_updated_sequence_number` column by name (encoding-
+    /// agnostic: casts through the run-end-encoding to logical Int64) and asserts its
+    /// per-row values.
+    fn assert_coalesced_seq_column(result: &RecordBatch, expected: &[Option<i64>]) {
+        use crate::metadata_columns::RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER;
+
+        let col = result
+            .column_by_name(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER)
+            .expect("_last_updated_sequence_number column should be present");
+        let logical = cast(col, &DataType::Int64).unwrap();
+        let values = logical.as_any().downcast_ref::<Int64Array>().unwrap();
+        let actual: Vec<Option<i64>> = (0..values.len())
+            .map(|i| (!values.is_null(i)).then(|| values.value(i)))
+            .collect();
+        assert_eq!(&actual, expected);
+    }
+
     #[test]
     fn last_updated_sequence_number_coalesce_column() {
         let (mut transformer, batch) =
@@ -2448,12 +2467,29 @@ mod test {
         let result = transformer.process_record_batch(batch).unwrap();
 
         // Per-row value where non-null; the fallback (9) where null.
-        let seq_col = cast(result.column(1), &DataType::Int64).unwrap();
-        let seq_col = seq_col.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(seq_col.len(), 3);
-        assert_eq!(seq_col.value(0), 5);
-        assert_eq!(seq_col.value(1), 9);
-        assert_eq!(seq_col.value(2), 8);
+        assert_coalesced_seq_column(&result, &[Some(5), Some(9), Some(8)]);
+    }
+
+    #[test]
+    fn last_updated_sequence_number_coalesce_all_null() {
+        // Every row falls back. This is the only input that distinguishes the `is_not_null`
+        // mask from `is_null` -- a mixed input passes under either polarity.
+        let (mut transformer, batch) =
+            coalesce_transformer_and_batch(vec![None, None, None], vec![10, 20, 30], 9);
+        let result = transformer.process_record_batch(batch).unwrap();
+
+        assert_coalesced_seq_column(&result, &[Some(9), Some(9), Some(9)]);
+    }
+
+    #[test]
+    fn last_updated_sequence_number_coalesce_all_non_null() {
+        // Nothing falls back: every per-row value passes through, and the run-end-encoding
+        // cast still yields a valid array.
+        let (mut transformer, batch) =
+            coalesce_transformer_and_batch(vec![Some(5), Some(6), Some(7)], vec![10, 20, 30], 9);
+        let result = transformer.process_record_batch(batch).unwrap();
+
+        assert_coalesced_seq_column(&result, &[Some(5), Some(6), Some(7)]);
     }
 
     #[test]
@@ -2464,9 +2500,7 @@ mod test {
         let result = transformer.process_record_batch(batch).unwrap();
 
         assert_eq!(result.num_rows(), 0);
-        let seq_col = cast(result.column(1), &DataType::Int64).unwrap();
-        let seq_col = seq_col.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(seq_col.len(), 0);
+        assert_coalesced_seq_column(&result, &[]);
     }
 
     /// field 1 and RESERVED_FIELD_ID_POS are of identical type

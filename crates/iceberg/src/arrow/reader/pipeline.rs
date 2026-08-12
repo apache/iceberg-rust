@@ -260,9 +260,9 @@ impl FileScanTaskReader {
             .contains(&RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER);
 
         // Parquet leaf index of the physical column, if present by embedded field id.
-        // `build_field_id_map` is all-or-nothing (`None` if any column lacks an id), so a
-        // file mixing id-bearing and id-less columns is rejected below rather than
-        // coalesced -- safe, and consistent with the rest of the reader.
+        // `build_field_id_map` is all-or-nothing: a file mixing id-bearing and id-less
+        // columns yields `None` and is rejected below rather than coalesced, even if the
+        // physical column itself carries its reserved id.
         let phys_last_updated_seq_leaf = if project_last_updated_seq {
             build_field_id_map(record_batch_stream_builder.parquet_schema())?.and_then(|m| {
                 m.get(&RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER)
@@ -282,9 +282,10 @@ impl FileScanTaskReader {
                 .iter()
                 .any(|f| f.name() == RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER);
 
-        // We read + coalesce the physical column only when it is present by id AND the file
-        // is row-lineage-bearing (first_row_id set) with a data sequence number to fall
-        // back to. When first_row_id is null the column is nulled, so we must not read it.
+        // Read the physical column only when first_row_id is set (with a data sequence
+        // number to fall back to). A null first_row_id drops the leaf and nulls the whole
+        // column below, discarding any per-row values the file carries -- matching Java
+        // (`ValueReaders.lastUpdated` nulls when the base row id is null).
         let coalesce_last_updated_seq_leaf = phys_last_updated_seq_leaf
             .filter(|_| task.first_row_id.is_some() && task.data_sequence_number.is_some());
 
@@ -361,7 +362,7 @@ impl FileScanTaskReader {
                     if coalesce_last_updated_seq_leaf.is_some() {
                         // The file physically carries the column: read the per-row value,
                         // falling back to the data sequence number only where null.
-                        record_batch_transformer_builder.with_coalesced_metadata_column(
+                        record_batch_transformer_builder.with_coalesced_last_updated_seq_column(
                             RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
                             datum,
                         )
@@ -370,6 +371,9 @@ impl FileScanTaskReader {
                         // positional fallback). The transformer keys the source column by
                         // field id, so we can't thread it; no real writer produces this, so
                         // reject loudly rather than silently overwrite with the constant.
+                        // Arm-local by design: only this arm reads the physical column, so
+                        // only here can a name-only column defeat us. The `(None, _)` arm
+                        // nulls the column without reading it, so it needs no such guard.
                         return Err(Error::new(
                             ErrorKind::FeatureUnsupported,
                             "Reading a physically-stored _last_updated_sequence_number column \
@@ -1393,6 +1397,36 @@ mod tests {
         assert_eq!(err.kind(), crate::ErrorKind::FeatureUnsupported);
         assert!(
             format!("{err}").contains("without an embedded field id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_last_updated_sequence_number_physical_column_first_row_id_without_data_seq() {
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+        let seq_col = Arc::new(Int64Array::from(vec![Some(5), None, Some(8)])) as ArrayRef;
+        let file_path = write_plain_parquet(
+            dir,
+            "with_seq_no_data_seq.parquet",
+            vec![physical_last_updated_seq_field()],
+            vec![seq_col],
+        );
+
+        // first_row_id set but no data sequence number: after manifest inheritance a
+        // committed entry always has one, so this is a malformed manifest, rejected loudly
+        // rather than nulled.
+        let task = last_updated_seq_task(file_path, Some(100), None);
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let result: Result<Vec<RecordBatch>, _> =
+            reader.read(tasks).unwrap().stream().try_collect().await;
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), crate::ErrorKind::DataInvalid);
+        assert!(
+            format!("{err}").contains("no data sequence number"),
             "unexpected error: {err}"
         );
     }
