@@ -2888,10 +2888,40 @@ pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize
 pub const iceberg::spec::TableProperties::RESERVED_PROPERTIES: [&str; 9]
+impl iceberg::spec::TableProperties
+pub fn iceberg::spec::TableProperties::cdc_enabled(&self) -> bool
+pub fn iceberg::spec::TableProperties::cdc_max_chunk_size(&self) -> usize
+pub fn iceberg::spec::TableProperties::cdc_min_chunk_size(&self) -> usize
+pub fn iceberg::spec::TableProperties::cdc_norm_level(&self) -> i32
+pub fn iceberg::spec::TableProperties::commit_max_retry_wait_ms(&self) -> u64
+pub fn iceberg::spec::TableProperties::commit_min_retry_wait_ms(&self) -> u64
+pub fn iceberg::spec::TableProperties::commit_num_retries(&self) -> usize
+pub fn iceberg::spec::TableProperties::commit_total_retry_timeout_ms(&self) -> u64
 pub fn iceberg::spec::TableProperties::data_encryption_key_size(&self) -> iceberg::Result<iceberg::encryption::AesKeySize>
+pub fn iceberg::spec::TableProperties::encryption_data_key_length(&self) -> usize
+pub fn iceberg::spec::TableProperties::encryption_key_id(&self) -> &core::option::Option<alloc::string::String>
+pub fn iceberg::spec::TableProperties::from_properties(properties: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<Self>
+pub fn iceberg::spec::TableProperties::gc_enabled(&self) -> bool
+pub fn iceberg::spec::TableProperties::max_ref_age_ms(&self) -> i64
+pub fn iceberg::spec::TableProperties::max_snapshot_age_ms(&self) -> i64
+pub fn iceberg::spec::TableProperties::metadata_compression_codec(&self) -> &iceberg::compression::CompressionCodec
+pub fn iceberg::spec::TableProperties::min_snapshots_to_keep(&self) -> usize
+pub fn iceberg::spec::TableProperties::parquet_compression_codec(&self) -> &iceberg::compression::CompressionCodec
+pub fn iceberg::spec::TableProperties::parquet_dict_size_bytes(&self) -> usize
+pub fn iceberg::spec::TableProperties::parquet_page_row_limit(&self) -> usize
+pub fn iceberg::spec::TableProperties::parquet_page_size_bytes(&self) -> usize
+pub fn iceberg::spec::TableProperties::parquet_row_group_size_bytes(&self) -> usize
+pub fn iceberg::spec::TableProperties::write_data_location(&self) -> &core::option::Option<alloc::string::String>
+pub fn iceberg::spec::TableProperties::write_datafusion_fanout_enabled(&self) -> bool
+pub fn iceberg::spec::TableProperties::write_folder_storage_location(&self) -> &core::option::Option<alloc::string::String>
+pub fn iceberg::spec::TableProperties::write_format_default(&self) -> &alloc::string::String
+pub fn iceberg::spec::TableProperties::write_metadata_path(&self) -> &core::option::Option<alloc::string::String>
+pub fn iceberg::spec::TableProperties::write_object_storage_location(&self) -> &core::option::Option<alloc::string::String>
+pub fn iceberg::spec::TableProperties::write_object_storage_partitioned_paths(&self) -> bool
+pub fn iceberg::spec::TableProperties::write_target_file_size_bytes(&self) -> usize
 impl core::convert::TryFrom<&std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>> for iceberg::spec::TableProperties
 pub type iceberg::spec::TableProperties::Error = iceberg::Error
-pub fn iceberg::spec::TableProperties::try_from(props: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<Self>
+pub fn iceberg::spec::TableProperties::try_from(properties: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<Self>
 impl core::fmt::Debug for iceberg::spec::TableProperties
 pub fn iceberg::spec::TableProperties::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::spec::UnboundPartitionField
