@@ -145,11 +145,14 @@ struct TableLikeProperties {
     #[property(prefix = COLUMN_FPP_PREFIX, getter)]
     column_fpp: HashMap<String, f64>,
 
-    /// A single-key parser can validate and normalize an explicitly configured path.
+    /// An explicitly configured data path override.
+    /// `None` means callers should use `<table-location>/data`.
+    /// A single-key parser validates and normalizes configured values.
     #[property(
         key = LOCATION,
         default = None,
-        parse_with = parse_location
+        parse_with = parse_location,
+        getter
     )]
     location: Option<String>,
 
@@ -164,21 +167,13 @@ struct TableLikeProperties {
     dimensions: (u64, u64, u64),
 }
 
-impl TableLikeProperties {
-    fn location(&self) -> &str {
-        self.location
-            .as_deref()
-            .unwrap_or("<table-location>/data")
-    }
-}
-
 fn main() -> iceberg::Result<()> {
     let defaults = TableLikeProperties::from_properties(&HashMap::new())?;
     assert_eq!(defaults.commit().retries(), 4);
     assert_eq!(defaults.owner(), &None);
     assert!(defaults.fanout_enabled());
     assert!(defaults.column_fpp().is_empty());
-    assert_eq!(defaults.location(), "<table-location>/data");
+    assert_eq!(defaults.location(), &None);
     assert_eq!(defaults.dimensions(), (640, 480, 320));
 
     let raw = HashMap::from([
@@ -198,7 +193,10 @@ fn main() -> iceberg::Result<()> {
     assert_eq!(properties.owner().as_deref(), Some("iceberg"));
     assert!(!properties.fanout_enabled());
     assert_eq!(properties.column_fpp()["id"], 0.01);
-    assert_eq!(properties.location(), "s3://bucket/table");
+    assert_eq!(
+        properties.location().as_deref(),
+        Some("s3://bucket/table")
+    );
     assert_eq!(properties.dimensions(), (1920, 1080, 720));
 
     let error = TableLikeProperties::from_properties(&HashMap::from([(
