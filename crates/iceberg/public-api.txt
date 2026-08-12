@@ -1012,7 +1012,7 @@ pub const iceberg::io::GCS_DISABLE_CONFIG_LOAD: &str
 pub const iceberg::io::GCS_DISABLE_VM_METADATA: &str
 pub const iceberg::io::GCS_NO_AUTH: &str
 pub const iceberg::io::GCS_PROJECT_ID: &str
-pub const iceberg::io::GCS_SERVICE_PATH: &str
+pub const iceberg::io::GCS_SERVICE_HOST: &str
 pub const iceberg::io::GCS_TOKEN: &str
 pub const iceberg::io::GCS_USER_PROJECT: &str
 pub const iceberg::io::HF_ENDPOINT: &str

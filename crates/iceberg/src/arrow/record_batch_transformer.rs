@@ -30,7 +30,10 @@ use arrow_schema::{
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::value::{create_primitive_array_repeated, create_primitive_array_single_element};
-use crate::arrow::{datum_to_arrow_type_with_ree, schema_to_arrow_schema, type_to_arrow_type};
+use crate::arrow::{
+    datum_to_arrow_type_with_ree, primitive_type_to_arrow_type_with_ree, schema_to_arrow_schema,
+    type_to_arrow_type,
+};
 use crate::metadata_columns::{
     RESERVED_COL_NAME_PARTITION, RESERVED_FIELD_ID_PARTITION, get_metadata_field,
 };
@@ -235,6 +238,12 @@ pub(crate) enum ColumnConstant {
     /// A struct constant (the `_partition` column). Each child is a primitive constant
     /// or null (for partition evolution gaps).
     Struct(StructConstant),
+    /// An all-null metadata column, carrying its Arrow type. Used when a metadata
+    /// column resolves to null (e.g. `_last_updated_sequence_number` for a file
+    /// with a null `first_row_id`). A distinct variant (rather than `Scalar` with a
+    /// null value) because `Datum` always represents a non-null value; the type is
+    /// computed once so the schema and column-source paths cannot derive it apart.
+    Null(DataType),
 }
 
 /// Pre-computed data for a struct constant column.
@@ -292,6 +301,32 @@ impl RecordBatchTransformerBuilder {
         self.constant_fields
             .insert(field_id, ColumnConstant::Scalar(datum));
         self
+    }
+
+    /// Add an all-null metadata column for a specific field ID.
+    /// Used for metadata columns that resolve to null (e.g.
+    /// `_last_updated_sequence_number` when the file has a null `first_row_id`).
+    pub(crate) fn with_null_metadata_column(mut self, field_id: i32) -> Result<Self> {
+        let iceberg_field = get_metadata_field(field_id)?;
+        let prim_type = iceberg_field
+            .field_type
+            .as_primitive_type()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "Metadata column {} has non-primitive type {:?}",
+                        iceberg_field.name, iceberg_field.field_type
+                    ),
+                )
+            })?;
+        // Use the same run-end-encoded type as the non-null constant path, so a
+        // column keeps one Arrow type whether a given file resolves it to a value
+        // or to null.
+        let arrow_type = primitive_type_to_arrow_type_with_ree(prim_type);
+        self.constant_fields
+            .insert(field_id, ColumnConstant::Null(arrow_type));
+        Ok(self)
     }
 
     /// Set partition spec and data together for identifying identity-transformed partition columns.
@@ -494,6 +529,18 @@ impl RecordBatchTransformer {
                         // Identity partition constant -- fall through to use the
                         // mapped schema field (read from file if present).
                     }
+                    Some(ColumnConstant::Null(arrow_type)) => {
+                        let iceberg_field = get_metadata_field(*field_id)?;
+                        // Always nullable: this arm produces an all-null column regardless
+                        // of the field's declared optionality.
+                        let arrow_field = field_with_id(
+                            &iceberg_field.name,
+                            arrow_type.clone(),
+                            true,
+                            iceberg_field.id,
+                        );
+                        return Ok(Arc::new(arrow_field));
+                    }
                     None => {}
                 }
 
@@ -662,6 +709,12 @@ impl RecordBatchTransformer {
                         }
                         // Identity partition field present in the file -- fall through
                         // to read from the file instead of using the constant.
+                    }
+                    Some(ColumnConstant::Null(arrow_type)) => {
+                        return Ok(ColumnSource::Add {
+                            value: None,
+                            target_type: arrow_type.clone(),
+                        });
                     }
                     None => {}
                 }
@@ -952,6 +1005,7 @@ mod test {
         Array, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
         StringArray,
     };
+    use arrow_cast::cast;
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 
     use super::field_with_id;
@@ -2139,6 +2193,104 @@ mod test {
 
         assert_eq!(pos_col.len(), 3);
         assert_eq!(pos_col.values(), &[0, 1, 2]);
+    }
+
+    #[test]
+    fn last_updated_sequence_number_constant() {
+        use crate::metadata_columns::RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER;
+        use crate::spec::Datum;
+
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // The column is not physically present in the file; it is materialized as
+        // a per-file constant equal to the data sequence number.
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "id",
+            DataType::Int32,
+            false,
+            1,
+        )]));
+
+        let projected_field_ids = [1, RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER];
+
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_constant(
+                    RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+                    Datum::long(7),
+                )
+                .build();
+
+        let parquet_batch =
+            RecordBatch::try_new(parquet_schema, vec![Arc::new(Int32Array::from(vec![
+                10, 20, 30,
+            ]))])
+            .unwrap();
+
+        let result = transformer.process_record_batch(parquet_batch).unwrap();
+
+        assert_eq!(result.num_columns(), 2);
+        assert_eq!(result.num_rows(), 3);
+
+        // Every row's logical value is 7 (the data sequence number), regardless of
+        // the physical (run-end) encoding.
+        let seq_col = cast(result.column(1), &DataType::Int64).unwrap();
+        let seq_col = seq_col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(seq_col.len(), 3);
+        assert!((0..3).all(|i| !seq_col.is_null(i) && seq_col.value(i) == 7));
+    }
+
+    #[test]
+    fn last_updated_sequence_number_null_column() {
+        use crate::metadata_columns::RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER;
+
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "id",
+            DataType::Int32,
+            false,
+            1,
+        )]));
+
+        let projected_field_ids = [1, RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER];
+
+        // The null-gate path (a file with a null first_row_id): the whole column is null.
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_null_metadata_column(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER)
+                .unwrap()
+                .build();
+
+        let parquet_batch =
+            RecordBatch::try_new(parquet_schema, vec![Arc::new(Int32Array::from(vec![
+                10, 20, 30,
+            ]))])
+            .unwrap();
+
+        let result = transformer.process_record_batch(parquet_batch).unwrap();
+
+        // Every row's logical value is null.
+        let seq_col = cast(result.column(1), &DataType::Int64).unwrap();
+        let seq_col = seq_col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(seq_col.len(), 3);
+        assert!((0..3).all(|i| seq_col.is_null(i)));
     }
 
     /// field 1 and RESERVED_FIELD_ID_POS are of identical type

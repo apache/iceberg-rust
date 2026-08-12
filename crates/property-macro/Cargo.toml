@@ -15,31 +15,35 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
+[package]
+edition = { workspace = true }
+homepage = { workspace = true }
+name = "iceberg-property-macro"
+publish = false
+readme = "README.md"
+rust-version = { workspace = true }
+version = { workspace = true }
 
-  paths-ignore:
-    - "LICENSE"
-    - "NOTICE"
-    - ".gitattributes"
-    - "**/*.json"
-    # Generated content by mdbook
-    - "website/book"
-    # Generated content by scripts
-    - "**/DEPENDENCIES.*.tsv"
-    # Generated content by cargo-public-api
-    - "**/public-api.txt"
-    # Generated content by trybuild
-    - "**/*.stderr"
-    # Release distributions
-    - "dist/*"
-    - "target"
-    - "Cargo.lock"
-    - "bindings/python/uv.lock"
-    - ".github/PULL_REQUEST_TEMPLATE.md"
-    # Python environment
-    - "bindings/python/.venv/"
-    - "bindings/python/.pytest_cache/"
-  comment: on-failure
+license = { workspace = true }
+repository = { workspace = true }
+
+categories = ["database"]
+description = "Property derive macro for Apache Iceberg Rust"
+keywords = ["iceberg"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["full"] }
+
+[dev-dependencies]
+iceberg = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+trybuild = { workspace = true }
+
+[lints]
+workspace = true
