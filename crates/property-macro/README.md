@@ -145,16 +145,13 @@ struct TableLikeProperties {
     #[property(prefix = COLUMN_FPP_PREFIX, getter)]
     column_fpp: HashMap<String, f64>,
 
-    /// A single-key parser can validate and normalize a property value.
+    /// A single-key parser can validate and normalize an explicitly configured path.
     #[property(
         key = LOCATION,
-        // Iceberg computes the real absent case as `<table-location>/data`.
-        // This literal is only an illustrative default for the macro example.
-        default = "<table-location>/data",
-        parse_with = parse_location,
-        getter
+        default = None,
+        parse_with = parse_location
     )]
-    location: String,
+    location: Option<String>,
 
     /// A full-map parser can model one field with multiple property keys.
     #[property(
@@ -165,6 +162,14 @@ struct TableLikeProperties {
         getter
     )]
     dimensions: (u64, u64, u64),
+}
+
+impl TableLikeProperties {
+    fn location(&self) -> &str {
+        self.location
+            .as_deref()
+            .unwrap_or("<table-location>/data")
+    }
 }
 
 fn main() -> iceberg::Result<()> {
