@@ -30,7 +30,7 @@
 <a href=#30 id=30 data-nosnippet>30</a><span class="doccomment">/// Google Cloud Project ID.
 <a href=#31 id=31 data-nosnippet>31</a></span><span class="kw">pub const </span>GCS_PROJECT_ID: <span class="kw-2">&amp;</span>str = <span class="string">"gcs.project-id"</span>;
 <a href=#32 id=32 data-nosnippet>32</a><span class="doccomment">/// Google Cloud Storage endpoint.
-<a href=#33 id=33 data-nosnippet>33</a></span><span class="kw">pub const </span>GCS_SERVICE_PATH: <span class="kw-2">&amp;</span>str = <span class="string">"gcs.service.path"</span>;
+<a href=#33 id=33 data-nosnippet>33</a></span><span class="kw">pub const </span>GCS_SERVICE_HOST: <span class="kw-2">&amp;</span>str = <span class="string">"gcs.service.host"</span>;
 <a href=#34 id=34 data-nosnippet>34</a><span class="doccomment">/// Google Cloud user project.
 <a href=#35 id=35 data-nosnippet>35</a></span><span class="kw">pub const </span>GCS_USER_PROJECT: <span class="kw-2">&amp;</span>str = <span class="string">"gcs.user-project"</span>;
 <a href=#36 id=36 data-nosnippet>36</a><span class="doccomment">/// Allow unauthenticated requests.
@@ -92,7 +92,7 @@
 <a href=#92 id=92 data-nosnippet>92</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(project_id) = props.get(GCS_PROJECT_ID) {
 <a href=#93 id=93 data-nosnippet>93</a>            cfg.project_id = <span class="prelude-val">Some</span>(project_id.clone());
 <a href=#94 id=94 data-nosnippet>94</a>        }
-<a href=#95 id=95 data-nosnippet>95</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(endpoint) = props.get(GCS_SERVICE_PATH) {
+<a href=#95 id=95 data-nosnippet>95</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(endpoint) = props.get(GCS_SERVICE_HOST) {
 <a href=#96 id=96 data-nosnippet>96</a>            cfg.endpoint = <span class="prelude-val">Some</span>(endpoint.clone());
 <a href=#97 id=97 data-nosnippet>97</a>        }
 <a href=#98 id=98 data-nosnippet>98</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(user_project) = props.get(GCS_USER_PROJECT) {
@@ -154,7 +154,7 @@
 <a href=#154 id=154 data-nosnippet>154</a>        <span class="kw">let </span>storage_config = StorageConfig::new()
 <a href=#155 id=155 data-nosnippet>155</a>            .with_prop(GCS_PROJECT_ID, <span class="string">"my-project"</span>)
 <a href=#156 id=156 data-nosnippet>156</a>            .with_prop(GCS_CREDENTIALS_JSON, <span class="string">"base64-creds"</span>)
-<a href=#157 id=157 data-nosnippet>157</a>            .with_prop(GCS_SERVICE_PATH, <span class="string">"http://localhost:4443"</span>);
+<a href=#157 id=157 data-nosnippet>157</a>            .with_prop(GCS_SERVICE_HOST, <span class="string">"http://localhost:4443"</span>);
 <a href=#158 id=158 data-nosnippet>158</a>
 <a href=#159 id=159 data-nosnippet>159</a>        <span class="kw">let </span>gcs_config = GcsConfig::try_from(<span class="kw-2">&amp;</span>storage_config).unwrap();
 <a href=#160 id=160 data-nosnippet>160</a>

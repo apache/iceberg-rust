@@ -1,0 +1,243 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Iceberg property derive macro"><title>iceberg_property_macro - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="iceberg_property_macro" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0-nightly (b90dc1e59 2026-03-04)" data-channel="nightly" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../static.files/storage-41dd4d93.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate iceberg_property_macro</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../iceberg_property_macro/index.html">iceberg_<wbr>property_<wbr>macro</a><span class="version">0.10.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#iceberg-property-derive-macro" title="Iceberg property derive macro">Iceberg property derive macro</a><ul><li><a href="#generated-api" title="Generated API">Generated API</a></li><li><a href="#complete-example" title="Complete example">Complete example</a></li><li><a href="#using-ordinary-derives-together" title="Using ordinary derives together">Using ordinary derives together</a></li></ul></li></ul><h3><a href="#derives">Crate Items</a></h3><ul class="block"><li><a href="#derives" title="Derive Macros">Derive Macros</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1>Crate <span>iceberg_<wbr>property_<wbr>macro</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/iceberg_property_macro/lib.rs.html#18-34">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><!--
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<h2 id="iceberg-property-derive-macro"><a class="doc-anchor" href="#iceberg-property-derive-macro">§</a>Iceberg property derive macro</h2>
+<p><code>Properties</code> parses a typed struct from a flat <code>HashMap&lt;String, String&gt;</code> and
+can generate opt-in read-only getters. It deliberately does not generate
+property-map serialization or implement <code>Default</code>, <code>Serialize</code>, <code>Deserialize</code>,
+or any other trait.</p>
+<h3 id="generated-api"><a class="doc-anchor" href="#generated-api">§</a>Generated API</h3>
+<p>For every annotated struct, <code>#[derive(Properties)]</code> generates this inherent
+constructor:</p>
+<div class="example-wrap"><pre class="language-text"><code>impl MyProperties {
+    pub fn from_properties(
+        properties: &amp;HashMap&lt;String, String&gt;,
+    ) -&gt; iceberg::Result&lt;Self&gt;;
+}</code></pre></div>
+<p><code>from_properties</code> borrows the source map, parses every modeled property, and
+uses its annotated default when a property is absent. Unknown keys are ignored.
+An invalid value returns an <code>iceberg::Error</code> with <code>ErrorKind::DataInvalid</code> and a
+message containing its primary property key.</p>
+<p>Adding <code>getter</code> to a field generates a public immutable accessor with the field
+name. Primitive <code>Copy</code> types, references, pointers, and compositions of those
+types return <code>T</code>; other types return <code>&amp;T</code>. Because a procedural macro cannot
+resolve trait implementations, a user-defined <code>Copy</code> type returns <code>&amp;T</code>.
+Documentation attributes on the field are copied to the generated getter. The
+macro generates no setters, backing fields, or conversion back to a property
+map.</p>
+<h3 id="complete-example"><a class="doc-anchor" href="#complete-example">§</a>Complete example</h3>
+<p>This example covers exact keys and defaults, optional values, case-insensitive
+booleans, prefixed maps, nested groups, custom single-value parsing, custom
+multi-key parsing, lists of additional keys, read-only getters, ignored unknown
+keys, and contextual errors.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::collections::HashMap;
+
+<span class="kw">use </span>iceberg::{Error, ErrorKind};
+<span class="kw">use </span>iceberg_property_macro::Properties;
+
+<span class="kw">const </span>RETRIES: <span class="kw-2">&amp;</span>str = <span class="string">"commit.retry.num-retries"</span>;
+<span class="kw">const </span>OWNER: <span class="kw-2">&amp;</span>str = <span class="string">"owner"</span>;
+<span class="kw">const </span>FANOUT: <span class="kw-2">&amp;</span>str = <span class="string">"write.datafusion.fanout.enabled"</span>;
+<span class="kw">const </span>COLUMN_FPP_PREFIX: <span class="kw-2">&amp;</span>str = <span class="string">"write.parquet.bloom-filter-fpp.column."</span>;
+<span class="kw">const </span>LOCATION: <span class="kw-2">&amp;</span>str = <span class="string">"write.data.path"</span>;
+<span class="kw">const </span>WIDTH: <span class="kw-2">&amp;</span>str = <span class="string">"dimensions.width"</span>;
+<span class="kw">const </span>HEIGHT: <span class="kw-2">&amp;</span>str = <span class="string">"dimensions.height"</span>;
+<span class="kw">const </span>DEPTH: <span class="kw-2">&amp;</span>str = <span class="string">"dimensions.depth"</span>;
+
+<span class="kw">fn </span>parse_location(value: <span class="kw-2">&amp;</span>str) -&gt; iceberg::Result&lt;String&gt; {
+    <span class="kw">let </span>location = value.trim().trim_end_matches(<span class="string">'/'</span>);
+    <span class="kw">if </span>location.is_empty() {
+        <span class="prelude-val">Err</span>(Error::new(
+            ErrorKind::DataInvalid,
+            <span class="string">"location must not be empty"</span>,
+        ))
+    } <span class="kw">else </span>{
+        <span class="prelude-val">Ok</span>(location.to_string())
+    }
+}
+
+<span class="kw">fn </span>parse_dimensions(
+    properties: <span class="kw-2">&amp;</span>HashMap&lt;String, String&gt;,
+    width_key: <span class="kw-2">&amp;</span>str,
+    additional_keys: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>str],
+    default: (u64, u64, u64),
+) -&gt; iceberg::Result&lt;(u64, u64, u64)&gt; {
+    <span class="kw">if </span>additional_keys.len() != <span class="number">2 </span>{
+        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+            ErrorKind::DataInvalid,
+            <span class="string">"dimensions require height and depth keys"</span>,
+        ));
+    }
+    <span class="kw">let </span>parse = |key: <span class="kw-2">&amp;</span>str, default| {
+        properties
+            .get(key)
+            .map(|value| {
+                value.parse::&lt;u64&gt;().map_err(|error| {
+                    Error::new(ErrorKind::DataInvalid, error.to_string())
+                })
+            })
+            .transpose()
+            .map(|value| value.unwrap_or(default))
+    };
+
+    <span class="prelude-val">Ok</span>((
+        parse(width_key, default.<span class="number">0</span>)<span class="question-mark">?</span>,
+        parse(additional_keys[<span class="number">0</span>], default.<span class="number">1</span>)<span class="question-mark">?</span>,
+        parse(additional_keys[<span class="number">1</span>], default.<span class="number">2</span>)<span class="question-mark">?</span>,
+    ))
+}
+
+<span class="attr">#[derive(Debug, Properties)]
+</span><span class="kw">struct </span>CommitProperties {
+    <span class="doccomment">/// Maximum number of times to retry a commit.
+    </span><span class="attr">#[property(key = RETRIES, default = <span class="number">4</span>, getter)]
+    </span>retries: usize,
+}
+
+<span class="attr">#[derive(Debug, Properties)]
+</span><span class="kw">struct </span>TableLikeProperties {
+    <span class="doccomment">/// Nested groups parse from the same flat property map.
+    </span><span class="attr">#[property(nested, getter)]
+    </span>commit: CommitProperties,
+
+    <span class="doccomment">/// Option&lt;T&gt; distinguishes an absent property from a present value.
+    </span><span class="attr">#[property(key = OWNER, default = <span class="prelude-val">None</span>, getter)]
+    </span>owner: <span class="prelude-ty">Option</span>&lt;String&gt;,
+
+    <span class="doccomment">/// This DataFusion-specific boolean is parsed case-insensitively.
+    /// Its `true` default is engine-specific, rather than an Iceberg-wide default.
+    </span><span class="attr">#[property(key = FANOUT, default = <span class="bool-val">true</span>, getter)]
+    </span>fanout_enabled: bool,
+
+    <span class="doccomment">/// A prefix captures suffix/value pairs into a typed map.
+    </span><span class="attr">#[property(prefix = COLUMN_FPP_PREFIX, getter)]
+    </span>column_fpp: HashMap&lt;String, f64&gt;,
+
+    <span class="doccomment">/// A single-key parser can validate and normalize a property value.
+    </span><span class="attr">#[property(
+        key = LOCATION,
+        default = <span class="string">"warehouse"</span>,
+        parse_with = parse_location,
+        getter
+    )]
+    </span>location: String,
+
+    <span class="doccomment">/// A full-map parser can model one field with multiple property keys.
+    </span><span class="attr">#[property(
+        key = WIDTH,
+        additional_keys = [HEIGHT, DEPTH]</span>,
+        default = (<span class="number">640</span>, <span class="number">480</span>, <span class="number">320</span>),
+        parse_properties_with = parse_dimensions,
+        getter
+    )]
+    dimensions: (u64, u64, u64),
+}
+
+<span class="kw">fn </span>main() -&gt; iceberg::Result&lt;()&gt; {
+    <span class="kw">let </span>defaults = TableLikeProperties::from_properties(<span class="kw-2">&amp;</span>HashMap::new())<span class="question-mark">?</span>;
+    <span class="macro">assert_eq!</span>(defaults.commit().retries(), <span class="number">4</span>);
+    <span class="macro">assert_eq!</span>(defaults.owner(), <span class="kw-2">&amp;</span><span class="prelude-val">None</span>);
+    <span class="macro">assert!</span>(defaults.fanout_enabled());
+    <span class="macro">assert!</span>(defaults.column_fpp().is_empty());
+    <span class="macro">assert_eq!</span>(defaults.location(), <span class="string">"warehouse"</span>);
+    <span class="macro">assert_eq!</span>(defaults.dimensions(), (<span class="number">640</span>, <span class="number">480</span>, <span class="number">320</span>));
+
+    <span class="kw">let </span>raw = HashMap::from([
+        (RETRIES.to_string(), <span class="string">"8"</span>.to_string()),
+        (OWNER.to_string(), <span class="string">"iceberg"</span>.to_string()),
+        (FANOUT.to_string(), <span class="string">"FALSE"</span>.to_string()),
+        (<span class="macro">format!</span>(<span class="string">"{COLUMN_FPP_PREFIX}id"</span>), <span class="string">"0.01"</span>.to_string()),
+        (LOCATION.to_string(), <span class="string">" s3://bucket/table/ "</span>.to_string()),
+        (WIDTH.to_string(), <span class="string">"1920"</span>.to_string()),
+        (HEIGHT.to_string(), <span class="string">"1080"</span>.to_string()),
+        (DEPTH.to_string(), <span class="string">"720"</span>.to_string()),
+        (<span class="string">"unmodeled"</span>.to_string(), <span class="string">"ignored"</span>.to_string()),
+    ]);
+
+    <span class="kw">let </span>properties = TableLikeProperties::from_properties(<span class="kw-2">&amp;</span>raw)<span class="question-mark">?</span>;
+    <span class="macro">assert_eq!</span>(properties.commit().retries(), <span class="number">8</span>);
+    <span class="macro">assert_eq!</span>(properties.owner().as_deref(), <span class="prelude-val">Some</span>(<span class="string">"iceberg"</span>));
+    <span class="macro">assert!</span>(!properties.fanout_enabled());
+    <span class="macro">assert_eq!</span>(properties.column_fpp()[<span class="string">"id"</span>], <span class="number">0.01</span>);
+    <span class="macro">assert_eq!</span>(properties.location(), <span class="string">"s3://bucket/table"</span>);
+    <span class="macro">assert_eq!</span>(properties.dimensions(), (<span class="number">1920</span>, <span class="number">1080</span>, <span class="number">720</span>));
+
+    <span class="kw">let </span>error = TableLikeProperties::from_properties(<span class="kw-2">&amp;</span>HashMap::from([(
+        LOCATION.to_string(),
+        <span class="string">"/"</span>.to_string(),
+    )]))
+    .unwrap_err();
+    <span class="macro">assert_eq!</span>(error.kind(), ErrorKind::DataInvalid);
+    <span class="macro">assert!</span>(<span class="macro">format!</span>(<span class="string">"{error}"</span>).contains(LOCATION));
+
+    <span class="prelude-val">Ok</span>(())
+}</code></pre></div><h3 id="using-ordinary-derives-together"><a class="doc-anchor" href="#using-ordinary-derives-together">§</a>Using ordinary derives together</h3>
+<p><code>Properties</code> does not implicitly derive other traits, so <code>Default</code>,
+<code>Serialize</code>, and <code>Deserialize</code> can be selected independently and behave like
+ordinary Rust derives:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::collections::HashMap;
+
+<span class="kw">use </span>iceberg_property_macro::Properties;
+<span class="kw">use </span>serde::{Deserialize, Serialize};
+
+<span class="attr">#[derive(Debug, Default, Serialize, Deserialize, Properties)]
+</span><span class="kw">struct </span>ReadProperties {
+    <span class="attr">#[property(
+        key = <span class="string">"commit.retry.num-retries"</span>,
+        default = <span class="number">4</span>,
+        getter
+    )]
+    </span>retries: u64,
+}
+
+<span class="kw">fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;(), Box&lt;<span class="kw">dyn </span>std::error::Error&gt;&gt; {
+    <span class="comment">// The property annotation supplies the default used by from_properties.
+    </span><span class="kw">let </span>properties = ReadProperties::from_properties(<span class="kw-2">&amp;</span>HashMap::new())<span class="question-mark">?</span>;
+    <span class="macro">assert_eq!</span>(properties.retries(), <span class="number">4</span>);
+
+    <span class="comment">// The ordinary Default derive uses the field's Rust default instead.
+    </span><span class="kw">let </span>defaults = ReadProperties::default();
+    <span class="macro">assert_eq!</span>(defaults.retries(), <span class="number">0</span>);
+
+    <span class="comment">// Ordinary Serde derives use Rust field names, not property keys.
+    </span><span class="kw">let </span>json = serde_json::to_string(<span class="kw-2">&amp;</span>properties)<span class="question-mark">?</span>;
+    <span class="macro">assert_eq!</span>(json, <span class="string">r#"{"retries":4}"#</span>);
+    <span class="kw">let </span>decoded: ReadProperties = serde_json::from_str(<span class="string">r#"{"retries":7}"#</span>)<span class="question-mark">?</span>;
+    <span class="macro">assert_eq!</span>(decoded.retries(), <span class="number">7</span>);
+    <span class="prelude-val">Ok</span>(())
+}</code></pre></div>
+<p>All field settings must be grouped under <code>#[property(...)]</code>. This keeps <code>key</code>,
+<code>default</code>, <code>prefix</code>, <code>nested</code>, parser hooks, additional keys, and getter
+generation in one attribute and avoids collisions with ordinary Rust derives.</p>
+<p>Exact-key fields require a <code>default</code>. The <code>prefix</code> setting requires
+<code>HashMap&lt;String, T&gt;</code> and returns the entries matched by the prefix, or an empty
+map when none match. <code>nested</code> embeds another <code>Properties</code> struct while reading
+the same flat map. Neither prefix nor nested fields accept a <code>default</code>.
+<code>parse_with</code> customizes parsing for one exact-key field; on an <code>Option&lt;T&gt;</code> field,
+the parser produces <code>T</code> and the macro wraps a present value in <code>Some</code>.
+<code>parse_properties_with</code> receives the complete property map, and its required
+<code>additional_keys</code> setting supplies the list of secondary keys.</p>
+<p>Boolean values are parsed case-insensitively. Other values require <code>FromStr</code>
+unless a custom parser is supplied. String-literal and path defaults are
+converted into their field type with <code>Into</code>.</p>
+<p><code>from_properties</code> and both custom parser hooks use <code>iceberg::Result</code>. Generated
+<code>FromStr</code> failures use <code>ErrorKind::DataInvalid</code>. The macro preserves errors from
+custom parsers and adds the primary property key as error context.</p>
+</div></details><h2 id="derives" class="section-header">Derive Macros<a href="#derives" class="anchor">§</a></h2><dl class="item-table"><dt><a class="derive" href="derive.Properties.html" title="derive iceberg_property_macro::Properties">Properties</a></dt><dd>Derives property-map parsing and opt-in read-only accessors for a struct.</dd></dl></section></div></main></body></html>
