@@ -21,6 +21,7 @@ use std::str::FromStr;
 
 use crate::compression::{CompressionCodec, TABLE_METADATA_SUPPORTED_COMPRESSION};
 use crate::error::{Error, ErrorKind, Result};
+use crate::util::location::strip_trailing_slash;
 
 fn supported_metadata_compression_names() -> String {
     let names = TABLE_METADATA_SUPPORTED_COMPRESSION
@@ -66,16 +67,26 @@ where
     })
 }
 
-/// Strips trailing slashes from a location, preserving a bare URI scheme root
-fn strip_trailing_slash(path: &str) -> &str {
-    let mut path = path;
-    while !path.ends_with("://") {
-        let Some(stripped) = path.strip_suffix('/') else {
-            break;
-        };
-        path = stripped;
-    }
-    path
+/// Parse an optional property, returning `None` when the key is absent and an
+/// error when the value is present but fails to parse.
+fn parse_optional_property<T: FromStr>(
+    properties: &HashMap<String, String>,
+    key: &str,
+) -> Result<Option<T>>
+where
+    <T as FromStr>::Err: Display,
+{
+    properties
+        .get(key)
+        .map(|value| {
+            value.parse::<T>().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid value for {key}: {e}"),
+                )
+            })
+        })
+        .transpose()
 }
 
 fn parse_location_property(
@@ -137,6 +148,57 @@ pub(crate) fn parse_metadata_file_compression(
     }
 }
 
+/// Parse the Parquet data-file compression codec (`write.parquet.compression-codec`)
+/// and fold in the compression level (`write.parquet.compression-level`) for the
+/// codecs that accept one (`zstd`, `gzip`, `brotli`).
+fn parse_parquet_compression(properties: &HashMap<String, String>) -> Result<CompressionCodec> {
+    let value = properties
+        .get(TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC)
+        .map(|s| s.as_str())
+        .unwrap_or(TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT);
+
+    let codec: CompressionCodec =
+        serde_json::from_value(serde_json::Value::String(value.to_lowercase())).map_err(|_| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid Parquet compression codec: {value}. Supported codecs: \
+                     uncompressed, snappy, gzip, lzo, brotli, lz4, lz4_raw, zstd"
+                ),
+            )
+        })?;
+
+    let level: Option<u8> = parse_optional_property(
+        properties,
+        TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL,
+    )?;
+
+    Ok(match (codec, level) {
+        (CompressionCodec::Zstd(_), Some(level)) => CompressionCodec::Zstd(level),
+        (CompressionCodec::Gzip(_), Some(level)) => CompressionCodec::Gzip(level),
+        (CompressionCodec::Brotli(_), Some(level)) => CompressionCodec::Brotli(level),
+        (codec, _) => codec,
+    })
+}
+
+/// Parse boolean property case insensitively
+/// Rust standard library only accepts "true" and "false", see https://doc.rust-lang.org/std/primitive.bool.html#method.from_str
+/// Users might accidentally trigger fallback with valid configuration values such as "False" or "True"
+fn parse_property_bool(
+    properties: &HashMap<String, String>,
+    key: &str,
+    default: bool,
+) -> Result<bool> {
+    properties.get(key).map_or(Ok(default), |value| {
+        value.to_lowercase().parse::<bool>().map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid value for {key}: {e}"),
+            )
+        })
+    })
+}
+
 /// TableProperties that contains the properties of a table.
 #[derive(Debug)]
 pub struct TableProperties {
@@ -177,11 +239,37 @@ pub struct TableProperties {
     pub cdc_max_chunk_size: usize,
     /// Content-defined chunking normalization level (gearhash bit adjustment).
     pub cdc_norm_level: i32,
+    /// Parquet compression codec for data files, with the resolved compression
+    /// level folded in (from `write.parquet.compression-level`, or the codec's
+    /// default when unset).
+    pub parquet_compression_codec: CompressionCodec,
+    /// Approximate maximum Parquet row group size in bytes.
+    pub parquet_row_group_size_bytes: usize,
+    /// Approximate maximum Parquet data page size in bytes.
+    pub parquet_page_size_bytes: usize,
+    /// Maximum number of rows per Parquet data page.
+    pub parquet_page_row_limit: usize,
+    /// Approximate maximum Parquet dictionary page size in bytes.
+    pub parquet_dict_size_bytes: usize,
     /// The master key id used to encrypt this table's manifest list and data
     /// files. `None` if `encryption.key-id` is not set.
     pub encryption_key_id: Option<String>,
     /// The encryption data encryption key length in bytes.
     pub encryption_data_key_length: usize,
+    /// Base directory for data files
+    pub write_data_location: Option<String>,
+    /// Deprecated table property for data file write location.
+    ///
+    /// Property will be removed at a later date.
+    /// Superseded by [write_data_location].
+    pub write_folder_storage_location: Option<String>,
+    /// Deprecated table property for data file write location for object storage location generator.
+    ///
+    /// Property will be removed at a later date.
+    /// Superseded by [write_data_location].
+    pub write_object_storage_location: Option<String>,
+    /// Whether partition values are included in object storage paths.
+    pub write_object_storage_partitioned_paths: bool,
 }
 
 impl TableProperties {
@@ -326,6 +414,37 @@ impl TableProperties {
     /// Default matches `parquet::file::properties::DEFAULT_CDC_NORM_LEVEL`.
     pub const PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32 = 0;
 
+    /// Compression codec for Parquet data files (e.g. `zstd`, `gzip`, `snappy`,
+    /// `lz4`, `lz4_raw`, `brotli`, `lzo`, `uncompressed`). The codec name is
+    /// parsed into a [`CompressionCodec`] when properties are parsed; the level's
+    /// range is validated when the writer is built.
+    pub const PROPERTY_PARQUET_COMPRESSION_CODEC: &str = "write.parquet.compression-codec";
+    /// Default Parquet compression codec.
+    pub const PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT: &str = "zstd";
+    /// Compression level for Parquet data files, for codecs that take one
+    /// (`gzip`, `zstd`, `brotli`). When unset, the codec's default level is used.
+    pub const PROPERTY_PARQUET_COMPRESSION_LEVEL: &str = "write.parquet.compression-level";
+
+    /// Approximate maximum size of a Parquet row group in bytes.
+    pub const PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES: &str = "write.parquet.row-group-size-bytes";
+    /// Default Parquet row group size in bytes.
+    pub const PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT: usize = 128 * 1024 * 1024;
+
+    /// Approximate maximum size of a Parquet data page in bytes.
+    pub const PROPERTY_PARQUET_PAGE_SIZE_BYTES: &str = "write.parquet.page-size-bytes";
+    /// Default Parquet page size in bytes.
+    pub const PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT: usize = 1024 * 1024;
+
+    /// Maximum number of rows per Parquet data page.
+    pub const PROPERTY_PARQUET_PAGE_ROW_LIMIT: &str = "write.parquet.page-row-limit";
+    /// Default Parquet page row limit.
+    pub const PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT: usize = 20000;
+
+    /// Approximate maximum size of the Parquet dictionary page in bytes.
+    pub const PROPERTY_PARQUET_DICT_SIZE_BYTES: &str = "write.parquet.dict-size-bytes";
+    /// Default Parquet dictionary page size in bytes.
+    pub const PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT: usize = 2 * 1024 * 1024;
+
     /// Property key for the master key id used to encrypt the table's manifest
     /// list and data files as defined in https://iceberg.apache.org/docs/nightly/encryption/.
     pub const PROPERTY_ENCRYPTION_KEY_ID: &str = "encryption.key-id";
@@ -334,6 +453,17 @@ impl TableProperties {
     pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH: &str = "encryption.data-key-length";
     /// Default value for the encryption DEK length (16 bytes = AES-128).
     pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT: usize = 16;
+    /// Property key for the base directory for data files
+    pub const PROPERTY_WRITE_DATA_LOCATION: &str = "write.data.path";
+    /// Property key for deprecated [write_folder_storage_location]
+    pub const PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &str = "write.folder-storage.path";
+    /// Property key for deprecated object storage path, kept as a fallback for compatibility.
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &str = "write.object-storage.path";
+    /// Property key for controlling whether partition values are included in object storage paths.
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &str =
+        "write.object-storage.partitioned-paths";
+    /// Default value for [PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS]
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool = true;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
@@ -377,12 +507,12 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_METADATA_PATH,
             )?,
             metadata_compression_codec: parse_metadata_file_compression(props)?,
-            write_datafusion_fanout_enabled: parse_property(
+            write_datafusion_fanout_enabled: parse_property_bool(
                 props,
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
                 TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT,
             )?,
-            gc_enabled: parse_property(
+            gc_enabled: parse_property_bool(
                 props,
                 TableProperties::PROPERTY_GC_ENABLED,
                 TableProperties::PROPERTY_GC_ENABLED_DEFAULT,
@@ -402,7 +532,7 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_MAX_REF_AGE_MS,
                 TableProperties::PROPERTY_MAX_REF_AGE_MS_DEFAULT,
             )?,
-            cdc_enabled: parse_property(
+            cdc_enabled: parse_property_bool(
                 props,
                 TableProperties::PROPERTY_PARQUET_CDC_ENABLED,
                 TableProperties::PROPERTY_PARQUET_CDC_ENABLED_DEFAULT,
@@ -422,6 +552,27 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL,
                 TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT,
             )?,
+            parquet_compression_codec: parse_parquet_compression(props)?,
+            parquet_row_group_size_bytes: parse_property(
+                props,
+                TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES,
+                TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT,
+            )?,
+            parquet_page_size_bytes: parse_property(
+                props,
+                TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES,
+                TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT,
+            )?,
+            parquet_page_row_limit: parse_property(
+                props,
+                TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT,
+                TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT,
+            )?,
+            parquet_dict_size_bytes: parse_property(
+                props,
+                TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES,
+                TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT,
+            )?,
             encryption_key_id: props
                 .get(TableProperties::PROPERTY_ENCRYPTION_KEY_ID)
                 .cloned(),
@@ -429,6 +580,20 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 props,
                 TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
                 TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT,
+            )?,
+            write_data_location: props
+                .get(TableProperties::PROPERTY_WRITE_DATA_LOCATION)
+                .cloned(),
+            write_folder_storage_location: props
+                .get(TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION)
+                .cloned(),
+            write_object_storage_location: props
+                .get(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION)
+                .cloned(),
+            write_object_storage_partitioned_paths: parse_property_bool(
+                props,
+                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS,
+                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT,
             )?,
         })
     }
@@ -536,22 +701,6 @@ mod tests {
             table_properties.write_metadata_path.as_deref(),
             Some("s3://other-bucket/custom-meta")
         );
-    }
-
-    #[test]
-    fn test_strip_trailing_slash() {
-        for (path, expected) in [
-            ("s3://bucket/db/tbl", "s3://bucket/db/tbl"),
-            ("s3://bucket/db/tbl/", "s3://bucket/db/tbl"),
-            ("s3://bucket/db/tbl////", "s3://bucket/db/tbl"),
-            ("blobstore://", "blobstore://"),
-            ("blobstore:///", "blobstore://"),
-            ("file:///", "file://"),
-            ("////", ""),
-            ("", ""),
-        ] {
-            assert_eq!(strip_trailing_slash(path), expected);
-        }
     }
 
     #[test]
@@ -897,5 +1046,147 @@ mod tests {
         let props = HashMap::from([("some.other.property".to_string(), "value".to_string())]);
         let tp = TableProperties::try_from(&props).unwrap();
         assert!(!tp.cdc_enabled);
+    }
+
+    #[test]
+    fn test_parquet_sizing_defaults() {
+        let tp = TableProperties::try_from(&HashMap::new()).unwrap();
+        // Default codec is zstd at its default level.
+        assert_eq!(
+            tp.parquet_compression_codec,
+            CompressionCodec::zstd_default()
+        );
+        assert_eq!(
+            tp.parquet_row_group_size_bytes,
+            TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT
+        );
+        assert_eq!(
+            tp.parquet_page_size_bytes,
+            TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT
+        );
+        assert_eq!(
+            tp.parquet_page_row_limit,
+            TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT
+        );
+        assert_eq!(
+            tp.parquet_dict_size_bytes,
+            TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT
+        );
+    }
+
+    #[test]
+    fn test_parquet_sizing_overrides() {
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
+                "gzip".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL.to_string(),
+                "4".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES.to_string(),
+                "1048576".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES.to_string(),
+                "65536".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT.to_string(),
+                "5000".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES.to_string(),
+                "131072".to_string(),
+            ),
+        ]);
+        let tp = TableProperties::try_from(&props).unwrap();
+        // Codec name and level are folded into a single CompressionCodec.
+        assert_eq!(tp.parquet_compression_codec, CompressionCodec::Gzip(4));
+        assert_eq!(tp.parquet_row_group_size_bytes, 1048576);
+        assert_eq!(tp.parquet_page_size_bytes, 65536);
+        assert_eq!(tp.parquet_page_row_limit, 5000);
+        assert_eq!(tp.parquet_dict_size_bytes, 131072);
+    }
+
+    #[test]
+    fn test_parquet_invalid_sizing_rejected() {
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES.to_string(),
+            "not_a_number".to_string(),
+        )]);
+        let err = TableProperties::try_from(&props).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string()
+                .contains(TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES)
+        );
+    }
+
+    #[test]
+    fn test_parquet_all_codecs_parse() {
+        // Every codec name parquet-java supports must parse (parity with Java's
+        // `CompressionCodecName.valueOf`).
+        for (name, expected) in [
+            ("uncompressed", CompressionCodec::None),
+            ("snappy", CompressionCodec::Snappy),
+            ("gzip", CompressionCodec::gzip_default()),
+            ("lzo", CompressionCodec::Lzo),
+            ("brotli", CompressionCodec::brotli_default()),
+            ("lz4", CompressionCodec::Lz4),
+            ("lz4_raw", CompressionCodec::Lz4Raw),
+            ("zstd", CompressionCodec::zstd_default()),
+        ] {
+            let props = HashMap::from([(
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
+                name.to_string(),
+            )]);
+            let tp = TableProperties::try_from(&props).unwrap();
+            assert_eq!(tp.parquet_compression_codec, expected, "codec {name}");
+        }
+    }
+
+    #[test]
+    fn test_parquet_compression_level_ignored_for_levelless_codec() {
+        // A level set alongside a codec that carries none (e.g. snappy) is
+        // ignored rather than rejected, matching parquet-java.
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
+                "snappy".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL.to_string(),
+                "5".to_string(),
+            ),
+        ]);
+        let tp = TableProperties::try_from(&props).unwrap();
+        assert_eq!(tp.parquet_compression_codec, CompressionCodec::Snappy);
+    }
+
+    #[test]
+    fn test_parse_boolean_property_case_insensitive() {
+        let false_variants = ["False", "FALSE"];
+        let true_variants = ["True", "TRUE"];
+
+        for f in false_variants {
+            let props = HashMap::from([(
+                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS.to_string(),
+                f.to_string(),
+            )]);
+            let tp = TableProperties::try_from(&props).unwrap();
+            assert!(!tp.write_object_storage_partitioned_paths);
+        }
+
+        for t in true_variants {
+            let props = HashMap::from([(
+                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS.to_string(),
+                t.to_string(),
+            )]);
+            let tp = TableProperties::try_from(&props).unwrap();
+            assert!(tp.write_object_storage_partitioned_paths);
+        }
     }
 }
