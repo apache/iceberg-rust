@@ -127,8 +127,8 @@ pub fn iceberg_catalog_rest::ErrorResponse::deserialize<__D>(__deserializer: __D
 pub struct iceberg_catalog_rest::HttpClient
 impl iceberg_catalog_rest::HttpClient
 pub async fn iceberg_catalog_rest::HttpClient::post_form(&self, url: &str, headers: &http::header::map::HeaderMap, form: &std::collections::hash::map::HashMap<&str, &str>) -> iceberg::error::Result<(http::status::StatusCode, alloc::vec::Vec<u8>)>
-pub fn iceberg_catalog_rest::HttpClient::with_session(&self, session: alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>) -> Self
-pub fn iceberg_catalog_rest::HttpClient::without_session(&self) -> Self
+pub fn iceberg_catalog_rest::HttpClient::with_auth_session(&self, auth_session: alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>) -> Self
+pub fn iceberg_catalog_rest::HttpClient::without_auth_session(&self) -> Self
 impl core::clone::Clone for iceberg_catalog_rest::HttpClient
 pub fn iceberg_catalog_rest::HttpClient::clone(&self) -> iceberg_catalog_rest::HttpClient
 impl core::fmt::Debug for iceberg_catalog_rest::HttpClient

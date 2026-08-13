@@ -45,7 +45,7 @@ pub struct HttpClient {
     /// manager is about to create.
     ///
     /// [`AuthManager`]: crate::auth::AuthManager
-    session: Arc<dyn AuthSession>,
+    auth_session: Arc<dyn AuthSession>,
 }
 
 impl Debug for HttpClient {
@@ -63,12 +63,12 @@ impl Debug for HttpClient {
 }
 
 impl HttpClient {
-    /// The same client authenticating with `session` instead: a derived
-    /// session reuses the connection pool and headers of the client it came
-    /// from, carrying its own authentication.
-    pub fn with_session(&self, session: Arc<dyn AuthSession>) -> Self {
+    /// The same client authenticating with `auth_session` instead: a derived
+    /// auth session reuses the connection pool and headers of the client it
+    /// came from, carrying its own authentication.
+    pub fn with_auth_session(&self, auth_session: Arc<dyn AuthSession>) -> Self {
         Self {
-            session,
+            auth_session,
             ..self.clone()
         }
     }
@@ -76,8 +76,8 @@ impl HttpClient {
     /// The same client with no authentication, for the requests that must not
     /// carry it — a session refreshing its own token over the client it
     /// authenticates would otherwise recurse.
-    pub fn without_session(&self) -> Self {
-        self.with_session(Arc::new(NoopSession))
+    pub fn without_auth_session(&self) -> Self {
+        self.with_auth_session(Arc::new(NoopSession))
     }
 
     /// Sends a form-encoded POST and returns the response status and body,
@@ -107,7 +107,7 @@ impl HttpClient {
             reqwest::header::CONTENT_TYPE,
             reqwest::header::HeaderValue::from_static("application/x-www-form-urlencoded"),
         );
-        self.session.authenticate(&mut request).await?;
+        self.auth_session.authenticate(&mut request).await?;
         let response = self.client.execute(request.into_inner()).await?;
         let status = response.status();
         let body = response
@@ -123,7 +123,7 @@ impl HttpClient {
             client: cfg.client(),
             extra_headers: cfg.extra_headers()?,
             disable_header_redaction: cfg.disable_header_redaction(),
-            session: Arc::new(NoopSession),
+            auth_session: Arc::new(NoopSession),
         })
     }
 
@@ -141,14 +141,14 @@ impl HttpClient {
             client: cfg.client(),
             extra_headers,
             disable_header_redaction: cfg.disable_header_redaction(),
-            session: self.session,
+            auth_session: self.auth_session,
         })
     }
 
     /// Testing only: the session authenticating this client's requests.
     #[cfg(test)]
-    pub(crate) fn session(&self) -> &Arc<dyn AuthSession> {
-        &self.session
+    pub(crate) fn auth_session(&self) -> &Arc<dyn AuthSession> {
+        &self.auth_session
     }
 
     /// Testing only: the bearer token `session` would attach.
@@ -162,7 +162,7 @@ impl HttpClient {
                 .request(Method::GET, "http://localhost/token-probe"),
         )
         .ok()?;
-        self.session.authenticate(&mut request).await.ok()?;
+        self.auth_session.authenticate(&mut request).await.ok()?;
         let request = request.into_inner();
         request
             .headers()
@@ -185,7 +185,7 @@ impl HttpClient {
     pub(crate) async fn query_catalog(&self, mut request: HttpRequest) -> Result<Response> {
         // Authenticate first, then apply extra headers, so a configured
         // `header.authorization` keeps overriding a token (unchanged behavior).
-        self.session.authenticate(&mut request).await?;
+        self.auth_session.authenticate(&mut request).await?;
         let mut request = request.into_inner();
         request.headers_mut().extend(self.extra_headers.clone());
         Ok(self.client.execute(request).await?)
@@ -323,7 +323,7 @@ mod tests {
 
         let client = HttpClient::new(&RestCatalogConfig::builder().uri(server.url()).build())
             .unwrap()
-            .with_session(Arc::new(StaticSession));
+            .with_auth_session(Arc::new(StaticSession));
         let url = format!("{}/token", server.url());
 
         client
@@ -333,7 +333,7 @@ mod tests {
         signed.assert_async().await;
 
         client
-            .without_session()
+            .without_auth_session()
             .post_form(&url, &HeaderMap::new(), &HashMap::new())
             .await
             .unwrap();

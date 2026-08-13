@@ -634,12 +634,12 @@ impl RestCatalog {
                 let catalog_config = {
                     let init_session = auth_manager
                         .init_session(
-                            &http_client.without_session(),
+                            &http_client.without_auth_session(),
                             &Self::auth_props(&self.user_config),
                         )
                         .await?;
                     RestCatalog::load_config(
-                        &http_client.with_session(Arc::from(init_session)),
+                        &http_client.with_auth_session(Arc::from(init_session)),
                         &self.user_config,
                     )
                     .await?
@@ -657,12 +657,15 @@ impl RestCatalog {
                 // The manager is handed an unauthenticated client: its own
                 // requests must not be signed by the session it is deriving.
                 let session = auth_manager
-                    .catalog_session(&http_client.without_session(), &Self::auth_props(&config))
+                    .catalog_session(
+                        &http_client.without_auth_session(),
+                        &Self::auth_props(&config),
+                    )
                     .await?;
 
                 Ok(RestClient {
                     config,
-                    http_client: http_client.with_session(session),
+                    http_client: http_client.with_auth_session(session),
                     endpoints,
                 })
             })
@@ -1968,7 +1971,7 @@ mod tests {
         bootstrap_oauth_mock.assert_async().await;
         // The catalog session's endpoint follows the overridden URI (visible
         // via the session's Debug, which prints its token endpoint).
-        let session_debug = format!("{:?}", client.http_client.session());
+        let session_debug = format!("{:?}", client.http_client.auth_session());
         assert!(session_debug.contains(&format!("{}/v1/oauth/tokens", overridden.url())));
     }
 
