@@ -336,3 +336,44 @@ impl AuthSession for OAuth2Session {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use reqwest::Client;
+
+    use super::*;
+    use crate::RestCatalogConfig;
+
+    fn test_client() -> HttpClient {
+        HttpClient::new(
+            &RestCatalogConfig::builder()
+                .uri("http://localhost".to_string())
+                .build(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_static_token_session_attaches_token() {
+        // Token-only config: the token is attached as-is.
+        let manager = OAuth2Manager::new("http://localhost/unused").with_token("tok-static");
+        let session = manager
+            .init_session(&test_client(), &HashMap::new())
+            .await
+            .unwrap();
+
+        let mut req = HttpRequest::new(
+            Client::new()
+                .get("https://rest.example.com/v1/config")
+                .build()
+                .unwrap(),
+        );
+        session.authenticate(&mut req).await.unwrap();
+        assert_eq!(
+            req.headers().get("authorization").unwrap(),
+            "Bearer tok-static"
+        );
+    }
+}
