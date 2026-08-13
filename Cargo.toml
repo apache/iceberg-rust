@@ -23,6 +23,7 @@ members = [
   "crates/iceberg",
   "crates/integration_tests",
   "crates/integrations/*",
+  "crates/property-macro",
   "crates/sqllogictest",
   "crates/storage/*",
   "crates/test_utils",
@@ -125,7 +126,9 @@ ordered-float = "4"
 parquet = "59.2"
 pilota = "0.11.10"
 pretty_assertions = "1.4"
+proc-macro2 = "1"
 pyo3 = "0.29"
+quote = "1"
 rand = "0.9.3"
 regex = "1.11.3"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
@@ -141,6 +144,7 @@ sqllogictest = "0.29"
 sqlx = { version = "0.8.1", default-features = false }
 stacker = "0.1.20"
 strum = "0.27.2"
+syn = "2"
 tempfile = "3.18"
 thrift = "0.17.0"
 tokio = { version = "1.47", default-features = false, features = [
@@ -150,6 +154,7 @@ tokio = { version = "1.47", default-features = false, features = [
 toml = "0.8"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
+trybuild = "1"
 typed-builder = "0.20"
 typetag = "0.2"
 url = "2.5.7"
