@@ -4015,7 +4015,7 @@ dependencies = [
  "quote",
  "serde",
  "serde_json",
- "syn",
+ "syn 2.0.118",
  "trybuild",
 ]
 
