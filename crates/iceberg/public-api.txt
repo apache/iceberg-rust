@@ -3275,7 +3275,6 @@ pub type iceberg::writer::base_writer::position_delete_writer::PositionDeleteFil
 pub fn iceberg::writer::base_writer::position_delete_writer::PositionDeleteFileWriterBuilder<B, L, F>::build<'life0, 'async_trait>(&'life0 self, partition_key: core::option::Option<iceberg::spec::PartitionKey>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<Self::R>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 impl<B: core::fmt::Debug + iceberg::writer::file_writer::FileWriterBuilder, L: core::fmt::Debug + iceberg::writer::file_writer::location_generator::LocationGenerator, F: core::fmt::Debug + iceberg::writer::file_writer::location_generator::FileNameGenerator> core::fmt::Debug for iceberg::writer::base_writer::position_delete_writer::PositionDeleteFileWriterBuilder<B, L, F>
 pub fn iceberg::writer::base_writer::position_delete_writer::PositionDeleteFileWriterBuilder<B, L, F>::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub fn iceberg::writer::base_writer::position_delete_writer::position_delete_arrow_schema() -> arrow_schema::schema::SchemaRef
 pub fn iceberg::writer::base_writer::position_delete_writer::position_delete_schema() -> iceberg::spec::SchemaRef
 pub mod iceberg::writer::file_writer
 pub mod iceberg::writer::file_writer::location_generator

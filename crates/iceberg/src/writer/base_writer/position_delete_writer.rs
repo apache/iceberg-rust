@@ -23,15 +23,19 @@
 //! those two columns (see [`position_delete_schema`]) and sets
 //! [`DataContentType::PositionDeletes`] on the output. It does not sort its input; see
 //! [`PositionDeleteFileWriter::write`].
+//!
+//! Position delete files are a v2 construct. v3 replaces them with deletion vectors and
+//! forbids adding new position delete files, so callers must not route v3 writes here.
+//! This base writer has no format-version gate by design; that gating belongs at the
+//! transaction/commit layer.
 
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
-use arrow_schema::{DataType, Field, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{DataType, Field};
 use once_cell::sync::Lazy;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-use crate::arrow::schema_to_arrow_schema;
 use crate::metadata_columns::{
     RESERVED_FIELD_ID_DELETE_FILE_PATH, RESERVED_FIELD_ID_DELETE_FILE_POS, delete_file_path_field,
     delete_file_pos_field,
@@ -57,11 +61,13 @@ static POSITION_DELETE_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
     )
 });
 
-/// [`POSITION_DELETE_SCHEMA`] converted to Arrow, keeping the reserved field ids in
-/// each field's Parquet field-id metadata.
-static POSITION_DELETE_ARROW_SCHEMA: Lazy<ArrowSchemaRef> = Lazy::new(|| {
+/// [`POSITION_DELETE_SCHEMA`] converted to Arrow, keeping the reserved field ids in each
+/// field's Parquet field-id metadata. Test-only for now: callers configure the writer with
+/// the Iceberg [`position_delete_schema`], so no non-test code needs the Arrow form yet.
+#[cfg(test)]
+static POSITION_DELETE_ARROW_SCHEMA: Lazy<arrow_schema::SchemaRef> = Lazy::new(|| {
     Arc::new(
-        schema_to_arrow_schema(&POSITION_DELETE_SCHEMA)
+        crate::arrow::schema_to_arrow_schema(&POSITION_DELETE_SCHEMA)
             .expect("position delete arrow schema is statically valid"),
     )
 });
@@ -76,7 +82,8 @@ pub fn position_delete_schema() -> SchemaRef {
 }
 
 /// Returns the canonical Arrow schema of a position delete file.
-pub fn position_delete_arrow_schema() -> ArrowSchemaRef {
+#[cfg(test)]
+fn position_delete_arrow_schema() -> arrow_schema::SchemaRef {
     POSITION_DELETE_ARROW_SCHEMA.clone()
 }
 
@@ -434,6 +441,40 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_position_delete_writer_parquet_field_ids() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let (file_io, builder) = writer_setup(&temp_dir);
+        let mut writer = builder.build(None).await?;
+        writer
+            .write(position_delete_batch(
+                vec!["s3://bucket/data/f0.parquet"],
+                vec![1],
+            ))
+            .await?;
+        let data_files = writer.close().await?;
+
+        // The reserved field ids must survive into the written Parquet schema, not just
+        // the in-memory Arrow schema, so cross-engine readers resolve the columns by id.
+        let content = file_io
+            .new_input(data_files[0].file_path.clone())?
+            .read()
+            .await?;
+        let reader = ParquetRecordBatchReaderBuilder::try_new(content).unwrap();
+        let field_ids: Vec<i32> = reader
+            .parquet_schema()
+            .columns()
+            .iter()
+            .map(|col| col.self_type().get_basic_info().id())
+            .collect();
+        assert_eq!(field_ids, vec![
+            RESERVED_FIELD_ID_DELETE_FILE_PATH,
+            RESERVED_FIELD_ID_DELETE_FILE_POS,
+        ]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_position_delete_writer_multiple_writes() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let (file_io, builder) = writer_setup(&temp_dir);
@@ -545,6 +586,38 @@ mod test {
         let err = writer.write(batch).await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.to_string().contains("field id metadata"), "{err}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_position_delete_writer_rejects_unparseable_field_id() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let (_file_io, builder) = writer_setup(&temp_dir);
+        let mut writer = builder.build(None).await?;
+
+        // Field-id metadata present but not an integer: must be rejected.
+        let bad_meta = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new(RESERVED_COL_NAME_DELETE_FILE_PATH, DataType::Utf8, false).with_metadata(
+                HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "not_a_number".to_string(),
+                )]),
+            ),
+            field_with_id(
+                RESERVED_COL_NAME_DELETE_FILE_POS,
+                DataType::Int64,
+                RESERVED_FIELD_ID_DELETE_FILE_POS,
+            ),
+        ]));
+        let batch = RecordBatch::try_new(bad_meta, vec![
+            Arc::new(StringArray::from(vec!["s3://bucket/data/f0.parquet"])),
+            Arc::new(Int64Array::from(vec![1_i64])),
+        ])
+        .unwrap();
+
+        let err = writer.write(batch).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.to_string().contains("invalid field id"), "{err}");
         Ok(())
     }
 
