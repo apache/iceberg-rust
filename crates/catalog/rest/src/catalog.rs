@@ -459,10 +459,10 @@ pub(crate) fn oauth_params_from_props(props: &HashMap<String, String>) -> HashMa
 }
 
 #[derive(Debug)]
-struct RestContext {
+struct RestClient {
     /// Carries the session the auth manager derived from the merged
     /// configuration, so every request below is authenticated.
-    client: HttpClient,
+    http_client: HttpClient,
     /// Runtime config is fetched from rest server and stored here.
     ///
     /// It's could be different from the user config.
@@ -471,16 +471,16 @@ struct RestContext {
     endpoints: HashSet<Endpoint>,
 }
 
-impl RestContext {
+impl RestClient {
     /// Testing only: the bearer token the catalog session would attach.
     #[cfg(test)]
     async fn token(&self) -> Option<String> {
-        self.client.token().await
+        self.http_client.token().await
     }
 
     /// Sends `request`, authenticated by the client's session.
     async fn query_catalog(&self, request: HttpRequest) -> Result<Response> {
-        self.client.query_catalog(request).await
+        self.http_client.query_catalog(request).await
     }
 }
 
@@ -494,7 +494,7 @@ pub struct RestCatalog {
     ///
     /// It could be different from the config fetched from the server and used at runtime.
     user_config: RestCatalogConfig,
-    ctx: OnceCell<RestContext>,
+    client: OnceCell<RestClient>,
     /// Storage factory for creating FileIO instances.
     storage_factory: Option<Arc<dyn StorageFactory>>,
     runtime: Runtime,
@@ -514,7 +514,7 @@ impl RestCatalog {
         Self {
             auth_manager,
             user_config: config,
-            ctx: OnceCell::new(),
+            client: OnceCell::new(),
             storage_factory,
             runtime,
             kms_client,
@@ -523,18 +523,18 @@ impl RestCatalog {
 
     /// Sends a DELETE request for the given table, optionally requesting purge.
     async fn delete_table(&self, table: &TableIdent, purge: bool) -> Result<()> {
-        let context = self.context().await?;
+        let client = self.client().await?;
 
-        let mut request_builder = context
-            .client
-            .request(Method::DELETE, context.config.table_endpoint(table));
+        let mut request_builder = client
+            .http_client
+            .request(Method::DELETE, client.config.table_endpoint(table));
 
         if purge {
             request_builder = request_builder.query(&[("purgeRequested", "true")]);
         }
 
         let request = HttpRequest::build(request_builder)?;
-        let http_response = context.query_catalog(request).await?;
+        let http_response = client.query_catalog(request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
@@ -544,7 +544,7 @@ impl RestCatalog {
             )),
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
-                context.client.disable_header_redaction(),
+                client.http_client.disable_header_redaction(),
             )
             .await),
         }
@@ -622,11 +622,11 @@ impl RestCatalog {
         }
     }
 
-    /// Gets the [`RestContext`] from the catalog.
-    async fn context(&self) -> Result<&RestContext> {
-        self.ctx
+    /// Gets the [`RestClient`] from the catalog.
+    async fn client(&self) -> Result<&RestClient> {
+        self.client
             .get_or_try_init(|| async {
-                let client = HttpClient::new(&self.user_config)?;
+                let http_client = HttpClient::new(&self.user_config)?;
                 let auth_manager = self.resolve_auth_manager()?;
                 // The init session lives only for the config handshake, so a
                 // manager whose session guards a one-shot resource can release
@@ -634,12 +634,12 @@ impl RestCatalog {
                 let catalog_config = {
                     let init_session = auth_manager
                         .init_session(
-                            &client.without_session(),
+                            &http_client.without_auth_session(),
                             &Self::auth_props(&self.user_config),
                         )
                         .await?;
                     RestCatalog::load_config(
-                        &client.with_session(Arc::from(init_session)),
+                        &http_client.with_auth_session(Arc::from(init_session)),
                         &self.user_config,
                     )
                     .await?
@@ -653,16 +653,19 @@ impl RestCatalog {
                     _ => crate::endpoint::DEFAULT_ENDPOINTS.clone(),
                 };
                 let config = self.user_config.clone().merge_with_config(catalog_config);
-                let client = client.update_with(&config)?;
+                let http_client = http_client.update_with(&config)?;
                 // The manager is handed an unauthenticated client: its own
                 // requests must not be signed by the session it is deriving.
                 let session = auth_manager
-                    .catalog_session(&client.without_session(), &Self::auth_props(&config))
+                    .catalog_session(
+                        &http_client.without_auth_session(),
+                        &Self::auth_props(&config),
+                    )
                     .await?;
 
-                Ok(RestContext {
+                Ok(RestClient {
                     config,
-                    client: client.with_session(session),
+                    http_client: http_client.with_auth_session(session),
                     endpoints,
                 })
             })
@@ -673,21 +676,21 @@ impl RestCatalog {
     /// advertised in `GET /v1/config` (or a default base set when it advertised
     /// none).
     pub(crate) async fn supports_endpoint(&self, endpoint: &Endpoint) -> Result<bool> {
-        Ok(self.context().await?.endpoints.contains(endpoint))
+        Ok(self.client().await?.endpoints.contains(endpoint))
     }
 
     /// Issue a `HEAD` request to `url` and interpret it as an existence check:
     /// `2xx` means it exists, `404` means it doesn't.
-    async fn check_exists_via_head(&self, context: &RestContext, url: String) -> Result<bool> {
-        let request = HttpRequest::build(context.client.request(Method::HEAD, url))?;
-        let http_response = context.query_catalog(request).await?;
+    async fn check_exists_via_head(&self, client: &RestClient, url: String) -> Result<bool> {
+        let request = HttpRequest::build(client.http_client.request(Method::HEAD, url))?;
+        let http_response = client.query_catalog(request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
             StatusCode::NOT_FOUND => Ok(false),
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
-                context.client.disable_header_redaction(),
+                client.http_client.disable_header_redaction(),
             )
             .await),
         }
@@ -697,10 +700,10 @@ impl RestCatalog {
     ///
     /// It's required for a REST catalog to update its config after creation.
     async fn load_config(
-        client: &HttpClient,
+        http_client: &HttpClient,
         user_config: &RestCatalogConfig,
     ) -> Result<CatalogConfig> {
-        let mut request_builder = client.request(Method::GET, user_config.config_endpoint());
+        let mut request_builder = http_client.request(Method::GET, user_config.config_endpoint());
 
         if let Some(warehouse_location) = &user_config.warehouse {
             request_builder = request_builder.query(&[("warehouse", warehouse_location)]);
@@ -708,13 +711,13 @@ impl RestCatalog {
 
         let request = HttpRequest::build(request_builder)?;
 
-        let http_response = client.query_catalog(request).await?;
+        let http_response = http_client.query_catalog(request).await?;
 
         match http_response.status() {
             StatusCode::OK => deserialize_catalog_response(http_response).await,
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
-                client.disable_header_redaction(),
+                http_client.disable_header_redaction(),
             )
             .await),
         }
@@ -725,14 +728,14 @@ impl RestCatalog {
         metadata_location: Option<&str>,
         extra_config: Option<HashMap<String, String>>,
     ) -> Result<FileIO> {
-        let mut props = self.context().await?.config.props.clone();
+        let mut props = self.client().await?.config.props.clone();
         if let Some(config) = extra_config {
             props.extend(config);
         }
 
         // If the warehouse is a logical identifier instead of a URL we don't want
         // to raise an exception
-        let warehouse_path = match self.context().await?.config.warehouse.as_deref() {
+        let warehouse_path = match self.client().await?.config.warehouse.as_deref() {
             Some(url) if Url::parse(url).is_ok() => Some(url),
             Some(_) => None,
             None => None,
@@ -770,13 +773,13 @@ impl Catalog for RestCatalog {
         &self,
         parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
-        let context = self.context().await?;
-        let endpoint = context.config.namespaces_endpoint();
+        let client = self.client().await?;
+        let endpoint = client.config.namespaces_endpoint();
         let mut namespaces = Vec::new();
         let mut next_token = None;
 
         loop {
-            let mut request = context.client.request(Method::GET, endpoint.clone());
+            let mut request = client.http_client.request(Method::GET, endpoint.clone());
 
             // Filter on `parent={namespace}` if a parent namespace exists.
             if let Some(ns) = parent {
@@ -787,7 +790,7 @@ impl Catalog for RestCatalog {
                 request = request.query(&[("pageToken", token)]);
             }
 
-            let http_response = context.query_catalog(HttpRequest::build(request)?).await?;
+            let http_response = client.query_catalog(HttpRequest::build(request)?).await?;
 
             match http_response.status() {
                 StatusCode::OK => {
@@ -811,7 +814,7 @@ impl Catalog for RestCatalog {
                 _ => {
                     return Err(deserialize_unexpected_catalog_error(
                         http_response,
-                        context.client.disable_header_redaction(),
+                        client.http_client.disable_header_redaction(),
                     )
                     .await);
                 }
@@ -826,19 +829,19 @@ impl Catalog for RestCatalog {
         namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<Namespace> {
-        let context = self.context().await?;
+        let client = self.client().await?;
 
         let request = HttpRequest::build(
-            context
-                .client
-                .request(Method::POST, context.config.namespaces_endpoint())
+            client
+                .http_client
+                .request(Method::POST, client.config.namespaces_endpoint())
                 .json(&CreateNamespaceRequest {
                     namespace: namespace.clone(),
                     properties,
                 }),
         )?;
 
-        let http_response = context.query_catalog(request).await?;
+        let http_response = client.query_catalog(request).await?;
 
         match http_response.status() {
             StatusCode::OK => {
@@ -852,22 +855,22 @@ impl Catalog for RestCatalog {
             )),
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
-                context.client.disable_header_redaction(),
+                client.http_client.disable_header_redaction(),
             )
             .await),
         }
     }
 
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
-        let context = self.context().await?;
+        let client = self.client().await?;
 
         let request = HttpRequest::build(
-            context
-                .client
-                .request(Method::GET, context.config.namespace_endpoint(namespace)),
+            client
+                .http_client
+                .request(Method::GET, client.config.namespace_endpoint(namespace)),
         )?;
 
-        let http_response = context.query_catalog(request).await?;
+        let http_response = client.query_catalog(request).await?;
 
         match http_response.status() {
             StatusCode::OK => {
@@ -881,7 +884,7 @@ impl Catalog for RestCatalog {
             )),
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
-                context.client.disable_header_redaction(),
+                client.http_client.disable_header_redaction(),
             )
             .await),
         }
@@ -900,8 +903,8 @@ impl Catalog for RestCatalog {
             };
         }
 
-        let context = self.context().await?;
-        self.check_exists_via_head(context, context.config.namespace_endpoint(ns))
+        let client = self.client().await?;
+        self.check_exists_via_head(client, client.config.namespace_endpoint(ns))
             .await
     }
 
@@ -917,15 +920,15 @@ impl Catalog for RestCatalog {
     }
 
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
-        let context = self.context().await?;
+        let client = self.client().await?;
 
         let request = HttpRequest::build(
-            context
-                .client
-                .request(Method::DELETE, context.config.namespace_endpoint(namespace)),
+            client
+                .http_client
+                .request(Method::DELETE, client.config.namespace_endpoint(namespace)),
         )?;
 
-        let http_response = context.query_catalog(request).await?;
+        let http_response = client.query_catalog(request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
@@ -935,26 +938,26 @@ impl Catalog for RestCatalog {
             )),
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
-                context.client.disable_header_redaction(),
+                client.http_client.disable_header_redaction(),
             )
             .await),
         }
     }
 
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
-        let context = self.context().await?;
-        let endpoint = context.config.tables_endpoint(namespace);
+        let client = self.client().await?;
+        let endpoint = client.config.tables_endpoint(namespace);
         let mut identifiers = Vec::new();
         let mut next_token = None;
 
         loop {
-            let mut request = context.client.request(Method::GET, endpoint.clone());
+            let mut request = client.http_client.request(Method::GET, endpoint.clone());
 
             if let Some(token) = next_token {
                 request = request.query(&[("pageToken", token)]);
             }
 
-            let http_response = context.query_catalog(HttpRequest::build(request)?).await?;
+            let http_response = client.query_catalog(HttpRequest::build(request)?).await?;
 
             match http_response.status() {
                 StatusCode::OK => {
@@ -977,7 +980,7 @@ impl Catalog for RestCatalog {
                 _ => {
                     return Err(deserialize_unexpected_catalog_error(
                         http_response,
-                        context.client.disable_header_redaction(),
+                        client.http_client.disable_header_redaction(),
                     )
                     .await);
                 }
@@ -998,14 +1001,14 @@ impl Catalog for RestCatalog {
         namespace: &NamespaceIdent,
         creation: TableCreation,
     ) -> Result<Table> {
-        let context = self.context().await?;
+        let client = self.client().await?;
 
         let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
 
         let request = HttpRequest::build(
-            context
-                .client
-                .request(Method::POST, context.config.tables_endpoint(namespace))
+            client
+                .http_client
+                .request(Method::POST, client.config.tables_endpoint(namespace))
                 .json(&CreateTableRequest {
                     name: creation.name,
                     location: creation.location,
@@ -1017,7 +1020,7 @@ impl Catalog for RestCatalog {
                 }),
         )?;
 
-        let http_response = context.query_catalog(request).await?;
+        let http_response = client.query_catalog(request).await?;
 
         let response = match http_response.status() {
             StatusCode::OK => {
@@ -1038,7 +1041,7 @@ impl Catalog for RestCatalog {
             _ => {
                 return Err(deserialize_unexpected_catalog_error(
                     http_response,
-                    context.client.disable_header_redaction(),
+                    client.http_client.disable_header_redaction(),
                 )
                 .await);
             }
@@ -1081,15 +1084,15 @@ impl Catalog for RestCatalog {
     /// server and the config provided when creating this `RestCatalog` instance, then the value
     /// provided locally to the `RestCatalog` will take precedence.
     async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
-        let context = self.context().await?;
+        let client = self.client().await?;
 
         let request = HttpRequest::build(
-            context
-                .client
-                .request(Method::GET, context.config.table_endpoint(table_ident)),
+            client
+                .http_client
+                .request(Method::GET, client.config.table_endpoint(table_ident)),
         )?;
 
-        let http_response = context.query_catalog(request).await?;
+        let http_response = client.query_catalog(request).await?;
 
         let response = match http_response.status() {
             StatusCode::OK | StatusCode::NOT_MODIFIED => {
@@ -1104,7 +1107,7 @@ impl Catalog for RestCatalog {
             _ => {
                 return Err(deserialize_unexpected_catalog_error(
                     http_response,
-                    context.client.disable_header_redaction(),
+                    client.http_client.disable_header_redaction(),
                 )
                 .await);
             }
@@ -1160,26 +1163,26 @@ impl Catalog for RestCatalog {
             };
         }
 
-        let context = self.context().await?;
-        self.check_exists_via_head(context, context.config.table_endpoint(table))
+        let client = self.client().await?;
+        self.check_exists_via_head(client, client.config.table_endpoint(table))
             .await
     }
 
     /// Rename a table in the catalog.
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
-        let context = self.context().await?;
+        let client = self.client().await?;
 
         let request = HttpRequest::build(
-            context
-                .client
-                .request(Method::POST, context.config.rename_table_endpoint())
+            client
+                .http_client
+                .request(Method::POST, client.config.rename_table_endpoint())
                 .json(&RenameTableRequest {
                     source: src.clone(),
                     destination: dest.clone(),
                 }),
         )?;
 
-        let http_response = context.query_catalog(request).await?;
+        let http_response = client.query_catalog(request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
@@ -1193,7 +1196,7 @@ impl Catalog for RestCatalog {
             )),
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
-                context.client.disable_header_redaction(),
+                client.http_client.disable_header_redaction(),
             )
             .await),
         }
@@ -1204,14 +1207,14 @@ impl Catalog for RestCatalog {
         table_ident: &TableIdent,
         metadata_location: String,
     ) -> Result<Table> {
-        let context = self.context().await?;
+        let client = self.client().await?;
 
         let request = HttpRequest::build(
-            context
-                .client
+            client
+                .http_client
                 .request(
                     Method::POST,
-                    context
+                    client
                         .config
                         .register_table_endpoint(table_ident.namespace()),
                 )
@@ -1222,7 +1225,7 @@ impl Catalog for RestCatalog {
                 }),
         )?;
 
-        let http_response = context.query_catalog(request).await?;
+        let http_response = client.query_catalog(request).await?;
 
         let response: LoadTableResult = match http_response.status() {
             StatusCode::OK => {
@@ -1243,7 +1246,7 @@ impl Catalog for RestCatalog {
             _ => {
                 return Err(deserialize_unexpected_catalog_error(
                     http_response,
-                    context.client.disable_header_redaction(),
+                    client.http_client.disable_header_redaction(),
                 )
                 .await);
             }
@@ -1269,14 +1272,14 @@ impl Catalog for RestCatalog {
     }
 
     async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
-        let context = self.context().await?;
+        let client = self.client().await?;
 
         let request = HttpRequest::build(
-            context
-                .client
+            client
+                .http_client
                 .request(
                     Method::POST,
-                    context.config.table_endpoint(commit.identifier()),
+                    client.config.table_endpoint(commit.identifier()),
                 )
                 .json(&CommitTableRequest {
                     identifier: Some(commit.identifier().clone()),
@@ -1285,7 +1288,7 @@ impl Catalog for RestCatalog {
                 }),
         )?;
 
-        let http_response = context.query_catalog(request).await?;
+        let http_response = client.query_catalog(request).await?;
 
         let response: CommitTableResponse = match http_response.status() {
             StatusCode::OK => deserialize_catalog_response(http_response).await?,
@@ -1323,7 +1326,7 @@ impl Catalog for RestCatalog {
             _ => {
                 return Err(deserialize_unexpected_catalog_error(
                     http_response,
-                    context.client.disable_header_redaction(),
+                    client.http_client.disable_header_redaction(),
                 )
                 .await);
             }
@@ -1417,7 +1420,7 @@ mod tests {
 
         assert_eq!(
             catalog
-                .context()
+                .client()
                 .await
                 .unwrap()
                 .config
@@ -1616,7 +1619,7 @@ mod tests {
             None,
         );
 
-        let token = catalog.context().await.unwrap().token().await;
+        let token = catalog.client().await.unwrap().token().await;
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
         assert_eq!(token, Some("ey000000000000".to_string()));
@@ -1666,7 +1669,7 @@ mod tests {
             None,
         );
 
-        let token = catalog.context().await.unwrap().token().await;
+        let token = catalog.client().await.unwrap().token().await;
 
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
@@ -1772,7 +1775,7 @@ mod tests {
             None,
         );
 
-        let token = catalog.context().await.unwrap().token().await;
+        let token = catalog.client().await.unwrap().token().await;
 
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
@@ -1963,12 +1966,12 @@ mod tests {
             None,
         );
 
-        let context = catalog.context().await.unwrap();
+        let client = catalog.client().await.unwrap();
         config_mock.assert_async().await;
         bootstrap_oauth_mock.assert_async().await;
         // The catalog session's endpoint follows the overridden URI (visible
         // via the session's Debug, which prints its token endpoint).
-        let session_debug = format!("{:?}", context.client.session());
+        let session_debug = format!("{:?}", client.http_client.auth_session());
         assert!(session_debug.contains(&format!("{}/v1/oauth/tokens", overridden.url())));
     }
 
@@ -2235,7 +2238,7 @@ mod tests {
             None,
         );
 
-        catalog.context().await.unwrap();
+        catalog.client().await.unwrap();
         config_mock.assert_async().await;
     }
 
@@ -2292,7 +2295,7 @@ mod tests {
             None,
         );
 
-        catalog.context().await.unwrap();
+        catalog.client().await.unwrap();
         config_mock.assert_async().await;
         let props = captured.lock().await.clone().unwrap();
         assert_eq!(props.get("token").map(String::as_str), Some("tok-user"));
@@ -2362,7 +2365,7 @@ mod tests {
             Runtime::current(),
             None,
         );
-        catalog.context().await.unwrap();
+        catalog.client().await.unwrap();
         config_mock.assert_async().await;
         let props = captured.lock().await.clone().unwrap();
         assert_eq!(
@@ -2393,7 +2396,7 @@ mod tests {
             Runtime::current(),
             None,
         );
-        catalog.context().await.unwrap();
+        catalog.client().await.unwrap();
         config_mock.assert_async().await;
         let props = captured.lock().await.clone().unwrap();
         assert_eq!(
@@ -2469,7 +2472,7 @@ mod tests {
             None,
         );
 
-        catalog.context().await.unwrap();
+        catalog.client().await.unwrap();
         config_mock.assert_async().await;
         assert!(dropped.load(Ordering::SeqCst));
     }
