@@ -40,12 +40,17 @@ serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+bytes = { workspace = true }
+futures = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
+# `stream` lets tests build a streaming body to exercise HttpRequestBody::Streaming.
+reqwest = { workspace = true, features = ["stream"] }
 tokio = { workspace = true }
 
 [lints]
