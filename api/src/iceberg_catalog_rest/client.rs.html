@@ -45,7 +45,7 @@
 <a href=#45 id=45 data-nosnippet>45</a>    /// manager is about to create.
 <a href=#46 id=46 data-nosnippet>46</a>    ///
 <a href=#47 id=47 data-nosnippet>47</a>    /// [`AuthManager`]: crate::auth::AuthManager
-<a href=#48 id=48 data-nosnippet>48</a>    </span>session: Arc&lt;<span class="kw">dyn </span>AuthSession&gt;,
+<a href=#48 id=48 data-nosnippet>48</a>    </span>auth_session: Arc&lt;<span class="kw">dyn </span>AuthSession&gt;,
 <a href=#49 id=49 data-nosnippet>49</a>}
 <a href=#50 id=50 data-nosnippet>50</a>
 <a href=#51 id=51 data-nosnippet>51</a><span class="kw">impl </span>Debug <span class="kw">for </span>HttpClient {
@@ -63,12 +63,12 @@
 <a href=#63 id=63 data-nosnippet>63</a>}
 <a href=#64 id=64 data-nosnippet>64</a>
 <a href=#65 id=65 data-nosnippet>65</a><span class="kw">impl </span>HttpClient {
-<a href=#66 id=66 data-nosnippet>66</a>    <span class="doccomment">/// The same client authenticating with `session` instead: a derived
-<a href=#67 id=67 data-nosnippet>67</a>    /// session reuses the connection pool and headers of the client it came
-<a href=#68 id=68 data-nosnippet>68</a>    /// from, carrying its own authentication.
-<a href=#69 id=69 data-nosnippet>69</a>    </span><span class="kw">pub fn </span>with_session(<span class="kw-2">&amp;</span><span class="self">self</span>, session: Arc&lt;<span class="kw">dyn </span>AuthSession&gt;) -&gt; <span class="self">Self </span>{
+<a href=#66 id=66 data-nosnippet>66</a>    <span class="doccomment">/// The same client authenticating with `auth_session` instead: a derived
+<a href=#67 id=67 data-nosnippet>67</a>    /// auth session reuses the connection pool and headers of the client it
+<a href=#68 id=68 data-nosnippet>68</a>    /// came from, carrying its own authentication.
+<a href=#69 id=69 data-nosnippet>69</a>    </span><span class="kw">pub fn </span>with_auth_session(<span class="kw-2">&amp;</span><span class="self">self</span>, auth_session: Arc&lt;<span class="kw">dyn </span>AuthSession&gt;) -&gt; <span class="self">Self </span>{
 <a href=#70 id=70 data-nosnippet>70</a>        <span class="self">Self </span>{
-<a href=#71 id=71 data-nosnippet>71</a>            session,
+<a href=#71 id=71 data-nosnippet>71</a>            auth_session,
 <a href=#72 id=72 data-nosnippet>72</a>            ..<span class="self">self</span>.clone()
 <a href=#73 id=73 data-nosnippet>73</a>        }
 <a href=#74 id=74 data-nosnippet>74</a>    }
@@ -76,8 +76,8 @@
 <a href=#76 id=76 data-nosnippet>76</a>    <span class="doccomment">/// The same client with no authentication, for the requests that must not
 <a href=#77 id=77 data-nosnippet>77</a>    /// carry it — a session refreshing its own token over the client it
 <a href=#78 id=78 data-nosnippet>78</a>    /// authenticates would otherwise recurse.
-<a href=#79 id=79 data-nosnippet>79</a>    </span><span class="kw">pub fn </span>without_session(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
-<a href=#80 id=80 data-nosnippet>80</a>        <span class="self">self</span>.with_session(Arc::new(NoopSession))
+<a href=#79 id=79 data-nosnippet>79</a>    </span><span class="kw">pub fn </span>without_auth_session(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+<a href=#80 id=80 data-nosnippet>80</a>        <span class="self">self</span>.with_auth_session(Arc::new(NoopSession))
 <a href=#81 id=81 data-nosnippet>81</a>    }
 <a href=#82 id=82 data-nosnippet>82</a>
 <a href=#83 id=83 data-nosnippet>83</a>    <span class="doccomment">/// Sends a form-encoded POST and returns the response status and body,
@@ -107,7 +107,7 @@
 <a href=#107 id=107 data-nosnippet>107</a>            reqwest::header::CONTENT_TYPE,
 <a href=#108 id=108 data-nosnippet>108</a>            reqwest::header::HeaderValue::from_static(<span class="string">"application/x-www-form-urlencoded"</span>),
 <a href=#109 id=109 data-nosnippet>109</a>        );
-<a href=#110 id=110 data-nosnippet>110</a>        <span class="self">self</span>.session.authenticate(<span class="kw-2">&amp;mut </span>request).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#110 id=110 data-nosnippet>110</a>        <span class="self">self</span>.auth_session.authenticate(<span class="kw-2">&amp;mut </span>request).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#111 id=111 data-nosnippet>111</a>        <span class="kw">let </span>response = <span class="self">self</span>.client.execute(request.into_inner()).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#112 id=112 data-nosnippet>112</a>        <span class="kw">let </span>status = response.status();
 <a href=#113 id=113 data-nosnippet>113</a>        <span class="kw">let </span>body = response
@@ -123,7 +123,7 @@
 <a href=#123 id=123 data-nosnippet>123</a>            client: cfg.client(),
 <a href=#124 id=124 data-nosnippet>124</a>            extra_headers: cfg.extra_headers()<span class="question-mark">?</span>,
 <a href=#125 id=125 data-nosnippet>125</a>            disable_header_redaction: cfg.disable_header_redaction(),
-<a href=#126 id=126 data-nosnippet>126</a>            session: Arc::new(NoopSession),
+<a href=#126 id=126 data-nosnippet>126</a>            auth_session: Arc::new(NoopSession),
 <a href=#127 id=127 data-nosnippet>127</a>        })
 <a href=#128 id=128 data-nosnippet>128</a>    }
 <a href=#129 id=129 data-nosnippet>129</a>
@@ -141,14 +141,14 @@
 <a href=#141 id=141 data-nosnippet>141</a>            </span>client: cfg.client(),
 <a href=#142 id=142 data-nosnippet>142</a>            extra_headers,
 <a href=#143 id=143 data-nosnippet>143</a>            disable_header_redaction: cfg.disable_header_redaction(),
-<a href=#144 id=144 data-nosnippet>144</a>            session: <span class="self">self</span>.session,
+<a href=#144 id=144 data-nosnippet>144</a>            auth_session: <span class="self">self</span>.auth_session,
 <a href=#145 id=145 data-nosnippet>145</a>        })
 <a href=#146 id=146 data-nosnippet>146</a>    }
 <a href=#147 id=147 data-nosnippet>147</a>
 <a href=#148 id=148 data-nosnippet>148</a>    <span class="doccomment">/// Testing only: the session authenticating this client's requests.
 <a href=#149 id=149 data-nosnippet>149</a>    </span><span class="attr">#[cfg(test)]
-<a href=#150 id=150 data-nosnippet>150</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>session(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">dyn </span>AuthSession&gt; {
-<a href=#151 id=151 data-nosnippet>151</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.session
+<a href=#150 id=150 data-nosnippet>150</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>auth_session(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">dyn </span>AuthSession&gt; {
+<a href=#151 id=151 data-nosnippet>151</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.auth_session
 <a href=#152 id=152 data-nosnippet>152</a>    }
 <a href=#153 id=153 data-nosnippet>153</a>
 <a href=#154 id=154 data-nosnippet>154</a>    <span class="doccomment">/// Testing only: the bearer token `session` would attach.
@@ -162,7 +162,7 @@
 <a href=#162 id=162 data-nosnippet>162</a>                .request(Method::GET, <span class="string">"http://localhost/token-probe"</span>),
 <a href=#163 id=163 data-nosnippet>163</a>        )
 <a href=#164 id=164 data-nosnippet>164</a>        .ok()<span class="question-mark">?</span>;
-<a href=#165 id=165 data-nosnippet>165</a>        <span class="self">self</span>.session.authenticate(<span class="kw-2">&amp;mut </span>request).<span class="kw">await</span>.ok()<span class="question-mark">?</span>;
+<a href=#165 id=165 data-nosnippet>165</a>        <span class="self">self</span>.auth_session.authenticate(<span class="kw-2">&amp;mut </span>request).<span class="kw">await</span>.ok()<span class="question-mark">?</span>;
 <a href=#166 id=166 data-nosnippet>166</a>        <span class="kw">let </span>request = request.into_inner();
 <a href=#167 id=167 data-nosnippet>167</a>        request
 <a href=#168 id=168 data-nosnippet>168</a>            .headers()
@@ -185,7 +185,7 @@
 <a href=#185 id=185 data-nosnippet>185</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>query_catalog(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>request: HttpRequest) -&gt; <span class="prelude-ty">Result</span>&lt;Response&gt; {
 <a href=#186 id=186 data-nosnippet>186</a>        <span class="comment">// Authenticate first, then apply extra headers, so a configured
 <a href=#187 id=187 data-nosnippet>187</a>        // `header.authorization` keeps overriding a token (unchanged behavior).
-<a href=#188 id=188 data-nosnippet>188</a>        </span><span class="self">self</span>.session.authenticate(<span class="kw-2">&amp;mut </span>request).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#188 id=188 data-nosnippet>188</a>        </span><span class="self">self</span>.auth_session.authenticate(<span class="kw-2">&amp;mut </span>request).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#189 id=189 data-nosnippet>189</a>        <span class="kw">let </span><span class="kw-2">mut </span>request = request.into_inner();
 <a href=#190 id=190 data-nosnippet>190</a>        request.headers_mut().extend(<span class="self">self</span>.extra_headers.clone());
 <a href=#191 id=191 data-nosnippet>191</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.client.execute(request).<span class="kw">await</span><span class="question-mark">?</span>)
@@ -323,7 +323,7 @@
 <a href=#323 id=323 data-nosnippet>323</a>
 <a href=#324 id=324 data-nosnippet>324</a>        <span class="kw">let </span>client = HttpClient::new(<span class="kw-2">&amp;</span>RestCatalogConfig::builder().uri(server.url()).build())
 <a href=#325 id=325 data-nosnippet>325</a>            .unwrap()
-<a href=#326 id=326 data-nosnippet>326</a>            .with_session(Arc::new(StaticSession));
+<a href=#326 id=326 data-nosnippet>326</a>            .with_auth_session(Arc::new(StaticSession));
 <a href=#327 id=327 data-nosnippet>327</a>        <span class="kw">let </span>url = <span class="macro">format!</span>(<span class="string">"{}/token"</span>, server.url());
 <a href=#328 id=328 data-nosnippet>328</a>
 <a href=#329 id=329 data-nosnippet>329</a>        client
@@ -333,7 +333,7 @@
 <a href=#333 id=333 data-nosnippet>333</a>        signed.assert_async().<span class="kw">await</span>;
 <a href=#334 id=334 data-nosnippet>334</a>
 <a href=#335 id=335 data-nosnippet>335</a>        client
-<a href=#336 id=336 data-nosnippet>336</a>            .without_session()
+<a href=#336 id=336 data-nosnippet>336</a>            .without_auth_session()
 <a href=#337 id=337 data-nosnippet>337</a>            .post_form(<span class="kw-2">&amp;</span>url, <span class="kw-2">&amp;</span>HeaderMap::new(), <span class="kw-2">&amp;</span>HashMap::new())
 <a href=#338 id=338 data-nosnippet>338</a>            .<span class="kw">await
 <a href=#339 id=339 data-nosnippet>339</a>            </span>.unwrap();
