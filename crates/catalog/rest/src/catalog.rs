@@ -419,6 +419,51 @@ struct RestClient {
 }
 
 impl RestClient {
+    async fn init(
+        user_config: &RestCatalogConfig,
+        auth_manager: Arc<dyn AuthManager>,
+    ) -> Result<Self> {
+        let http_client = HttpClient::new(user_config)?;
+        // The init session lives only for the config handshake, so a
+        // manager whose session guards a one-shot resource can release
+        // it before deriving the catalog session.
+        let catalog_config = {
+            let init_session = auth_manager
+                .init_session(
+                    &http_client.without_auth_session(),
+                    &RestSessionCatalog::auth_props(user_config),
+                )
+                .await?;
+            RestSessionCatalog::load_config(
+                &http_client.with_auth_session(Arc::from(init_session)),
+                user_config,
+            )
+            .await?
+        };
+        // Use the advertised endpoints as-is, falling back to
+        // `DEFAULT_ENDPOINTS` when absent or empty.
+        let endpoints = match &catalog_config.endpoints {
+            Some(advertised) if !advertised.is_empty() => advertised.iter().cloned().collect(),
+            _ => crate::endpoint::DEFAULT_ENDPOINTS.clone(),
+        };
+        let config = user_config.clone().merge_with_config(catalog_config);
+        let http_client = http_client.update_with(&config)?;
+        // The manager is handed an unauthenticated client: its own
+        // requests must not be signed by the session it is deriving.
+        let session = auth_manager
+            .catalog_session(
+                &http_client.without_auth_session(),
+                &RestSessionCatalog::auth_props(&config),
+            )
+            .await?;
+
+        Ok(Self {
+            config,
+            http_client: http_client.with_auth_session(session),
+            endpoints,
+        })
+    }
+
     /// Testing only: the bearer token the catalog session would attach.
     #[cfg(test)]
     async fn token(&self) -> Option<String> {
@@ -740,48 +785,7 @@ impl RestSessionCatalog {
     async fn client(&self) -> Result<&RestClient> {
         self.client
             .get_or_try_init(|| async {
-                let http_client = HttpClient::new(&self.user_config)?;
-                let auth_manager = self.resolve_auth_manager()?;
-                // The init session lives only for the config handshake, so a
-                // manager whose session guards a one-shot resource can release
-                // it before deriving the catalog session.
-                let catalog_config = {
-                    let init_session = auth_manager
-                        .init_session(
-                            &http_client.without_auth_session(),
-                            &Self::auth_props(&self.user_config),
-                        )
-                        .await?;
-                    RestSessionCatalog::load_config(
-                        &http_client.with_auth_session(Arc::from(init_session)),
-                        &self.user_config,
-                    )
-                    .await?
-                };
-                // Use the advertised endpoints as-is, falling back to
-                // `DEFAULT_ENDPOINTS` when absent or empty.
-                let endpoints = match &catalog_config.endpoints {
-                    Some(advertised) if !advertised.is_empty() => {
-                        advertised.iter().cloned().collect()
-                    }
-                    _ => crate::endpoint::DEFAULT_ENDPOINTS.clone(),
-                };
-                let config = self.user_config.clone().merge_with_config(catalog_config);
-                let http_client = http_client.update_with(&config)?;
-                // The manager is handed an unauthenticated client: its own
-                // requests must not be signed by the session it is deriving.
-                let session = auth_manager
-                    .catalog_session(
-                        &http_client.without_auth_session(),
-                        &Self::auth_props(&config),
-                    )
-                    .await?;
-
-                Ok(RestClient {
-                    config,
-                    http_client: http_client.with_auth_session(session),
-                    endpoints,
-                })
+                RestClient::init(&self.user_config, self.resolve_auth_manager()?).await
             })
             .await
     }
