@@ -1,0 +1,6 @@
+error: parse_properties_with requires additional_keys in #[property(...)]
+  --> tests/compile-fail/parse_properties_without_additional_keys.rs:34:5
+   |
+34 | /     #[property(key = "value", default = 1, parse_properties_with = parse_all)]
+35 | |     value: u64,
+   | |______________^
