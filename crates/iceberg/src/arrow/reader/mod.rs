@@ -44,7 +44,9 @@ mod row_filter;
 pub use file_reader::ArrowFileReader;
 pub(crate) use options::ParquetReadOptions;
 use predicate_visitor::{CollectFieldIdVisitor, PredicateConverter};
-use projection::{add_fallback_field_ids_to_arrow_schema, apply_name_mapping_to_arrow_schema};
+use projection::{
+    add_fallback_field_ids_to_arrow_schema, apply_name_mapping_to_arrow_schema, build_field_id_map,
+};
 
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {

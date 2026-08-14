@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use iceberg::io::{
     GCS_ALLOW_ANONYMOUS, GCS_CREDENTIALS_JSON, GCS_DISABLE_CONFIG_LOAD, GCS_DISABLE_VM_METADATA,
-    GCS_NO_AUTH, GCS_SERVICE_PATH, GCS_TOKEN, StorageCredentialKind, StorageCredentialProvider,
+    GCS_NO_AUTH, GCS_SERVICE_HOST, GCS_TOKEN, StorageCredentialKind, StorageCredentialProvider,
 };
 use iceberg::{Error, ErrorKind, Result};
 use opendal::services::GcsConfig;
@@ -47,7 +47,7 @@ pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConf
         cfg.token = Some(token);
     }
 
-    if let Some(endpoint) = m.remove(GCS_SERVICE_PATH) {
+    if let Some(endpoint) = m.remove(GCS_SERVICE_HOST) {
         cfg.endpoint = Some(endpoint);
     }
 

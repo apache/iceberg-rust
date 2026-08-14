@@ -53,13 +53,15 @@ use iceberg::io::{
     S3_SESSION_TOKEN_EXPIRES_AT_MS, S3Credential, StorageCredential, StorageCredentialKind,
     StorageCredentialProvider,
 };
-use iceberg::{Error, ErrorKind, Result};
+use iceberg::{Error, ErrorKind, Result, TableIdent};
 use rand::Rng;
 use reqwest::{Method, StatusCode, Url};
 use tokio::sync::Mutex;
 
 use crate::REST_CATALOG_PROP_SCAN_PLAN_ID;
+use crate::auth::AuthManager;
 use crate::client::{HttpClient, deserialize_unexpected_catalog_error};
+use crate::request::HttpRequest;
 use crate::types::LoadCredentialsResponse;
 
 /// Cloud-specific details regarding vended-credential refresh.
@@ -271,7 +273,7 @@ impl RestVendedCredentialProvider {
         if let Some(plan_id) = &self.plan_id {
             request = request.query(&[("planId", plan_id)]);
         }
-        let request = request.build()?;
+        let request = HttpRequest::build(request)?;
         let response = self.client.query_catalog(request).await?;
 
         match response.status() {
@@ -575,8 +577,12 @@ fn failure_backoff(consecutive_failures: u32) -> Duration {
 /// `base_uri` is the catalog URI, used to resolve a relative endpoint.
 /// `table_auth_props` is the unmerged config returned by the table endpoint:
 /// keeping it separate prevents local FileIO overrides from masking table auth.
-pub(crate) fn build_vended_credential_provider(
+/// `auth_manager` derives an isolated child session when those properties
+/// override authentication for `table`.
+pub(crate) async fn build_vended_credential_provider(
     client: Arc<HttpClient>,
+    auth_manager: &dyn AuthManager,
+    table: &TableIdent,
     base_uri: &str,
     props: &HashMap<String, String>,
     table_auth_props: Option<&HashMap<String, String>>,
@@ -620,8 +626,16 @@ pub(crate) fn build_vended_credential_provider(
     }
 
     let empty_auth_props = HashMap::new();
-    let table_client =
-        Arc::new(client.for_table(base_uri, table_auth_props.unwrap_or(&empty_auth_props))?);
+    let table_auth_props = table_auth_props.unwrap_or(&empty_auth_props);
+    let table_session = auth_manager
+        .table_session(
+            &client.without_auth_session(),
+            table,
+            table_auth_props,
+            client.auth_session(),
+        )
+        .await?;
+    let table_client = Arc::new(client.for_table(table_auth_props, table_session)?);
     let plan_id = props.get(REST_CATALOG_PROP_SCAN_PLAN_ID).cloned();
     Ok(Some(Arc::new(RestVendedCredentialProvider::new(
         table_client,
@@ -723,6 +737,7 @@ mod tests {
 
     use super::*;
     use crate::RestCatalogConfig;
+    use crate::auth::{NoopAuthManager, OAuth2Manager};
 
     fn epoch_millis(time: SystemTime) -> String {
         time.duration_since(UNIX_EPOCH)
@@ -792,11 +807,33 @@ mod tests {
         props
     }
 
-    fn test_provider(
+    fn test_table() -> TableIdent {
+        TableIdent::from_strs(["namespace", "table"]).unwrap()
+    }
+
+    async fn build_test_provider(
+        client: Arc<HttpClient>,
+        base_uri: &str,
+        props: &HashMap<String, String>,
+        table_auth_props: Option<&HashMap<String, String>>,
+    ) -> Result<Option<Arc<dyn StorageCredentialProvider>>> {
+        build_vended_credential_provider(
+            client,
+            &NoopAuthManager,
+            &test_table(),
+            base_uri,
+            props,
+            table_auth_props,
+        )
+        .await
+    }
+
+    async fn test_provider(
         base_uri: &str,
         props: &HashMap<String, String>,
     ) -> Arc<dyn StorageCredentialProvider> {
-        build_vended_credential_provider(test_client(base_uri), base_uri, props, None)
+        build_test_provider(test_client(base_uri), base_uri, props, None)
+            .await
             .expect("provider construction should succeed")
             .expect("provider should be built")
     }
@@ -994,14 +1031,15 @@ mod tests {
         assert!(!selected.is_fresh(SystemTime::now()));
     }
 
-    #[test]
-    fn provider_support_tracks_configured_cloud_endpoints() {
+    #[tokio::test]
+    async fn provider_support_tracks_configured_cloud_endpoints() {
         let client = test_client("http://cat");
         let props = aws_refresh_props("/v1/creds");
 
         // The provider is configured independently of the table metadata scheme,
         // but advertises support only for clouds whose endpoint is present.
-        let provider = build_vended_credential_provider(client.clone(), "http://cat", &props, None)
+        let provider = build_test_provider(client.clone(), "http://cat", &props, None)
+            .await
             .unwrap()
             .unwrap();
         assert!(provider.supports_path("s3://b/k"));
@@ -1017,13 +1055,15 @@ mod tests {
             ),
         ]);
         assert!(
-            build_vended_credential_provider(client.clone(), "http://cat", &enabled, None)
+            build_test_provider(client.clone(), "http://cat", &enabled, None)
+                .await
                 .unwrap()
                 .is_some()
         );
         // No endpoint advertised.
         assert!(
-            build_vended_credential_provider(client.clone(), "http://cat", &HashMap::new(), None)
+            build_test_provider(client.clone(), "http://cat", &HashMap::new(), None)
+                .await
                 .unwrap()
                 .is_none()
         );
@@ -1039,7 +1079,8 @@ mod tests {
             ),
         ]);
         assert!(
-            build_vended_credential_provider(client, "http://cat", &disabled, None)
+            build_test_provider(client, "http://cat", &disabled, None)
+                .await
                 .unwrap()
                 .is_none()
         );
@@ -1047,7 +1088,8 @@ mod tests {
         let empty = HashMap::from([(CloudRefresh::AWS.endpoint_key.to_string(), String::new())]);
         let client = test_client("http://cat");
         assert!(
-            build_vended_credential_provider(client, "http://cat", &empty, None)
+            build_test_provider(client, "http://cat", &empty, None)
+                .await
                 .unwrap()
                 .is_none()
         );
@@ -1080,7 +1122,7 @@ mod tests {
             "scan-plan-1".to_string(),
         );
 
-        let provider = test_provider(&server.url(), &props);
+        let provider = test_provider(&server.url(), &props).await;
         let credential = provider
             .load_credential("s3://bucket/warehouse/f")
             .await
@@ -1115,7 +1157,7 @@ mod tests {
             .await;
 
         let props = aws_refresh_props("/v1/credentials");
-        let provider = test_provider(&server.url(), &props);
+        let provider = test_provider(&server.url(), &props).await;
 
         assert!(
             provider
@@ -1163,7 +1205,7 @@ mod tests {
             .await;
 
         let props = aws_refresh_props("/v1/credentials");
-        let provider = test_provider(&server.url(), &props);
+        let provider = test_provider(&server.url(), &props).await;
 
         assert!(
             provider
@@ -1205,7 +1247,7 @@ mod tests {
             SystemTime::now() + Duration::from_secs(3600),
         );
 
-        let provider = test_provider(&server.url(), &props);
+        let provider = test_provider(&server.url(), &props).await;
         let credential = provider.load_credential("s3://bucket/x/f").await.unwrap();
 
         assert_eq!(credential.prefix(), None);
@@ -1231,7 +1273,7 @@ mod tests {
             SystemTime::now() + Duration::from_secs(60),
         );
 
-        let provider = test_provider(&server.url(), &props);
+        let provider = test_provider(&server.url(), &props).await;
         // The first refresh fails, but the still-valid seed is served. Immediate
         // follow-up operations stay inside the first jittered backoff window.
         for _ in 0..2 {
@@ -1258,7 +1300,7 @@ mod tests {
             "SEED_AK",
             SystemTime::now() + Duration::from_secs(60),
         );
-        let provider = test_provider(&server.url(), &props);
+        let provider = test_provider(&server.url(), &props).await;
 
         for _ in 0..2 {
             let credential = provider.load_credential("s3://bucket/x/f").await.unwrap();
@@ -1430,7 +1472,7 @@ mod tests {
             "SEED_AK",
             SystemTime::now() + Duration::from_secs(60),
         );
-        let provider = test_provider(&server.url(), &props);
+        let provider = test_provider(&server.url(), &props).await;
 
         let first_provider = Arc::clone(&provider);
         let first =
@@ -1497,10 +1539,18 @@ mod tests {
             ("token".to_string(), "user-token".to_string()),
         ]);
         let table_auth = HashMap::from([("token".to_string(), "table-token".to_string())]);
-        let provider =
-            build_vended_credential_provider(client, &server.url(), &props, Some(&table_auth))
-                .unwrap()
-                .unwrap();
+        let auth_manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()));
+        let provider = build_vended_credential_provider(
+            client,
+            &auth_manager,
+            &test_table(),
+            &server.url(),
+            &props,
+            Some(&table_auth),
+        )
+        .await
+        .unwrap()
+        .unwrap();
 
         provider.load_credential("s3://bucket/x/f").await.unwrap();
         mock.assert_async().await;
@@ -1543,7 +1593,7 @@ mod tests {
                 "/v1/gcp-credentials".to_string(),
             ),
         ]);
-        let provider = test_provider(&server.url(), &props);
+        let provider = test_provider(&server.url(), &props).await;
 
         assert!(provider.supports_path("s3://bucket/x"));
         assert!(provider.supports_path("gs://bucket/x"));
@@ -1580,7 +1630,7 @@ mod tests {
             SystemTime::now() - Duration::from_secs(60),
         );
 
-        let provider = test_provider(&server.url(), &props);
+        let provider = test_provider(&server.url(), &props).await;
 
         assert!(provider.load_credential("s3://bucket/x/f").await.is_err());
         assert!(provider.load_credential("s3://bucket/x/f").await.is_err());
@@ -1611,7 +1661,7 @@ mod tests {
         // returned credential is already inside its prefetch window.
         let props = aws_refresh_props("/v1/credentials");
 
-        let provider = test_provider(&server.url(), &props);
+        let provider = test_provider(&server.url(), &props).await;
 
         for _ in 0..2 {
             let credential = provider.load_credential("s3://bucket/x/f").await.unwrap();

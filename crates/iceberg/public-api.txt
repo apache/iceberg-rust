@@ -1058,7 +1058,7 @@ pub const iceberg::io::GCS_NO_AUTH: &str
 pub const iceberg::io::GCS_PROJECT_ID: &str
 pub const iceberg::io::GCS_REFRESH_CREDENTIALS_ENABLED: &str
 pub const iceberg::io::GCS_REFRESH_CREDENTIALS_ENDPOINT: &str
-pub const iceberg::io::GCS_SERVICE_PATH: &str
+pub const iceberg::io::GCS_SERVICE_HOST: &str
 pub const iceberg::io::GCS_TOKEN: &str
 pub const iceberg::io::GCS_TOKEN_EXPIRES_AT: &str
 pub const iceberg::io::GCS_USER_PROJECT: &str

@@ -418,7 +418,20 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
-    use crate::io::{LocalFsStorageFactory, MemoryStorageFactory};
+    use crate::io::{
+        LocalFsStorageFactory, MemoryStorageFactory, StorageCredential, StorageCredentialProvider,
+    };
+    use crate::{ErrorKind, Result};
+
+    #[derive(Debug)]
+    struct TestCredentialProvider;
+
+    #[async_trait::async_trait]
+    impl StorageCredentialProvider for TestCredentialProvider {
+        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
+            unreachable!("unsupported factories must reject the provider before loading from it")
+        }
+    }
 
     fn create_local_file_io() -> FileIO {
         FileIO::new_with_fs()
@@ -564,5 +577,15 @@ mod tests {
 
         assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
         assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_file_io_rejects_credentials_for_unsupported_factory() {
+        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+            .with_credential_provider(Arc::new(TestCredentialProvider))
+            .build();
+
+        let err = file_io.exists("memory://file").await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
     }
 }

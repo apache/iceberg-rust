@@ -51,12 +51,17 @@
 
 #![deny(missing_docs)]
 
+mod auth;
 mod catalog;
 mod client;
 mod credential;
+pub use client::HttpClient;
+mod request;
+pub use request::{HttpRequest, HttpRequestBody};
 mod endpoint;
 mod types;
 
+pub use auth::*;
 pub use catalog::*;
 pub use endpoint::Endpoint;
 pub use types::*;

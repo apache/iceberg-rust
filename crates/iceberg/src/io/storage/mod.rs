@@ -167,11 +167,10 @@ pub trait StorageFactory: Debug + Send + Sync {
 ///
 /// # Caching
 ///
-/// [`load_credential`](Self::load_credential) may be called very frequently —
-/// the S3 backend, for example, rebuilds its operator (and therefore its
-/// signer) on every file operation. Implementations must cache internally and
-/// only re-fetch when the current credential is at or near expiry; otherwise
-/// every object-store request would trigger a call back to the catalog.
+/// [`load_credential`](Self::load_credential) may be called very frequently.
+/// Implementations must cache internally and only re-fetch when the current
+/// credential is at or near expiry; otherwise every object-store request could
+/// trigger a call back to the catalog.
 #[async_trait]
 pub trait StorageCredentialProvider: Debug + Send + Sync {
     /// Return whether this provider has refresh configuration for `path`.
