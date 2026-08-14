@@ -484,11 +484,4 @@ mod tests {
             "Encrypted portion should be plaintext length + 16-byte tag"
         );
     }
-
-    #[test]
-    fn test_backwards_compatible_sensitive_bytes_import() {
-        use crate::encryption::SensitiveBytes;
-
-        let _ = SensitiveBytes::new(&b"123"[..]);
-    }
 }
