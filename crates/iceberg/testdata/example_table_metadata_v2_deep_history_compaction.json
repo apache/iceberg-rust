@@ -78,7 +78,7 @@
       "parent-snapshot-id": 3056729675574597004,
       "timestamp-ms": 1595100955770,
       "sequence-number": 3,
-      "summary": {"operation": "overwrite"},
+      "summary": {"operation": "replace"},
       "manifest-list": "{{ manifest_list_s4_location }}",
       "schema-id": 1
     },
