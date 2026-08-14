@@ -100,13 +100,19 @@ cfg_if! {
 mod resolving;
 pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 
-/// Returns `true` when the property map contains S3-style configuration,
-/// indicating that `oss://` paths should be routed through the S3 backend
-/// (e.g. REST catalog vended credentials).
+/// Returns `true` when `oss://` paths should go through the S3 backend rather
+/// than the native OSS one (e.g. for REST catalog vended `s3.*` credentials).
+///
+/// `s3.endpoint` is required, not merely one of the `s3.*` keys: without it
+/// opendal falls back to `s3.amazonaws.com`, so an access key meant for Aliyun
+/// would be sent to AWS.
+///
+/// Note that one props map serves every scheme, so a map carrying both `s3.*`
+/// (for `s3://` paths) and `oss.*` (for `oss://` paths) sends `oss://` to the
+/// S3 endpoint. Configure the two in separate `FileIO`s.
 #[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
-fn has_s3_config(props: &HashMap<String, String>) -> bool {
+fn routes_oss_via_s3(props: &HashMap<String, String>) -> bool {
     props.contains_key(iceberg::io::S3_ENDPOINT)
-        || props.contains_key(iceberg::io::S3_ACCESS_KEY_ID)
 }
 
 /// OpenDAL-based storage factory.
@@ -169,7 +175,7 @@ impl StorageFactory for OpenDalStorageFactory {
             // Otherwise fall back to native OSS backend (RAM/OIDC auth).
             #[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
             OpenDalStorageFactory::Oss => {
-                if has_s3_config(config.props()) {
+                if routes_oss_via_s3(config.props()) {
                     Ok(Arc::new(OpenDalStorage::S3 {
                         config: s3_config_parse(config.props().clone())?.into(),
                         customized_credential_load: None,
@@ -658,6 +664,30 @@ impl FileWrite for OpenDalWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
+    #[test]
+    fn factory_routes_oss_like_the_resolver_does() {
+        use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT};
+
+        let via_s3 = StorageConfig::new()
+            .with_prop(S3_ENDPOINT, "https://oss-cn-shanghai.aliyuncs.com")
+            .with_prop(S3_ACCESS_KEY_ID, "AKIA_TEST");
+        // `Storage` is only debuggable through the trait object, and the
+        // variant name is what distinguishes the two backends.
+        let built = format!("{:?}", OpenDalStorageFactory::Oss.build(&via_s3).unwrap());
+        assert!(built.starts_with("S3"), "{built}");
+
+        // Credentials without an endpoint stay on the native backend — the
+        // same rule the resolver applies.
+        for props in [
+            StorageConfig::new().with_prop(S3_ACCESS_KEY_ID, "AKIA_TEST"),
+            StorageConfig::new(),
+        ] {
+            let built = format!("{:?}", OpenDalStorageFactory::Oss.build(&props).unwrap());
+            assert!(built.starts_with("Oss"), "{built}");
+        }
+    }
 
     #[cfg(feature = "opendal-memory")]
     #[test]
