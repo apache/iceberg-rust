@@ -67,7 +67,11 @@ const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PATH_V1: &str = "v1";
 
-/// Builder for [`RestCatalog`].
+/// Builder for [`RestCatalog`], the [`Catalog`]-compatible façade over a
+/// [`RestSessionCatalog`].
+///
+/// The resulting catalog binds one [`SessionContext`] to every operation. Use
+/// [`RestSessionCatalogBuilder`] when the caller supplies a context per operation.
 #[derive(Debug, Default)]
 pub struct RestCatalogBuilder {
     session_context: Option<SessionContext>,
@@ -114,8 +118,10 @@ impl RestCatalogBuilder {
         self
     }
 
-    /// Configures the session context that will be used with this catalog.
-    /// Overwrites the default empty context from SessionContext::empty().
+    /// Binds the session context forwarded with every catalog operation.
+    ///
+    /// If this is not called, [`load`](CatalogBuilder::load) creates a fresh
+    /// [`SessionContext::empty`] context.
     pub fn with_session_context(mut self, context: SessionContext) -> Self {
         self.session_context = Some(context);
         self
@@ -164,8 +170,8 @@ fn is_sensitive_prop(key: &str) -> bool {
         || key.starts_with("header.")
 }
 
-/// Redacts secret property values: this config is printed by
-/// [`RestCatalog`]'s derived `Debug`.
+/// Redacts secret property values: this config is printed by the derived
+/// [`Debug`] implementations of [`RestSessionCatalog`] and [`RestCatalog`].
 impl Debug for RestCatalogConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let props: HashMap<&str, &str> = self
@@ -412,13 +418,15 @@ struct RestClient {
     http_client: HttpClient,
     /// Runtime config is fetched from rest server and stored here.
     ///
-    /// It's could be different from the user config.
+    /// It could be different from the user config.
     config: RestCatalogConfig,
-    /// Capabilities the server advertises (see [`RestCatalog::supports_endpoint`]).
+    /// Capabilities the server advertises (see [`RestSessionCatalog::supports_endpoint`]).
     endpoints: HashSet<Endpoint>,
 }
 
 impl RestClient {
+    /// Initializes the runtime config, advertised endpoints, and authentication
+    /// sessions shared by one REST catalog instance.
     async fn init(
         user_config: &RestCatalogConfig,
         auth_manager: Arc<dyn AuthManager>,
@@ -476,7 +484,11 @@ impl RestClient {
     }
 }
 
-/// Rest catalog implementation.
+/// A [`Catalog`]-compatible façade over [`RestSessionCatalog`].
+///
+/// Every operation is forwarded with the single [`SessionContext`] selected by
+/// [`RestCatalogBuilder`]. Use [`RestSessionCatalog`] when the caller needs to
+/// provide a context per operation.
 #[derive(Debug)]
 pub struct RestCatalog {
     session_context: SessionContext,
@@ -518,8 +530,9 @@ impl RestCatalog {
     }
 }
 
-/// All requests and expected responses are derived from the REST catalog API spec:
-/// https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml
+/// Every operation forwards to its [`RestSessionCatalog`] equivalent with the
+/// bound [`SessionContext`]; see that implementation for the REST-specific
+/// behavior.
 #[async_trait]
 impl Catalog for RestCatalog {
     async fn list_namespaces(
@@ -573,12 +586,6 @@ impl Catalog for RestCatalog {
             .await
     }
 
-    /// Create a new table inside the namespace.
-    ///
-    /// In the resulting table, if there are any config properties that
-    /// are present in both the response from the REST server and the
-    /// config provided when creating this `RestCatalog` instance then
-    /// the value provided locally to the `RestCatalog` will take precedence.
     async fn create_table(
         &self,
         namespace: &NamespaceIdent,
@@ -589,34 +596,24 @@ impl Catalog for RestCatalog {
             .await
     }
 
-    /// Load table from the catalog.
-    ///
-    /// If there are any config properties that are present in both the response from the REST
-    /// server and the config provided when creating this `RestCatalog` instance, then the value
-    /// provided locally to the `RestCatalog` will take precedence.
     async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
         self.inner
             .load_table(&self.session_context, table_ident)
             .await
     }
 
-    /// Drop a table from the catalog.
     async fn drop_table(&self, table: &TableIdent) -> Result<()> {
         self.inner.drop_table(&self.session_context, table).await
     }
 
-    /// Drop a table from the catalog and purge its data by sending
-    /// `purgeRequested=true` to the REST server.
     async fn purge_table(&self, table: &TableIdent) -> Result<()> {
         self.inner.purge_table(&self.session_context, table).await
     }
 
-    /// Check if a table exists in the catalog.
     async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
         self.inner.table_exists(&self.session_context, table).await
     }
 
-    /// Rename a table in the catalog.
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
         self.inner
             .rename_table(&self.session_context, src, dest)
@@ -638,13 +635,16 @@ impl Catalog for RestCatalog {
     }
 }
 
-/// Rest catalog implementation.
+/// REST catalog implementation of [`SessionCatalog`].
+///
+/// Each operation accepts a [`SessionContext`]. REST configuration, authentication sessions,
+/// and the HTTP client are initialized lazily once per catalog and shared across all operations.
 #[derive(Debug)]
 pub struct RestSessionCatalog {
     /// Injected through [`RestSessionCatalogBuilder::with_auth_manager`]; otherwise
     /// one is resolved from `rest.auth.type` when the client is built.
     auth_manager: Option<Arc<dyn AuthManager>>,
-    /// User config is stored as-is and never be changed.
+    /// User config is stored as-is and never changed.
     ///
     /// It could be different from the config fetched from the server and used at runtime.
     user_config: RestCatalogConfig,
@@ -774,8 +774,8 @@ impl RestSessionCatalog {
                 ErrorKind::DataInvalid,
                 format!(
                     "unknown '{REST_CATALOG_PROP_AUTH_TYPE}': {other}; use \
-                     `RestCatalogBuilder::with_auth_manager` to inject a \
-                     custom auth manager"
+                     `RestSessionCatalogBuilder::with_auth_manager` or \
+                     `RestCatalogBuilder::with_auth_manager` to inject a custom auth manager"
                 ),
             )),
         }
@@ -873,7 +873,7 @@ impl RestSessionCatalog {
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::Unexpected,
-                    "StorageFactory must be provided for RestCatalog. Use `with_storage_factory` to configure it.",
+                    "StorageFactory must be provided for REST catalog table operations. Use `with_storage_factory` to configure it.",
                 )
             })?;
 
@@ -883,6 +883,8 @@ impl RestSessionCatalog {
     }
 }
 
+/// All requests and expected responses are derived from the REST catalog API spec:
+/// <https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml>
 #[async_trait]
 impl SessionCatalog for RestSessionCatalog {
     async fn list_namespaces(
@@ -1129,8 +1131,8 @@ impl SessionCatalog for RestSessionCatalog {
     ///
     /// In the resulting table, if there are any config properties that
     /// are present in both the response from the REST server and the
-    /// config provided when creating this `RestCatalog` instance then
-    /// the value provided locally to the `RestCatalog` will take precedence.
+    /// config provided when creating this `RestSessionCatalog` instance, then
+    /// the value provided locally to the `RestSessionCatalog` will take precedence.
     async fn create_table(
         &self,
         _context: &SessionContext,
@@ -1217,8 +1219,8 @@ impl SessionCatalog for RestSessionCatalog {
     /// Load table from the catalog.
     ///
     /// If there are any config properties that are present in both the response from the REST
-    /// server and the config provided when creating this `RestCatalog` instance, then the value
-    /// provided locally to the `RestCatalog` will take precedence.
+    /// server and the config provided when creating this `RestSessionCatalog` instance, then the
+    /// value provided locally to the `RestSessionCatalog` will take precedence.
     async fn load_table(
         &self,
         _context: &SessionContext,
@@ -1499,7 +1501,10 @@ impl SessionCatalog for RestSessionCatalog {
     }
 }
 
-/// Builder for [`RestSessionCatalog`].
+/// Builder for an unbound [`RestSessionCatalog`].
+///
+/// Unlike [`RestCatalogBuilder`], the resulting catalog accepts a
+/// [`SessionContext`] with each [`SessionCatalog`] operation.
 #[derive(Debug)]
 pub struct RestSessionCatalogBuilder {
     config: RestCatalogConfig,
@@ -1553,12 +1558,12 @@ impl RestSessionCatalogBuilder {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use iceberg::CatalogBuilder;
     /// use iceberg::io::StorageFactory;
+    /// use iceberg_catalog_rest::RestSessionCatalogBuilder;
     /// use iceberg_storage_opendal::OpenDalStorageFactory;
     /// use std::sync::Arc;
     ///
-    /// let catalog = MyCatalogBuilder::default()
+    /// let catalog = RestSessionCatalogBuilder::default()
     ///     .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
     ///         customized_credential_load: None,
     ///     }))
@@ -1574,18 +1579,18 @@ impl RestSessionCatalogBuilder {
     ///
     /// When provided, the catalog calls the factory once during
     /// [`load`](Self::load) with the catalog properties to create a shared
-    /// [`KeyManagementClient`](crate::encryption::KeyManagementClient).
+    /// [`KeyManagementClient`].
     /// That client is then passed to each table's `TableBuilder` so tables
     /// with `encryption.key-id` set can construct an `EncryptionManager`.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// use iceberg::CatalogBuilder;
     /// use iceberg::encryption::kms::KmsClientFactory;
+    /// use iceberg_catalog_rest::RestSessionCatalogBuilder;
     /// use std::sync::Arc;
     ///
-    /// let catalog = MyCatalogBuilder::default()
+    /// let catalog = RestSessionCatalogBuilder::default()
     ///     .with_kms_client_factory(Arc::new(MyKmsClientFactory))
     ///     .load("my_catalog", props)
     ///     .await?;
@@ -1608,7 +1613,10 @@ impl RestSessionCatalogBuilder {
         self
     }
 
-    /// Create a new catalog instance.
+    /// Creates a new session catalog instance.
+    ///
+    /// The server configuration handshake, endpoint negotiation, and
+    /// authentication sessions are initialized lazily on the first operation.
     pub fn load(
         mut self,
         name: impl Into<String>,
@@ -4435,7 +4443,7 @@ mod tests {
 
         assert!(result.is_ok());
 
-        // Without `with_session`, the catalog falls back to `SessionContext::empty()`,
+        // Without `with_session_context`, the catalog falls back to `SessionContext::empty()`,
         // which assigns a fresh v4 UUID.
         let catalog = result.unwrap();
         assert!(uuid::Uuid::parse_str(catalog.session_context.session_id()).is_ok());
