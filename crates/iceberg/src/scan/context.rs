@@ -29,7 +29,7 @@ use crate::scan::{
 };
 use crate::spec::{
     ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
-    PartitionSpecRef, SchemaRef, SnapshotRef, TableMetadataRef,
+    PartitionSpecRef, SchemaRef, SnapshotRef, StructType, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -58,6 +58,7 @@ pub(crate) struct ManifestFileContext {
     case_sensitive: bool,
     entry_filter: Option<ManifestEntryFilter>,
     partition_spec: Option<PartitionSpecRef>,
+    unified_partition_type: Option<Arc<StructType>>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -74,6 +75,7 @@ pub(crate) struct ManifestEntryContext {
     pub name_mapping: Option<Arc<NameMapping>>,
     pub case_sensitive: bool,
     pub partition_spec: Option<PartitionSpecRef>,
+    pub unified_partition_type: Option<Arc<StructType>>,
 }
 
 impl ManifestFileContext {
@@ -93,6 +95,7 @@ impl ManifestFileContext {
             case_sensitive,
             entry_filter,
             partition_spec,
+            unified_partition_type,
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
@@ -116,6 +119,7 @@ impl ManifestFileContext {
                 name_mapping: name_mapping.clone(),
                 case_sensitive,
                 partition_spec: partition_spec.clone(),
+                unified_partition_type: unified_partition_type.clone(),
             };
 
             sender
@@ -145,6 +149,8 @@ impl ManifestEntryContext {
             .with_start(0)
             .with_length(self.manifest_entry.file_size_in_bytes())
             .with_record_count(Some(self.manifest_entry.record_count()))
+            .with_first_row_id(self.manifest_entry.data_file().first_row_id())
+            .with_data_sequence_number(self.manifest_entry.sequence_number())
             .with_data_file_path(self.manifest_entry.file_path().to_string())
             .with_data_file_format(self.manifest_entry.file_format())
             .with_schema(self.snapshot_schema)
@@ -157,6 +163,7 @@ impl ManifestEntryContext {
             .with_partition(Some(self.manifest_entry.data_file.partition.clone()))
             .with_partition_spec(self.partition_spec.clone())
             .with_name_mapping(self.name_mapping)
+            .with_unified_partition_type(self.unified_partition_type.clone())
             .with_case_sensitive(self.case_sensitive)
             .with_key_metadata(self.manifest_entry.data_file.key_metadata().map(Box::from))
             .build())
@@ -182,6 +189,8 @@ pub(crate) struct PlanContext {
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     pub manifest_file_filter: Option<ManifestFileFilter>,
     pub manifest_entry_filter: Option<ManifestEntryFilter>,
+
+    pub unified_partition_type: Option<Arc<StructType>>,
 }
 
 impl std::fmt::Debug for PlanContext {
@@ -209,6 +218,8 @@ impl PlanContext {
             .await
     }
 
+    /// Returns the partition filter for a manifest. See [`PartitionFilterCache::get`] for the
+    /// always-true fallback when the manifest's spec cannot be resolved against the scan schema.
     fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
         let partition_spec_id = manifest_file.partition_spec_id;
 
@@ -333,6 +344,7 @@ impl PlanContext {
                 .table_metadata
                 .partition_spec_by_id(manifest_file.partition_spec_id)
                 .cloned(),
+            unified_partition_type: self.unified_partition_type.clone(),
         }
     }
 }

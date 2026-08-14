@@ -166,13 +166,14 @@ impl PartitionSpec {
             .enumerate()
             .map(|(i, field)| {
                 let value = data[i].as_ref();
-                format!(
-                    "{}={}",
-                    field.name,
-                    field
-                        .transform
-                        .to_human_string(&field_types[i].field_type, value)
-                )
+                form_urlencoded::Serializer::new(String::new())
+                    .append_pair(
+                        &field.name,
+                        &field
+                            .transform
+                            .to_human_string(&field_types[i].field_type, value),
+                    )
+                    .finish()
             })
             .join("/")
     }
@@ -1748,6 +1749,64 @@ mod tests {
         assert_eq!(
             spec.partition_to_path(&data, schema.into()),
             "id=42/name=alice/ts_hour=1000/empty_void=null"
+        );
+    }
+
+    #[test]
+    fn test_partition_to_path_escaped_strings() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "\"esc\"#1", Type::Primitive(PrimitiveType::String))
+                    .into(),
+                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let spec = PartitionSpec::builder(schema.clone())
+            .add_partition_field("\"esc\"#1", "\"esc\"#1", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let data = Struct::from_iter([
+            Some(Literal::string("a/b/c/d")),
+            Some(Literal::string("val#1")),
+        ]);
+
+        assert_eq!(
+            spec.partition_to_path(&data, schema.into()),
+            "%22esc%22%231=a%2Fb%2Fc%2Fd"
+        );
+    }
+
+    #[test]
+    fn test_partition_to_path_escaped_field_name() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "\"esc\"#1", Type::Primitive(PrimitiveType::String))
+                    .into(),
+                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let spec = PartitionSpec::builder(schema.clone())
+            .add_partition_field("data", "data", Transform::Identity)
+            .unwrap()
+            .add_partition_field("data", "data_truc_10", Transform::Truncate(10))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let data = Struct::from_iter([
+            Some(Literal::string("a/b/c/d")),
+            Some(Literal::string("a/b/c/d")),
+        ]);
+
+        assert_eq!(
+            spec.partition_to_path(&data, schema.into()),
+            "data=a%2Fb%2Fc%2Fd/data_truc_10=a%2Fb%2Fc%2Fd"
         );
     }
 }

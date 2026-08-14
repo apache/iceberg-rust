@@ -259,15 +259,13 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use crate::catalog::MockCatalog;
-    use crate::encryption::SensitiveBytes;
-    use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
     use crate::io::FileIO;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
     };
     use crate::table::Table;
-    use crate::test_utils::test_runtime;
+    use crate::test_utils::{make_encrypted_table, test_runtime};
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
 
@@ -579,37 +577,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_commit_rejects_encrypted_table() {
-        let file = File::open(format!(
-            "{}/testdata/table_metadata/{}",
-            env!("CARGO_MANIFEST_DIR"),
-            "TableMetadataV3ValidEncryption.json"
-        ))
-        .unwrap();
-        let reader = BufReader::new(file);
-        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
-
-        let kms: Arc<dyn KeyManagementClient> = {
-            let k = MemoryKeyManagementClient::new();
-            k.add_master_key_bytes(
-                "master-1",
-                SensitiveBytes::new([
-                    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
-                    0x0d, 0x0e, 0x0f,
-                ]),
-            )
-            .unwrap();
-            Arc::new(k)
-        };
-
-        let table = Table::builder()
-            .metadata(resp)
-            .metadata_location("s3://bucket/test/location/metadata/v1.json")
-            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-            .file_io(FileIO::new_with_memory())
-            .kms_client(kms)
-            .runtime(test_runtime())
-            .build()
-            .unwrap();
+        let table = make_encrypted_table().await;
 
         let tx = Transaction::new(&table);
         let tx = tx

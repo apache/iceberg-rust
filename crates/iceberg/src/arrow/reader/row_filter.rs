@@ -1138,6 +1138,8 @@ mod tests {
             start: 0,
             length: 0,
             record_count: None,
+            first_row_id: None,
+            data_sequence_number: None,
             data_file_path: file_path.clone(),
             data_file_format: DataFileFormat::Parquet,
             schema: iceberg_schema.clone(),
@@ -1147,6 +1149,7 @@ mod tests {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            unified_partition_type: None,
             case_sensitive: false,
             key_metadata: None,
         };
@@ -1230,6 +1233,8 @@ mod tests {
             start: 0,
             length: 0,
             record_count: None,
+            first_row_id: None,
+            data_sequence_number: None,
             data_file_path: file_path.clone(),
             data_file_format: DataFileFormat::Parquet,
             schema: iceberg_schema.clone(),
@@ -1246,6 +1251,7 @@ mod tests {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            unified_partition_type: None,
             case_sensitive: false,
             key_metadata: None,
         };
