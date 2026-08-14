@@ -126,7 +126,7 @@ impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::ErrorRespon
 pub fn iceberg_catalog_rest::ErrorResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::HttpClient
 impl iceberg_catalog_rest::HttpClient
-pub async fn iceberg_catalog_rest::HttpClient::post_form(&self, url: &str, headers: &http::header::map::HeaderMap, form: &std::collections::hash::map::HashMap<&str, &str>) -> iceberg::error::Result<(http::status::StatusCode, alloc::vec::Vec<u8>)>
+pub async fn iceberg_catalog_rest::HttpClient::post_form(&self, url: &str, headers: &http::header::map::HeaderMap, form: &std::collections::hash::map::HashMap<&str, &str>) -> iceberg::error::Result<iceberg_catalog_rest::HttpResponse>
 pub fn iceberg_catalog_rest::HttpClient::with_auth_session(&self, auth_session: alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>) -> Self
 pub fn iceberg_catalog_rest::HttpClient::without_auth_session(&self) -> Self
 impl core::clone::Clone for iceberg_catalog_rest::HttpClient
@@ -141,6 +141,16 @@ pub fn iceberg_catalog_rest::HttpRequest::headers_mut(&mut self) -> &mut http::h
 pub fn iceberg_catalog_rest::HttpRequest::method(&self) -> &http::method::Method
 pub fn iceberg_catalog_rest::HttpRequest::new(inner: reqwest::async_impl::request::Request) -> Self
 pub fn iceberg_catalog_rest::HttpRequest::url_str(&self) -> &str
+pub struct iceberg_catalog_rest::HttpResponse
+impl iceberg_catalog_rest::HttpResponse
+pub fn iceberg_catalog_rest::HttpResponse::body(&self) -> &[u8]
+pub fn iceberg_catalog_rest::HttpResponse::headers(&self) -> &http::header::map::HeaderMap
+pub fn iceberg_catalog_rest::HttpResponse::new(status: http::status::StatusCode, headers: http::header::map::HeaderMap, body: alloc::vec::Vec<u8>) -> Self
+pub fn iceberg_catalog_rest::HttpResponse::status(&self) -> http::status::StatusCode
+impl core::clone::Clone for iceberg_catalog_rest::HttpResponse
+pub fn iceberg_catalog_rest::HttpResponse::clone(&self) -> iceberg_catalog_rest::HttpResponse
+impl core::fmt::Debug for iceberg_catalog_rest::HttpResponse
+pub fn iceberg_catalog_rest::HttpResponse::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg_catalog_rest::ListNamespaceResponse
 pub iceberg_catalog_rest::ListNamespaceResponse::namespaces: alloc::vec::Vec<iceberg::catalog::NamespaceIdent>
 pub iceberg_catalog_rest::ListNamespaceResponse::next_page_token: core::option::Option<alloc::string::String>
