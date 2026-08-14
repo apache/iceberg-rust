@@ -439,10 +439,10 @@ impl RestClient {
             let init_session = auth_manager
                 .init_session(
                     &http_client.without_auth_session(),
-                    &RestSessionCatalog::auth_props(user_config),
+                    &Self::auth_props(user_config),
                 )
                 .await?;
-            RestSessionCatalog::load_config(
+            Self::load_config(
                 &http_client.with_auth_session(Arc::from(init_session)),
                 user_config,
             )
@@ -461,7 +461,7 @@ impl RestClient {
         let session = auth_manager
             .catalog_session(
                 &http_client.without_auth_session(),
-                &RestSessionCatalog::auth_props(&config),
+                &Self::auth_props(&config),
             )
             .await?;
 
@@ -481,6 +481,52 @@ impl RestClient {
     /// Sends `request`, authenticated by the client's session.
     async fn query_catalog(&self, request: HttpRequest) -> Result<Response> {
         self.http_client.query_catalog(request).await
+    }
+
+    /// The properties handed to the [`AuthManager`], with the catalog `uri`
+    /// and `warehouse` made explicit.
+    fn auth_props(config: &RestCatalogConfig) -> HashMap<String, String> {
+        // `oauth2-server-uri` stays absent unless explicitly configured, so an
+        // injected manager keeps its own endpoint. The resolved `uri` and
+        // `warehouse` ARE passed: the builder moved them off the props, and
+        // the built-in manager recomputes its token endpoint from the URI.
+        let mut props = config.props.clone();
+        props.insert(REST_CATALOG_PROP_URI.to_string(), config.uri.clone());
+        if let Some(warehouse) = &config.warehouse {
+            // A fallback only: after the handshake the merged props hold
+            // the resolved warehouse, server override included.
+            props
+                .entry(REST_CATALOG_PROP_WAREHOUSE.to_string())
+                .or_insert_with(|| warehouse.clone());
+        }
+        props
+    }
+
+    /// Loads the runtime config from the server using `user_config`.
+    ///
+    /// It's required for a REST catalog to update its config after creation.
+    async fn load_config(
+        http_client: &HttpClient,
+        user_config: &RestCatalogConfig,
+    ) -> Result<CatalogConfig> {
+        let mut request_builder = http_client.request(Method::GET, user_config.config_endpoint());
+
+        if let Some(warehouse_location) = &user_config.warehouse {
+            request_builder = request_builder.query(&[("warehouse", warehouse_location)]);
+        }
+
+        let request = HttpRequest::build(request_builder)?;
+
+        let http_response = http_client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::OK => deserialize_catalog_response(http_response).await,
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                http_client.disable_header_redaction(),
+            )
+            .await),
+        }
     }
 }
 
@@ -709,25 +755,6 @@ impl RestSessionCatalog {
         }
     }
 
-    /// The properties handed to the [`AuthManager`], with the catalog `uri`
-    /// and `warehouse` made explicit.
-    fn auth_props(config: &RestCatalogConfig) -> HashMap<String, String> {
-        // `oauth2-server-uri` stays absent unless explicitly configured, so an
-        // injected manager keeps its own endpoint. The resolved `uri` and
-        // `warehouse` ARE passed: the builder moved them off the props, and
-        // the built-in manager recomputes its token endpoint from the URI.
-        let mut props = config.props.clone();
-        props.insert(REST_CATALOG_PROP_URI.to_string(), config.uri.clone());
-        if let Some(warehouse) = &config.warehouse {
-            // A fallback only: after the handshake the merged props hold
-            // the resolved warehouse, server override included.
-            props
-                .entry(REST_CATALOG_PROP_WAREHOUSE.to_string())
-                .or_insert_with(|| warehouse.clone());
-        }
-        props
-    }
-
     /// The configured auth scheme: explicit `rest.auth.type` (matched
     /// case-insensitively) when set; otherwise `oauth2` when a `token`,
     /// `credential` or `oauth2-server-uri` is configured (preserving
@@ -809,33 +836,6 @@ impl RestSessionCatalog {
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
                 client.http_client.disable_header_redaction(),
-            )
-            .await),
-        }
-    }
-
-    /// Load the runtime config from the server by `user_config`.
-    ///
-    /// It's required for a REST catalog to update its config after creation.
-    async fn load_config(
-        http_client: &HttpClient,
-        user_config: &RestCatalogConfig,
-    ) -> Result<CatalogConfig> {
-        let mut request_builder = http_client.request(Method::GET, user_config.config_endpoint());
-
-        if let Some(warehouse_location) = &user_config.warehouse {
-            request_builder = request_builder.query(&[("warehouse", warehouse_location)]);
-        }
-
-        let request = HttpRequest::build(request_builder)?;
-
-        let http_response = http_client.query_catalog(request).await?;
-
-        match http_response.status() {
-            StatusCode::OK => deserialize_catalog_response(http_response).await,
-            _ => Err(deserialize_unexpected_catalog_error(
-                http_response,
-                http_client.disable_header_redaction(),
             )
             .await),
         }
