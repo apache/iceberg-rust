@@ -727,6 +727,7 @@ pub fn iceberg::io::AzdlsConfig::deserialize<__D>(__deserializer: __D) -> core::
 pub struct iceberg::io::FileIO
 impl iceberg::io::FileIO
 pub fn iceberg::io::FileIO::config(&self) -> &iceberg::io::StorageConfig
+pub fn iceberg::io::FileIO::config_for(&self, path: &str) -> &iceberg::io::StorageConfig
 pub async fn iceberg::io::FileIO::delete(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<()>
 pub async fn iceberg::io::FileIO::delete_prefix(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<()>
 pub async fn iceberg::io::FileIO::delete_stream(&self, paths: impl futures_core::stream::Stream<Item = alloc::string::String> + core::marker::Send + 'static) -> iceberg::Result<()>

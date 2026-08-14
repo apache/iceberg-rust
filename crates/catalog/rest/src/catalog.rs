@@ -3850,6 +3850,26 @@ mod tests {
             table.metadata_location().unwrap()
         );
 
+        // The point of the feature: the vended credentials reach the FileIO,
+        // scoped to the prefix the server sent them for.
+        let file_io = table.file_io();
+        let vended = file_io.config_for("s3://warehouse/database/table/data/f.parquet");
+        assert_eq!(
+            vended.get("s3.access-key-id"),
+            Some(&"vended-key-id".to_string())
+        );
+        assert_eq!(
+            vended.get("s3.session-token"),
+            Some(&"vended-token".to_string())
+        );
+        // A path outside the prefix keeps the credential-free default.
+        assert_eq!(
+            file_io
+                .config_for("s3://warehouse/other/f.parquet")
+                .get("s3.access-key-id"),
+            None
+        );
+
         config_mock.assert_async().await;
         load_table_mock.assert_async().await;
     }
