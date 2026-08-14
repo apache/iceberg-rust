@@ -25,7 +25,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use iceberg::Result;
+use iceberg::{Result, TableIdent};
 pub use oauth2::OAuth2Manager;
 
 use crate::client::HttpClient;
@@ -42,9 +42,9 @@ pub const AUTH_TYPE_OAUTH2: &str = "oauth2";
 /// property or injected through `RestCatalogBuilder::with_auth_manager`. It
 /// builds the sessions the catalog then keeps.
 ///
-/// Both methods are handed the catalog's [`HttpClient`], which an
-/// implementation may reuse for its own requests (e.g. a token exchange) so
-/// that they share the catalog's connection pool and configuration.
+/// Session-construction methods are handed the catalog's [`HttpClient`], which
+/// an implementation may reuse for its own requests (e.g. a token exchange)
+/// so that they share the catalog's connection pool and configuration.
 #[async_trait]
 pub trait AuthManager: Debug + Send + Sync {
     /// Session used for the initial `/v1/config` handshake, given the
@@ -69,6 +69,22 @@ pub trait AuthManager: Debug + Send + Sync {
         client: &HttpClient,
         props: &HashMap<String, String>,
     ) -> Result<Arc<dyn AuthSession>>;
+
+    /// Returns a session for requests associated with `table`.
+    ///
+    /// `props` are the unmerged properties returned by the table endpoint.
+    /// The default preserves the catalog session; managers should return a
+    /// child session only when the table properties contain an authentication
+    /// override.
+    async fn table_session(
+        &self,
+        _client: &HttpClient,
+        _table: &TableIdent,
+        _props: &HashMap<String, String>,
+        parent: Arc<dyn AuthSession>,
+    ) -> Result<Arc<dyn AuthSession>> {
+        Ok(parent)
+    }
 }
 
 /// Authenticates outgoing REST catalog requests.

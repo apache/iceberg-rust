@@ -22,7 +22,8 @@ use iceberg::io::{
     CLIENT_REGION, S3_ACCESS_KEY_ID, S3_ALLOW_ANONYMOUS, S3_ASSUME_ROLE_ARN,
     S3_ASSUME_ROLE_EXTERNAL_ID, S3_ASSUME_ROLE_SESSION_NAME, S3_DISABLE_CONFIG_LOAD,
     S3_DISABLE_EC2_METADATA, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
-    S3_SESSION_TOKEN, S3_SSE_KEY, S3_SSE_MD5, S3_SSE_TYPE,
+    S3_SESSION_TOKEN, S3_SSE_KEY, S3_SSE_MD5, S3_SSE_TYPE, StorageCredentialKind,
+    StorageCredentialProvider,
 };
 use iceberg::{Error, ErrorKind, Result};
 use opendal::services::S3Config;
@@ -31,10 +32,16 @@ use opendal::{Configurator, Operator};
 pub use reqsign_aws_v4::Credential as AwsCredential;
 /// Trait for types that can asynchronously supply [`AwsCredential`] to a [`CustomAwsCredentialLoader`].
 pub use reqsign_core::ProvideCredential;
-use reqsign_core::{ProvideCredentialChain, ProvideCredentialDyn};
+use reqsign_core::{
+    Context, Error as ReqsignError, ProvideCredentialChain, ProvideCredentialDyn,
+    Result as ReqsignResult,
+};
 use url::Url;
 
-use crate::utils::{from_opendal_error, is_truthy};
+use crate::DynamicCredentialScope;
+use crate::utils::{
+    from_opendal_error, is_truthy, system_time_to_timestamp, validate_credential_prefix,
+};
 
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {
@@ -129,7 +136,9 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
 pub(crate) fn s3_config_build(
     cfg: &S3Config,
     customized_credential_load: &Option<CustomAwsCredentialLoader>,
+    credential_provider: &Option<Arc<dyn StorageCredentialProvider>>,
     path: &str,
+    credential_scope: Option<&DynamicCredentialScope>,
 ) -> Result<Operator> {
     let url = Url::parse(path)?;
     let bucket = url.host_str().ok_or_else(|| {
@@ -138,6 +147,19 @@ pub(crate) fn s3_config_build(
             format!("Invalid s3 url: {path}, missing bucket"),
         )
     })?;
+
+    // Preserve the existing custom-loader precedence: an explicitly configured loader
+    // is the sole source, otherwise install the catalog provider as a replacement chain so
+    // refresh failures cannot fall through to broader ambient AWS credentials.
+    let credential_provider = credential_provider
+        .as_ref()
+        .filter(|provider| provider.supports_path(path));
+    if customized_credential_load.is_none() && credential_provider.is_some() && cfg.skip_signature {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Invalid S3 auth settings: anonymous access cannot be combined with refreshable credentials",
+        ));
+    }
 
     let mut builder = cfg
         .clone()
@@ -148,9 +170,95 @@ pub(crate) fn s3_config_build(
     if let Some(loader) = customized_credential_load {
         let chain = ProvideCredentialChain::new().push(Arc::clone(&loader.0));
         builder = builder.credential_provider_chain(chain);
+    } else if let Some(provider) = credential_provider {
+        let chain = ProvideCredentialChain::new().push(VendedS3CredentialProvider::new(
+            Arc::clone(provider),
+            path.to_string(),
+            credential_scope.cloned(),
+        ));
+        builder = builder.credential_provider_chain(chain);
     }
 
     Operator::new(builder).map_err(from_opendal_error)
+}
+
+/// Adapts a generic [`StorageCredentialProvider`] into a reqsign
+/// [`ProvideCredential`], so the S3 signer can obtain and refresh vended
+/// credentials.
+struct VendedS3CredentialProvider {
+    provider: Arc<dyn StorageCredentialProvider>,
+    /// Absolute path this operator serves; handed back to the provider so it can
+    /// select the vended credential whose prefix best matches the location.
+    path: String,
+    /// Exact scope selected when a bulk-delete operator was created. Ordinary
+    /// operators are unbound so they can follow the provider's best match.
+    credential_scope: Option<DynamicCredentialScope>,
+}
+
+impl std::fmt::Debug for VendedS3CredentialProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VendedS3CredentialProvider")
+            .field("path", &self.path)
+            .field("credential_scope", &self.credential_scope)
+            .finish_non_exhaustive()
+    }
+}
+
+impl VendedS3CredentialProvider {
+    fn new(
+        provider: Arc<dyn StorageCredentialProvider>,
+        path: String,
+        credential_scope: Option<DynamicCredentialScope>,
+    ) -> Self {
+        Self {
+            provider,
+            path,
+            credential_scope,
+        }
+    }
+}
+
+impl ProvideCredential for VendedS3CredentialProvider {
+    type Credential = AwsCredential;
+
+    async fn provide_credential(&self, _ctx: &Context) -> ReqsignResult<Option<AwsCredential>> {
+        let credential = self
+            .provider
+            .load_credential(&self.path)
+            .await
+            .map_err(|e| {
+                ReqsignError::unexpected(format!(
+                    "failed to load vended S3 credential for {}",
+                    self.path
+                ))
+                .with_source(e)
+            })?;
+
+        validate_credential_prefix(
+            &self.path,
+            credential.prefix(),
+            self.credential_scope.as_ref(),
+        )?;
+
+        let expires_in = credential
+            .expires_at()
+            .map(system_time_to_timestamp)
+            .transpose()?;
+        match credential.into_kind() {
+            StorageCredentialKind::S3(s3) => {
+                let (access_key_id, secret_access_key, session_token) = s3.into_parts();
+                Ok(Some(AwsCredential {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                    expires_in,
+                }))
+            }
+            _ => Err(ReqsignError::unexpected(
+                "S3 storage received a non-S3 credential from the provider",
+            )),
+        }
+    }
 }
 
 /// Custom AWS credential loader.
@@ -176,7 +284,7 @@ impl std::fmt::Debug for CustomAwsCredentialLoader {
 impl CustomAwsCredentialLoader {
     /// Create a new custom AWS credential loader from any [`ProvideCredential`] implementation.
     pub fn new(provider: impl ProvideCredential<Credential = AwsCredential> + 'static) -> Self {
-        Self(Arc::new(provider) as Arc<dyn ProvideCredentialDyn<Credential = AwsCredential>>)
+        Self(Arc::new(provider))
     }
 }
 
@@ -184,9 +292,44 @@ impl CustomAwsCredentialLoader {
 mod tests {
     use std::collections::HashMap;
 
-    use iceberg::io::S3_PATH_STYLE_ACCESS;
+    use async_trait::async_trait;
+    use iceberg::io::{S3_PATH_STYLE_ACCESS, S3Credential, StorageCredential};
 
-    use super::s3_config_parse;
+    use super::*;
+
+    #[derive(Debug)]
+    struct FixedCredentialProvider(StorageCredential);
+
+    #[async_trait]
+    impl StorageCredentialProvider for FixedCredentialProvider {
+        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn credential(prefix: Option<&str>) -> StorageCredential {
+        let credential = StorageCredential::new(StorageCredentialKind::S3(S3Credential::new(
+            "access-key",
+            "secret-key",
+            Some("session-token".to_string()),
+        )));
+        match prefix {
+            Some(prefix) => credential.with_prefix(prefix),
+            None => credential,
+        }
+    }
+
+    fn provider(
+        path: &str,
+        returned_prefix: Option<&str>,
+        credential_scope: Option<DynamicCredentialScope>,
+    ) -> VendedS3CredentialProvider {
+        VendedS3CredentialProvider::new(
+            Arc::new(FixedCredentialProvider(credential(returned_prefix))),
+            path.to_string(),
+            credential_scope,
+        )
+    }
 
     fn parse_with(prop: Option<&str>) -> bool {
         let mut props = HashMap::new();
@@ -202,5 +345,54 @@ mod tests {
         assert!(parse_with(None));
         assert!(parse_with(Some("false")));
         assert!(!parse_with(Some("true")));
+    }
+
+    #[tokio::test]
+    async fn vended_provider_enforces_bound_credential_scope() {
+        let path = "s3://bucket/table/file.parquet";
+        let table_prefix = "s3://bucket/table";
+
+        assert!(
+            provider(
+                path,
+                Some(table_prefix),
+                Some(DynamicCredentialScope::Prefix(table_prefix.to_string())),
+            )
+            .provide_credential(&Context::default())
+            .await
+            .is_ok()
+        );
+        assert!(
+            provider(
+                path,
+                Some("s3://bucket"),
+                Some(DynamicCredentialScope::Prefix(table_prefix.to_string())),
+            )
+            .provide_credential(&Context::default())
+            .await
+            .is_err()
+        );
+        assert!(
+            provider(path, Some("s3://bucket"), None)
+                .provide_credential(&Context::default())
+                .await
+                .is_ok()
+        );
+        assert!(
+            provider(path, None, Some(DynamicCredentialScope::Unscoped))
+                .provide_credential(&Context::default())
+                .await
+                .is_ok()
+        );
+        assert!(
+            provider(
+                path,
+                Some(table_prefix),
+                Some(DynamicCredentialScope::Unscoped),
+            )
+            .provide_credential(&Context::default())
+            .await
+            .is_err()
+        );
     }
 }

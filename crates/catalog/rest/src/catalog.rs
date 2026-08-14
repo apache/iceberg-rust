@@ -43,6 +43,7 @@ use crate::auth::{AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, AuthManager, NoopAuthManager
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
+use crate::credential::build_vended_credential_provider;
 use crate::endpoint::{Endpoint, V1_NAMESPACE_EXISTS, V1_TABLE_EXISTS};
 use crate::request::HttpRequest;
 use crate::types::{
@@ -58,6 +59,8 @@ pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 /// Disable header redaction in error logs and `Debug` output (defaults to
 /// false for security)
 pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
+/// Identifier for a server-side scan plan associated with credential requests.
+pub const REST_CATALOG_PROP_SCAN_PLAN_ID: &str = "rest.scan.plan-id";
 /// Authentication scheme: `none` or `oauth2`. When unset, `oauth2` is used
 /// if a `token`, `credential` or `oauth2-server-uri` is configured, `none`
 /// otherwise.
@@ -460,6 +463,8 @@ pub(crate) fn oauth_params_from_props(props: &HashMap<String, String>) -> HashMa
 
 #[derive(Debug)]
 struct RestClient {
+    /// Creates child authentication sessions for table-scoped requests.
+    auth_manager: Arc<dyn AuthManager>,
     /// Carries the session the auth manager derived from the merged
     /// configuration, so every request below is authenticated.
     http_client: HttpClient,
@@ -664,6 +669,7 @@ impl RestCatalog {
                     .await?;
 
                 Ok(RestClient {
+                    auth_manager,
                     config,
                     http_client: http_client.with_auth_session(session),
                     endpoints,
@@ -725,20 +731,22 @@ impl RestCatalog {
 
     async fn load_file_io(
         &self,
+        table: &TableIdent,
         metadata_location: Option<&str>,
         extra_config: Option<HashMap<String, String>>,
+        table_auth_config: Option<HashMap<String, String>>,
     ) -> Result<FileIO> {
-        let mut props = self.client().await?.config.props.clone();
+        let client = self.client().await?;
+        let mut props = client.config.props.clone();
         if let Some(config) = extra_config {
             props.extend(config);
         }
 
         // If the warehouse is a logical identifier instead of a URL we don't want
         // to raise an exception
-        let warehouse_path = match self.client().await?.config.warehouse.as_deref() {
+        let warehouse_path = match client.config.warehouse.as_deref() {
             Some(url) if Url::parse(url).is_ok() => Some(url),
-            Some(_) => None,
-            None => None,
+            _ => None,
         };
 
         if metadata_location.or(warehouse_path).is_none() {
@@ -759,9 +767,24 @@ impl RestCatalog {
                 )
             })?;
 
-        let file_io = FileIOBuilder::new(factory).with_props(props).build();
+        // If the catalog vends refreshable credentials for this table's storage,
+        // attach a provider so the backend re-fetches them before they expire.
+        let credential_provider = build_vended_credential_provider(
+            Arc::new(client.http_client.clone()),
+            client.auth_manager.as_ref(),
+            table,
+            &client.config.uri,
+            &props,
+            table_auth_config.as_ref(),
+        )
+        .await?;
 
-        Ok(file_io)
+        let mut builder = FileIOBuilder::new(factory).with_props(props);
+        if let Some(provider) = credential_provider {
+            builder = builder.with_credential_provider(provider);
+        }
+
+        Ok(builder.build())
     }
 }
 
@@ -1052,14 +1075,20 @@ impl Catalog for RestCatalog {
             "Metadata location missing in `create_table` response!",
         ))?;
 
-        let config = response
-            .config
+        let table_config = response.config;
+        let config = table_config
+            .clone()
             .into_iter()
             .chain(self.user_config.props.clone())
             .collect();
 
         let file_io = self
-            .load_file_io(Some(metadata_location), Some(config))
+            .load_file_io(
+                &table_ident,
+                Some(metadata_location),
+                Some(config),
+                Some(table_config),
+            )
             .await?;
 
         let mut table_builder = Table::builder()
@@ -1113,14 +1142,20 @@ impl Catalog for RestCatalog {
             }
         };
 
-        let config = response
-            .config
+        let table_config = response.config;
+        let config = table_config
+            .clone()
             .into_iter()
             .chain(self.user_config.props.clone())
             .collect();
 
         let file_io = self
-            .load_file_io(response.metadata_location.as_deref(), Some(config))
+            .load_file_io(
+                table_ident,
+                response.metadata_location.as_deref(),
+                Some(config),
+                Some(table_config),
+            )
             .await?;
 
         let mut table_builder = Table::builder()
@@ -1257,7 +1292,20 @@ impl Catalog for RestCatalog {
             "Metadata location missing in `register_table` response!",
         ))?;
 
-        let file_io = self.load_file_io(Some(metadata_location), None).await?;
+        let table_config = response.config;
+        let config = table_config
+            .clone()
+            .into_iter()
+            .chain(self.user_config.props.clone())
+            .collect();
+        let file_io = self
+            .load_file_io(
+                table_ident,
+                Some(metadata_location),
+                Some(config),
+                Some(table_config),
+            )
+            .await?;
 
         let mut table_builder = Table::builder()
             .identifier(table_ident.clone())
@@ -1333,7 +1381,12 @@ impl Catalog for RestCatalog {
         };
 
         let file_io = self
-            .load_file_io(Some(&response.metadata_location), None)
+            .load_file_io(
+                commit.identifier(),
+                Some(&response.metadata_location),
+                None,
+                None,
+            )
             .await?;
 
         let mut table_builder = Table::builder()

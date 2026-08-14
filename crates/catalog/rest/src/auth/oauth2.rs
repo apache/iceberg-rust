@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use http::StatusCode;
-use iceberg::{Credential, Error, ErrorKind, Result};
+use iceberg::{Credential, Error, ErrorKind, Result, TableIdent};
 use reqwest::header::HeaderMap;
 use tokio::sync::Mutex;
 
@@ -45,8 +45,9 @@ struct OAuth2Params {
 /// Iceberg REST catalogs.
 ///
 /// A configured `token` is used directly; otherwise `credential` is exchanged
-/// for a token at the token endpoint and cached. The cached token is shared
-/// across sessions so it survives the config handshake.
+/// for a token at the token endpoint and cached. The cached token is shared by
+/// the init and catalog sessions so it survives the config handshake;
+/// table-specific tokens use isolated sessions.
 pub struct OAuth2Manager {
     token: Arc<Mutex<Option<Credential>>>,
     init_params: OAuth2Params,
@@ -143,13 +144,30 @@ impl AuthManager for OAuth2Manager {
     ) -> Result<Arc<dyn AuthSession>> {
         Ok(Arc::new(self.session_from(client, props).await?))
     }
+
+    async fn table_session(
+        &self,
+        _client: &HttpClient,
+        _table: &TableIdent,
+        props: &HashMap<String, String>,
+        parent: Arc<dyn AuthSession>,
+    ) -> Result<Arc<dyn AuthSession>> {
+        let Some(token) = props.get("token") else {
+            return Ok(parent);
+        };
+
+        Ok(Arc::new(OAuth2Session {
+            token: Arc::new(Mutex::new(Some(Credential::from(token.clone())))),
+            token_source: TokenSource::StaticToken,
+        }))
+    }
 }
 
 impl OAuth2Manager {
     /// Builds a session from the manager's options with `props` merged onto
     /// them, so an injected manager keeps whatever a property doesn't
-    /// override. The manager's token cell is shared with every session it
-    /// builds, so a token cached during the handshake survives it.
+    /// override. The manager's token cell is shared by the init and catalog
+    /// sessions, so a token cached during the handshake survives it.
     async fn session_from(
         &self,
         client: &HttpClient,
@@ -374,6 +392,58 @@ mod tests {
         assert_eq!(
             req.headers().get("authorization").unwrap(),
             "Bearer tok-static"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_table_session_inherits_parent_unless_token_is_overridden() {
+        let manager = OAuth2Manager::new("http://localhost/unused").with_token("catalog-token");
+        let client = test_client();
+        let parent = manager
+            .catalog_session(&client, &HashMap::new())
+            .await
+            .unwrap();
+        let table = TableIdent::from_strs(["namespace", "table"]).unwrap();
+
+        let inherited = manager
+            .table_session(&client, &table, &HashMap::new(), Arc::clone(&parent))
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(&parent, &inherited));
+
+        let overridden = manager
+            .table_session(
+                &client,
+                &table,
+                &HashMap::from([("token".to_string(), "table-token".to_string())]),
+                Arc::clone(&parent),
+            )
+            .await
+            .unwrap();
+        assert!(!Arc::ptr_eq(&parent, &overridden));
+
+        let mut parent_request = HttpRequest::new(
+            Client::new()
+                .get("https://rest.example.com/catalog")
+                .build()
+                .unwrap(),
+        );
+        parent.authenticate(&mut parent_request).await.unwrap();
+        assert_eq!(
+            parent_request.headers().get("authorization").unwrap(),
+            "Bearer catalog-token"
+        );
+
+        let mut table_request = HttpRequest::new(
+            Client::new()
+                .get("https://rest.example.com/table")
+                .build()
+                .unwrap(),
+        );
+        overridden.authenticate(&mut table_request).await.unwrap();
+        assert_eq!(
+            table_request.headers().get("authorization").unwrap(),
+            "Bearer table-token"
         );
     }
 }
