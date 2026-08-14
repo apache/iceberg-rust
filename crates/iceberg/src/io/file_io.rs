@@ -128,8 +128,10 @@ impl FileIO {
     /// The storage cell and configuration serving `path`.
     ///
     /// `prefixed` is sorted longest-first, so the first match is the most
-    /// specific one, per the Iceberg REST spec's storage-credentials semantics
-    /// (and Java's `S3FileIO`).
+    /// specific one, per the Iceberg REST spec's storage-credentials semantics.
+    ///
+    /// Matching is on the raw string, so `s3://bucket/data` also serves
+    /// `s3://bucket/database/` — as in Java's `S3FileIO.clientForStoragePath`.
     fn route(&self, path: &str) -> (&OnceLock<Arc<dyn Storage>>, &StorageConfig) {
         for ps in self.prefixed.iter() {
             if path.starts_with(&ps.prefix) {
