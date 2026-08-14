@@ -161,7 +161,7 @@ impl EncryptionManager {
     ///
     /// Stores the resulting wrapped entry (and any newly created KEK) in the
     /// manager's internal `encryption_keys` map. Callers persist the full set
-    /// at commit time via [`Self::encryption_keys`].
+    /// at commit time via the manager's `encryption_keys`.
     ///
     /// Returns the `key_id` of the wrapped entry, which should be recorded on
     /// the snapshot as `encryption_key_id` so readers can locate it later.

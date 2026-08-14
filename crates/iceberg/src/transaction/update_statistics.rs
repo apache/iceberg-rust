@@ -31,7 +31,7 @@ pub struct UpdateStatisticsAction {
 }
 
 impl UpdateStatisticsAction {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             statistics_to_set: HashMap::default(),
         }
