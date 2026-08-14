@@ -111,18 +111,32 @@ impl FileIO {
         &self.config
     }
 
+    /// The configuration `path` routes to: the longest-matching prefix's if
+    /// any, else the default. Vended credentials live on the prefix configs,
+    /// so this answers "which credentials apply to this path".
+    pub fn config_for(&self, path: &str) -> &StorageConfig {
+        self.route(path).1
+    }
+
     /// Get or create the storage for `path`, routing to the longest-matching
     /// prefix storage if any, else the default. Built once, then cached.
     fn get_storage(&self, path: &str) -> Result<Arc<dyn Storage>> {
-        // `prefixed` is sorted longest-first, so the first match is most specific.
-        // Selection is by longest matching string prefix, per the Iceberg REST
-        // spec's storage-credentials semantics (and Java's `S3FileIO`).
+        let (cell, config) = self.route(path);
+        Self::get_or_build(cell, &self.factory, config)
+    }
+
+    /// The storage cell and configuration serving `path`.
+    ///
+    /// `prefixed` is sorted longest-first, so the first match is the most
+    /// specific one, per the Iceberg REST spec's storage-credentials semantics
+    /// (and Java's `S3FileIO`).
+    fn route(&self, path: &str) -> (&OnceLock<Arc<dyn Storage>>, &StorageConfig) {
         for ps in self.prefixed.iter() {
             if path.starts_with(&ps.prefix) {
-                return Self::get_or_build(&ps.storage, &self.factory, &ps.config);
+                return (&ps.storage, &ps.config);
             }
         }
-        Self::get_or_build(&self.storage, &self.factory, &self.config)
+        (&self.storage, &self.config)
     }
 
     /// Get a cached storage from `cell`, building it from `config` on first use.
@@ -636,6 +650,36 @@ mod tests {
 
         assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
         assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_routes_a_path_to_its_longest_matching_prefix() {
+        // Overlapping prefixes: the more specific credentials must win, so
+        // sorting alone isn't enough — the lookup has to respect that order.
+        // Each prefix owns a storage cell, so identity tells them apart.
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prefixed_props("memory://bucket/data", [("k", "short")])
+            .with_prefixed_props("memory://bucket/data/warehouse", [("k", "long")])
+            .build();
+
+        let long = file_io
+            .get_storage("memory://bucket/data/warehouse/t/f")
+            .unwrap();
+        let short = file_io.get_storage("memory://bucket/data/other/f").unwrap();
+        let default = file_io.get_storage("memory://elsewhere/f").unwrap();
+
+        // Routing the shortest prefix first would collapse these two.
+        assert!(!Arc::ptr_eq(&long, &short));
+        assert!(!Arc::ptr_eq(&short, &default));
+        assert!(!Arc::ptr_eq(&long, &default));
+        // The same prefix keeps serving the same storage.
+        assert!(Arc::ptr_eq(
+            &long,
+            &file_io
+                .get_storage("memory://bucket/data/warehouse/other")
+                .unwrap()
+        ));
     }
 
     #[tokio::test]

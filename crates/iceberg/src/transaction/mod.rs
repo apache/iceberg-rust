@@ -275,7 +275,7 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use crate::catalog::MockCatalog;
-    use crate::io::FileIO;
+    use crate::io::{FileIO, FileIOBuilder, MemoryStorageFactory};
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
@@ -416,6 +416,39 @@ mod tests {
             .set("test.key".to_string(), "test.value".to_string())
             .apply(tx)
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_commit_keeps_the_refreshed_file_io() {
+        // The commit response carries no vended credentials, so the FileIO from
+        // the refresh load has to survive; taking the committed table's own
+        // would silently drop them.
+        let refreshed = make_v2_table().with_file_io(
+            FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+                .with_prefixed_props("memory://warehouse", [("s3.access-key-id", "vended")])
+                .build(),
+        );
+        let mut mock_catalog = MockCatalog::new();
+        mock_catalog.expect_load_table().returning_st(move |_| {
+            let refreshed = refreshed.clone();
+            Box::pin(async move { Ok(refreshed) })
+        });
+        mock_catalog
+            .expect_update_table()
+            .returning_st(|_| Box::pin(async move { Ok(make_v2_table()) }));
+
+        let table = create_test_transaction(&make_v2_table())
+            .commit(&mock_catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            table
+                .file_io()
+                .config_for("memory://warehouse/t/f")
+                .get("s3.access-key-id"),
+            Some(&"vended".to_string()),
+        );
     }
 
     /// Helper function to set up a mock catalog with retryable errors
