@@ -17,22 +17,27 @@
 
 use std::sync::Arc;
 
-use iceberg::{Catalog, SessionCatalog};
+use iceberg::{Catalog, SessionCatalog, SessionContext};
 
 use crate::SessionContextResolver;
 
 /// Describes how the DataFusion integration accesses an Iceberg catalog.
 ///
-/// A catalog can either be accessed directly through [`Catalog`] or through
-/// [`SessionCatalog`] with an Iceberg [`SessionContext`] derived from the
-/// current DataFusion session. Operations for which DataFusion provides no
-/// session use an empty Iceberg context.
+/// A catalog can either be accessed directly through [`Catalog`] or through a
+/// [`SessionCatalog`] bound to an Iceberg [`SessionContext`]. Operations that
+/// receive a DataFusion session resolve and bind its context once. Operations
+/// for which DataFusion provides no session reuse one anonymous fallback
+/// context so session-scoped catalog state remains stable across those calls.
 #[derive(Clone, Debug)]
 pub(crate) enum CatalogAccess {
     /// A catalog accessed directly through the [`Catalog`] API.
     Direct(Arc<dyn Catalog>),
 
-    /// A session-aware catalog and the resolver used to derive its Iceberg
-    /// context from the current DataFusion session.
-    SessionAware(Arc<dyn SessionCatalog>, Arc<dyn SessionContextResolver>),
+    /// A session-aware catalog, its resolver, and the stable context used by
+    /// DataFusion APIs that do not expose a session.
+    SessionAware {
+        catalog: Arc<dyn SessionCatalog>,
+        resolver: Arc<dyn SessionContextResolver>,
+        fallback_context: SessionContext,
+    },
 }
