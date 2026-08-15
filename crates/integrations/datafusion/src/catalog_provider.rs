@@ -51,6 +51,20 @@ impl IcebergCatalogProvider {
         Self::try_new_with_access(direct).await
     }
 
+    /// Creates an [`IcebergCatalogProvider`] backed by a [`SessionCatalog`].
+    ///
+    /// The [`SessionContextResolver`] derives an Iceberg [`SessionContext`]
+    /// from the current DataFusion session for operations that provide one.
+    /// Initialization and operations without a DataFusion session use
+    /// [`SessionContext::empty`].
+    pub async fn try_new_with_session_catalog(
+        catalog: Arc<dyn SessionCatalog>,
+        resolver: Arc<dyn SessionContextResolver>,
+    ) -> Result<Self> {
+        let session_aware = CatalogAccess::SessionAware(session_catalog, resolver);
+        Self::try_new_with_access(session_aware).await
+    }
+
     async fn try_new_with_access(catalog: CatalogAccess) -> Result<Self> {
         // TODO:
         // Schemas and providers should be cached and evicted based on time

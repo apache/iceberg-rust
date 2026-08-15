@@ -94,6 +94,7 @@ pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::
 pub struct iceberg_datafusion::IcebergCatalogProvider
 impl iceberg_datafusion::IcebergCatalogProvider
 pub async fn iceberg_datafusion::IcebergCatalogProvider::try_new(catalog: alloc::sync::Arc<dyn iceberg::catalog::Catalog>) -> iceberg::error::Result<Self>
+pub async fn iceberg_datafusion::IcebergCatalogProvider::try_new_with_session_catalog(catalog: alloc::sync::Arc<dyn iceberg::catalog::session::SessionCatalog>, resolver: alloc::sync::Arc<dyn iceberg_datafusion::SessionContextResolver>) -> iceberg::error::Result<Self>
 impl core::fmt::Debug for iceberg_datafusion::IcebergCatalogProvider
 pub fn iceberg_datafusion::IcebergCatalogProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl datafusion_catalog::catalog::CatalogProvider for iceberg_datafusion::IcebergCatalogProvider
