@@ -40,7 +40,7 @@ use crate::to_datafusion_error;
 #[derive(Debug)]
 pub(crate) struct IcebergSchemaProvider {
     /// Access policy for the Iceberg catalog.
-    catalog: CatalogAccess,
+    catalog_access: CatalogAccess,
     /// The namespace this schema represents
     namespace: NamespaceIdent,
     /// A concurrent map where keys are table names
@@ -57,27 +57,28 @@ impl IcebergSchemaProvider {
     ///
     /// This method retrieves a list of table names, attempts to create a table
     /// provider for each name, and collects the providers into a [`DashMap`].
-    pub(crate) async fn try_new(catalog: CatalogAccess, namespace: NamespaceIdent) -> Result<Self> {
+    pub(crate) async fn try_new(
+        catalog_access: CatalogAccess,
+        namespace: NamespaceIdent,
+    ) -> Result<Self> {
         // TODO:
         // Tables and providers should be cached based on table_name
         // if we have a cache miss; we update our internal cache & check again
         // As of right now; tables might become stale.
-        let table_names: Vec<_> = match &catalog {
-            CatalogAccess::Direct(catalog) => catalog.list_tables(&namespace).await?,
-            CatalogAccess::SessionAware {
-                catalog,
-                resolver: _,
-                fallback_context,
-            } => catalog.list_tables(&fallback_context, &namespace).await?,
-        }
-        .iter()
-        .map(|tbl| tbl.name().to_string())
-        .collect();
+        let table_names: Vec<_> = catalog_access
+            .without_session()
+            .list_tables(&namespace)
+            .await?
+            .iter()
+            .map(|tbl| tbl.name().to_string())
+            .collect();
 
         let providers = try_join_all(
             table_names
                 .iter()
-                .map(|name| IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), name))
+                .map(|name| {
+                    IcebergTableProvider::try_new(catalog_access.clone(), namespace.clone(), name)
+                })
                 .collect::<Vec<_>>(),
         )
         .await?;
@@ -88,7 +89,7 @@ impl IcebergSchemaProvider {
         }
 
         Ok(IcebergSchemaProvider {
-            catalog,
+            catalog_access,
             namespace,
             tables,
         })
@@ -173,7 +174,7 @@ impl SchemaProvider for IcebergSchemaProvider {
             .format_version(format_version)
             .build();
 
-        let catalog = self.catalog.clone();
+        let catalog_access = self.catalog_access.clone();
         let namespace = self.namespace.clone();
         let tables = self.tables.clone();
         let name_clone = name.clone();
@@ -188,25 +189,15 @@ impl SchemaProvider for IcebergSchemaProvider {
                     .await
                     .map_err(to_datafusion_error)?;
 
-                match &catalog {
-                    CatalogAccess::Direct(catalog) => {
-                        catalog.create_table(&namespace, table_creation).await
-                    }
-                    CatalogAccess::SessionAware {
-                        catalog,
-                        resolver: _,
-                        fallback_context,
-                    } => {
-                        catalog
-                            .create_table(&fallback_context, &namespace, table_creation)
-                            .await
-                    }
-                }
-                .map_err(to_datafusion_error)?;
+                catalog_access
+                    .without_session()
+                    .create_table(&namespace, table_creation)
+                    .await
+                    .map_err(to_datafusion_error)?;
 
-                // Create a new table provider using the catalog reference
+                // Create a new table provider using the catalog access
                 let table_provider = IcebergTableProvider::try_new(
-                    catalog.clone(),
+                    catalog_access,
                     namespace.clone(),
                     name_clone.clone(),
                 )
@@ -233,7 +224,7 @@ impl SchemaProvider for IcebergSchemaProvider {
             return Ok(None);
         }
 
-        let catalog = self.catalog.clone();
+        let catalog = self.catalog_access.without_session();
         let namespace = self.namespace.clone();
         let tables = self.tables.clone();
         let table_name = name.to_string();
@@ -245,15 +236,10 @@ impl SchemaProvider for IcebergSchemaProvider {
                 let table_ident = TableIdent::new(namespace, table_name.clone());
 
                 // Drop the table from the Iceberg catalog
-                match &catalog {
-                    CatalogAccess::Direct(catalog) => catalog.drop_table(&table_ident).await,
-                    CatalogAccess::SessionAware {
-                        catalog,
-                        resolver: _,
-                        fallback_context,
-                    } => catalog.drop_table(&fallback_context, &table_ident).await,
-                }
-                .map_err(to_datafusion_error)?;
+                catalog
+                    .drop_table(&table_ident)
+                    .await
+                    .map_err(to_datafusion_error)?;
 
                 // Remove from local cache and return the removed provider
                 let removed = tables
