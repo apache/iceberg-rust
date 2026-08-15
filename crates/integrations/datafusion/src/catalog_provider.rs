@@ -20,8 +20,10 @@ use std::sync::Arc;
 
 use datafusion::catalog::{CatalogProvider, SchemaProvider};
 use futures::future::try_join_all;
-use iceberg::{Catalog, NamespaceIdent, Result};
+use iceberg::{Catalog, NamespaceIdent, Result, SessionCatalog, SessionContext};
 
+use crate::SessionContextResolver;
+use crate::catalog_access::CatalogAccess;
 use crate::schema_provider::IcebergSchemaProvider;
 
 /// Provides an interface to manage and access multiple schemas
@@ -38,47 +40,36 @@ pub struct IcebergCatalogProvider {
 }
 
 impl IcebergCatalogProvider {
-    /// Asynchronously tries to construct a new [`IcebergCatalogProvider`]
-    /// using the given client to fetch and initialize schema providers for
-    /// each namespace in the Iceberg [`Catalog`].
+    /// Asynchronously constructs an [`IcebergCatalogProvider`] from a
+    /// [`Catalog`], fetching and initializing a schema provider for each
+    /// namespace.
     ///
-    /// This method retrieves the list of namespace names
-    /// attempts to create a schema provider for each namespace, and
-    /// collects these providers into a `HashMap`.
-    pub async fn try_new(client: Arc<dyn Catalog>) -> Result<Self> {
+    /// This method retrieves the namespace names and collects an initialized
+    /// schema provider for each namespace into a `HashMap`.
+    pub async fn try_new(catalog: Arc<dyn Catalog>) -> Result<Self> {
+        let direct = CatalogAccess::Direct(catalog);
+        Self::try_new_with_access(direct).await
+    }
+
+    async fn try_new_with_access(catalog: CatalogAccess) -> Result<Self> {
         // TODO:
         // Schemas and providers should be cached and evicted based on time
         // As of right now; schemas might become stale.
-        let schema_names: Vec<_> = client
-            .list_namespaces(None)
-            .await?
-            .iter()
-            .flat_map(|ns| ns.as_ref().clone())
-            .collect();
+        let schema_names: Vec<_> = match &catalog {
+            CatalogAccess::Direct(catalog) => catalog.list_namespaces(None).await?,
+            CatalogAccess::SessionAware(session_catalog, _) => {
+                session_catalog
+                    .list_namespaces(&SessionContext::empty(), None)
+                    .await?
+            }
+        }
+        .iter()
+        .flat_map(|ns| ns.as_ref().clone())
+        .collect();
 
-        let providers = try_join_all(
-            schema_names
-                .iter()
-                .map(|name| {
-                    IcebergSchemaProvider::try_new(
-                        client.clone(),
-                        NamespaceIdent::new(name.clone()),
-                    )
-                })
-                .collect::<Vec<_>>(),
-        )
-        .await?;
-
-        let schemas: HashMap<String, Arc<dyn SchemaProvider>> = schema_names
-            .into_iter()
-            .zip(providers)
-            .map(|(name, provider)| {
-                let provider = Arc::new(provider) as Arc<dyn SchemaProvider>;
-                (name, provider)
-            })
-            .collect();
-
-        Ok(IcebergCatalogProvider { schemas })
+        Ok(IcebergCatalogProvider {
+            schemas: load_schema_providers(catalog, schema_names).await?,
+        })
     }
 }
 
@@ -90,4 +81,30 @@ impl CatalogProvider for IcebergCatalogProvider {
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
         self.schemas.get(name).cloned()
     }
+}
+
+async fn load_schema_providers(
+    catalog: CatalogAccess,
+    schema_names: Vec<String>,
+) -> Result<HashMap<String, Arc<dyn SchemaProvider>>> {
+    let iceberg_providers = try_join_all(
+        schema_names
+            .iter()
+            .map(|name| {
+                IcebergSchemaProvider::try_new(catalog.clone(), NamespaceIdent::new(name.clone()))
+            })
+            .collect::<Vec<_>>(),
+    )
+    .await?;
+
+    let provider_map = schema_names
+        .into_iter()
+        .zip(iceberg_providers)
+        .map(|(name, iceberg_provider)| {
+            let provider = Arc::new(iceberg_provider) as Arc<dyn SchemaProvider>;
+            (name, provider)
+        })
+        .collect();
+
+    Ok(provider_map)
 }
