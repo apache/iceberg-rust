@@ -64,6 +64,20 @@ impl CatalogAccess {
             ))),
         }
     }
+
+    pub(crate) fn without_session(&self) -> Arc<dyn Catalog> {
+        match self {
+            CatalogAccess::Direct(catalog) => Arc::clone(catalog),
+            CatalogAccess::SessionAware {
+                catalog,
+                fallback_context,
+                ..
+            } => Arc::new(SessionBoundCatalog::new(
+                fallback_context.clone(),
+                Arc::clone(catalog),
+            )),
+        }
+    }
 }
 
 /// Adapts a [`SessionCatalog`] to [`Catalog`] by binding one [`SessionContext`].

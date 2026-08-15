@@ -69,6 +69,7 @@ impl IcebergCatalogProvider {
         let session_aware = CatalogAccess::SessionAware {
             catalog,
             resolver,
+            // One session context that's shared for all query-unrelated catalog operations.
             fallback_context: SessionContext::empty(),
         };
         Self::try_new_with_access(session_aware).await
@@ -78,17 +79,13 @@ impl IcebergCatalogProvider {
         // TODO:
         // Schemas and providers should be cached and evicted based on time
         // As of right now; schemas might become stale.
-        let schema_names: Vec<_> = match &catalog {
-            CatalogAccess::Direct(catalog) => catalog.list_namespaces(None).await?,
-            CatalogAccess::SessionAware {
-                catalog,
-                resolver: _,
-                fallback_context,
-            } => catalog.list_namespaces(&fallback_context, None).await?,
-        }
-        .iter()
-        .flat_map(|ns| ns.as_ref().clone())
-        .collect();
+        let schema_names: Vec<_> = catalog
+            .without_session()
+            .list_namespaces(None)
+            .await?
+            .iter()
+            .flat_map(|ns| ns.as_ref().clone())
+            .collect();
 
         Ok(IcebergCatalogProvider {
             schemas: load_schema_providers(catalog, schema_names).await?,
@@ -107,14 +104,17 @@ impl CatalogProvider for IcebergCatalogProvider {
 }
 
 async fn load_schema_providers(
-    catalog: CatalogAccess,
+    catalog_access: CatalogAccess,
     schema_names: Vec<String>,
 ) -> Result<HashMap<String, Arc<dyn SchemaProvider>>> {
     let iceberg_providers = try_join_all(
         schema_names
             .iter()
             .map(|name| {
-                IcebergSchemaProvider::try_new(catalog.clone(), NamespaceIdent::new(name.clone()))
+                IcebergSchemaProvider::try_new(
+                    catalog_access.clone(),
+                    NamespaceIdent::new(name.clone()),
+                )
             })
             .collect::<Vec<_>>(),
     )
