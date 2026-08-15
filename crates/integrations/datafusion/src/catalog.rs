@@ -52,8 +52,8 @@ impl IcebergCatalogProvider {
 
     /// Like [`try_new`](Self::try_new), but threads a serializable
     /// [`IcebergCatalogConfig`] into every schema and table provider it creates,
-    /// so the catalog's tables can be queried by a distributed engine such as
-    /// Ballista. The `client` must already be built from the same `config`.
+    /// so the catalog's tables can be queried by a distributed engine. The
+    /// `client` must already be built from the same `config`.
     pub async fn try_new_with_config(
         client: Arc<dyn Catalog>,
         config: IcebergCatalogConfig,

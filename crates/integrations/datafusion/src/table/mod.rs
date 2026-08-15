@@ -60,11 +60,9 @@ use crate::physical_plan::write::IcebergWriteExec;
 /// the table's current schema for `None`, that snapshot's schema for `Some`, so
 /// a time-travel read plans against the schema in effect at that snapshot.
 ///
-/// This is the single definition of that mapping. Distributed engines need it
-/// too — an executor rebuilding a snapshot-pinned plan node has to resolve the
-/// same schema the provider resolved at planning time — so it is public rather
-/// than reimplemented per engine, where the two copies could drift apart
-/// silently.
+/// Public because a distributed engine rebuilding a snapshot-pinned plan node
+/// has to resolve the same schema the provider resolved at planning time, and a
+/// second copy of this mapping could drift from this one silently.
 pub fn snapshot_arrow_schema(table: &Table, snapshot_id: Option<i64>) -> Result<ArrowSchemaRef> {
     let iceberg_schema = match snapshot_id {
         None => table.metadata().current_schema().clone(),
@@ -103,10 +101,8 @@ pub struct IcebergTableProvider {
     table_ident: TableIdent,
     /// A reference-counted arrow `Schema`
     schema: ArrowSchemaRef,
-    /// Optional serializable catalog/storage config. When present, it is
-    /// threaded into the execution plan nodes produced by `scan`/`insert_into`
-    /// so that a distributed engine can reconstruct them (and their catalog and
-    /// storage) on remote nodes.
+    /// When present, threaded into the nodes `scan`/`insert_into` produce, so a
+    /// distributed engine can rebuild them and their catalog on a worker.
     config: Option<crate::IcebergCatalogConfig>,
 }
 
@@ -140,8 +136,8 @@ impl IcebergTableProvider {
     ///
     /// The `catalog` must already be built from the same `config`. The config is
     /// threaded into the execution plan nodes this provider produces so that a
-    /// distributed engine (e.g. Ballista) can serialize those nodes and rebuild
-    /// the catalog/storage on remote executors.
+    /// distributed engine can serialize those nodes and rebuild the
+    /// catalog/storage on remote workers.
     pub async fn try_new_with_config(
         catalog: Arc<dyn Catalog>,
         config: crate::IcebergCatalogConfig,
@@ -316,11 +312,8 @@ pub struct IcebergStaticTableProvider {
     snapshot_id: Option<i64>,
     /// A reference-counted arrow `Schema`
     schema: ArrowSchemaRef,
-    /// Optional serializable catalog/storage config identifying where `table`
-    /// came from. Purely descriptive — this provider never talks to the catalog
-    /// — but it is what lets a distributed engine serialize the provider and
-    /// rebuild an equivalent one on a remote node. See
-    /// [`Self::with_catalog_config`].
+    /// Identifies where `table` came from. Purely descriptive — this provider
+    /// never talks to the catalog. See [`Self::with_catalog_config`].
     config: Option<crate::IcebergCatalogConfig>,
 }
 
@@ -354,21 +347,19 @@ impl IcebergStaticTableProvider {
 
     /// Records the catalog/storage config the table was loaded from.
     ///
-    /// The provider still never contacts the catalog; the config is carried so
-    /// that (a) the scan nodes it produces can rebuild storage on a remote node,
-    /// and (b) a serializer can identify the table well enough to reconstruct an
-    /// equivalent provider elsewhere — the same identity
-    /// [`IcebergTableProvider::config`] exposes.
+    /// The provider still never contacts the catalog. The config is carried so
+    /// that the scan nodes it produces can rebuild storage on a worker, and so
+    /// that it, [`Self::table_ident`] and [`Self::snapshot_id`] together are
+    /// enough to rebuild an equivalent provider elsewhere.
     ///
-    /// The caller is responsible for passing the config the table was actually
-    /// loaded from; nothing here validates that.
+    /// The caller must pass the config the table was actually loaded from;
+    /// nothing here validates that.
     pub fn with_catalog_config(mut self, config: crate::IcebergCatalogConfig) -> Self {
         self.config = Some(config);
         self
     }
 
-    /// Returns the serializable catalog/storage config, if one was recorded with
-    /// [`Self::with_catalog_config`].
+    /// Returns the config recorded with [`Self::with_catalog_config`], if any.
     pub fn config(&self) -> Option<&crate::IcebergCatalogConfig> {
         self.config.as_ref()
     }

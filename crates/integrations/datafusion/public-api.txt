@@ -29,7 +29,6 @@ pub fn iceberg_datafusion::physical_plan::IcebergCommitExec::fmt(&self, f: &mut 
 impl datafusion_physical_plan::display::DisplayAs for iceberg_datafusion::physical_plan::IcebergCommitExec
 pub fn iceberg_datafusion::physical_plan::IcebergCommitExec::fmt_as(&self, t: datafusion_physical_plan::display::DisplayFormatType, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl datafusion_physical_plan::execution_plan::ExecutionPlan for iceberg_datafusion::physical_plan::IcebergCommitExec
-pub fn iceberg_datafusion::physical_plan::IcebergCommitExec::as_any(&self) -> &dyn core::any::Any
 pub fn iceberg_datafusion::physical_plan::IcebergCommitExec::benefits_from_input_partitioning(&self) -> alloc::vec::Vec<bool>
 pub fn iceberg_datafusion::physical_plan::IcebergCommitExec::children(&self) -> alloc::vec::Vec<&alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>
 pub fn iceberg_datafusion::physical_plan::IcebergCommitExec::execute(&self, partition: usize, context: alloc::sync::Arc<datafusion_execution::task::TaskContext>) -> datafusion_common::error::Result<datafusion_execution::stream::SendableRecordBatchStream>
@@ -46,7 +45,6 @@ pub fn iceberg_datafusion::physical_plan::IcebergMetadataScan::fmt(&self, f: &mu
 impl datafusion_physical_plan::display::DisplayAs for iceberg_datafusion::physical_plan::IcebergMetadataScan
 pub fn iceberg_datafusion::physical_plan::IcebergMetadataScan::fmt_as(&self, _t: datafusion_physical_plan::display::DisplayFormatType, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl datafusion_physical_plan::execution_plan::ExecutionPlan for iceberg_datafusion::physical_plan::IcebergMetadataScan
-pub fn iceberg_datafusion::physical_plan::IcebergMetadataScan::as_any(&self) -> &dyn core::any::Any
 pub fn iceberg_datafusion::physical_plan::IcebergMetadataScan::children(&self) -> alloc::vec::Vec<&alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>
 pub fn iceberg_datafusion::physical_plan::IcebergMetadataScan::execute(&self, _partition: usize, _context: alloc::sync::Arc<datafusion_execution::task::TaskContext>) -> datafusion_common::error::Result<datafusion_execution::stream::SendableRecordBatchStream>
 pub fn iceberg_datafusion::physical_plan::IcebergMetadataScan::name(&self) -> &str
@@ -76,7 +74,7 @@ pub fn iceberg_datafusion::physical_plan::IcebergTableScan::with_new_children(se
 pub struct iceberg_datafusion::physical_plan::IcebergWriteExec
 impl iceberg_datafusion::physical_plan::IcebergWriteExec
 pub fn iceberg_datafusion::physical_plan::IcebergWriteExec::catalog_config(&self) -> core::option::Option<&iceberg_datafusion::IcebergCatalogConfig>
-pub fn iceberg_datafusion::physical_plan::IcebergWriteExec::new(table: iceberg::table::Table, input: alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>, schema: arrow_schema::schema::SchemaRef) -> Self
+pub fn iceberg_datafusion::physical_plan::IcebergWriteExec::new(table: iceberg::table::Table, input: alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>) -> Self
 pub fn iceberg_datafusion::physical_plan::IcebergWriteExec::table(&self) -> &iceberg::table::Table
 pub fn iceberg_datafusion::physical_plan::IcebergWriteExec::with_catalog_config(self, catalog_config: core::option::Option<iceberg_datafusion::IcebergCatalogConfig>) -> Self
 impl core::fmt::Debug for iceberg_datafusion::physical_plan::IcebergWriteExec
@@ -84,7 +82,6 @@ pub fn iceberg_datafusion::physical_plan::IcebergWriteExec::fmt(&self, f: &mut c
 impl datafusion_physical_plan::display::DisplayAs for iceberg_datafusion::physical_plan::IcebergWriteExec
 pub fn iceberg_datafusion::physical_plan::IcebergWriteExec::fmt_as(&self, t: datafusion_physical_plan::display::DisplayFormatType, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl datafusion_physical_plan::execution_plan::ExecutionPlan for iceberg_datafusion::physical_plan::IcebergWriteExec
-pub fn iceberg_datafusion::physical_plan::IcebergWriteExec::as_any(&self) -> &dyn core::any::Any
 pub fn iceberg_datafusion::physical_plan::IcebergWriteExec::benefits_from_input_partitioning(&self) -> alloc::vec::Vec<bool>
 pub fn iceberg_datafusion::physical_plan::IcebergWriteExec::children(&self) -> alloc::vec::Vec<&alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>
 pub fn iceberg_datafusion::physical_plan::IcebergWriteExec::execute(&self, partition: usize, context: alloc::sync::Arc<datafusion_execution::task::TaskContext>) -> datafusion_common::error::Result<datafusion_execution::stream::SendableRecordBatchStream>
@@ -109,7 +106,6 @@ pub fn iceberg_datafusion::physical_plan::PartitionExpr::fmt(&self, f: &mut core
 impl core::hash::Hash for iceberg_datafusion::physical_plan::PartitionExpr
 pub fn iceberg_datafusion::physical_plan::PartitionExpr::hash<H: core::hash::Hasher>(&self, state: &mut H)
 impl datafusion_physical_expr_common::physical_expr::PhysicalExpr for iceberg_datafusion::physical_plan::PartitionExpr
-pub fn iceberg_datafusion::physical_plan::PartitionExpr::as_any(&self) -> &dyn core::any::Any
 pub fn iceberg_datafusion::physical_plan::PartitionExpr::children(&self) -> alloc::vec::Vec<&alloc::sync::Arc<dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr>>
 pub fn iceberg_datafusion::physical_plan::PartitionExpr::data_type(&self, _input_schema: &arrow_schema::schema::Schema) -> datafusion_common::error::Result<arrow_schema::datatype::DataType>
 pub fn iceberg_datafusion::physical_plan::PartitionExpr::evaluate(&self, batch: &arrow_array::record_batch::RecordBatch) -> datafusion_common::error::Result<datafusion_expr_common::columnar_value::ColumnarValue>
@@ -162,14 +158,17 @@ pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::clone(&
 impl core::fmt::Debug for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl datafusion_catalog::table::TableProvider for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
-pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::as_any(&self) -> &dyn core::any::Any
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, _projection: core::option::Option<&'life2 alloc::vec::Vec<usize>>, _filters: &'life3 [datafusion_expr::expr::Expr], _limit: core::option::Option<usize>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::schema(&self) -> arrow_schema::schema::SchemaRef
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
 pub struct iceberg_datafusion::table::IcebergStaticTableProvider
 impl iceberg_datafusion::IcebergStaticTableProvider
+pub fn iceberg_datafusion::IcebergStaticTableProvider::config(&self) -> core::option::Option<&iceberg_datafusion::IcebergCatalogConfig>
+pub fn iceberg_datafusion::IcebergStaticTableProvider::snapshot_id(&self) -> core::option::Option<i64>
+pub fn iceberg_datafusion::IcebergStaticTableProvider::table_ident(&self) -> &iceberg::catalog::TableIdent
 pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table(table: iceberg::table::Table) -> iceberg::error::Result<Self>
 pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table_snapshot(table: iceberg::table::Table, snapshot_id: i64) -> iceberg::error::Result<Self>
+pub fn iceberg_datafusion::IcebergStaticTableProvider::with_catalog_config(self, config: iceberg_datafusion::IcebergCatalogConfig) -> Self
 impl core::clone::Clone for iceberg_datafusion::IcebergStaticTableProvider
 pub fn iceberg_datafusion::IcebergStaticTableProvider::clone(&self) -> iceberg_datafusion::IcebergStaticTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergStaticTableProvider
@@ -183,10 +182,8 @@ pub fn iceberg_datafusion::IcebergStaticTableProvider::table_type(&self) -> data
 pub struct iceberg_datafusion::table::IcebergTableProvider
 impl iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::config(&self) -> core::option::Option<&iceberg_datafusion::IcebergCatalogConfig>
-pub fn iceberg_datafusion::IcebergTableProvider::snapshot_id(&self) -> core::option::Option<i64>
 pub fn iceberg_datafusion::IcebergTableProvider::table_ident(&self) -> &iceberg::catalog::TableIdent
 pub async fn iceberg_datafusion::IcebergTableProvider::try_new_with_config(catalog: alloc::sync::Arc<dyn iceberg::catalog::Catalog>, config: iceberg_datafusion::IcebergCatalogConfig, namespace: iceberg::catalog::NamespaceIdent, name: impl core::convert::Into<alloc::string::String>) -> iceberg::error::Result<Self>
-pub async fn iceberg_datafusion::IcebergTableProvider::with_snapshot_id(self, snapshot_id: core::option::Option<i64>) -> iceberg::error::Result<Self>
 impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider
@@ -246,14 +243,17 @@ pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::clone(&
 impl core::fmt::Debug for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl datafusion_catalog::table::TableProvider for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
-pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::as_any(&self) -> &dyn core::any::Any
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, _projection: core::option::Option<&'life2 alloc::vec::Vec<usize>>, _filters: &'life3 [datafusion_expr::expr::Expr], _limit: core::option::Option<usize>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::schema(&self) -> arrow_schema::schema::SchemaRef
 pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
 pub struct iceberg_datafusion::IcebergStaticTableProvider
 impl iceberg_datafusion::IcebergStaticTableProvider
+pub fn iceberg_datafusion::IcebergStaticTableProvider::config(&self) -> core::option::Option<&iceberg_datafusion::IcebergCatalogConfig>
+pub fn iceberg_datafusion::IcebergStaticTableProvider::snapshot_id(&self) -> core::option::Option<i64>
+pub fn iceberg_datafusion::IcebergStaticTableProvider::table_ident(&self) -> &iceberg::catalog::TableIdent
 pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table(table: iceberg::table::Table) -> iceberg::error::Result<Self>
 pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table_snapshot(table: iceberg::table::Table, snapshot_id: i64) -> iceberg::error::Result<Self>
+pub fn iceberg_datafusion::IcebergStaticTableProvider::with_catalog_config(self, config: iceberg_datafusion::IcebergCatalogConfig) -> Self
 impl core::clone::Clone for iceberg_datafusion::IcebergStaticTableProvider
 pub fn iceberg_datafusion::IcebergStaticTableProvider::clone(&self) -> iceberg_datafusion::IcebergStaticTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergStaticTableProvider
@@ -267,10 +267,8 @@ pub fn iceberg_datafusion::IcebergStaticTableProvider::table_type(&self) -> data
 pub struct iceberg_datafusion::IcebergTableProvider
 impl iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::config(&self) -> core::option::Option<&iceberg_datafusion::IcebergCatalogConfig>
-pub fn iceberg_datafusion::IcebergTableProvider::snapshot_id(&self) -> core::option::Option<i64>
 pub fn iceberg_datafusion::IcebergTableProvider::table_ident(&self) -> &iceberg::catalog::TableIdent
 pub async fn iceberg_datafusion::IcebergTableProvider::try_new_with_config(catalog: alloc::sync::Arc<dyn iceberg::catalog::Catalog>, config: iceberg_datafusion::IcebergCatalogConfig, namespace: iceberg::catalog::NamespaceIdent, name: impl core::convert::Into<alloc::string::String>) -> iceberg::error::Result<Self>
-pub async fn iceberg_datafusion::IcebergTableProvider::with_snapshot_id(self, snapshot_id: core::option::Option<i64>) -> iceberg::error::Result<Self>
 impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider

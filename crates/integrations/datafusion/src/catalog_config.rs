@@ -17,15 +17,11 @@
 
 use std::collections::HashMap;
 
-/// A serializable description of the catalog (and storage) that backs an
-/// [`IcebergTableProvider`](crate::table::IcebergTableProvider).
+/// A serializable description of the catalog and storage that backs a table.
 ///
-/// This is the minimal, self-contained handle needed to *reconstruct* a catalog
-/// and its associated `FileIO` on a remote node. It deliberately holds only
-/// plain data (no live connections) so that distributed query engines such as
-/// Ballista can serialize it, ship it to executors, and rebuild the catalog
-/// there via a catalog loader (e.g. `iceberg-catalog-loader`) and the storage
-/// via `FileIOBuilder::with_props`.
+/// Holds only plain data — no live connections — so a distributed query engine
+/// can serialize it, ship it to a worker, and rebuild the catalog there via a
+/// catalog loader and the storage via `FileIOBuilder::with_props`.
 ///
 /// The `props` map carries both the catalog connection properties (e.g. the
 /// REST catalog URI) and the storage/`FileIO` properties (e.g. S3 endpoint and

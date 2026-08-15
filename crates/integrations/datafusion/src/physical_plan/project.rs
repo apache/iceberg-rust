@@ -100,9 +100,9 @@ pub fn project_with_partition(
 /// `PhysicalExpr` that computes Iceberg partition values for each input row.
 ///
 /// Alongside the live (non-serializable) [`PartitionValueCalculator`], it retains
-/// the [`PartitionSpec`] and table schema it was built from. A distributed engine
-/// can serialize those two — both are self-contained iceberg spec types — and
-/// rebuild an equivalent expression on a remote node via [`PartitionExpr::try_new`].
+/// the [`PartitionSpec`] and table schema it was built from. Both are
+/// self-contained spec types, so a distributed engine can serialize them and
+/// rebuild an equivalent expression with [`Self::try_new`].
 #[derive(Debug, Clone)]
 pub struct PartitionExpr {
     calculator: Arc<PartitionValueCalculator>,

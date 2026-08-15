@@ -47,9 +47,8 @@ pub struct IcebergCommitExec {
     schema: ArrowSchemaRef,
     count_schema: ArrowSchemaRef,
     plan_properties: Arc<PlanProperties>,
-    /// Optional serializable catalog/storage config, populated when this node is
-    /// built through a config-backed provider so it can be reconstructed on a
-    /// remote node by a distributed engine.
+    /// Set when built through a config-backed provider, so a distributed engine
+    /// can rebuild this node on a worker.
     catalog_config: Option<crate::IcebergCatalogConfig>,
 }
 
@@ -75,9 +74,8 @@ impl IcebergCommitExec {
         }
     }
 
-    /// Attaches a serializable catalog/storage config to this node so that a
-    /// distributed engine can reconstruct it (including the catalog) on a remote
-    /// node.
+    /// Attaches the config, so a distributed engine can rebuild this node and
+    /// its catalog on a worker.
     pub fn with_catalog_config(
         mut self,
         catalog_config: Option<crate::IcebergCatalogConfig>,

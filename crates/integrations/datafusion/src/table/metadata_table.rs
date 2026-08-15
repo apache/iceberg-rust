@@ -40,10 +40,8 @@ use crate::to_datafusion_error;
 pub struct IcebergMetadataTableProvider {
     pub(crate) table: Table,
     pub(crate) r#type: MetadataTableType,
-    /// Optional serializable catalog/storage config, populated when this provider
-    /// is built through a config-backed table provider so that a distributed
-    /// engine can reconstruct it (reload the table from the catalog) on a remote
-    /// node.
+    /// Set when built through a config-backed table provider, so a distributed
+    /// engine can reload the table and rebuild this provider on a worker.
     catalog_config: Option<crate::IcebergCatalogConfig>,
 }
 
@@ -57,8 +55,8 @@ impl IcebergMetadataTableProvider {
         }
     }
 
-    /// Attaches a serializable catalog/storage config so that a distributed engine
-    /// can reconstruct this provider on a remote node.
+    /// Attaches the config, so a distributed engine can rebuild this provider on
+    /// a worker.
     pub fn with_catalog_config(
         mut self,
         catalog_config: Option<crate::IcebergCatalogConfig>,
