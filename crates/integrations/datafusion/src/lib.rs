@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod catalog_provider;
-pub use catalog_provider::*;
-
 mod error;
 pub use error::*;
 
+mod catalog_provider;
+pub use catalog_provider::*;
 pub mod physical_plan;
 mod schema_provider;
 pub mod table;
@@ -28,3 +27,23 @@ pub use table::table_provider_factory::IcebergTableProviderFactory;
 pub use table::*;
 
 pub(crate) mod task_writer;
+
+use std::fmt;
+
+use datafusion::catalog::Session as DFSession;
+use datafusion::error::Result as DFResult;
+use iceberg::SessionContext;
+
+/// Resolves an Iceberg [`SessionContext`] from a DataFusion session.
+///
+/// The DataFusion integration calls the resolver once while planning each
+/// session-aware scan or insert. The returned context is bound to that
+/// operation and, for inserts, is retained through transaction commit.
+/// Implementations should therefore return a stable Iceberg session identity
+/// for repeated operations from the same DataFusion session.
+pub trait SessionContextResolver: fmt::Debug + Send + Sync {
+    /// Returns the Iceberg context associated with `session`.
+    ///
+    /// Returning an error aborts planning before the catalog is accessed.
+    fn resolve(&self, session: &dyn DFSession) -> DFResult<SessionContext>;
+}
