@@ -48,7 +48,7 @@ use iceberg::table::Table;
 use iceberg::{Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
 
-use crate::catalog_access::{CatalogAccess, SessionBoundCatalog};
+use crate::catalog_access::CatalogAccess;
 use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::project::project_with_partition;
@@ -190,17 +190,7 @@ impl TableProvider for IcebergTableProvider {
             )));
         }
 
-        let catalog = match &self.catalog {
-            CatalogAccess::Direct(catalog) => Arc::clone(catalog),
-            CatalogAccess::SessionAware {
-                catalog,
-                resolver: session_context_resolver,
-                fallback_context: _,
-            } => {
-                let context = session_context_resolver.resolve(state)?;
-                Arc::new(SessionBoundCatalog::new(context, Arc::clone(catalog)))
-            }
-        };
+        let catalog = self.catalog.with_session(state)?;
 
         // Load fresh table metadata from catalog
         let table = catalog
