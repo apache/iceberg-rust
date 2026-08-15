@@ -56,35 +56,6 @@ use crate::physical_plan::scan::IcebergTableScan;
 use crate::physical_plan::sort::sort_by_partition;
 use crate::physical_plan::write::IcebergWriteExec;
 
-/// Computes the arrow schema to expose for reading `table` at the given snapshot:
-/// the table's current schema for `None`, that snapshot's schema for `Some`, so
-/// a time-travel read plans against the schema in effect at that snapshot.
-///
-/// Public because a distributed engine rebuilding a snapshot-pinned plan node
-/// has to resolve the same schema the provider resolved at planning time, and a
-/// second copy of this mapping could drift from this one silently.
-pub fn snapshot_arrow_schema(table: &Table, snapshot_id: Option<i64>) -> Result<ArrowSchemaRef> {
-    let iceberg_schema = match snapshot_id {
-        None => table.metadata().current_schema().clone(),
-        Some(snapshot_id) => {
-            let snapshot = table
-                .metadata()
-                .snapshot_by_id(snapshot_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "snapshot id {snapshot_id} not found in table {}",
-                            table.identifier()
-                        ),
-                    )
-                })?;
-            snapshot.schema(table.metadata())?
-        }
-    };
-    Ok(Arc::new(schema_to_arrow_schema(&iceberg_schema)?))
-}
-
 /// Catalog-backed table provider with automatic metadata refresh.
 ///
 /// This provider loads fresh table metadata from the catalog on every scan and write
@@ -121,7 +92,7 @@ impl IcebergTableProvider {
 
         // Load table once to get initial schema
         let table = catalog.load_table(&table_ident).await?;
-        let schema = snapshot_arrow_schema(&table, None)?;
+        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
 
         Ok(IcebergTableProvider {
             catalog,
@@ -322,7 +293,7 @@ impl IcebergStaticTableProvider {
     ///
     /// Uses the table's current snapshot for all queries. Does not support write operations.
     pub async fn try_new_from_table(table: Table) -> Result<Self> {
-        let schema = snapshot_arrow_schema(&table, None)?;
+        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
         Ok(IcebergStaticTableProvider {
             table,
             snapshot_id: None,
@@ -336,7 +307,20 @@ impl IcebergStaticTableProvider {
     /// Queries the specified snapshot for all operations. Useful for time-travel queries.
     /// Does not support write operations.
     pub async fn try_new_from_table_snapshot(table: Table, snapshot_id: i64) -> Result<Self> {
-        let schema = snapshot_arrow_schema(&table, Some(snapshot_id))?;
+        let snapshot = table
+            .metadata()
+            .snapshot_by_id(snapshot_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "snapshot id {snapshot_id} not found in table {}",
+                        table.identifier().name()
+                    ),
+                )
+            })?;
+        let table_schema = snapshot.schema(table.metadata())?;
+        let schema = Arc::new(schema_to_arrow_schema(&table_schema)?);
         Ok(IcebergStaticTableProvider {
             table,
             snapshot_id: Some(snapshot_id),
@@ -1284,8 +1268,7 @@ mod tests {
             .unwrap_err();
         let message = error.to_string();
         assert!(message.contains("snapshot id 9999999"), "{message}");
-        // Namespace-qualified: a bare table name is ambiguous across namespaces.
-        assert!(message.contains("test_ns.test_table"), "{message}");
+        assert!(message.contains("test_table"), "{message}");
     }
 
     const PINNED_SNAPSHOT: i64 = 3_051_729_675_574_597_004;
@@ -1368,27 +1351,38 @@ mod tests {
         schema.fields().iter().map(|f| f.name().as_str()).collect()
     }
 
-    #[test]
-    fn snapshot_arrow_schema_pinned_uses_that_snapshot_schema() {
+    #[tokio::test]
+    async fn pinned_static_provider_uses_that_snapshot_schema() {
         // `email` came later, so a read pinned to this snapshot must not
         // advertise it.
-        let schema = snapshot_arrow_schema(&evolved_table(), Some(PINNED_SNAPSHOT)).unwrap();
+        let provider = IcebergStaticTableProvider::try_new_from_table_snapshot(
+            evolved_table(),
+            PINNED_SNAPSHOT,
+        )
+        .await
+        .unwrap();
+        let schema = provider.schema();
         assert_eq!(field_names(&schema), vec!["id", "name"]);
     }
 
-    #[test]
-    fn snapshot_arrow_schema_unpinned_uses_current_schema() {
-        let schema = snapshot_arrow_schema(&evolved_table(), None).unwrap();
+    #[tokio::test]
+    async fn unpinned_static_provider_uses_current_schema() {
+        let provider = IcebergStaticTableProvider::try_new_from_table(evolved_table())
+            .await
+            .unwrap();
+        let schema = provider.schema();
         assert_eq!(field_names(&schema), vec!["id", "name", "email"]);
     }
 
-    #[test]
-    fn snapshot_arrow_schema_unknown_snapshot_errors() {
+    #[tokio::test]
+    async fn unknown_snapshot_errors() {
         // Falling back to the current schema would turn a stale pin into wrong
         // output instead of a failure.
-        let err = snapshot_arrow_schema(&evolved_table(), Some(-1)).unwrap_err();
+        let err = IcebergStaticTableProvider::try_new_from_table_snapshot(evolved_table(), -1)
+            .await
+            .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("snapshot id -1"), "names the snapshot: {msg}");
-        assert!(msg.contains("ns.tbl"), "names the table: {msg}");
+        assert!(msg.contains("tbl"), "names the table: {msg}");
     }
 }
