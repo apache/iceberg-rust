@@ -48,7 +48,7 @@ use iceberg::table::Table;
 use iceberg::{Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
 
-use crate::catalog_access::CatalogAccess;
+use crate::catalog_access::{CatalogAccess, SessionBoundCatalog};
 use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::project::project_with_partition;
@@ -190,19 +190,23 @@ impl TableProvider for IcebergTableProvider {
             )));
         }
 
-        // Load fresh table metadata from catalog
-        let table = match &self.catalog {
-            CatalogAccess::Direct(catalog) => catalog.load_table(&self.table_ident).await,
+        let catalog = match &self.catalog {
+            CatalogAccess::Direct(catalog) => Arc::clone(catalog),
             CatalogAccess::SessionAware {
                 catalog,
                 resolver: session_context_resolver,
                 fallback_context: _,
             } => {
                 let context = session_context_resolver.resolve(state)?;
-                catalog.load_table(&context, &self.table_ident).await
+                Arc::new(SessionBoundCatalog::new(context, Arc::clone(catalog)))
             }
-        }
-        .map_err(to_datafusion_error)?;
+        };
+
+        // Load fresh table metadata from catalog
+        let table = catalog
+            .load_table(&self.table_ident)
+            .await
+            .map_err(to_datafusion_error)?;
 
         let partition_spec = table.metadata().default_partition_spec();
 
@@ -260,7 +264,7 @@ impl TableProvider for IcebergTableProvider {
 
         Ok(Arc::new(IcebergCommitExec::new(
             table,
-            self.catalog.clone(),
+            catalog,
             coalesce_partitions,
             self.schema.clone(),
         )))
