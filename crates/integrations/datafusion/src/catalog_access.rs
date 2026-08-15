@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::catalog::Session;
+use datafusion::error::Result as DFResult;
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Namespace, NamespaceIdent, Result, SessionCatalog, SessionContext, TableCommit,
@@ -48,13 +50,29 @@ pub(crate) enum CatalogAccess {
     },
 }
 
+impl CatalogAccess {
+    pub(crate) fn with_session(&self, session: &dyn Session) -> DFResult<Arc<dyn Catalog>> {
+        match self {
+            CatalogAccess::Direct(catalog) => Ok(Arc::clone(catalog)),
+            CatalogAccess::SessionAware {
+                catalog,
+                resolver: session_context_resolver,
+                ..
+            } => Ok(Arc::new(SessionBoundCatalog::new(
+                session_context_resolver.resolve(session)?,
+                Arc::clone(catalog),
+            ))),
+        }
+    }
+}
+
 /// Adapts a [`SessionCatalog`] to [`Catalog`] by binding one [`SessionContext`].
 ///
 /// Every catalog operation is forwarded to the inner session-aware catalog
 /// with the same context. The binding is fixed for the lifetime of this
 /// adapter; create another adapter to use a different session context.
 #[derive(Debug)]
-pub(crate) struct SessionBoundCatalog {
+struct SessionBoundCatalog {
     context: SessionContext,
     inner: Arc<dyn SessionCatalog>,
 }
@@ -64,7 +82,7 @@ impl SessionBoundCatalog {
     ///
     /// The inner catalog receives this context for every operation performed
     /// through the returned adapter.
-    pub fn new(context: SessionContext, inner: Arc<dyn SessionCatalog>) -> Self {
+    fn new(context: SessionContext, inner: Arc<dyn SessionCatalog>) -> Self {
         Self { context, inner }
     }
 }
