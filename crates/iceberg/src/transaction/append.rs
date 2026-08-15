@@ -170,8 +170,8 @@ mod tests {
         Struct, TableMetadata,
     };
     use crate::table::Table;
-    use crate::test_utils::test_runtime;
-    use crate::transaction::tests::{make_encrypted_table, make_v2_minimal_table};
+    use crate::test_utils::{make_encrypted_table, test_runtime};
+    use crate::transaction::tests::make_v2_minimal_table;
     use crate::transaction::{Transaction, TransactionAction};
     use crate::{TableIdent, TableRequirement, TableUpdate};
 

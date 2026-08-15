@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use iceberg::io::{
     GCS_ALLOW_ANONYMOUS, GCS_CREDENTIALS_JSON, GCS_DISABLE_CONFIG_LOAD, GCS_DISABLE_VM_METADATA,
-    GCS_NO_AUTH, GCS_SERVICE_PATH, GCS_TOKEN,
+    GCS_NO_AUTH, GCS_SERVICE_HOST, GCS_TOKEN,
 };
 use iceberg::{Error, ErrorKind, Result};
 use opendal::Operator;
@@ -41,7 +41,7 @@ pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConf
         cfg.token = Some(token);
     }
 
-    if let Some(endpoint) = m.remove(GCS_SERVICE_PATH) {
+    if let Some(endpoint) = m.remove(GCS_SERVICE_HOST) {
         cfg.endpoint = Some(endpoint);
     }
 
@@ -82,7 +82,5 @@ pub(crate) fn gcs_config_build(cfg: &GcsConfig, path: &str) -> Result<Operator> 
 
     let mut cfg = cfg.clone();
     cfg.bucket = bucket.to_string();
-    Ok(Operator::from_config(cfg)
-        .map_err(from_opendal_error)?
-        .finish())
+    Operator::from_config(cfg).map_err(from_opendal_error)
 }

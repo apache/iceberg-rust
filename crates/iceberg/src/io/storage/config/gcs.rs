@@ -30,7 +30,7 @@ use crate::io::is_truthy;
 /// Google Cloud Project ID.
 pub const GCS_PROJECT_ID: &str = "gcs.project-id";
 /// Google Cloud Storage endpoint.
-pub const GCS_SERVICE_PATH: &str = "gcs.service.path";
+pub const GCS_SERVICE_HOST: &str = "gcs.service.host";
 /// Google Cloud user project.
 pub const GCS_USER_PROJECT: &str = "gcs.user-project";
 /// Allow unauthenticated requests.
@@ -92,7 +92,7 @@ impl TryFrom<&StorageConfig> for GcsConfig {
         if let Some(project_id) = props.get(GCS_PROJECT_ID) {
             cfg.project_id = Some(project_id.clone());
         }
-        if let Some(endpoint) = props.get(GCS_SERVICE_PATH) {
+        if let Some(endpoint) = props.get(GCS_SERVICE_HOST) {
             cfg.endpoint = Some(endpoint.clone());
         }
         if let Some(user_project) = props.get(GCS_USER_PROJECT) {
@@ -154,7 +154,7 @@ mod tests {
         let storage_config = StorageConfig::new()
             .with_prop(GCS_PROJECT_ID, "my-project")
             .with_prop(GCS_CREDENTIALS_JSON, "base64-creds")
-            .with_prop(GCS_SERVICE_PATH, "http://localhost:4443");
+            .with_prop(GCS_SERVICE_HOST, "http://localhost:4443");
 
         let gcs_config = GcsConfig::try_from(&storage_config).unwrap();
 
