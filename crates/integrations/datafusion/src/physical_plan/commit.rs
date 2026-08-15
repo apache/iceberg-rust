@@ -51,7 +51,7 @@ pub(crate) struct IcebergCommitExec {
 }
 
 impl IcebergCommitExec {
-    pub fn new(
+    pub(crate) fn new(
         table: Table,
         catalog: Arc<dyn Catalog>,
         input: Arc<dyn ExecutionPlan>,
