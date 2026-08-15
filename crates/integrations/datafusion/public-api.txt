@@ -29,6 +29,29 @@ pub fn iceberg_datafusion::physical_plan::IcebergTableScan::execute(&self, _part
 pub fn iceberg_datafusion::physical_plan::IcebergTableScan::name(&self) -> &str
 pub fn iceberg_datafusion::physical_plan::IcebergTableScan::properties(&self) -> &alloc::sync::Arc<datafusion_physical_plan::execution_plan::PlanProperties>
 pub fn iceberg_datafusion::physical_plan::IcebergTableScan::with_new_children(self: alloc::sync::Arc<Self>, _children: alloc::vec::Vec<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>) -> datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>
+pub struct iceberg_datafusion::physical_plan::PartitionExpr
+impl iceberg_datafusion::physical_plan::PartitionExpr
+pub fn iceberg_datafusion::physical_plan::PartitionExpr::partition_spec(&self) -> &alloc::sync::Arc<iceberg::spec::partition::PartitionSpec>
+pub fn iceberg_datafusion::physical_plan::PartitionExpr::table_schema(&self) -> &iceberg::spec::schema::SchemaRef
+pub fn iceberg_datafusion::physical_plan::PartitionExpr::try_new(partition_spec: alloc::sync::Arc<iceberg::spec::partition::PartitionSpec>, table_schema: iceberg::spec::schema::SchemaRef) -> datafusion_common::error::Result<Self>
+impl core::clone::Clone for iceberg_datafusion::physical_plan::PartitionExpr
+pub fn iceberg_datafusion::physical_plan::PartitionExpr::clone(&self) -> iceberg_datafusion::physical_plan::PartitionExpr
+impl core::cmp::Eq for iceberg_datafusion::physical_plan::PartitionExpr
+impl core::cmp::PartialEq for iceberg_datafusion::physical_plan::PartitionExpr
+pub fn iceberg_datafusion::physical_plan::PartitionExpr::eq(&self, other: &Self) -> bool
+impl core::fmt::Debug for iceberg_datafusion::physical_plan::PartitionExpr
+pub fn iceberg_datafusion::physical_plan::PartitionExpr::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg_datafusion::physical_plan::PartitionExpr
+pub fn iceberg_datafusion::physical_plan::PartitionExpr::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for iceberg_datafusion::physical_plan::PartitionExpr
+pub fn iceberg_datafusion::physical_plan::PartitionExpr::hash<H: core::hash::Hasher>(&self, state: &mut H)
+impl datafusion_physical_expr_common::physical_expr::PhysicalExpr for iceberg_datafusion::physical_plan::PartitionExpr
+pub fn iceberg_datafusion::physical_plan::PartitionExpr::children(&self) -> alloc::vec::Vec<&alloc::sync::Arc<dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr>>
+pub fn iceberg_datafusion::physical_plan::PartitionExpr::data_type(&self, _input_schema: &arrow_schema::schema::Schema) -> datafusion_common::error::Result<arrow_schema::datatype::DataType>
+pub fn iceberg_datafusion::physical_plan::PartitionExpr::evaluate(&self, batch: &arrow_array::record_batch::RecordBatch) -> datafusion_common::error::Result<datafusion_expr_common::columnar_value::ColumnarValue>
+pub fn iceberg_datafusion::physical_plan::PartitionExpr::fmt_sql(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn iceberg_datafusion::physical_plan::PartitionExpr::nullable(&self, _input_schema: &arrow_schema::schema::Schema) -> datafusion_common::error::Result<bool>
+pub fn iceberg_datafusion::physical_plan::PartitionExpr::with_new_children(self: alloc::sync::Arc<Self>, _children: alloc::vec::Vec<alloc::sync::Arc<dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr>>) -> datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr>>
 pub fn iceberg_datafusion::physical_plan::convert_filters_to_predicate(filters: &[datafusion_expr::expr::Expr]) -> core::option::Option<iceberg::expr::predicate::Predicate>
 pub fn iceberg_datafusion::physical_plan::project_with_partition(input: alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>, table: &iceberg::table::Table) -> datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>
 pub mod iceberg_datafusion::table
