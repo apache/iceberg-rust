@@ -22,7 +22,7 @@ use datafusion::catalog::{CatalogProvider, SchemaProvider};
 use futures::future::try_join_all;
 use iceberg::{Catalog, NamespaceIdent, Result};
 
-use crate::schema::IcebergSchemaProvider;
+use crate::schema_provider::IcebergSchemaProvider;
 
 /// Provides an interface to manage and access multiple schemas
 /// within an Iceberg [`Catalog`].
