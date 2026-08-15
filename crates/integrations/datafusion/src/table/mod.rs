@@ -45,9 +45,10 @@ use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::inspect::MetadataTableType;
 use iceberg::spec::TableProperties;
 use iceberg::table::Table;
-use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
+use iceberg::{Error, ErrorKind, NamespaceIdent, Result, SessionContext, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
 
+use crate::catalog_access::CatalogAccess;
 use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::project::project_with_partition;
@@ -67,7 +68,7 @@ use crate::physical_plan::write::IcebergWriteExec;
 #[derive(Debug, Clone)]
 pub struct IcebergTableProvider {
     /// The catalog that manages this table
-    catalog: Arc<dyn Catalog>,
+    catalog: CatalogAccess,
     /// The table identifier (namespace + name)
     table_ident: TableIdent,
     /// A reference-counted arrow `Schema` (cached at construction)
@@ -80,14 +81,20 @@ impl IcebergTableProvider {
     /// Loads the table once to get the initial schema, then stores the catalog
     /// reference for future metadata refreshes on each operation.
     pub(crate) async fn try_new(
-        catalog: Arc<dyn Catalog>,
+        catalog: CatalogAccess,
         namespace: NamespaceIdent,
         name: impl Into<String>,
     ) -> Result<Self> {
         let table_ident = TableIdent::new(namespace, name.into());
 
         // Load table once to get initial schema
-        let table = catalog.load_table(&table_ident).await?;
+        let table = match &catalog {
+            CatalogAccess::Direct(catalog) => catalog.load_table(&table_ident).await?,
+            CatalogAccess::SessionAware(session_catalog, _) => {
+                let context = SessionContext::empty();
+                session_catalog.load_table(&context, &table_ident).await?
+            }
+        };
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
 
         Ok(IcebergTableProvider {
@@ -102,7 +109,15 @@ impl IcebergTableProvider {
         r#type: MetadataTableType,
     ) -> Result<IcebergMetadataTableProvider> {
         // Load fresh table metadata for metadata table access
-        let table = self.catalog.load_table(&self.table_ident).await?;
+        let table = match &self.catalog {
+            CatalogAccess::Direct(catalog) => catalog.load_table(&self.table_ident).await?,
+            CatalogAccess::SessionAware(session_catalog, _) => {
+                let context = SessionContext::empty();
+                session_catalog
+                    .load_table(&context, &self.table_ident)
+                    .await?
+            }
+        };
         Ok(IcebergMetadataTableProvider { table, r#type })
     }
 }
@@ -119,17 +134,22 @@ impl TableProvider for IcebergTableProvider {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         // Load fresh table metadata from catalog
-        let table = self
-            .catalog
-            .load_table(&self.table_ident)
-            .await
-            .map_err(to_datafusion_error)?;
+        let table = match &self.catalog {
+            CatalogAccess::Direct(catalog) => catalog.load_table(&self.table_ident).await,
+            CatalogAccess::SessionAware(session_catalog, session_context_resolver) => {
+                let context = session_context_resolver.resolve(state)?;
+                session_catalog
+                    .load_table(&context, &self.table_ident)
+                    .await
+            }
+        }
+        .map_err(to_datafusion_error)?;
 
         // Create scan with fresh metadata (always use current snapshot)
         Ok(Arc::new(IcebergTableScan::new(
@@ -163,11 +183,16 @@ impl TableProvider for IcebergTableProvider {
         }
 
         // Load fresh table metadata from catalog
-        let table = self
-            .catalog
-            .load_table(&self.table_ident)
-            .await
-            .map_err(to_datafusion_error)?;
+        let table = match &self.catalog {
+            CatalogAccess::Direct(catalog) => catalog.load_table(&self.table_ident).await,
+            CatalogAccess::SessionAware(session_catalog, session_context_resolver) => {
+                let context = session_context_resolver.resolve(state)?;
+                session_catalog
+                    .load_table(&context, &self.table_ident)
+                    .await
+            }
+        }
+        .map_err(to_datafusion_error)?;
 
         let partition_spec = table.metadata().default_partition_spec();
 
@@ -374,7 +399,7 @@ mod tests {
         static_table.into_table()
     }
 
-    async fn get_test_catalog_and_table() -> (Arc<dyn Catalog>, NamespaceIdent, String, TempDir) {
+    async fn get_test_catalog_and_table() -> (CatalogAccess, NamespaceIdent, String, TempDir) {
         let temp_dir = TempDir::new().unwrap();
         let warehouse_path = temp_dir.path().to_str().unwrap().to_string();
 
@@ -414,7 +439,7 @@ mod tests {
             .unwrap();
 
         (
-            Arc::new(catalog),
+            CatalogAccess::Direct(Arc::new(catalog)),
             namespace,
             "test_table".to_string(),
             temp_dir,
@@ -625,7 +650,7 @@ mod tests {
 
     async fn get_partitioned_test_catalog_and_table(
         fanout_enabled: Option<bool>,
-    ) -> (Arc<dyn Catalog>, NamespaceIdent, String, TempDir) {
+    ) -> (CatalogAccess, NamespaceIdent, String, TempDir) {
         use iceberg::spec::{Transform, UnboundPartitionSpec};
 
         let temp_dir = TempDir::new().unwrap();
@@ -682,7 +707,7 @@ mod tests {
             .unwrap();
 
         (
-            Arc::new(catalog),
+            CatalogAccess::Direct(Arc::new(catalog)),
             namespace,
             "partitioned_table".to_string(),
             temp_dir,

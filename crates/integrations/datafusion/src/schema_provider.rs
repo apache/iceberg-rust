@@ -23,23 +23,27 @@ use datafusion::catalog::SchemaProvider;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result as DFResult};
 use datafusion::execution::TaskContext;
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::SessionContext as DFSessionContext;
 use futures::StreamExt;
 use futures::future::try_join_all;
 use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 use iceberg::inspect::MetadataTableType;
 use iceberg::spec::FormatVersion;
-use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableCreation, TableIdent};
+use iceberg::{
+    Error, ErrorKind, NamespaceIdent, Result, SessionContext as IcebergSessionContext,
+    TableCreation, TableIdent,
+};
 
+use crate::catalog_access::CatalogAccess;
 use crate::table::IcebergTableProvider;
 use crate::to_datafusion_error;
 
-/// Represents a [`SchemaProvider`] for the Iceberg [`Catalog`], managing
-/// access to table providers within a specific namespace.
+/// Represents a [`SchemaProvider`] for an Iceberg catalog, managing table
+/// providers within a specific namespace.
 #[derive(Debug)]
 pub(crate) struct IcebergSchemaProvider {
-    /// Reference to the Iceberg catalog
-    catalog: Arc<dyn Catalog>,
+    /// Access policy for the Iceberg catalog.
+    catalog: CatalogAccess,
     /// The namespace this schema represents
     namespace: NamespaceIdent,
     /// A concurrent map where keys are table names
@@ -52,30 +56,30 @@ pub(crate) struct IcebergSchemaProvider {
 impl IcebergSchemaProvider {
     /// Asynchronously tries to construct a new [`IcebergSchemaProvider`]
     /// using the given client to fetch and initialize table providers for
-    /// the provided namespace in the Iceberg [`Catalog`].
+    /// the provided namespace in the Iceberg [`iceberg::Catalog`].
     ///
-    /// This method retrieves a list of table names
-    /// attempts to create a table provider for each table name, and
-    /// collects these providers into a `HashMap`.
-    pub(crate) async fn try_new(
-        client: Arc<dyn Catalog>,
-        namespace: NamespaceIdent,
-    ) -> Result<Self> {
+    /// This method retrieves a list of table names, attempts to create a table
+    /// provider for each name, and collects the providers into a [`DashMap`].
+    pub(crate) async fn try_new(catalog: CatalogAccess, namespace: NamespaceIdent) -> Result<Self> {
         // TODO:
         // Tables and providers should be cached based on table_name
         // if we have a cache miss; we update our internal cache & check again
         // As of right now; tables might become stale.
-        let table_names: Vec<_> = client
-            .list_tables(&namespace)
-            .await?
-            .iter()
-            .map(|tbl| tbl.name().to_string())
-            .collect();
+        let table_names: Vec<_> = match &catalog {
+            CatalogAccess::Direct(catalog) => catalog.list_tables(&namespace).await?,
+            CatalogAccess::SessionAware(session_catalog, _) => {
+                let context = IcebergSessionContext::empty();
+                session_catalog.list_tables(&context, &namespace).await?
+            }
+        }
+        .iter()
+        .map(|tbl| tbl.name().to_string())
+        .collect();
 
         let providers = try_join_all(
             table_names
                 .iter()
-                .map(|name| IcebergTableProvider::try_new(client.clone(), namespace.clone(), name))
+                .map(|name| IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), name))
                 .collect::<Vec<_>>(),
         )
         .await?;
@@ -86,7 +90,7 @@ impl IcebergSchemaProvider {
         }
 
         Ok(IcebergSchemaProvider {
-            catalog: client,
+            catalog,
             namespace,
             tables,
         })
@@ -186,10 +190,18 @@ impl SchemaProvider for IcebergSchemaProvider {
                     .await
                     .map_err(to_datafusion_error)?;
 
-                catalog
-                    .create_table(&namespace, table_creation)
-                    .await
-                    .map_err(to_datafusion_error)?;
+                match &catalog {
+                    CatalogAccess::Direct(catalog) => {
+                        catalog.create_table(&namespace, table_creation).await
+                    }
+                    CatalogAccess::SessionAware(session_catalog, _) => {
+                        let context = IcebergSessionContext::empty();
+                        session_catalog
+                            .create_table(&context, &namespace, table_creation)
+                            .await
+                    }
+                }
+                .map_err(to_datafusion_error)?;
 
                 // Create a new table provider using the catalog reference
                 let table_provider = IcebergTableProvider::try_new(
@@ -232,10 +244,14 @@ impl SchemaProvider for IcebergSchemaProvider {
                 let table_ident = TableIdent::new(namespace, table_name.clone());
 
                 // Drop the table from the Iceberg catalog
-                catalog
-                    .drop_table(&table_ident)
-                    .await
-                    .map_err(to_datafusion_error)?;
+                match &catalog {
+                    CatalogAccess::Direct(catalog) => catalog.drop_table(&table_ident).await,
+                    CatalogAccess::SessionAware(session_catalog, _) => {
+                        let context = IcebergSessionContext::empty();
+                        session_catalog.drop_table(&context, &table_ident).await
+                    }
+                }
+                .map_err(to_datafusion_error)?;
 
                 // Remove from local cache and return the removed provider
                 let removed = tables
@@ -254,7 +270,7 @@ impl SchemaProvider for IcebergSchemaProvider {
 /// Verifies that a table provider contains no data by scanning with LIMIT 1.
 /// Returns an error if the table has any rows.
 async fn ensure_table_is_empty(table: &Arc<dyn TableProvider>) -> Result<()> {
-    let session_ctx = SessionContext::new();
+    let session_ctx = DFSessionContext::new();
     let exec_plan = table
         .scan(&session_ctx.state(), None, &[], Some(1))
         .await
@@ -317,9 +333,10 @@ mod tests {
             .await
             .unwrap();
 
-        let provider = IcebergSchemaProvider::try_new(Arc::new(catalog), namespace)
-            .await
-            .unwrap();
+        let provider =
+            IcebergSchemaProvider::try_new(CatalogAccess::Direct(Arc::new(catalog)), namespace)
+                .await
+                .unwrap();
 
         (provider, temp_dir)
     }
