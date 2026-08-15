@@ -17,6 +17,7 @@
 
 mod error;
 pub use error::*;
+mod catalog_access;
 
 mod catalog_provider;
 pub use catalog_provider::*;
