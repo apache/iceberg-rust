@@ -45,7 +45,7 @@ use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::inspect::MetadataTableType;
 use iceberg::spec::TableProperties;
 use iceberg::table::Table;
-use iceberg::{Error, ErrorKind, NamespaceIdent, Result, SessionContext, TableIdent};
+use iceberg::{Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
 
 use crate::catalog_access::CatalogAccess;
@@ -59,9 +59,11 @@ use crate::physical_plan::write::IcebergWriteExec;
 
 /// Catalog-backed table provider with automatic metadata refresh.
 ///
-/// This provider loads fresh table metadata from the catalog on every scan and write
-/// operation, ensuring you always see the latest table state. Use this when you need
-/// write operations or want to see the most up-to-date data.
+/// This provider loads fresh table metadata from the catalog on every scan and
+/// write operation, ensuring you always see the latest table state. A
+/// session-aware provider binds the current DataFusion session for those
+/// operations. Initial schema loading and metadata-table lookup do not receive
+/// a DataFusion session and use the provider's shared anonymous context.
 ///
 /// For read-only access to a specific snapshot without catalog overhead, use
 /// [`IcebergStaticTableProvider`] instead.
@@ -90,10 +92,11 @@ impl IcebergTableProvider {
         // Load table once to get initial schema
         let table = match &catalog {
             CatalogAccess::Direct(catalog) => catalog.load_table(&table_ident).await?,
-            CatalogAccess::SessionAware(session_catalog, _) => {
-                let context = SessionContext::empty();
-                session_catalog.load_table(&context, &table_ident).await?
-            }
+            CatalogAccess::SessionAware {
+                catalog,
+                resolver: _,
+                fallback_context,
+            } => catalog.load_table(&fallback_context, &table_ident).await?,
         };
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
 
@@ -111,10 +114,13 @@ impl IcebergTableProvider {
         // Load fresh table metadata for metadata table access
         let table = match &self.catalog {
             CatalogAccess::Direct(catalog) => catalog.load_table(&self.table_ident).await?,
-            CatalogAccess::SessionAware(session_catalog, _) => {
-                let context = SessionContext::empty();
-                session_catalog
-                    .load_table(&context, &self.table_ident)
+            CatalogAccess::SessionAware {
+                catalog,
+                resolver: _,
+                fallback_context,
+            } => {
+                catalog
+                    .load_table(&fallback_context, &self.table_ident)
                     .await?
             }
         };
@@ -142,11 +148,13 @@ impl TableProvider for IcebergTableProvider {
         // Load fresh table metadata from catalog
         let table = match &self.catalog {
             CatalogAccess::Direct(catalog) => catalog.load_table(&self.table_ident).await,
-            CatalogAccess::SessionAware(session_catalog, session_context_resolver) => {
+            CatalogAccess::SessionAware {
+                catalog,
+                resolver: session_context_resolver,
+                fallback_context: _,
+            } => {
                 let context = session_context_resolver.resolve(state)?;
-                session_catalog
-                    .load_table(&context, &self.table_ident)
-                    .await
+                catalog.load_table(&context, &self.table_ident).await
             }
         }
         .map_err(to_datafusion_error)?;
@@ -185,11 +193,13 @@ impl TableProvider for IcebergTableProvider {
         // Load fresh table metadata from catalog
         let table = match &self.catalog {
             CatalogAccess::Direct(catalog) => catalog.load_table(&self.table_ident).await,
-            CatalogAccess::SessionAware(session_catalog, session_context_resolver) => {
+            CatalogAccess::SessionAware {
+                catalog,
+                resolver: session_context_resolver,
+                fallback_context: _,
+            } => {
                 let context = session_context_resolver.resolve(state)?;
-                session_catalog
-                    .load_table(&context, &self.table_ident)
-                    .await
+                catalog.load_table(&context, &self.table_ident).await
             }
         }
         .map_err(to_datafusion_error)?;

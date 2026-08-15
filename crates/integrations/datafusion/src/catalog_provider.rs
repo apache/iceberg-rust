@@ -26,8 +26,8 @@ use crate::SessionContextResolver;
 use crate::catalog_access::CatalogAccess;
 use crate::schema_provider::IcebergSchemaProvider;
 
-/// Provides an interface to manage and access multiple schemas
-/// within an Iceberg [`Catalog`].
+/// Provides a DataFusion interface to schemas in an Iceberg [`Catalog`] or
+/// [`SessionCatalog`].
 ///
 /// Acts as a centralized catalog provider that aggregates
 /// multiple [`SchemaProvider`], each associated with distinct namespaces.
@@ -53,15 +53,24 @@ impl IcebergCatalogProvider {
 
     /// Creates an [`IcebergCatalogProvider`] backed by a [`SessionCatalog`].
     ///
-    /// The [`SessionContextResolver`] derives an Iceberg [`SessionContext`]
-    /// from the current DataFusion session for operations that provide one.
-    /// Initialization and operations without a DataFusion session use
-    /// [`SessionContext::empty`].
+    /// The [`SessionContextResolver`] derives an Iceberg session context for
+    /// scans and inserts. Provider initialization, metadata-table lookup,
+    /// table registration, and table deregistration do not receive a
+    /// DataFusion session; they share one anonymous fallback context instead.
+    ///
+    /// Namespace and table discovery is performed once during construction and
+    /// shared by all DataFusion sessions. Catalogs with session-dependent
+    /// visibility must make the intended discovery set available to the
+    /// anonymous fallback; discovery is not repeated per DataFusion session.
     pub async fn try_new_with_session_catalog(
         catalog: Arc<dyn SessionCatalog>,
         resolver: Arc<dyn SessionContextResolver>,
     ) -> Result<Self> {
-        let session_aware = CatalogAccess::SessionAware(session_catalog, resolver);
+        let session_aware = CatalogAccess::SessionAware {
+            catalog,
+            resolver,
+            fallback_context: SessionContext::empty(),
+        };
         Self::try_new_with_access(session_aware).await
     }
 
@@ -71,11 +80,11 @@ impl IcebergCatalogProvider {
         // As of right now; schemas might become stale.
         let schema_names: Vec<_> = match &catalog {
             CatalogAccess::Direct(catalog) => catalog.list_namespaces(None).await?,
-            CatalogAccess::SessionAware(session_catalog, _) => {
-                session_catalog
-                    .list_namespaces(&SessionContext::empty(), None)
-                    .await?
-            }
+            CatalogAccess::SessionAware {
+                catalog,
+                resolver: _,
+                fallback_context,
+            } => catalog.list_namespaces(&fallback_context, None).await?,
         }
         .iter()
         .flat_map(|ns| ns.as_ref().clone())

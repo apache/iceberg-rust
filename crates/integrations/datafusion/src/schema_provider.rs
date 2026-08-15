@@ -29,10 +29,7 @@ use futures::future::try_join_all;
 use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 use iceberg::inspect::MetadataTableType;
 use iceberg::spec::FormatVersion;
-use iceberg::{
-    Error, ErrorKind, NamespaceIdent, Result, SessionContext as IcebergSessionContext,
-    TableCreation, TableIdent,
-};
+use iceberg::{Error, ErrorKind, NamespaceIdent, Result, TableCreation, TableIdent};
 
 use crate::catalog_access::CatalogAccess;
 use crate::table::IcebergTableProvider;
@@ -67,10 +64,11 @@ impl IcebergSchemaProvider {
         // As of right now; tables might become stale.
         let table_names: Vec<_> = match &catalog {
             CatalogAccess::Direct(catalog) => catalog.list_tables(&namespace).await?,
-            CatalogAccess::SessionAware(session_catalog, _) => {
-                let context = IcebergSessionContext::empty();
-                session_catalog.list_tables(&context, &namespace).await?
-            }
+            CatalogAccess::SessionAware {
+                catalog,
+                resolver: _,
+                fallback_context,
+            } => catalog.list_tables(&fallback_context, &namespace).await?,
         }
         .iter()
         .map(|tbl| tbl.name().to_string())
@@ -194,10 +192,13 @@ impl SchemaProvider for IcebergSchemaProvider {
                     CatalogAccess::Direct(catalog) => {
                         catalog.create_table(&namespace, table_creation).await
                     }
-                    CatalogAccess::SessionAware(session_catalog, _) => {
-                        let context = IcebergSessionContext::empty();
-                        session_catalog
-                            .create_table(&context, &namespace, table_creation)
+                    CatalogAccess::SessionAware {
+                        catalog,
+                        resolver: _,
+                        fallback_context,
+                    } => {
+                        catalog
+                            .create_table(&fallback_context, &namespace, table_creation)
                             .await
                     }
                 }
@@ -246,10 +247,11 @@ impl SchemaProvider for IcebergSchemaProvider {
                 // Drop the table from the Iceberg catalog
                 match &catalog {
                     CatalogAccess::Direct(catalog) => catalog.drop_table(&table_ident).await,
-                    CatalogAccess::SessionAware(session_catalog, _) => {
-                        let context = IcebergSessionContext::empty();
-                        session_catalog.drop_table(&context, &table_ident).await
-                    }
+                    CatalogAccess::SessionAware {
+                        catalog,
+                        resolver: _,
+                        fallback_context,
+                    } => catalog.drop_table(&fallback_context, &table_ident).await,
                 }
                 .map_err(to_datafusion_error)?;
 
