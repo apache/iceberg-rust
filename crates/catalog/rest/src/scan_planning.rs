@@ -864,11 +864,16 @@ impl RestSessionCatalog {
 
     async fn plan_scan(&self, request: ScanPlanningRequest) -> Result<ScanPlanningResult> {
         let ident = request.table_ident.clone();
+        // TableScan always binds the snapshot schema. OpenAPI defaults
+        // use-snapshot-schema to false (current table schema), which would
+        // plan time travel against the wrong schema.
+        let use_snapshot_schema = request.snapshot_id.map(|_| true);
         let resp = self
             .plan_table_scan(&ident, PlanTableScanRequest {
                 snapshot_id: request.snapshot_id,
                 select: request.select.clone().unwrap_or_default(),
                 case_sensitive: Some(request.case_sensitive),
+                use_snapshot_schema,
                 ..Default::default()
             })
             .await?;
@@ -2123,6 +2128,10 @@ mod tests {
         let load = mock_load_table(&mut server).await;
         let plan = server
             .mock("POST", "/v1/namespaces/ns1/tables/test1/plan")
+            .match_body(mockito::Matcher::PartialJson(json!({
+                "snapshot-id": 3497810964824022504i64,
+                "use-snapshot-schema": true
+            })))
             .with_status(200)
             .with_body(
                 json!({
