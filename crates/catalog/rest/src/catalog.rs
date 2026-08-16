@@ -1220,7 +1220,8 @@ impl SessionCatalog for RestSessionCatalog {
             .identifier(table_ident.clone())
             .file_io(file_io)
             .metadata(response.metadata)
-            .runtime(self.runtime.clone());
+            .runtime(self.runtime.clone())
+            .scan_planner(Arc::new(self.clone_uninitialized()));
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
         }
@@ -1285,7 +1286,8 @@ impl SessionCatalog for RestSessionCatalog {
             .identifier(table_ident.clone())
             .file_io(file_io)
             .metadata(response.metadata)
-            .runtime(self.runtime.clone());
+            .runtime(self.runtime.clone())
+            .scan_planner(Arc::new(self.clone_uninitialized()));
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
         }
@@ -1428,7 +1430,8 @@ impl SessionCatalog for RestSessionCatalog {
             .file_io(file_io)
             .metadata(response.metadata)
             .metadata_location(metadata_location.clone())
-            .runtime(self.runtime.clone());
+            .runtime(self.runtime.clone())
+            .scan_planner(Arc::new(self.clone_uninitialized()));
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
         }
@@ -1509,7 +1512,8 @@ impl SessionCatalog for RestSessionCatalog {
             .file_io(file_io)
             .metadata(response.metadata)
             .metadata_location(response.metadata_location)
-            .runtime(self.runtime.clone());
+            .runtime(self.runtime.clone())
+            .scan_planner(Arc::new(self.clone_uninitialized()));
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
         }

@@ -1271,6 +1271,21 @@ pub const iceberg::puffin::APACHE_DATASKETCHES_THETA_V1: &str
 pub const iceberg::puffin::CREATED_BY_PROPERTY: &str
 pub const iceberg::puffin::DELETION_VECTOR_V1: &str
 pub mod iceberg::scan
+pub enum iceberg::scan::ScanPlanningMode
+pub iceberg::scan::ScanPlanningMode::Auto
+pub iceberg::scan::ScanPlanningMode::Local
+pub iceberg::scan::ScanPlanningMode::Remote
+impl core::clone::Clone for iceberg::scan::ScanPlanningMode
+pub fn iceberg::scan::ScanPlanningMode::clone(&self) -> iceberg::scan::ScanPlanningMode
+impl core::cmp::Eq for iceberg::scan::ScanPlanningMode
+impl core::cmp::PartialEq for iceberg::scan::ScanPlanningMode
+pub fn iceberg::scan::ScanPlanningMode::eq(&self, other: &iceberg::scan::ScanPlanningMode) -> bool
+impl core::default::Default for iceberg::scan::ScanPlanningMode
+pub fn iceberg::scan::ScanPlanningMode::default() -> iceberg::scan::ScanPlanningMode
+impl core::fmt::Debug for iceberg::scan::ScanPlanningMode
+pub fn iceberg::scan::ScanPlanningMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for iceberg::scan::ScanPlanningMode
+impl core::marker::StructuralPartialEq for iceberg::scan::ScanPlanningMode
 pub struct iceberg::scan::FileScanTask
 pub iceberg::scan::FileScanTask::case_sensitive: bool
 pub iceberg::scan::FileScanTask::data_file_format: iceberg::spec::DataFileFormat
@@ -1336,6 +1351,27 @@ impl core::clone::Clone for iceberg::scan::ScanMetrics
 pub fn iceberg::scan::ScanMetrics::clone(&self) -> iceberg::scan::ScanMetrics
 impl core::fmt::Debug for iceberg::scan::ScanMetrics
 pub fn iceberg::scan::ScanMetrics::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg::scan::ScanPlanningRequest
+pub iceberg::scan::ScanPlanningRequest::bound_filter: core::option::Option<iceberg::expr::BoundPredicate>
+pub iceberg::scan::ScanPlanningRequest::case_sensitive: bool
+pub iceberg::scan::ScanPlanningRequest::metadata: iceberg::spec::TableMetadataRef
+pub iceberg::scan::ScanPlanningRequest::name_mapping: core::option::Option<alloc::sync::Arc<iceberg::spec::NameMapping>>
+pub iceberg::scan::ScanPlanningRequest::project_field_ids: alloc::vec::Vec<i32>
+pub iceberg::scan::ScanPlanningRequest::select: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub iceberg::scan::ScanPlanningRequest::snapshot_id: core::option::Option<i64>
+pub iceberg::scan::ScanPlanningRequest::snapshot_schema: iceberg::spec::SchemaRef
+pub iceberg::scan::ScanPlanningRequest::table_ident: iceberg::TableIdent
+pub iceberg::scan::ScanPlanningRequest::unified_partition_type: core::option::Option<alloc::sync::Arc<iceberg::spec::StructType>>
+impl core::clone::Clone for iceberg::scan::ScanPlanningRequest
+pub fn iceberg::scan::ScanPlanningRequest::clone(&self) -> iceberg::scan::ScanPlanningRequest
+impl core::fmt::Debug for iceberg::scan::ScanPlanningRequest
+pub fn iceberg::scan::ScanPlanningRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg::scan::ScanPlanningResult
+pub iceberg::scan::ScanPlanningResult::tasks: alloc::vec::Vec<iceberg::scan::FileScanTask>
+impl core::clone::Clone for iceberg::scan::ScanPlanningResult
+pub fn iceberg::scan::ScanPlanningResult::clone(&self) -> iceberg::scan::ScanPlanningResult
+impl core::fmt::Debug for iceberg::scan::ScanPlanningResult
+pub fn iceberg::scan::ScanPlanningResult::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::scan::ScanResult
 impl iceberg::scan::ScanResult
 pub fn iceberg::scan::ScanResult::metrics(&self) -> &iceberg::scan::ScanMetrics
@@ -1363,6 +1399,10 @@ pub fn iceberg::scan::TableScanBuilder<'a>::with_filter(self, predicate: iceberg
 pub fn iceberg::scan::TableScanBuilder<'a>::with_manifest_entry_concurrency_limit(self, limit: usize) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_row_group_filtering_enabled(self, row_group_filtering_enabled: bool) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_row_selection_enabled(self, row_selection_enabled: bool) -> Self
+pub fn iceberg::scan::TableScanBuilder<'a>::with_scan_planning_mode(self, mode: iceberg::scan::ScanPlanningMode) -> Self
+pub trait iceberg::scan::ScanPlanner: core::fmt::Debug + core::marker::Send + core::marker::Sync
+pub fn iceberg::scan::ScanPlanner::plan_files<'life0, 'async_trait>(&'life0 self, request: iceberg::scan::ScanPlanningRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::scan::ScanPlanningResult>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn iceberg::scan::ScanPlanner::supports_remote_scan_planning<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub type iceberg::scan::ArrowRecordBatchStream = futures_core::stream::BoxStream<'static, iceberg::Result<arrow_array::record_batch::RecordBatch>>
 pub type iceberg::scan::FileScanTaskStream = futures_core::stream::BoxStream<'static, iceberg::Result<iceberg::scan::FileScanTask>>
 pub mod iceberg::sensitive
@@ -3208,6 +3248,7 @@ pub fn iceberg::table::TableBuilder::metadata<T: core::convert::Into<iceberg::sp
 pub fn iceberg::table::TableBuilder::metadata_location<T: core::convert::Into<alloc::string::String>>(self, metadata_location: T) -> Self
 pub fn iceberg::table::TableBuilder::readonly(self, readonly: bool) -> Self
 pub fn iceberg::table::TableBuilder::runtime(self, runtime: iceberg::Runtime) -> Self
+pub fn iceberg::table::TableBuilder::scan_planner(self, scan_planner: alloc::sync::Arc<dyn iceberg::scan::ScanPlanner>) -> Self
 pub mod iceberg::test_utils
 pub fn iceberg::test_utils::check_record_batches(record_batches: alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, expected_schema: expect_test::Expect, expected_data: expect_test::Expect, ignore_check_columns: &[&str], sort_column: core::option::Option<&str>)
 pub async fn iceberg::test_utils::make_encrypted_table() -> iceberg::table::Table

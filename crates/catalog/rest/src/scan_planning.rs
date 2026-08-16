@@ -17,13 +17,16 @@
 
 //! REST server-side scan planning client.
 //!
-//! Implements the plan / fetch-result / cancel / fetch-tasks endpoints and a
-//! [`RestSessionCatalog::wait_for_plan`] poller. Task decoding and `TableScan`
-//! auto-routing are follow-ups: [`RestSessionCatalog::supports_remote_scan_planning`]
-//! stays `false` until those land.
+//! Implements the plan / fetch-result / cancel / fetch-tasks endpoints, a
+//! [`RestSessionCatalog::wait_for_plan`] poller, content-file decoding, and
+//! [`iceberg::scan::ScanPlanner`] so a table loaded from this catalog can
+//! plan remotely when the server advertises the endpoints.
 
+use std::collections::{HashSet, VecDeque};
 use std::time::Duration;
 
+use async_trait::async_trait;
+use iceberg::scan::{ScanPlanner, ScanPlanningRequest, ScanPlanningResult};
 use iceberg::{Error, ErrorKind, Result, TableIdent};
 use rand::Rng;
 use reqwest::{Method, Response, StatusCode};
@@ -346,15 +349,11 @@ impl RestSessionCatalog {
 
     /// Whether this catalog can complete a remote plan end-to-end.
     ///
-    /// Stays `false` until task decoding is wired into `TableScan`. Routing
-    /// auto-mode scans on endpoint capability alone would fail with
-    /// [`ErrorKind::FeatureUnsupported`] instead of falling back to local
-    /// planning.
+    /// True when the server advertises all four scan-planning endpoints. Task
+    /// decoding is implemented, so auto-mode [`iceberg::scan::TableScan`]s can
+    /// route here instead of falling back to local planning.
     pub async fn supports_remote_scan_planning(&self) -> Result<bool> {
-        // Touch config so a down server still surfaces as an error, but never
-        // claim end-to-end remote planning until TableScan can decode tasks.
-        let _ = self.supports_plan_table_scan().await?;
-        Ok(false)
+        self.supports_full_remote_scan_planning().await
     }
 
     /// Submits a server-side scan plan.
@@ -659,19 +658,106 @@ impl RestSessionCatalog {
     async fn abandon_plan(&self, table: &TableIdent, plan_id: &str, grace: Duration) {
         let _ = tokio::time::timeout(grace, self.cancel_planning(table, plan_id)).await;
     }
+
+    async fn collect_scan_tasks(
+        &self,
+        table: &TableIdent,
+        tasks: ScanTasks,
+    ) -> Result<(Vec<RestFileScanTask>, Vec<serde_json::Value>)> {
+        let mut files = tasks.file_scan_tasks;
+        let mut deletes = tasks.delete_files;
+        let mut queue: VecDeque<String> = tasks.plan_tasks.into();
+        let mut seen = HashSet::new();
+        while let Some(handle) = queue.pop_front() {
+            if !seen.insert(handle.clone()) {
+                continue;
+            }
+            let resp = self
+                .fetch_scan_tasks(table, FetchScanTasksRequest {
+                    idempotency_key: None,
+                    plan_task: handle,
+                })
+                .await?;
+            files.extend(resp.scan_tasks.file_scan_tasks);
+            deletes.extend(resp.scan_tasks.delete_files);
+            queue.extend(resp.scan_tasks.plan_tasks);
+        }
+        Ok((files, deletes))
+    }
+
+    async fn plan_scan(&self, request: ScanPlanningRequest) -> Result<ScanPlanningResult> {
+        let ident = request.table_ident.clone();
+        let resp = self
+            .plan_table_scan(&ident, PlanTableScanRequest {
+                snapshot_id: request.snapshot_id,
+                select: request.select.clone().unwrap_or_default(),
+                case_sensitive: Some(request.case_sensitive),
+                ..Default::default()
+            })
+            .await?;
+
+        let completed = match resp.status {
+            PlanStatus::Completed => CompletedPlanningResult {
+                status: PlanStatus::Completed,
+                scan_tasks: resp.scan_tasks,
+                storage_credentials: resp.storage_credentials,
+            },
+            PlanStatus::Submitted => {
+                let plan_id = resp.plan_id.ok_or_else(|| {
+                    Error::new(ErrorKind::DataInvalid, "submitted plan missing plan-id")
+                })?;
+                self.wait_for_plan(&ident, &plan_id, WaitForPlanOptions::default())
+                    .await?
+            }
+            PlanStatus::Failed => return Err(failed_plan_error(resp.error.as_ref())),
+            PlanStatus::Cancelled => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "planTableScan response has invalid status cancelled",
+                ));
+            }
+        };
+
+        let (files, deletes) = self
+            .collect_scan_tasks(&ident, completed.scan_tasks)
+            .await?;
+        let ctx = crate::scan_decode::ConvertContext {
+            metadata: request.metadata,
+            snapshot_schema: request.snapshot_schema,
+            project_field_ids: request.project_field_ids,
+            case_sensitive: request.case_sensitive,
+            bound_filter: request.bound_filter,
+            name_mapping: request.name_mapping,
+            unified_partition_type: request.unified_partition_type,
+        };
+        Ok(ScanPlanningResult {
+            tasks: crate::scan_decode::decode_scan_tasks(files, deletes, &ctx)?,
+        })
+    }
 }
 
-/// Best-effort DELETE of a submitted plan if [`RestCatalog::wait_for_plan`] is
+#[async_trait]
+impl ScanPlanner for RestSessionCatalog {
+    async fn supports_remote_scan_planning(&self) -> Result<bool> {
+        self.supports_full_remote_scan_planning().await
+    }
+
+    async fn plan_files(&self, request: ScanPlanningRequest) -> Result<ScanPlanningResult> {
+        self.plan_scan(request).await
+    }
+}
+
+/// Best-effort DELETE of a submitted plan if [`RestSessionCatalog::wait_for_plan`] is
 /// dropped (caller timeout, cancellation) before it returns.
 struct PlanAbandonGuard {
-    catalog: Option<RestCatalog>,
+    catalog: Option<RestSessionCatalog>,
     table: TableIdent,
     plan_id: String,
     grace: Duration,
 }
 
 impl PlanAbandonGuard {
-    fn new(catalog: RestCatalog, table: TableIdent, plan_id: &str, grace: Duration) -> Self {
+    fn new(catalog: RestSessionCatalog, table: TableIdent, plan_id: &str, grace: Duration) -> Self {
         Self {
             catalog: Some(catalog),
             table,
@@ -915,7 +1001,12 @@ fn require_plan_id(plan_id: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use iceberg::{NamespaceIdent, Runtime};
+    use std::sync::Arc;
+
+    use futures::TryStreamExt;
+    use iceberg::io::LocalFsStorageFactory;
+    use iceberg::scan::ScanPlanningMode;
+    use iceberg::{NamespaceIdent, Runtime, SessionCatalog, SessionContext};
     use mockito::Server;
     use serde_json::json;
     use uuid::Uuid;
@@ -950,6 +1041,7 @@ mod tests {
             .mock("GET", "/v1/config")
             .with_status(200)
             .with_body(body.to_string())
+            .expect_at_least(1)
             .create_async()
             .await
     }
@@ -1097,13 +1189,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_scan_planning_stays_false_when_all_endpoints_are_advertised() {
+    async fn remote_scan_planning_is_true_when_all_endpoints_are_advertised() {
         let mut server = Server::new_async().await;
         let config = config_with_endpoints(&mut server, ALL_PLAN).await;
         let catalog = catalog(&server.url());
         assert!(catalog.supports_plan_table_scan().await.unwrap());
         assert!(catalog.supports_full_remote_scan_planning().await.unwrap());
-        assert!(!catalog.supports_remote_scan_planning().await.unwrap());
+        assert!(catalog.supports_remote_scan_planning().await.unwrap());
         config.assert_async().await;
     }
 
@@ -1748,5 +1840,354 @@ mod tests {
         catalog.cancel_planning(&table(), "p1").await.unwrap();
         config.assert_async().await;
         cancel.assert_async().await;
+    }
+
+    fn load_catalog(uri: &str) -> RestSessionCatalog {
+        RestSessionCatalog::new(
+            RestCatalogConfig::builder().uri(uri.to_string()).build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        )
+    }
+
+    fn empty_context() -> SessionContext {
+        SessionContext::empty()
+    }
+
+    fn test1() -> TableIdent {
+        TableIdent::new(NamespaceIdent::new("ns1".into()), "test1".into())
+    }
+
+    fn data_file_json() -> serde_json::Value {
+        json!({
+            "content": 0,
+            "file-path": "s3://warehouse/database/table/data/00000.parquet",
+            "file-format": "PARQUET",
+            "spec-id": 0,
+            "partition": {},
+            "record-count": 1,
+            "file-size-in-bytes": 697
+        })
+    }
+
+    async fn mock_load_table(server: &mut mockito::ServerGuard) -> mockito::Mock {
+        server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/load_table_response.json",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .create_async()
+            .await
+    }
+
+    fn empty_table_body() -> String {
+        json!({
+            "metadata-location": "s3://warehouse/ns1/test1/metadata.json",
+            "metadata": {
+                "format-version": 2,
+                "table-uuid": "b55d9dda-6561-423a-8bfc-787980ce421f",
+                "location": "s3://warehouse/ns1/test1",
+                "last-sequence-number": 0,
+                "last-updated-ms": 1,
+                "last-column-id": 2,
+                "current-schema-id": 0,
+                "schemas": [{
+                    "type": "struct",
+                    "schema-id": 0,
+                    "fields": [
+                        {"id": 1, "name": "id", "required": false, "type": "int"},
+                        {"id": 2, "name": "data", "required": false, "type": "string"}
+                    ]
+                }],
+                "default-spec-id": 0,
+                "partition-specs": [{"spec-id": 0, "fields": []}],
+                "last-partition-id": 999,
+                "default-sort-order-id": 0,
+                "sort-orders": [{"order-id": 0, "fields": []}],
+                "current-snapshot-id": -1,
+                "snapshots": []
+            }
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn table_scan_completed_plan_yields_file_scan_task() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let load = mock_load_table(&mut server).await;
+        let plan = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/plan")
+            .with_status(200)
+            .with_body(
+                json!({
+                    "status": "completed",
+                    "plan-id": "p1",
+                    "file-scan-tasks": [{"data-file": data_file_json()}]
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+        let catalog = load_catalog(&server.url());
+        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let tasks: Vec<_> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].data_file_path,
+            "s3://warehouse/database/table/data/00000.parquet"
+        );
+        assert_eq!(tasks[0].file_size_in_bytes, 697);
+        assert_eq!(
+            tasks[0].data_file_format,
+            iceberg::spec::DataFileFormat::Parquet
+        );
+        config.assert_async().await;
+        load.assert_async().await;
+        plan.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn table_scan_submitted_plan_waits_then_completes() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let load = mock_load_table(&mut server).await;
+        let plan = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/plan")
+            .with_status(200)
+            .with_body(r#"{"status":"submitted","plan-id":"p1"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let pending = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1/plan/p1")
+            .with_status(200)
+            .with_body(r#"{"status":"submitted"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let done = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1/plan/p1")
+            .with_status(200)
+            .with_body(
+                json!({
+                    "status": "completed",
+                    "file-scan-tasks": [{"data-file": data_file_json()}]
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+        let catalog = load_catalog(&server.url());
+        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let tasks: Vec<_> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].file_size_in_bytes, 697);
+        config.assert_async().await;
+        load.assert_async().await;
+        plan.assert_async().await;
+        pending.assert_async().await;
+        done.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn table_scan_expands_plan_task_handles() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let load = mock_load_table(&mut server).await;
+        let plan = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/plan")
+            .with_status(200)
+            .with_body(r#"{"status":"completed","plan-id":"p1","plan-tasks":["h1"]}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let tasks_ep = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/tasks")
+            .match_body(r#"{"plan-task":"h1"}"#)
+            .with_status(200)
+            .with_body(
+                json!({
+                    "file-scan-tasks": [{"data-file": data_file_json()}]
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+        let catalog = load_catalog(&server.url());
+        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let tasks: Vec<_> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].data_file_path,
+            "s3://warehouse/database/table/data/00000.parquet"
+        );
+        config.assert_async().await;
+        load.assert_async().await;
+        plan.assert_async().await;
+        tasks_ep.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn table_scan_reissued_plan_task_does_not_loop() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let load = mock_load_table(&mut server).await;
+        let plan = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/plan")
+            .with_status(200)
+            .with_body(r#"{"status":"completed","plan-id":"p1","plan-tasks":["h1"]}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let tasks_ep = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/tasks")
+            .with_status(200)
+            .with_body(r#"{"plan-tasks":["h1"]}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let catalog = load_catalog(&server.url());
+        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let tasks: Vec<_> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert!(tasks.is_empty());
+        config.assert_async().await;
+        load.assert_async().await;
+        plan.assert_async().await;
+        tasks_ep.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn table_scan_empty_plan_is_empty_not_error() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let load = mock_load_table(&mut server).await;
+        let plan = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/plan")
+            .with_status(200)
+            .with_body(r#"{"status":"completed","plan-id":"p1"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let catalog = load_catalog(&server.url());
+        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let tasks: Vec<_> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert!(tasks.is_empty());
+        config.assert_async().await;
+        load.assert_async().await;
+        plan.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn auto_mode_without_plan_endpoints_does_not_post_plan() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, &[]).await;
+        let load = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body(empty_table_body())
+            .create_async()
+            .await;
+        let plan = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/plan")
+            .expect(0)
+            .create_async()
+            .await;
+        let catalog = load_catalog(&server.url());
+        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let tasks: Vec<_> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert!(tasks.is_empty());
+        config.assert_async().await;
+        load.assert_async().await;
+        plan.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn remote_mode_without_endpoints_is_feature_unsupported() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, &[]).await;
+        let load = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body(empty_table_body())
+            .create_async()
+            .await;
+        let catalog = load_catalog(&server.url());
+        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let err = match table
+            .scan()
+            .with_scan_planning_mode(ScanPlanningMode::Remote)
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+        {
+            Ok(_) => panic!("expected FeatureUnsupported"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        config.assert_async().await;
+        load.assert_async().await;
     }
 }
