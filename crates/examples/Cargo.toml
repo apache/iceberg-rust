@@ -26,11 +26,18 @@ rust-version = { workspace = true }
 version = { workspace = true }
 
 [dependencies]
+async-trait = { workspace = true }
+datafusion = { workspace = true }
 futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
+iceberg-datafusion = { workspace = true }
 iceberg-storage-opendal = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["full"] }
+
+[[example]]
+name = "datafusion-session-catalog"
+path = "src/datafusion_session_catalog.rs"
 
 [[example]]
 name = "rest-catalog-namespace"
