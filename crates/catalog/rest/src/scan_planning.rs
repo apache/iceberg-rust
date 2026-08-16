@@ -222,7 +222,9 @@ pub struct WaitForPlanOptions {
     pub max_delay: Duration,
     /// Bound on the best-effort cancel after giving up. Zero uses 5s.
     pub cancel_grace_period: Duration,
-    /// Poll attempts after the first. Zero uses 10.
+    /// Poll attempts after the first. Zero uses 10 when [`Self::timeout`] is
+    /// `None`. When a timeout is set, zero means keep polling until the
+    /// deadline.
     pub max_retries: u32,
     /// Optional overall deadline. `None` relies on `max_retries`.
     pub timeout: Option<Duration>,
@@ -495,19 +497,24 @@ impl RestSessionCatalog {
         self.require_endpoint(&V1_FETCH_PLAN_RESULT, "fetchPlanningResult")
             .await?;
 
+        let (_, _, grace, _, _) = resolve_wait_options(&opts);
+        let mut guard =
+            PlanAbandonGuard::new(self.clone_uninitialized(), table.clone(), plan_id, grace);
+
         let work = self.wait_for_plan_loop(table, plan_id, opts.clone());
-        if let Some(timeout) = opts.timeout {
+        let result = if let Some(timeout) = opts.timeout {
             match tokio::time::timeout(timeout, work).await {
                 Ok(result) => result,
                 Err(_) => {
-                    self.abandon_plan(table, plan_id, resolve_wait_options(&opts).2)
-                        .await;
+                    self.abandon_plan(table, plan_id, grace).await;
                     Err(Error::new(ErrorKind::Unexpected, MSG_PLAN_POLL_EXHAUSTED))
                 }
             }
         } else {
             work.await
-        }
+        };
+        guard.disarm();
+        result
     }
 
     async fn wait_for_plan_loop(
@@ -516,7 +523,8 @@ impl RestSessionCatalog {
         plan_id: &str,
         opts: WaitForPlanOptions,
     ) -> Result<CompletedPlanningResult> {
-        let (min_delay, max_delay, grace, max_retries) = resolve_wait_options(&opts);
+        let (min_delay, max_delay, grace, max_retries, clamp_retry_after) =
+            resolve_wait_options(&opts);
         let fetch_opts = FetchPlanningResultOptions {
             access_delegation: opts.access_delegation.clone(),
         };
@@ -545,13 +553,13 @@ impl RestSessionCatalog {
                 Err(PollError::Terminal(err)) => return Err(err),
             };
 
-            if retries >= max_retries {
+            if max_retries > 0 && retries >= max_retries {
                 self.abandon_plan(table, plan_id, grace).await;
                 return Err(Error::new(ErrorKind::Unexpected, MSG_PLAN_POLL_EXHAUSTED));
             }
             retries += 1;
             sleep = next_scan_plan_backoff(sleep, min_delay, max_delay);
-            sleep = apply_retry_after(sleep, retry_after, min_delay, max_delay);
+            sleep = apply_retry_after(sleep, retry_after, min_delay, max_delay, clamp_retry_after);
             tokio::time::sleep(sleep).await;
         }
     }
@@ -650,6 +658,45 @@ impl RestSessionCatalog {
 
     async fn abandon_plan(&self, table: &TableIdent, plan_id: &str, grace: Duration) {
         let _ = tokio::time::timeout(grace, self.cancel_planning(table, plan_id)).await;
+    }
+}
+
+/// Best-effort DELETE of a submitted plan if [`RestCatalog::wait_for_plan`] is
+/// dropped (caller timeout, cancellation) before it returns.
+struct PlanAbandonGuard {
+    catalog: Option<RestCatalog>,
+    table: TableIdent,
+    plan_id: String,
+    grace: Duration,
+}
+
+impl PlanAbandonGuard {
+    fn new(catalog: RestCatalog, table: TableIdent, plan_id: &str, grace: Duration) -> Self {
+        Self {
+            catalog: Some(catalog),
+            table,
+            plan_id: plan_id.to_string(),
+            grace,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.catalog = None;
+    }
+}
+
+impl Drop for PlanAbandonGuard {
+    fn drop(&mut self) {
+        let Some(catalog) = self.catalog.take() else {
+            return;
+        };
+        let table = self.table.clone();
+        let plan_id = self.plan_id.clone();
+        let grace = self.grace;
+        let runtime = catalog.runtime().clone();
+        drop(runtime.io().spawn(async move {
+            let _ = tokio::time::timeout(grace, catalog.cancel_planning(&table, &plan_id)).await;
+        }));
     }
 }
 
@@ -774,7 +821,7 @@ fn escape_opaque_path_segment(s: &str) -> String {
     }
 }
 
-fn resolve_wait_options(opts: &WaitForPlanOptions) -> (Duration, Duration, Duration, u32) {
+fn resolve_wait_options(opts: &WaitForPlanOptions) -> (Duration, Duration, Duration, u32, bool) {
     let mut min_delay = opts.min_delay;
     let mut max_delay = opts.max_delay;
     let mut grace = opts.cancel_grace_period;
@@ -791,10 +838,11 @@ fn resolve_wait_options(opts: &WaitForPlanOptions) -> (Duration, Duration, Durat
     if grace.is_zero() {
         grace = Duration::from_secs(5);
     }
-    if max_retries == 0 {
+    if max_retries == 0 && opts.timeout.is_none() {
         max_retries = 10;
     }
-    (min_delay, max_delay, grace, max_retries)
+    let clamp_retry_after = opts.timeout.is_none();
+    (min_delay, max_delay, grace, max_retries, clamp_retry_after)
 }
 
 fn next_scan_plan_backoff(prev: Duration, min_delay: Duration, max_delay: Duration) -> Duration {
@@ -821,17 +869,31 @@ fn apply_retry_after(
     retry_after: Option<Duration>,
     min_delay: Duration,
     max_delay: Duration,
+    clamp_to_max: bool,
 ) -> Duration {
     let Some(retry_after) = retry_after.filter(|d| !d.is_zero()) else {
         return backoff;
     };
-    retry_after.max(min_delay).min(max_delay)
+    let delay = retry_after.max(min_delay);
+    if clamp_to_max {
+        delay.min(max_delay)
+    } else {
+        delay
+    }
 }
 
 fn parse_retry_after(value: Option<&reqwest::header::HeaderValue>) -> Option<Duration> {
     let value = value?.to_str().ok()?.trim();
-    let seconds: i64 = value.parse().ok()?;
-    (seconds > 0).then(|| Duration::from_secs(seconds as u64))
+    let seconds: u64 = value.parse().ok()?;
+    if seconds == 0 {
+        return None;
+    }
+    // Duration::from_secs panics when secs * 1e9 overflows u64.
+    const MAX_SECS: u64 = u64::MAX / 1_000_000_000;
+    if seconds > MAX_SECS {
+        return None;
+    }
+    Some(Duration::from_secs(seconds))
 }
 
 fn require_plan_id(plan_id: &str) -> Result<()> {
@@ -973,6 +1035,28 @@ mod tests {
         assert_eq!(escape_opaque_path_segment("."), "%2E");
         assert_eq!(escape_opaque_path_segment(".."), "%2E%2E");
         assert_eq!(escape_opaque_path_segment("plain"), "plain");
+    }
+
+    #[test]
+    fn parse_retry_after_ignores_zero_and_overflow() {
+        let zero = reqwest::header::HeaderValue::from_static("0");
+        assert!(parse_retry_after(Some(&zero)).is_none());
+        let huge = reqwest::header::HeaderValue::from_static("99999999999");
+        assert!(parse_retry_after(Some(&huge)).is_none());
+        let ok = reqwest::header::HeaderValue::from_static("2");
+        assert_eq!(parse_retry_after(Some(&ok)), Some(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn apply_retry_after_skips_max_clamp_when_a_deadline_is_set() {
+        let retry = Some(Duration::from_secs(30));
+        let min = Duration::from_millis(100);
+        let max = Duration::from_secs(5);
+        assert_eq!(apply_retry_after(min, retry, min, max, true), max);
+        assert_eq!(
+            apply_retry_after(min, retry, min, max, false),
+            Duration::from_secs(30)
+        );
     }
 
     #[tokio::test]
@@ -1274,6 +1358,153 @@ mod tests {
         config.assert_async().await;
         poll.assert_async().await;
         cancel.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn wait_for_plan_cancels_after_timeout() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let poll = server
+            .mock("GET", "/v1/namespaces/ns/tables/tbl/plan/p1")
+            .with_status(200)
+            .with_body(r#"{"status":"submitted"}"#)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let cancel = server
+            .mock("DELETE", "/v1/namespaces/ns/tables/tbl/plan/p1")
+            .with_status(204)
+            .expect(1)
+            .create_async()
+            .await;
+        let catalog = catalog(&server.url());
+        let err = catalog
+            .wait_for_plan(&table(), "p1", WaitForPlanOptions {
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(1),
+                timeout: Some(Duration::from_millis(80)),
+                max_retries: 0,
+                cancel_grace_period: Duration::from_secs(1),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(is_plan_poll_exhausted(&err));
+        config.assert_async().await;
+        poll.assert_async().await;
+        cancel.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn wait_for_plan_cancels_when_future_is_dropped() {
+        let mut server = Server::new_async().await;
+        let body = json!({
+            "overrides": {},
+            "defaults": {},
+            "endpoints": ALL_PLAN,
+        });
+        let config = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(body.to_string())
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let poll = server
+            .mock("GET", "/v1/namespaces/ns/tables/tbl/plan/p1")
+            .with_status(200)
+            .with_body(r#"{"status":"submitted"}"#)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let cancel = server
+            .mock("DELETE", "/v1/namespaces/ns/tables/tbl/plan/p1")
+            .with_status(204)
+            .expect(1)
+            .create_async()
+            .await;
+        let catalog = catalog(&server.url());
+        let table = table();
+        let wait = catalog.wait_for_plan(&table, "p1", WaitForPlanOptions {
+            min_delay: Duration::from_millis(1),
+            max_delay: Duration::from_millis(1),
+            max_retries: 50,
+            cancel_grace_period: Duration::from_secs(1),
+            ..Default::default()
+        });
+        let _ = tokio::time::timeout(Duration::from_millis(80), wait).await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        config.assert_async().await;
+        poll.assert_async().await;
+        cancel.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn wait_for_plan_timeout_zero_retries_keeps_polling() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let pending = server
+            .mock("GET", "/v1/namespaces/ns/tables/tbl/plan/p1")
+            .with_status(200)
+            .with_body(r#"{"status":"submitted"}"#)
+            .expect(11)
+            .create_async()
+            .await;
+        let done = server
+            .mock("GET", "/v1/namespaces/ns/tables/tbl/plan/p1")
+            .with_status(200)
+            .with_body(r#"{"status":"completed"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let catalog = catalog(&server.url());
+        let result = catalog
+            .wait_for_plan(&table(), "p1", WaitForPlanOptions {
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(1),
+                max_retries: 0,
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.status, PlanStatus::Completed);
+        config.assert_async().await;
+        pending.assert_async().await;
+        done.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn wait_for_plan_huge_retry_after_does_not_panic() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let busy = server
+            .mock("GET", "/v1/namespaces/ns/tables/tbl/plan/p1")
+            .with_status(503)
+            .with_header("Retry-After", "99999999999")
+            .expect(1)
+            .create_async()
+            .await;
+        let done = server
+            .mock("GET", "/v1/namespaces/ns/tables/tbl/plan/p1")
+            .with_status(200)
+            .with_body(r#"{"status":"completed"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let catalog = catalog(&server.url());
+        let result = catalog
+            .wait_for_plan(&table(), "p1", WaitForPlanOptions {
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(1),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.status, PlanStatus::Completed);
+        config.assert_async().await;
+        busy.assert_async().await;
+        done.assert_async().await;
     }
 
     #[tokio::test]
