@@ -26,12 +26,13 @@ use std::collections::{HashSet, VecDeque};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use iceberg::scan::{ScanPlanner, ScanPlanningRequest, ScanPlanningResult};
+use iceberg::scan::{FileScanTask, ScanPlanner, ScanPlanningRequest, ScanPlanningResult};
+use iceberg::spec::DataContentType;
 use iceberg::{Error, ErrorKind, Result, TableIdent};
 use rand::Rng;
 use reqwest::{Method, Response, StatusCode};
 use serde::de::{self, Deserializer};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use uuid::{Uuid, Variant, Version};
 
 use crate::catalog::RestSessionCatalog;
@@ -77,20 +78,63 @@ pub struct ScanTasks {
     /// Opaque plan-task handles that still need [`RestSessionCatalog::fetch_scan_tasks`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plan_tasks: Vec<String>,
-    /// File scan tasks. `data-file` is left as JSON until a decoder lands.
+    /// File scan tasks.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_scan_tasks: Vec<RestFileScanTask>,
-    /// Delete files referenced by the scan tasks, as raw REST JSON.
+    /// Delete files referenced by indices in this payload's `file-scan-tasks`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub delete_files: Vec<serde_json::Value>,
+    pub delete_files: Vec<RestContentFile>,
 }
 
-/// REST `FileScanTask` wire payload. Nested content-files stay opaque.
+/// REST ContentFile JSON. Unknown fields such as metrics maps are ignored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct RestContentFile {
+    /// Absolute file path.
+    pub file_path: String,
+    /// File format string (`PARQUET`, `AVRO`, ...).
+    pub file_format: String,
+    /// File size in bytes.
+    pub file_size_in_bytes: u64,
+    /// Record count when the server provided it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_count: Option<u64>,
+    /// `data`, `position-deletes`, or `equality-deletes`. Avro ordinals 0/1/2 are also accepted.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_content",
+        serialize_with = "serialize_content"
+    )]
+    pub content: Option<DataContentType>,
+    /// Partition spec id. Defaults to 0.
+    #[serde(default)]
+    pub spec_id: i32,
+    /// Partition values as a JSON array or object keyed by field id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition: Option<serde_json::Value>,
+    /// Equality field ids for equality deletes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equality_ids: Option<Vec<i32>>,
+    /// Encryption key metadata. OpenAPI hex text, or a JSON array of 0..=255 integers.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_key_metadata",
+        serialize_with = "serialize_key_metadata"
+    )]
+    pub key_metadata: Option<Box<[u8]>>,
+    /// First row id when the server provided it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_row_id: Option<i64>,
+}
+
+/// REST `FileScanTask` wire payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct RestFileScanTask {
-    /// REST ContentFile JSON for the data file.
-    pub data_file: serde_json::Value,
+    /// REST ContentFile for the data file.
+    pub data_file: RestContentFile,
     /// Indices into the sibling delete-files array.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delete_file_references: Option<Vec<i32>>,
@@ -331,6 +375,135 @@ pub fn is_no_such_plan_task(err: &Error) -> bool {
 /// True when [`RestSessionCatalog::wait_for_plan`] hit its retry or timeout bound.
 pub fn is_plan_poll_exhausted(err: &Error) -> bool {
     err.message() == MSG_PLAN_POLL_EXHAUSTED
+}
+
+fn parse_content_type(value: &serde_json::Value) -> std::result::Result<DataContentType, String> {
+    match value {
+        serde_json::Value::String(s) => match s.as_str() {
+            "data" => Ok(DataContentType::Data),
+            "position-deletes" => Ok(DataContentType::PositionDeletes),
+            "equality-deletes" => Ok(DataContentType::EqualityDeletes),
+            other => Err(format!("unknown REST content type {other:?}")),
+        },
+        serde_json::Value::Number(n) => {
+            let ordinal = n
+                .as_i64()
+                .ok_or_else(|| format!("content ordinal is not an integer: {n}"))?;
+            let ordinal = i32::try_from(ordinal)
+                .map_err(|_| format!("content ordinal out of range: {ordinal}"))?;
+            DataContentType::try_from(ordinal).map_err(|e| e.to_string())
+        }
+        other => Err(format!("unexpected REST content encoding: {other}")),
+    }
+}
+
+fn deserialize_content<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<DataContentType>, D::Error>
+where D: Deserializer<'de> {
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Null => Ok(None),
+        value => parse_content_type(&value)
+            .map(Some)
+            .map_err(de::Error::custom),
+    }
+}
+
+fn serialize_content<S>(
+    value: &Option<DataContentType>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        None => serializer.serialize_none(),
+        Some(DataContentType::Data) => serializer.serialize_str("data"),
+        Some(DataContentType::PositionDeletes) => serializer.serialize_str("position-deletes"),
+        Some(DataContentType::EqualityDeletes) => serializer.serialize_str("equality-deletes"),
+    }
+}
+
+fn decode_hex_key_metadata(value: &str) -> std::result::Result<Vec<u8>, String> {
+    if !value.len().is_multiple_of(2) {
+        return Err(format!(
+            "key-metadata hex string must have an even number of characters: {value:?}"
+        ));
+    }
+    value
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|chunk| {
+            let high = decode_hex_digit(chunk[0], value)?;
+            let low = decode_hex_digit(chunk[1], value)?;
+            Ok((high << 4) | low)
+        })
+        .collect()
+}
+
+fn decode_hex_digit(digit: u8, value: &str) -> std::result::Result<u8, String> {
+    match digit {
+        b'0'..=b'9' => Ok(digit - b'0'),
+        b'a'..=b'f' => Ok(digit - b'a' + 10),
+        b'A'..=b'F' => Ok(digit - b'A' + 10),
+        _ => Err(format!("key-metadata is not valid hex: {value:?}")),
+    }
+}
+
+fn deserialize_key_metadata<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Box<[u8]>>, D::Error>
+where D: Deserializer<'de> {
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::String(s) => {
+            if s.is_empty() {
+                return Ok(None);
+            }
+            decode_hex_key_metadata(&s)
+                .map(|bytes| Some(bytes.into_boxed_slice()))
+                .map_err(de::Error::custom)
+        }
+        serde_json::Value::Array(values) => {
+            if values.is_empty() {
+                return Ok(None);
+            }
+            let mut bytes = Vec::with_capacity(values.len());
+            for value in values {
+                let n = value.as_u64().ok_or_else(|| {
+                    de::Error::custom("key-metadata array element is not an integer")
+                })?;
+                let byte = u8::try_from(n)
+                    .map_err(|_| de::Error::custom("key-metadata array element is out of range"))?;
+                bytes.push(byte);
+            }
+            Ok(Some(bytes.into_boxed_slice()))
+        }
+        other => Err(de::Error::custom(format!(
+            "unexpected key-metadata encoding: {other}"
+        ))),
+    }
+}
+
+fn serialize_key_metadata<S>(
+    value: &Option<Box<[u8]>>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        None => serializer.serialize_none(),
+        Some(bytes) => {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            let mut out = String::with_capacity(bytes.len() * 2);
+            for byte in bytes.iter() {
+                out.push(HEX[(byte >> 4) as usize] as char);
+                out.push(HEX[(byte & 0x0f) as usize] as char);
+            }
+            serializer.serialize_str(&out)
+        }
+    }
 }
 
 impl RestSessionCatalog {
@@ -663,9 +836,10 @@ impl RestSessionCatalog {
         &self,
         table: &TableIdent,
         tasks: ScanTasks,
-    ) -> Result<(Vec<RestFileScanTask>, Vec<serde_json::Value>)> {
-        let mut files = tasks.file_scan_tasks;
-        let mut deletes = tasks.delete_files;
+        ctx: &crate::scan_decode::ConvertContext,
+    ) -> Result<Vec<FileScanTask>> {
+        let mut out =
+            crate::scan_decode::decode_scan_tasks(tasks.file_scan_tasks, tasks.delete_files, ctx)?;
         let mut queue: VecDeque<String> = tasks.plan_tasks.into();
         let mut seen = HashSet::new();
         while let Some(handle) = queue.pop_front() {
@@ -678,11 +852,14 @@ impl RestSessionCatalog {
                     plan_task: handle,
                 })
                 .await?;
-            files.extend(resp.scan_tasks.file_scan_tasks);
-            deletes.extend(resp.scan_tasks.delete_files);
+            out.extend(crate::scan_decode::decode_scan_tasks(
+                resp.scan_tasks.file_scan_tasks,
+                resp.scan_tasks.delete_files,
+                ctx,
+            )?);
             queue.extend(resp.scan_tasks.plan_tasks);
         }
-        Ok((files, deletes))
+        Ok(out)
     }
 
     async fn plan_scan(&self, request: ScanPlanningRequest) -> Result<ScanPlanningResult> {
@@ -718,9 +895,6 @@ impl RestSessionCatalog {
             }
         };
 
-        let (files, deletes) = self
-            .collect_scan_tasks(&ident, completed.scan_tasks)
-            .await?;
         let ctx = crate::scan_decode::ConvertContext {
             metadata: request.metadata,
             snapshot_schema: request.snapshot_schema,
@@ -731,7 +905,9 @@ impl RestSessionCatalog {
             unified_partition_type: request.unified_partition_type,
         };
         Ok(ScanPlanningResult {
-            tasks: crate::scan_decode::decode_scan_tasks(files, deletes, &ctx)?,
+            tasks: self
+                .collect_scan_tasks(&ident, completed.scan_tasks, &ctx)
+                .await?,
         })
     }
 }
@@ -1086,13 +1262,17 @@ mod tests {
             "status": "completed",
             "plan-id": "p1",
             "plan-tasks": ["t1"],
-            "file-scan-tasks": [{"data-file": {"file-path": "s3://b/f.parquet"}}],
+            "file-scan-tasks": [{"data-file": {
+                "file-path": "s3://b/f.parquet",
+                "file-format": "PARQUET",
+                "file-size-in-bytes": 1
+            }}],
             "storage-credentials": [{"prefix": "s3://b/", "config": {"s3.access-key-id": "k"}}]
         });
         let parsed: PlanTableScanResponse = serde_json::from_value(body.clone()).unwrap();
         assert_eq!(parsed.scan_tasks.plan_tasks, ["t1"]);
         assert_eq!(
-            parsed.scan_tasks.file_scan_tasks[0].data_file["file-path"],
+            parsed.scan_tasks.file_scan_tasks[0].data_file.file_path,
             "s3://b/f.parquet"
         );
         assert_eq!(
@@ -1374,7 +1554,7 @@ mod tests {
             .match_body(r#"{"plan-task":"h1"}"#)
             .with_status(200)
             .with_body(
-                r#"{"plan-tasks":["h2"],"file-scan-tasks":[{"data-file":{"file-path":"f"}}]}"#,
+                r#"{"plan-tasks":["h2"],"file-scan-tasks":[{"data-file":{"file-path":"f","file-format":"PARQUET","file-size-in-bytes":1}}]}"#,
             )
             .create_async()
             .await;
@@ -1884,6 +2064,27 @@ mod tests {
             .await
     }
 
+    async fn mock_load_table_with_config(
+        server: &mut mockito::ServerGuard,
+        config: serde_json::Value,
+    ) -> mockito::Mock {
+        let mut body: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(format!(
+                "{}/testdata/load_table_response.json",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        body["config"] = config;
+        server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body(body.to_string())
+            .create_async()
+            .await
+    }
+
     fn empty_table_body() -> String {
         json!({
             "metadata-location": "s3://warehouse/ns1/test1/metadata.json",
@@ -1938,6 +2139,7 @@ mod tests {
         let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
         let tasks: Vec<_> = table
             .scan()
+            .with_scan_planning_mode(ScanPlanningMode::Remote)
             .build()
             .unwrap()
             .plan_files()
@@ -1997,6 +2199,7 @@ mod tests {
         let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
         let tasks: Vec<_> = table
             .scan()
+            .with_scan_planning_mode(ScanPlanningMode::Remote)
             .build()
             .unwrap()
             .plan_files()
@@ -2043,6 +2246,7 @@ mod tests {
         let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
         let tasks: Vec<_> = table
             .scan()
+            .with_scan_planning_mode(ScanPlanningMode::Remote)
             .build()
             .unwrap()
             .plan_files()
@@ -2085,6 +2289,7 @@ mod tests {
         let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
         let tasks: Vec<_> = table
             .scan()
+            .with_scan_planning_mode(ScanPlanningMode::Remote)
             .build()
             .unwrap()
             .plan_files()
@@ -2116,6 +2321,7 @@ mod tests {
         let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
         let tasks: Vec<_> = table
             .scan()
+            .with_scan_planning_mode(ScanPlanningMode::Remote)
             .build()
             .unwrap()
             .plan_files()
@@ -2187,6 +2393,190 @@ mod tests {
             Err(e) => e,
         };
         assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        config.assert_async().await;
+        load.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn default_plan_files_does_not_post_plan_when_endpoints_are_advertised() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let load = mock_load_table(&mut server).await;
+        let plan = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/plan")
+            .expect(0)
+            .create_async()
+            .await;
+        let catalog = load_catalog(&server.url());
+        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let _ = table.scan().build().unwrap().plan_files().await;
+        config.assert_async().await;
+        load.assert_async().await;
+        plan.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn auto_mode_with_client_config_does_not_post_plan() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let load =
+            mock_load_table_with_config(&mut server, json!({"scan-planning-mode": "client"})).await;
+        let plan = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/plan")
+            .expect(0)
+            .create_async()
+            .await;
+        let catalog = load_catalog(&server.url());
+        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let _ = table
+            .scan()
+            .with_scan_planning_mode(ScanPlanningMode::Auto)
+            .build()
+            .unwrap()
+            .plan_files()
+            .await;
+        config.assert_async().await;
+        load.assert_async().await;
+        plan.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn auto_mode_with_server_config_posts_plan() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let load =
+            mock_load_table_with_config(&mut server, json!({"scan-planning-mode": "server"})).await;
+        let plan = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/plan")
+            .with_status(200)
+            .with_body(
+                json!({
+                    "status": "completed",
+                    "plan-id": "p1",
+                    "file-scan-tasks": [{"data-file": data_file_json()}]
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+        let catalog = load_catalog(&server.url());
+        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let tasks: Vec<_> = table
+            .scan()
+            .with_scan_planning_mode(ScanPlanningMode::Auto)
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        config.assert_async().await;
+        load.assert_async().await;
+        plan.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn delete_file_references_are_resolved_per_payload() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let load = mock_load_table(&mut server).await;
+        let plan = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/plan")
+            .with_status(200)
+            .with_body(
+                json!({
+                    "status": "completed",
+                    "plan-id": "p1",
+                    "plan-tasks": ["h1"],
+                    "delete-files": [{
+                        "content": "position-deletes",
+                        "file-path": "s3://warehouse/decoy.parquet",
+                        "file-format": "PARQUET",
+                        "spec-id": 0,
+                        "file-size-in-bytes": 3
+                    }]
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+        let tasks_ep = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/tasks")
+            .match_body(r#"{"plan-task":"h1"}"#)
+            .with_status(200)
+            .with_body(
+                json!({
+                    "file-scan-tasks": [{
+                        "data-file": data_file_json(),
+                        "delete-file-references": [0]
+                    }],
+                    "delete-files": [{
+                        "content": "position-deletes",
+                        "file-path": "s3://warehouse/d1.parquet",
+                        "file-format": "PARQUET",
+                        "spec-id": 0,
+                        "file-size-in-bytes": 3
+                    }]
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+        let catalog = load_catalog(&server.url());
+        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let tasks: Vec<_> = table
+            .scan()
+            .with_scan_planning_mode(ScanPlanningMode::Remote)
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes.len(), 1);
+        assert_eq!(tasks[0].deletes[0].file_path, "s3://warehouse/d1.parquet");
+        config.assert_async().await;
+        load.assert_async().await;
+        plan.assert_async().await;
+        tasks_ep.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn load_table_then_auto_plan_hits_config_once() {
+        let mut server = Server::new_async().await;
+        let config = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(
+                json!({
+                    "overrides": {},
+                    "defaults": {},
+                    "endpoints": []
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+        let load = mock_load_table(&mut server).await;
+        let catalog = load_catalog(&server.url());
+        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let _ = table
+            .scan()
+            .with_scan_planning_mode(ScanPlanningMode::Auto)
+            .build()
+            .unwrap()
+            .plan_files()
+            .await;
         config.assert_async().await;
         load.assert_async().await;
     }

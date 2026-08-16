@@ -694,7 +694,7 @@ pub struct RestSessionCatalog {
     ///
     /// It could be different from the config fetched from the server and used at runtime.
     user_config: RestCatalogConfig,
-    client: OnceCell<RestClient>,
+    client: Arc<OnceCell<RestClient>>,
     /// Storage factory for creating FileIO instances.
     storage_factory: Option<Arc<dyn StorageFactory>>,
     runtime: Runtime,
@@ -714,7 +714,7 @@ impl RestSessionCatalog {
         Self {
             auth_manager,
             user_config: config,
-            client: OnceCell::new(),
+            client: Arc::new(OnceCell::new()),
             storage_factory,
             runtime,
             kms_client,
@@ -731,6 +731,20 @@ impl RestSessionCatalog {
             self.runtime.clone(),
             self.kms_client.clone(),
         )
+    }
+
+    /// Shares the already-initialized HTTP client. Used when injecting this
+    /// catalog as a [`iceberg::scan::ScanPlanner`] so Auto/capability checks
+    /// do not repeat `GET /v1/config`.
+    pub(crate) fn clone_initialized(&self) -> Self {
+        Self {
+            auth_manager: self.auth_manager.clone(),
+            user_config: self.user_config.clone(),
+            client: Arc::clone(&self.client),
+            storage_factory: self.storage_factory.clone(),
+            runtime: self.runtime.clone(),
+            kms_client: self.kms_client.clone(),
+        }
     }
 
     pub(crate) fn runtime(&self) -> &Runtime {
@@ -1221,7 +1235,7 @@ impl SessionCatalog for RestSessionCatalog {
             .file_io(file_io)
             .metadata(response.metadata)
             .runtime(self.runtime.clone())
-            .scan_planner(Arc::new(self.clone_uninitialized()));
+            .scan_planner(Arc::new(self.clone_initialized()));
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
         }
@@ -1287,7 +1301,7 @@ impl SessionCatalog for RestSessionCatalog {
             .file_io(file_io)
             .metadata(response.metadata)
             .runtime(self.runtime.clone())
-            .scan_planner(Arc::new(self.clone_uninitialized()));
+            .scan_planner(Arc::new(self.clone_initialized()));
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
         }
@@ -1431,7 +1445,7 @@ impl SessionCatalog for RestSessionCatalog {
             .metadata(response.metadata)
             .metadata_location(metadata_location.clone())
             .runtime(self.runtime.clone())
-            .scan_planner(Arc::new(self.clone_uninitialized()));
+            .scan_planner(Arc::new(self.clone_initialized()));
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
         }
@@ -1513,7 +1527,7 @@ impl SessionCatalog for RestSessionCatalog {
             .metadata(response.metadata)
             .metadata_location(response.metadata_location)
             .runtime(self.runtime.clone())
-            .scan_planner(Arc::new(self.clone_uninitialized()));
+            .scan_planner(Arc::new(self.clone_initialized()));
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
         }

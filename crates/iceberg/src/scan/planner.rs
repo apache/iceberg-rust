@@ -36,13 +36,19 @@ use crate::{Result, TableIdent};
 /// between local manifest planning and a catalog-provided [`ScanPlanner`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScanPlanningMode {
-    /// Use remote planning when the table's planner advertises it, otherwise
-    /// plan locally. This is the default.
-    #[default]
+    /// Use remote planning when the table's planner advertises it and the
+    /// table config is `scan-planning-mode=server`. Missing or `client` stays
+    /// local. Select this mode explicitly; the default is [`Self::Local`].
     Auto,
     /// Always plan by reading manifests through the table's FileIO.
+    /// This is the default, matching Java `CLIENT` and Go `ScanPlanningLocal`.
+    #[default]
     Local,
     /// Require a planner that supports remote planning; error otherwise.
+    ///
+    /// An explicit `scan-planning-mode=client` table config still fails as
+    /// unsupported. A missing key does not; Remote is user opt-in and overrides
+    /// the client default.
     Remote,
 }
 

@@ -27,10 +27,9 @@ use iceberg::spec::{
     DataContentType, DataFileFormat, Literal, NameMapping, SchemaRef, Struct, TableMetadataRef,
 };
 use iceberg::{Error, ErrorKind, Result};
-use serde::Deserialize;
 use serde_json::Value;
 
-use crate::scan_planning::RestFileScanTask;
+use crate::scan_planning::{RestContentFile, RestFileScanTask};
 
 /// Per-scan context needed to materialize tasks.
 pub(crate) struct ConvertContext {
@@ -43,32 +42,10 @@ pub(crate) struct ConvertContext {
     pub(crate) unified_partition_type: Option<std::sync::Arc<iceberg::spec::StructType>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-struct RestContentFile {
-    file_path: String,
-    file_format: String,
-    file_size_in_bytes: u64,
-    #[serde(default)]
-    record_count: Option<u64>,
-    #[serde(default)]
-    content: Option<i32>,
-    #[serde(default)]
-    spec_id: i32,
-    #[serde(default)]
-    partition: Option<Value>,
-    #[serde(default)]
-    equality_ids: Option<Vec<i32>>,
-    #[serde(default)]
-    key_metadata: Option<Value>,
-    #[serde(default)]
-    first_row_id: Option<i64>,
-}
-
-/// Decode expanded REST file-scan-tasks and delete-files into domain tasks.
+/// Decode one ScanTasks payload's file-scan-tasks against that payload's delete-files.
 pub(crate) fn decode_scan_tasks(
     files: Vec<RestFileScanTask>,
-    delete_files: Vec<Value>,
+    delete_files: Vec<RestContentFile>,
     ctx: &ConvertContext,
 ) -> Result<Vec<FileScanTask>> {
     if files.is_empty() && delete_files.is_empty() {
@@ -76,7 +53,7 @@ pub(crate) fn decode_scan_tasks(
     }
 
     let deletes = delete_files
-        .iter()
+        .into_iter()
         .map(to_delete_file)
         .collect::<Result<Vec<_>>>()?;
 
@@ -86,30 +63,27 @@ pub(crate) fn decode_scan_tasks(
         .collect()
 }
 
-fn parse_content_file(value: &Value) -> Result<RestContentFile> {
-    serde_json::from_value(value.clone()).map_err(|e| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            "failed to decode REST content-file JSON",
-        )
-        .with_source(e)
-    })
-}
-
-fn to_delete_file(value: &Value) -> Result<FileScanTaskDeleteFile> {
-    let rcf = parse_content_file(value)?;
-    let content = rcf
-        .content
-        .map(DataContentType::try_from)
-        .transpose()?
-        .unwrap_or(DataContentType::PositionDeletes);
+fn to_delete_file(rcf: RestContentFile) -> Result<FileScanTaskDeleteFile> {
+    let content = match rcf.content {
+        Some(DataContentType::PositionDeletes) => DataContentType::PositionDeletes,
+        Some(DataContentType::EqualityDeletes) => DataContentType::EqualityDeletes,
+        Some(DataContentType::Data) | None => {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "delete file {} is missing a valid content type",
+                    rcf.file_path
+                ),
+            ));
+        }
+    };
     Ok(FileScanTaskDeleteFile::builder()
         .with_file_path(rcf.file_path)
         .with_file_size_in_bytes(rcf.file_size_in_bytes)
         .with_file_type(content)
         .with_partition_spec_id(rcf.spec_id)
         .with_equality_ids(rcf.equality_ids)
-        .with_key_metadata(decode_key_metadata(rcf.key_metadata.as_ref()))
+        .with_key_metadata(rcf.key_metadata)
         .build())
 }
 
@@ -118,7 +92,7 @@ fn to_file_scan_task(
     all_deletes: &[FileScanTaskDeleteFile],
     ctx: &ConvertContext,
 ) -> Result<FileScanTask> {
-    let rcf = parse_content_file(&task.data_file)?;
+    let rcf = task.data_file;
     let spec = ctx
         .metadata
         .partition_spec_by_id(rcf.spec_id)
@@ -183,7 +157,7 @@ fn to_file_scan_task(
         .with_name_mapping(ctx.name_mapping.clone())
         .with_unified_partition_type(ctx.unified_partition_type.clone())
         .with_case_sensitive(ctx.case_sensitive)
-        .with_key_metadata(decode_key_metadata(rcf.key_metadata.as_ref()))
+        .with_key_metadata(rcf.key_metadata)
         .build())
 }
 
@@ -242,23 +216,6 @@ fn decode_partition(
     Ok(Struct::from_iter(literals))
 }
 
-fn decode_key_metadata(value: Option<&Value>) -> Option<Box<[u8]>> {
-    match value {
-        Some(Value::Array(values)) => {
-            let bytes: Vec<u8> = values
-                .iter()
-                .filter_map(|v| v.as_u64().map(|n| n as u8))
-                .collect();
-            if bytes.is_empty() {
-                None
-            } else {
-                Some(bytes.into_boxed_slice())
-            }
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -267,7 +224,23 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::scan_planning::RestFileScanTask;
+    use crate::scan_planning::{RestContentFile, RestFileScanTask};
+
+    fn content_file(value: Value) -> RestContentFile {
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn delete_files(values: Vec<Value>) -> Vec<RestContentFile> {
+        values.into_iter().map(content_file).collect()
+    }
+
+    fn file_task(data_file: Value) -> RestFileScanTask {
+        RestFileScanTask {
+            data_file: content_file(data_file),
+            delete_file_references: None,
+            residual_filter: None,
+        }
+    }
 
     fn unpartitioned_metadata() -> TableMetadataRef {
         let json = r#"{
@@ -318,19 +291,15 @@ mod tests {
 
     #[test]
     fn data_file_json_becomes_file_scan_task() {
-        let file = RestFileScanTask {
-            data_file: json!({
-                "content": 0,
-                "file-path": "s3://bucket/f.parquet",
-                "file-format": "PARQUET",
-                "spec-id": 0,
-                "partition": {},
-                "record-count": 7,
-                "file-size-in-bytes": 128
-            }),
-            delete_file_references: None,
-            residual_filter: None,
-        };
+        let file = file_task(json!({
+            "content": 0,
+            "file-path": "s3://bucket/f.parquet",
+            "file-format": "PARQUET",
+            "spec-id": 0,
+            "partition": {},
+            "record-count": 7,
+            "file-size-in-bytes": 128
+        }));
         let tasks = decode_scan_tasks(vec![file], vec![], &ctx()).unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].data_file_path, "s3://bucket/f.parquet");
@@ -342,21 +311,18 @@ mod tests {
 
     #[test]
     fn delete_file_references_are_resolved() {
-        let file = RestFileScanTask {
-            data_file: json!({
-                "file-path": "s3://bucket/f.parquet",
-                "file-format": "parquet",
-                "file-size-in-bytes": 10
-            }),
-            delete_file_references: Some(vec![0]),
-            residual_filter: None,
-        };
-        let deletes = vec![json!({
+        let mut file = file_task(json!({
+            "file-path": "s3://bucket/f.parquet",
+            "file-format": "parquet",
+            "file-size-in-bytes": 10
+        }));
+        file.delete_file_references = Some(vec![0]);
+        let deletes = delete_files(vec![json!({
             "content": 1,
             "file-path": "s3://bucket/d.parquet",
             "file-format": "parquet",
             "file-size-in-bytes": 3
-        })];
+        })]);
         let tasks = decode_scan_tasks(vec![file], deletes, &ctx()).unwrap();
         assert_eq!(tasks[0].deletes.len(), 1);
         assert_eq!(tasks[0].deletes[0].file_path, "s3://bucket/d.parquet");
@@ -368,17 +334,112 @@ mod tests {
 
     #[test]
     fn unknown_spec_id_is_data_invalid() {
-        let file = RestFileScanTask {
-            data_file: json!({
-                "file-path": "s3://bucket/f.parquet",
-                "file-format": "parquet",
-                "file-size-in-bytes": 10,
-                "spec-id": 99
-            }),
-            delete_file_references: None,
-            residual_filter: None,
-        };
+        let file = file_task(json!({
+            "file-path": "s3://bucket/f.parquet",
+            "file-format": "parquet",
+            "file-size-in-bytes": 10,
+            "spec-id": 99
+        }));
         let err = decode_scan_tasks(vec![file], vec![], &ctx()).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[test]
+    fn content_string_data_decodes() {
+        let file = file_task(json!({
+            "content": "data",
+            "file-path": "s3://bucket/f.parquet",
+            "file-format": "PARQUET",
+            "spec-id": 0,
+            "file-size-in-bytes": 128
+        }));
+        let tasks = decode_scan_tasks(vec![file], vec![], &ctx()).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].data_file_path, "s3://bucket/f.parquet");
+    }
+
+    #[test]
+    fn content_string_position_deletes_decodes() {
+        let mut file = file_task(json!({
+            "file-path": "s3://bucket/f.parquet",
+            "file-format": "parquet",
+            "file-size-in-bytes": 10
+        }));
+        file.delete_file_references = Some(vec![0]);
+        let deletes = delete_files(vec![json!({
+            "content": "position-deletes",
+            "file-path": "s3://bucket/d.parquet",
+            "file-format": "parquet",
+            "file-size-in-bytes": 3
+        })]);
+        let tasks = decode_scan_tasks(vec![file], deletes, &ctx()).unwrap();
+        assert_eq!(tasks[0].deletes.len(), 1);
+        assert_eq!(tasks[0].deletes[0].file_path, "s3://bucket/d.parquet");
+        assert_eq!(
+            tasks[0].deletes[0].file_type,
+            DataContentType::PositionDeletes
+        );
+    }
+
+    #[test]
+    fn content_integer_ordinals_still_decode() {
+        let mut file = file_task(json!({
+            "content": 0,
+            "file-path": "s3://bucket/f.parquet",
+            "file-format": "parquet",
+            "file-size-in-bytes": 10
+        }));
+        file.delete_file_references = Some(vec![0]);
+        let deletes = delete_files(vec![json!({
+            "content": 1,
+            "file-path": "s3://bucket/d.parquet",
+            "file-format": "parquet",
+            "file-size-in-bytes": 3
+        })]);
+        let tasks = decode_scan_tasks(vec![file], deletes, &ctx()).unwrap();
+        assert_eq!(
+            tasks[0].deletes[0].file_type,
+            DataContentType::PositionDeletes
+        );
+    }
+
+    #[test]
+    fn delete_file_without_content_is_data_invalid() {
+        let mut file = file_task(json!({
+            "file-path": "s3://bucket/f.parquet",
+            "file-format": "parquet",
+            "file-size-in-bytes": 10
+        }));
+        file.delete_file_references = Some(vec![0]);
+        let deletes = delete_files(vec![json!({
+            "file-path": "s3://bucket/d.parquet",
+            "file-format": "parquet",
+            "file-size-in-bytes": 3
+        })]);
+        let err = decode_scan_tasks(vec![file], deletes, &ctx()).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[test]
+    fn hex_key_metadata_decodes_to_bytes() {
+        let file = file_task(json!({
+            "file-path": "s3://bucket/f.parquet",
+            "file-format": "parquet",
+            "file-size-in-bytes": 10,
+            "key-metadata": "00000000000000000000000000000000"
+        }));
+        let tasks = decode_scan_tasks(vec![file], vec![], &ctx()).unwrap();
+        assert_eq!(tasks[0].key_metadata.as_deref(), Some([0u8; 16].as_slice()));
+    }
+
+    #[test]
+    fn non_hex_key_metadata_is_rejected() {
+        let err = serde_json::from_value::<RestContentFile>(json!({
+            "file-path": "s3://bucket/f.parquet",
+            "file-format": "parquet",
+            "file-size-in-bytes": 10,
+            "key-metadata": "not-hex"
+        }));
+        assert!(err.is_err());
     }
 }

@@ -85,7 +85,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
-            planning_mode: ScanPlanningMode::Auto,
+            planning_mode: ScanPlanningMode::Local,
         }
     }
 
@@ -194,8 +194,10 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Sets whether this scan plans locally, remotely, or automatically.
     ///
-    /// Defaults to [`ScanPlanningMode::Auto`]: remote planning when the table's
-    /// [`ScanPlanner`] advertises it, otherwise local manifest planning.
+    /// Defaults to [`ScanPlanningMode::Local`]. [`ScanPlanningMode::Auto`]
+    /// uses remote planning only when the planner advertises it and table
+    /// config is `scan-planning-mode=server` (case-insensitive). A missing key
+    /// is treated as client.
     pub fn with_scan_planning_mode(mut self, mode: ScanPlanningMode) -> Self {
         self.planning_mode = mode;
         self
@@ -403,9 +405,17 @@ impl TableScan {
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
         match self.planning_mode {
             ScanPlanningMode::Local => self.plan_files_local().await,
-            ScanPlanningMode::Remote => self.plan_files_remote().await,
+            ScanPlanningMode::Remote => {
+                if self.table_requests_client_planning() {
+                    return Err(Error::new(
+                        ErrorKind::FeatureUnsupported,
+                        "remote scan planning is disabled by scan-planning-mode=client",
+                    ));
+                }
+                self.plan_files_remote().await
+            }
             ScanPlanningMode::Auto => {
-                if self.remote_planning_available().await? {
+                if self.remote_planning_available().await? && self.table_allows_server_planning() {
                     match self.plan_files_remote().await {
                         Ok(tasks) => Ok(tasks),
                         Err(e) if e.kind() == ErrorKind::FeatureUnsupported => {
@@ -418,6 +428,26 @@ impl TableScan {
                 }
             }
         }
+    }
+
+    fn scan_planning_mode_property(&self) -> Option<&str> {
+        let from_meta = self
+            .plan_context
+            .as_ref()
+            .and_then(|ctx| ctx.table_metadata.properties().get("scan-planning-mode"));
+        from_meta
+            .or_else(|| self.file_io.config().get("scan-planning-mode"))
+            .map(String::as_str)
+    }
+
+    fn table_requests_client_planning(&self) -> bool {
+        self.scan_planning_mode_property()
+            .is_some_and(|value| value.eq_ignore_ascii_case("client"))
+    }
+
+    fn table_allows_server_planning(&self) -> bool {
+        self.scan_planning_mode_property()
+            .is_some_and(|value| value.eq_ignore_ascii_case("server"))
     }
 
     async fn remote_planning_available(&self) -> Result<bool> {
@@ -747,7 +777,7 @@ pub mod tests {
 
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
-    use crate::io::{FileIO, OutputFile};
+    use crate::io::{FileIO, FileIOBuilder, LocalFsStorageFactory, OutputFile};
     use crate::metadata_columns::{
         RESERVED_COL_NAME_DELETE_FILE_PATH, RESERVED_COL_NAME_DELETE_FILE_POS,
         RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
@@ -3825,10 +3855,31 @@ pub mod tests {
     }
 
     fn table_with_planner(fixture: &TableTestFixture, planner: Arc<dyn ScanPlanner>) -> Table {
+        table_with_planner_and_mode(fixture, planner, None)
+    }
+
+    fn table_with_server_planner(
+        fixture: &TableTestFixture,
+        planner: Arc<dyn ScanPlanner>,
+    ) -> Table {
+        table_with_planner_and_mode(fixture, planner, Some("server"))
+    }
+
+    fn table_with_planner_and_mode(
+        fixture: &TableTestFixture,
+        planner: Arc<dyn ScanPlanner>,
+        scan_planning_mode: Option<&str>,
+    ) -> Table {
+        let file_io = match scan_planning_mode {
+            Some(mode) => FileIOBuilder::new(Arc::new(LocalFsStorageFactory))
+                .with_prop("scan-planning-mode", mode)
+                .build(),
+            None => fixture.table.file_io().clone(),
+        };
         Table::builder()
             .metadata(fixture.table.metadata_ref())
             .identifier(fixture.table.identifier().clone())
-            .file_io(fixture.table.file_io().clone())
+            .file_io(file_io)
             .metadata_location(fixture.table.metadata_location().unwrap())
             .runtime(fixture.table.runtime().clone())
             .scan_planner(planner)
@@ -3855,10 +3906,10 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn auto_mode_uses_remote_tasks_when_planner_supports_it() {
+    async fn default_mode_is_local_even_with_a_capable_planner() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
-        let table = table_with_planner(
+        let table = table_with_server_planner(
             &fixture,
             Arc::new(FakePlanner {
                 remote: true,
@@ -3876,6 +3927,68 @@ pub mod tests {
             .try_collect()
             .await
             .unwrap();
+        assert_eq!(tasks.len(), 2);
+        assert!(
+            tasks
+                .iter()
+                .all(|t| t.data_file_path != "s3://bucket/remote.parquet")
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_mode_without_server_property_plans_locally() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let table = table_with_planner(
+            &fixture,
+            Arc::new(FakePlanner {
+                remote: true,
+                kind: None,
+                tasks: vec![remote_stub_task()],
+            }),
+        );
+        let tasks: Vec<_> = table
+            .scan()
+            .with_scan_planning_mode(ScanPlanningMode::Auto)
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 2);
+        assert!(
+            tasks
+                .iter()
+                .all(|t| t.data_file_path != "s3://bucket/remote.parquet")
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_mode_uses_remote_tasks_when_planner_supports_it() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let table = table_with_server_planner(
+            &fixture,
+            Arc::new(FakePlanner {
+                remote: true,
+                kind: None,
+                tasks: vec![remote_stub_task()],
+            }),
+        );
+        let tasks: Vec<_> = table
+            .scan()
+            .with_scan_planning_mode(ScanPlanningMode::Auto)
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].data_file_path, "s3://bucket/remote.parquet");
         assert_eq!(tasks[0].file_size_in_bytes, 42);
@@ -3885,7 +3998,7 @@ pub mod tests {
     async fn auto_mode_falls_back_to_local_on_feature_unsupported() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
-        let table = table_with_planner(
+        let table = table_with_server_planner(
             &fixture,
             Arc::new(FakePlanner {
                 remote: true,
@@ -3895,6 +4008,7 @@ pub mod tests {
         );
         let tasks: Vec<_> = table
             .scan()
+            .with_scan_planning_mode(ScanPlanningMode::Auto)
             .build()
             .unwrap()
             .plan_files()
@@ -3910,7 +4024,7 @@ pub mod tests {
     async fn auto_mode_does_not_fall_back_on_other_remote_errors() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
-        let table = table_with_planner(
+        let table = table_with_server_planner(
             &fixture,
             Arc::new(FakePlanner {
                 remote: true,
@@ -3918,7 +4032,14 @@ pub mod tests {
                 tasks: vec![],
             }),
         );
-        let err = match table.scan().build().unwrap().plan_files().await {
+        let err = match table
+            .scan()
+            .with_scan_planning_mode(ScanPlanningMode::Auto)
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+        {
             Ok(_) => panic!("expected remote planning to fail"),
             Err(e) => e,
         };
