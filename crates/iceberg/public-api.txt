@@ -3761,6 +3761,7 @@ pub fn iceberg::SessionContext::builder() -> SessionContextBuilder<((), (), (), 
 pub struct iceberg::TableCommit
 impl iceberg::TableCommit
 pub fn iceberg::TableCommit::apply(self, table: iceberg::table::Table) -> iceberg::Result<iceberg::table::Table>
+pub fn iceberg::TableCommit::from_parts(ident: iceberg::TableIdent, requirements: alloc::vec::Vec<iceberg::TableRequirement>, updates: alloc::vec::Vec<iceberg::TableUpdate>) -> Self
 pub fn iceberg::TableCommit::identifier(&self) -> &iceberg::TableIdent
 pub fn iceberg::TableCommit::take_requirements(&mut self) -> alloc::vec::Vec<iceberg::TableRequirement>
 pub fn iceberg::TableCommit::take_updates(&mut self) -> alloc::vec::Vec<iceberg::TableUpdate>

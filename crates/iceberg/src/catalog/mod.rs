@@ -385,6 +385,27 @@ pub struct TableCommit {
 }
 
 impl TableCommit {
+    /// Builds a [`TableCommit`] from a table identifier, requirements, and
+    /// updates.
+    ///
+    /// The transaction API covers the common commit shapes, but engines that
+    /// build snapshots at the manifest/metadata layer (for example a REPLACE
+    /// commit produced by external compaction) need to hand a commit directly
+    /// to [`Catalog::update_table`]. The caller is responsible for supplying
+    /// requirements that make the commit safe to retry (compare-and-swap on
+    /// the branch head) and updates that keep the table metadata consistent.
+    pub fn from_parts(
+        ident: TableIdent,
+        requirements: Vec<TableRequirement>,
+        updates: Vec<TableUpdate>,
+    ) -> Self {
+        Self {
+            ident,
+            requirements,
+            updates,
+        }
+    }
+
     /// Return the table identifier.
     pub fn identifier(&self) -> &TableIdent {
         &self.ident
