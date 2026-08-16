@@ -724,6 +724,22 @@ impl RestSessionCatalog {
         }
     }
 
+    /// Same catalog identity with an empty HTTP client cache, for fire-and-forget
+    /// work (best-effort plan cancel on drop) that must not borrow `self`.
+    pub(crate) fn clone_uninitialized(&self) -> Self {
+        Self::new(
+            self.user_config.clone(),
+            self.auth_manager.clone(),
+            self.storage_factory.clone(),
+            self.runtime.clone(),
+            self.kms_client.clone(),
+        )
+    }
+
+    pub(crate) fn runtime(&self) -> &Runtime {
+        &self.runtime
+    }
+
     /// Sends a DELETE request for the given table, optionally requesting purge.
     async fn delete_table(
         &self,
