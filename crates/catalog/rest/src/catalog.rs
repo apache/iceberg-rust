@@ -238,7 +238,7 @@ impl RestCatalogConfig {
         self.url_prefixed(&["namespaces", &ns.to_url_string(), "register"])
     }
 
-    fn table_endpoint(&self, table: &TableIdent) -> String {
+    pub(crate) fn table_endpoint(&self, table: &TableIdent) -> String {
         self.url_prefixed(&[
             "namespaces",
             &table.namespace.to_url_string(),
@@ -412,14 +412,14 @@ pub(crate) fn oauth_params_from_props(props: &HashMap<String, String>) -> HashMa
 }
 
 #[derive(Debug)]
-struct RestClient {
+pub(crate) struct RestClient {
     /// Carries the session the auth manager derived from the merged
     /// configuration, so every request below is authenticated.
-    http_client: HttpClient,
+    pub(crate) http_client: HttpClient,
     /// Runtime config is fetched from rest server and stored here.
     ///
     /// It could be different from the user config.
-    config: RestCatalogConfig,
+    pub(crate) config: RestCatalogConfig,
     /// Capabilities the server advertises (see [`RestSessionCatalog::supports_endpoint`]).
     endpoints: HashSet<Endpoint>,
 }
@@ -479,7 +479,7 @@ impl RestClient {
     }
 
     /// Sends `request`, authenticated by the client's session.
-    async fn query_catalog(&self, request: HttpRequest) -> Result<Response> {
+    pub(crate) async fn query_catalog(&self, request: HttpRequest) -> Result<Response> {
         self.http_client.query_catalog(request).await
     }
 
@@ -704,7 +704,7 @@ pub struct RestSessionCatalog {
 
 impl RestSessionCatalog {
     /// Creates a `RestSessionCatalog` from a [`RestCatalogConfig`].
-    fn new(
+    pub(crate) fn new(
         config: RestCatalogConfig,
         auth_manager: Option<Arc<dyn AuthManager>>,
         storage_factory: Option<Arc<dyn StorageFactory>>,
@@ -809,7 +809,7 @@ impl RestSessionCatalog {
     }
 
     /// Gets the [`RestClient`] from the catalog.
-    async fn client(&self) -> Result<&RestClient> {
+    pub(crate) async fn client(&self) -> Result<&RestClient> {
         self.client
             .get_or_try_init(|| async {
                 RestClient::init(&self.user_config, self.resolve_auth_manager()?).await

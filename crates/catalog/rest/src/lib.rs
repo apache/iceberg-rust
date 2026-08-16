@@ -92,9 +92,11 @@ pub use client::HttpClient;
 mod request;
 pub use request::{HttpRequest, HttpRequestBody};
 mod endpoint;
+mod scan_planning;
 mod types;
 
 pub use auth::*;
 pub use catalog::*;
 pub use endpoint::Endpoint;
+pub use scan_planning::*;
 pub use types::*;
