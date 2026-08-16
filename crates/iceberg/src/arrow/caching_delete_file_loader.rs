@@ -963,15 +963,22 @@ mod tests {
         assert!(err.message().contains("negative position"));
     }
 
+    fn sorted_positions(dv: &DeleteVector) -> Vec<u64> {
+        let mut positions: Vec<u64> = dv.iter().collect();
+        positions.sort_unstable();
+        positions
+    }
+
+    /// Spec-compliant input: rows sorted by (file_path, pos). Exercises the
+    /// common shape: multi-position runs, several files in one batch, and a
+    /// run for "b" that continues across the batch boundary.
     #[tokio::test]
-    async fn test_parse_positional_deletes_groups_and_merges_paths() {
+    async fn test_parse_positional_deletes_merges_sorted_runs() {
         let schema = crate::arrow::delete_filter::tests::create_pos_del_schema();
 
-        // "a" appears in two non-contiguous runs (must merge), "b" spans the
-        // two batches, and each file accumulates every one of its positions.
         let batch1 = RecordBatch::try_new(schema.clone(), vec![
-            Arc::new(StringArray::from_iter_values(vec!["a", "a", "b", "a"])),
-            Arc::new(Int64Array::from_iter_values(vec![1i64, 3, 2, 5])),
+            Arc::new(StringArray::from_iter_values(vec!["a", "a", "a", "b"])),
+            Arc::new(Int64Array::from_iter_values(vec![1i64, 3, 5, 2])),
         ])
         .unwrap();
         let batch2 = RecordBatch::try_new(schema, vec![
@@ -985,15 +992,35 @@ mod tests {
             .await
             .unwrap();
 
-        let sorted = |dv: &DeleteVector| {
-            let mut v: Vec<u64> = dv.iter().collect();
-            v.sort_unstable();
-            v
-        };
         assert_eq!(result.len(), 3);
-        assert_eq!(sorted(&result["a"]), vec![1, 3, 5]);
-        assert_eq!(sorted(&result["b"]), vec![2, 4]);
-        assert_eq!(sorted(&result["c"]), vec![0]);
+        assert_eq!(sorted_positions(&result["a"]), vec![1, 3, 5]);
+        assert_eq!(sorted_positions(&result["b"]), vec![2, 4]);
+        assert_eq!(sorted_positions(&result["c"]), vec![0]);
+    }
+
+    /// Deliberately unsorted input. The spec requires position delete rows to be
+    /// sorted by (file_path, pos), but the reader must not depend on it: run
+    /// buffering only groups *contiguous* rows, so a path split into
+    /// non-contiguous runs (here "a" before and after "b") must still merge into
+    /// a single delete vector rather than silently dropping positions.
+    #[tokio::test]
+    async fn test_parse_positional_deletes_merges_spec_noncompliant_unsorted_runs() {
+        let schema = crate::arrow::delete_filter::tests::create_pos_del_schema();
+
+        let batch = RecordBatch::try_new(schema, vec![
+            Arc::new(StringArray::from_iter_values(vec!["a", "b", "a"])),
+            Arc::new(Int64Array::from_iter_values(vec![3i64, 2, 1])),
+        ])
+        .unwrap();
+        let stream = futures::stream::iter(vec![Ok(batch)]).boxed();
+
+        let result = CachingDeleteFileLoader::parse_positional_deletes_record_batch_stream(stream)
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(sorted_positions(&result["a"]), vec![1, 3]);
+        assert_eq!(sorted_positions(&result["b"]), vec![2]);
     }
 
     /// Verifies that evolve_schema on partial-schema equality deletes works correctly
