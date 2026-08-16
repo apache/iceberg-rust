@@ -344,7 +344,6 @@ impl CachingDeleteFileLoader {
 
         while let Some(batch) = stream.next().await {
             let batch = batch?;
-            let schema = batch.schema();
             let columns = batch.columns();
 
             let Some(file_paths) = columns[0].as_any().downcast_ref::<StringArray>() else {
@@ -360,6 +359,16 @@ impl CachingDeleteFileLoader {
                 ));
             };
 
+            // Within a batch, positional deletes are sorted by (file_path, pos),
+            // so the rows for one data file form a contiguous run. Buffer each
+            // run and merge it with a single map lookup, allocating and hashing
+            // the key once per run instead of once per row. Grouping is per
+            // batch, not across the whole stream: a run never spans batch
+            // boundaries, so a path that also appears in another batch merges
+            // into its existing delete vector (order does not affect the result).
+            let mut run_path: Option<&str> = None;
+            let mut run_positions: Vec<u64> = Vec::new();
+
             for (file_path, pos) in file_paths.iter().zip(positions.iter()) {
                 let (Some(file_path), Some(pos)) = (file_path, pos) else {
                     return Err(Error::new(
@@ -374,14 +383,41 @@ impl CachingDeleteFileLoader {
                     ));
                 }
 
-                result
-                    .entry(file_path.to_string())
-                    .or_default()
-                    .insert(pos as u64);
+                if run_path != Some(file_path) {
+                    if let Some(run_path) = run_path {
+                        Self::merge_delete_positions(&mut result, run_path, &run_positions);
+                        run_positions.clear();
+                    }
+
+                    run_path = Some(file_path);
+                }
+
+                run_positions.push(pos as u64);
+            }
+
+            if let Some(run_path) = run_path {
+                Self::merge_delete_positions(&mut result, run_path, &run_positions);
             }
         }
 
         Ok(result)
+    }
+
+    /// Marks every position in `positions` as deleted for `file_path`, merging
+    /// into any delete vector already recorded for that file.
+    fn merge_delete_positions(
+        result: &mut HashMap<String, DeleteVector>,
+        file_path: &str,
+        positions: &[u64],
+    ) {
+        if positions.is_empty() {
+            return;
+        }
+
+        let delete_vector = result.entry(file_path.to_string()).or_default();
+        for &pos in positions {
+            delete_vector.insert(pos);
+        }
     }
 
     async fn parse_equality_deletes_record_batch_stream(
@@ -925,6 +961,39 @@ mod tests {
 
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.message().contains("negative position"));
+    }
+
+    #[tokio::test]
+    async fn test_parse_positional_deletes_groups_and_merges_paths() {
+        let schema = crate::arrow::delete_filter::tests::create_pos_del_schema();
+
+        // "a" appears in two non-contiguous runs (must merge), "b" spans the
+        // two batches, and each file accumulates every one of its positions.
+        let batch1 = RecordBatch::try_new(schema.clone(), vec![
+            Arc::new(StringArray::from_iter_values(vec!["a", "a", "b", "a"])),
+            Arc::new(Int64Array::from_iter_values(vec![1i64, 3, 2, 5])),
+        ])
+        .unwrap();
+        let batch2 = RecordBatch::try_new(schema, vec![
+            Arc::new(StringArray::from_iter_values(vec!["b", "c"])),
+            Arc::new(Int64Array::from_iter_values(vec![4i64, 0])),
+        ])
+        .unwrap();
+        let stream = futures::stream::iter(vec![Ok(batch1), Ok(batch2)]).boxed();
+
+        let result = CachingDeleteFileLoader::parse_positional_deletes_record_batch_stream(stream)
+            .await
+            .unwrap();
+
+        let sorted = |dv: &DeleteVector| {
+            let mut v: Vec<u64> = dv.iter().collect();
+            v.sort_unstable();
+            v
+        };
+        assert_eq!(result.len(), 3);
+        assert_eq!(sorted(&result["a"]), vec![1, 3, 5]);
+        assert_eq!(sorted(&result["b"]), vec![2, 4]);
+        assert_eq!(sorted(&result["c"]), vec![0]);
     }
 
     /// Verifies that evolve_schema on partial-schema equality deletes works correctly
