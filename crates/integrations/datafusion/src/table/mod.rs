@@ -48,6 +48,7 @@ use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
 
+use crate::IcebergCatalogConfig;
 use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::project::project_with_partition;
@@ -248,6 +249,8 @@ pub struct IcebergStaticTableProvider {
     snapshot_id: Option<i64>,
     /// A reference-counted arrow `Schema`
     schema: ArrowSchemaRef,
+    /// Catalog and storage `table` was loaded from, if recorded
+    config: Option<IcebergCatalogConfig>,
 }
 
 impl IcebergStaticTableProvider {
@@ -260,6 +263,7 @@ impl IcebergStaticTableProvider {
             table,
             snapshot_id: None,
             schema,
+            config: None,
         })
     }
 
@@ -286,7 +290,32 @@ impl IcebergStaticTableProvider {
             table,
             snapshot_id: Some(snapshot_id),
             schema,
+            config: None,
         })
+    }
+
+    /// Records the catalog and storage the table was loaded from.
+    ///
+    /// The provider still never contacts the catalog. The config is carried so
+    /// the scan nodes it produces can rebuild storage on a remote worker, and so
+    /// a caller can load the same table from a rebuilt catalog: the config
+    /// identifies the catalog, [`Self::table_ident`] the table within it, and
+    /// [`Self::snapshot_id`] the snapshot to pin.
+    pub fn with_catalog_config(mut self, config: IcebergCatalogConfig) -> Self {
+        self.config = Some(config);
+        self
+    }
+
+    pub fn config(&self) -> Option<&IcebergCatalogConfig> {
+        self.config.as_ref()
+    }
+
+    pub fn table_ident(&self) -> &TableIdent {
+        self.table.identifier()
+    }
+
+    pub fn snapshot_id(&self) -> Option<i64> {
+        self.snapshot_id
     }
 }
 
@@ -308,14 +337,17 @@ impl TableProvider for IcebergStaticTableProvider {
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         // Use cached table (no refresh)
-        Ok(Arc::new(IcebergTableScan::new(
-            self.table.clone(),
-            self.snapshot_id,
-            self.schema.clone(),
-            projection,
-            filters,
-            limit,
-        )))
+        Ok(Arc::new(
+            IcebergTableScan::new(
+                self.table.clone(),
+                self.snapshot_id,
+                self.schema.clone(),
+                projection,
+                filters,
+                limit,
+            )
+            .with_catalog_config(self.config.clone()),
+        ))
     }
 
     fn supports_filters_pushdown(
@@ -510,6 +542,62 @@ mod tests {
         let df = ctx.sql("SELECT count(*) FROM mytable").await.unwrap();
         let physical_plan = df.create_physical_plan().await;
         assert!(physical_plan.is_ok());
+    }
+
+    fn test_catalog_config() -> IcebergCatalogConfig {
+        IcebergCatalogConfig::new(
+            "rest",
+            "test_catalog",
+            HashMap::from([("uri".to_string(), "http://localhost:8181".to_string())]),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_static_provider_exposes_catalog_identity() {
+        let table = get_test_table_from_metadata_file().await;
+        let ident = table.identifier().clone();
+        let snapshot_id = table.metadata().snapshots().next().unwrap().snapshot_id();
+        let config = test_catalog_config();
+
+        let provider = IcebergStaticTableProvider::try_new_from_table(table.clone())
+            .await
+            .unwrap();
+        assert!(provider.config().is_none());
+
+        let provider = IcebergStaticTableProvider::try_new_from_table_snapshot(table, snapshot_id)
+            .await
+            .unwrap();
+        assert!(provider.config().is_none());
+
+        // Exactly the inputs needed to rebuild an equivalent provider elsewhere.
+        let provider = provider.with_catalog_config(config.clone());
+        assert_eq!(provider.config(), Some(&config));
+        assert_eq!(provider.table_ident(), &ident);
+        assert_eq!(provider.snapshot_id(), Some(snapshot_id));
+    }
+
+    #[tokio::test]
+    async fn test_static_provider_propagates_catalog_config_into_scan() {
+        let table = get_test_table_from_metadata_file().await;
+        let config = test_catalog_config();
+        let ctx = SessionContext::new();
+
+        let provider = IcebergStaticTableProvider::try_new_from_table(table.clone())
+            .await
+            .unwrap();
+        let plan = provider.scan(&ctx.state(), None, &[], None).await.unwrap();
+        let scan = plan
+            .downcast_ref::<IcebergTableScan>()
+            .expect("static provider should produce an IcebergTableScan");
+        assert!(scan.catalog_config().is_none());
+
+        let provider = IcebergStaticTableProvider::try_new_from_table(table)
+            .await
+            .unwrap()
+            .with_catalog_config(config.clone());
+        let plan = provider.scan(&ctx.state(), None, &[], None).await.unwrap();
+        let scan = plan.downcast_ref::<IcebergTableScan>().unwrap();
+        assert_eq!(scan.catalog_config(), Some(&config));
     }
 
     // Tests for IcebergTableProvider
