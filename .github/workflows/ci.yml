@@ -149,8 +149,8 @@ jobs:
             cargo check -p "$pkg" --all-targets || exit 1
           done
 
-  # Verifies the core iceberg crate compiles without default features, ensuring
-  # optional functionality is properly gated behind feature flags.
+  # Verifies crates with feature flags compile without default features, ensuring
+  # optional functionality is properly gated.
   build_with_no_default_features:
     needs: lint
     runs-on: ${{ matrix.os }}
@@ -178,7 +178,9 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Build
-        run: cargo build -p iceberg --no-default-features
+        run: |
+          cargo build -p iceberg --no-default-features
+          cargo build -p iceberg-catalog-rest --no-default-features
 
   tests:
     needs: lint

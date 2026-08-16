@@ -25,3 +25,21 @@
 This crate contains the official Native Rust implementation of Apache Iceberg Rest Catalog.
 
 See the [API documentation](https://docs.rs/iceberg-catalog-rest/latest) for examples and the full API.
+
+## Crate Features
+
+| Feature                   | Default | Description                                                                          |
+| ------------------------- | ------- | ------------------------------------------------------------------------------------ |
+| `rustls-tls-native-roots` | Yes     | TLS via rustls, validating certificates against the operating system's trust store    |
+| `rustls-tls`              | No      | TLS via rustls, validating certificates against a compiled-in webpki root bundle      |
+
+With the default features, `https://` catalog URIs work out of the box. To build without a
+TLS stack, disable default features:
+
+```toml
+[dependencies]
+iceberg-catalog-rest = { version = "x.y.z", default-features = false }
+```
+
+For custom TLS settings such as client certificates or additional trusted roots, pass a
+preconfigured `reqwest::Client` to `RestCatalogBuilder::with_client`.
