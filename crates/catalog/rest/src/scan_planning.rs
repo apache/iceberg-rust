@@ -884,16 +884,25 @@ fn apply_retry_after(
 
 fn parse_retry_after(value: Option<&reqwest::header::HeaderValue>) -> Option<Duration> {
     let value = value?.to_str().ok()?.trim();
-    let seconds: u64 = value.parse().ok()?;
-    if seconds == 0 {
-        return None;
+    if let Ok(seconds) = value.parse::<u64>() {
+        if seconds == 0 {
+            return None;
+        }
+        // Duration::from_secs panics when secs * 1e9 overflows u64.
+        const MAX_SECS: u64 = u64::MAX / 1_000_000_000;
+        if seconds > MAX_SECS {
+            return None;
+        }
+        return Some(Duration::from_secs(seconds));
     }
-    // Duration::from_secs panics when secs * 1e9 overflows u64.
-    const MAX_SECS: u64 = u64::MAX / 1_000_000_000;
-    if seconds > MAX_SECS {
-        return None;
-    }
-    Some(Duration::from_secs(seconds))
+    // RFC 9110 HTTP-date, IMF-fixdate form (RFC 2822). Obsolete RFC 850 /
+    // asctime values are ignored rather than adding another parser.
+    let retry_at = chrono::DateTime::parse_from_rfc2822(value).ok()?;
+    retry_at
+        .signed_duration_since(chrono::Utc::now())
+        .to_std()
+        .ok()
+        .filter(|d| !d.is_zero())
 }
 
 fn require_plan_id(plan_id: &str) -> Result<()> {
@@ -1045,6 +1054,22 @@ mod tests {
         assert!(parse_retry_after(Some(&huge)).is_none());
         let ok = reqwest::header::HeaderValue::from_static("2");
         assert_eq!(parse_retry_after(Some(&ok)), Some(Duration::from_secs(2)));
+        let padded = reqwest::header::HeaderValue::from_static(" 2 ");
+        assert_eq!(
+            parse_retry_after(Some(&padded)),
+            Some(Duration::from_secs(2))
+        );
+        let invalid = reqwest::header::HeaderValue::from_static("not-a-date");
+        assert!(parse_retry_after(Some(&invalid)).is_none());
+    }
+
+    #[test]
+    fn parse_retry_after_accepts_http_date() {
+        let past = reqwest::header::HeaderValue::from_static("Wed, 21 Oct 2015 07:28:00 GMT");
+        assert!(parse_retry_after(Some(&past)).is_none());
+        let future = reqwest::header::HeaderValue::from_static("Sun, 16 Aug 2099 12:00:00 GMT");
+        let delay = parse_retry_after(Some(&future)).unwrap();
+        assert!(delay > Duration::from_secs(60 * 60 * 24 * 365));
     }
 
     #[test]
@@ -1162,6 +1187,68 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::TableNotFound);
         config.assert_async().await;
         missing.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn plan_404_splits_namespace() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let missing = server
+            .mock("POST", "/v1/namespaces/ns/tables/tbl/plan")
+            .with_status(404)
+            .with_body(
+                r#"{"error":{"message":"gone","type":"NoSuchNamespaceException","code":404}}"#,
+            )
+            .create_async()
+            .await;
+        let catalog = catalog(&server.url());
+        let err = catalog
+            .plan_table_scan(&table(), PlanTableScanRequest::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::NamespaceNotFound);
+        config.assert_async().await;
+        missing.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn fetch_planning_result_cancelled_is_an_error() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let fetch = server
+            .mock("GET", "/v1/namespaces/ns/tables/tbl/plan/p1")
+            .with_status(200)
+            .with_body(r#"{"status":"cancelled"}"#)
+            .create_async()
+            .await;
+        let catalog = catalog(&server.url());
+        let err = catalog
+            .fetch_planning_result(&table(), "p1", FetchPlanningResultOptions::default())
+            .await
+            .unwrap_err();
+        assert!(is_plan_cancelled(&err));
+        config.assert_async().await;
+        fetch.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn fetch_planning_result_failed_is_an_error() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let fetch = server
+            .mock("GET", "/v1/namespaces/ns/tables/tbl/plan/p1")
+            .with_status(200)
+            .with_body(r#"{"status":"failed","error":{"message":"boom","type":"IcebergException","code":500}}"#)
+            .create_async()
+            .await;
+        let catalog = catalog(&server.url());
+        let err = catalog
+            .fetch_planning_result(&table(), "p1", FetchPlanningResultOptions::default())
+            .await
+            .unwrap_err();
+        assert!(is_plan_failed(&err));
+        config.assert_async().await;
+        fetch.assert_async().await;
     }
 
     #[tokio::test]
@@ -1291,6 +1378,117 @@ mod tests {
         config.assert_async().await;
         first.assert_async().await;
         second.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn wait_for_plan_propagates_cancelled() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let poll = server
+            .mock("GET", "/v1/namespaces/ns/tables/tbl/plan/p1")
+            .with_status(200)
+            .with_body(r#"{"status":"cancelled"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let catalog = catalog(&server.url());
+        let err = catalog
+            .wait_for_plan(&table(), "p1", WaitForPlanOptions {
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(1),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(is_plan_cancelled(&err));
+        config.assert_async().await;
+        poll.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn wait_for_plan_propagates_expired() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let poll = server
+            .mock("GET", "/v1/namespaces/ns/tables/tbl/plan/p1")
+            .with_status(404)
+            .with_body(
+                r#"{"error":{"message":"expired","type":"NoSuchPlanIdException","code":404}}"#,
+            )
+            .expect(1)
+            .create_async()
+            .await;
+        let catalog = catalog(&server.url());
+        let err = catalog
+            .wait_for_plan(&table(), "p1", WaitForPlanOptions {
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(1),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(is_plan_expired(&err));
+        config.assert_async().await;
+        poll.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn wait_for_plan_propagates_failed() {
+        let mut server = Server::new_async().await;
+        let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+        let poll = server
+            .mock("GET", "/v1/namespaces/ns/tables/tbl/plan/p1")
+            .with_status(200)
+            .with_body(r#"{"status":"failed","error":{"message":"boom","type":"IcebergException","code":500}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let catalog = catalog(&server.url());
+        let err = catalog
+            .wait_for_plan(&table(), "p1", WaitForPlanOptions {
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(1),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(is_plan_failed(&err));
+        config.assert_async().await;
+        poll.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn wait_for_plan_retries_java_idempotent_get_statuses() {
+        for status in [408, 429, 500, 502, 503, 504] {
+            let mut server = Server::new_async().await;
+            let config = config_with_endpoints(&mut server, ALL_PLAN).await;
+            let busy = server
+                .mock("GET", "/v1/namespaces/ns/tables/tbl/plan/p1")
+                .with_status(status)
+                .expect(1)
+                .create_async()
+                .await;
+            let done = server
+                .mock("GET", "/v1/namespaces/ns/tables/tbl/plan/p1")
+                .with_status(200)
+                .with_body(r#"{"status":"completed"}"#)
+                .expect(1)
+                .create_async()
+                .await;
+            let catalog = catalog(&server.url());
+            let result = catalog
+                .wait_for_plan(&table(), "p1", WaitForPlanOptions {
+                    min_delay: Duration::from_millis(1),
+                    max_delay: Duration::from_millis(1),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            assert_eq!(result.status, PlanStatus::Completed, "status {status}");
+            config.assert_async().await;
+            busy.assert_async().await;
+            done.assert_async().await;
+        }
     }
 
     #[tokio::test]
