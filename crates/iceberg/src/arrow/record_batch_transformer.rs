@@ -18,15 +18,17 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow_arith::boolean::is_not_null;
 use arrow_array::{
-    Array as ArrowArray, ArrayRef, Int32Array, RecordBatch, RecordBatchOptions, RunArray,
-    StructArray,
+    Array as ArrowArray, ArrayRef, Int32Array, Int64Array, RecordBatch, RecordBatchOptions,
+    RunArray, StructArray,
 };
 use arrow_cast::cast;
 use arrow_schema::{
     DataType, Field, FieldRef, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
     SchemaRef,
 };
+use arrow_select::zip::zip;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::value::{create_primitive_array_repeated, create_primitive_array_single_element};
@@ -168,6 +170,17 @@ pub(crate) enum ColumnSource {
         fields: Fields,
         child_values: Vec<Option<PrimitiveLiteral>>,
     },
+
+    // A metadata column read from the file and coalesced with a per-file
+    // fallback: the source column's value where non-null, else `fallback`.
+    // Used for `_last_updated_sequence_number` when the file physically carries
+    // the per-row column. The result is cast to `target_type` so it matches the
+    // (run-end-encoded) type the constant and null paths produce for the column.
+    CoalesceLastUpdatedSeq {
+        source_index: usize,
+        fallback: PrimitiveLiteral,
+        target_type: DataType,
+    },
     // The iceberg spec refers to other permissible schema evolution actions
     // (see https://iceberg.apache.org/spec/#schema-evolution):
     // renaming fields, deleting fields and reordering fields.
@@ -226,10 +239,11 @@ pub(crate) struct RecordBatchTransformerBuilder {
     virtual_fields: HashSet<i32>,
 }
 
-/// A per-file constant value for a column.
+/// How a metadata (or identity-partition) column's values are supplied.
 ///
-/// Covers both scalar constants (metadata columns like `_file` and `_spec_id`,
-/// as well as identity partition source fields) and the struct `_partition` column.
+/// Covers scalar constants (metadata columns like `_file` and `_spec_id`, and
+/// identity partition source fields), the struct `_partition` column, an all-null
+/// column, and a per-row column coalesced with a per-file fallback.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ColumnConstant {
     /// A scalar constant (e.g., `_file` path, `_spec_id`, identity partition values).
@@ -244,6 +258,11 @@ pub(crate) enum ColumnConstant {
     /// null value) because `Datum` always represents a non-null value; the type is
     /// computed once so the schema and column-source paths cannot derive it apart.
     Null(DataType),
+    /// A metadata column physically present in the file that must be coalesced with
+    /// a per-file fallback: read the per-row value, substitute this Datum where the
+    /// per-row value is null (e.g. `_last_updated_sequence_number` on a file that
+    /// carries the column, falling back to the data sequence number).
+    CoalesceLastUpdatedSeq(Datum),
 }
 
 /// Pre-computed data for a struct constant column.
@@ -300,6 +319,19 @@ impl RecordBatchTransformerBuilder {
     pub(crate) fn with_constant(mut self, field_id: i32, datum: Datum) -> Self {
         self.constant_fields
             .insert(field_id, ColumnConstant::Scalar(datum));
+        self
+    }
+
+    /// Add a coalesced `_last_updated_sequence_number` column for a specific field ID:
+    /// the file's per-row value where non-null, falling back to `datum` where null.
+    /// Used when the file physically carries the column.
+    pub(crate) fn with_coalesced_last_updated_seq_column(
+        mut self,
+        field_id: i32,
+        datum: Datum,
+    ) -> Self {
+        self.constant_fields
+            .insert(field_id, ColumnConstant::CoalesceLastUpdatedSeq(datum));
         self
     }
 
@@ -541,6 +573,19 @@ impl RecordBatchTransformer {
                         );
                         return Ok(Arc::new(arrow_field));
                     }
+                    Some(ColumnConstant::CoalesceLastUpdatedSeq(datum)) => {
+                        // Same run-end-encoded type as the constant/null paths, so the
+                        // column has one Arrow type whether a file coalesces, uses the
+                        // constant, or is nulled.
+                        let iceberg_field = get_metadata_field(*field_id)?;
+                        let arrow_field = field_with_id(
+                            &iceberg_field.name,
+                            datum_to_arrow_type_with_ree(datum),
+                            true,
+                            iceberg_field.id,
+                        );
+                        return Ok(Arc::new(arrow_field));
+                    }
                     None => {}
                 }
 
@@ -716,6 +761,26 @@ impl RecordBatchTransformer {
                             target_type: arrow_type.clone(),
                         });
                     }
+                    Some(ColumnConstant::CoalesceLastUpdatedSeq(datum)) => {
+                        // Registered only for `_last_updated_sequence_number`, and only after
+                        // the pipeline detects the embedded field id, so the source column is
+                        // always present in the file.
+                        let (_, source_index) =
+                            field_id_to_source_schema_map.get(field_id).ok_or_else(|| {
+                                Error::new(
+                                    ErrorKind::Unexpected,
+                                    format!(
+                                        "coalesce registered for field id {field_id} but the \
+                                         column is absent from the file batch"
+                                    ),
+                                )
+                            })?;
+                        return Ok(ColumnSource::CoalesceLastUpdatedSeq {
+                            source_index: *source_index,
+                            fallback: datum.literal().clone(),
+                            target_type: datum_to_arrow_type_with_ree(datum),
+                        });
+                    }
                     None => {}
                 }
 
@@ -870,9 +935,48 @@ impl RecordBatchTransformer {
                         fields,
                         child_values,
                     } => Self::create_struct_column(fields, child_values, num_rows)?,
+
+                    ColumnSource::CoalesceLastUpdatedSeq {
+                        source_index,
+                        fallback,
+                        target_type,
+                    } => Self::create_coalesce_column(
+                        &columns[*source_index],
+                        fallback,
+                        target_type,
+                    )?,
                 })
             })
             .collect()
+    }
+
+    /// Builds a coalesced column: the source column's per-row value where non-null,
+    /// else the scalar `fallback`, cast to `target_type` (the run-end-encoded type
+    /// the column's other paths produce).
+    fn create_coalesce_column(
+        source: &ArrayRef,
+        fallback: &PrimitiveLiteral,
+        target_type: &DataType,
+    ) -> Result<ArrayRef> {
+        if source.data_type() != &DataType::Int64 {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("coalesce source must be Int64, got {}", source.data_type()),
+            ));
+        }
+        let PrimitiveLiteral::Long(seq) = fallback else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                format!("coalesce fallback must be a long, got {fallback:?}"),
+            ));
+        };
+        let scalar = Int64Array::new_scalar(*seq);
+        let mask = is_not_null(source)?;
+        let coalesced = zip(&mask, source, &scalar)?;
+        // Cast to the run-end-encoded target type for column-type uniformity across the
+        // constant/null/coalesce paths (not for compression -- a per-row-varying column
+        // gains nothing from REE).
+        Ok(cast(&coalesced, target_type)?)
     }
 
     fn create_column(
@@ -2242,10 +2346,7 @@ mod test {
 
         // Every row's logical value is 7 (the data sequence number), regardless of
         // the physical (run-end) encoding.
-        let seq_col = cast(result.column(1), &DataType::Int64).unwrap();
-        let seq_col = seq_col.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(seq_col.len(), 3);
-        assert!((0..3).all(|i| !seq_col.is_null(i) && seq_col.value(i) == 7));
+        assert_last_updated_seq_column(&result, &[Some(7), Some(7), Some(7)]);
     }
 
     #[test]
@@ -2287,10 +2388,112 @@ mod test {
         let result = transformer.process_record_batch(parquet_batch).unwrap();
 
         // Every row's logical value is null.
-        let seq_col = cast(result.column(1), &DataType::Int64).unwrap();
-        let seq_col = seq_col.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(seq_col.len(), 3);
-        assert!((0..3).all(|i| seq_col.is_null(i)));
+        assert_last_updated_seq_column(&result, &[None, None, None]);
+    }
+
+    /// Builds a transformer + a file batch for the coalesce case: `id` plus a physical
+    /// `_last_updated_sequence_number` column carrying `seq_values`.
+    fn coalesce_transformer_and_batch(
+        seq_values: Vec<Option<i64>>,
+        id_values: Vec<i32>,
+        fallback: i64,
+    ) -> (RecordBatchTransformer, RecordBatch) {
+        use crate::metadata_columns::{
+            RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
+            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+        };
+        use crate::spec::Datum;
+
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![
+            field_with_id("id", DataType::Int32, false, 1),
+            field_with_id(
+                RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
+                DataType::Int64,
+                true,
+                RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+            ),
+        ]));
+        let projected_field_ids = [1, RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER];
+        let transformer = RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+            .with_coalesced_last_updated_seq_column(
+                RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+                Datum::long(fallback),
+            )
+            .build();
+        let batch = RecordBatch::try_new(parquet_schema, vec![
+            Arc::new(Int32Array::from(id_values)),
+            Arc::new(Int64Array::from(seq_values)),
+        ])
+        .unwrap();
+        (transformer, batch)
+    }
+
+    /// Reads the `_last_updated_sequence_number` column by name (encoding-agnostic: casts
+    /// through the run-end-encoding to logical Int64) and asserts its per-row values.
+    fn assert_last_updated_seq_column(result: &RecordBatch, expected: &[Option<i64>]) {
+        use crate::metadata_columns::RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER;
+
+        let col = result
+            .column_by_name(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER)
+            .expect("_last_updated_sequence_number column should be present");
+        let logical = cast(col, &DataType::Int64).unwrap();
+        let values = logical.as_any().downcast_ref::<Int64Array>().unwrap();
+        let actual: Vec<Option<i64>> = (0..values.len())
+            .map(|i| (!values.is_null(i)).then(|| values.value(i)))
+            .collect();
+        assert_eq!(&actual, expected);
+    }
+
+    #[test]
+    fn last_updated_sequence_number_coalesce_column() {
+        let (mut transformer, batch) =
+            coalesce_transformer_and_batch(vec![Some(5), None, Some(8)], vec![10, 20, 30], 9);
+        let result = transformer.process_record_batch(batch).unwrap();
+
+        // Per-row value where non-null; the fallback (9) where null.
+        assert_last_updated_seq_column(&result, &[Some(5), Some(9), Some(8)]);
+    }
+
+    #[test]
+    fn last_updated_sequence_number_coalesce_all_null() {
+        // Every row falls back. This is the only input that distinguishes the `is_not_null`
+        // mask from `is_null` -- a mixed input passes under either polarity.
+        let (mut transformer, batch) =
+            coalesce_transformer_and_batch(vec![None, None, None], vec![10, 20, 30], 9);
+        let result = transformer.process_record_batch(batch).unwrap();
+
+        assert_last_updated_seq_column(&result, &[Some(9), Some(9), Some(9)]);
+    }
+
+    #[test]
+    fn last_updated_sequence_number_coalesce_all_non_null() {
+        // Nothing falls back: every per-row value passes through, and the run-end-encoding
+        // cast still yields a valid array.
+        let (mut transformer, batch) =
+            coalesce_transformer_and_batch(vec![Some(5), Some(6), Some(7)], vec![10, 20, 30], 9);
+        let result = transformer.process_record_batch(batch).unwrap();
+
+        assert_last_updated_seq_column(&result, &[Some(5), Some(6), Some(7)]);
+    }
+
+    #[test]
+    fn last_updated_sequence_number_coalesce_empty_batch() {
+        // A 0-row batch (reachable when a predicate or positional deletes clear a row
+        // group) must still produce a well-formed, empty column of the shared type.
+        let (mut transformer, batch) = coalesce_transformer_and_batch(vec![], vec![], 9);
+        let result = transformer.process_record_batch(batch).unwrap();
+
+        assert_eq!(result.num_rows(), 0);
+        assert_last_updated_seq_column(&result, &[]);
     }
 
     /// field 1 and RESERVED_FIELD_ID_POS are of identical type

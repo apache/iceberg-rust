@@ -50,6 +50,10 @@ Documentation attributes on the field are copied to the generated getter. The
 macro generates no setters, backing fields, or conversion back to a property
 map.
 
+`Option<T>` key fields and `HashMap<String, T>` prefix fields must use the
+corresponding types from `std`. The macro recognizes those field shapes
+syntactically and generates code using the standard-library variants.
+
 ## Complete example
 
 This example covers exact keys and defaults, optional values, case-insensitive
@@ -141,14 +145,16 @@ struct TableLikeProperties {
     #[property(prefix = COLUMN_FPP_PREFIX, getter)]
     column_fpp: HashMap<String, f64>,
 
-    /// A single-key parser can validate and normalize a property value.
+    /// An explicitly configured data path override.
+    /// `None` means callers should use `<table-location>/data`.
+    /// A single-key parser validates and normalizes configured values.
     #[property(
         key = LOCATION,
-        default = "warehouse",
+        default = None,
         parse_with = parse_location,
         getter
     )]
-    location: String,
+    location: Option<String>,
 
     /// A full-map parser can model one field with multiple property keys.
     #[property(
@@ -167,7 +173,7 @@ fn main() -> iceberg::Result<()> {
     assert_eq!(defaults.owner(), &None);
     assert!(defaults.fanout_enabled());
     assert!(defaults.column_fpp().is_empty());
-    assert_eq!(defaults.location(), "warehouse");
+    assert_eq!(defaults.location(), &None);
     assert_eq!(defaults.dimensions(), (640, 480, 320));
 
     let raw = HashMap::from([
@@ -187,7 +193,10 @@ fn main() -> iceberg::Result<()> {
     assert_eq!(properties.owner().as_deref(), Some("iceberg"));
     assert!(!properties.fanout_enabled());
     assert_eq!(properties.column_fpp()["id"], 0.01);
-    assert_eq!(properties.location(), "s3://bucket/table");
+    assert_eq!(
+        properties.location().as_deref(),
+        Some("s3://bucket/table")
+    );
     assert_eq!(properties.dimensions(), (1920, 1080, 720));
 
     let error = TableLikeProperties::from_properties(&HashMap::from([(
