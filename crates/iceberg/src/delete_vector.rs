@@ -17,9 +17,10 @@
 
 use std::ops::BitOrAssign;
 
-use roaring::RoaringTreemap;
+use bytes::Buf;
 use roaring::bitmap::Iter;
 use roaring::treemap::BitmapIter;
+use roaring::{RoaringBitmap, RoaringTreemap};
 
 use crate::{Error, ErrorKind, Result};
 
@@ -87,8 +88,9 @@ impl DeleteVector {
     /// ```
     ///
     /// `length` counts the magic and vector bytes (not itself or the CRC). The CRC-32 is
-    /// computed over the magic and vector. `vector` is a roaring bitmap in the portable
-    /// 64-bit format read by [`RoaringTreemap::deserialize_from`].
+    /// computed over the magic and vector. `vector` is a roaring bitmap in the portable 64-bit
+    /// format: a directory of 32-bit key / 32-bit roaring bitmap pairs, ordered by unsigned
+    /// comparison of the keys, one bitmap per key.
     ///
     /// Cardinality is not checked here. The caller validates the decoded length against the
     /// delete file's `record_count`, where the manifest metadata is available.
@@ -96,7 +98,8 @@ impl DeleteVector {
     /// # Errors
     ///
     /// Returns [`ErrorKind::DataInvalid`] if the blob is shorter than the minimum, the length
-    /// prefix or CRC does not match, the magic is wrong, or the roaring payload fails to decode.
+    /// prefix or CRC does not match, the magic is wrong, the roaring directory's keys are not
+    /// ordered by unsigned comparison, or the roaring payload fails to decode.
     // Consumed by the scan delete loader once the deletion-vector read path is wired up.
     #[allow(dead_code)]
     pub fn deserialize(blob: &[u8]) -> Result<Self> {
@@ -113,8 +116,15 @@ impl DeleteVector {
         // The magic and vector, i.e. the bytes covered by both the length prefix and the CRC.
         let body = &blob[DV_LENGTH_PREFIX_BYTES..blob.len() - DV_CRC_BYTES];
 
-        let declared_len =
-            u32::from_be_bytes(blob[..DV_LENGTH_PREFIX_BYTES].try_into().unwrap()) as usize;
+        let declared_len = (&blob[..DV_LENGTH_PREFIX_BYTES])
+            .try_get_u32()
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "failed to read the deletion-vector-v1 length prefix",
+                )
+                .with_source(e)
+            })? as usize;
         if declared_len != body.len() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
@@ -127,7 +137,15 @@ impl DeleteVector {
 
         // Verify the CRC before interpreting any bytes so a corrupt blob yields a single clear
         // error rather than an opaque roaring decode failure.
-        let stored_crc = u32::from_be_bytes(blob[blob.len() - DV_CRC_BYTES..].try_into().unwrap());
+        let stored_crc = (&blob[blob.len() - DV_CRC_BYTES..])
+            .try_get_u32()
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "failed to read the deletion-vector-v1 CRC",
+                )
+                .with_source(e)
+            })?;
         let computed_crc = crc32fast::hash(body);
         if computed_crc != stored_crc {
             return Err(Error::new(
@@ -148,13 +166,56 @@ impl DeleteVector {
             ));
         }
 
-        let inner = RoaringTreemap::deserialize_from(vector).map_err(|e| {
+        // The Puffin spec defines the roaring directory as the bitmaps "ordered by unsigned
+        // comparison of the 32-bit keys", with one bitmap per key. Walk it ourselves (rather than
+        // `RoaringTreemap::deserialize_from`, which stores keys in a `BTreeMap` via a plain insert
+        // and would silently accept a stream with duplicate or out-of-order keys, discarding the
+        // earlier bitmap on a duplicate) so a non-conformant blob is rejected instead of decoded
+        // into a value that doesn't match what was actually written.
+        let mut reader = vector;
+        let bitmap_count = reader.try_get_u64_le().map_err(|e| {
             Error::new(
                 ErrorKind::DataInvalid,
                 "failed to decode deletion-vector-v1 roaring payload",
             )
             .with_source(e)
         })?;
+
+        let mut bitmaps = Vec::new();
+        let mut last_key: Option<u32> = None;
+        for _ in 0..bitmap_count {
+            let key = reader.try_get_u32_le().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "failed to decode deletion-vector-v1 roaring payload",
+                )
+                .with_source(e)
+            })?;
+            if let Some(last) = last_key
+                && key <= last
+            {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "deletion-vector-v1 roaring keys must be ordered by unsigned comparison, got key {key} after {last}"
+                    ),
+                ));
+            }
+            last_key = Some(key);
+
+            let bitmap = RoaringBitmap::deserialize_from(&mut reader).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "failed to decode deletion-vector-v1 roaring payload",
+                )
+                .with_source(e)
+            })?;
+            bitmaps.push((key, bitmap));
+        }
+
+        // `bitmaps` is already sorted by key, but `roaring` has no constructor that accepts
+        // pre-sorted pairs without re-sorting them; revisit if that changes upstream.
+        let inner = RoaringTreemap::from_bitmaps(bitmaps);
 
         Ok(DeleteVector { inner })
     }
@@ -292,18 +353,21 @@ mod tests {
     // Reproduces Iceberg-Java's `deletion-vector-v1` framing so tests can round-trip through
     // `deserialize` without a Java writer. Cross-implementation golden fixtures produced by
     // Iceberg-Java are tracked separately; this only checks that our decode matches our encode.
-    fn encode_dv_blob(dv: &DeleteVector) -> Vec<u8> {
-        let mut vector = Vec::with_capacity(dv.inner.serialized_size());
-        dv.inner.serialize_into(&mut vector).unwrap();
-
+    fn frame_dv_blob(vector: &[u8]) -> Vec<u8> {
         let body_len = DV_MAGIC_BYTES + vector.len();
         let mut blob = Vec::with_capacity(DV_LENGTH_PREFIX_BYTES + body_len + DV_CRC_BYTES);
         blob.extend_from_slice(&(body_len as u32).to_be_bytes());
         blob.extend_from_slice(&DV_MAGIC);
-        blob.extend_from_slice(&vector);
+        blob.extend_from_slice(vector);
         let crc = crc32fast::hash(&blob[DV_LENGTH_PREFIX_BYTES..]);
         blob.extend_from_slice(&crc.to_be_bytes());
         blob
+    }
+
+    fn encode_dv_blob(dv: &DeleteVector) -> Vec<u8> {
+        let mut vector = Vec::with_capacity(dv.inner.serialized_size());
+        dv.inner.serialize_into(&mut vector).unwrap();
+        frame_dv_blob(&vector)
     }
 
     fn dv_of(positions: impl IntoIterator<Item = u64>) -> DeleteVector {
@@ -391,5 +455,42 @@ mod tests {
         blob[..DV_LENGTH_PREFIX_BYTES].copy_from_slice(&(declared + 1).to_be_bytes());
         let err = DeleteVector::deserialize(&blob).unwrap_err();
         assert!(err.message().contains("length prefix"), "got: {err}");
+    }
+
+    // Crafts a raw roaring treemap directory (bitmap count header + key/bitmap entries) so tests
+    // can exercise key-ordering violations that `dv_of`/`encode_dv_blob` can never produce, since
+    // `DeleteVector::insert` always keeps keys unique and ascending.
+    fn raw_roaring_vector(entries: &[(u32, &[u32])]) -> Vec<u8> {
+        let mut vector = Vec::new();
+        vector.extend_from_slice(&(entries.len() as u64).to_le_bytes());
+        for (key, positions) in entries {
+            let mut bitmap = RoaringBitmap::new();
+            for &pos in *positions {
+                bitmap.insert(pos);
+            }
+            vector.extend_from_slice(&key.to_le_bytes());
+            bitmap.serialize_into(&mut vector).unwrap();
+        }
+        vector
+    }
+
+    // `RoaringTreemap::deserialize_from` stores keys in a `BTreeMap` via a plain insert, so
+    // without our own ordering check, decoding this would silently keep only the second bitmap
+    // for key 5 (position 2) and drop the first (position 1).
+    #[test]
+    fn test_deserialize_rejects_duplicate_keys() {
+        let vector = raw_roaring_vector(&[(5, &[1]), (5, &[2])]);
+        let err = DeleteVector::deserialize(&frame_dv_blob(&vector)).unwrap_err();
+        assert!(err.message().contains("unsigned comparison"), "got: {err}");
+    }
+
+    // The Puffin spec requires the roaring directory's keys to be "ordered by unsigned
+    // comparison"; a stream with unique but out-of-order keys is not a conformant blob even
+    // though `BTreeMap` would happily reorder it into a correct-looking result.
+    #[test]
+    fn test_deserialize_rejects_out_of_order_keys() {
+        let vector = raw_roaring_vector(&[(5, &[1]), (3, &[2])]);
+        let err = DeleteVector::deserialize(&frame_dv_blob(&vector)).unwrap_err();
+        assert!(err.message().contains("unsigned comparison"), "got: {err}");
     }
 }
