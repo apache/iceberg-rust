@@ -25,9 +25,10 @@ Tests requiring live HF credentials are skipped when HF_TOKEN or HF_DATASET is n
 """
 
 import os
-import pytest
-import pyarrow as pa
+
 import datafusion
+import pyarrow as pa
+import pytest
 from datafusion import SessionContext
 from packaging.version import Version
 from pyiceberg.catalog import load_catalog
@@ -49,10 +50,8 @@ def local_catalog(tmp_path_factory: pytest.TempPathFactory):
     warehouse = tmp_path_factory.mktemp("cdc_warehouse")
     catalog = load_catalog(
         "default",
-        **{
-            "uri": f"sqlite:///{warehouse}/pyiceberg_catalog.db",
-            "warehouse": f"file://{warehouse}",
-        },
+        uri=f"sqlite:///{warehouse}/pyiceberg_catalog.db",
+        warehouse=f"file://{warehouse}",
     )
     yield catalog
     catalog.close()

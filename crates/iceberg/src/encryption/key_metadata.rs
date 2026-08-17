@@ -20,7 +20,7 @@
 
 use std::fmt;
 
-use super::{SecureKey, SensitiveBytes};
+use super::SecureKey;
 use crate::{Error, ErrorKind, Result};
 
 /// Standard key metadata for Iceberg table encryption.
@@ -32,7 +32,7 @@ use crate::{Error, ErrorKind, Result};
 /// Wire format: `[version byte (0x01)] [Avro binary datum]`
 #[derive(Clone, PartialEq, Eq)]
 pub struct StandardKeyMetadata {
-    encryption_key: SensitiveBytes,
+    encryption_key: SecureKey,
     aad_prefix: Option<Box<[u8]>>,
     file_length: Option<u64>,
 }
@@ -54,13 +54,9 @@ impl fmt::Debug for StandardKeyMetadata {
 }
 
 impl StandardKeyMetadata {
-    /// Creates a new `StandardKeyMetadata`.
-    pub fn new(encryption_key: &[u8]) -> Self {
-        Self {
-            encryption_key: SensitiveBytes::new(encryption_key),
-            aad_prefix: None,
-            file_length: None,
-        }
+    /// Creates a new `StandardKeyMetadata` from raw key bytes.
+    pub fn try_new(encryption_key: &[u8]) -> Result<Self> {
+        Ok(Self::from(SecureKey::new(encryption_key)?))
     }
 
     /// Adds an AAD prefix.
@@ -76,7 +72,7 @@ impl StandardKeyMetadata {
     }
 
     /// Returns the plaintext Data Encryption Key.
-    pub fn encryption_key(&self) -> &SensitiveBytes {
+    pub fn encryption_key(&self) -> &SecureKey {
         &self.encryption_key
     }
 
@@ -97,17 +93,18 @@ impl StandardKeyMetadata {
 
     /// Decodes from Java-compatible format.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let metadata = _serde::StandardKeyMetadataV1::decode(bytes).map(Self::from)?;
-        // Validate the DEK is a usable AES key (16/24/32 bytes) up front, so a
-        // malformed key surfaces a clear error.
-        SecureKey::new(metadata.encryption_key.as_bytes()).map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Invalid encryption key in key metadata",
-            )
-            .with_source(e)
-        })?;
-        Ok(metadata)
+        _serde::StandardKeyMetadataV1::decode(bytes).and_then(Self::try_from)
+    }
+}
+
+impl From<SecureKey> for StandardKeyMetadata {
+    /// Creates a `StandardKeyMetadata` from an already-validated key.
+    fn from(encryption_key: SecureKey) -> Self {
+        Self {
+            encryption_key,
+            aad_prefix: None,
+            file_length: None,
+        }
     }
 }
 
@@ -223,13 +220,22 @@ mod _serde {
         }
     }
 
-    impl From<StandardKeyMetadataV1> for StandardKeyMetadata {
-        fn from(v1: StandardKeyMetadataV1) -> Self {
-            Self {
-                encryption_key: SensitiveBytes::new(v1.encryption_key.into_vec()),
+    impl TryFrom<StandardKeyMetadataV1> for StandardKeyMetadata {
+        type Error = Error;
+
+        fn try_from(v1: StandardKeyMetadataV1) -> Result<Self> {
+            let encryption_key = SecureKey::new(&v1.encryption_key).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Invalid encryption key in key metadata",
+                )
+                .with_source(e)
+            })?;
+            Ok(Self {
+                encryption_key,
                 aad_prefix: v1.aad_prefix.map(|b| b.into_vec().into_boxed_slice()),
                 file_length: v1.file_length,
-            }
+            })
         }
     }
 }
@@ -243,7 +249,9 @@ mod tests {
         let key = b"0123456789012345";
         let aad = b"1234567890123456";
 
-        let metadata = StandardKeyMetadata::new(key).with_aad_prefix(aad);
+        let metadata = StandardKeyMetadata::try_new(key)
+            .unwrap()
+            .with_aad_prefix(aad);
         let serialized = metadata.encode().unwrap();
         let parsed = StandardKeyMetadata::decode(&serialized).unwrap();
 
@@ -258,7 +266,8 @@ mod tests {
         let aad = b"1234567890123456";
 
         let file_length = 100_000;
-        let metadata = StandardKeyMetadata::new(key)
+        let metadata = StandardKeyMetadata::try_new(key)
+            .unwrap()
             .with_aad_prefix(aad)
             .with_file_length(file_length);
         let serialized = metadata.encode().unwrap();
@@ -287,7 +296,7 @@ mod tests {
     #[test]
     fn test_roundtrip_without_aad() {
         let key = b"0123456789012345";
-        let metadata = StandardKeyMetadata::new(key);
+        let metadata = StandardKeyMetadata::try_new(key).unwrap();
         let serialized = metadata.encode().unwrap();
         let parsed = StandardKeyMetadata::decode(&serialized).unwrap();
 
@@ -296,17 +305,33 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_rejects_invalid_key_length() {
+    fn test_new_rejects_invalid_key_length() {
         // 24-byte (AES-192) and 32-byte (AES-256) keys are accepted.
         for len in [16usize, 24, 32] {
-            let metadata = StandardKeyMetadata::new(&vec![0u8; len]);
-            let serialized = metadata.encode().unwrap();
-            assert!(StandardKeyMetadata::decode(&serialized).is_ok());
+            assert!(StandardKeyMetadata::try_new(&vec![0u8; len]).is_ok());
         }
 
+        // Invalid lengths are rejected at construction, so an invalid
+        // `StandardKeyMetadata` can never exist.
         for len in [0usize, 4, 15, 20, 33] {
-            let metadata = StandardKeyMetadata::new(&vec![0u8; len]);
-            let serialized = metadata.encode().unwrap();
+            assert!(StandardKeyMetadata::try_new(&vec![0u8; len]).is_err());
+        }
+    }
+
+    #[test]
+    fn test_decode_rejects_invalid_key_length() {
+        // Craft wire bytes carrying an invalid-length DEK directly via the
+        // serde struct (bypassing the validated public constructors) to prove
+        // `decode` still rejects malformed key material off the wire.
+        for len in [0usize, 4, 15, 20, 33] {
+            let serialized = _serde::StandardKeyMetadataV1 {
+                encryption_key: serde_bytes::ByteBuf::from(vec![0u8; len]),
+                aad_prefix: None,
+                file_length: None,
+            }
+            .encode()
+            .unwrap();
+
             let err = StandardKeyMetadata::decode(&serialized).unwrap_err();
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
             assert!(

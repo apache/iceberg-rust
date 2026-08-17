@@ -218,11 +218,7 @@ impl TableProvider for IcebergTableProvider {
             sort_by_partition(repartitioned_plan)?
         };
 
-        let write_plan = Arc::new(IcebergWriteExec::new(
-            table.clone(),
-            write_input,
-            self.schema.clone(),
-        ));
+        let write_plan = Arc::new(IcebergWriteExec::new(table.clone(), write_input));
 
         // Merge the outputs of write_plan into one so we can commit all files together
         let coalesce_partitions = Arc::new(CoalescePartitionsExec::new(write_plan));
@@ -667,8 +663,7 @@ mod tests {
         let mut properties = HashMap::new();
         if let Some(enabled) = fanout_enabled {
             properties.insert(
-                iceberg::spec::TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED
-                    .to_string(),
+                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED.to_string(),
                 enabled.to_string(),
             );
         }

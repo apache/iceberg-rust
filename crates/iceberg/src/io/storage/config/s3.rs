@@ -140,7 +140,7 @@ impl Default for S3Config {
 }
 
 impl TryFrom<&StorageConfig> for S3Config {
-    type Error = crate::Error;
+    type Error = Error;
 
     fn try_from(config: &StorageConfig) -> Result<Self> {
         let props = config.props();

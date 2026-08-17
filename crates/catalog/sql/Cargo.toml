@@ -47,3 +47,6 @@ sqlx = { version = "0.8.1", features = [
 ], default-features = false }
 tempfile = { workspace = true }
 tokio = { workspace = true }
+
+[lints]
+workspace = true

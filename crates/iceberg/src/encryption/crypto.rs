@@ -17,67 +17,19 @@
 
 //! Core cryptographic operations for Iceberg encryption.
 
-use std::fmt;
 use std::str::FromStr;
 
 use aes_gcm::aead::generic_array::typenum::U12;
 use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
 use aes_gcm::{Aes128Gcm, Aes256Gcm, AesGcm, Nonce};
-use zeroize::Zeroizing;
 
 /// AES-192-GCM with 96-bit nonce. Not provided by `aes-gcm` but constructible
 /// from the underlying primitives, same as `Aes128Gcm` and `Aes256Gcm`.
 type Aes192Gcm = AesGcm<aes_gcm::aes::Aes192, U12>;
 
+use crate::sensitive::SensitiveBytes;
 use crate::{Error, ErrorKind, Result};
-
-/// Wrapper for sensitive byte data (encryption keys, DEKs, etc.) that:
-/// - Zeroizes memory on drop
-/// - Redacts content in [`Debug`] and [`Display`] output
-/// - Provides only `&[u8]` access via [`as_bytes()`](Self::as_bytes)
-/// - Uses `Box<[u8]>` (immutable boxed slice) since key bytes never grow
-///
-/// Use this type for any struct field that holds plaintext key material.
-/// Because its [`Debug`] impl always prints `[N bytes REDACTED]`, structs
-/// containing `SensitiveBytes` can safely derive or implement `Debug`
-/// without risk of leaking key material.
-#[derive(Clone, PartialEq, Eq)]
-pub struct SensitiveBytes(Zeroizing<Box<[u8]>>);
-
-impl SensitiveBytes {
-    /// Wraps the given bytes as sensitive material.
-    pub fn new(bytes: impl Into<Box<[u8]>>) -> Self {
-        Self(Zeroizing::new(bytes.into()))
-    }
-
-    /// Returns the underlying bytes.
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    /// Returns the number of bytes.
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    /// Returns `true` if the byte slice is empty.
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-impl fmt::Debug for SensitiveBytes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{} bytes REDACTED]", self.0.len())
-    }
-}
-
-impl fmt::Display for SensitiveBytes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{} bytes REDACTED]", self.0.len())
-    }
-}
 
 /// Supported AES key sizes for AES-GCM encryption.
 ///
@@ -138,6 +90,10 @@ impl FromStr for AesKeySize {
 }
 
 /// A secure encryption key that zeroes its memory on drop.
+///
+/// The `Debug` impl is safe to expose: the inner [`SensitiveBytes`] redacts
+/// the key material, printing only its length.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SecureKey {
     key: SensitiveBytes,
     key_size: AesKeySize,

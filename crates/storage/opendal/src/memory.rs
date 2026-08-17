@@ -22,7 +22,5 @@ use opendal::services::MemoryConfig;
 use crate::utils::from_opendal_error;
 
 pub(crate) fn memory_config_build() -> Result<Operator> {
-    Ok(Operator::from_config(MemoryConfig::default())
-        .map_err(from_opendal_error)?
-        .finish())
+    Operator::from_config(MemoryConfig::default()).map_err(from_opendal_error)
 }

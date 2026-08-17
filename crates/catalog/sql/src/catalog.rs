@@ -63,6 +63,28 @@ static MAX_CONNECTIONS: u32 = 10; // Default the SQL pool to 10 connections if n
 static IDLE_TIMEOUT: u64 = 10; // Default the maximum idle timeout per connection to 10s before it is closed
 static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each connection to enabled prior to returning
 
+fn parse_pool_property<T>(
+    props: &HashMap<String, String>,
+    property: &'static str,
+    default: T,
+) -> Result<T>
+where
+    T: FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    props.get(property).map_or(Ok(default), |value| {
+        value.parse().map_err(|error| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Failed to parse SQL catalog pool property",
+            )
+            .with_context("property", property)
+            .with_context("value", value)
+            .with_source(error)
+        })
+    })
+}
+
 /// Builder for [`SqlCatalog`]
 #[derive(Debug)]
 pub struct SqlCatalogBuilder {
@@ -278,21 +300,14 @@ impl SqlCatalog {
             .build();
 
         install_default_drivers();
-        let max_connections: u32 = config
-            .props
-            .get("pool.max-connections")
-            .map(|v| v.parse().unwrap())
-            .unwrap_or(MAX_CONNECTIONS);
-        let idle_timeout: u64 = config
-            .props
-            .get("pool.idle-timeout")
-            .map(|v| v.parse().unwrap())
-            .unwrap_or(IDLE_TIMEOUT);
-        let test_before_acquire: bool = config
-            .props
-            .get("pool.test-before-acquire")
-            .map(|v| v.parse().unwrap())
-            .unwrap_or(TEST_BEFORE_ACQUIRE);
+        let max_connections =
+            parse_pool_property(&config.props, "pool.max-connections", MAX_CONNECTIONS)?;
+        let idle_timeout = parse_pool_property(&config.props, "pool.idle-timeout", IDLE_TIMEOUT)?;
+        let test_before_acquire = parse_pool_property(
+            &config.props,
+            "pool.test-before-acquire",
+            TEST_BEFORE_ACQUIRE,
+        )?;
 
         let pool = AnyPoolOptions::new()
             .max_connections(max_connections)
@@ -467,7 +482,7 @@ impl Catalog for SqlCatalog {
 
         if exists {
             return Err(Error::new(
-                iceberg::ErrorKind::NamespaceAlreadyExists,
+                ErrorKind::NamespaceAlreadyExists,
                 format!("Namespace {namespace:?} already exists"),
             ));
         }
@@ -670,7 +685,7 @@ impl Catalog for SqlCatalog {
             let tables = self.list_tables(namespace).await?;
             if !tables.is_empty() {
                 return Err(Error::new(
-                    iceberg::ErrorKind::Unexpected,
+                    ErrorKind::Unexpected,
                     format!(
                         "Namespace {:?} is not empty. {} tables exist.",
                         namespace,
@@ -861,40 +876,35 @@ impl Catalog for SqlCatalog {
             return table_already_exists_err(&tbl_ident);
         }
 
-        let (tbl_creation, location) = match creation.location.clone() {
-            Some(location) => (creation, location),
-            None => {
-                // fall back to namespace-specific location
-                // and then to warehouse location
-                let nsp_properties = self.get_namespace(namespace).await?.properties().clone();
-                let nsp_location = match nsp_properties.get(NAMESPACE_LOCATION_PROPERTY_KEY) {
-                    Some(location) => location.clone(),
-                    None => {
-                        format!(
-                            "{}/{}",
-                            self.warehouse_location.clone(),
-                            namespace.join("/")
-                        )
-                    }
-                };
+        let tbl_creation = if creation.location.is_some() {
+            creation
+        } else {
+            // fall back to namespace-specific location
+            // and then to warehouse location
+            let nsp_properties = self.get_namespace(namespace).await?.properties().clone();
+            let nsp_location = match nsp_properties.get(NAMESPACE_LOCATION_PROPERTY_KEY) {
+                Some(location) => location.clone(),
+                None => {
+                    format!(
+                        "{}/{}",
+                        self.warehouse_location.clone(),
+                        namespace.join("/")
+                    )
+                }
+            };
 
-                let tbl_location = format!("{}/{}", nsp_location, tbl_ident.name());
+            let tbl_location = format!("{}/{}", nsp_location, tbl_ident.name());
 
-                (
-                    TableCreation {
-                        location: Some(tbl_location.clone()),
-                        ..creation
-                    },
-                    tbl_location,
-                )
+            TableCreation {
+                location: Some(tbl_location),
+                ..creation
             }
         };
 
         let tbl_metadata = TableMetadataBuilder::from_table_creation(tbl_creation)?
             .build()?
             .metadata;
-        let tbl_metadata_location =
-            MetadataLocation::new_with_metadata(location.clone(), &tbl_metadata);
+        let tbl_metadata_location = MetadataLocation::try_new_with_metadata(&tbl_metadata)?;
 
         tbl_metadata
             .write_to(&self.fileio, &tbl_metadata_location)
@@ -1057,7 +1067,9 @@ mod tests {
     use iceberg::io::LocalFsStorageFactory;
     use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use iceberg::table::Table;
-    use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
+    use iceberg::{
+        Catalog, CatalogBuilder, ErrorKind, Namespace, NamespaceIdent, TableCreation, TableIdent,
+    };
     use itertools::Itertools;
     use regex::Regex;
     use sqlx::migrate::MigrateDatabase;
@@ -1076,7 +1088,7 @@ mod tests {
         temp_dir.path().to_str().unwrap().to_string()
     }
 
-    fn to_set<T: std::cmp::Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
+    fn to_set<T: Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
         HashSet::from_iter(vec)
     }
 
@@ -1437,6 +1449,26 @@ mod tests {
             .await;
 
         assert!(catalog.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_builder_props_invalid_pool_property_fails() {
+        for property in [
+            "pool.max-connections",
+            "pool.idle-timeout",
+            "pool.test-before-acquire",
+        ] {
+            let error = SqlCatalogBuilder::default()
+                .with_storage_factory(Arc::new(LocalFsStorageFactory))
+                .prop(property, "invalid")
+                .load("iceberg", HashMap::new())
+                .await
+                .unwrap_err();
+
+            assert_eq!(error.kind(), ErrorKind::DataInvalid);
+            assert!(error.to_string().contains(property));
+            assert!(error.to_string().contains("invalid"));
+        }
     }
 
     #[tokio::test]

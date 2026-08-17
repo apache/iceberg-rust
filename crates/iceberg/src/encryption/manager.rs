@@ -36,11 +36,12 @@ use uuid::Uuid;
 
 const MILLIS_IN_DAY: i64 = 24 * 60 * 60 * 1000;
 
-use super::crypto::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
+use super::crypto::{AesGcmCipher, AesKeySize, SecureKey};
 use super::io::EncryptedOutputFile;
 use super::key_metadata::StandardKeyMetadata;
 use super::kms::KeyManagementClient;
 use crate::io::OutputFile;
+use crate::sensitive::SensitiveBytes;
 use crate::spec::{EncryptedKey, FormatVersion, TableMetadataRef};
 use crate::{Error, ErrorKind, Result};
 
@@ -153,7 +154,7 @@ impl EncryptionManager {
     pub fn encrypt(&self, raw_output: OutputFile) -> EncryptedOutputFile {
         let dek = SecureKey::generate(self.key_size);
         let aad_prefix = Self::generate_aad_prefix();
-        let metadata = StandardKeyMetadata::new(dek.as_bytes()).with_aad_prefix(&aad_prefix);
+        let metadata = StandardKeyMetadata::from(dek).with_aad_prefix(&aad_prefix);
         EncryptedOutputFile::new(raw_output, metadata)
     }
 
@@ -460,7 +461,9 @@ mod tests {
     }
 
     fn sample_key_metadata() -> StandardKeyMetadata {
-        StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"test-aad-prefix!")
+        StandardKeyMetadata::try_new(b"0123456789abcdef")
+            .unwrap()
+            .with_aad_prefix(b"test-aad-prefix!")
     }
 
     #[tokio::test]

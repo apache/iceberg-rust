@@ -27,6 +27,7 @@ use itertools::Itertools;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
+use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{CdcOptions, WriterProperties};
 use parquet::file::statistics::Statistics;
@@ -36,11 +37,12 @@ use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
     get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
 };
+use crate::compression::CompressionCodec;
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
     NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
-    StructType, TableMetadata, TableProperties, Type, visit_schema,
+    StructType, TableMetadata, TableProperties, Type, VariantType, visit_schema,
 };
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
@@ -81,23 +83,22 @@ impl ParquetWriterBuilder {
     /// Build a `ParquetWriterBuilder` from Iceberg table properties and a
     /// schema, translating `write.parquet.*` settings into `WriterProperties`
     /// instead of using parquet-rs defaults.
-    ///
-    /// Currently translates the content-defined-chunking keys
-    /// (`write.parquet.content-defined-chunking.*`); other keys fall back to
-    /// parquet-rs defaults.
-    pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Self {
+    pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Result<Self> {
         let cdc = table_props.cdc_enabled.then_some(CdcOptions {
             min_chunk_size: table_props.cdc_min_chunk_size,
             max_chunk_size: table_props.cdc_max_chunk_size,
             norm_level: table_props.cdc_norm_level,
         });
-        // TODO: translate the remaining write.parquet.* keys (e.g. compression-codec,
-        // row-group-size-bytes, page-size-bytes).
-        // This constructor is intended to be the single place that maps them.
+        let compression = parquet_compression(table_props.parquet_compression_codec)?;
         let props = WriterProperties::builder()
             .set_content_defined_chunking(cdc)
+            .set_compression(compression)
+            .set_max_row_group_bytes(Some(table_props.parquet_row_group_size_bytes))
+            .set_data_page_size_limit(table_props.parquet_page_size_bytes)
+            .set_data_page_row_count_limit(table_props.parquet_page_row_limit)
+            .set_dictionary_page_size_limit(table_props.parquet_dict_size_bytes)
             .build();
-        Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
+        Ok(Self::new_with_match_mode(props, schema, FieldMatchMode::Id))
     }
 
     /// Set the field match mode used to map Arrow fields to Iceberg fields.
@@ -108,6 +109,40 @@ impl ParquetWriterBuilder {
         self.match_mode = match_mode;
         self
     }
+}
+
+fn parquet_compression(codec: CompressionCodec) -> Result<Compression> {
+    let compression = match codec {
+        CompressionCodec::None => Compression::UNCOMPRESSED,
+        CompressionCodec::Snappy => Compression::SNAPPY,
+        CompressionCodec::Lzo => Compression::LZO,
+        CompressionCodec::Lz4 => Compression::LZ4,
+        CompressionCodec::Lz4Raw => Compression::LZ4_RAW,
+        CompressionCodec::Zstd(level) => {
+            let level =
+                ZstdLevel::try_new(level as i32).map_err(|e| invalid_level_error("zstd", e))?;
+            Compression::ZSTD(level)
+        }
+        CompressionCodec::Gzip(level) => {
+            let level =
+                GzipLevel::try_new(level as u32).map_err(|e| invalid_level_error("gzip", e))?;
+            Compression::GZIP(level)
+        }
+        CompressionCodec::Brotli(level) => {
+            let level =
+                BrotliLevel::try_new(level as u32).map_err(|e| invalid_level_error("brotli", e))?;
+            Compression::BROTLI(level)
+        }
+    };
+    Ok(compression)
+}
+
+fn invalid_level_error(codec: &str, source: impl Into<anyhow::Error>) -> Error {
+    Error::new(
+        ErrorKind::DataInvalid,
+        format!("Invalid {codec} compression level"),
+    )
+    .with_source(source)
 }
 
 impl FileWriterBuilder for ParquetWriterBuilder {
@@ -240,6 +275,13 @@ impl SchemaVisitor for IndexByParquetPathName {
         }
 
         Ok(())
+    }
+
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Writing variant columns to Parquet is not supported yet",
+        ))
     }
 }
 
@@ -656,7 +698,9 @@ mod tests {
     use arrow_schema::{DataType, Field, Fields, SchemaRef as ArrowSchemaRef};
     use arrow_select::concat::concat_batches;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
     use parquet::file::statistics::ValueStatistics;
+    use parquet::schema::types::ColumnPath;
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -822,6 +866,21 @@ mod tests {
         assert_eq!(visitor.name_to_id, expect);
     }
 
+    #[test]
+    fn test_index_by_parquet_path_variant_is_unsupported() {
+        // Writing variant columns to Parquet is not supported yet; indexing a schema that
+        // contains one must error rather than silently miss-map columns.
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+        let mut visitor = IndexByParquetPathName::new();
+        let err = visit_schema(&schema, &mut visitor).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+    }
+
     #[tokio::test]
     async fn test_parquet_writer() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
@@ -928,11 +987,11 @@ mod tests {
             (0..1024).map(|n| n.to_string()),
         )) as ArrayRef;
         let col3 = Arc::new({
-            let list_parts = arrow_array::ListArray::from_iter_primitive::<Int64Type, _, _>(
+            let list_parts = ListArray::from_iter_primitive::<Int64Type, _, _>(
                 (0..1024).map(|n| Some(vec![Some(n)])),
             )
             .into_parts();
-            arrow_array::ListArray::new(
+            ListArray::new(
                 {
                     if let DataType::List(field) = arrow_schema.field(3).data_type() {
                         field.clone()
@@ -1030,7 +1089,7 @@ mod tests {
                     nulls,
                 )
             };
-            arrow_array::MapArray::new(
+            MapArray::new(
                 {
                     if let DataType::Map(map_field, _) = arrow_schema.field(5).data_type() {
                         map_field.clone()
@@ -1065,7 +1124,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1141,13 +1200,13 @@ mod tests {
         ])) as ArrayRef;
         let col1 = Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(4)])) as ArrayRef;
         let col2 = Arc::new(Int64Array::from(vec![Some(1), Some(2), None, Some(4)])) as ArrayRef;
-        let col3 = Arc::new(arrow_array::Float32Array::from(vec![
+        let col3 = Arc::new(Float32Array::from(vec![
             Some(0.5),
             Some(2.0),
             None,
             Some(3.5),
         ])) as ArrayRef;
-        let col4 = Arc::new(arrow_array::Float64Array::from(vec![
+        let col4 = Arc::new(Float64Array::from(vec![
             Some(0.5),
             Some(2.0),
             None,
@@ -1198,7 +1257,7 @@ mod tests {
                 .with_timezone_utc(),
         ) as ArrayRef;
         let col13 = Arc::new(
-            arrow_array::Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
+            Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
                 .with_precision_and_scale(10, 5)
                 .unwrap(),
         ) as ArrayRef;
@@ -1229,7 +1288,7 @@ mod tests {
             .unwrap(),
         ) as ArrayRef;
         let col16 = Arc::new(
-            arrow_array::Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
+            Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
                 .with_precision_and_scale(38, 5)
                 .unwrap(),
         ) as ArrayRef;
@@ -1255,7 +1314,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1406,7 +1465,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1458,7 +1517,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1519,7 +1578,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1617,11 +1676,13 @@ mod tests {
 
         // Test that file will create if data to write
         let schema = {
-            let fields = vec![
-                arrow_schema::Field::new("col", arrow_schema::DataType::Int64, true).with_metadata(
-                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "0".to_string())]),
-                ),
-            ];
+            let fields =
+                vec![
+                    Field::new("col", DataType::Int64, true).with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "0".to_string(),
+                    )])),
+                ];
             Arc::new(arrow_schema::Schema::new(fields))
         };
         let col = Arc::new(Int64Array::from_iter_values(0..1024)) as ArrayRef;
@@ -1668,12 +1729,14 @@ mod tests {
         // prepare data
         let arrow_schema = {
             let fields = vec![
-                Field::new("col", arrow_schema::DataType::Float32, false).with_metadata(
-                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "0".to_string())]),
-                ),
-                Field::new("col2", arrow_schema::DataType::Float64, false).with_metadata(
-                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
-                ),
+                Field::new("col", DataType::Float32, false).with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "0".to_string(),
+                )])),
+                Field::new("col2", DataType::Float64, false).with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "1".to_string(),
+                )])),
             ];
             Arc::new(arrow_schema::Schema::new(fields))
         };
@@ -1710,7 +1773,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -1770,7 +1833,7 @@ mod tests {
         let schema_struct_nested_fields = Fields::from(vec![
             Field::new(
                 "col6",
-                arrow_schema::DataType::Struct(schema_struct_nested_float_fields.clone()),
+                DataType::Struct(schema_struct_nested_float_fields.clone()),
                 false,
             )
             .with_metadata(HashMap::from([(
@@ -1784,7 +1847,7 @@ mod tests {
             let fields = vec![
                 Field::new(
                     "col3",
-                    arrow_schema::DataType::Struct(schema_struct_float_fields.clone()),
+                    DataType::Struct(schema_struct_float_fields.clone()),
                     false,
                 )
                 .with_metadata(HashMap::from([(
@@ -1793,7 +1856,7 @@ mod tests {
                 )])),
                 Field::new(
                     "col5",
-                    arrow_schema::DataType::Struct(schema_struct_nested_fields.clone()),
+                    DataType::Struct(schema_struct_nested_fields.clone()),
                     false,
                 )
                 .with_metadata(HashMap::from([(
@@ -1850,7 +1913,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -2014,7 +2077,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -2195,7 +2258,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .partition_spec_id(0)
             .build()
@@ -2315,10 +2378,6 @@ mod tests {
         assert_eq!(upper_bounds, HashMap::from([(0, Datum::int(i32::MAX))]));
     }
 
-    // -----------------------------------------------------------------
-    // ParquetWriterBuilder::from_table_properties
-    // -----------------------------------------------------------------
-
     fn cdc_test_schema() -> SchemaRef {
         Arc::new(
             Schema::builder()
@@ -2340,7 +2399,7 @@ mod tests {
     #[test]
     fn test_from_table_properties_no_cdc_by_default() {
         let tp = table_props(HashMap::new());
-        let builder = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema());
+        let builder = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema()).unwrap();
         assert!(builder.props.content_defined_chunking().is_none());
     }
 
@@ -2378,6 +2437,7 @@ mod tests {
             .new_output(format!("{}/cdc.parquet", tmp.path().to_str().unwrap()))
             .unwrap();
         let writer = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
+            .unwrap()
             .build(output)
             .await
             .unwrap();
@@ -2390,5 +2450,143 @@ mod tests {
         assert_eq!(cdc.min_chunk_size, 4096);
         assert_eq!(cdc.max_chunk_size, 8192);
         assert_eq!(cdc.norm_level, 2);
+    }
+
+    #[test]
+    fn test_from_table_properties_sizing_defaults() {
+        // With no properties set, the writer must use Iceberg's defaults (which
+        // differ from parquet-rs's own defaults), not parquet-rs's.
+        let tp = table_props(HashMap::new());
+        let props = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
+            .unwrap()
+            .props;
+
+        assert_eq!(
+            props.max_row_group_bytes(),
+            Some(TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT)
+        );
+        assert_eq!(
+            props.data_page_size_limit(),
+            TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT
+        );
+        assert_eq!(
+            props.data_page_row_count_limit(),
+            TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT
+        );
+        assert_eq!(
+            props.dictionary_page_size_limit(),
+            TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT
+        );
+        // Default codec is zstd at the Java-aligned default level (3).
+        assert_eq!(
+            props.compression(&ColumnPath::from("id")),
+            Compression::ZSTD(ZstdLevel::try_new(3).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_from_table_properties_sizing_and_compression_overrides() {
+        let tp = table_props(HashMap::from([
+            (
+                TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES.to_string(),
+                "1048576".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES.to_string(),
+                "65536".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT.to_string(),
+                "5000".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES.to_string(),
+                "131072".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
+                "gzip".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL.to_string(),
+                "9".to_string(),
+            ),
+        ]));
+        let props = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
+            .unwrap()
+            .props;
+
+        assert_eq!(props.max_row_group_bytes(), Some(1048576));
+        assert_eq!(props.data_page_size_limit(), 65536);
+        assert_eq!(props.data_page_row_count_limit(), 5000);
+        assert_eq!(props.dictionary_page_size_limit(), 131072);
+        assert_eq!(
+            props.compression(&ColumnPath::from("id")),
+            Compression::GZIP(GzipLevel::try_new(9).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_from_table_properties_invalid_codec_errors() {
+        let entries = HashMap::from([(
+            TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
+            "bogus".to_string(),
+        )]);
+        let err = TableProperties::try_from(&entries).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.to_string().contains("bogus"));
+    }
+
+    #[test]
+    fn test_parquet_compression_mapping() {
+        // Codecs without a level.
+        assert_eq!(
+            parquet_compression(CompressionCodec::None).unwrap(),
+            Compression::UNCOMPRESSED
+        );
+        assert_eq!(
+            parquet_compression(CompressionCodec::Snappy).unwrap(),
+            Compression::SNAPPY
+        );
+        assert_eq!(
+            parquet_compression(CompressionCodec::Lz4).unwrap(),
+            Compression::LZ4
+        );
+        assert_eq!(
+            parquet_compression(CompressionCodec::Lz4Raw).unwrap(),
+            Compression::LZ4_RAW
+        );
+        assert_eq!(
+            parquet_compression(CompressionCodec::Lzo).unwrap(),
+            Compression::LZO
+        );
+
+        // Level-carrying codecs at their defaults.
+        assert_eq!(
+            parquet_compression(CompressionCodec::zstd_default()).unwrap(),
+            Compression::ZSTD(ZstdLevel::try_new(3).unwrap())
+        );
+        assert_eq!(
+            parquet_compression(CompressionCodec::gzip_default()).unwrap(),
+            Compression::GZIP(GzipLevel::try_new(6).unwrap())
+        );
+        assert_eq!(
+            parquet_compression(CompressionCodec::brotli_default()).unwrap(),
+            Compression::BROTLI(BrotliLevel::try_new(1).unwrap())
+        );
+
+        // Explicit levels are honored.
+        assert_eq!(
+            parquet_compression(CompressionCodec::Zstd(10)).unwrap(),
+            Compression::ZSTD(ZstdLevel::try_new(10).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_parquet_compression_invalid_level() {
+        // zstd valid range is 1..=22; 99 is out of range.
+        let err = parquet_compression(CompressionCodec::Zstd(99)).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.to_string().contains("zstd"));
     }
 }

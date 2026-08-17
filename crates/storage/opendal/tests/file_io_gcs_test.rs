@@ -25,7 +25,7 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use iceberg::io::{FileIO, FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_PATH};
+    use iceberg::io::{FileIO, FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_HOST};
     use iceberg_storage_opendal::OpenDalStorageFactory;
     use iceberg_test_utils::{get_gcs_endpoint, set_up};
 
@@ -41,7 +41,7 @@ mod tests {
 
         FileIOBuilder::new(Arc::new(OpenDalStorageFactory::Gcs))
             .with_props(vec![
-                (GCS_SERVICE_PATH, gcs_endpoint),
+                (GCS_SERVICE_HOST, gcs_endpoint),
                 (GCS_NO_AUTH, "true".to_string()),
             ])
             .build()
@@ -74,7 +74,7 @@ mod tests {
         let file_io = get_file_io_gcs().await;
         let output = file_io.new_output(&gs_file).unwrap();
         output
-            .write(bytes::Bytes::from_static(b"iceberg-gcs!"))
+            .write(Bytes::from_static(b"iceberg-gcs!"))
             .await
             .expect("Write to test output file");
         assert!(file_io.exists(gs_file).await.unwrap())
@@ -86,7 +86,7 @@ mod tests {
         let file_io = get_file_io_gcs().await;
         let output = file_io.new_output(&gs_file).unwrap();
         output
-            .write(bytes::Bytes::from_static(b"iceberg!"))
+            .write(Bytes::from_static(b"iceberg!"))
             .await
             .expect("Write to test output file");
         assert!(file_io.exists(&gs_file).await.unwrap());
