@@ -142,12 +142,16 @@ pub fn iceberg::cache::ObjectCacheProvide::manifest_list_cache(&self) -> &dyn ic
 pub type iceberg::cache::ObjectCacheProvider = alloc::sync::Arc<dyn iceberg::cache::ObjectCacheProvide>
 pub mod iceberg::compression
 pub enum iceberg::compression::CompressionCodec
+pub iceberg::compression::CompressionCodec::Brotli(u8)
 pub iceberg::compression::CompressionCodec::Gzip(u8)
 pub iceberg::compression::CompressionCodec::Lz4
+pub iceberg::compression::CompressionCodec::Lz4Raw
+pub iceberg::compression::CompressionCodec::Lzo
 pub iceberg::compression::CompressionCodec::None
 pub iceberg::compression::CompressionCodec::Snappy
 pub iceberg::compression::CompressionCodec::Zstd(u8)
 impl iceberg::compression::CompressionCodec
+pub const fn iceberg::compression::CompressionCodec::brotli_default() -> Self
 pub const fn iceberg::compression::CompressionCodec::gzip_default() -> Self
 pub fn iceberg::compression::CompressionCodec::name(&self) -> &'static str
 pub const fn iceberg::compression::CompressionCodec::zstd_default() -> Self
@@ -174,13 +178,13 @@ pub mod iceberg::encryption
 pub mod iceberg::encryption::kms
 pub struct iceberg::encryption::kms::GeneratedKey
 impl iceberg::encryption::GeneratedKey
-pub fn iceberg::encryption::GeneratedKey::key(&self) -> &iceberg::encryption::SensitiveBytes
-pub fn iceberg::encryption::GeneratedKey::new(key: iceberg::encryption::SensitiveBytes, wrapped_key: alloc::vec::Vec<u8>) -> Self
+pub fn iceberg::encryption::GeneratedKey::key(&self) -> &iceberg::sensitive::SensitiveBytes
+pub fn iceberg::encryption::GeneratedKey::new(key: iceberg::sensitive::SensitiveBytes, wrapped_key: alloc::vec::Vec<u8>) -> Self
 pub fn iceberg::encryption::GeneratedKey::wrapped_key(&self) -> &[u8]
 pub struct iceberg::encryption::kms::MemoryKeyManagementClient
 impl iceberg::encryption::kms::MemoryKeyManagementClient
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::add_master_key(&self, key_id: impl core::convert::Into<alloc::string::String>) -> iceberg::Result<()>
-pub fn iceberg::encryption::kms::MemoryKeyManagementClient::add_master_key_bytes(&self, key_id: impl core::convert::Into<alloc::string::String>, key_bytes: iceberg::encryption::SensitiveBytes) -> iceberg::Result<()>
+pub fn iceberg::encryption::kms::MemoryKeyManagementClient::add_master_key_bytes(&self, key_id: impl core::convert::Into<alloc::string::String>, key_bytes: iceberg::sensitive::SensitiveBytes) -> iceberg::Result<()>
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::has_key(&self, key_id: &str) -> bool
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::key_count(&self) -> usize
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::new() -> Self
@@ -194,12 +198,12 @@ pub fn iceberg::encryption::kms::MemoryKeyManagementClient::fmt(&self, f: &mut c
 impl iceberg::encryption::KeyManagementClient for iceberg::encryption::kms::MemoryKeyManagementClient
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::generate_key<'life0, 'life1, 'async_trait>(&'life0 self, _wrapping_key_id: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::GeneratedKey>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::supports_key_generation(&self) -> bool
-pub fn iceberg::encryption::kms::MemoryKeyManagementClient::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn iceberg::encryption::kms::MemoryKeyManagementClient::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::sensitive::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::wrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<u8>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub struct iceberg::encryption::kms::MemoryKmsClientFactory
 impl iceberg::encryption::kms::MemoryKmsClientFactory
 pub fn iceberg::encryption::kms::MemoryKmsClientFactory::add_master_key(&self, key_id: impl core::convert::Into<alloc::string::String>) -> iceberg::Result<()>
-pub fn iceberg::encryption::kms::MemoryKmsClientFactory::add_master_key_bytes(&self, key_id: impl core::convert::Into<alloc::string::String>, key_bytes: iceberg::encryption::SensitiveBytes) -> iceberg::Result<()>
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::add_master_key_bytes(&self, key_id: impl core::convert::Into<alloc::string::String>, key_bytes: iceberg::sensitive::SensitiveBytes) -> iceberg::Result<()>
 pub fn iceberg::encryption::kms::MemoryKmsClientFactory::new() -> Self
 pub fn iceberg::encryption::kms::MemoryKmsClientFactory::with_master_key_size(master_key_size: iceberg::encryption::AesKeySize) -> Self
 impl core::clone::Clone for iceberg::encryption::kms::MemoryKmsClientFactory
@@ -213,17 +217,17 @@ pub fn iceberg::encryption::kms::MemoryKmsClientFactory::create_kms_client<'life
 pub trait iceberg::encryption::kms::KeyManagementClient: core::marker::Send + core::marker::Sync + core::fmt::Debug
 pub fn iceberg::encryption::kms::KeyManagementClient::generate_key<'life0, 'life1, 'async_trait>(&'life0 self, wrapping_key_id: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::GeneratedKey>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::encryption::kms::KeyManagementClient::supports_key_generation(&self) -> bool
-pub fn iceberg::encryption::kms::KeyManagementClient::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn iceberg::encryption::kms::KeyManagementClient::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::sensitive::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg::encryption::kms::KeyManagementClient::wrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<u8>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 impl iceberg::encryption::KeyManagementClient for iceberg::encryption::kms::MemoryKeyManagementClient
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::generate_key<'life0, 'life1, 'async_trait>(&'life0 self, _wrapping_key_id: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::GeneratedKey>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::supports_key_generation(&self) -> bool
-pub fn iceberg::encryption::kms::MemoryKeyManagementClient::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn iceberg::encryption::kms::MemoryKeyManagementClient::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::sensitive::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::wrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<u8>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 impl<T: core::convert::AsRef<dyn iceberg::encryption::KeyManagementClient> + core::marker::Send + core::marker::Sync + core::fmt::Debug> iceberg::encryption::KeyManagementClient for T
 pub fn T::generate_key<'life0, 'life1, 'async_trait>(&'life0 self, wrapping_key_id: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::GeneratedKey>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn T::supports_key_generation(&self) -> bool
-pub fn T::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn T::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::sensitive::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn T::wrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<u8>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait iceberg::encryption::kms::KmsClientFactory: core::fmt::Debug + core::marker::Send + core::marker::Sync
 pub fn iceberg::encryption::kms::KmsClientFactory::create_kms_client<'life0, 'life1, 'async_trait>(&'life0 self, properties: &'life1 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::sync::Arc<dyn iceberg::encryption::KeyManagementClient>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -305,8 +309,8 @@ impl iceberg::encryption::EncryptionManager
 pub fn iceberg::encryption::EncryptionManager::builder() -> EncryptionManagerBuilder<((), (), (), (std::sync::poison::rwlock::RwLock<std::collections::hash::map::HashMap<alloc::string::String, iceberg::spec::EncryptedKey>>))>
 pub struct iceberg::encryption::GeneratedKey
 impl iceberg::encryption::GeneratedKey
-pub fn iceberg::encryption::GeneratedKey::key(&self) -> &iceberg::encryption::SensitiveBytes
-pub fn iceberg::encryption::GeneratedKey::new(key: iceberg::encryption::SensitiveBytes, wrapped_key: alloc::vec::Vec<u8>) -> Self
+pub fn iceberg::encryption::GeneratedKey::key(&self) -> &iceberg::sensitive::SensitiveBytes
+pub fn iceberg::encryption::GeneratedKey::new(key: iceberg::sensitive::SensitiveBytes, wrapped_key: alloc::vec::Vec<u8>) -> Self
 pub fn iceberg::encryption::GeneratedKey::wrapped_key(&self) -> &[u8]
 pub struct iceberg::encryption::SecureKey
 impl iceberg::encryption::SecureKey
@@ -321,31 +325,31 @@ impl core::cmp::PartialEq for iceberg::encryption::SecureKey
 pub fn iceberg::encryption::SecureKey::eq(&self, other: &iceberg::encryption::SecureKey) -> bool
 impl core::convert::From<iceberg::encryption::SecureKey> for iceberg::encryption::StandardKeyMetadata
 pub fn iceberg::encryption::StandardKeyMetadata::from(encryption_key: iceberg::encryption::SecureKey) -> Self
-impl core::convert::TryFrom<iceberg::encryption::SensitiveBytes> for iceberg::encryption::SecureKey
+impl core::convert::TryFrom<iceberg::sensitive::SensitiveBytes> for iceberg::encryption::SecureKey
 pub type iceberg::encryption::SecureKey::Error = iceberg::Error
-pub fn iceberg::encryption::SecureKey::try_from(key: iceberg::encryption::SensitiveBytes) -> iceberg::Result<Self>
+pub fn iceberg::encryption::SecureKey::try_from(key: iceberg::sensitive::SensitiveBytes) -> iceberg::Result<Self>
 impl core::fmt::Debug for iceberg::encryption::SecureKey
 pub fn iceberg::encryption::SecureKey::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::encryption::SecureKey
 pub struct iceberg::encryption::SensitiveBytes(_)
-impl iceberg::encryption::SensitiveBytes
-pub fn iceberg::encryption::SensitiveBytes::as_bytes(&self) -> &[u8]
-pub fn iceberg::encryption::SensitiveBytes::is_empty(&self) -> bool
-pub fn iceberg::encryption::SensitiveBytes::len(&self) -> usize
-pub fn iceberg::encryption::SensitiveBytes::new(bytes: impl core::convert::Into<alloc::boxed::Box<[u8]>>) -> Self
-impl core::clone::Clone for iceberg::encryption::SensitiveBytes
-pub fn iceberg::encryption::SensitiveBytes::clone(&self) -> iceberg::encryption::SensitiveBytes
-impl core::cmp::Eq for iceberg::encryption::SensitiveBytes
-impl core::cmp::PartialEq for iceberg::encryption::SensitiveBytes
-pub fn iceberg::encryption::SensitiveBytes::eq(&self, other: &iceberg::encryption::SensitiveBytes) -> bool
-impl core::convert::TryFrom<iceberg::encryption::SensitiveBytes> for iceberg::encryption::SecureKey
+impl iceberg::sensitive::SensitiveBytes
+pub fn iceberg::sensitive::SensitiveBytes::as_bytes(&self) -> &[u8]
+pub fn iceberg::sensitive::SensitiveBytes::is_empty(&self) -> bool
+pub fn iceberg::sensitive::SensitiveBytes::len(&self) -> usize
+pub fn iceberg::sensitive::SensitiveBytes::new(bytes: impl core::convert::Into<alloc::boxed::Box<[u8]>>) -> Self
+impl core::clone::Clone for iceberg::sensitive::SensitiveBytes
+pub fn iceberg::sensitive::SensitiveBytes::clone(&self) -> iceberg::sensitive::SensitiveBytes
+impl core::cmp::Eq for iceberg::sensitive::SensitiveBytes
+impl core::cmp::PartialEq for iceberg::sensitive::SensitiveBytes
+pub fn iceberg::sensitive::SensitiveBytes::eq(&self, other: &iceberg::sensitive::SensitiveBytes) -> bool
+impl core::convert::TryFrom<iceberg::sensitive::SensitiveBytes> for iceberg::encryption::SecureKey
 pub type iceberg::encryption::SecureKey::Error = iceberg::Error
-pub fn iceberg::encryption::SecureKey::try_from(key: iceberg::encryption::SensitiveBytes) -> iceberg::Result<Self>
-impl core::fmt::Debug for iceberg::encryption::SensitiveBytes
-pub fn iceberg::encryption::SensitiveBytes::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for iceberg::encryption::SensitiveBytes
-pub fn iceberg::encryption::SensitiveBytes::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for iceberg::encryption::SensitiveBytes
+pub fn iceberg::encryption::SecureKey::try_from(key: iceberg::sensitive::SensitiveBytes) -> iceberg::Result<Self>
+impl core::fmt::Debug for iceberg::sensitive::SensitiveBytes
+pub fn iceberg::sensitive::SensitiveBytes::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg::sensitive::SensitiveBytes
+pub fn iceberg::sensitive::SensitiveBytes::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::sensitive::SensitiveBytes
 pub struct iceberg::encryption::StandardKeyMetadata
 impl iceberg::encryption::StandardKeyMetadata
 pub fn iceberg::encryption::StandardKeyMetadata::aad_prefix(&self) -> core::option::Option<&[u8]>
@@ -369,17 +373,17 @@ impl core::marker::StructuralPartialEq for iceberg::encryption::StandardKeyMetad
 pub trait iceberg::encryption::KeyManagementClient: core::marker::Send + core::marker::Sync + core::fmt::Debug
 pub fn iceberg::encryption::KeyManagementClient::generate_key<'life0, 'life1, 'async_trait>(&'life0 self, wrapping_key_id: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::GeneratedKey>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::encryption::KeyManagementClient::supports_key_generation(&self) -> bool
-pub fn iceberg::encryption::KeyManagementClient::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn iceberg::encryption::KeyManagementClient::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::sensitive::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg::encryption::KeyManagementClient::wrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<u8>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 impl iceberg::encryption::KeyManagementClient for iceberg::encryption::kms::MemoryKeyManagementClient
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::generate_key<'life0, 'life1, 'async_trait>(&'life0 self, _wrapping_key_id: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::GeneratedKey>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::supports_key_generation(&self) -> bool
-pub fn iceberg::encryption::kms::MemoryKeyManagementClient::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn iceberg::encryption::kms::MemoryKeyManagementClient::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::sensitive::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::wrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<u8>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 impl<T: core::convert::AsRef<dyn iceberg::encryption::KeyManagementClient> + core::marker::Send + core::marker::Sync + core::fmt::Debug> iceberg::encryption::KeyManagementClient for T
 pub fn T::generate_key<'life0, 'life1, 'async_trait>(&'life0 self, wrapping_key_id: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::GeneratedKey>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn T::supports_key_generation(&self) -> bool
-pub fn T::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn T::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::sensitive::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn T::wrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<u8>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub mod iceberg::expr
 pub enum iceberg::expr::BoundPredicate
@@ -1007,7 +1011,7 @@ pub const iceberg::io::GCS_DISABLE_CONFIG_LOAD: &str
 pub const iceberg::io::GCS_DISABLE_VM_METADATA: &str
 pub const iceberg::io::GCS_NO_AUTH: &str
 pub const iceberg::io::GCS_PROJECT_ID: &str
-pub const iceberg::io::GCS_SERVICE_PATH: &str
+pub const iceberg::io::GCS_SERVICE_HOST: &str
 pub const iceberg::io::GCS_TOKEN: &str
 pub const iceberg::io::GCS_USER_PROJECT: &str
 pub const iceberg::io::HF_ENDPOINT: &str
@@ -1162,12 +1166,16 @@ pub mod iceberg::partitioning
 pub fn iceberg::partitioning::compute_unified_partition_type<'a>(partition_specs: impl core::iter::traits::iterator::Iterator<Item = &'a iceberg::spec::PartitionSpec>, schema: &iceberg::spec::Schema) -> iceberg::Result<iceberg::spec::StructType>
 pub mod iceberg::puffin
 pub enum iceberg::puffin::CompressionCodec
+pub iceberg::puffin::CompressionCodec::Brotli(u8)
 pub iceberg::puffin::CompressionCodec::Gzip(u8)
 pub iceberg::puffin::CompressionCodec::Lz4
+pub iceberg::puffin::CompressionCodec::Lz4Raw
+pub iceberg::puffin::CompressionCodec::Lzo
 pub iceberg::puffin::CompressionCodec::None
 pub iceberg::puffin::CompressionCodec::Snappy
 pub iceberg::puffin::CompressionCodec::Zstd(u8)
 impl iceberg::compression::CompressionCodec
+pub const fn iceberg::compression::CompressionCodec::brotli_default() -> Self
 pub const fn iceberg::compression::CompressionCodec::gzip_default() -> Self
 pub fn iceberg::compression::CompressionCodec::name(&self) -> &'static str
 pub const fn iceberg::compression::CompressionCodec::zstd_default() -> Self
@@ -1356,6 +1364,40 @@ pub fn iceberg::scan::TableScanBuilder<'a>::with_row_group_filtering_enabled(sel
 pub fn iceberg::scan::TableScanBuilder<'a>::with_row_selection_enabled(self, row_selection_enabled: bool) -> Self
 pub type iceberg::scan::ArrowRecordBatchStream = futures_core::stream::BoxStream<'static, iceberg::Result<arrow_array::record_batch::RecordBatch>>
 pub type iceberg::scan::FileScanTaskStream = futures_core::stream::BoxStream<'static, iceberg::Result<iceberg::scan::FileScanTask>>
+pub mod iceberg::sensitive
+pub struct iceberg::sensitive::SensitiveBytes(_)
+impl iceberg::sensitive::SensitiveBytes
+pub fn iceberg::sensitive::SensitiveBytes::as_bytes(&self) -> &[u8]
+pub fn iceberg::sensitive::SensitiveBytes::is_empty(&self) -> bool
+pub fn iceberg::sensitive::SensitiveBytes::len(&self) -> usize
+pub fn iceberg::sensitive::SensitiveBytes::new(bytes: impl core::convert::Into<alloc::boxed::Box<[u8]>>) -> Self
+impl core::clone::Clone for iceberg::sensitive::SensitiveBytes
+pub fn iceberg::sensitive::SensitiveBytes::clone(&self) -> iceberg::sensitive::SensitiveBytes
+impl core::cmp::Eq for iceberg::sensitive::SensitiveBytes
+impl core::cmp::PartialEq for iceberg::sensitive::SensitiveBytes
+pub fn iceberg::sensitive::SensitiveBytes::eq(&self, other: &iceberg::sensitive::SensitiveBytes) -> bool
+impl core::convert::TryFrom<iceberg::sensitive::SensitiveBytes> for iceberg::encryption::SecureKey
+pub type iceberg::encryption::SecureKey::Error = iceberg::Error
+pub fn iceberg::encryption::SecureKey::try_from(key: iceberg::sensitive::SensitiveBytes) -> iceberg::Result<Self>
+impl core::fmt::Debug for iceberg::sensitive::SensitiveBytes
+pub fn iceberg::sensitive::SensitiveBytes::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg::sensitive::SensitiveBytes
+pub fn iceberg::sensitive::SensitiveBytes::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::sensitive::SensitiveBytes
+pub struct iceberg::sensitive::SensitiveString(_)
+impl iceberg::sensitive::SensitiveString
+pub fn iceberg::sensitive::SensitiveString::expose(&self) -> &str
+pub fn iceberg::sensitive::SensitiveString::is_empty(&self) -> bool
+impl core::clone::Clone for iceberg::sensitive::SensitiveString
+pub fn iceberg::sensitive::SensitiveString::clone(&self) -> iceberg::sensitive::SensitiveString
+impl core::cmp::Eq for iceberg::sensitive::SensitiveString
+impl core::cmp::PartialEq for iceberg::sensitive::SensitiveString
+pub fn iceberg::sensitive::SensitiveString::eq(&self, other: &iceberg::sensitive::SensitiveString) -> bool
+impl core::convert::From<alloc::string::String> for iceberg::sensitive::SensitiveString
+pub fn iceberg::sensitive::SensitiveString::from(value: alloc::string::String) -> Self
+impl core::fmt::Debug for iceberg::sensitive::SensitiveString
+pub fn iceberg::sensitive::SensitiveString::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::sensitive::SensitiveString
 pub mod iceberg::spec
 pub use iceberg::spec::ByteBuf
 pub enum iceberg::spec::DataContentType
@@ -2764,6 +2806,11 @@ pub iceberg::spec::TableProperties::max_ref_age_ms: i64
 pub iceberg::spec::TableProperties::max_snapshot_age_ms: i64
 pub iceberg::spec::TableProperties::metadata_compression_codec: iceberg::compression::CompressionCodec
 pub iceberg::spec::TableProperties::min_snapshots_to_keep: usize
+pub iceberg::spec::TableProperties::parquet_compression_codec: iceberg::compression::CompressionCodec
+pub iceberg::spec::TableProperties::parquet_dict_size_bytes: usize
+pub iceberg::spec::TableProperties::parquet_page_row_limit: usize
+pub iceberg::spec::TableProperties::parquet_page_size_bytes: usize
+pub iceberg::spec::TableProperties::parquet_row_group_size_bytes: usize
 pub iceberg::spec::TableProperties::write_data_location: core::option::Option<alloc::string::String>
 pub iceberg::spec::TableProperties::write_datafusion_fanout_enabled: bool
 pub iceberg::spec::TableProperties::write_folder_storage_location: core::option::Option<alloc::string::String>
@@ -2816,6 +2863,17 @@ pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE: &
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE_DEFAULT: usize
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL: &str
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES: &str
+pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT: usize
 pub const iceberg::spec::TableProperties::PROPERTY_SNAPSHOT_COUNT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_UUID: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_DATA_LOCATION: &str
@@ -3306,7 +3364,7 @@ pub async fn iceberg::writer::file_writer::ParquetWriter::close(self) -> iceberg
 pub async fn iceberg::writer::file_writer::ParquetWriter::write(&mut self, batch: &arrow_array::record_batch::RecordBatch) -> iceberg::Result<()>
 pub struct iceberg::writer::file_writer::ParquetWriterBuilder
 impl iceberg::writer::file_writer::ParquetWriterBuilder
-pub fn iceberg::writer::file_writer::ParquetWriterBuilder::from_table_properties(table_props: &iceberg::spec::TableProperties, schema: iceberg::spec::SchemaRef) -> Self
+pub fn iceberg::writer::file_writer::ParquetWriterBuilder::from_table_properties(table_props: &iceberg::spec::TableProperties, schema: iceberg::spec::SchemaRef) -> iceberg::Result<Self>
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::new(props: parquet::file::properties::WriterProperties, schema: iceberg::spec::SchemaRef) -> Self
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::new_with_match_mode(props: parquet::file::properties::WriterProperties, schema: iceberg::spec::SchemaRef, match_mode: iceberg::arrow::FieldMatchMode) -> Self
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::with_match_mode(self, match_mode: iceberg::arrow::FieldMatchMode) -> Self
@@ -3539,15 +3597,6 @@ impl serde_core::ser::Serialize for iceberg::ViewUpdate
 pub fn iceberg::ViewUpdate::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::ViewUpdate
 pub fn iceberg::ViewUpdate::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
-pub struct iceberg::Credential(_)
-impl iceberg::Credential
-pub fn iceberg::Credential::expose(&self) -> &str
-impl core::clone::Clone for iceberg::Credential
-pub fn iceberg::Credential::clone(&self) -> iceberg::Credential
-impl core::convert::From<alloc::string::String> for iceberg::Credential
-pub fn iceberg::Credential::from(value: alloc::string::String) -> Self
-impl core::fmt::Debug for iceberg::Credential
-pub fn iceberg::Credential::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::Error
 impl iceberg::Error
 pub fn iceberg::Error::backtrace(&self) -> &std::backtrace::Backtrace
@@ -3698,7 +3747,7 @@ impl core::fmt::Debug for iceberg::RuntimeHandle
 pub fn iceberg::RuntimeHandle::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::SessionContext
 impl iceberg::SessionContext
-pub fn iceberg::SessionContext::credentials(&self) -> &std::collections::hash::map::HashMap<alloc::string::String, iceberg::Credential>
+pub fn iceberg::SessionContext::credentials(&self) -> &std::collections::hash::map::HashMap<alloc::string::String, iceberg::sensitive::SensitiveString>
 pub fn iceberg::SessionContext::empty() -> Self
 pub fn iceberg::SessionContext::identity(&self) -> core::option::Option<&str>
 pub fn iceberg::SessionContext::properties(&self) -> &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
