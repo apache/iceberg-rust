@@ -203,6 +203,8 @@
 <li>Create and list namespaces.</li>
 <li>Create, load, and drop tables</li>
 </ul>
+<p><code>SessionCatalog</code> offers the same operations, but takes a <code>SessionContext</code> with each call instead of
+binding one for the lifetime of the catalog. It is currently implemented by the REST catalog only.</p>
 <p>There is support for the following catalogs:</p>
 <div class="table-wrapper"><table><thead><tr><th>Catalog</th><th>Description</th></tr></thead><tbody>
 <tr><td><code>Rest</code></td><td>the Iceberg REST catalog</td></tr>
@@ -214,7 +216,14 @@
 </tbody></table>
 </div>
 <p>Not all catalog implementations are complete.</p>
-<h2 id="restcatalog"><a class="header" href="#restcatalog"><code>RestCatalog</code></a></h2>
+<h2 id="rest-catalog-apis"><a class="header" href="#rest-catalog-apis">REST catalog APIs</a></h2>
+<p>The REST catalog provides two interfaces:</p>
+<ul>
+<li><code>RestCatalog</code> implements <code>Catalog</code> and binds one <code>SessionContext</code> to every operation.</li>
+<li><code>RestSessionCatalog</code> implements <code>SessionCatalog</code> and accepts a context with each operation.</li>
+</ul>
+<p>REST configuration, authentication, and the HTTP client are shared by the catalog instance.</p>
+<h3 id="restcatalog"><a class="header" href="#restcatalog"><code>RestCatalog</code></a></h3>
 <p>Here is an example of how to create a <code>RestCatalog</code>:</p>
 <pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
 </span><span class="boring">// or more contributor license agreements.  See the NOTICE file
@@ -423,6 +432,275 @@
     println!(&quot;Namespace {namespace_ident:?} created!&quot;);
 
     let loaded_namespace = catalog.get_namespace(&amp;namespace_ident).await.unwrap();
+    println!(&quot;Namespace loaded!\n\nNamespace: {loaded_namespace:#?}&quot;,);
+<span class="boring">}</span></code></pre>
+<h3 id="restsessioncatalog"><a class="header" href="#restsessioncatalog"><code>RestSessionCatalog</code></a></h3>
+<p>Use <code>RestSessionCatalog</code> when the caller supplies a session context for each operation. Build the
+catalog and the context it should run under:</p>
+<pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
+</span><span class="boring">// or more contributor license agreements.  See the NOTICE file
+</span><span class="boring">// distributed with this work for additional information
+</span><span class="boring">// regarding copyright ownership.  The ASF licenses this file
+</span><span class="boring">// to you under the Apache License, Version 2.0 (the
+</span><span class="boring">// &quot;License&quot;); you may not use this file except in compliance
+</span><span class="boring">// with the License.  You may obtain a copy of the License at
+</span><span class="boring">//
+</span><span class="boring">//   http://www.apache.org/licenses/LICENSE-2.0
+</span><span class="boring">//
+</span><span class="boring">// Unless required by applicable law or agreed to in writing,
+</span><span class="boring">// software distributed under the License is distributed on an
+</span><span class="boring">// &quot;AS IS&quot; BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+</span><span class="boring">// KIND, either express or implied.  See the License for the
+</span><span class="boring">// specific language governing permissions and limitations
+</span><span class="boring">// under the License.
+</span><span class="boring">
+</span><span class="boring">use std::collections::HashMap;
+</span><span class="boring">
+</span><span class="boring">use iceberg::{NamespaceIdent, SessionCatalog, SessionContext};
+</span><span class="boring">use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestSessionCatalogBuilder};
+</span><span class="boring">
+</span><span class="boring">static REST_URI: &amp;str = &quot;http://localhost:8181&quot;;
+</span><span class="boring">
+</span><span class="boring">/// This is a simple example that demonstrates how to use [`RestSessionCatalog`] to create
+</span><span class="boring">/// namespaces.
+</span><span class="boring">///
+</span><span class="boring">/// Unlike [`RestCatalog`](iceberg_catalog_rest::RestCatalog), every operation
+</span><span class="boring">/// takes the [`SessionContext`] it should run under, so a single catalog instance
+</span><span class="boring">/// can serve requests on behalf of different sessions.
+</span><span class="boring">///
+</span><span class="boring">/// A running instance of the iceberg-rest catalog on port 8181 is required.
+</span><span class="boring">/// You can find how to run the iceberg-rest catalog with `docker compose` in
+</span><span class="boring">/// the official [quickstart documentation](https://iceberg.apache.org/spark-quickstart/).
+</span><span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() {
+</span>    // Create the REST iceberg session catalog.
+    let catalog = RestSessionCatalogBuilder::default()
+        .load(
+            &quot;rest&quot;,
+            HashMap::from([(REST_CATALOG_PROP_URI.to_string(), REST_URI.to_string())]),
+        )
+        .await
+        .unwrap();
+
+    // Build the session context passed to each operation.
+    let context = SessionContext::builder()
+        .identity(&quot;user123&quot;.to_string())
+        .build();
+<span class="boring">
+</span><span class="boring">    // List all namespaces already in the catalog.
+</span><span class="boring">    let existing_namespaces = catalog.list_namespaces(&amp;context, None).await.unwrap();
+</span><span class="boring">    println!(&quot;Namespaces alreading in the existing catalog: {existing_namespaces:?}&quot;);
+</span><span class="boring">
+</span><span class="boring">    // Create a new namespace identifier.
+</span><span class="boring">    let namespace_ident =
+</span><span class="boring">        NamespaceIdent::from_vec(vec![&quot;ns1&quot;.to_string(), &quot;ns11&quot;.to_string()]).unwrap();
+</span><span class="boring">
+</span><span class="boring">    // Drop the namespace if it already exists.
+</span><span class="boring">    if catalog
+</span><span class="boring">        .namespace_exists(&amp;context, &amp;namespace_ident)
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap()
+</span><span class="boring">    {
+</span><span class="boring">        println!(&quot;Namespace already exists, dropping now.&quot;,);
+</span><span class="boring">        catalog
+</span><span class="boring">            .drop_namespace(&amp;context, &amp;namespace_ident)
+</span><span class="boring">            .await
+</span><span class="boring">            .unwrap();
+</span><span class="boring">    }
+</span><span class="boring">
+</span><span class="boring">    // Create the new namespace in the catalog.
+</span><span class="boring">    let _created_namespace = catalog
+</span><span class="boring">        .create_namespace(
+</span><span class="boring">            &amp;context,
+</span><span class="boring">            &amp;namespace_ident,
+</span><span class="boring">            HashMap::from([(&quot;key1&quot;.to_string(), &quot;value1&quot;.to_string())]),
+</span><span class="boring">        )
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap();
+</span><span class="boring">    println!(&quot;Namespace {namespace_ident:?} created!&quot;);
+</span><span class="boring">
+</span><span class="boring">    let loaded_namespace = catalog
+</span><span class="boring">        .get_namespace(&amp;context, &amp;namespace_ident)
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap();
+</span><span class="boring">    println!(&quot;Namespace loaded!\n\nNamespace: {loaded_namespace:#?}&quot;,);
+</span><span class="boring">}</span></code></pre>
+<p>Every operation then takes that context. You can run following code to list all root namespaces:</p>
+<pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
+</span><span class="boring">// or more contributor license agreements.  See the NOTICE file
+</span><span class="boring">// distributed with this work for additional information
+</span><span class="boring">// regarding copyright ownership.  The ASF licenses this file
+</span><span class="boring">// to you under the Apache License, Version 2.0 (the
+</span><span class="boring">// &quot;License&quot;); you may not use this file except in compliance
+</span><span class="boring">// with the License.  You may obtain a copy of the License at
+</span><span class="boring">//
+</span><span class="boring">//   http://www.apache.org/licenses/LICENSE-2.0
+</span><span class="boring">//
+</span><span class="boring">// Unless required by applicable law or agreed to in writing,
+</span><span class="boring">// software distributed under the License is distributed on an
+</span><span class="boring">// &quot;AS IS&quot; BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+</span><span class="boring">// KIND, either express or implied.  See the License for the
+</span><span class="boring">// specific language governing permissions and limitations
+</span><span class="boring">// under the License.
+</span><span class="boring">
+</span><span class="boring">use std::collections::HashMap;
+</span><span class="boring">
+</span><span class="boring">use iceberg::{NamespaceIdent, SessionCatalog, SessionContext};
+</span><span class="boring">use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestSessionCatalogBuilder};
+</span><span class="boring">
+</span><span class="boring">static REST_URI: &amp;str = &quot;http://localhost:8181&quot;;
+</span><span class="boring">
+</span><span class="boring">/// This is a simple example that demonstrates how to use [`RestSessionCatalog`] to create
+</span><span class="boring">/// namespaces.
+</span><span class="boring">///
+</span><span class="boring">/// Unlike [`RestCatalog`](iceberg_catalog_rest::RestCatalog), every operation
+</span><span class="boring">/// takes the [`SessionContext`] it should run under, so a single catalog instance
+</span><span class="boring">/// can serve requests on behalf of different sessions.
+</span><span class="boring">///
+</span><span class="boring">/// A running instance of the iceberg-rest catalog on port 8181 is required.
+</span><span class="boring">/// You can find how to run the iceberg-rest catalog with `docker compose` in
+</span><span class="boring">/// the official [quickstart documentation](https://iceberg.apache.org/spark-quickstart/).
+</span><span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() {
+</span><span class="boring">    // Create the REST iceberg session catalog.
+</span><span class="boring">    let catalog = RestSessionCatalogBuilder::default()
+</span><span class="boring">        .load(
+</span><span class="boring">            &quot;rest&quot;,
+</span><span class="boring">            HashMap::from([(REST_CATALOG_PROP_URI.to_string(), REST_URI.to_string())]),
+</span><span class="boring">        )
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap();
+</span><span class="boring">
+</span><span class="boring">    // Build the session context passed to each operation.
+</span><span class="boring">    let context = SessionContext::builder()
+</span><span class="boring">        .identity(&quot;user123&quot;.to_string())
+</span><span class="boring">        .build();
+</span><span class="boring">
+</span>    // List all namespaces already in the catalog.
+    let existing_namespaces = catalog.list_namespaces(&amp;context, None).await.unwrap();
+    println!(&quot;Namespaces alreading in the existing catalog: {existing_namespaces:?}&quot;);
+<span class="boring">
+</span><span class="boring">    // Create a new namespace identifier.
+</span><span class="boring">    let namespace_ident =
+</span><span class="boring">        NamespaceIdent::from_vec(vec![&quot;ns1&quot;.to_string(), &quot;ns11&quot;.to_string()]).unwrap();
+</span><span class="boring">
+</span><span class="boring">    // Drop the namespace if it already exists.
+</span><span class="boring">    if catalog
+</span><span class="boring">        .namespace_exists(&amp;context, &amp;namespace_ident)
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap()
+</span><span class="boring">    {
+</span><span class="boring">        println!(&quot;Namespace already exists, dropping now.&quot;,);
+</span><span class="boring">        catalog
+</span><span class="boring">            .drop_namespace(&amp;context, &amp;namespace_ident)
+</span><span class="boring">            .await
+</span><span class="boring">            .unwrap();
+</span><span class="boring">    }
+</span><span class="boring">
+</span><span class="boring">    // Create the new namespace in the catalog.
+</span><span class="boring">    let _created_namespace = catalog
+</span><span class="boring">        .create_namespace(
+</span><span class="boring">            &amp;context,
+</span><span class="boring">            &amp;namespace_ident,
+</span><span class="boring">            HashMap::from([(&quot;key1&quot;.to_string(), &quot;value1&quot;.to_string())]),
+</span><span class="boring">        )
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap();
+</span><span class="boring">    println!(&quot;Namespace {namespace_ident:?} created!&quot;);
+</span><span class="boring">
+</span><span class="boring">    let loaded_namespace = catalog
+</span><span class="boring">        .get_namespace(&amp;context, &amp;namespace_ident)
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap();
+</span><span class="boring">    println!(&quot;Namespace loaded!\n\nNamespace: {loaded_namespace:#?}&quot;,);
+</span><span class="boring">}</span></code></pre>
+<p>Then you can run following code to create namespace:</p>
+<pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
+</span><span class="boring">// or more contributor license agreements.  See the NOTICE file
+</span><span class="boring">// distributed with this work for additional information
+</span><span class="boring">// regarding copyright ownership.  The ASF licenses this file
+</span><span class="boring">// to you under the Apache License, Version 2.0 (the
+</span><span class="boring">// &quot;License&quot;); you may not use this file except in compliance
+</span><span class="boring">// with the License.  You may obtain a copy of the License at
+</span><span class="boring">//
+</span><span class="boring">//   http://www.apache.org/licenses/LICENSE-2.0
+</span><span class="boring">//
+</span><span class="boring">// Unless required by applicable law or agreed to in writing,
+</span><span class="boring">// software distributed under the License is distributed on an
+</span><span class="boring">// &quot;AS IS&quot; BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+</span><span class="boring">// KIND, either express or implied.  See the License for the
+</span><span class="boring">// specific language governing permissions and limitations
+</span><span class="boring">// under the License.
+</span><span class="boring">
+</span><span class="boring">use std::collections::HashMap;
+</span><span class="boring">
+</span><span class="boring">use iceberg::{NamespaceIdent, SessionCatalog, SessionContext};
+</span><span class="boring">use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestSessionCatalogBuilder};
+</span><span class="boring">
+</span><span class="boring">static REST_URI: &amp;str = &quot;http://localhost:8181&quot;;
+</span><span class="boring">
+</span><span class="boring">/// This is a simple example that demonstrates how to use [`RestSessionCatalog`] to create
+</span><span class="boring">/// namespaces.
+</span><span class="boring">///
+</span><span class="boring">/// Unlike [`RestCatalog`](iceberg_catalog_rest::RestCatalog), every operation
+</span><span class="boring">/// takes the [`SessionContext`] it should run under, so a single catalog instance
+</span><span class="boring">/// can serve requests on behalf of different sessions.
+</span><span class="boring">///
+</span><span class="boring">/// A running instance of the iceberg-rest catalog on port 8181 is required.
+</span><span class="boring">/// You can find how to run the iceberg-rest catalog with `docker compose` in
+</span><span class="boring">/// the official [quickstart documentation](https://iceberg.apache.org/spark-quickstart/).
+</span><span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() {
+</span><span class="boring">    // Create the REST iceberg session catalog.
+</span><span class="boring">    let catalog = RestSessionCatalogBuilder::default()
+</span><span class="boring">        .load(
+</span><span class="boring">            &quot;rest&quot;,
+</span><span class="boring">            HashMap::from([(REST_CATALOG_PROP_URI.to_string(), REST_URI.to_string())]),
+</span><span class="boring">        )
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap();
+</span><span class="boring">
+</span><span class="boring">    // Build the session context passed to each operation.
+</span><span class="boring">    let context = SessionContext::builder()
+</span><span class="boring">        .identity(&quot;user123&quot;.to_string())
+</span><span class="boring">        .build();
+</span><span class="boring">
+</span><span class="boring">    // List all namespaces already in the catalog.
+</span><span class="boring">    let existing_namespaces = catalog.list_namespaces(&amp;context, None).await.unwrap();
+</span><span class="boring">    println!(&quot;Namespaces alreading in the existing catalog: {existing_namespaces:?}&quot;);
+</span><span class="boring">
+</span>    // Create a new namespace identifier.
+    let namespace_ident =
+        NamespaceIdent::from_vec(vec![&quot;ns1&quot;.to_string(), &quot;ns11&quot;.to_string()]).unwrap();
+
+    // Drop the namespace if it already exists.
+    if catalog
+        .namespace_exists(&amp;context, &amp;namespace_ident)
+        .await
+        .unwrap()
+    {
+        println!(&quot;Namespace already exists, dropping now.&quot;,);
+        catalog
+            .drop_namespace(&amp;context, &amp;namespace_ident)
+            .await
+            .unwrap();
+    }
+
+    // Create the new namespace in the catalog.
+    let _created_namespace = catalog
+        .create_namespace(
+            &amp;context,
+            &amp;namespace_ident,
+            HashMap::from([(&quot;key1&quot;.to_string(), &quot;value1&quot;.to_string())]),
+        )
+        .await
+        .unwrap();
+    println!(&quot;Namespace {namespace_ident:?} created!&quot;);
+
+    let loaded_namespace = catalog
+        .get_namespace(&amp;context, &amp;namespace_ident)
+        .await
+        .unwrap();
     println!(&quot;Namespace loaded!\n\nNamespace: {loaded_namespace:#?}&quot;,);
 <span class="boring">}</span></code></pre>
 <h1 id="table"><a class="header" href="#table">Table</a></h1>
