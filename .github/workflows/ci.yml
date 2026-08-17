@@ -98,7 +98,7 @@ jobs:
         run: echo "id=${ImageOS:?}" >> "$GITHUB_OUTPUT"
 
       - name: Cache Rust artifacts
-        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ steps.image.outputs.id }}-${{ hashFiles('.github/workflows/ci.yml', 'Makefile', 'Cargo.toml') }}
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -299,7 +299,7 @@ jobs:
         shell: bash
         run: echo "id=${ImageOS:?}" >> "$GITHUB_OUTPUT"
       - name: Cache Rust artifacts
-        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: msrv-${{ steps.get-msrv.outputs.msrv }}-${{ steps.image.outputs.id }}-${{ hashFiles('.github/workflows/ci.yml', 'Makefile', 'Cargo.toml') }}
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
