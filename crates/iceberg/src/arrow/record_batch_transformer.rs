@@ -1270,7 +1270,6 @@ mod test {
     };
     use arrow_cast::cast;
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema};
-    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use super::field_with_id;
     use crate::arrow::build_partition_constant;
@@ -1398,17 +1397,17 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let source_fields = Fields::from(vec![simple_field("known", DataType::Int32, true, "2")]);
+        let source_fields = Fields::from(vec![field_with_id("known", DataType::Int32, true, 2)]);
         let source_struct = Arc::new(StructArray::new(
             source_fields.clone(),
             vec![Arc::new(Int32Array::from(vec![Some(1), Some(2)]))],
             None,
         ));
-        let source_schema = Arc::new(ArrowSchema::new(vec![simple_field(
+        let source_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
             "nested",
             DataType::Struct(source_fields),
             true,
-            "1",
+            1,
         )]));
         let source_batch = RecordBatch::try_new(source_schema, vec![source_struct]).unwrap();
         let mut transformer = RecordBatchTransformerBuilder::new(snapshot_schema, &[1]).build();
@@ -1444,22 +1443,17 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let source_fields = Fields::from(vec![simple_field(
-            "reused",
-            DataType::Int32,
-            true,
-            "2",
-        )]);
+        let source_fields = Fields::from(vec![field_with_id("reused", DataType::Int32, true, 2)]);
         let source_struct = Arc::new(StructArray::new(
             source_fields.clone(),
             vec![Arc::new(Int32Array::from(vec![Some(10), Some(20)]))],
             None,
         ));
-        let source_schema = Arc::new(ArrowSchema::new(vec![simple_field(
+        let source_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
             "nested",
             DataType::Struct(source_fields),
             true,
-            "1",
+            1,
         )]));
         let source_batch = RecordBatch::try_new(source_schema, vec![source_struct]).unwrap();
         let mut transformer = RecordBatchTransformerBuilder::new(snapshot_schema, &[1]).build();

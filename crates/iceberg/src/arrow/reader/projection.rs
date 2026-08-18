@@ -557,10 +557,11 @@ mod tests {
             DataType::Int32,
             true,
         )]));
-        let file_batch = RecordBatch::try_new(file_schema.clone(), vec![Arc::new(
-            arrow_array::Int32Array::from(vec![10, 20]),
-        )])
-        .unwrap();
+        let file_batch =
+            RecordBatch::try_new(file_schema.clone(), vec![Arc::new(Int32Array::from(vec![
+                10, 20,
+            ]))])
+            .unwrap();
         let tmp_dir = TempDir::new().unwrap();
         let file_path = tmp_dir.path().join("unknown-fallback.parquet");
         let file = File::create(&file_path).unwrap();
@@ -618,13 +619,10 @@ mod tests {
                 "2".to_string(),
             )])),
         ]));
-        let file_batch = RecordBatch::try_new(
-            file_schema.clone(),
-            vec![
-                Arc::new(Int32Array::from(vec![7, 8])),
-                Arc::new(Int32Array::from(vec![10, 20])),
-            ],
-        )
+        let file_batch = RecordBatch::try_new(file_schema.clone(), vec![
+            Arc::new(Int32Array::from(vec![7, 8])),
+            Arc::new(Int32Array::from(vec![10, 20])),
+        ])
         .unwrap();
         let tmp_dir = TempDir::new().unwrap();
         let file_path = tmp_dir.path().join("physical-unknown.parquet");
