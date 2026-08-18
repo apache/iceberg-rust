@@ -20,6 +20,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 use crate::compression::CompressionCodec;
+use crate::encryption::AesKeySize;
 use crate::error::{Error, ErrorKind, Result};
 use crate::util::location::strip_trailing_slash;
 
@@ -455,6 +456,12 @@ impl TableProperties {
         "write.object-storage.partitioned-paths";
     /// Default value for [PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS]
     pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool = true;
+
+    /// The AES key size to use when generating data encryption keys, derived
+    /// from `encryption.data-key-length`.
+    pub fn data_encryption_key_size(&self) -> Result<AesKeySize> {
+        AesKeySize::from_key_length(self.encryption_data_key_length)
+    }
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {

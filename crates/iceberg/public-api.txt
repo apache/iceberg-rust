@@ -302,6 +302,7 @@ impl iceberg::encryption::EncryptionManager
 pub async fn iceberg::encryption::EncryptionManager::decrypt_manifest_list_key_metadata(&self, encryption_key_id: &str) -> iceberg::Result<iceberg::encryption::StandardKeyMetadata>
 pub fn iceberg::encryption::EncryptionManager::encrypt(&self, raw_output: iceberg::io::OutputFile) -> iceberg::encryption::EncryptedOutputFile
 pub async fn iceberg::encryption::EncryptionManager::encrypt_manifest_list_key_metadata(&self, key_metadata: &iceberg::encryption::StandardKeyMetadata) -> iceberg::Result<alloc::string::String>
+pub fn iceberg::encryption::EncryptionManager::generate_key_metadata(&self) -> iceberg::encryption::StandardKeyMetadata
 pub fn iceberg::encryption::EncryptionManager::with_encryption_keys<F, R>(&self, f: F) -> R where F: core::ops::function::FnOnce(&std::collections::hash::map::HashMap<alloc::string::String, iceberg::spec::EncryptedKey>) -> R
 impl core::fmt::Debug for iceberg::encryption::EncryptionManager
 pub fn iceberg::encryption::EncryptionManager::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -2887,6 +2888,7 @@ pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize
 pub const iceberg::spec::TableProperties::RESERVED_PROPERTIES: [&str; 9]
+pub fn iceberg::spec::TableProperties::data_encryption_key_size(&self) -> iceberg::Result<iceberg::encryption::AesKeySize>
 impl core::convert::TryFrom<&std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>> for iceberg::spec::TableProperties
 pub type iceberg::spec::TableProperties::Error = iceberg::Error
 pub fn iceberg::spec::TableProperties::try_from(props: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<Self>
@@ -3178,7 +3180,7 @@ pub struct iceberg::table::Table
 impl iceberg::table::Table
 pub fn iceberg::table::Table::builder() -> iceberg::table::TableBuilder
 pub fn iceberg::table::Table::current_schema_ref(&self) -> iceberg::spec::SchemaRef
-pub fn iceberg::table::Table::encryption_manager(&self) -> core::option::Option<&iceberg::encryption::EncryptionManager>
+pub fn iceberg::table::Table::encryption_manager(&self) -> core::option::Option<&alloc::sync::Arc<iceberg::encryption::EncryptionManager>>
 pub fn iceberg::table::Table::file_io(&self) -> &iceberg::io::FileIO
 pub fn iceberg::table::Table::identifier(&self) -> &iceberg::TableIdent
 pub fn iceberg::table::Table::inspect(&self) -> iceberg::inspect::MetadataTable<'_>
@@ -3367,6 +3369,7 @@ impl iceberg::writer::file_writer::ParquetWriterBuilder
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::from_table_properties(table_props: &iceberg::spec::TableProperties, schema: iceberg::spec::SchemaRef) -> iceberg::Result<Self>
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::new(props: parquet::file::properties::WriterProperties, schema: iceberg::spec::SchemaRef) -> Self
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::new_with_match_mode(props: parquet::file::properties::WriterProperties, schema: iceberg::spec::SchemaRef, match_mode: iceberg::arrow::FieldMatchMode) -> Self
+pub fn iceberg::writer::file_writer::ParquetWriterBuilder::with_encryption_manager(self, encryption_manager: alloc::sync::Arc<iceberg::encryption::EncryptionManager>) -> Self
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::with_match_mode(self, match_mode: iceberg::arrow::FieldMatchMode) -> Self
 impl core::clone::Clone for iceberg::writer::file_writer::ParquetWriterBuilder
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::clone(&self) -> iceberg::writer::file_writer::ParquetWriterBuilder
