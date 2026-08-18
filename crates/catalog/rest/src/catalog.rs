@@ -577,6 +577,19 @@ impl RestCatalog {
     pub(crate) async fn supports_endpoint(&self, endpoint: &Endpoint) -> Result<bool> {
         self.inner.supports_endpoint(endpoint).await
     }
+
+    /// Same catalog identity with an empty HTTP client cache, for fire-and-forget
+    /// work (best-effort plan cancel on drop) that must not borrow `self`.
+    pub(crate) fn clone_uninitialized(&self) -> Self {
+        Self {
+            session_context: self.session_context.clone(),
+            inner: Arc::new(self.inner.clone_uninitialized()),
+        }
+    }
+
+    pub(crate) fn runtime(&self) -> &Runtime {
+        self.inner.runtime()
+    }
 }
 
 /// Every operation forwards to its [`RestSessionCatalog`] equivalent with the
