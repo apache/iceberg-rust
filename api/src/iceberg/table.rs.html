@@ -271,8 +271,8 @@
 <a href=#271 id=271 data-nosnippet>271</a>    /// A manager is present iff the table metadata has the
 <a href=#272 id=272 data-nosnippet>272</a>    /// `encryption.key-id` property set and a [`KeyManagementClient`] was
 <a href=#273 id=273 data-nosnippet>273</a>    /// supplied to the [`TableBuilder`].
-<a href=#274 id=274 data-nosnippet>274</a>    </span><span class="kw">pub fn </span>encryption_manager(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>EncryptionManager&gt; {
-<a href=#275 id=275 data-nosnippet>275</a>        <span class="self">self</span>.encryption_manager.as_deref()
+<a href=#274 id=274 data-nosnippet>274</a>    </span><span class="kw">pub fn </span>encryption_manager(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Arc&lt;EncryptionManager&gt;&gt; {
+<a href=#275 id=275 data-nosnippet>275</a>        <span class="self">self</span>.encryption_manager.as_ref()
 <a href=#276 id=276 data-nosnippet>276</a>    }
 <a href=#277 id=277 data-nosnippet>277</a>
 <a href=#278 id=278 data-nosnippet>278</a>    <span class="doccomment">/// Creates a table scan.
