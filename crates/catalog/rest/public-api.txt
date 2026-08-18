@@ -371,7 +371,6 @@ pub fn iceberg_catalog_rest::RenameTableRequest::serialize<__S>(&self, __seriali
 impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::RenameTableRequest
 pub fn iceberg_catalog_rest::RenameTableRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::RestCatalog
-impl iceberg_catalog_rest::RestCatalog
 impl core::fmt::Debug for iceberg_catalog_rest::RestCatalog
 pub fn iceberg_catalog_rest::RestCatalog::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::catalog::Catalog for iceberg_catalog_rest::RestCatalog

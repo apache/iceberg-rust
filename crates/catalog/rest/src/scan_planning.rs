@@ -2145,7 +2145,10 @@ mod tests {
             .create_async()
             .await;
         let catalog = load_catalog(&server.url());
-        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let table = catalog
+            .load_table(&empty_context(), &test1())
+            .await
+            .unwrap();
         let tasks: Vec<_> = table
             .scan()
             .with_scan_planning_mode(ScanPlanningMode::Remote)
@@ -2205,7 +2208,10 @@ mod tests {
             .create_async()
             .await;
         let catalog = load_catalog(&server.url());
-        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let table = catalog
+            .load_table(&empty_context(), &test1())
+            .await
+            .unwrap();
         let tasks: Vec<_> = table
             .scan()
             .with_scan_planning_mode(ScanPlanningMode::Remote)
@@ -2252,7 +2258,10 @@ mod tests {
             .create_async()
             .await;
         let catalog = load_catalog(&server.url());
-        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let table = catalog
+            .load_table(&empty_context(), &test1())
+            .await
+            .unwrap();
         let tasks: Vec<_> = table
             .scan()
             .with_scan_planning_mode(ScanPlanningMode::Remote)
@@ -2295,7 +2304,10 @@ mod tests {
             .create_async()
             .await;
         let catalog = load_catalog(&server.url());
-        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let table = catalog
+            .load_table(&empty_context(), &test1())
+            .await
+            .unwrap();
         let tasks: Vec<_> = table
             .scan()
             .with_scan_planning_mode(ScanPlanningMode::Remote)
@@ -2327,7 +2339,10 @@ mod tests {
             .create_async()
             .await;
         let catalog = load_catalog(&server.url());
-        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let table = catalog
+            .load_table(&empty_context(), &test1())
+            .await
+            .unwrap();
         let tasks: Vec<_> = table
             .scan()
             .with_scan_planning_mode(ScanPlanningMode::Remote)
@@ -2361,7 +2376,10 @@ mod tests {
             .create_async()
             .await;
         let catalog = load_catalog(&server.url());
-        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let table = catalog
+            .load_table(&empty_context(), &test1())
+            .await
+            .unwrap();
         let tasks: Vec<_> = table
             .scan()
             .build()
@@ -2389,7 +2407,10 @@ mod tests {
             .create_async()
             .await;
         let catalog = load_catalog(&server.url());
-        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let table = catalog
+            .load_table(&empty_context(), &test1())
+            .await
+            .unwrap();
         let err = match table
             .scan()
             .with_scan_planning_mode(ScanPlanningMode::Remote)
@@ -2417,7 +2438,10 @@ mod tests {
             .create_async()
             .await;
         let catalog = load_catalog(&server.url());
-        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let table = catalog
+            .load_table(&empty_context(), &test1())
+            .await
+            .unwrap();
         let _ = table.scan().build().unwrap().plan_files().await;
         config.assert_async().await;
         load.assert_async().await;
@@ -2436,7 +2460,10 @@ mod tests {
             .create_async()
             .await;
         let catalog = load_catalog(&server.url());
-        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let table = catalog
+            .load_table(&empty_context(), &test1())
+            .await
+            .unwrap();
         let _ = table
             .scan()
             .with_scan_planning_mode(ScanPlanningMode::Auto)
@@ -2470,7 +2497,10 @@ mod tests {
             .create_async()
             .await;
         let catalog = load_catalog(&server.url());
-        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let table = catalog
+            .load_table(&empty_context(), &test1())
+            .await
+            .unwrap();
         let tasks: Vec<_> = table
             .scan()
             .with_scan_planning_mode(ScanPlanningMode::Auto)
@@ -2538,7 +2568,10 @@ mod tests {
             .create_async()
             .await;
         let catalog = load_catalog(&server.url());
-        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let table = catalog
+            .load_table(&empty_context(), &test1())
+            .await
+            .unwrap();
         let tasks: Vec<_> = table
             .scan()
             .with_scan_planning_mode(ScanPlanningMode::Remote)
@@ -2578,7 +2611,10 @@ mod tests {
             .await;
         let load = mock_load_table(&mut server).await;
         let catalog = load_catalog(&server.url());
-        let table = catalog.load_table(&empty_context(), &test1()).await.unwrap();
+        let table = catalog
+            .load_table(&empty_context(), &test1())
+            .await
+            .unwrap();
         let _ = table
             .scan()
             .with_scan_planning_mode(ScanPlanningMode::Auto)
