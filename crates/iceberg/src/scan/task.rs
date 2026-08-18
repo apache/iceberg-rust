@@ -244,16 +244,22 @@ pub struct FileScanTaskDeleteFile {
 
     /// For a deletion vector, the location of the data file whose rows it deletes. Required for
     /// deletion vectors, and may also be set on a position delete file scoped to one data file.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[builder(default)]
     pub referenced_data_file: Option<String>,
 
     /// For a deletion vector, the offset of the blob within its Puffin file. Set only for
     /// deletion vectors, where it locates the blob for direct access.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[builder(default)]
     pub content_offset: Option<i64>,
 
     /// For a deletion vector, the length in bytes of the blob within its Puffin file. Set
     /// whenever `content_offset` is.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[builder(default)]
     pub content_size_in_bytes: Option<i64>,
 
