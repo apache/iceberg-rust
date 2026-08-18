@@ -23,7 +23,10 @@ mod common;
 
 use std::collections::HashMap;
 
-use common::{CatalogKind, cleanup_namespace_dyn, load_catalog, table_creation};
+use common::{
+    CatalogKind, cleanup_namespace_dyn, encrypted_table_creation, load_catalog, table_creation,
+};
+use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat, Struct};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{ErrorKind, NamespaceIdent, Result, TableIdent};
 use iceberg_test_utils::normalize_test_name_with_parts;
@@ -318,6 +321,82 @@ async fn test_catalog_purge_table(#[case] kind: CatalogKind) -> Result<()> {
             !file_io.exists(location).await?,
             "Metadata file should have been deleted after purge"
         );
+    }
+
+    catalog.drop_namespace(&namespace).await?;
+
+    Ok(())
+}
+
+#[rstest]
+#[case::glue_catalog(CatalogKind::Glue)]
+#[case::sql_catalog(CatalogKind::Sql)]
+#[case::memory_catalog(CatalogKind::Memory)]
+#[tokio::test]
+async fn test_catalog_purge_encrypted_table(#[case] kind: CatalogKind) -> Result<()> {
+    let Some(harness) = load_catalog(kind).await else {
+        return Ok(());
+    };
+    let catalog = harness.catalog;
+    let namespace = NamespaceIdent::new(normalize_test_name_with_parts!(
+        "catalog_purge_encrypted_table",
+        harness.label
+    ));
+
+    cleanup_namespace_dyn(catalog.as_ref(), &namespace).await;
+    catalog.create_namespace(&namespace, HashMap::new()).await?;
+
+    let table_name =
+        normalize_test_name_with_parts!("catalog_purge_encrypted_table", harness.label, "table");
+    let table = catalog
+        .create_table(&namespace, encrypted_table_creation(table_name))
+        .await?;
+    let ident = table.identifier().clone();
+    let file_io = table.file_io().clone();
+    let data_file_path = format!("{}/data/00000.parquet", table.metadata().location());
+
+    file_io
+        .new_output(&data_file_path)?
+        .write(vec![0; 16].into())
+        .await?;
+
+    let data_file = DataFileBuilder::default()
+        .content(DataContentType::Data)
+        .file_path(data_file_path.clone())
+        .file_format(DataFileFormat::Parquet)
+        .partition(Struct::empty())
+        .record_count(1)
+        .file_size_in_bytes(16)
+        .partition_spec_id(table.metadata().default_partition_spec_id())
+        .build()
+        .unwrap();
+
+    let tx = Transaction::new(&table);
+    tx.fast_append()
+        .add_data_files(vec![data_file])
+        .apply(tx)?
+        .commit(catalog.as_ref())
+        .await?;
+    let table = catalog.load_table(&ident).await?;
+
+    let metadata_location = table.metadata_location().map(str::to_string);
+    let snapshot = table.metadata().current_snapshot().unwrap();
+    let manifest_list_location = snapshot.manifest_list().to_string();
+    let manifest_list = table.manifest_list_reader(snapshot).load().await?;
+    let manifest_location = manifest_list.entries()[0].manifest_path.clone();
+
+    assert!(file_io.exists(&data_file_path).await?);
+    assert!(file_io.exists(&manifest_location).await?);
+    assert!(file_io.exists(&manifest_list_location).await?);
+
+    catalog.purge_table(&ident).await?;
+
+    assert!(!catalog.table_exists(&ident).await?);
+    assert!(!file_io.exists(&data_file_path).await?);
+    assert!(!file_io.exists(&manifest_location).await?);
+    assert!(!file_io.exists(&manifest_list_location).await?);
+    if let Some(location) = &metadata_location {
+        assert!(!file_io.exists(location).await?);
     }
 
     catalog.drop_namespace(&namespace).await?;
