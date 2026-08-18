@@ -98,8 +98,9 @@ impl DeleteVector {
     /// # Errors
     ///
     /// Returns [`ErrorKind::DataInvalid`] if the blob is shorter than the minimum, the length
-    /// prefix or CRC does not match, the magic is wrong, the roaring directory's keys are not
-    /// ordered by unsigned comparison, or the roaring payload fails to decode.
+    /// prefix or CRC does not match, the magic is wrong, the roaring bitmap count exceeds the
+    /// portable format's maximum, the roaring directory's keys are not ordered by unsigned
+    /// comparison, or the roaring payload fails to decode.
     // Consumed by the scan delete loader once the deletion-vector read path is wired up.
     #[allow(dead_code)]
     pub fn deserialize(blob: &[u8]) -> Result<Self> {
@@ -115,110 +116,132 @@ impl DeleteVector {
 
         // The magic and vector, i.e. the bytes covered by both the length prefix and the CRC.
         let body = &blob[DV_LENGTH_PREFIX_BYTES..blob.len() - DV_CRC_BYTES];
-
-        let declared_len = (&blob[..DV_LENGTH_PREFIX_BYTES])
-            .try_get_u32()
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "failed to read the deletion-vector-v1 length prefix",
-                )
-                .with_source(e)
-            })? as usize;
-        if declared_len != body.len() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion-vector-v1 length prefix is {declared_len}, expected {}",
-                    body.len()
-                ),
-            ));
-        }
+        verify_length_prefix(&blob[..DV_LENGTH_PREFIX_BYTES], body)?;
 
         // Verify the CRC before interpreting any bytes so a corrupt blob yields a single clear
         // error rather than an opaque roaring decode failure.
-        let stored_crc = (&blob[blob.len() - DV_CRC_BYTES..])
-            .try_get_u32()
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "failed to read the deletion-vector-v1 CRC",
-                )
-                .with_source(e)
-            })?;
-        let computed_crc = crc32fast::hash(body);
-        if computed_crc != stored_crc {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion-vector-v1 CRC mismatch: computed {computed_crc:#010x}, stored {stored_crc:#010x}"
-                ),
-            ));
-        }
+        verify_crc(body, &blob[blob.len() - DV_CRC_BYTES..])?;
 
         let (magic, vector) = body.split_at(DV_MAGIC_BYTES);
-        if magic != DV_MAGIC {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion-vector-v1 magic mismatch: {magic:02x?}, expected {DV_MAGIC:02x?}"
-                ),
-            ));
-        }
+        verify_magic(magic)?;
 
-        // The Puffin spec defines the roaring directory as the bitmaps "ordered by unsigned
-        // comparison of the 32-bit keys", with one bitmap per key. Walk it ourselves (rather than
-        // `RoaringTreemap::deserialize_from`, which stores keys in a `BTreeMap` via a plain insert
-        // and would silently accept a stream with duplicate or out-of-order keys, discarding the
-        // earlier bitmap on a duplicate) so a non-conformant blob is rejected instead of decoded
-        // into a value that doesn't match what was actually written.
-        let mut reader = vector;
-        let bitmap_count = reader.try_get_u64_le().map_err(|e| {
+        let inner = decode_roaring_directory(vector)?;
+
+        Ok(DeleteVector { inner })
+    }
+}
+
+fn verify_length_prefix(mut prefix: &[u8], body: &[u8]) -> Result<()> {
+    let declared_len = prefix.try_get_u32().map_err(|e| {
+        Error::new(
+            ErrorKind::Unexpected,
+            "failed to read the deletion-vector-v1 length prefix",
+        )
+        .with_source(e)
+    })? as usize;
+    if declared_len != body.len() {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "deletion-vector-v1 length prefix is {declared_len}, expected {}",
+                body.len()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_crc(body: &[u8], mut crc_bytes: &[u8]) -> Result<()> {
+    let stored_crc = crc_bytes.try_get_u32().map_err(|e| {
+        Error::new(
+            ErrorKind::Unexpected,
+            "failed to read the deletion-vector-v1 CRC",
+        )
+        .with_source(e)
+    })?;
+    let computed_crc = crc32fast::hash(body);
+    if computed_crc != stored_crc {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "deletion-vector-v1 CRC mismatch: computed {computed_crc:#010x}, stored {stored_crc:#010x}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_magic(magic: &[u8]) -> Result<()> {
+    if magic != DV_MAGIC {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("deletion-vector-v1 magic mismatch: {magic:02x?}, expected {DV_MAGIC:02x?}"),
+        ));
+    }
+    Ok(())
+}
+
+// The Puffin spec defines the roaring directory as the bitmaps "ordered by unsigned comparison
+// of the 32-bit keys", with one bitmap per key. Walk it ourselves (rather than
+// `RoaringTreemap::deserialize_from`, which stores keys in a `BTreeMap` via a plain insert and
+// would silently accept a stream with duplicate or out-of-order keys, discarding the earlier
+// bitmap on a duplicate) so a non-conformant blob is rejected instead of decoded into a value
+// that doesn't match what was actually written.
+fn decode_roaring_directory(mut reader: &[u8]) -> Result<RoaringTreemap> {
+    let bitmap_count = reader.try_get_u64_le().map_err(|e| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            "failed to decode deletion-vector-v1 roaring payload",
+        )
+        .with_source(e)
+    })?;
+    // The roaring portable format restricts the bitmap count to [0, 2^32 - 1] (it is stored as a
+    // u64 with the upper 32 bits reserved as zero padding).
+    if bitmap_count > u32::MAX as u64 {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "deletion-vector-v1 roaring bitmap count {bitmap_count} exceeds the {}-key maximum",
+                u32::MAX
+            ),
+        ));
+    }
+
+    let mut bitmaps = Vec::new();
+    let mut last_key: Option<u32> = None;
+    for _ in 0..bitmap_count {
+        let key = reader.try_get_u32_le().map_err(|e| {
             Error::new(
                 ErrorKind::DataInvalid,
                 "failed to decode deletion-vector-v1 roaring payload",
             )
             .with_source(e)
         })?;
-
-        let mut bitmaps = Vec::new();
-        let mut last_key: Option<u32> = None;
-        for _ in 0..bitmap_count {
-            let key = reader.try_get_u32_le().map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "failed to decode deletion-vector-v1 roaring payload",
-                )
-                .with_source(e)
-            })?;
-            if let Some(last) = last_key
-                && key <= last
-            {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "deletion-vector-v1 roaring keys must be ordered by unsigned comparison, got key {key} after {last}"
-                    ),
-                ));
-            }
-            last_key = Some(key);
-
-            let bitmap = RoaringBitmap::deserialize_from(&mut reader).map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "failed to decode deletion-vector-v1 roaring payload",
-                )
-                .with_source(e)
-            })?;
-            bitmaps.push((key, bitmap));
+        if let Some(last) = last_key
+            && key <= last
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion-vector-v1 roaring keys must be ordered by unsigned comparison, got key {key} after {last}"
+                ),
+            ));
         }
+        last_key = Some(key);
 
-        // `bitmaps` is already sorted by key, but `roaring` has no constructor that accepts
-        // pre-sorted pairs without re-sorting them; revisit if that changes upstream.
-        let inner = RoaringTreemap::from_bitmaps(bitmaps);
-
-        Ok(DeleteVector { inner })
+        let bitmap = RoaringBitmap::deserialize_from(&mut reader).map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "failed to decode deletion-vector-v1 roaring payload",
+            )
+            .with_source(e)
+        })?;
+        bitmaps.push((key, bitmap));
     }
+
+    // `bitmaps` is already sorted by key, but `roaring` has no constructor that accepts
+    // pre-sorted pairs without re-sorting them; revisit if that changes upstream.
+    Ok(RoaringTreemap::from_bitmaps(bitmaps))
 }
 
 // Ideally, we'd just wrap `roaring::RoaringTreemap`'s iterator, `roaring::treemap::Iter` here.
@@ -492,5 +515,15 @@ mod tests {
         let vector = raw_roaring_vector(&[(5, &[1]), (3, &[2])]);
         let err = DeleteVector::deserialize(&frame_dv_blob(&vector)).unwrap_err();
         assert!(err.message().contains("unsigned comparison"), "got: {err}");
+    }
+
+    // The roaring portable format stores the bitmap count as a u64 with the upper 32 bits
+    // reserved as zero padding, restricting it to [0, 2^32 - 1]; a value above that is not a
+    // conformant blob, regardless of whether any key/bitmap entries follow.
+    #[test]
+    fn test_deserialize_rejects_bitmap_count_overflow() {
+        let vector = (u32::MAX as u64 + 1).to_le_bytes().to_vec();
+        let err = DeleteVector::deserialize(&frame_dv_blob(&vector)).unwrap_err();
+        assert!(err.message().contains("exceeds the"), "got: {err}");
     }
 }
