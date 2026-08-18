@@ -28,6 +28,8 @@ pub use table::table_provider_factory::IcebergTableProviderFactory;
 pub use table::*;
 
 pub(crate) mod task_writer;
+#[cfg(test)]
+mod test_utils;
 
 use std::fmt;
 
