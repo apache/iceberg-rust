@@ -52,7 +52,6 @@ impl DeleteVector {
     /// # Errors
     ///
     /// Returns an error if the precondition is not met.
-    #[allow(dead_code)]
     pub fn insert_positions(&mut self, positions: &[u64]) -> Result<usize> {
         if let Err(err) = self.inner.append(positions.iter().copied()) {
             return Err(Error::new(

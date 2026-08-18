@@ -341,6 +341,7 @@ impl CachingDeleteFileLoader {
         mut stream: ArrowRecordBatchStream,
     ) -> Result<HashMap<String, DeleteVector>> {
         let mut result: HashMap<String, DeleteVector> = HashMap::default();
+        let mut run_positions: Vec<u64> = Vec::new();
 
         while let Some(batch) = stream.next().await {
             let batch = batch?;
@@ -367,7 +368,6 @@ impl CachingDeleteFileLoader {
             // boundaries, so a path that also appears in another batch merges
             // into its existing delete vector (order does not affect the result).
             let mut run_path: Option<&str> = None;
-            let mut run_positions: Vec<u64> = Vec::new();
 
             for (file_path, pos) in file_paths.iter().zip(positions.iter()) {
                 let (Some(file_path), Some(pos)) = (file_path, pos) else {
@@ -384,8 +384,8 @@ impl CachingDeleteFileLoader {
                 }
 
                 if run_path != Some(file_path) {
-                    if let Some(run_path) = run_path {
-                        Self::merge_delete_positions(&mut result, run_path, &run_positions);
+                    if let Some(prev_path) = run_path {
+                        Self::merge_delete_positions(&mut result, prev_path, &run_positions);
                         run_positions.clear();
                     }
 
@@ -395,8 +395,9 @@ impl CachingDeleteFileLoader {
                 run_positions.push(pos as u64);
             }
 
-            if let Some(run_path) = run_path {
-                Self::merge_delete_positions(&mut result, run_path, &run_positions);
+            if let Some(prev_path) = run_path {
+                Self::merge_delete_positions(&mut result, prev_path, &run_positions);
+                run_positions.clear();
             }
         }
 
@@ -410,13 +411,20 @@ impl CachingDeleteFileLoader {
         file_path: &str,
         positions: &[u64],
     ) {
-        if positions.is_empty() {
-            return;
-        }
+        // Callers only flush a run after pushing at least one position onto it.
+        debug_assert!(!positions.is_empty());
 
         let delete_vector = result.entry(file_path.to_string()).or_default();
-        for &pos in positions {
-            delete_vector.insert(pos);
+        // A run is a strictly ascending slice in the spec-compliant case, which
+        // `insert_positions` bulk-appends in one pass. Fall back to per-position
+        // inserts when the append precondition doesn't hold (unsorted rows, or a
+        // run that overlaps positions already recorded from an earlier batch).
+        // `insert` is idempotent, so re-inserting any prefix the failed append
+        // already added is harmless.
+        if delete_vector.insert_positions(positions).is_err() {
+            for &pos in positions {
+                delete_vector.insert(pos);
+            }
         }
     }
 
