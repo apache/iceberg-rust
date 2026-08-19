@@ -352,6 +352,28 @@ pub fn encrypted_table_creation(name: impl ToString) -> TableCreation {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum TableMode {
+    Plain,
+    Encrypted,
+}
+
+impl TableMode {
+    pub fn table_creation(self, name: impl ToString) -> TableCreation {
+        match self {
+            Self::Plain => table_creation(name),
+            Self::Encrypted => encrypted_table_creation(name),
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Encrypted => "encrypted",
+        }
+    }
+}
+
 pub fn assert_map_contains(expected: &HashMap<String, String>, actual: &HashMap<String, String>) {
     for (key, value) in expected {
         assert_eq!(actual.get(key), Some(value));

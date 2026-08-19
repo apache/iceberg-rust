@@ -23,9 +23,7 @@ mod common;
 
 use std::collections::HashMap;
 
-use common::{
-    CatalogKind, cleanup_namespace_dyn, encrypted_table_creation, load_catalog, table_creation,
-};
+use common::{CatalogKind, TableMode, cleanup_namespace_dyn, load_catalog, table_creation};
 use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat, Struct};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{ErrorKind, NamespaceIdent, Result, TableIdent};
@@ -329,27 +327,38 @@ async fn test_catalog_purge_table(#[case] kind: CatalogKind) -> Result<()> {
 }
 
 #[rstest]
-#[case::glue_catalog(CatalogKind::Glue)]
-#[case::sql_catalog(CatalogKind::Sql)]
-#[case::memory_catalog(CatalogKind::Memory)]
+#[case::glue_plain(CatalogKind::Glue, TableMode::Plain)]
+#[case::glue_encrypted(CatalogKind::Glue, TableMode::Encrypted)]
+#[case::sql_plain(CatalogKind::Sql, TableMode::Plain)]
+#[case::sql_encrypted(CatalogKind::Sql, TableMode::Encrypted)]
+#[case::memory_plain(CatalogKind::Memory, TableMode::Plain)]
+#[case::memory_encrypted(CatalogKind::Memory, TableMode::Encrypted)]
 #[tokio::test]
-async fn test_catalog_purge_encrypted_table(#[case] kind: CatalogKind) -> Result<()> {
+async fn test_catalog_purge_table_with_data(
+    #[case] kind: CatalogKind,
+    #[case] mode: TableMode,
+) -> Result<()> {
     let Some(harness) = load_catalog(kind).await else {
         return Ok(());
     };
     let catalog = harness.catalog;
     let namespace = NamespaceIdent::new(normalize_test_name_with_parts!(
-        "catalog_purge_encrypted_table",
-        harness.label
+        "catalog_purge_table_with_data",
+        harness.label,
+        mode.label()
     ));
 
     cleanup_namespace_dyn(catalog.as_ref(), &namespace).await;
     catalog.create_namespace(&namespace, HashMap::new()).await?;
 
-    let table_name =
-        normalize_test_name_with_parts!("catalog_purge_encrypted_table", harness.label, "table");
+    let table_name = normalize_test_name_with_parts!(
+        "catalog_purge_table_with_data",
+        harness.label,
+        mode.label(),
+        "table"
+    );
     let table = catalog
-        .create_table(&namespace, encrypted_table_creation(table_name))
+        .create_table(&namespace, mode.table_creation(table_name))
         .await?;
     let ident = table.identifier().clone();
     let file_io = table.file_io().clone();
