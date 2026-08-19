@@ -1748,7 +1748,7 @@ mod tests {
 
         assert_eq!(
             spec.partition_to_path(&data, schema.into()),
-            "id=42/name=alice/ts_hour=1000/empty_void=null"
+            "id=42/name=alice/ts_hour=1970-02-11-16/empty_void=null"
         );
     }
 
