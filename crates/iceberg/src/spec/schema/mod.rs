@@ -39,11 +39,11 @@ pub use self::prune_columns::prune_columns;
 use super::NestedField;
 use crate::error::Result;
 use crate::expr::accessor::StructAccessor;
-use crate::spec::FormatVersion;
 use crate::spec::datatypes::{
     LIST_FIELD_NAME, ListType, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType, NestedFieldRef,
     PrimitiveType, StructType, Type,
 };
+use crate::spec::{FormatVersion, Literal};
 use crate::{Error, ErrorKind, ensure_data_valid};
 
 /// Type alias for schema id.
@@ -195,16 +195,23 @@ impl SchemaBuilder {
     }
 
     fn validate_unknown_type_field(field: &NestedFieldRef) -> Result<()> {
+        ensure_data_valid!(
+            !field
+                .initial_default
+                .iter()
+                .chain(field.write_default.iter())
+                .any(|default| {
+                    Self::default_contains_non_null_unknown(default, &field.field_type)
+                }),
+            "Field {} cannot have non-null defaults because unknown type requires null defaults",
+            field.name
+        );
+
         match field.field_type.as_ref() {
             Type::Primitive(PrimitiveType::Unknown) => {
                 ensure_data_valid!(
                     !field.required,
                     "Field {} cannot be required because unknown type must be optional",
-                    field.name
-                );
-                ensure_data_valid!(
-                    field.initial_default.is_none() && field.write_default.is_none(),
-                    "Field {} cannot have non-null defaults because unknown type requires null defaults",
                     field.name
                 );
             }
@@ -224,6 +231,40 @@ impl SchemaBuilder {
         }
 
         Ok(())
+    }
+
+    fn default_contains_non_null_unknown(default: &Literal, field_type: &Type) -> bool {
+        match (default, field_type) {
+            (_, Type::Primitive(PrimitiveType::Unknown)) => true,
+            (Literal::Struct(value), Type::Struct(struct_type)) => value
+                .iter()
+                .zip(struct_type.fields())
+                .any(|(value, field)| {
+                    value.is_some_and(|value| {
+                        Self::default_contains_non_null_unknown(value, &field.field_type)
+                    })
+                }),
+            (Literal::List(values), Type::List(list_type)) => values.iter().any(|value| {
+                value.as_ref().is_some_and(|value| {
+                    Self::default_contains_non_null_unknown(
+                        value,
+                        &list_type.element_field.field_type,
+                    )
+                })
+            }),
+            (Literal::Map(map), Type::Map(map_type)) => {
+                map.clone().into_iter().any(|(key, value)| {
+                    Self::default_contains_non_null_unknown(&key, &map_type.key_field.field_type)
+                        || value.as_ref().is_some_and(|value| {
+                            Self::default_contains_non_null_unknown(
+                                value,
+                                &map_type.value_field.field_type,
+                            )
+                        })
+                })
+            }
+            _ => false,
+        }
     }
 
     fn build_accessors(&self) -> HashMap<i32, Arc<StructAccessor>> {
@@ -1607,5 +1648,159 @@ table {
                 .message()
                 .contains("unknown type requires null defaults")
         );
+    }
+
+    #[test]
+    fn test_unknown_type_rejects_non_null_container_defaults() {
+        let cases = [
+            (
+                "struct",
+                Struct(StructType::new(vec![
+                    NestedField::optional(2, "empty", Primitive(PrimitiveType::Unknown)).into(),
+                ])),
+                Literal::Struct(crate::spec::Struct::from_iter([Some(Literal::int(1))])),
+            ),
+            (
+                "list",
+                List(ListType::new(
+                    NestedField::list_element(2, Primitive(PrimitiveType::Unknown), false).into(),
+                )),
+                Literal::List(vec![Some(Literal::int(1))]),
+            ),
+            (
+                "map",
+                Map(MapType::optional(
+                    2,
+                    Primitive(PrimitiveType::String),
+                    3,
+                    Primitive(PrimitiveType::Unknown),
+                )),
+                Literal::Map(MapValue::from([(
+                    Literal::string("key"),
+                    Some(Literal::int(1)),
+                )])),
+            ),
+        ];
+
+        for (name, field_type, default) in cases {
+            let error = Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, name, field_type)
+                        .with_initial_default(default)
+                        .into(),
+                ])
+                .build()
+                .unwrap_err();
+            assert!(
+                error
+                    .message()
+                    .contains("unknown type requires null defaults"),
+                "unexpected error for {name}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_unknown_type_accepts_null_container_defaults() {
+        let cases = [
+            (
+                "struct",
+                Struct(StructType::new(vec![
+                    NestedField::optional(2, "empty", Primitive(PrimitiveType::Unknown)).into(),
+                ])),
+                Literal::Struct(crate::spec::Struct::from_iter([None])),
+            ),
+            (
+                "list",
+                List(ListType::new(
+                    NestedField::list_element(2, Primitive(PrimitiveType::Unknown), false).into(),
+                )),
+                Literal::List(vec![None]),
+            ),
+            (
+                "map",
+                Map(MapType::optional(
+                    2,
+                    Primitive(PrimitiveType::String),
+                    3,
+                    Primitive(PrimitiveType::Unknown),
+                )),
+                Literal::Map(MapValue::from([(Literal::string("key"), None)])),
+            ),
+        ];
+
+        for (name, field_type, default) in cases {
+            let schema = Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, name, field_type)
+                        .with_write_default(default)
+                        .into(),
+                ])
+                .build()
+                .unwrap();
+            serde_json::to_value(schema).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_unknown_type_deserialization_rejects_non_null_container_defaults() {
+        let cases = [
+            (
+                "struct",
+                serde_json::json!({
+                    "type": "struct",
+                    "fields": [{
+                        "id": 2,
+                        "name": "empty",
+                        "required": false,
+                        "type": "unknown"
+                    }]
+                }),
+                serde_json::json!({"2": 1}),
+            ),
+            (
+                "list",
+                serde_json::json!({
+                    "type": "list",
+                    "element-id": 2,
+                    "element-required": false,
+                    "element": "unknown"
+                }),
+                serde_json::json!([1]),
+            ),
+            (
+                "map",
+                serde_json::json!({
+                    "type": "map",
+                    "key-id": 2,
+                    "key": "string",
+                    "value-id": 3,
+                    "value-required": false,
+                    "value": "unknown"
+                }),
+                serde_json::json!({"keys": ["key"], "values": [1]}),
+            ),
+        ];
+
+        for (name, field_type, default) in cases {
+            let schema_json = serde_json::json!({
+                "type": "struct",
+                "schema-id": 1,
+                "fields": [{
+                    "id": 1,
+                    "name": name,
+                    "required": false,
+                    "type": field_type,
+                    "initial-default": default
+                }]
+            });
+
+            assert!(
+                serde_json::from_value::<Schema>(schema_json).is_err(),
+                "non-null unknown default in {name} should be rejected"
+            );
+        }
     }
 }

@@ -599,15 +599,52 @@ impl TryFrom<SerdeNestedField> for NestedField {
     type Error = crate::Error;
 
     fn try_from(value: SerdeNestedField) -> Result<Self> {
+        fn validate_unknown_values(default: &JsonValue, field_type: &Type) -> Result<()> {
+            if default.is_null() {
+                return Ok(());
+            }
+
+            match (field_type, default) {
+                (Type::Primitive(PrimitiveType::Unknown), _) => {
+                    ensure_data_valid!(false, "Unknown type only supports null default values",);
+                }
+                (Type::Struct(struct_type), JsonValue::Object(object)) => {
+                    for field in struct_type.fields() {
+                        if let Some(value) = object.get(&field.id.to_string()) {
+                            validate_unknown_values(value, &field.field_type)?;
+                        }
+                    }
+                }
+                (Type::List(list_type), JsonValue::Array(values)) => {
+                    for value in values {
+                        validate_unknown_values(value, &list_type.element_field.field_type)?;
+                    }
+                }
+                (Type::Map(map_type), JsonValue::Object(object)) => {
+                    if let Some(JsonValue::Array(keys)) = object.get("keys") {
+                        for key in keys {
+                            validate_unknown_values(key, &map_type.key_field.field_type)?;
+                        }
+                    }
+                    if let Some(JsonValue::Array(values)) = object.get("values") {
+                        for value in values {
+                            validate_unknown_values(value, &map_type.value_field.field_type)?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            Ok(())
+        }
+
         fn parse_default(default: Option<JsonValue>, field_type: &Type) -> Result<Option<Literal>> {
             let Some(default) = default else {
                 return Ok(None);
             };
+            validate_unknown_values(&default, field_type)?;
             match Literal::try_from_json(default, field_type) {
                 Ok(default) => Ok(default),
-                Err(error) if matches!(field_type, Type::Primitive(PrimitiveType::Unknown)) => {
-                    Err(error)
-                }
                 Err(_) => Ok(None),
             }
         }
