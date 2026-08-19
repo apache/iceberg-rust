@@ -271,8 +271,8 @@ impl Table {
     /// A manager is present iff the table metadata has the
     /// `encryption.key-id` property set and a [`KeyManagementClient`] was
     /// supplied to the [`TableBuilder`].
-    pub fn encryption_manager(&self) -> Option<&EncryptionManager> {
-        self.encryption_manager.as_deref()
+    pub fn encryption_manager(&self) -> Option<&Arc<EncryptionManager>> {
+        self.encryption_manager.as_ref()
     }
 
     /// Creates a table scan.

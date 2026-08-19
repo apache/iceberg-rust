@@ -25,8 +25,8 @@ use async_trait::async_trait;
 use mockall::automock;
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
-use zeroize::Zeroizing;
 
+use crate::sensitive::SensitiveString;
 use crate::table::Table;
 use crate::{Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent};
 
@@ -61,7 +61,7 @@ pub struct SessionContext {
     properties: HashMap<String, String>,
 
     #[builder(default)]
-    credentials: HashMap<String, Credential>,
+    credentials: HashMap<String, SensitiveString>,
 }
 
 impl SessionContext {
@@ -88,44 +88,8 @@ impl SessionContext {
     }
 
     /// Returns the session's credential map.
-    pub fn credentials(&self) -> &HashMap<String, Credential> {
+    pub fn credentials(&self) -> &HashMap<String, SensitiveString> {
         &self.credentials
-    }
-}
-
-/// A string-like type containing sensitive information such as passwords or tokens.
-///
-/// It is redacted from logs and automatically zeroized.
-///
-/// # Example
-/// ```rust
-/// use iceberg::Credential;
-///
-/// let sensitive_value = "my-pw-12345";
-/// let credential = Credential::from(sensitive_value.to_string());
-///
-/// // Not contained in debug logs.
-/// assert!(!format!("{:?}", credential).contains(sensitive_value));
-/// ```
-#[derive(Clone)]
-pub struct Credential(Zeroizing<String>);
-
-impl Credential {
-    /// Returns the raw value of the credential.
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Debug for Credential {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Credential([REDACTED])")
-    }
-}
-
-impl From<String> for Credential {
-    fn from(value: String) -> Self {
-        Self(Zeroizing::new(value))
     }
 }
 
@@ -239,7 +203,8 @@ mod tests {
 
     use uuid::Uuid;
 
-    use crate::{Credential, SessionCatalog, SessionContext};
+    use crate::sensitive::SensitiveString;
+    use crate::{SessionCatalog, SessionContext};
 
     #[test]
     fn test_empty_session_context_has_uuid_session_id() {
@@ -271,7 +236,7 @@ mod tests {
         let session = SessionContext::builder()
             .credentials(HashMap::from([(
                 "key".to_string(),
-                Credential::from(sensitive_value.to_string()),
+                SensitiveString::from(sensitive_value.to_string()),
             )]))
             .build();
 
@@ -280,16 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn test_credential_redacts_value() {
-        let sensitive_value = "my-pw-12346";
-
-        let logged = format!("{:?}", Credential::from(sensitive_value.to_string()));
-        assert!(!logged.contains(sensitive_value));
-    }
-
-    #[test]
     fn test_types_are_send_sync() {
-        assert_send_sync::<Credential>();
         assert_send_sync::<SessionContext>();
         assert_send_sync::<dyn SessionCatalog>();
 
