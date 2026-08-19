@@ -1772,7 +1772,7 @@ mod tests {
     }
 
     // A scan predicate and an equality delete are pushed as two separate `ArrowPredicate`s
-    // (they used to be ANDed into one bound `Predicate`), so the result must be the
+    // (they used to be "AND-ed" into one bound `Predicate`), so the result must be the
     // intersection of both.
     #[tokio::test]
     async fn test_eq_delete_with_scan_predicate_intersects() {
