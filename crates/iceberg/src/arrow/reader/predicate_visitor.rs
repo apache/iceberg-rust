@@ -25,7 +25,9 @@ use std::sync::Arc;
 use arrow_arith::boolean::{and, and_kleene, is_not_null, is_null, not, or, or_kleene};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type};
-use arrow_array::{Array, ArrayRef, BooleanArray, Datum as ArrowDatum, RecordBatch, Scalar};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, Datum as ArrowDatum, RecordBatch, Scalar, StructArray,
+};
 use arrow_buffer::BooleanBuffer;
 use arrow_cast::cast::cast;
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
@@ -207,26 +209,21 @@ pub(super) struct PredicateConverter<'a> {
 }
 
 impl PredicateConverter<'_> {
-    /// When visiting a bound reference, we return index of the leaf column in the
-    /// required column indices which is used to project the column in the record batch.
-    /// Return None if the field id is not found in the column map, which is possible
-    /// due to schema evolution.
-    fn bound_reference(&mut self, reference: &BoundReference) -> Result<Option<usize>> {
+    /// When visiting a bound reference, we return the Parquet column path (root to leaf)
+    /// of the referenced leaf column, which the predicate closures use to extract the
+    /// column from the record batch. Return None if the field id is not found in the
+    /// column map, which is possible due to schema evolution.
+    ///
+    /// The path lets predicates target a primitive leaf nested inside a struct: for a
+    /// top-level column the path is a single element, and for `nested.value` it is
+    /// `["nested", "value"]`. `ProjectionMask::leaves` preserves the Parquet nesting, so
+    /// the projected record batch exposes `nested` as a `StructArray` holding the leaf,
+    /// which `project_column` descends by name.
+    fn bound_reference(&mut self, reference: &BoundReference) -> Result<Option<Arc<[String]>>> {
         // The leaf column's index in Parquet schema.
         if let Some(column_idx) = self.column_map.get(&reference.field().id) {
-            if self.parquet_schema.get_column_root(*column_idx).is_group() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Leaf column `{}` in predicates isn't a root column in Parquet schema.",
-                        reference.field().name
-                    ),
-                ));
-            }
-
-            // The leaf column's index in the required column indices.
-            let index = self
-                .column_indices
+            // Confirm the leaf is among the projected columns.
+            self.column_indices
                 .iter()
                 .position(|&idx| idx == *column_idx)
                 .ok_or(Error::new(
@@ -237,7 +234,16 @@ impl PredicateConverter<'_> {
             ),
                 ))?;
 
-            Ok(Some(index))
+            let path: Arc<[String]> = self
+                .parquet_schema
+                .column(*column_idx)
+                .path()
+                .parts()
+                .iter()
+                .cloned()
+                .collect();
+
+            Ok(Some(path))
         } else {
             Ok(None)
         }
@@ -258,20 +264,55 @@ impl PredicateConverter<'_> {
     }
 }
 
-/// Gets the leaf column from the record batch for the required column index. Only
-/// supports top-level columns for now.
+/// Walks the Parquet column path (root to leaf) through the projected record batch to
+/// reach a primitive leaf. A single-element path returns the matching top-level column;
+/// a longer path descends through `StructArray` children by name. Predicates can only
+/// bind to primitive leaves in top-level or struct-nested positions (list/map interiors
+/// have no accessor), so every path segment before the leaf resolves to a struct.
 fn project_column(
     batch: &RecordBatch,
-    column_idx: usize,
+    path: &[String],
 ) -> std::result::Result<ArrayRef, ArrowError> {
-    let column = batch.column(column_idx);
+    let (root_name, rest) = path
+        .split_first()
+        .ok_or_else(|| ArrowError::SchemaError("Predicate column path is empty.".to_string()))?;
 
-    match column.data_type() {
-        DataType::Struct(_) => Err(ArrowError::SchemaError(
-            "Does not support struct column yet.".to_string(),
-        )),
-        _ => Ok(column.clone()),
+    let mut current = batch
+        .column_by_name(root_name)
+        .ok_or_else(|| {
+            ArrowError::SchemaError(format!(
+                "Predicate column root `{root_name}` not found in projected record batch."
+            ))
+        })?
+        .clone();
+
+    for part in rest {
+        let struct_array = current
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| {
+                ArrowError::SchemaError(format!(
+                    "Predicate column path expected a struct at `{part}` but found {:?}.",
+                    current.data_type()
+                ))
+            })?;
+        current = struct_array
+            .column_by_name(part)
+            .ok_or_else(|| {
+                ArrowError::SchemaError(format!(
+                    "Predicate column nested field `{part}` not found in struct."
+                ))
+            })?
+            .clone();
     }
+
+    if matches!(current.data_type(), DataType::Struct(_)) {
+        return Err(ArrowError::SchemaError(
+            "Predicate column path resolved to a struct, expected a primitive leaf.".to_string(),
+        ));
+    }
+
+    Ok(current)
 }
 
 fn compute_is_nan(array: &ArrayRef) -> std::result::Result<BooleanArray, ArrowError> {
@@ -353,9 +394,9 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(path) = self.bound_reference(reference)? {
             Ok(Box::new(move |batch| {
-                let column = project_column(&batch, idx)?;
+                let column = project_column(&batch, &path)?;
                 is_null(&column)
             }))
         } else {
@@ -369,9 +410,9 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(path) = self.bound_reference(reference)? {
             Ok(Box::new(move |batch| {
-                let column = project_column(&batch, idx)?;
+                let column = project_column(&batch, &path)?;
                 is_not_null(&column)
             }))
         } else {
@@ -385,9 +426,9 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(path) = self.bound_reference(reference)? {
             Ok(Box::new(move |batch| {
-                let column = project_column(&batch, idx)?;
+                let column = project_column(&batch, &path)?;
                 compute_is_nan(&column)
             }))
         } else {
@@ -401,9 +442,9 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(path) = self.bound_reference(reference)? {
             Ok(Box::new(move |batch| {
-                let column = project_column(&batch, idx)?;
+                let column = project_column(&batch, &path)?;
                 let is_nan = compute_is_nan(&column)?;
                 not(&is_nan)
             }))
@@ -419,11 +460,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(path) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_column(&batch, &path)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 lt(&left, literal.as_ref())
             }))
@@ -439,11 +480,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(path) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_column(&batch, &path)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 lt_eq(&left, literal.as_ref())
             }))
@@ -459,11 +500,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(path) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_column(&batch, &path)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 gt(&left, literal.as_ref())
             }))
@@ -479,11 +520,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(path) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_column(&batch, &path)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 gt_eq(&left, literal.as_ref())
             }))
@@ -499,11 +540,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(path) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_column(&batch, &path)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 eq(&left, literal.as_ref())
             }))
@@ -519,11 +560,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(path) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_column(&batch, &path)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 neq(&left, literal.as_ref())
             }))
@@ -539,11 +580,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(path) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_column(&batch, &path)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 starts_with(&left, literal.as_ref())
             }))
@@ -559,11 +600,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(path) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_column(&batch, &path)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 // update here if arrow ever adds a native not_starts_with
                 not(&starts_with(&left, literal.as_ref())?)
@@ -580,7 +621,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(path) = self.bound_reference(reference)? {
             let literals: Vec<_> = literals
                 .iter()
                 .map(|lit| get_arrow_datum(lit).unwrap())
@@ -588,7 +629,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native is_in kernel
-                let left = project_column(&batch, idx)?;
+                let left = project_column(&batch, &path)?;
 
                 let mut acc = BooleanArray::from(vec![false; batch.num_rows()]);
                 for literal in &literals {
@@ -610,7 +651,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(path) = self.bound_reference(reference)? {
             let literals: Vec<_> = literals
                 .iter()
                 .map(|lit| get_arrow_datum(lit).unwrap())
@@ -618,7 +659,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native not_in kernel
-                let left = project_column(&batch, idx)?;
+                let left = project_column(&batch, &path)?;
                 let mut acc = BooleanArray::from(vec![true; batch.num_rows()]);
                 for literal in &literals {
                     let literal = try_cast_literal(literal, left.data_type())?;
@@ -816,5 +857,88 @@ mod tests {
             [true, false, true, true]
         );
         assert!(!result.is_null(2));
+    }
+
+    /// A predicate on a primitive leaf inside a struct must build and evaluate rather than
+    /// being rejected because the leaf's Parquet column root is a group. Regression test
+    /// for issue #2432.
+    #[test]
+    fn test_predicate_on_nested_leaf_column() {
+        use arrow_array::{ArrayRef, Int32Array, StructArray};
+        use arrow_schema::Fields;
+
+        use crate::spec::Datum;
+
+        // Schema: id: int (1), person: struct<age: int (3)> (2)
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(
+                        2,
+                        "person",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::required(3, "age", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // `person.age > 25`, bound to the nested leaf (field id 3).
+        let bound = Reference::new("person.age")
+            .greater_than(Datum::int(25))
+            .bind(schema, true)
+            .unwrap();
+
+        // Arrow batch mirroring the schema: a struct column whose `age` child is the leaf.
+        let age = Arc::new(Int32Array::from(vec![30, 20, 40])) as ArrayRef;
+        let person = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("age", DataType::Int32, false)),
+            age as ArrayRef,
+        )]));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "person",
+            DataType::Struct(Fields::from(vec![Field::new(
+                "age",
+                DataType::Int32,
+                false,
+            )])),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(arrow_schema, vec![person]).unwrap();
+
+        // Parquet schema: the nested leaf `person.age` sits under a group, so its column
+        // root is a group (the shape that used to be rejected).
+        let message_type = "
+            message schema {
+              required group person = 2 {
+                required int32 age = 3;
+              }
+            }
+        ";
+        let parquet_type = parse_message_type(message_type).expect("parse schema");
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
+
+        // `person.age` is the single projected leaf (Parquet leaf index 0).
+        let column_map = HashMap::from([(3i32, 0usize)]);
+        let column_indices = vec![0usize];
+
+        let mut converter = PredicateConverter {
+            parquet_schema: &parquet_schema,
+            column_map: &column_map,
+            column_indices: &column_indices,
+        };
+
+        let mut predicate_fn = visit(&mut converter, &bound).unwrap();
+        let result = predicate_fn(batch).unwrap();
+
+        assert_eq!([result.value(0), result.value(1), result.value(2)], [
+            true, false, true
+        ]);
     }
 }
