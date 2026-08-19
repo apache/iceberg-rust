@@ -28,7 +28,7 @@ use super::{
     Datum, FormatVersion, Schema, data_file_schema_v1, data_file_schema_v2, data_file_schema_v3,
 };
 use crate::error::Result;
-use crate::spec::{DEFAULT_PARTITION_SPEC_ID, Struct, StructType};
+use crate::spec::{DEFAULT_PARTITION_SPEC_ID, Struct, StructType, Type};
 use crate::{Error, ErrorKind};
 
 /// Data file carries data file path, partition tuple, metrics, …
@@ -303,10 +303,13 @@ pub fn write_data_files_to_avro<W: Write>(
     };
     let mut writer = AvroWriter::new(&avro_schema, writer);
 
+    // Wrap once and reuse across files so the field-name lookup is not rebuilt
+    // for each data file.
+    let partition_struct_type = Type::Struct(partition_type.clone());
     for data_file in data_files {
         let value = to_value(DataFileSerde::try_from(
             data_file,
-            partition_type,
+            &partition_struct_type,
             FormatVersion::V1,
         )?)?
         .resolve(&avro_schema)?;
@@ -331,12 +334,15 @@ pub fn read_data_files_from_avro<R: Read>(
     };
 
     let reader = AvroReader::with_schema(&avro_schema, reader)?;
+    // Wrap once and reuse across files so the field-name lookup is not rebuilt
+    // for each data file.
+    let partition_struct_type = Type::Struct(partition_type.clone());
     reader
         .into_iter()
         .map(|value| {
             from_value::<DataFileSerde>(&value?)?.try_into(
                 partition_spec_id,
-                partition_type,
+                &partition_struct_type,
                 schema,
             )
         })
