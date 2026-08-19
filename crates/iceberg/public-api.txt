@@ -2888,6 +2888,7 @@ pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize
 pub const iceberg::spec::TableProperties::RESERVED_PROPERTIES: [&str; 9]
+pub fn iceberg::spec::TableProperties::data_encryption_key_size(&self) -> iceberg::Result<iceberg::encryption::AesKeySize>
 impl iceberg::spec::TableProperties
 pub fn iceberg::spec::TableProperties::cdc_enabled(&self) -> bool
 pub fn iceberg::spec::TableProperties::cdc_max_chunk_size(&self) -> usize
@@ -2897,7 +2898,6 @@ pub fn iceberg::spec::TableProperties::commit_max_retry_wait_ms(&self) -> u64
 pub fn iceberg::spec::TableProperties::commit_min_retry_wait_ms(&self) -> u64
 pub fn iceberg::spec::TableProperties::commit_num_retries(&self) -> usize
 pub fn iceberg::spec::TableProperties::commit_total_retry_timeout_ms(&self) -> u64
-pub fn iceberg::spec::TableProperties::data_encryption_key_size(&self) -> iceberg::Result<iceberg::encryption::AesKeySize>
 pub fn iceberg::spec::TableProperties::encryption_data_key_length(&self) -> usize
 pub fn iceberg::spec::TableProperties::encryption_key_id(&self) -> &core::option::Option<alloc::string::String>
 pub fn iceberg::spec::TableProperties::from_properties(properties: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<Self>
