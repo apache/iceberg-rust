@@ -24,59 +24,6 @@ use crate::encryption::AesKeySize;
 use crate::error::{Error, ErrorKind, Result};
 use crate::util::location::strip_trailing_slash;
 
-const COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
-const COMMIT_NUM_RETRIES_DEFAULT: usize = 4;
-const COMMIT_MIN_RETRY_WAIT_MS: &str = "commit.retry.min-wait-ms";
-const COMMIT_MIN_RETRY_WAIT_MS_DEFAULT: u64 = 100;
-const COMMIT_MAX_RETRY_WAIT_MS: &str = "commit.retry.max-wait-ms";
-const COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64 = 60 * 1000;
-const COMMIT_TOTAL_RETRY_TIME_MS: &str = "commit.retry.total-timeout-ms";
-const COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT: u64 = 30 * 60 * 1000;
-const DEFAULT_FILE_FORMAT: &str = "write.format.default";
-const DEFAULT_FILE_FORMAT_DEFAULT: &str = "parquet";
-const WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-bytes";
-const WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024;
-const WRITE_METADATA_PATH: &str = "write.metadata.path";
-const METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
-const METADATA_COMPRESSION_CODEC_DEFAULT: &str = "none";
-const DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
-const DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
-const GC_ENABLED: &str = "gc.enabled";
-const GC_ENABLED_DEFAULT: bool = true;
-const MAX_SNAPSHOT_AGE_MS: &str = "history.expire.max-snapshot-age-ms";
-const MAX_SNAPSHOT_AGE_MS_DEFAULT: i64 = 5 * 24 * 60 * 60 * 1000;
-const MIN_SNAPSHOTS_TO_KEEP: &str = "history.expire.min-snapshots-to-keep";
-const MIN_SNAPSHOTS_TO_KEEP_DEFAULT: usize = 1;
-const MAX_REF_AGE_MS: &str = "history.expire.max-ref-age-ms";
-const MAX_REF_AGE_MS_DEFAULT: i64 = i64::MAX;
-const PARQUET_CDC_ENABLED: &str = "write.parquet.content-defined-chunking.enabled";
-const PARQUET_CDC_ENABLED_DEFAULT: bool = false;
-const PARQUET_CDC_MIN_CHUNK_SIZE: &str = "write.parquet.content-defined-chunking.min-chunk-size";
-const PARQUET_CDC_MIN_CHUNK_SIZE_DEFAULT: usize = 256 * 1024;
-const PARQUET_CDC_MAX_CHUNK_SIZE: &str = "write.parquet.content-defined-chunking.max-chunk-size";
-const PARQUET_CDC_MAX_CHUNK_SIZE_DEFAULT: usize = 1024 * 1024;
-const PARQUET_CDC_NORM_LEVEL: &str = "write.parquet.content-defined-chunking.norm-level";
-const PARQUET_CDC_NORM_LEVEL_DEFAULT: i32 = 0;
-const PARQUET_COMPRESSION_CODEC: &str = "write.parquet.compression-codec";
-const PARQUET_COMPRESSION_CODEC_DEFAULT: &str = "zstd";
-const PARQUET_COMPRESSION_LEVEL: &str = "write.parquet.compression-level";
-const PARQUET_ROW_GROUP_SIZE_BYTES: &str = "write.parquet.row-group-size-bytes";
-const PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT: usize = 128 * 1024 * 1024;
-const PARQUET_PAGE_SIZE_BYTES: &str = "write.parquet.page-size-bytes";
-const PARQUET_PAGE_SIZE_BYTES_DEFAULT: usize = 1024 * 1024;
-const PARQUET_PAGE_ROW_LIMIT: &str = "write.parquet.page-row-limit";
-const PARQUET_PAGE_ROW_LIMIT_DEFAULT: usize = 20000;
-const PARQUET_DICT_SIZE_BYTES: &str = "write.parquet.dict-size-bytes";
-const PARQUET_DICT_SIZE_BYTES_DEFAULT: usize = 2 * 1024 * 1024;
-const ENCRYPTION_KEY_ID: &str = "encryption.key-id";
-const ENCRYPTION_DATA_KEY_LENGTH: &str = "encryption.data-key-length";
-const ENCRYPTION_DATA_KEY_LENGTH_DEFAULT: usize = 16;
-const WRITE_DATA_LOCATION: &str = "write.data.path";
-const WRITE_FOLDER_STORAGE_LOCATION: &str = "write.folder-storage.path";
-const WRITE_OBJECT_STORAGE_LOCATION: &str = "write.object-storage.path";
-const WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &str = "write.object-storage.partitioned-paths";
-const WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool = true;
-
 fn parse_location_property(path: &str) -> Result<String> {
     if path.is_empty() {
         return Err(Error::new(ErrorKind::DataInvalid, "path must not be empty"));
@@ -101,9 +48,9 @@ pub(crate) fn parse_metadata_file_compression(
     properties: &HashMap<String, String>,
 ) -> Result<CompressionCodec> {
     let value = properties
-        .get(METADATA_COMPRESSION_CODEC)
+        .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
         .map(|s| s.as_str())
-        .unwrap_or(METADATA_COMPRESSION_CODEC_DEFAULT);
+        .unwrap_or(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT);
 
     parse_metadata_compression(value)
 }
@@ -197,50 +144,50 @@ fn parse_parquet_compression(
 pub struct TableProperties {
     /// The number of times to retry a commit.
     #[property(
-        key = COMMIT_NUM_RETRIES,
-        default = COMMIT_NUM_RETRIES_DEFAULT,
+        key = Self::PROPERTY_COMMIT_NUM_RETRIES,
+        default = Self::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT,
         getter
     )]
     pub commit_num_retries: usize,
     /// The minimum wait time between retries.
     #[property(
-        key = COMMIT_MIN_RETRY_WAIT_MS,
-        default = COMMIT_MIN_RETRY_WAIT_MS_DEFAULT,
+        key = Self::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS,
+        default = Self::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT,
         getter
     )]
     pub commit_min_retry_wait_ms: u64,
     /// The maximum wait time between retries.
     #[property(
-        key = COMMIT_MAX_RETRY_WAIT_MS,
-        default = COMMIT_MAX_RETRY_WAIT_MS_DEFAULT,
+        key = Self::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS,
+        default = Self::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT,
         getter
     )]
     pub commit_max_retry_wait_ms: u64,
     /// The total timeout for commit retries.
     #[property(
-        key = COMMIT_TOTAL_RETRY_TIME_MS,
-        default = COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT,
+        key = Self::PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS,
+        default = Self::PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT,
         getter
     )]
     pub commit_total_retry_timeout_ms: u64,
     /// The default format for files.
     #[property(
-        key = DEFAULT_FILE_FORMAT,
-        default = DEFAULT_FILE_FORMAT_DEFAULT,
+        key = Self::PROPERTY_DEFAULT_FILE_FORMAT,
+        default = Self::PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT,
         getter
     )]
     pub write_format_default: String,
     /// The target file size for files.
     #[property(
-        key = WRITE_TARGET_FILE_SIZE_BYTES,
-        default = WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
+        key = Self::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
+        default = Self::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
         getter
     )]
     pub write_target_file_size_bytes: usize,
     /// Base directory for metadata files (manifests, manifest lists), with any
     /// trailing slash trimmed. `None` if `write.metadata.path` is not set.
     #[property(
-        key = WRITE_METADATA_PATH,
+        key = Self::PROPERTY_WRITE_METADATA_PATH,
         default = None,
         parse_with = parse_location_property,
         getter
@@ -248,7 +195,7 @@ pub struct TableProperties {
     pub write_metadata_path: Option<String>,
     /// Compression codec for metadata files (JSON)
     #[property(
-        key = METADATA_COMPRESSION_CODEC,
+        key = Self::PROPERTY_METADATA_COMPRESSION_CODEC,
         default = CompressionCodec::None,
         parse_with = parse_metadata_compression,
         getter
@@ -256,66 +203,66 @@ pub struct TableProperties {
     pub metadata_compression_codec: CompressionCodec,
     /// Whether to use `FanoutWriter` for partitioned tables.
     #[property(
-        key = DATAFUSION_WRITE_FANOUT_ENABLED,
-        default = DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT,
+        key = Self::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
+        default = Self::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT,
         getter
     )]
     pub write_datafusion_fanout_enabled: bool,
     /// Whether garbage collection is enabled on drop.
     /// When `false`, data files will not be deleted when a table is dropped.
     #[property(
-        key = GC_ENABLED,
-        default = GC_ENABLED_DEFAULT,
+        key = Self::PROPERTY_GC_ENABLED,
+        default = Self::PROPERTY_GC_ENABLED_DEFAULT,
         getter
     )]
     pub gc_enabled: bool,
     /// Default maximum age of a snapshot to keep when expiring snapshots.
     #[property(
-        key = MAX_SNAPSHOT_AGE_MS,
-        default = MAX_SNAPSHOT_AGE_MS_DEFAULT,
+        key = Self::PROPERTY_MAX_SNAPSHOT_AGE_MS,
+        default = Self::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT,
         getter
     )]
     pub max_snapshot_age_ms: i64,
     /// Default minimum number of snapshots to keep per branch when expiring snapshots.
     #[property(
-        key = MIN_SNAPSHOTS_TO_KEEP,
-        default = MIN_SNAPSHOTS_TO_KEEP_DEFAULT,
+        key = Self::PROPERTY_MIN_SNAPSHOTS_TO_KEEP,
+        default = Self::PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT,
         getter
     )]
     pub min_snapshots_to_keep: usize,
     /// Default maximum age of a snapshot reference to keep when expiring snapshots.
     #[property(
-        key = MAX_REF_AGE_MS,
-        default = MAX_REF_AGE_MS_DEFAULT,
+        key = Self::PROPERTY_MAX_REF_AGE_MS,
+        default = Self::PROPERTY_MAX_REF_AGE_MS_DEFAULT,
         getter
     )]
     pub max_ref_age_ms: i64,
     /// Whether content-defined chunking is enabled.
     /// `true` only when `write.parquet.content-defined-chunking.enabled = "true"`.
     #[property(
-        key = PARQUET_CDC_ENABLED,
-        default = PARQUET_CDC_ENABLED_DEFAULT,
+        key = Self::PROPERTY_PARQUET_CDC_ENABLED,
+        default = Self::PROPERTY_PARQUET_CDC_ENABLED_DEFAULT,
         getter
     )]
     pub cdc_enabled: bool,
     /// Content-defined chunking minimum chunk size in bytes.
     #[property(
-        key = PARQUET_CDC_MIN_CHUNK_SIZE,
-        default = PARQUET_CDC_MIN_CHUNK_SIZE_DEFAULT,
+        key = Self::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE,
+        default = Self::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE_DEFAULT,
         getter
     )]
     pub cdc_min_chunk_size: usize,
     /// Content-defined chunking maximum chunk size in bytes.
     #[property(
-        key = PARQUET_CDC_MAX_CHUNK_SIZE,
-        default = PARQUET_CDC_MAX_CHUNK_SIZE_DEFAULT,
+        key = Self::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE,
+        default = Self::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE_DEFAULT,
         getter
     )]
     pub cdc_max_chunk_size: usize,
     /// Content-defined chunking normalization level (gearhash bit adjustment).
     #[property(
-        key = PARQUET_CDC_NORM_LEVEL,
-        default = PARQUET_CDC_NORM_LEVEL_DEFAULT,
+        key = Self::PROPERTY_PARQUET_CDC_NORM_LEVEL,
+        default = Self::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT,
         getter
     )]
     pub cdc_norm_level: i32,
@@ -323,8 +270,8 @@ pub struct TableProperties {
     /// level folded in (from `write.parquet.compression-level`, or the codec's
     /// default when unset).
     #[property(
-        key = PARQUET_COMPRESSION_CODEC,
-        additional_keys = [PARQUET_COMPRESSION_LEVEL],
+        key = Self::PROPERTY_PARQUET_COMPRESSION_CODEC,
+        additional_keys = [Self::PROPERTY_PARQUET_COMPRESSION_LEVEL],
         default = CompressionCodec::zstd_default(),
         parse_properties_with = parse_parquet_compression,
         getter
@@ -332,50 +279,50 @@ pub struct TableProperties {
     pub parquet_compression_codec: CompressionCodec,
     /// Approximate maximum Parquet row group size in bytes.
     #[property(
-        key = PARQUET_ROW_GROUP_SIZE_BYTES,
-        default = PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT,
+        key = Self::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES,
+        default = Self::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT,
         getter
     )]
     pub parquet_row_group_size_bytes: usize,
     /// Approximate maximum Parquet data page size in bytes.
     #[property(
-        key = PARQUET_PAGE_SIZE_BYTES,
-        default = PARQUET_PAGE_SIZE_BYTES_DEFAULT,
+        key = Self::PROPERTY_PARQUET_PAGE_SIZE_BYTES,
+        default = Self::PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT,
         getter
     )]
     pub parquet_page_size_bytes: usize,
     /// Maximum number of rows per Parquet data page.
     #[property(
-        key = PARQUET_PAGE_ROW_LIMIT,
-        default = PARQUET_PAGE_ROW_LIMIT_DEFAULT,
+        key = Self::PROPERTY_PARQUET_PAGE_ROW_LIMIT,
+        default = Self::PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT,
         getter
     )]
     pub parquet_page_row_limit: usize,
     /// Approximate maximum Parquet dictionary page size in bytes.
     #[property(
-        key = PARQUET_DICT_SIZE_BYTES,
-        default = PARQUET_DICT_SIZE_BYTES_DEFAULT,
+        key = Self::PROPERTY_PARQUET_DICT_SIZE_BYTES,
+        default = Self::PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT,
         getter
     )]
     pub parquet_dict_size_bytes: usize,
     /// The master key id used to encrypt this table's manifest list and data
     /// files. `None` if `encryption.key-id` is not set.
     #[property(
-        key = ENCRYPTION_KEY_ID,
+        key = Self::PROPERTY_ENCRYPTION_KEY_ID,
         default = None,
         getter
     )]
     pub encryption_key_id: Option<String>,
     /// The encryption data encryption key length in bytes.
     #[property(
-        key = ENCRYPTION_DATA_KEY_LENGTH,
-        default = ENCRYPTION_DATA_KEY_LENGTH_DEFAULT,
+        key = Self::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
+        default = Self::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT,
         getter
     )]
     pub encryption_data_key_length: usize,
     /// Base directory for data files, with any trailing slash trimmed.
     #[property(
-        key = WRITE_DATA_LOCATION,
+        key = Self::PROPERTY_WRITE_DATA_LOCATION,
         default = None,
         parse_with = parse_location_property,
         getter
@@ -386,7 +333,7 @@ pub struct TableProperties {
     /// Property will be removed at a later date.
     /// Superseded by [write_data_location].
     #[property(
-        key = WRITE_FOLDER_STORAGE_LOCATION,
+        key = Self::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION,
         default = None,
         parse_with = parse_location_property,
         getter
@@ -398,7 +345,7 @@ pub struct TableProperties {
     /// Property will be removed at a later date.
     /// Superseded by [write_data_location].
     #[property(
-        key = WRITE_OBJECT_STORAGE_LOCATION,
+        key = Self::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION,
         default = None,
         parse_with = parse_location_property,
         getter
@@ -406,8 +353,8 @@ pub struct TableProperties {
     pub write_object_storage_location: Option<String>,
     /// Whether partition values are included in object storage paths.
     #[property(
-        key = WRITE_OBJECT_STORAGE_PARTITIONED_PATHS,
-        default = WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT,
+        key = Self::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS,
+        default = Self::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT,
         getter
     )]
     pub write_object_storage_partitioned_paths: bool,
@@ -469,147 +416,142 @@ impl TableProperties {
     ];
 
     /// Property key for number of commit retries.
-    pub const PROPERTY_COMMIT_NUM_RETRIES: &str = COMMIT_NUM_RETRIES;
+    pub const PROPERTY_COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
     /// Default value for number of commit retries.
-    pub const PROPERTY_COMMIT_NUM_RETRIES_DEFAULT: usize = COMMIT_NUM_RETRIES_DEFAULT;
+    pub const PROPERTY_COMMIT_NUM_RETRIES_DEFAULT: usize = 4;
 
     /// Property key for minimum wait time (ms) between retries.
-    pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS: &str = COMMIT_MIN_RETRY_WAIT_MS;
+    pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS: &str = "commit.retry.min-wait-ms";
     /// Default value for minimum wait time (ms) between retries.
-    pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT: u64 = COMMIT_MIN_RETRY_WAIT_MS_DEFAULT;
+    pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT: u64 = 100;
 
     /// Property key for maximum wait time (ms) between retries.
-    pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str = COMMIT_MAX_RETRY_WAIT_MS;
+    pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str = "commit.retry.max-wait-ms";
     /// Default value for maximum wait time (ms) between retries.
-    pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64 = COMMIT_MAX_RETRY_WAIT_MS_DEFAULT;
+    pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64 = 60 * 1000; // 1 minute
 
     /// Property key for total maximum retry time (ms).
-    pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS: &str = COMMIT_TOTAL_RETRY_TIME_MS;
+    pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS: &str = "commit.retry.total-timeout-ms";
     /// Default value for total maximum retry time (ms).
-    pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT: u64 = COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT;
+    pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT: u64 = 30 * 60 * 1000; // 30 minutes
 
     /// Default file format for data files
-    pub const PROPERTY_DEFAULT_FILE_FORMAT: &str = DEFAULT_FILE_FORMAT;
+    pub const PROPERTY_DEFAULT_FILE_FORMAT: &str = "write.format.default";
     /// Default file format for delete files
     pub const PROPERTY_DELETE_DEFAULT_FILE_FORMAT: &str = "write.delete.format.default";
     /// Default value for data file format
-    pub const PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT: &str = DEFAULT_FILE_FORMAT_DEFAULT;
+    pub const PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT: &str = "parquet";
 
     /// Target file size for newly written files.
-    pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = WRITE_TARGET_FILE_SIZE_BYTES;
+    pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-bytes";
     /// Default target file size
-    pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize =
-        WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT;
+    pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
 
     /// Base location for metadata files (manifests, manifest lists, table metadata).
     /// When unset, metadata files default to the `metadata` directory under the table
     /// location.
-    pub const PROPERTY_WRITE_METADATA_PATH: &str = WRITE_METADATA_PATH;
+    pub const PROPERTY_WRITE_METADATA_PATH: &str = "write.metadata.path";
 
     /// Compression codec for metadata files (JSON)
-    pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = METADATA_COMPRESSION_CODEC;
+    pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
-    pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str =
-        METADATA_COMPRESSION_CODEC_DEFAULT;
+    pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "none";
     /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
     /// If false, uses `ClusteredWriter` (requires sorted data, more memory efficient).
-    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = DATAFUSION_WRITE_FANOUT_ENABLED;
+    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
     /// Default value for fanout writer enabled
-    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool =
-        DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT;
+    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
 
     /// Property key for enabling garbage collection on drop.
     /// When set to `false`, data files will not be deleted when a table is dropped.
     /// Defaults to `true`.
-    pub const PROPERTY_GC_ENABLED: &str = GC_ENABLED;
+    pub const PROPERTY_GC_ENABLED: &str = "gc.enabled";
     /// Default value for gc.enabled
-    pub const PROPERTY_GC_ENABLED_DEFAULT: bool = GC_ENABLED_DEFAULT;
+    pub const PROPERTY_GC_ENABLED_DEFAULT: bool = true;
 
     /// Property key for the default maximum age of a snapshot to keep when expiring snapshots.
-    pub const PROPERTY_MAX_SNAPSHOT_AGE_MS: &str = MAX_SNAPSHOT_AGE_MS;
+    pub const PROPERTY_MAX_SNAPSHOT_AGE_MS: &str = "history.expire.max-snapshot-age-ms";
     /// Default value for history.expire.max-snapshot-age-ms (5 days).
-    pub const PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT: i64 = MAX_SNAPSHOT_AGE_MS_DEFAULT;
+    pub const PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT: i64 = 5 * 24 * 60 * 60 * 1000;
     /// Property key for the default minimum number of snapshots to keep when expiring snapshots.
-    pub const PROPERTY_MIN_SNAPSHOTS_TO_KEEP: &str = MIN_SNAPSHOTS_TO_KEEP;
+    pub const PROPERTY_MIN_SNAPSHOTS_TO_KEEP: &str = "history.expire.min-snapshots-to-keep";
     /// Default value for history.expire.min-snapshots-to-keep.
-    pub const PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT: usize = MIN_SNAPSHOTS_TO_KEEP_DEFAULT;
+    pub const PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT: usize = 1;
     /// Property key for the default maximum age of a snapshot reference to keep when expiring.
-    pub const PROPERTY_MAX_REF_AGE_MS: &str = MAX_REF_AGE_MS;
+    pub const PROPERTY_MAX_REF_AGE_MS: &str = "history.expire.max-ref-age-ms";
     /// Default value for history.expire.max-ref-age-ms (effectively never expire refs).
-    pub const PROPERTY_MAX_REF_AGE_MS_DEFAULT: i64 = MAX_REF_AGE_MS_DEFAULT;
+    pub const PROPERTY_MAX_REF_AGE_MS_DEFAULT: i64 = i64::MAX;
 
     /// Enable content-defined chunking with parquet defaults (or per-property overrides).
-    pub const PROPERTY_PARQUET_CDC_ENABLED: &str = PARQUET_CDC_ENABLED;
+    pub const PROPERTY_PARQUET_CDC_ENABLED: &str = "write.parquet.content-defined-chunking.enabled";
     /// Default value for content-defined chunking enabled.
-    pub const PROPERTY_PARQUET_CDC_ENABLED_DEFAULT: bool = PARQUET_CDC_ENABLED_DEFAULT;
+    pub const PROPERTY_PARQUET_CDC_ENABLED_DEFAULT: bool = false;
     /// Minimum chunk size in bytes for content-defined chunking.
-    pub const PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE: &str = PARQUET_CDC_MIN_CHUNK_SIZE;
+    pub const PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE: &str =
+        "write.parquet.content-defined-chunking.min-chunk-size";
     /// Default matches `parquet::file::properties::DEFAULT_CDC_MIN_CHUNK_SIZE`.
-    pub const PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE_DEFAULT: usize =
-        PARQUET_CDC_MIN_CHUNK_SIZE_DEFAULT;
+    pub const PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE_DEFAULT: usize = 256 * 1024;
     /// Maximum chunk size in bytes for content-defined chunking.
-    pub const PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE: &str = PARQUET_CDC_MAX_CHUNK_SIZE;
+    pub const PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE: &str =
+        "write.parquet.content-defined-chunking.max-chunk-size";
     /// Default matches `parquet::file::properties::DEFAULT_CDC_MAX_CHUNK_SIZE`.
-    pub const PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE_DEFAULT: usize =
-        PARQUET_CDC_MAX_CHUNK_SIZE_DEFAULT;
+    pub const PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE_DEFAULT: usize = 1024 * 1024;
     /// Normalization level (gearhash bit adjustment) for content-defined chunking.
-    pub const PROPERTY_PARQUET_CDC_NORM_LEVEL: &str = PARQUET_CDC_NORM_LEVEL;
+    pub const PROPERTY_PARQUET_CDC_NORM_LEVEL: &str =
+        "write.parquet.content-defined-chunking.norm-level";
     /// Default matches `parquet::file::properties::DEFAULT_CDC_NORM_LEVEL`.
-    pub const PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32 = PARQUET_CDC_NORM_LEVEL_DEFAULT;
+    pub const PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32 = 0;
 
     /// Compression codec for Parquet data files (e.g. `zstd`, `gzip`, `snappy`,
     /// `lz4`, `lz4_raw`, `brotli`, `lzo`, `uncompressed`). The codec name is
     /// parsed into a [`CompressionCodec`] when properties are parsed; the level's
     /// range is validated when the writer is built.
-    pub const PROPERTY_PARQUET_COMPRESSION_CODEC: &str = PARQUET_COMPRESSION_CODEC;
+    pub const PROPERTY_PARQUET_COMPRESSION_CODEC: &str = "write.parquet.compression-codec";
     /// Default Parquet compression codec.
-    pub const PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT: &str = PARQUET_COMPRESSION_CODEC_DEFAULT;
+    pub const PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT: &str = "zstd";
     /// Compression level for Parquet data files, for codecs that take one
     /// (`gzip`, `zstd`, `brotli`). When unset, the codec's default level is used.
-    pub const PROPERTY_PARQUET_COMPRESSION_LEVEL: &str = PARQUET_COMPRESSION_LEVEL;
+    pub const PROPERTY_PARQUET_COMPRESSION_LEVEL: &str = "write.parquet.compression-level";
 
     /// Approximate maximum size of a Parquet row group in bytes.
-    pub const PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES: &str = PARQUET_ROW_GROUP_SIZE_BYTES;
+    pub const PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES: &str = "write.parquet.row-group-size-bytes";
     /// Default Parquet row group size in bytes.
-    pub const PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT: usize =
-        PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT;
+    pub const PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT: usize = 128 * 1024 * 1024;
 
     /// Approximate maximum size of a Parquet data page in bytes.
-    pub const PROPERTY_PARQUET_PAGE_SIZE_BYTES: &str = PARQUET_PAGE_SIZE_BYTES;
+    pub const PROPERTY_PARQUET_PAGE_SIZE_BYTES: &str = "write.parquet.page-size-bytes";
     /// Default Parquet page size in bytes.
-    pub const PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT: usize = PARQUET_PAGE_SIZE_BYTES_DEFAULT;
+    pub const PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT: usize = 1024 * 1024;
 
     /// Maximum number of rows per Parquet data page.
-    pub const PROPERTY_PARQUET_PAGE_ROW_LIMIT: &str = PARQUET_PAGE_ROW_LIMIT;
+    pub const PROPERTY_PARQUET_PAGE_ROW_LIMIT: &str = "write.parquet.page-row-limit";
     /// Default Parquet page row limit.
-    pub const PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT: usize = PARQUET_PAGE_ROW_LIMIT_DEFAULT;
+    pub const PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT: usize = 20000;
 
     /// Approximate maximum size of the Parquet dictionary page in bytes.
-    pub const PROPERTY_PARQUET_DICT_SIZE_BYTES: &str = PARQUET_DICT_SIZE_BYTES;
+    pub const PROPERTY_PARQUET_DICT_SIZE_BYTES: &str = "write.parquet.dict-size-bytes";
     /// Default Parquet dictionary page size in bytes.
-    pub const PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT: usize = PARQUET_DICT_SIZE_BYTES_DEFAULT;
+    pub const PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT: usize = 2 * 1024 * 1024;
 
     /// Property key for the master key id used to encrypt the table's manifest
     /// list and data files as defined in https://iceberg.apache.org/docs/nightly/encryption/.
-    pub const PROPERTY_ENCRYPTION_KEY_ID: &str = ENCRYPTION_KEY_ID;
+    pub const PROPERTY_ENCRYPTION_KEY_ID: &str = "encryption.key-id";
 
     /// Property key for the encryption data encryption key (DEK) length in bytes.
-    pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH: &str = ENCRYPTION_DATA_KEY_LENGTH;
+    pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH: &str = "encryption.data-key-length";
     /// Default value for the encryption DEK length (16 bytes = AES-128).
-    pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT: usize =
-        ENCRYPTION_DATA_KEY_LENGTH_DEFAULT;
+    pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT: usize = 16;
     /// Property key for the base directory for data files
-    pub const PROPERTY_WRITE_DATA_LOCATION: &str = WRITE_DATA_LOCATION;
+    pub const PROPERTY_WRITE_DATA_LOCATION: &str = "write.data.path";
     /// Property key for deprecated [write_folder_storage_location]
-    pub const PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &str = WRITE_FOLDER_STORAGE_LOCATION;
+    pub const PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &str = "write.folder-storage.path";
     /// Property key for deprecated object storage path, kept as a fallback for compatibility.
-    pub const PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &str = WRITE_OBJECT_STORAGE_LOCATION;
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &str = "write.object-storage.path";
     /// Property key for controlling whether partition values are included in object storage paths.
     pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &str =
-        WRITE_OBJECT_STORAGE_PARTITIONED_PATHS;
+        "write.object-storage.partitioned-paths";
     /// Default value for [PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS]
-    pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool =
-        WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT;
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool = true;
 
     /// The AES key size to use when generating data encryption keys, derived
     /// from `encryption.data-key-length`.
