@@ -86,7 +86,7 @@ impl HttpClient {
     /// not merged in.
     ///
     /// Like every request, it carries this client's session; call
-    /// [`Self::without_session`] first to send it unauthenticated.
+    /// [`Self::without_auth_session`] first to send it unauthenticated.
     ///
     /// [`AuthManager`]: crate::auth::AuthManager
     pub async fn post_form(

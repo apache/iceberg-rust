@@ -28,8 +28,6 @@ use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use aes_gcm::aead::OsRng;
-use aes_gcm::aead::rand_core::RngCore;
 use chrono::Utc;
 use moka::future::Cache;
 use uuid::Uuid;
@@ -54,10 +52,6 @@ const DEFAULT_KEK_LIFESPAN_DAYS: i64 = 730;
 
 /// Default cache TTL for unwrapped KEKs.
 const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(3600);
-
-/// Default AAD prefix length in bytes.
-/// Matches Java's `TableProperties.ENCRYPTION_AAD_LENGTH_DEFAULT`.
-const AAD_PREFIX_LENGTH: usize = 16;
 
 /// File-level encryption manager using two-layer envelope encryption.
 ///
@@ -120,7 +114,7 @@ impl EncryptionManager {
         }
 
         let table_properties = metadata.table_properties()?;
-        let Some(table_key_id) = table_properties.encryption_key_id else {
+        let Some(table_key_id) = table_properties.encryption_key_id.as_deref() else {
             if kms_client.is_some() {
                 tracing::warn!(
                     "KeyManagementClient provided but table does not have encryption.key-id set"
@@ -140,11 +134,15 @@ impl EncryptionManager {
             .kms_client(Arc::clone(kms_client))
             .table_key_id(table_key_id)
             .encryption_keys(metadata.encryption_keys.clone())
-            .key_size(AesKeySize::from_key_length(
-                table_properties.encryption_data_key_length,
-            )?)
+            .key_size(table_properties.data_encryption_key_size()?)
             .build();
         Ok(Some(Arc::new(em)))
+    }
+
+    /// Generate key metadata for a single file: a fresh DEK of the table's
+    /// configured key length together with a fresh AAD prefix.
+    pub fn generate_key_metadata(&self) -> StandardKeyMetadata {
+        StandardKeyMetadata::generate(self.key_size)
     }
 
     /// Encrypt a file with AGS1 stream encryption.
@@ -152,10 +150,7 @@ impl EncryptionManager {
     /// Returns an [`EncryptedOutputFile`] that transparently encrypts on
     /// write, along with key metadata for later decryption.
     pub fn encrypt(&self, raw_output: OutputFile) -> EncryptedOutputFile {
-        let dek = SecureKey::generate(self.key_size);
-        let aad_prefix = Self::generate_aad_prefix();
-        let metadata = StandardKeyMetadata::from(dek).with_aad_prefix(&aad_prefix);
-        EncryptedOutputFile::new(raw_output, metadata)
+        EncryptedOutputFile::new(raw_output, self.generate_key_metadata())
     }
 
     /// Wrap a manifest list key metadata with a KEK for storage in table metadata.
@@ -396,13 +391,6 @@ impl EncryptionManager {
                     ),
                 )
             })
-    }
-
-    /// Generate a random AAD prefix for file encryption.
-    fn generate_aad_prefix() -> Box<[u8]> {
-        let mut prefix = vec![0u8; AAD_PREFIX_LENGTH];
-        OsRng.fill_bytes(&mut prefix);
-        prefix.into_boxed_slice()
     }
 
     /// Wrap a DEK with a KEK using local AES-GCM.
