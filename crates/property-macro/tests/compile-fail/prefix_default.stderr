@@ -1,0 +1,6 @@
+error: prefix fields collect matching properties and cannot declare default in #[property(...)]
+  --> tests/compile-fail/prefix_default.rs:25:5
+   |
+25 | /     #[property(prefix = "values.", default = HashMap::new())]
+26 | |     values: HashMap<String, u64>,
+   | |________________________________^
