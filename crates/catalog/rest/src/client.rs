@@ -176,8 +176,8 @@ impl HttpClient {
             .headers(self.extra_headers.clone())
     }
 
-    // Queries the Iceberg REST catalog after authentication with the given `Request` and
-    // returns a `Response`.
+    /// Sends `request` to the Iceberg REST catalog, authenticated by this
+    /// client's session.
     pub(crate) async fn query_catalog(&self, mut request: HttpRequest) -> Result<HttpResponse> {
         // Authenticate first, then apply extra headers, so a configured
         // `header.authorization` keeps overriding a token (unchanged behavior).
