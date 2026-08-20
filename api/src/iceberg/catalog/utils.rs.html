@@ -23,7 +23,7 @@
 <a href=#23 id=23 data-nosnippet>23</a>
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span><span class="kw">crate</span>::Result;
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
-<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span><span class="kw">crate</span>::spec::ManifestFile;
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span><span class="kw">crate</span>::spec::{ManifestFile, ManifestReader};
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span><span class="kw">crate</span>::table::Table;
 <a href=#28 id=28 data-nosnippet>28</a>
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">const </span>DELETE_CONCURRENCY: usize = <span class="number">10</span>;
@@ -111,7 +111,7 @@
 <a href=#111 id=111 data-nosnippet>111</a>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#112 id=112 data-nosnippet>112</a>    stream::iter(manifest_files.values().map(<span class="prelude-val">Ok</span>))
 <a href=#113 id=113 data-nosnippet>113</a>        .try_for_each_concurrent(DELETE_CONCURRENCY, |manifest_file| <span class="kw">async move </span>{
-<a href=#114 id=114 data-nosnippet>114</a>            <span class="kw">let </span>manifest = manifest_file.load_manifest(io).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#114 id=114 data-nosnippet>114</a>            <span class="kw">let </span>manifest = ManifestReader::new(io.clone()).read(manifest_file).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#115 id=115 data-nosnippet>115</a>            <span class="kw">let </span>data_file_paths = manifest
 <a href=#116 id=116 data-nosnippet>116</a>                .entries()
 <a href=#117 id=117 data-nosnippet>117</a>                .iter()
