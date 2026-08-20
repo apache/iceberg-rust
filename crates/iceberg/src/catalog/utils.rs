@@ -23,7 +23,7 @@ use futures::{TryStreamExt, stream};
 
 use crate::Result;
 use crate::io::FileIO;
-use crate::spec::ManifestFile;
+use crate::spec::{ManifestFile, ManifestReader};
 use crate::table::Table;
 
 const DELETE_CONCURRENCY: usize = 10;
@@ -111,7 +111,7 @@ async fn delete_data_files(
 ) -> Result<()> {
     stream::iter(manifest_files.values().map(Ok))
         .try_for_each_concurrent(DELETE_CONCURRENCY, |manifest_file| async move {
-            let manifest = manifest_file.load_manifest(io).await?;
+            let manifest = ManifestReader::new(io.clone()).read(manifest_file).await?;
             let data_file_paths = manifest
                 .entries()
                 .iter()
