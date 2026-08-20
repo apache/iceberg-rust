@@ -2277,7 +2277,7 @@ mod tests {
 
         // Opening the catalog with sql.schema-version=V1 should migrate the V0 schema.
         let props = HashMap::from_iter([
-            (SQL_CATALOG_PROP_URI.to_string(), uri),
+            (SQL_CATALOG_PROP_URI.to_string(), uri.clone()),
             (
                 SQL_CATALOG_PROP_WAREHOUSE.to_string(),
                 temp_dir.path().to_str().unwrap().to_string(),
@@ -2302,6 +2302,13 @@ mod tests {
         let tables = catalog.list_tables(&ns).await.unwrap();
         assert_eq!(tables.len(), 1);
         assert_eq!(tables[0].name(), "tbl");
+
+        // Confirm the column WAS added to the database.
+        let probe_pool = sqlx::AnyPool::connect(&uri).await.unwrap();
+        let probe_result = sqlx::query("SELECT iceberg_type FROM iceberg_tables LIMIT 0")
+            .execute(&probe_pool)
+            .await;
+        probe_result.expect("probe should succeed as iceberg_type column should exist when sql.schema-version=V1 was set");
     }
 
     #[tokio::test]
