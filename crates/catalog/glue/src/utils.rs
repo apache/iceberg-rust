@@ -17,25 +17,32 @@
 
 use std::collections::HashMap;
 
-use aws_config::{BehaviorVersion, Region, SdkConfig};
-use aws_sdk_glue::config::Credentials;
 use aws_sdk_glue::types::{Database, DatabaseInput, StorageDescriptor, TableInput};
 use iceberg::spec::TableMetadata;
 use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
+/// Property aws access key
+pub use iceberg_aws::AWS_ACCESS_KEY_ID;
+/// Property for the IAM role ARN to assume when accessing AWS services.
+/// When set, the catalog will use AWS STS to assume the specified role,
+/// replacing the default credential chain for both the Glue client and S3 file I/O.
+pub use iceberg_aws::AWS_ASSUME_ROLE_ARN;
+/// Optional external ID used when assuming an IAM role (for cross-account access).
+pub use iceberg_aws::AWS_ASSUME_ROLE_EXTERNAL_ID;
+/// Optional session name used when assuming an IAM role.
+/// Defaults to `"iceberg-glue-catalog"` if not specified.
+pub use iceberg_aws::AWS_ASSUME_ROLE_SESSION_NAME;
+/// Property aws profile name
+pub use iceberg_aws::AWS_PROFILE_NAME;
+/// Property aws region
+pub use iceberg_aws::AWS_REGION_NAME;
+/// Property aws secret access key
+pub use iceberg_aws::AWS_SECRET_ACCESS_KEY;
+/// Property aws session token
+pub use iceberg_aws::AWS_SESSION_TOKEN;
 
 use crate::error::from_aws_build_error;
 use crate::schema::GlueSchemaBuilder;
 
-/// Property aws profile name
-pub const AWS_PROFILE_NAME: &str = "profile_name";
-/// Property aws region
-pub const AWS_REGION_NAME: &str = "region_name";
-/// Property aws access key
-pub const AWS_ACCESS_KEY_ID: &str = "aws_access_key_id";
-/// Property aws secret access key
-pub const AWS_SECRET_ACCESS_KEY: &str = "aws_secret_access_key";
-/// Property aws session token
-pub const AWS_SESSION_TOKEN: &str = "aws_session_token";
 /// Parameter namespace description
 const DESCRIPTION: &str = "description";
 /// Parameter namespace location uri
@@ -53,44 +60,10 @@ const ICEBERG: &str = "ICEBERG";
 
 /// Creates an aws sdk configuration based on
 /// provided properties and an optional endpoint URL.
-pub(crate) async fn create_sdk_config(
-    properties: &HashMap<String, String>,
-    endpoint_uri: Option<&String>,
-) -> SdkConfig {
-    let mut config = aws_config::defaults(BehaviorVersion::latest());
-
-    if let Some(endpoint) = endpoint_uri {
-        config = config.endpoint_url(endpoint)
-    };
-
-    if properties.is_empty() {
-        return config.load().await;
-    }
-
-    if let (Some(access_key), Some(secret_key)) = (
-        properties.get(AWS_ACCESS_KEY_ID),
-        properties.get(AWS_SECRET_ACCESS_KEY),
-    ) {
-        let session_token = properties.get(AWS_SESSION_TOKEN).cloned();
-        let credentials_provider =
-            Credentials::new(access_key, secret_key, session_token, None, "properties");
-
-        config = config.credentials_provider(credentials_provider)
-    };
-
-    if let Some(profile_name) = properties.get(AWS_PROFILE_NAME) {
-        config = config.profile_name(profile_name);
-    }
-
-    if let Some(region_name) = properties.get(AWS_REGION_NAME) {
-        let region = Region::new(region_name.clone());
-        config = config.region(region);
-    }
-
-    config.load().await
-}
-
-/// Create `DatabaseInput` from `NamespaceIdent` and properties
+///
+/// When `client.assume-role.arn` is set, the function first builds a base
+/// configuration using any static credentials or profile provided, then uses
+/// AWS STS to assume the specified role. The resulting temporary credentials
 pub(crate) fn convert_to_database(
     namespace: &NamespaceIdent,
     properties: &HashMap<String, String>,
@@ -270,7 +243,6 @@ macro_rules! with_catalog_id {
 
 #[cfg(test)]
 mod tests {
-    use aws_sdk_glue::config::ProvideCredentials;
     use aws_sdk_glue::types::Column;
     use iceberg::spec::{NestedField, PrimitiveType, Schema, TableMetadataBuilder, Type};
     use iceberg::{MetadataLocation, Namespace, Result, TableCreation};
@@ -474,46 +446,5 @@ mod tests {
         assert!(valid.is_ok());
         assert!(empty.is_err());
         assert!(hierarchical.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_config_with_custom_endpoint() {
-        let properties = HashMap::new();
-        let endpoint_url = "http://custom_url:5001";
-
-        let sdk_config = create_sdk_config(&properties, Some(&endpoint_url.to_string())).await;
-
-        let result = sdk_config.endpoint_url().unwrap();
-
-        assert_eq!(result, endpoint_url);
-    }
-
-    #[tokio::test]
-    async fn test_config_with_properties() {
-        let properties = HashMap::from([
-            (AWS_PROFILE_NAME.to_string(), "my_profile".to_string()),
-            (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
-            (AWS_ACCESS_KEY_ID.to_string(), "my-access-id".to_string()),
-            (
-                AWS_SECRET_ACCESS_KEY.to_string(),
-                "my-secret-key".to_string(),
-            ),
-            (AWS_SESSION_TOKEN.to_string(), "my-token".to_string()),
-        ]);
-
-        let sdk_config = create_sdk_config(&properties, None).await;
-
-        let region = sdk_config.region().unwrap().as_ref();
-        let credentials = sdk_config
-            .credentials_provider()
-            .unwrap()
-            .provide_credentials()
-            .await
-            .unwrap();
-
-        assert_eq!("us-east-1", region);
-        assert_eq!("my-access-id", credentials.access_key_id());
-        assert_eq!("my-secret-key", credentials.secret_access_key());
-        assert_eq!("my-token", credentials.session_token().unwrap());
     }
 }
