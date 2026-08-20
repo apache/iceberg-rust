@@ -2378,7 +2378,7 @@ mod tests {
             .await;
 
         let err = result.expect_err("an invalid sql.schema-version should be rejected");
-        assert_eq!(err.kind(), iceberg::ErrorKind::DataInvalid);
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
     #[tokio::test]
