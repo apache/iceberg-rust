@@ -73,7 +73,6 @@ impl DeleteVector {
         Ok(positions.len())
     }
 
-    #[allow(unused)]
     pub fn len(&self) -> u64 {
         self.inner.len()
     }
@@ -92,17 +91,12 @@ impl DeleteVector {
     /// format: a directory of 32-bit key / 32-bit roaring bitmap pairs, ordered by unsigned
     /// comparison of the keys, one bitmap per key.
     ///
-    /// Cardinality is not checked here. The caller validates the decoded length against the
-    /// delete file's `record_count`, where the manifest metadata is available.
-    ///
     /// # Errors
     ///
     /// Returns [`ErrorKind::DataInvalid`] if the blob is shorter than the minimum, the length
     /// prefix or CRC does not match, the magic is wrong, the roaring bitmap count exceeds the
     /// portable format's maximum, the roaring directory's keys are not ordered by unsigned
     /// comparison, or the roaring payload fails to decode.
-    // Consumed by the scan delete loader once the deletion-vector read path is wired up.
-    #[allow(dead_code)]
     pub fn deserialize(blob: &[u8]) -> Result<Self> {
         if blob.len() < DV_MIN_BLOB_BYTES {
             return Err(Error::new(
@@ -316,6 +310,22 @@ impl BitOrAssign for DeleteVector {
     }
 }
 
+// Reproduces Iceberg-Java's `deletion-vector-v1` framing so tests can round-trip through
+// `deserialize` without a Java writer, and so other test modules can build blob fixtures.
+// Cross-implementation golden fixtures produced by Iceberg-Java are tracked separately; this
+// only checks that our decode matches our encode.
+#[cfg(test)]
+pub(crate) fn frame_dv_blob(vector: &[u8]) -> Vec<u8> {
+    let body_len = DV_MAGIC_BYTES + vector.len();
+    let mut blob = Vec::with_capacity(DV_LENGTH_PREFIX_BYTES + body_len + DV_CRC_BYTES);
+    blob.extend_from_slice(&(body_len as u32).to_be_bytes());
+    blob.extend_from_slice(&DV_MAGIC);
+    blob.extend_from_slice(vector);
+    let crc = crc32fast::hash(&blob[DV_LENGTH_PREFIX_BYTES..]);
+    blob.extend_from_slice(&crc.to_be_bytes());
+    blob
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,20 +381,6 @@ mod tests {
         let positions = vec![1, 3, 5, 5];
         let res = dv.insert_positions(&positions);
         assert!(res.is_err());
-    }
-
-    // Reproduces Iceberg-Java's `deletion-vector-v1` framing so tests can round-trip through
-    // `deserialize` without a Java writer. Cross-implementation golden fixtures produced by
-    // Iceberg-Java are tracked separately; this only checks that our decode matches our encode.
-    fn frame_dv_blob(vector: &[u8]) -> Vec<u8> {
-        let body_len = DV_MAGIC_BYTES + vector.len();
-        let mut blob = Vec::with_capacity(DV_LENGTH_PREFIX_BYTES + body_len + DV_CRC_BYTES);
-        blob.extend_from_slice(&(body_len as u32).to_be_bytes());
-        blob.extend_from_slice(&DV_MAGIC);
-        blob.extend_from_slice(vector);
-        let crc = crc32fast::hash(&blob[DV_LENGTH_PREFIX_BYTES..]);
-        blob.extend_from_slice(&crc.to_be_bytes());
-        blob
     }
 
     fn encode_dv_blob(dv: &DeleteVector) -> Vec<u8> {

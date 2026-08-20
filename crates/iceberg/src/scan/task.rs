@@ -211,6 +211,7 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
             .with_referenced_data_file(ctx.manifest_entry.data_file.referenced_data_file.clone())
             .with_content_offset(ctx.manifest_entry.data_file.content_offset)
             .with_content_size_in_bytes(ctx.manifest_entry.data_file.content_size_in_bytes)
+            .with_record_count(Some(ctx.manifest_entry.data_file.record_count))
             .with_key_metadata(
                 ctx.manifest_entry
                     .data_file
@@ -263,8 +264,18 @@ pub struct FileScanTaskDeleteFile {
     #[builder(default)]
     pub content_size_in_bytes: Option<i64>,
 
-    /// Key metadata for encrypted delete files (Parquet Modular Encryption).
-    /// When present, the reader uses this to build `FileDecryptionProperties`.
+    /// The delete file's record count, from the manifest entry. For a deletion vector, this is
+    /// the cardinality of the bitmap, used to validate the decoded blob against the manifest.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub record_count: Option<u64>,
+
+    /// Key metadata for an encrypted delete file. When present, the reader uses this to
+    /// decrypt the file: for a Parquet equality or position delete file, this builds
+    /// `FileDecryptionProperties` (Parquet Modular Encryption); for a deletion vector, whose
+    /// Puffin file has no native encryption, this wraps the range read in an
+    /// `EncryptedInputFile` (AGS1 stream encryption).
     ///
     /// Same plaintext-DEK trust boundary as [`FileScanTask::key_metadata`]:
     /// this is serialized into the scan plan and crosses the planner -> worker
