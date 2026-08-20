@@ -88,6 +88,7 @@ impl TableMetadataBuilder {
         let (fresh_schema, fresh_spec, fresh_sort_order) =
             Self::reassign_ids(schema, spec.into(), sort_order)?;
         let schema_id = fresh_schema.schema_id();
+        let table_properties = TableMetadata::parse_table_properties(&HashMap::new())?;
 
         let builder = Self {
             metadata: TableMetadata {
@@ -111,6 +112,7 @@ impl TableMetadataBuilder {
                 default_partition_type: StructType::new(vec![]),
                 last_partition_id: UNPARTITIONED_LAST_ASSIGNED_ID,
                 properties: HashMap::new(),
+                table_properties,
                 current_snapshot_id: None,
                 snapshots: HashMap::new(),
                 snapshot_log: vec![],
@@ -275,6 +277,8 @@ impl TableMetadataBuilder {
         }
 
         self.metadata.properties.extend(properties.clone());
+        self.metadata.table_properties =
+            TableMetadata::parse_table_properties(&self.metadata.properties)?;
         self.changes.push(TableUpdate::SetProperties {
             updates: properties,
         });
@@ -311,6 +315,8 @@ impl TableMetadataBuilder {
         for property in &properties {
             self.metadata.properties.remove(property);
         }
+        self.metadata.table_properties =
+            TableMetadata::parse_table_properties(&self.metadata.properties)?;
 
         if !properties.is_empty() {
             self.changes.push(TableUpdate::RemoveProperties {
@@ -2093,6 +2099,32 @@ mod tests {
         .unwrap();
 
         assert_eq!(build_result.metadata.metadata_log.len(), 0);
+    }
+
+    #[test]
+    fn test_typed_table_properties_stay_in_sync() {
+        let property = TableProperties::PROPERTY_COMMIT_NUM_RETRIES.to_string();
+        let metadata = builder_without_changes(FormatVersion::V2)
+            .set_properties(HashMap::from([(property.clone(), "7".to_string())]))
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(metadata.table_properties().commit_num_retries(), 7);
+
+        let metadata = metadata
+            .into_builder(None)
+            .remove_properties(&[property])
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(
+            metadata.table_properties().commit_num_retries(),
+            TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
+        );
     }
 
     #[test]

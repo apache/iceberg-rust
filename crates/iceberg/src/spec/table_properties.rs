@@ -44,7 +44,8 @@ fn parse_location_property(path: &str) -> Result<String> {
 ///
 /// Returns an error if the codec is not "none", "", or "gzip" (case-insensitive).
 /// Lz4 and Zstd are not supported for metadata file compression.
-pub(crate) fn parse_metadata_file_compression(
+#[cfg(test)]
+fn parse_metadata_file_compression(
     properties: &HashMap<String, String>,
 ) -> Result<CompressionCodec> {
     let value = properties
@@ -140,7 +141,7 @@ fn parse_parquet_compression(
 }
 
 /// TableProperties that contains the properties of a table.
-#[derive(Debug, Properties)]
+#[derive(Clone, Debug, Eq, PartialEq, Properties)]
 pub struct TableProperties {
     /// The number of times to retry a commit.
     #[property(

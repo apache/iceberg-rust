@@ -2725,7 +2725,7 @@ pub fn iceberg::spec::TableMetadata::sort_order_by_id(&self, sort_order_id: i64)
 pub fn iceberg::spec::TableMetadata::sort_orders_iter(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = &iceberg::spec::SortOrderRef>
 pub fn iceberg::spec::TableMetadata::statistics_for_snapshot(&self, snapshot_id: i64) -> core::option::Option<&iceberg::spec::StatisticsFile>
 pub fn iceberg::spec::TableMetadata::statistics_iter(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = &iceberg::spec::StatisticsFile>
-pub fn iceberg::spec::TableMetadata::table_properties(&self) -> iceberg::Result<iceberg::spec::TableProperties>
+pub fn iceberg::spec::TableMetadata::table_properties(&self) -> &iceberg::spec::TableProperties
 pub fn iceberg::spec::TableMetadata::uuid(&self) -> uuid::Uuid
 pub async fn iceberg::spec::TableMetadata::write_to(&self, file_io: &iceberg::io::FileIO, metadata_location: &iceberg::MetadataLocation) -> iceberg::Result<()>
 impl core::clone::Clone for iceberg::spec::TableMetadata
@@ -2893,11 +2893,17 @@ pub fn iceberg::spec::TableProperties::write_metadata_path(&self) -> &core::opti
 pub fn iceberg::spec::TableProperties::write_object_storage_location(&self) -> &core::option::Option<alloc::string::String>
 pub fn iceberg::spec::TableProperties::write_object_storage_partitioned_paths(&self) -> bool
 pub fn iceberg::spec::TableProperties::write_target_file_size_bytes(&self) -> usize
+impl core::clone::Clone for iceberg::spec::TableProperties
+pub fn iceberg::spec::TableProperties::clone(&self) -> iceberg::spec::TableProperties
+impl core::cmp::Eq for iceberg::spec::TableProperties
+impl core::cmp::PartialEq for iceberg::spec::TableProperties
+pub fn iceberg::spec::TableProperties::eq(&self, other: &iceberg::spec::TableProperties) -> bool
 impl core::convert::TryFrom<&std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>> for iceberg::spec::TableProperties
 pub type iceberg::spec::TableProperties::Error = iceberg::Error
 pub fn iceberg::spec::TableProperties::try_from(properties: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<Self>
 impl core::fmt::Debug for iceberg::spec::TableProperties
 pub fn iceberg::spec::TableProperties::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::spec::TableProperties
 pub struct iceberg::spec::UnboundPartitionField
 pub iceberg::spec::UnboundPartitionField::field_id: core::option::Option<i32>
 pub iceberg::spec::UnboundPartitionField::name: alloc::string::String

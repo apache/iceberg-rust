@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::Result;
-use crate::spec::{DataFileFormat, PartitionKey, TableMetadata, TableProperties};
+use crate::spec::{DataFileFormat, PartitionKey, TableMetadata};
 use crate::util::location::strip_trailing_slash;
 
 /// `LocationGenerator` used to generate the location of data file.
@@ -67,7 +67,7 @@ impl DefaultLocationGenerator {
     /// `{table_location}/data`.
     pub fn new(table_metadata: &TableMetadata) -> Result<Self> {
         let table_location = strip_trailing_slash(table_metadata.location());
-        let prop = TableProperties::try_from(table_metadata.properties())?;
+        let prop = table_metadata.table_properties();
         let data_location = strip_trailing_slash(
             prop.write_data_location()
                 .clone()
@@ -135,7 +135,7 @@ impl ObjectStorageLocationGenerator {
     /// `{table_location}/data`.
     pub fn new(table_metadata: &TableMetadata) -> Result<Self> {
         let table_location = strip_trailing_slash(table_metadata.location());
-        let prop = TableProperties::try_from(table_metadata.properties())?;
+        let prop = table_metadata.table_properties();
         let storage_location = strip_trailing_slash(
             prop.write_data_location()
                 .clone()
@@ -316,9 +316,12 @@ pub(crate) mod test {
         assert_eq!(location, "s3://data.db/table/data/part-00000-test.parquet");
 
         // test custom data location
-        table_metadata.properties.insert(
-            TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION.to_string(),
-            "s3://data.db/table/data_1".to_string(),
+        table_metadata = table_metadata_with(
+            "s3://data.db/table",
+            HashMap::from([(
+                TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION.to_string(),
+                "s3://data.db/table/data_1".to_string(),
+            )]),
         );
         let location_generator = DefaultLocationGenerator::new(&table_metadata).unwrap();
         let location =
@@ -328,9 +331,12 @@ pub(crate) mod test {
             "s3://data.db/table/data_1/part-00001-test.parquet"
         );
 
-        table_metadata.properties.insert(
-            TableProperties::PROPERTY_WRITE_DATA_LOCATION.to_string(),
-            "s3://data.db/table/data_2".to_string(),
+        table_metadata = table_metadata_with(
+            "s3://data.db/table",
+            HashMap::from([(
+                TableProperties::PROPERTY_WRITE_DATA_LOCATION.to_string(),
+                "s3://data.db/table/data_2".to_string(),
+            )]),
         );
         let location_generator = DefaultLocationGenerator::new(&table_metadata).unwrap();
         let location =
@@ -340,10 +346,13 @@ pub(crate) mod test {
             "s3://data.db/table/data_2/part-00002-test.parquet"
         );
 
-        table_metadata.properties.insert(
-            TableProperties::PROPERTY_WRITE_DATA_LOCATION.to_string(),
-            // invalid table location
-            "s3://data.db/data_3".to_string(),
+        table_metadata = table_metadata_with(
+            "s3://data.db/table",
+            HashMap::from([(
+                TableProperties::PROPERTY_WRITE_DATA_LOCATION.to_string(),
+                // invalid table location
+                "s3://data.db/data_3".to_string(),
+            )]),
         );
         let location_generator = DefaultLocationGenerator::new(&table_metadata).unwrap();
         let location =
@@ -608,6 +617,7 @@ pub(crate) mod test {
 
     /// Build a minimal `TableMetadata` for location generator tests.
     fn table_metadata_with(location: &str, properties: HashMap<String, String>) -> TableMetadata {
+        let table_properties = TableMetadata::parse_table_properties(&properties).unwrap();
         TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
@@ -626,6 +636,7 @@ pub(crate) mod test {
             current_snapshot_id: None,
             last_sequence_number: 1,
             properties,
+            table_properties,
             snapshot_log: Vec::new(),
             metadata_log: vec![],
             refs: HashMap::new(),
