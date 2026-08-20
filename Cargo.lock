@@ -3788,6 +3788,7 @@ dependencies = [
  "fnv",
  "form_urlencoded",
  "futures",
+ "iceberg-property-macro",
  "iceberg_test_utils",
  "itertools 0.13.0",
  "minijinja",

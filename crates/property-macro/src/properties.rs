@@ -128,6 +128,7 @@ pub(crate) fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2>
         impl #impl_generics #struct_name #type_generics #where_clause {
             #(#accessors)*
 
+            /// Parses this typed property set from a flat string-to-string map.
             pub fn from_properties(
                 properties: &::std::collections::HashMap<
                     ::std::string::String,

@@ -1,0 +1,2 @@
+pub mod iceberg_property_macro
+pub proc macro iceberg_property_macro::#[derive(Properties)]
