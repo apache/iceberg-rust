@@ -177,6 +177,13 @@ async fn collect_reachable(
 
         for manifest in manifests {
             for entry in manifest.entries() {
+                // Only live (added/existing) entries reference a file; a Deleted entry means the
+                // snapshot dropped it, so it must not keep that file alive (matches Java's
+                // `liveEntries()`), otherwise a file deleted by a retained snapshot would never be
+                // reported even once every snapshot that still held it live has expired.
+                if !entry.is_alive() {
+                    continue;
+                }
                 let path = entry.file_path().to_string();
                 match entry.data_file().content_type() {
                     DataContentType::Data => reachable.data_files.insert(path),
@@ -294,6 +301,33 @@ mod tests {
                 .add_file(data_file(path, content), sequence_number)
                 .unwrap();
         }
+        writer.write_manifest_file().await.unwrap()
+    }
+
+    /// Writes a data manifest whose single entry marks `path` as `Deleted`, and returns it.
+    async fn write_deleted_data_manifest(
+        file_io: &FileIO,
+        loc: &str,
+        snapshot_id: i64,
+        file_sequence_number: i64,
+        path: &str,
+    ) -> ManifestFile {
+        let output = file_io
+            .new_output(format!(
+                "{loc}/metadata/manifest-{snapshot_id}-{}.avro",
+                Uuid::new_v4()
+            ))
+            .unwrap();
+        let mut writer =
+            ManifestWriterBuilder::new(output, Some(snapshot_id), schema(), unpartitioned())
+                .build_v2_data();
+        writer
+            .add_delete_file(
+                data_file(path, DataContentType::Data),
+                file_sequence_number,
+                Some(file_sequence_number),
+            )
+            .unwrap();
         writer.write_manifest_file().await.unwrap()
     }
 
@@ -590,6 +624,42 @@ mod tests {
             files.delete_files,
             HashSet::from(["/s1-delete.parquet".to_string()])
         );
+    }
+
+    #[tokio::test]
+    async fn file_deleted_by_retained_snapshot_is_returned() {
+        let tmp = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let loc = tmp.path().join("table").to_str().unwrap().to_string();
+
+        // S1 (expired) adds F as a live entry; S2 (retained) carries F only as a Deleted entry. Once
+        // S1 expires, nothing holds F live, so a deleted entry must not keep it alive — F is orphaned
+        // and must be reported for deletion.
+        let s1_manifest = write_manifest(&file_io, &loc, S1, 1, DataContentType::Data, &[
+            "/f.parquet",
+        ])
+        .await;
+        let s2_manifest = write_deleted_data_manifest(&file_io, &loc, S2, 1, "/f.parquet").await;
+        let s1_list = write_list(&file_io, &loc, S1, None, 1, vec![s1_manifest]).await;
+        let s2_list = write_list(&file_io, &loc, S2, Some(S1), 2, vec![s2_manifest]).await;
+
+        let table = build_table(
+            &tmp,
+            file_io,
+            vec![
+                snapshot(S1, None, 1, 1000, s1_list),
+                snapshot(S2, Some(S1), 2, 2000, s2_list),
+            ],
+            S2,
+            HashMap::new(),
+            vec![],
+            vec![],
+        );
+
+        let files = unreferenced_files(&table, &HashSet::from([S1]))
+            .await
+            .unwrap();
+        assert_eq!(files.data_files, HashSet::from(["/f.parquet".to_string()]));
     }
 
     #[tokio::test]
