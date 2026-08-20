@@ -327,11 +327,9 @@ async fn test_catalog_purge_table(#[case] kind: CatalogKind) -> Result<()> {
 }
 
 #[rstest]
-// The REST fixture cannot purge externally written manifest files.
+// REST cannot purge external manifests, and HMS cannot update tables.
 #[case::glue_plain(CatalogKind::Glue, TableMode::Plain)]
 #[case::glue_encrypted(CatalogKind::Glue, TableMode::Encrypted)]
-#[case::hms_plain(CatalogKind::Hms, TableMode::Plain)]
-#[case::hms_encrypted(CatalogKind::Hms, TableMode::Encrypted)]
 #[case::sql_plain(CatalogKind::Sql, TableMode::Plain)]
 #[case::sql_encrypted(CatalogKind::Sql, TableMode::Encrypted)]
 #[case::s3tables_plain(CatalogKind::S3Tables, TableMode::Plain)]
