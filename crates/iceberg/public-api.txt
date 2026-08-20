@@ -3270,10 +3270,24 @@ pub fn iceberg::transaction::Transaction::update_table_properties(&self) -> iceb
 pub fn iceberg::transaction::Transaction::upgrade_table_version(&self) -> iceberg::transaction::upgrade_format_version::UpgradeFormatVersionAction
 impl core::clone::Clone for iceberg::transaction::Transaction
 pub fn iceberg::transaction::Transaction::clone(&self) -> iceberg::transaction::Transaction
+pub struct iceberg::transaction::UnreferencedFiles
+pub iceberg::transaction::UnreferencedFiles::data_files: std::collections::hash::set::HashSet<alloc::string::String>
+pub iceberg::transaction::UnreferencedFiles::delete_files: std::collections::hash::set::HashSet<alloc::string::String>
+pub iceberg::transaction::UnreferencedFiles::manifest_lists: std::collections::hash::set::HashSet<alloc::string::String>
+pub iceberg::transaction::UnreferencedFiles::manifests: std::collections::hash::set::HashSet<alloc::string::String>
+pub iceberg::transaction::UnreferencedFiles::partition_statistics_files: std::collections::hash::set::HashSet<alloc::string::String>
+pub iceberg::transaction::UnreferencedFiles::statistics_files: std::collections::hash::set::HashSet<alloc::string::String>
+impl iceberg::transaction::UnreferencedFiles
+pub fn iceberg::transaction::UnreferencedFiles::all_paths(&self) -> impl core::iter::traits::iterator::Iterator<Item = &alloc::string::String>
+pub fn iceberg::transaction::UnreferencedFiles::is_empty(&self) -> bool
+pub fn iceberg::transaction::UnreferencedFiles::len(&self) -> usize
+impl core::fmt::Debug for iceberg::transaction::UnreferencedFiles
+pub fn iceberg::transaction::UnreferencedFiles::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub trait iceberg::transaction::ApplyTransactionAction
 pub fn iceberg::transaction::ApplyTransactionAction::apply(self, tx: iceberg::transaction::Transaction) -> iceberg::Result<iceberg::transaction::Transaction>
 impl<T: TransactionAction + 'static> iceberg::transaction::ApplyTransactionAction for T
 pub fn T::apply(self, tx: iceberg::transaction::Transaction) -> iceberg::Result<iceberg::transaction::Transaction> where Self: core::marker::Sized
+pub async fn iceberg::transaction::unreferenced_files(table: &iceberg::table::Table, expired_snapshot_ids: &std::collections::hash::set::HashSet<i64>) -> iceberg::Result<iceberg::transaction::UnreferencedFiles>
 pub mod iceberg::transform
 pub trait iceberg::transform::TransformFunction: core::marker::Send + core::marker::Sync + core::fmt::Debug
 pub fn iceberg::transform::TransformFunction::transform(&self, input: arrow_array::array::ArrayRef) -> iceberg::Result<arrow_array::array::ArrayRef>
