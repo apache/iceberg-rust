@@ -31,7 +31,7 @@ use futures::stream::BoxStream;
 pub use local_fs::{LocalFsStorage, LocalFsStorageFactory};
 pub use memory::{MemoryStorage, MemoryStorageFactory};
 
-use super::{FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
+use super::{FileMetadata, FileRead, FileWrite, InputFile, ListEntry, OutputFile};
 use crate::Result;
 
 /// Trait for storage operations in Iceberg.
@@ -93,6 +93,20 @@ pub trait Storage: Debug + Send + Sync {
 
     /// Delete all files with the given prefix
     async fn delete_prefix(&self, path: &str) -> Result<()>;
+
+    /// Recursively list all FILES under a prefix (no directories). Entry paths
+    /// are absolute, in the same form as the given prefix. The prefix is
+    /// directory-style: implementations MUST normalize a prefix without a
+    /// trailing `/` by appending one, so a path naming an existing file
+    /// yields an empty list — see [`crate::io::FileIO::list_prefix`] for the
+    /// full contract. Default: unsupported.
+    async fn list_prefix(&self, path: &str) -> Result<Vec<ListEntry>> {
+        let _ = path;
+        Err(crate::Error::new(
+            crate::ErrorKind::FeatureUnsupported,
+            "list_prefix is not supported by this storage",
+        ))
+    }
 
     /// Delete multiple files from a stream of paths.
     async fn delete_stream(&self, paths: BoxStream<'static, String>) -> Result<()>;
