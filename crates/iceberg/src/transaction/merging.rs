@@ -104,9 +104,6 @@ impl ManifestFilterManager {
         let mut removed_collector = SnapshotSummaryCollector::default();
         let mut found_paths: HashSet<String> = HashSet::new();
 
-        let schema = table.metadata().current_schema().clone();
-        let partition_spec = table.metadata().default_partition_spec().clone();
-
         for manifest_file in &manifests {
             // Only filter data manifests; pass delete manifests through unchanged.
             if manifest_file.content != ManifestContentType::Data {
@@ -128,20 +125,23 @@ impl ManifestFilterManager {
                 continue;
             }
 
-            // Manifest requires the current partition spec to match so we can
-            // rewrite it correctly. Non-default specs need a writer
-            // parameterised by the source spec, which is not yet implemented.
-            if manifest_file.partition_spec_id != table.metadata().default_partition_spec_id() {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!(
-                        "Cannot rewrite manifest with partition spec {} (table default is {}). \
-                         Rewriting manifests with non-default partition specs is not yet supported.",
-                        manifest_file.partition_spec_id,
-                        table.metadata().default_partition_spec_id(),
-                    ),
-                ));
-            }
+            // Resolve the partition spec for this manifest. After partition
+            // evolution, old manifests may carry a non-default spec — we must
+            // use the manifest's own spec so the rewritten manifest stays valid.
+            let manifest_spec = table
+                .metadata()
+                .partition_spec_by_id(manifest_file.partition_spec_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Manifest references unknown partition spec {}",
+                            manifest_file.partition_spec_id,
+                        ),
+                    )
+                })?
+                .clone();
+            let schema = table.metadata().current_schema().clone();
 
             // Rewrite: keep surviving entries as EXISTING, drop deleted ones.
             let mut surviving_entries: Vec<ManifestEntry> = Vec::new();
@@ -152,7 +152,7 @@ impl ManifestFilterManager {
                     removed_collector.remove_file(
                         entry.data_file(),
                         schema.clone(),
-                        partition_spec.clone(),
+                        manifest_spec.clone(),
                     );
                 } else if entry.is_alive() {
                     // Surviving entry — re-emit as EXISTING with original ids preserved.
@@ -177,7 +177,7 @@ impl ManifestFilterManager {
                 continue;
             }
 
-            // Write the filtered manifest.
+            // Write the filtered manifest using the manifest's own partition spec.
             let new_manifest_path = format!(
                 "{}/{}-m-filter-{}.{}",
                 table.metadata().metadata_location()?,
@@ -193,7 +193,7 @@ impl ManifestFilterManager {
                 output_file,
                 Some(snapshot_id),
                 schema.clone(),
-                partition_spec.as_ref().clone(),
+                manifest_spec.as_ref().clone(),
             )?;
             for entry in surviving_entries {
                 writer.add_entry(entry)?;
