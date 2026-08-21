@@ -77,6 +77,7 @@ bytes = "1.11"
 cfg-if = "1"
 chrono = "0.4.41"
 clap = { version = "4.5.48", features = ["derive", "cargo"] }
+crc32fast = "1"
 dashmap = "6"
 datafusion = "54.1.0"
 datafusion-cli = "54.1.0"
@@ -107,6 +108,7 @@ iceberg-catalog-rest = { version = "0.10.0", path = "./crates/catalog/rest" }
 iceberg-catalog-s3tables = { version = "0.10.0", path = "./crates/catalog/s3tables" }
 iceberg-catalog-sql = { version = "0.10.0", path = "./crates/catalog/sql" }
 iceberg-datafusion = { version = "0.10.0", path = "./crates/integrations/datafusion" }
+iceberg-property-macro = { version = "0.10.0", path = "./crates/property-macro" }
 iceberg-storage-opendal = { version = "0.10.0", path = "./crates/storage/opendal" }
 indicatif = "0.18"
 itertools = "0.13"

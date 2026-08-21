@@ -197,12 +197,12 @@ impl Transaction {
 
     fn build_backoff(props: TableProperties) -> Result<ExponentialBackoff> {
         Ok(ExponentialBuilder::new()
-            .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms))
-            .with_max_delay(Duration::from_millis(props.commit_max_retry_wait_ms))
+            .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms()))
+            .with_max_delay(Duration::from_millis(props.commit_max_retry_wait_ms()))
             .with_total_delay(Some(Duration::from_millis(
-                props.commit_total_retry_timeout_ms,
+                props.commit_total_retry_timeout_ms(),
             )))
-            .with_max_times(props.commit_num_retries)
+            .with_max_times(props.commit_num_retries())
             .with_factor(2.0)
             .build())
     }

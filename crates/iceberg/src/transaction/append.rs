@@ -377,8 +377,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(1, manifest_list.entries().len());
-        manifest_list.entries()[0]
-            .load_manifest(table.file_io())
+        table
+            .manifest_reader()
+            .read(&manifest_list.entries()[0])
             .await
             .unwrap()
             .entries()
@@ -430,7 +431,6 @@ mod tests {
             .find(|m| m.added_files_count.unwrap_or(0) > 0)
             .expect("new snapshot should carry the appended data manifest");
 
-        // ManifestReader once it exists.
         // The manifest list entry must carry decodable key metadata.
         let key_metadata_bytes = manifest_file
             .key_metadata
@@ -439,11 +439,11 @@ mod tests {
         StandardKeyMetadata::decode(key_metadata_bytes)
             .expect("recorded key metadata must decode as StandardKeyMetadata");
 
-        // load_manifest self-decrypts using the recorded key metadata and must
-        // recover the entry we appended. Because the read goes through
+        // The reader self-decrypts using the recorded key metadata and must
+        // recover the entry we appended. Because the read goes through the
         // decryption path, this succeeding also proves the bytes
         // on disk were genuinely encrypted (not silently written as plaintext).
-        let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+        let manifest = table.manifest_reader().read(manifest_file).await.unwrap();
         assert_eq!(manifest.entries().len(), 1);
         assert_eq!(
             manifest.entries()[0].data_file().file_path(),
@@ -903,8 +903,9 @@ mod tests {
         );
 
         // check manifest
-        let manifest = manifest_list.entries()[0]
-            .load_manifest(table.file_io())
+        let manifest = table
+            .manifest_reader()
+            .read(&manifest_list.entries()[0])
             .await
             .unwrap();
         assert_eq!(1, manifest.entries().len());

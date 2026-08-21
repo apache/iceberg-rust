@@ -16,71 +16,20 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::fmt::Display;
-use std::str::FromStr;
+
+use iceberg_property_macro::Properties;
 
 use crate::compression::CompressionCodec;
 use crate::encryption::AesKeySize;
 use crate::error::{Error, ErrorKind, Result};
 use crate::util::location::strip_trailing_slash;
 
-fn parse_property<T: FromStr>(
-    properties: &HashMap<String, String>,
-    key: &str,
-    default: T,
-) -> Result<T>
-where
-    <T as FromStr>::Err: Display,
-{
-    properties.get(key).map_or(Ok(default), |value| {
-        value.parse::<T>().map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid value for {key}: {e}"),
-            )
-        })
-    })
-}
+fn parse_location_property(path: &str) -> Result<String> {
+    if path.is_empty() {
+        return Err(Error::new(ErrorKind::DataInvalid, "path must not be empty"));
+    }
 
-/// Parse an optional property, returning `None` when the key is absent and an
-/// error when the value is present but fails to parse.
-fn parse_optional_property<T: FromStr>(
-    properties: &HashMap<String, String>,
-    key: &str,
-) -> Result<Option<T>>
-where
-    <T as FromStr>::Err: Display,
-{
-    properties
-        .get(key)
-        .map(|value| {
-            value.parse::<T>().map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Invalid value for {key}: {e}"),
-                )
-            })
-        })
-        .transpose()
-}
-
-fn parse_location_property(
-    properties: &HashMap<String, String>,
-    key: &str,
-) -> Result<Option<String>> {
-    properties
-        .get(key)
-        .map(|path| {
-            if path.is_empty() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Invalid value for {key}: path must not be empty"),
-                ));
-            }
-
-            Ok(strip_trailing_slash(path).to_string())
-        })
-        .transpose()
+    Ok(strip_trailing_slash(path).to_string())
 }
 
 /// Parse compression codec for metadata files from table properties.
@@ -103,6 +52,10 @@ pub(crate) fn parse_metadata_file_compression(
         .map(|s| s.as_str())
         .unwrap_or(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT);
 
+    parse_metadata_compression(value)
+}
+
+fn parse_metadata_compression(value: &str) -> Result<CompressionCodec> {
     // Handle empty string as None
     if value.is_empty() {
         return Ok(CompressionCodec::None);
@@ -143,27 +96,40 @@ pub(crate) fn parse_metadata_file_compression(
 /// Parse the Parquet data-file compression codec (`write.parquet.compression-codec`)
 /// and fold in the compression level (`write.parquet.compression-level`) for the
 /// codecs that accept one (`zstd`, `gzip`, `brotli`).
-fn parse_parquet_compression(properties: &HashMap<String, String>) -> Result<CompressionCodec> {
-    let value = properties
-        .get(TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC)
-        .map(|s| s.as_str())
-        .unwrap_or(TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT);
+fn parse_parquet_compression(
+    properties: &HashMap<String, String>,
+    codec_key: &str,
+    additional_keys: &[&str],
+    default: CompressionCodec,
+) -> Result<CompressionCodec> {
+    let level_key = additional_keys[0];
+    let codec = properties
+        .get(codec_key)
+        .map(|value| {
+            serde_json::from_value(serde_json::Value::String(value.to_lowercase())).map_err(|_| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Invalid Parquet compression codec: {value}. Supported codecs: \
+                         uncompressed, snappy, gzip, lzo, brotli, lz4, lz4_raw, zstd"
+                    ),
+                )
+            })
+        })
+        .transpose()?
+        .unwrap_or(default);
 
-    let codec: CompressionCodec =
-        serde_json::from_value(serde_json::Value::String(value.to_lowercase())).map_err(|_| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid Parquet compression codec: {value}. Supported codecs: \
-                     uncompressed, snappy, gzip, lzo, brotli, lz4, lz4_raw, zstd"
-                ),
-            )
-        })?;
-
-    let level: Option<u8> = parse_optional_property(
-        properties,
-        TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL,
-    )?;
+    let level = properties
+        .get(level_key)
+        .map(|value| {
+            value.parse::<u8>().map_err(|error| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid value for {level_key}: {error}"),
+                )
+            })
+        })
+        .transpose()?;
 
     Ok(match (codec, level) {
         (CompressionCodec::Zstd(_), Some(level)) => CompressionCodec::Zstd(level),
@@ -173,95 +139,225 @@ fn parse_parquet_compression(properties: &HashMap<String, String>) -> Result<Com
     })
 }
 
-/// Parse boolean property case insensitively
-/// Rust standard library only accepts "true" and "false", see https://doc.rust-lang.org/std/primitive.bool.html#method.from_str
-/// Users might accidentally trigger fallback with valid configuration values such as "False" or "True"
-fn parse_property_bool(
-    properties: &HashMap<String, String>,
-    key: &str,
-    default: bool,
-) -> Result<bool> {
-    properties.get(key).map_or(Ok(default), |value| {
-        value.to_lowercase().parse::<bool>().map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid value for {key}: {e}"),
-            )
-        })
-    })
-}
-
 /// TableProperties that contains the properties of a table.
-#[derive(Debug)]
+#[derive(Debug, Properties)]
 pub struct TableProperties {
     /// The number of times to retry a commit.
-    pub commit_num_retries: usize,
+    #[property(
+        key = Self::PROPERTY_COMMIT_NUM_RETRIES,
+        default = Self::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT,
+        getter
+    )]
+    commit_num_retries: usize,
     /// The minimum wait time between retries.
-    pub commit_min_retry_wait_ms: u64,
+    #[property(
+        key = Self::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS,
+        default = Self::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT,
+        getter
+    )]
+    commit_min_retry_wait_ms: u64,
     /// The maximum wait time between retries.
-    pub commit_max_retry_wait_ms: u64,
+    #[property(
+        key = Self::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS,
+        default = Self::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT,
+        getter
+    )]
+    commit_max_retry_wait_ms: u64,
     /// The total timeout for commit retries.
-    pub commit_total_retry_timeout_ms: u64,
+    #[property(
+        key = Self::PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS,
+        default = Self::PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT,
+        getter
+    )]
+    commit_total_retry_timeout_ms: u64,
     /// The default format for files.
-    pub write_format_default: String,
+    #[property(
+        key = Self::PROPERTY_DEFAULT_FILE_FORMAT,
+        default = Self::PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT,
+        getter
+    )]
+    write_format_default: String,
     /// The target file size for files.
-    pub write_target_file_size_bytes: usize,
+    #[property(
+        key = Self::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
+        default = Self::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
+        getter
+    )]
+    write_target_file_size_bytes: usize,
     /// Base directory for metadata files (manifests, manifest lists), with any
     /// trailing slash trimmed. `None` if `write.metadata.path` is not set.
-    pub write_metadata_path: Option<String>,
+    #[property(
+        key = Self::PROPERTY_WRITE_METADATA_PATH,
+        default = None,
+        parse_with = parse_location_property,
+        getter
+    )]
+    write_metadata_path: Option<String>,
     /// Compression codec for metadata files (JSON)
-    pub metadata_compression_codec: CompressionCodec,
+    #[property(
+        key = Self::PROPERTY_METADATA_COMPRESSION_CODEC,
+        default = CompressionCodec::None,
+        parse_with = parse_metadata_compression,
+        getter
+    )]
+    metadata_compression_codec: CompressionCodec,
     /// Whether to use `FanoutWriter` for partitioned tables.
-    pub write_datafusion_fanout_enabled: bool,
+    #[property(
+        key = Self::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
+        default = Self::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT,
+        getter
+    )]
+    write_datafusion_fanout_enabled: bool,
     /// Whether garbage collection is enabled on drop.
     /// When `false`, data files will not be deleted when a table is dropped.
-    pub gc_enabled: bool,
+    #[property(
+        key = Self::PROPERTY_GC_ENABLED,
+        default = Self::PROPERTY_GC_ENABLED_DEFAULT,
+        getter
+    )]
+    gc_enabled: bool,
     /// Default maximum age of a snapshot to keep when expiring snapshots.
-    pub max_snapshot_age_ms: i64,
+    #[property(
+        key = Self::PROPERTY_MAX_SNAPSHOT_AGE_MS,
+        default = Self::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT,
+        getter
+    )]
+    max_snapshot_age_ms: i64,
     /// Default minimum number of snapshots to keep per branch when expiring snapshots.
-    pub min_snapshots_to_keep: usize,
+    #[property(
+        key = Self::PROPERTY_MIN_SNAPSHOTS_TO_KEEP,
+        default = Self::PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT,
+        getter
+    )]
+    min_snapshots_to_keep: usize,
     /// Default maximum age of a snapshot reference to keep when expiring snapshots.
-    pub max_ref_age_ms: i64,
+    #[property(
+        key = Self::PROPERTY_MAX_REF_AGE_MS,
+        default = Self::PROPERTY_MAX_REF_AGE_MS_DEFAULT,
+        getter
+    )]
+    max_ref_age_ms: i64,
     /// Whether content-defined chunking is enabled.
     /// `true` only when `write.parquet.content-defined-chunking.enabled = "true"`.
-    pub cdc_enabled: bool,
+    #[property(
+        key = Self::PROPERTY_PARQUET_CDC_ENABLED,
+        default = Self::PROPERTY_PARQUET_CDC_ENABLED_DEFAULT,
+        getter
+    )]
+    cdc_enabled: bool,
     /// Content-defined chunking minimum chunk size in bytes.
-    pub cdc_min_chunk_size: usize,
+    #[property(
+        key = Self::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE,
+        default = Self::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE_DEFAULT,
+        getter
+    )]
+    cdc_min_chunk_size: usize,
     /// Content-defined chunking maximum chunk size in bytes.
-    pub cdc_max_chunk_size: usize,
+    #[property(
+        key = Self::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE,
+        default = Self::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE_DEFAULT,
+        getter
+    )]
+    cdc_max_chunk_size: usize,
     /// Content-defined chunking normalization level (gearhash bit adjustment).
-    pub cdc_norm_level: i32,
+    #[property(
+        key = Self::PROPERTY_PARQUET_CDC_NORM_LEVEL,
+        default = Self::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT,
+        getter
+    )]
+    cdc_norm_level: i32,
     /// Parquet compression codec for data files, with the resolved compression
     /// level folded in (from `write.parquet.compression-level`, or the codec's
     /// default when unset).
-    pub parquet_compression_codec: CompressionCodec,
+    #[property(
+        key = Self::PROPERTY_PARQUET_COMPRESSION_CODEC,
+        additional_keys = [Self::PROPERTY_PARQUET_COMPRESSION_LEVEL],
+        default = CompressionCodec::zstd_default(),
+        parse_properties_with = parse_parquet_compression,
+        getter
+    )]
+    parquet_compression_codec: CompressionCodec,
     /// Approximate maximum Parquet row group size in bytes.
-    pub parquet_row_group_size_bytes: usize,
+    #[property(
+        key = Self::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES,
+        default = Self::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT,
+        getter
+    )]
+    parquet_row_group_size_bytes: usize,
     /// Approximate maximum Parquet data page size in bytes.
-    pub parquet_page_size_bytes: usize,
+    #[property(
+        key = Self::PROPERTY_PARQUET_PAGE_SIZE_BYTES,
+        default = Self::PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT,
+        getter
+    )]
+    parquet_page_size_bytes: usize,
     /// Maximum number of rows per Parquet data page.
-    pub parquet_page_row_limit: usize,
+    #[property(
+        key = Self::PROPERTY_PARQUET_PAGE_ROW_LIMIT,
+        default = Self::PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT,
+        getter
+    )]
+    parquet_page_row_limit: usize,
     /// Approximate maximum Parquet dictionary page size in bytes.
-    pub parquet_dict_size_bytes: usize,
+    #[property(
+        key = Self::PROPERTY_PARQUET_DICT_SIZE_BYTES,
+        default = Self::PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT,
+        getter
+    )]
+    parquet_dict_size_bytes: usize,
     /// The master key id used to encrypt this table's manifest list and data
     /// files. `None` if `encryption.key-id` is not set.
-    pub encryption_key_id: Option<String>,
+    #[property(
+        key = Self::PROPERTY_ENCRYPTION_KEY_ID,
+        default = None,
+        getter
+    )]
+    encryption_key_id: Option<String>,
     /// The encryption data encryption key length in bytes.
-    pub encryption_data_key_length: usize,
-    /// Base directory for data files
-    pub write_data_location: Option<String>,
-    /// Deprecated table property for data file write location.
+    #[property(
+        key = Self::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
+        default = Self::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT,
+        getter
+    )]
+    encryption_data_key_length: usize,
+    /// Base directory for data files, with any trailing slash trimmed.
+    #[property(
+        key = Self::PROPERTY_WRITE_DATA_LOCATION,
+        default = None,
+        parse_with = parse_location_property,
+        getter
+    )]
+    write_data_location: Option<String>,
+    /// Deprecated table property for data file write location, with any trailing slash trimmed.
     ///
     /// Property will be removed at a later date.
     /// Superseded by [write_data_location].
-    pub write_folder_storage_location: Option<String>,
-    /// Deprecated table property for data file write location for object storage location generator.
+    #[property(
+        key = Self::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION,
+        default = None,
+        parse_with = parse_location_property,
+        getter
+    )]
+    write_folder_storage_location: Option<String>,
+    /// Deprecated table property for data file write location for object storage location generator,
+    /// with any trailing slash trimmed.
     ///
     /// Property will be removed at a later date.
     /// Superseded by [write_data_location].
-    pub write_object_storage_location: Option<String>,
+    #[property(
+        key = Self::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION,
+        default = None,
+        parse_with = parse_location_property,
+        getter
+    )]
+    write_object_storage_location: Option<String>,
     /// Whether partition values are included in object storage paths.
-    pub write_object_storage_partitioned_paths: bool,
+    #[property(
+        key = Self::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS,
+        default = Self::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT,
+        getter
+    )]
+    write_object_storage_partitioned_paths: bool,
 }
 
 impl TableProperties {
@@ -465,135 +561,10 @@ impl TableProperties {
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
-    // parse by entry key or use default value
     type Error = Error;
 
-    fn try_from(props: &HashMap<String, String>) -> Result<Self> {
-        Ok(TableProperties {
-            commit_num_retries: parse_property(
-                props,
-                TableProperties::PROPERTY_COMMIT_NUM_RETRIES,
-                TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT,
-            )?,
-            commit_min_retry_wait_ms: parse_property(
-                props,
-                TableProperties::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS,
-                TableProperties::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT,
-            )?,
-            commit_max_retry_wait_ms: parse_property(
-                props,
-                TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS,
-                TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT,
-            )?,
-            commit_total_retry_timeout_ms: parse_property(
-                props,
-                TableProperties::PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS,
-                TableProperties::PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT,
-            )?,
-            write_format_default: parse_property(
-                props,
-                TableProperties::PROPERTY_DEFAULT_FILE_FORMAT,
-                TableProperties::PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT.to_string(),
-            )?,
-            write_target_file_size_bytes: parse_property(
-                props,
-                TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
-                TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
-            )?,
-            write_metadata_path: parse_location_property(
-                props,
-                TableProperties::PROPERTY_WRITE_METADATA_PATH,
-            )?,
-            metadata_compression_codec: parse_metadata_file_compression(props)?,
-            write_datafusion_fanout_enabled: parse_property_bool(
-                props,
-                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
-                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT,
-            )?,
-            gc_enabled: parse_property_bool(
-                props,
-                TableProperties::PROPERTY_GC_ENABLED,
-                TableProperties::PROPERTY_GC_ENABLED_DEFAULT,
-            )?,
-            max_snapshot_age_ms: parse_property(
-                props,
-                TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS,
-                TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT,
-            )?,
-            min_snapshots_to_keep: parse_property(
-                props,
-                TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP,
-                TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT,
-            )?,
-            max_ref_age_ms: parse_property(
-                props,
-                TableProperties::PROPERTY_MAX_REF_AGE_MS,
-                TableProperties::PROPERTY_MAX_REF_AGE_MS_DEFAULT,
-            )?,
-            cdc_enabled: parse_property_bool(
-                props,
-                TableProperties::PROPERTY_PARQUET_CDC_ENABLED,
-                TableProperties::PROPERTY_PARQUET_CDC_ENABLED_DEFAULT,
-            )?,
-            cdc_min_chunk_size: parse_property(
-                props,
-                TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE,
-                TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE_DEFAULT,
-            )?,
-            cdc_max_chunk_size: parse_property(
-                props,
-                TableProperties::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE,
-                TableProperties::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE_DEFAULT,
-            )?,
-            cdc_norm_level: parse_property(
-                props,
-                TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL,
-                TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT,
-            )?,
-            parquet_compression_codec: parse_parquet_compression(props)?,
-            parquet_row_group_size_bytes: parse_property(
-                props,
-                TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES,
-                TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT,
-            )?,
-            parquet_page_size_bytes: parse_property(
-                props,
-                TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES,
-                TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT,
-            )?,
-            parquet_page_row_limit: parse_property(
-                props,
-                TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT,
-                TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT,
-            )?,
-            parquet_dict_size_bytes: parse_property(
-                props,
-                TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES,
-                TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT,
-            )?,
-            encryption_key_id: props
-                .get(TableProperties::PROPERTY_ENCRYPTION_KEY_ID)
-                .cloned(),
-            encryption_data_key_length: parse_property(
-                props,
-                TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
-                TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT,
-            )?,
-            write_data_location: props
-                .get(TableProperties::PROPERTY_WRITE_DATA_LOCATION)
-                .cloned(),
-            write_folder_storage_location: props
-                .get(TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION)
-                .cloned(),
-            write_object_storage_location: props
-                .get(TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION)
-                .cloned(),
-            write_object_storage_partitioned_paths: parse_property_bool(
-                props,
-                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS,
-                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT,
-            )?,
-        })
+    fn try_from(properties: &HashMap<String, String>) -> Result<Self> {
+        Self::from_properties(properties)
     }
 }
 
@@ -672,33 +643,50 @@ mod tests {
     }
 
     #[test]
-    fn test_table_properties_write_metadata_path() {
-        // Test unset
+    fn test_table_properties_location_paths() {
+        // Test unset.
         let table_properties = TableProperties::try_from(&HashMap::new()).unwrap();
         assert_eq!(table_properties.write_metadata_path, None);
+        assert_eq!(table_properties.write_data_location, None);
+        assert_eq!(table_properties.write_folder_storage_location, None);
+        assert_eq!(table_properties.write_object_storage_location, None);
 
-        // Test empty path is invalid
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
-            String::new(),
-        )]);
-        let error = TableProperties::try_from(&props).unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::DataInvalid);
-        assert!(
-            error
-                .message()
-                .contains(TableProperties::PROPERTY_WRITE_METADATA_PATH)
-        );
+        for key in [
+            TableProperties::PROPERTY_WRITE_METADATA_PATH,
+            TableProperties::PROPERTY_WRITE_DATA_LOCATION,
+            TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION,
+            TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION,
+        ] {
+            // Test empty paths are invalid and retain the property key as error context.
+            let error =
+                TableProperties::try_from(&HashMap::from([(key.to_string(), String::new())]))
+                    .unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::DataInvalid);
+            assert!(format!("{error}").contains(key));
 
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
-            "s3://other-bucket/custom-meta/".to_string(),
-        )]);
-        let table_properties = TableProperties::try_from(&props).unwrap();
-        assert_eq!(
-            table_properties.write_metadata_path.as_deref(),
-            Some("s3://other-bucket/custom-meta")
-        );
+            // Test all supported location properties share trailing-slash normalization.
+            let table_properties = TableProperties::try_from(&HashMap::from([(
+                key.to_string(),
+                "s3://other-bucket/custom-path/".to_string(),
+            )]))
+            .unwrap();
+            let parsed = match key {
+                TableProperties::PROPERTY_WRITE_METADATA_PATH => {
+                    table_properties.write_metadata_path.as_deref()
+                }
+                TableProperties::PROPERTY_WRITE_DATA_LOCATION => {
+                    table_properties.write_data_location.as_deref()
+                }
+                TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION => {
+                    table_properties.write_folder_storage_location.as_deref()
+                }
+                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION => {
+                    table_properties.write_object_storage_location.as_deref()
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(parsed, Some("s3://other-bucket/custom-path"));
+        }
     }
 
     #[test]
