@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, Int64Array, StringArray, StructArray};
+use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
 use tokio::sync::oneshot::{Receiver, channel};
 
@@ -27,6 +28,7 @@ use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
 use crate::arrow::scan_metrics::ScanMetrics;
 use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
+use crate::encryption::{EncryptedInputFile, StandardKeyMetadata};
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Predicate, Reference};
 use crate::io::FileIO;
@@ -51,7 +53,6 @@ pub(crate) struct CachingDeleteFileLoader {
 
 // Intermediate context during processing of a delete file task.
 enum DeleteFileContext {
-    // TODO: Delete Vector loader from Puffin files
     ExistingEqDel,
     ExistingPosDel,
     PosDels {
@@ -63,6 +64,15 @@ enum DeleteFileContext {
         equality_ids: HashSet<i32>,
         sender: tokio::sync::oneshot::Sender<Predicate>,
     },
+    // A V3 deletion vector: the raw deletion-vector-v1 blob bytes, the data file whose rows it
+    // deletes, and the manifest's expected cardinality. The blob is decoded and validated in the
+    // parse phase.
+    DelVec {
+        data_file_path: String,
+        blob: Bytes,
+        record_count: Option<u64>,
+        dv_path: String,
+    },
 }
 
 // Final result of the processing of a delete file task before
@@ -71,6 +81,11 @@ enum ParsedDeleteFileContext {
     DelVecs {
         file_path: String,
         results: HashMap<String, DeleteVector>,
+    },
+    // A single deletion vector decoded from a Puffin blob, keyed by the data file it applies to.
+    DelVec {
+        data_file_path: String,
+        delete_vector: DeleteVector,
     },
     EqDel,
     ExistingPosDel,
@@ -117,12 +132,13 @@ impl CachingDeleteFileLoader {
     ///    tasks from starting to load the same equality delete file. We spawn a task to load
     ///    the EQ delete's record batch stream, convert it to a predicate, update the delete filter,
     ///    and notify any task that was waiting for it.
-    ///  * When this gets updated to add support for delete vectors, the load phase will return
-    ///    a PuffinReader for them.
+    ///  * For a V3 deletion vector, the load phase reads the blob's byte range directly from its
+    ///    Puffin file (decrypting first if the entry carries key metadata), and the parse phase
+    ///    decodes it into a single `DeleteVector`.
     ///  * The parse phase parses each record batch stream according to its associated data type.
     ///    The result of this is a map of data file paths to delete vectors for the positional
-    ///    delete tasks (and in future for the delete vector tasks). For equality delete
-    ///    file tasks, this results in an unbound Predicate.
+    ///    delete tasks, or a single (data file path, delete vector) pair for a deletion vector
+    ///    task. For equality delete file tasks, this results in an unbound Predicate.
     ///  * The unbound Predicates resulting from equality deletes are sent to their associated oneshot
     ///    channel to store them in the right place in the delete file managers state.
     ///  * The results of all of these futures are awaited on in parallel with the specified
@@ -143,10 +159,10 @@ impl CachingDeleteFileLoader {
     ///                                                     |
     ///                                                     |
     ///                       +-----------------------------+--------------------------+
-    ///                     Pos Del           Del Vec (Not yet Implemented)         EQ Del
+    ///                     Pos Del                       Del Vec                    EQ Del
     ///                       |                             |                          |
     ///              [parse pos del stream]         [parse del vec puffin]       [parse eq del]
-    ///          HashMap<String, RoaringTreeMap> HashMap<String, RoaringTreeMap>   (Predicate, Sender)
+    ///          HashMap<String, RoaringTreeMap>        DeleteVector             (Predicate, Sender)
     ///                       |                             |                          |
     ///                       |                             |                 [persist to state]
     ///                       |                             |                          ()
@@ -211,13 +227,22 @@ impl CachingDeleteFileLoader {
                     .try_buffer_unordered(concurrency_limit_data_files);
 
                 while let Some(item) = results_stream.next().await {
-                    let item = item?;
-                    if let ParsedDeleteFileContext::DelVecs { file_path, results } = item {
-                        for (data_file_path, delete_vector) in results.into_iter() {
+                    match item? {
+                        ParsedDeleteFileContext::DelVecs { file_path, results } => {
+                            for (data_file_path, delete_vector) in results.into_iter() {
+                                del_filter.upsert_delete_vector(data_file_path, delete_vector);
+                            }
+                            // Mark the positional delete file as fully loaded so waiters can proceed
+                            del_filter.finish_pos_del_load(&file_path);
+                        }
+                        ParsedDeleteFileContext::DelVec {
+                            data_file_path,
+                            delete_vector,
+                        } => {
                             del_filter.upsert_delete_vector(data_file_path, delete_vector);
                         }
-                        // Mark the positional delete file as fully loaded so waiters can proceed
-                        del_filter.finish_pos_del_load(&file_path);
+                        ParsedDeleteFileContext::EqDel
+                        | ParsedDeleteFileContext::ExistingPosDel => {}
                     }
                 }
 
@@ -239,6 +264,17 @@ impl CachingDeleteFileLoader {
     ) -> Result<DeleteFileContext> {
         match task.file_type {
             DataContentType::PositionDeletes => {
+                // A V3 deletion vector arrives as a PositionDeletes entry whose deletes live in a
+                // Puffin blob located by content_offset, not in a positional-delete parquet file.
+                if let Some(content_offset) = task.content_offset {
+                    return Self::load_deletion_vector(
+                        task,
+                        content_offset,
+                        basic_delete_file_loader,
+                    )
+                    .await;
+                }
+
                 match del_filter.try_start_pos_del_load(&task.file_path) {
                     PosDelLoadAction::AlreadyLoaded => Ok(DeleteFileContext::ExistingPosDel),
                     PosDelLoadAction::WaitFor(notified) => {
@@ -299,6 +335,129 @@ impl CachingDeleteFileLoader {
         }
     }
 
+    /// Validates a `PositionDeletes` task's deletion-vector coordinates and returns them as
+    /// typed values ready for the range read: `(start, len, referenced data file path)`.
+    ///
+    /// The spec requires `referenced_data_file` and `content_size_in_bytes` whenever
+    /// `content_offset` is set (a deletion vector), so their absence is a manifest-entry
+    /// inconsistency rather than an I/O failure.
+    ///
+    /// Equality and ordinary position deletes have no equivalent validation in this loader: a
+    /// malformed equality/position delete file fails loudly when the Parquet reader can't open
+    /// it. A deletion vector's coordinates instead drive a raw byte-range read with no format
+    /// to fail against, so a bad coordinate would otherwise decode silently into the wrong (or
+    /// no) deletes, per the same corrupted-blob concern Iceberg-Java validates in
+    /// `BitmapPositionDeleteIndex.deserializeBitmap`.
+    fn validate_deletion_vector_task(
+        task: &FileScanTaskDeleteFile,
+        content_offset: i64,
+    ) -> Result<(u64, u64, String)> {
+        let content_size = task.content_size_in_bytes.ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} sets content_offset but not content_size_in_bytes",
+                    task.file_path
+                ),
+            )
+        })?;
+        let data_file_path = task.referenced_data_file.clone().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} is missing referenced_data_file",
+                    task.file_path
+                ),
+            )
+        })?;
+
+        let start = u64::try_from(content_offset).map_err(|_| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} has negative content_offset {content_offset}",
+                    task.file_path
+                ),
+            )
+        })?;
+        let len = u64::try_from(content_size).map_err(|_| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} has negative content_size_in_bytes {content_size}",
+                    task.file_path
+                ),
+            )
+        })?;
+
+        Ok((start, len, data_file_path))
+    }
+
+    /// Validates a decoded deletion vector's cardinality against the manifest entry's
+    /// `record_count`, mirroring Iceberg-Java's `BitmapPositionDeleteIndex.deserializeBitmap`.
+    /// `record_count` is only absent for a scan task built without a manifest entry (e.g. in a
+    /// test fixture), in which case there is nothing to validate against.
+    fn validate_deletion_vector_cardinality(
+        delete_vector: &DeleteVector,
+        expected: Option<u64>,
+        dv_path: &str,
+    ) -> Result<()> {
+        let Some(expected) = expected else {
+            return Ok(());
+        };
+        let actual = delete_vector.len();
+        if actual != expected {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {dv_path} decoded to {actual} positions, expected {expected} from record_count"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Reads a V3 deletion vector blob directly from its Puffin file.
+    ///
+    /// The spec requires a delete manifest entry's `content_offset` / `content_size_in_bytes` to
+    /// match the blob's offset and length in the Puffin footer, so the blob is read by range
+    /// without parsing the footer. It is decoded into a [`DeleteVector`] in the parse phase.
+    ///
+    /// Decrypts the range read when `task.key_metadata` is set, the same way `ManifestReader`
+    /// decrypts a manifest file (`spec/manifest/reader.rs`): the coordinate space of
+    /// `content_offset` / `content_size_in_bytes` is the plaintext file, which is what
+    /// `EncryptedInputFile` reads over.
+    async fn load_deletion_vector(
+        task: &FileScanTaskDeleteFile,
+        content_offset: i64,
+        basic_delete_file_loader: BasicDeleteFileLoader,
+    ) -> Result<DeleteFileContext> {
+        let (start, len, data_file_path) =
+            Self::validate_deletion_vector_task(task, content_offset)?;
+
+        let input_file = basic_delete_file_loader
+            .file_io()
+            .new_input(&task.file_path)?;
+        let blob = match task.key_metadata.as_deref() {
+            Some(key_metadata) => {
+                let key_metadata = StandardKeyMetadata::decode(key_metadata)?;
+                EncryptedInputFile::new(input_file, key_metadata)
+                    .reader()
+                    .await?
+                    .read(start..start + len)
+                    .await?
+            }
+            None => input_file.reader().await?.read(start..start + len).await?,
+        };
+
+        Ok(DeleteFileContext::DelVec {
+            data_file_path,
+            blob,
+            record_count: task.record_count,
+            dv_path: task.file_path.clone(),
+        })
+    }
+
     async fn parse_file_content_for_task(
         ctx: DeleteFileContext,
     ) -> Result<ParsedDeleteFileContext> {
@@ -310,6 +469,20 @@ impl CachingDeleteFileLoader {
                 Ok(ParsedDeleteFileContext::DelVecs {
                     file_path,
                     results: del_vecs,
+                })
+            }
+            DeleteFileContext::DelVec {
+                data_file_path,
+                blob,
+                record_count,
+                dv_path,
+            } => {
+                let delete_vector = DeleteVector::deserialize(&blob)?;
+                Self::validate_deletion_vector_cardinality(&delete_vector, record_count, &dv_path)?;
+
+                Ok(ParsedDeleteFileContext::DelVec {
+                    data_file_path,
+                    delete_vector,
                 })
             }
             DeleteFileContext::FreshEqDel {
@@ -644,6 +817,7 @@ mod tests {
     use crate::arrow::delete_filter::tests::setup;
     use crate::scan::FileScanTaskDeleteFile;
     use crate::spec::{DataContentType, Schema};
+    use crate::test_utils::encode_dv_blob;
 
     #[tokio::test]
     async fn test_delete_file_loader_parse_equality_deletes() {
@@ -1205,5 +1379,287 @@ mod tests {
         // Verify that the delete vectors point to the same memory location,
         // confirming that the second load reused the result from the first.
         assert!(Arc::ptr_eq(&dv1, &dv2));
+    }
+
+    fn dv_task(
+        dv_path: String,
+        file_size: u64,
+        data_file_path: String,
+        content_offset: i64,
+        content_size: i64,
+        record_count: u64,
+        key_metadata: Option<Box<[u8]>>,
+    ) -> FileScanTaskDeleteFile {
+        FileScanTaskDeleteFile::builder()
+            .with_file_path(dv_path)
+            .with_file_size_in_bytes(file_size)
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_partition_spec_id(0)
+            .with_referenced_data_file(Some(data_file_path))
+            .with_content_offset(Some(content_offset))
+            .with_content_size_in_bytes(Some(content_size))
+            .with_record_count(Some(record_count))
+            .with_key_metadata(key_metadata)
+            .build()
+    }
+
+    #[tokio::test]
+    async fn test_load_deletes_applies_deletion_vector() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::new_with_fs();
+
+        let blob = encode_dv_blob([0u64, 1, 5]);
+
+        // Embed the blob in a Puffin-like file behind leading bytes so content_offset is
+        // non-zero, then let the loader read it back by range.
+        let content_offset = 12i64;
+        let content_size = blob.len() as i64;
+        let mut file_bytes = vec![0u8; content_offset as usize];
+        file_bytes.extend_from_slice(&blob);
+        file_bytes.extend_from_slice(&[0u8; 8]);
+        let dv_path = format!("{table_location}/deletes.puffin");
+        std::fs::write(&dv_path, &file_bytes).unwrap();
+
+        let data_file_path = format!("{table_location}/data-1.parquet");
+        let dv = dv_task(
+            dv_path.clone(),
+            std::fs::metadata(&dv_path).unwrap().len(),
+            data_file_path.clone(),
+            content_offset,
+            content_size,
+            3,
+            None,
+        );
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let loader = CachingDeleteFileLoader::new(file_io, 10, Runtime::current());
+        let delete_filter = loader.load_deletes(&[dv], schema).await.unwrap().unwrap();
+
+        let delete_vector = delete_filter
+            .get_delete_vector_for_path(&data_file_path)
+            .expect("a delete vector should be indexed for the referenced data file");
+        let mut positions: Vec<u64> = delete_vector.lock().unwrap().iter().collect();
+        positions.sort_unstable();
+        assert_eq!(positions, vec![0, 1, 5]);
+    }
+
+    #[tokio::test]
+    async fn test_load_deletes_decrypts_deletion_vector() {
+        use crate::encryption::{EncryptedOutputFile, StandardKeyMetadata};
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::new_with_fs();
+
+        let key_metadata = StandardKeyMetadata::try_new(b"0123456789abcdef")
+            .unwrap()
+            .with_aad_prefix(b"test-aad-prefix!");
+        let encoded_key_metadata = key_metadata.encode().unwrap();
+
+        let blob = encode_dv_blob([2u64, 4]);
+        let plaintext_size = blob.len() as i64;
+        let dv_path = format!("{table_location}/deletes.puffin");
+        let output = EncryptedOutputFile::new(file_io.new_output(&dv_path).unwrap(), key_metadata);
+        output.write(Bytes::from(blob)).await.unwrap();
+
+        // content_offset / content_size_in_bytes are in the plaintext coordinate space, distinct
+        // from the ciphertext's on-disk size (header, nonce, and tag overhead).
+        let file_size = std::fs::metadata(&dv_path).unwrap().len();
+        let data_file_path = format!("{table_location}/data-1.parquet");
+        let dv = dv_task(
+            dv_path.clone(),
+            file_size,
+            data_file_path.clone(),
+            0,
+            plaintext_size,
+            2,
+            Some(encoded_key_metadata),
+        );
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let loader = CachingDeleteFileLoader::new(file_io, 10, Runtime::current());
+        let delete_filter = loader.load_deletes(&[dv], schema).await.unwrap().unwrap();
+
+        let delete_vector = delete_filter
+            .get_delete_vector_for_path(&data_file_path)
+            .expect("a delete vector should be indexed for the referenced data file");
+        let mut positions: Vec<u64> = delete_vector.lock().unwrap().iter().collect();
+        positions.sort_unstable();
+        assert_eq!(positions, vec![2, 4]);
+    }
+
+    #[tokio::test]
+    async fn test_load_deletes_rejects_deletion_vector_cardinality_mismatch() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::new_with_fs();
+
+        let blob = encode_dv_blob([0u64, 1, 5]);
+        let dv_path = format!("{table_location}/deletes.puffin");
+        std::fs::write(&dv_path, &blob).unwrap();
+
+        let data_file_path = format!("{table_location}/data-1.parquet");
+        // record_count says 2 positions, but the blob decodes to 3.
+        let dv = dv_task(
+            dv_path.clone(),
+            std::fs::metadata(&dv_path).unwrap().len(),
+            data_file_path,
+            0,
+            blob.len() as i64,
+            2,
+            None,
+        );
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let loader = CachingDeleteFileLoader::new(file_io, 10, Runtime::current());
+        let err = loader
+            .load_deletes(&[dv], schema)
+            .await
+            .unwrap()
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("expected 2 from record_count"));
+    }
+
+    #[test]
+    fn test_validate_deletion_vector_task_rejects_missing_content_size() {
+        let task = FileScanTaskDeleteFile::builder()
+            .with_file_path("deletes.puffin".to_string())
+            .with_file_size_in_bytes(100)
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_partition_spec_id(0)
+            .with_referenced_data_file(Some("data.parquet".to_string()))
+            .build();
+
+        let err = CachingDeleteFileLoader::validate_deletion_vector_task(&task, 4).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("content_size_in_bytes"));
+    }
+
+    #[test]
+    fn test_validate_deletion_vector_task_rejects_missing_referenced_data_file() {
+        let task = FileScanTaskDeleteFile::builder()
+            .with_file_path("deletes.puffin".to_string())
+            .with_file_size_in_bytes(100)
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_partition_spec_id(0)
+            .with_content_size_in_bytes(Some(40))
+            .build();
+
+        let err = CachingDeleteFileLoader::validate_deletion_vector_task(&task, 4).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("referenced_data_file"));
+    }
+
+    #[test]
+    fn test_validate_deletion_vector_task_rejects_negative_content_offset() {
+        let task = FileScanTaskDeleteFile::builder()
+            .with_file_path("deletes.puffin".to_string())
+            .with_file_size_in_bytes(100)
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_partition_spec_id(0)
+            .with_referenced_data_file(Some("data.parquet".to_string()))
+            .with_content_size_in_bytes(Some(40))
+            .build();
+
+        let err = CachingDeleteFileLoader::validate_deletion_vector_task(&task, -1).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("negative content_offset"));
+    }
+
+    #[test]
+    fn test_validate_deletion_vector_task_rejects_negative_content_size() {
+        let task = FileScanTaskDeleteFile::builder()
+            .with_file_path("deletes.puffin".to_string())
+            .with_file_size_in_bytes(100)
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_partition_spec_id(0)
+            .with_referenced_data_file(Some("data.parquet".to_string()))
+            .with_content_size_in_bytes(Some(-1))
+            .build();
+
+        let err = CachingDeleteFileLoader::validate_deletion_vector_task(&task, 4).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("negative content_size_in_bytes"));
+    }
+
+    #[test]
+    fn test_validate_deletion_vector_task_accepts_valid_coordinates() {
+        let task = FileScanTaskDeleteFile::builder()
+            .with_file_path("deletes.puffin".to_string())
+            .with_file_size_in_bytes(100)
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_partition_spec_id(0)
+            .with_referenced_data_file(Some("data.parquet".to_string()))
+            .with_content_size_in_bytes(Some(40))
+            .build();
+
+        let (start, len, data_file_path) =
+            CachingDeleteFileLoader::validate_deletion_vector_task(&task, 4).unwrap();
+        assert_eq!(start, 4);
+        assert_eq!(len, 40);
+        assert_eq!(data_file_path, "data.parquet");
+    }
+
+    #[test]
+    fn test_validate_deletion_vector_cardinality_ignores_missing_record_count() {
+        let dv = DeleteVector::default();
+        CachingDeleteFileLoader::validate_deletion_vector_cardinality(&dv, None, "deletes.puffin")
+            .expect("no record_count means nothing to validate");
+    }
+
+    #[test]
+    fn test_validate_deletion_vector_cardinality_accepts_matching_count() {
+        let mut dv = DeleteVector::default();
+        dv.insert(1);
+        dv.insert(2);
+
+        CachingDeleteFileLoader::validate_deletion_vector_cardinality(
+            &dv,
+            Some(2),
+            "deletes.puffin",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_validate_deletion_vector_cardinality_rejects_mismatched_count() {
+        let mut dv = DeleteVector::default();
+        dv.insert(1);
+
+        let err = CachingDeleteFileLoader::validate_deletion_vector_cardinality(
+            &dv,
+            Some(2),
+            "deletes.puffin",
+        )
+        .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("expected 2 from record_count"));
     }
 }
