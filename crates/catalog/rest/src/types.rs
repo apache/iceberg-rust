@@ -42,6 +42,12 @@ pub struct ErrorResponse {
     error: ErrorModel,
 }
 
+impl ErrorResponse {
+    pub(crate) fn error_type(&self) -> &str {
+        &self.error.r#type
+    }
+}
+
 impl From<ErrorResponse> for Error {
     fn from(resp: ErrorResponse) -> Error {
         resp.error.into()
