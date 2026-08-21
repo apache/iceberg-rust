@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["SQL_CATALOG_PROP_BIND_STYLE","SQL_CATALOG_PROP_URI","SQL_CATALOG_PROP_WAREHOUSE"],"enum":["SqlBindStyle"],"struct":["SqlCatalog","SqlCatalogBuilder"]};
+window.SIDEBAR_ITEMS = {"constant":["SQL_CATALOG_PROP_BIND_STYLE","SQL_CATALOG_PROP_SCHEMA_VERSION","SQL_CATALOG_PROP_URI","SQL_CATALOG_PROP_WAREHOUSE"],"enum":["SchemaVersion","SqlBindStyle"],"struct":["SqlCatalog","SqlCatalogBuilder"]};
