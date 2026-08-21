@@ -27,9 +27,10 @@ use async_trait::async_trait;
 use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::table::Table;
+use iceberg::transaction::Transaction;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, Runtime,
-    SessionCatalog, SessionContext, TableCommit, TableCreation, TableIdent,
+    SessionCatalog, SessionContext, TableCommit, TableCreation, TableIdent, TransactionalCatalog,
 };
 use itertools::Itertools;
 use reqwest::header::{
@@ -681,6 +682,21 @@ impl Catalog for RestCatalog {
     }
 }
 
+#[async_trait]
+impl TransactionalCatalog for RestCatalog {
+    async fn create_table_transaction(
+        &self,
+        namespace: &NamespaceIdent,
+        creation: TableCreation,
+    ) -> Result<Transaction> {
+        let table = self
+            .inner
+            .create_table_internal(namespace, creation, true)
+            .await?;
+        Ok(Transaction::new_create(table))
+    }
+}
+
 /// REST catalog implementation of [`SessionCatalog`].
 ///
 /// Each operation accepts a [`SessionContext`]. REST configuration, authentication sessions,
@@ -1129,78 +1145,7 @@ impl SessionCatalog for RestSessionCatalog {
         namespace: &NamespaceIdent,
         creation: TableCreation,
     ) -> Result<Table> {
-        let client = self.client().await?;
-
-        let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
-
-        let request = HttpRequest::build(
-            client
-                .http_client
-                .request(Method::POST, client.config.tables_endpoint(namespace))
-                .json(&CreateTableRequest {
-                    name: creation.name,
-                    location: creation.location,
-                    schema: creation.schema,
-                    partition_spec: creation.partition_spec,
-                    write_order: creation.sort_order,
-                    stage_create: Some(false),
-                    properties: creation.properties,
-                }),
-        )?;
-
-        let http_response = client.query_catalog(request).await?;
-
-        let response = match http_response.status() {
-            StatusCode::OK => deserialize_catalog_response::<LoadTableResult>(http_response)?,
-            StatusCode::NOT_FOUND => {
-                return Err(Error::new(
-                    ErrorKind::NamespaceNotFound,
-                    "Tried to create a table under a namespace that does not exist",
-                ));
-            }
-            StatusCode::CONFLICT => {
-                return Err(Error::new(
-                    ErrorKind::TableAlreadyExists,
-                    "The table already exists",
-                ));
-            }
-            _ => {
-                return Err(deserialize_unexpected_catalog_error(
-                    http_response,
-                    client.http_client.disable_header_redaction(),
-                ));
-            }
-        };
-
-        let metadata_location = response.metadata_location.as_ref().ok_or(Error::new(
-            ErrorKind::DataInvalid,
-            "Metadata location missing in `create_table` response!",
-        ))?;
-
-        let config = response
-            .config
-            .into_iter()
-            .chain(self.user_config.props.clone())
-            .collect();
-
-        let file_io = self
-            .load_file_io(Some(metadata_location), Some(config))
-            .await?;
-
-        let mut table_builder = Table::builder()
-            .identifier(table_ident.clone())
-            .file_io(file_io)
-            .metadata(response.metadata)
-            .runtime(self.runtime.clone());
-        if let Some(kms_client) = self.kms_client.clone() {
-            table_builder = table_builder.kms_client(kms_client);
-        }
-
-        if let Some(metadata_location) = response.metadata_location {
-            table_builder.metadata_location(metadata_location).build()
-        } else {
-            table_builder.build()
-        }
+        self.create_table_internal(namespace, creation, false).await
     }
 
     /// Load table from the catalog.
@@ -1407,6 +1352,7 @@ impl SessionCatalog for RestSessionCatalog {
         mut commit: TableCommit,
     ) -> Result<Table> {
         let client = self.client().await?;
+        let is_create = commit.is_create();
 
         let request = HttpRequest::build(
             client
@@ -1433,11 +1379,18 @@ impl SessionCatalog for RestSessionCatalog {
                 ));
             }
             StatusCode::CONFLICT => {
-                return Err(Error::new(
-                    ErrorKind::CatalogCommitConflicts,
-                    "CatalogCommitConflicts, one or more requirements failed. The client may retry.",
-                )
-                .with_retryable(true));
+                return if is_create {
+                    Err(Error::new(
+                        ErrorKind::TableAlreadyExists,
+                        "The table already exists",
+                    ))
+                } else {
+                    Err(Error::new(
+                        ErrorKind::CatalogCommitConflicts,
+                        "CatalogCommitConflicts, one or more requirements failed. The client may retry.",
+                    )
+                    .with_retryable(true))
+                };
             }
             StatusCode::INTERNAL_SERVER_ERROR => {
                 return Err(Error::new(
@@ -1479,6 +1432,88 @@ impl SessionCatalog for RestSessionCatalog {
             table_builder = table_builder.kms_client(kms_client);
         }
         table_builder.build()
+    }
+}
+
+impl RestSessionCatalog {
+    async fn create_table_internal(
+        &self,
+        namespace: &NamespaceIdent,
+        creation: TableCreation,
+        stage_create: bool,
+    ) -> Result<Table> {
+        let client = self.client().await?;
+        let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
+        let mut properties = creation.properties;
+        properties.insert(
+            iceberg::spec::TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
+            (creation.format_version as u8).to_string(),
+        );
+        let request = HttpRequest::build(
+            client
+                .http_client
+                .request(Method::POST, client.config.tables_endpoint(namespace))
+                .json(&CreateTableRequest {
+                    name: creation.name,
+                    location: creation.location,
+                    schema: creation.schema,
+                    partition_spec: creation.partition_spec,
+                    write_order: creation.sort_order,
+                    stage_create: Some(stage_create),
+                    properties,
+                }),
+        )?;
+        let http_response = client.query_catalog(request).await?;
+        let response = match http_response.status() {
+            StatusCode::OK => deserialize_catalog_response::<LoadTableResult>(http_response)?,
+            StatusCode::NOT_FOUND => {
+                return Err(Error::new(
+                    ErrorKind::NamespaceNotFound,
+                    "Tried to create a table under a namespace that does not exist",
+                ));
+            }
+            StatusCode::CONFLICT => {
+                return Err(Error::new(
+                    ErrorKind::TableAlreadyExists,
+                    "The table already exists",
+                ));
+            }
+            _ => {
+                return Err(deserialize_unexpected_catalog_error(
+                    http_response,
+                    client.http_client.disable_header_redaction(),
+                ));
+            }
+        };
+        if !stage_create && response.metadata_location.is_none() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Metadata location missing in `create_table` response!",
+            ));
+        }
+        let io_location = response
+            .metadata_location
+            .as_deref()
+            .unwrap_or_else(|| response.metadata.location());
+        let config = response
+            .config
+            .into_iter()
+            .chain(self.user_config.props.clone())
+            .collect();
+        let file_io = self.load_file_io(Some(io_location), Some(config)).await?;
+        let mut table_builder = Table::builder()
+            .identifier(table_ident)
+            .file_io(file_io)
+            .metadata(response.metadata)
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            table_builder = table_builder.kms_client(kms_client);
+        }
+        if let Some(metadata_location) = response.metadata_location {
+            table_builder.metadata_location(metadata_location).build()
+        } else {
+            table_builder.build()
+        }
     }
 }
 
@@ -4131,6 +4166,85 @@ mod tests {
         config_mock.assert_async().await;
         update_table_mock.assert_async().await;
         load_table_mock.assert_async().await
+    }
+
+    #[tokio::test]
+    async fn test_create_table_transaction_stages_create() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let mut stage_response = serde_json::from_reader::<_, serde_json::Value>(
+            File::open(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "create_table_response.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        stage_response
+            .as_object_mut()
+            .unwrap()
+            .remove("metadata-location");
+        let stage_create_mock = server
+            .mock("POST", "/v1/namespaces/ns1/tables")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex(r#""stage-create":true"#.to_string()),
+                mockito::Matcher::Regex(r#""format-version":"1""#.to_string()),
+            ]))
+            .with_status(200)
+            .with_body(stage_response.to_string())
+            .create_async()
+            .await;
+        let commit_mock = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex(r#""type":"assert-create""#.to_string()),
+                mockito::Matcher::Regex(r#""action":"assign-uuid""#.to_string()),
+                mockito::Matcher::Regex(r#""action":"add-schema""#.to_string()),
+            ]))
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "update_table_response.json"
+            ))
+            .create_async()
+            .await;
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+        let namespace = NamespaceIdent::new("ns1".to_string());
+        let creation = TableCreation::builder()
+            .name("test1".to_string())
+            .schema(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::required(10, "id", Type::Primitive(PrimitiveType::Long))
+                            .into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            )
+            .format_version(FormatVersion::V1)
+            .build();
+
+        let transaction = catalog
+            .create_table_transaction(&namespace, creation)
+            .await
+            .unwrap();
+        assert_eq!("test1", transaction.table().identifier().name());
+        assert!(transaction.table().metadata_location().is_none());
+
+        transaction.commit(&catalog).await.unwrap();
+
+        config_mock.assert_async().await;
+        stage_create_mock.assert_async().await;
+        commit_mock.assert_async().await;
     }
 
     #[tokio::test]

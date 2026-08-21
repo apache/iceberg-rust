@@ -50,6 +50,7 @@ use crate::spec::{
     UnboundPartitionSpec, ViewFormatVersion, ViewRepresentations, ViewVersion,
 };
 use crate::table::Table;
+use crate::transaction::Transaction;
 use crate::{Error, ErrorKind, Result};
 
 /// The catalog API for Iceberg Rust.
@@ -122,6 +123,17 @@ pub trait Catalog: Debug + Sync + Send {
 
     /// Update a table to the catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table>;
+}
+
+/// Catalog operations that stage table creation in a transaction.
+#[async_trait]
+pub trait TransactionalCatalog: Catalog {
+    /// Start a transaction that creates a table when committed.
+    async fn create_table_transaction(
+        &self,
+        namespace: &NamespaceIdent,
+        creation: TableCreation,
+    ) -> Result<Transaction>;
 }
 
 /// Common interface for all catalog builders.
@@ -382,6 +394,8 @@ pub struct TableCommit {
     requirements: Vec<TableRequirement>,
     /// The updates of the table.
     updates: Vec<TableUpdate>,
+    #[builder(default, setter(strip_option))]
+    staged_table: Option<Table>,
 }
 
 impl TableCommit {
@@ -398,6 +412,25 @@ impl TableCommit {
     /// Take all updates.
     pub fn take_updates(&mut self) -> Vec<TableUpdate> {
         take(&mut self.updates)
+    }
+
+    /// Return whether this commit creates a table.
+    pub fn is_create(&self) -> bool {
+        self.staged_table.is_some()
+    }
+
+    /// Apply a create commit when no table currently exists.
+    pub fn apply_new(self) -> Result<Table> {
+        for requirement in self.requirements {
+            requirement.check(None)?;
+        }
+
+        self.staged_table.ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Cannot apply an update commit without an existing table",
+            )
+        })
     }
 
     /// Applies this [`TableCommit`] to the given [`Table`] as part of a catalog update.
