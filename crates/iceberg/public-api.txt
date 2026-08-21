@@ -727,6 +727,7 @@ pub fn iceberg::io::AzdlsConfig::deserialize<__D>(__deserializer: __D) -> core::
 pub struct iceberg::io::FileIO
 impl iceberg::io::FileIO
 pub fn iceberg::io::FileIO::config(&self) -> &iceberg::io::StorageConfig
+pub fn iceberg::io::FileIO::config_for(&self, path: &str) -> &iceberg::io::StorageConfig
 pub async fn iceberg::io::FileIO::delete(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<()>
 pub async fn iceberg::io::FileIO::delete_prefix(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<()>
 pub async fn iceberg::io::FileIO::delete_stream(&self, paths: impl futures_core::stream::Stream<Item = alloc::string::String> + core::marker::Send + 'static) -> iceberg::Result<()>
@@ -744,6 +745,7 @@ impl iceberg::io::FileIOBuilder
 pub fn iceberg::io::FileIOBuilder::build(self) -> iceberg::io::FileIO
 pub fn iceberg::io::FileIOBuilder::config(&self) -> &iceberg::io::StorageConfig
 pub fn iceberg::io::FileIOBuilder::new(factory: alloc::sync::Arc<dyn iceberg::io::StorageFactory>) -> Self
+pub fn iceberg::io::FileIOBuilder::with_prefixed_props(self, prefix: impl core::convert::Into<alloc::string::String>, props: impl core::iter::traits::collect::IntoIterator<Item = (impl alloc::string::ToString, impl alloc::string::ToString)>) -> Self
 pub fn iceberg::io::FileIOBuilder::with_prop(self, key: impl alloc::string::ToString, value: impl alloc::string::ToString) -> Self
 pub fn iceberg::io::FileIOBuilder::with_props(self, args: impl core::iter::traits::collect::IntoIterator<Item = (impl alloc::string::ToString, impl alloc::string::ToString)>) -> Self
 impl core::clone::Clone for iceberg::io::FileIOBuilder
