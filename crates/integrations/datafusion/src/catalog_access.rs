@@ -28,78 +28,52 @@ use iceberg::{
 
 use crate::options::resolve_session_context;
 
-/// Describes how the DataFusion integration accesses an Iceberg catalog.
-///
-/// A catalog can either be accessed directly through [`Catalog`] or through a
-/// [`SessionCatalog`] bound to an Iceberg [`SessionContext`]. Operations that
-/// receive a DataFusion session resolve and bind its context once. Operations
-/// for which DataFusion provides no session reuse one anonymous fallback
-/// context so session-scoped catalog state remains stable across those calls.
-#[derive(Clone, Debug)]
-pub(crate) enum CatalogAccess {
-    /// A catalog accessed directly through the [`Catalog`] API.
-    Direct(Arc<dyn Catalog>),
-
-    /// A session-aware catalog and the stable context used by DataFusion APIs
-    /// that do not expose a session.
-    SessionAware {
-        catalog: Arc<dyn SessionCatalog>,
-        fallback_context: SessionContext,
-    },
-}
-
-impl CatalogAccess {
-    pub(crate) fn with_session(&self, session: &dyn Session) -> Arc<dyn Catalog> {
-        match self {
-            CatalogAccess::Direct(catalog) => Arc::clone(catalog),
-            CatalogAccess::SessionAware {
-                catalog,
-                fallback_context,
-            } => {
-                let context = resolve_session_context(session).unwrap_or(fallback_context.clone());
-                Arc::new(SessionBoundCatalog::new(context, Arc::clone(catalog)))
-            }
-        }
-    }
-
-    pub(crate) fn without_session(&self) -> Arc<dyn Catalog> {
-        match self {
-            CatalogAccess::Direct(catalog) => Arc::clone(catalog),
-            CatalogAccess::SessionAware {
-                catalog,
-                fallback_context,
-                ..
-            } => Arc::new(SessionBoundCatalog::new(
-                fallback_context.clone(),
-                Arc::clone(catalog),
-            )),
-        }
-    }
-}
-
 /// Adapts a [`SessionCatalog`] to [`Catalog`] by binding one [`SessionContext`].
 ///
 /// Every catalog operation is forwarded to the inner session-aware catalog
 /// with the same context. The binding is fixed for the lifetime of this
 /// adapter; create another adapter to use a different session context.
-#[derive(Debug)]
-struct SessionBoundCatalog {
+#[derive(Clone, Debug)]
+pub(crate) struct SessionBindingCatalogAdapter {
     context: SessionContext,
     inner: Arc<dyn SessionCatalog>,
 }
 
-impl SessionBoundCatalog {
+impl SessionBindingCatalogAdapter {
     /// Creates a catalog view of `inner` bound to `context`.
     ///
     /// The inner catalog receives this context for every operation performed
     /// through the returned adapter.
-    fn new(context: SessionContext, inner: Arc<dyn SessionCatalog>) -> Self {
+    pub(crate) fn new(context: SessionContext, inner: Arc<dyn SessionCatalog>) -> Self {
         Self { context, inner }
+    }
+
+    /// Adapts a plain, session-unaware catalog to a [`SessionBindingCatalogAdapter`].
+    ///
+    /// The bound session context is never used, but simply ignored.
+    pub(crate) fn new_without_context(catalog: Arc<dyn Catalog>) -> Self {
+        let session_catalog = SessionDroppingCatalogAdapter::new(catalog);
+        Self::new(SessionContext::empty(), Arc::new(session_catalog))
+    }
+
+    /// Overwrites the already bound, usually shared fallback session, with
+    /// a provided session, usually from a DataFusion query.
+    pub(crate) fn with_session(
+        self: &Arc<Self>,
+        session: &dyn Session,
+    ) -> Arc<SessionBindingCatalogAdapter> {
+        match resolve_session_context(session) {
+            None => Arc::clone(self),
+            Some(context) => Arc::new(SessionBindingCatalogAdapter::new(
+                context,
+                Arc::clone(&self.inner),
+            )),
+        }
     }
 }
 
 #[async_trait]
-impl Catalog for SessionBoundCatalog {
+impl Catalog for SessionBindingCatalogAdapter {
     async fn list_namespaces(
         &self,
         parent: Option<&NamespaceIdent>,
@@ -185,5 +159,120 @@ impl Catalog for SessionBoundCatalog {
 
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
         self.inner.update_table(&self.context, commit).await
+    }
+}
+
+/// A wrapper around a [`Catalog`] to provide a [`SessionCatalog`] API by
+/// ignoring any passed [`SessionContext`].
+#[derive(Debug)]
+struct SessionDroppingCatalogAdapter {
+    inner: Arc<dyn Catalog>,
+}
+
+impl SessionDroppingCatalogAdapter {
+    fn new(inner: Arc<dyn Catalog>) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait]
+impl SessionCatalog for SessionDroppingCatalogAdapter {
+    async fn list_namespaces(
+        &self,
+        _: &SessionContext,
+        parent: Option<&NamespaceIdent>,
+    ) -> Result<Vec<NamespaceIdent>> {
+        self.inner.list_namespaces(parent).await
+    }
+
+    async fn create_namespace(
+        &self,
+        _: &SessionContext,
+        namespace: &NamespaceIdent,
+        properties: HashMap<String, String>,
+    ) -> Result<Namespace> {
+        self.inner.create_namespace(namespace, properties).await
+    }
+
+    async fn get_namespace(
+        &self,
+        _: &SessionContext,
+        namespace: &NamespaceIdent,
+    ) -> Result<Namespace> {
+        self.inner.get_namespace(namespace).await
+    }
+
+    async fn namespace_exists(&self, _: &SessionContext, ns: &NamespaceIdent) -> Result<bool> {
+        self.inner.namespace_exists(ns).await
+    }
+
+    async fn update_namespace(
+        &self,
+        _: &SessionContext,
+        namespace: &NamespaceIdent,
+        properties: HashMap<String, String>,
+    ) -> Result<()> {
+        self.inner.update_namespace(namespace, properties).await
+    }
+
+    async fn drop_namespace(&self, _: &SessionContext, namespace: &NamespaceIdent) -> Result<()> {
+        self.inner.drop_namespace(namespace).await
+    }
+
+    async fn list_tables(
+        &self,
+        _: &SessionContext,
+        namespace: &NamespaceIdent,
+    ) -> Result<Vec<TableIdent>> {
+        self.inner.list_tables(namespace).await
+    }
+
+    async fn create_table(
+        &self,
+        _: &SessionContext,
+        namespace: &NamespaceIdent,
+        creation: TableCreation,
+    ) -> Result<Table> {
+        self.inner.create_table(namespace, creation).await
+    }
+
+    async fn load_table(&self, _: &SessionContext, table_ident: &TableIdent) -> Result<Table> {
+        self.inner.load_table(table_ident).await
+    }
+
+    async fn drop_table(&self, _: &SessionContext, table: &TableIdent) -> Result<()> {
+        self.inner.drop_table(table).await
+    }
+
+    async fn purge_table(&self, _: &SessionContext, table: &TableIdent) -> Result<()> {
+        self.inner.purge_table(table).await
+    }
+
+    async fn table_exists(&self, _: &SessionContext, table: &TableIdent) -> Result<bool> {
+        self.inner.table_exists(table).await
+    }
+
+    async fn rename_table(
+        &self,
+        _: &SessionContext,
+        src: &TableIdent,
+        dest: &TableIdent,
+    ) -> Result<()> {
+        self.inner.rename_table(src, dest).await
+    }
+
+    async fn register_table(
+        &self,
+        _: &SessionContext,
+        table_ident: &TableIdent,
+        metadata_location: String,
+    ) -> Result<Table> {
+        self.inner
+            .register_table(table_ident, metadata_location)
+            .await
+    }
+
+    async fn update_table(&self, _: &SessionContext, commit: TableCommit) -> Result<Table> {
+        self.inner.update_table(commit).await
     }
 }
