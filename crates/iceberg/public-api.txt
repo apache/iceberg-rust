@@ -1110,6 +1110,8 @@ pub fn iceberg::memory::MemoryCatalog::rename_table<'life0, 'life1, 'life2, 'asy
 pub fn iceberg::memory::MemoryCatalog::table_exists<'life0, 'life1, 'async_trait>(&'life0 self, table_ident: &'life1 iceberg::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::memory::MemoryCatalog::update_namespace<'life0, 'life1, 'async_trait>(&'life0 self, namespace_ident: &'life1 iceberg::NamespaceIdent, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::memory::MemoryCatalog::update_table<'life0, 'async_trait>(&'life0 self, commit: iceberg::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl iceberg::TransactionalCatalog for iceberg::memory::MemoryCatalog
+pub fn iceberg::memory::MemoryCatalog::create_table_transaction<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::NamespaceIdent, creation: iceberg::TableCreation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::Transaction>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct iceberg::memory::MemoryCatalogBuilder
 impl core::default::Default for iceberg::memory::MemoryCatalogBuilder
 pub fn iceberg::memory::MemoryCatalogBuilder::default() -> Self
@@ -3262,7 +3264,9 @@ pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn icebe
 pub fn iceberg::transaction::Transaction::expire_snapshots(&self) -> iceberg::transaction::expire_snapshots::ExpireSnapshotsAction
 pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transaction::append::FastAppendAction
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
+pub fn iceberg::transaction::Transaction::new_create(table: iceberg::table::Table) -> Self
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::sort_order::ReplaceSortOrderAction
+pub fn iceberg::transaction::Transaction::table(&self) -> &iceberg::table::Table
 pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::update_location::UpdateLocationAction
 pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::update_schema::UpdateSchemaAction
 pub fn iceberg::transaction::Transaction::update_statistics(&self) -> iceberg::transaction::update_statistics::UpdateStatisticsAction
@@ -3695,6 +3699,8 @@ pub fn iceberg::memory::MemoryCatalog::rename_table<'life0, 'life1, 'life2, 'asy
 pub fn iceberg::memory::MemoryCatalog::table_exists<'life0, 'life1, 'async_trait>(&'life0 self, table_ident: &'life1 iceberg::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::memory::MemoryCatalog::update_namespace<'life0, 'life1, 'async_trait>(&'life0 self, namespace_ident: &'life1 iceberg::NamespaceIdent, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::memory::MemoryCatalog::update_table<'life0, 'async_trait>(&'life0 self, commit: iceberg::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl iceberg::TransactionalCatalog for iceberg::memory::MemoryCatalog
+pub fn iceberg::memory::MemoryCatalog::create_table_transaction<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::NamespaceIdent, creation: iceberg::TableCreation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::Transaction>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub struct iceberg::MetadataLocation
 impl iceberg::MetadataLocation
 pub fn iceberg::MetadataLocation::compression_codec(&self) -> iceberg::compression::CompressionCodec
@@ -3796,7 +3802,9 @@ pub fn iceberg::SessionContext::builder() -> SessionContextBuilder<((), (), (), 
 pub struct iceberg::TableCommit
 impl iceberg::TableCommit
 pub fn iceberg::TableCommit::apply(self, table: iceberg::table::Table) -> iceberg::Result<iceberg::table::Table>
+pub fn iceberg::TableCommit::apply_new(self) -> iceberg::Result<iceberg::table::Table>
 pub fn iceberg::TableCommit::identifier(&self) -> &iceberg::TableIdent
+pub fn iceberg::TableCommit::is_create(&self) -> bool
 pub fn iceberg::TableCommit::take_requirements(&mut self) -> alloc::vec::Vec<iceberg::TableRequirement>
 pub fn iceberg::TableCommit::take_updates(&mut self) -> alloc::vec::Vec<iceberg::TableUpdate>
 impl core::fmt::Debug for iceberg::TableCommit
@@ -3916,5 +3924,9 @@ pub fn iceberg::SessionCatalog::rename_table<'life0, 'life1, 'life2, 'life3, 'as
 pub fn iceberg::SessionCatalog::table_exists<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, context: &'life1 iceberg::SessionContext, table: &'life2 iceberg::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg::SessionCatalog::update_namespace<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, context: &'life1 iceberg::SessionContext, namespace: &'life2 iceberg::NamespaceIdent, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg::SessionCatalog::update_table<'life0, 'life1, 'async_trait>(&'life0 self, context: &'life1 iceberg::SessionContext, commit: iceberg::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub trait iceberg::TransactionalCatalog: iceberg::Catalog
+pub fn iceberg::TransactionalCatalog::create_table_transaction<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::NamespaceIdent, creation: iceberg::TableCreation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::Transaction>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl iceberg::TransactionalCatalog for iceberg::memory::MemoryCatalog
+pub fn iceberg::memory::MemoryCatalog::create_table_transaction<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::NamespaceIdent, creation: iceberg::TableCreation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::Transaction>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub async fn iceberg::drop_table_data(table_info: &iceberg::table::Table) -> iceberg::Result<()>
 pub type iceberg::Result<T> = core::result::Result<T, iceberg::Error>
