@@ -240,8 +240,8 @@ impl ManifestFilterManager {
 /// and validation rules.
 pub(crate) struct MergingSnapshotProducer {
     operation: Operation,
-    pub(crate) added_data_files: Vec<DataFile>,
-    pub(crate) deleted_data_files: Vec<DataFile>,
+    added_data_files: Vec<DataFile>,
+    deleted_data_files: Vec<DataFile>,
     filter_manager: ManifestFilterManager,
     snapshot_properties: HashMap<String, String>,
     commit_uuid: Uuid,
@@ -266,6 +266,14 @@ impl MergingSnapshotProducer {
     pub(crate) fn delete_data_file(&mut self, file: DataFile) {
         self.filter_manager.add_delete(file.file_path.clone());
         self.deleted_data_files.push(file);
+    }
+
+    pub(crate) fn has_added_data_files(&self) -> bool {
+        !self.added_data_files.is_empty()
+    }
+
+    pub(crate) fn has_deleted_data_files(&self) -> bool {
+        !self.deleted_data_files.is_empty()
     }
 
     /// Produce manifests, compute summary, and commit a new snapshot.

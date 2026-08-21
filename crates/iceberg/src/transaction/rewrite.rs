@@ -81,13 +81,13 @@ impl RewriteFilesAction {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.producer.deleted_data_files.is_empty() {
+        if !self.producer.has_deleted_data_files() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "Rewrite files requires at least one file to delete",
             ));
         }
-        if self.producer.added_data_files.is_empty() {
+        if !self.producer.has_added_data_files() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "Rewrite files requires at least one file to add",
