@@ -337,10 +337,11 @@ impl SchemaVersion {
             .await
             .map_err(from_sqlx_error)?;
 
-        let has_type_column = catalog_table_description
-            .columns()
-            .iter()
-            .any(|column| column.name() == CATALOG_FIELD_RECORD_TYPE);
+        let has_type_column = catalog_table_description.columns().iter().any(|column| {
+            column
+                .name()
+                .eq_ignore_ascii_case(CATALOG_FIELD_RECORD_TYPE)
+        });
 
         Ok(if has_type_column {
             SchemaVersion::V1
@@ -2403,7 +2404,11 @@ mod tests {
             .expect("connection and query should succeed")
             .columns()
             .iter()
-            .any(|column| column.name() == CATALOG_FIELD_RECORD_TYPE);
+            .any(|column| {
+                column
+                    .name()
+                    .eq_ignore_ascii_case(CATALOG_FIELD_RECORD_TYPE)
+            });
         probe_pool.close().await;
         column_exists
     }
