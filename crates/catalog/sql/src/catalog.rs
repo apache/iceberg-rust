@@ -49,6 +49,12 @@ const SQL_CATALOG_PROP_BIND_STYLE_LEGACY: &str = "sql_bind_style";
 ///
 /// If this property is set and it is newer than the detected schema version,
 /// a migration will be attempted.
+/// If it is older, it is ignored with a warning.
+/// If the catalog table didn't already exist, this value is ignored and it will be created with `V1`.
+///
+/// `V0` is a compatibility mode for catalog tables created before the `iceberg_type` column
+/// existed; it cannot be requested for a new catalog table, since table creation and
+/// registration are unsupported on `V0`.
 pub const SQL_CATALOG_PROP_SCHEMA_VERSION: &str = "sql.schema-version";
 
 static CATALOG_TABLE_NAME: &str = "iceberg_tables";
@@ -348,10 +354,13 @@ impl SchemaVersion {
     /// `V1` schemas carry an `iceberg_type` column, so table rows are those tagged `TABLE`
     /// (or `NULL`, for rows written before the column existed). `V0` schemas have no such
     /// column, so no filter is applied.
-    fn record_type_filter(self) -> &'static str {
+    fn record_type_filter(self) -> String {
         match self {
-            SchemaVersion::V1 => "AND (iceberg_type = 'TABLE' OR iceberg_type IS NULL)",
-            SchemaVersion::V0 => "",
+            SchemaVersion::V1 => format!(
+                "AND ({CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}' \
+                 OR {CATALOG_FIELD_RECORD_TYPE} IS NULL)"
+            ),
+            SchemaVersion::V0 => String::new(),
         }
     }
 
@@ -442,10 +451,10 @@ impl SqlCatalog {
         .map_err(from_sqlx_error)?;
 
         let detected_schema_version = SchemaVersion::detect(&pool).await?;
-        let desired_schema_version = config.schema_version;
+        let expected_schema_version = config.schema_version;
 
-        // Detect schema by describing columns. If desired schema is configured then automigrate, otherwise gracefully support older schemas.
-        let schema_version = match (detected_schema_version, desired_schema_version) {
+        // Detect schema by describing columns. If expected is configured then automigrate, otherwise gracefully support older schemas.
+        let schema_version = match (detected_schema_version, expected_schema_version) {
             (SchemaVersion::V1, Some(SchemaVersion::V1) | None) => {
                 tracing::debug!(
                     "detected {CATALOG_TABLE_NAME} schema {} which already supports views",
@@ -453,11 +462,11 @@ impl SqlCatalog {
                 );
                 SchemaVersion::V1
             }
-            (SchemaVersion::V0, Some(desired_schema_version @ SchemaVersion::V1)) => {
+            (SchemaVersion::V0, Some(expected_schema_version @ SchemaVersion::V1)) => {
                 tracing::warn!(
-                    "table {CATALOG_TABLE_NAME} has inferred schema {} but desired schema {}, performing migration",
+                    "table {CATALOG_TABLE_NAME} has inferred schema {} but expected schema {}, performing migration",
                     detected_schema_version,
-                    desired_schema_version,
+                    expected_schema_version,
                 );
                 if let Some(migration_sql) = SchemaVersion::V1.migration_sql() {
                     sqlx::query(&migration_sql)
@@ -476,14 +485,14 @@ impl SqlCatalog {
                 );
                 SchemaVersion::V0
             }
-            (SchemaVersion::V1, Some(desired_schema_version @ SchemaVersion::V0)) => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!(
-                        "table {CATALOG_TABLE_NAME} has inferred schema {} but desired schema {}, downgrade migration is not supported",
-                        detected_schema_version, desired_schema_version,
-                    ),
-                ));
+            (SchemaVersion::V1, Some(expected_schema_version @ SchemaVersion::V0)) => {
+                tracing::warn!(
+                    "ignoring expected schema {} for table {CATALOG_TABLE_NAME}: the table is \
+                    already at schema {}, and downgrade migration is not supported",
+                    expected_schema_version,
+                    detected_schema_version,
+                );
+                SchemaVersion::V1
             }
         };
 
@@ -2561,31 +2570,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_v1_schema_downgrade_is_rejected() {
+    async fn test_v0_schema_version_is_ignored_on_v1_table() {
         install_default_drivers();
 
         let (uri, temp_dir) = create_v1_sqlite_db().await;
 
-        let result = SqlCatalogBuilder::default()
+        let catalog = SqlCatalogBuilder::default()
             .with_storage_factory(Arc::new(LocalFsStorageFactory))
             .load(
                 "iceberg",
                 catalog_props(&uri, &temp_dir, Some(SchemaVersion::V0)),
             )
-            .await;
+            .await
+            .expect("requesting V0 against a V1 catalog table should succeed");
 
-        let err = result.expect_err("downgrading a V1 catalog table to V0 should be rejected");
-        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
-        assert!(
-            err.to_string()
-                .contains("downgrade migration is not supported"),
-            "error should explain that the downgrade was refused, got: {err}"
-        );
+        assert_eq!(catalog.schema_version, SchemaVersion::V1);
 
-        assert!(
-            record_type_column_exists(&uri).await,
-            "a refused downgrade should leave the iceberg_type column in place"
+        let namespace = NamespaceIdent::from_strs(["test_namespace"]).unwrap();
+        let tables = catalog.list_tables(&namespace).await.unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].name(), "existing_test_table");
+    }
+
+    #[tokio::test]
+    async fn test_v0_schema_version_on_empty_database_yields_v1() {
+        install_default_drivers();
+
+        let temp_dir = TempDir::new().unwrap();
+        let uri = format!(
+            "sqlite:{}",
+            temp_dir.path().join("catalog.db").to_str().unwrap()
         );
+        sqlx::Sqlite::create_database(&uri).await.unwrap();
+
+        let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load(
+                "iceberg",
+                catalog_props(&uri, &temp_dir, Some(SchemaVersion::V0)),
+            )
+            .await
+            .expect("requesting V0 against an empty database should succeed");
+
+        assert_eq!(catalog.schema_version, SchemaVersion::V1);
     }
 
     #[tokio::test]
