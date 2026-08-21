@@ -30,7 +30,7 @@ use iceberg::{
     Runtime, TableCommit, TableCreation, TableIdent,
 };
 use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
-use sqlx::{Any, AnyPool, Row, Transaction};
+use sqlx::{Any, AnyPool, Column, Executor, Row, Transaction};
 
 use crate::error::{
     from_sqlx_error, no_such_namespace_err, no_such_table_err, table_already_exists_err,
@@ -319,6 +319,25 @@ pub enum SchemaVersion {
 }
 
 impl SchemaVersion {
+    /// Detect the schema version of an existing catalog table by introspecting its columns.
+    async fn detect(pool: &AnyPool) -> Result<Self> {
+        let catalog_table_description = pool
+            .describe(&format!("SELECT * FROM {CATALOG_TABLE_NAME}"))
+            .await
+            .map_err(from_sqlx_error)?;
+
+        let has_type_column = catalog_table_description
+            .columns()
+            .iter()
+            .any(|column| column.name() == CATALOG_FIELD_RECORD_TYPE);
+
+        Ok(if has_type_column {
+            SchemaVersion::V1
+        } else {
+            SchemaVersion::V0
+        })
+    }
+
     /// The trailing SQL `AND` clause used to exclude view rows when querying for tables.
     ///
     /// `V1` schemas carry an `iceberg_type` column, so table rows are those tagged `TABLE`
@@ -417,30 +436,19 @@ impl SqlCatalog {
         .await
         .map_err(from_sqlx_error)?;
 
-        // Probe for the `iceberg_type` column to detect whether the catalog table is already a schema version v1 (which supports views).
-        let is_v1 = match sqlx::query(&format!(
-            "SELECT {CATALOG_FIELD_RECORD_TYPE} FROM {CATALOG_TABLE_NAME} LIMIT 0"
-        ))
-        .execute(&pool)
-        .await
-        {
-            Ok(_) => true,
-            // The database rejected the query: the `iceberg_type` column (or table) is absent,
-            // so this is a genuine V0 schema.
-            Err(sqlx::Error::Database(_)) => false,
-            // Any other error (connection dropped, pool timeout, misconfiguration, ...) is not a
-            // signal about the schema version. Surface it rather than misclassifying as V0.
-            Err(e) => return Err(from_sqlx_error(e)),
-        };
+        let detected_schema_version = SchemaVersion::detect(&pool).await?;
+        let desired_schema_version = config.schema_version;
 
         // Migrate the schema to V1 if the catalog table does not support views and the caller
         // opted in via `sql.schema-version=V1`.
-        let schema_version = if is_v1 {
+        let schema_version = if detected_schema_version == SchemaVersion::V1 {
             tracing::debug!("detected {CATALOG_TABLE_NAME} schema v1 which already supports views");
             SchemaVersion::V1
-        } else if config.schema_version == Some(SchemaVersion::V1) {
+        } else if desired_schema_version == Some(SchemaVersion::V1) {
             tracing::warn!(
-                "detected {CATALOG_TABLE_NAME} schema v0; migrating to v1 to enable view support"
+                "table {CATALOG_TABLE_NAME} has inferred schema {} but desired schema {}, performing migration",
+                detected_schema_version,
+                SchemaVersion::V1,
             );
             if let Some(migration_sql) = SchemaVersion::V1.migration_sql() {
                 sqlx::query(&migration_sql)
@@ -451,8 +459,9 @@ impl SqlCatalog {
             SchemaVersion::V1
         } else {
             tracing::warn!(
-                "detected v0 {CATALOG_TABLE_NAME} schema; SqlCatalog is initialized without view support. To auto-migrate the database's schema and enable view support, set {}=V1",
-                SQL_CATALOG_PROP_SCHEMA_VERSION
+                "table {CATALOG_TABLE_NAME} has inferred schema {}; SQL catalog is initialized without view support. To auto-migrate the database's schema and enable view support, set {}=V1",
+                SchemaVersion::V0,
+                SQL_CATALOG_PROP_SCHEMA_VERSION,
             );
             SchemaVersion::V0
         };
@@ -1177,12 +1186,13 @@ mod tests {
     use regex::Regex;
     use sqlx::any::install_default_drivers;
     use sqlx::migrate::MigrateDatabase;
+    use sqlx::{Column, Executor};
     use tempfile::TempDir;
 
     use crate::catalog::{
-        NAMESPACE_LOCATION_PROPERTY_KEY, SQL_CATALOG_PROP_BIND_STYLE,
-        SQL_CATALOG_PROP_BIND_STYLE_LEGACY, SQL_CATALOG_PROP_SCHEMA_VERSION, SQL_CATALOG_PROP_URI,
-        SQL_CATALOG_PROP_WAREHOUSE,
+        CATALOG_FIELD_RECORD_TYPE, CATALOG_TABLE_NAME, NAMESPACE_LOCATION_PROPERTY_KEY,
+        SQL_CATALOG_PROP_BIND_STYLE, SQL_CATALOG_PROP_BIND_STYLE_LEGACY,
+        SQL_CATALOG_PROP_SCHEMA_VERSION, SQL_CATALOG_PROP_URI, SQL_CATALOG_PROP_WAREHOUSE,
     };
     use crate::{SchemaVersion, SqlBindStyle, SqlCatalogBuilder};
 
@@ -2269,6 +2279,97 @@ mod tests {
         (uri, temp_dir)
     }
 
+    /// Creates a V1 SQLite database (with an `iceberg_type` column) with one pre-inserted table row.
+    /// Returns the SQLite URI and the temp dir that owns the database file.
+    async fn create_v1_sqlite_db() -> (String, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let uri = format!(
+            "sqlite:{}",
+            temp_dir.path().join("catalog.db").to_str().unwrap()
+        );
+        sqlx::Sqlite::create_database(&uri).await.unwrap();
+        let pool = sqlx::AnyPool::connect(&uri).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE iceberg_tables (
+                catalog_name VARCHAR(255) NOT NULL,
+                table_namespace VARCHAR(255) NOT NULL,
+                table_name VARCHAR(255) NOT NULL,
+                metadata_location VARCHAR(1000),
+                previous_metadata_location VARCHAR(1000),
+                iceberg_type VARCHAR(5),
+                PRIMARY KEY (catalog_name, table_namespace, table_name)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO iceberg_tables
+             (catalog_name, table_namespace, table_name, metadata_location, iceberg_type)
+             VALUES ('iceberg', 'ns', 'tbl', '/tmp/fake-location', 'TABLE')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+        (uri, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_detect_schema_version() {
+        install_default_drivers();
+
+        let detected_schema = {
+            let (uri, _temp_dir) = create_v0_sqlite_db().await;
+            let pool = sqlx::AnyPool::connect(&uri).await.unwrap();
+            let detected_schema = SchemaVersion::detect(&pool).await.unwrap();
+            pool.close().await;
+            detected_schema
+        };
+        assert_eq!(
+            detected_schema,
+            SchemaVersion::V0,
+            "a catalog table without an iceberg_type column should be V0",
+        );
+
+        let detected_schema = {
+            let (uri, _temp_dir) = create_v1_sqlite_db().await;
+            let pool = sqlx::AnyPool::connect(&uri).await.unwrap();
+            let detected_schema = SchemaVersion::detect(&pool).await.unwrap();
+            pool.close().await;
+            detected_schema
+        };
+        assert_eq!(
+            detected_schema,
+            SchemaVersion::V1,
+            "a catalog table with an iceberg_type column should be V1",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_detect_schema_version_surfaces_errors() {
+        install_default_drivers();
+
+        let temp_dir = TempDir::new().unwrap();
+        let uri = format!(
+            "sqlite:{}",
+            temp_dir.path().join("catalog.db").to_str().unwrap()
+        );
+        sqlx::Sqlite::create_database(&uri).await.unwrap();
+        let pool = sqlx::AnyPool::connect(&uri).await.unwrap();
+
+        // No `iceberg_tables` table at all, so the schema version is unknowable.
+        let err = SchemaVersion::detect(&pool)
+            .await
+            .expect_err("detection should fail rather than report V0");
+        pool.close().await;
+
+        assert!(
+            err.to_string().contains("iceberg_tables"),
+            "error should name the table it failed to introspect, got: {err}"
+        );
+    }
+
     #[tokio::test]
     async fn test_v0_schema_migration() {
         install_default_drivers();
@@ -2304,11 +2405,22 @@ mod tests {
         assert_eq!(tables[0].name(), "tbl");
 
         // Confirm the column WAS added to the database.
-        let probe_pool = sqlx::AnyPool::connect(&uri).await.unwrap();
-        let probe_result = sqlx::query("SELECT iceberg_type FROM iceberg_tables LIMIT 0")
-            .execute(&probe_pool)
-            .await;
-        probe_result.expect("probe should succeed as iceberg_type column should exist when sql.schema-version=V1 was set");
+        let column_exists = {
+            let probe_pool = sqlx::AnyPool::connect(&uri).await.unwrap();
+            let column_exists = probe_pool
+                .describe(&format!("SELECT * FROM {CATALOG_TABLE_NAME}"))
+                .await
+                .expect("connection and query should succeed")
+                .columns()
+                .iter()
+                .any(|column| column.name() == CATALOG_FIELD_RECORD_TYPE);
+            probe_pool.close().await;
+            column_exists
+        };
+        assert!(
+            column_exists,
+            "iceberg_type column should exist when sql.schema-version=V1 was set",
+        );
     }
 
     #[tokio::test]
@@ -2344,12 +2456,18 @@ mod tests {
         assert_eq!(tables[0].name(), "tbl");
 
         // Confirm the column was NOT added to the database.
-        let probe_pool = sqlx::AnyPool::connect(&uri).await.unwrap();
-        let column_exists = sqlx::query("SELECT iceberg_type FROM iceberg_tables LIMIT 0")
-            .execute(&probe_pool)
-            .await
-            .is_ok();
-        probe_pool.close().await;
+        let column_exists = {
+            let probe_pool = sqlx::AnyPool::connect(&uri).await.unwrap();
+            let column_exists = probe_pool
+                .describe(&format!("SELECT * FROM {CATALOG_TABLE_NAME}"))
+                .await
+                .expect("connection and query should succeed")
+                .columns()
+                .iter()
+                .any(|column| column.name() == CATALOG_FIELD_RECORD_TYPE);
+            probe_pool.close().await;
+            column_exists
+        };
         assert!(
             !column_exists,
             "iceberg_type column should not exist when sql.schema-version=V1 was not set"
