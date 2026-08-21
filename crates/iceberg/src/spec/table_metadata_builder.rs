@@ -24,7 +24,7 @@ use super::{
     DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
     ONE_MINUTE_MS, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile, Schema, SchemaRef,
     Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef,
-    StatisticsFile, StructType, TableMetadata, TableProperties, UNPARTITIONED_LAST_ASSIGNED_ID,
+    StatisticsFile, TableMetadata, TableProperties, UNPARTITIONED_LAST_ASSIGNED_ID,
     UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result};
@@ -88,43 +88,9 @@ impl TableMetadataBuilder {
         let (fresh_schema, fresh_spec, fresh_sort_order) =
             Self::reassign_ids(schema, spec.into(), sort_order)?;
         let schema_id = fresh_schema.schema_id();
-        let table_properties = TableMetadata::parse_table_properties(&HashMap::new())?;
 
         let builder = Self {
-            metadata: TableMetadata {
-                format_version,
-                table_uuid: Uuid::now_v7(),
-                location: "".to_string(), // Overwritten immediately by set_location
-                last_sequence_number: 0,
-                last_updated_ms: 0,    // Overwritten by build() if not set before
-                last_column_id: -1,    // Overwritten immediately by add_current_schema
-                current_schema_id: -1, // Overwritten immediately by add_current_schema
-                schemas: HashMap::new(),
-                partition_specs: HashMap::new(),
-                default_spec: Arc::new(
-                    // The spec id (-1) is just a proxy value and can be any negative number.
-                    // 0 would lead to wrong changes in the builder if the provided spec by the user is
-                    // also unpartitioned.
-                    // The `default_spec` value is always replaced at the end of this method by he `add_default_partition_spec`
-                    // method.
-                    PartitionSpec::unpartition_spec().with_spec_id(-1),
-                ), // Overwritten immediately by add_default_partition_spec
-                default_partition_type: StructType::new(vec![]),
-                last_partition_id: UNPARTITIONED_LAST_ASSIGNED_ID,
-                properties: HashMap::new(),
-                table_properties,
-                current_snapshot_id: None,
-                snapshots: HashMap::new(),
-                snapshot_log: vec![],
-                sort_orders: HashMap::new(),
-                metadata_log: vec![],
-                default_sort_order_id: -1, // Overwritten immediately by add_default_sort_order
-                refs: HashMap::default(),
-                statistics: HashMap::new(),
-                partition_statistics: HashMap::new(),
-                encryption_keys: HashMap::new(),
-                next_row_id: INITIAL_ROW_ID,
-            },
+            metadata: TableMetadata::new_empty(format_version)?,
             last_updated_ms: None,
             changes: vec![],
             last_added_schema_id: Some(schema_id),
@@ -276,9 +242,9 @@ impl TableMetadataBuilder {
             return Ok(self);
         }
 
-        self.metadata.properties.extend(properties.clone());
-        self.metadata.table_properties =
-            TableMetadata::parse_table_properties(&self.metadata.properties)?;
+        let mut updated_properties = self.metadata.properties.clone();
+        updated_properties.extend(properties.clone());
+        self.metadata.replace_properties(updated_properties)?;
         self.changes.push(TableUpdate::SetProperties {
             updates: properties,
         });
@@ -312,11 +278,11 @@ impl TableMetadataBuilder {
             ));
         }
 
+        let mut updated_properties = self.metadata.properties.clone();
         for property in &properties {
-            self.metadata.properties.remove(property);
+            updated_properties.remove(property);
         }
-        self.metadata.table_properties =
-            TableMetadata::parse_table_properties(&self.metadata.properties)?;
+        self.metadata.replace_properties(updated_properties)?;
 
         if !properties.is_empty() {
             self.changes.push(TableUpdate::RemoveProperties {

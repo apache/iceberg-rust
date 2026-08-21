@@ -2730,7 +2730,6 @@ pub fn iceberg::spec::TableMetadata::uuid(&self) -> uuid::Uuid
 pub async fn iceberg::spec::TableMetadata::write_to(&self, file_io: &iceberg::io::FileIO, metadata_location: &iceberg::MetadataLocation) -> iceberg::Result<()>
 impl core::clone::Clone for iceberg::spec::TableMetadata
 pub fn iceberg::spec::TableMetadata::clone(&self) -> iceberg::spec::TableMetadata
-impl core::cmp::Eq for iceberg::spec::TableMetadata
 impl core::cmp::PartialEq for iceberg::spec::TableMetadata
 pub fn iceberg::spec::TableMetadata::eq(&self, other: &iceberg::spec::TableMetadata) -> bool
 impl core::convert::From<iceberg::spec::TableMetadataBuildResult> for iceberg::spec::TableMetadata
@@ -2895,7 +2894,6 @@ pub fn iceberg::spec::TableProperties::write_object_storage_partitioned_paths(&s
 pub fn iceberg::spec::TableProperties::write_target_file_size_bytes(&self) -> usize
 impl core::clone::Clone for iceberg::spec::TableProperties
 pub fn iceberg::spec::TableProperties::clone(&self) -> iceberg::spec::TableProperties
-impl core::cmp::Eq for iceberg::spec::TableProperties
 impl core::cmp::PartialEq for iceberg::spec::TableProperties
 pub fn iceberg::spec::TableProperties::eq(&self, other: &iceberg::spec::TableProperties) -> bool
 impl core::convert::TryFrom<&std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>> for iceberg::spec::TableProperties

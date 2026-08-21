@@ -34,7 +34,6 @@ pub iceberg_catalog_rest::CommitTableResponse::metadata: iceberg::spec::table_me
 pub iceberg_catalog_rest::CommitTableResponse::metadata_location: alloc::string::String
 impl core::clone::Clone for iceberg_catalog_rest::CommitTableResponse
 pub fn iceberg_catalog_rest::CommitTableResponse::clone(&self) -> iceberg_catalog_rest::CommitTableResponse
-impl core::cmp::Eq for iceberg_catalog_rest::CommitTableResponse
 impl core::cmp::PartialEq for iceberg_catalog_rest::CommitTableResponse
 pub fn iceberg_catalog_rest::CommitTableResponse::eq(&self, other: &iceberg_catalog_rest::CommitTableResponse) -> bool
 impl core::fmt::Debug for iceberg_catalog_rest::CommitTableResponse
@@ -188,7 +187,6 @@ pub iceberg_catalog_rest::LoadTableResult::metadata_location: core::option::Opti
 pub iceberg_catalog_rest::LoadTableResult::storage_credentials: core::option::Option<alloc::vec::Vec<iceberg_catalog_rest::StorageCredential>>
 impl core::clone::Clone for iceberg_catalog_rest::LoadTableResult
 pub fn iceberg_catalog_rest::LoadTableResult::clone(&self) -> iceberg_catalog_rest::LoadTableResult
-impl core::cmp::Eq for iceberg_catalog_rest::LoadTableResult
 impl core::cmp::PartialEq for iceberg_catalog_rest::LoadTableResult
 pub fn iceberg_catalog_rest::LoadTableResult::eq(&self, other: &iceberg_catalog_rest::LoadTableResult) -> bool
 impl core::fmt::Debug for iceberg_catalog_rest::LoadTableResult
