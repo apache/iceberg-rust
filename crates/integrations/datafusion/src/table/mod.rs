@@ -137,7 +137,7 @@ impl TableProvider for IcebergTableProvider {
         // Load fresh table metadata from catalog
         let table = self
             .catalog_access
-            .with_session(state)?
+            .with_session(state)
             .load_table(&self.table_ident)
             .await
             .map_err(to_datafusion_error)?;
@@ -173,7 +173,7 @@ impl TableProvider for IcebergTableProvider {
             )));
         }
 
-        let catalog = self.catalog_access.with_session(state)?;
+        let catalog = self.catalog_access.with_session(state);
 
         // Load fresh table metadata from catalog
         let table = catalog

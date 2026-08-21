@@ -20,14 +20,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::error::Result as DFResult;
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Namespace, NamespaceIdent, Result, SessionCatalog, SessionContext, TableCommit,
     TableCreation, TableIdent,
 };
 
-use crate::SessionContextResolver;
+use crate::options::resolve_session_context;
 
 /// Describes how the DataFusion integration accesses an Iceberg catalog.
 ///
@@ -41,27 +40,25 @@ pub(crate) enum CatalogAccess {
     /// A catalog accessed directly through the [`Catalog`] API.
     Direct(Arc<dyn Catalog>),
 
-    /// A session-aware catalog, its resolver, and the stable context used by
-    /// DataFusion APIs that do not expose a session.
+    /// A session-aware catalog and the stable context used by DataFusion APIs
+    /// that do not expose a session.
     SessionAware {
         catalog: Arc<dyn SessionCatalog>,
-        resolver: Arc<dyn SessionContextResolver>,
         fallback_context: SessionContext,
     },
 }
 
 impl CatalogAccess {
-    pub(crate) fn with_session(&self, session: &dyn Session) -> DFResult<Arc<dyn Catalog>> {
+    pub(crate) fn with_session(&self, session: &dyn Session) -> Arc<dyn Catalog> {
         match self {
-            CatalogAccess::Direct(catalog) => Ok(Arc::clone(catalog)),
+            CatalogAccess::Direct(catalog) => Arc::clone(catalog),
             CatalogAccess::SessionAware {
                 catalog,
-                resolver: session_context_resolver,
-                ..
-            } => Ok(Arc::new(SessionBoundCatalog::new(
-                session_context_resolver.resolve(session)?,
-                Arc::clone(catalog),
-            ))),
+                fallback_context,
+            } => {
+                let context = resolve_session_context(session).unwrap_or(fallback_context.clone());
+                Arc::new(SessionBoundCatalog::new(context, Arc::clone(catalog)))
+            }
         }
     }
 
