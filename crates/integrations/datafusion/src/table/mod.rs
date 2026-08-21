@@ -273,9 +273,15 @@ fn column_defaults_from_schema(schema: &IcebergSchema) -> HashMap<String, Expr> 
 
 /// Converts an Iceberg literal of the given type into a DataFusion [`ScalarValue`].
 ///
-/// Returns `None` for combinations that have no scalar representation; the insert
-/// planner casts the resulting expression to the target arrow type, so minor
-/// representation differences (e.g. timezone strings) are reconciled downstream.
+/// Returns `None` for combinations that have no scalar representation.
+///
+/// The scalars this produces carry the same arrow types that
+/// [`iceberg::arrow::type_to_arrow_type`] assigns to the columns, so the insert planner
+/// has nothing left to reconcile. Building them by going through
+/// `create_primitive_array_single_element` in iceberg-core instead would currently drop
+/// the `Time`, `Uuid`, `Fixed` and `Binary` defaults, because that function has no arm
+/// for `Time64`, `FixedSizeBinary` or `LargeBinary`; keeping the mapping here is a
+/// deliberate choice until those arms exist in core.
 fn literal_to_scalar_value(field_type: &Type, literal: &Literal) -> Option<ScalarValue> {
     let Type::Primitive(primitive_type) = field_type else {
         return None;
@@ -310,10 +316,16 @@ fn literal_to_scalar_value(field_type: &Type, literal: &Literal) -> Option<Scala
             ScalarValue::Decimal128(Some(*v), *precision as u8, *scale as i8)
         }
         (PrimitiveType::Binary, PrimitiveLiteral::Binary(v)) => {
-            ScalarValue::Binary(Some(v.clone()))
+            ScalarValue::LargeBinary(Some(v.clone()))
         }
-        (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(v)) => {
-            ScalarValue::FixedSizeBinary(v.len() as i32, Some(v.clone()))
+        (PrimitiveType::Fixed(len), PrimitiveLiteral::Binary(v)) => {
+            // Size the scalar from the column's declared width rather than the value's
+            // length, and skip a default whose length contradicts the declaration
+            let width = i32::try_from(*len).ok()?;
+            if v.len() != usize::try_from(*len).ok()? {
+                return None;
+            }
+            ScalarValue::FixedSizeBinary(width, Some(v.clone()))
         }
         (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(v)) => {
             ScalarValue::FixedSizeBinary(16, Some(v.to_be_bytes().to_vec()))
@@ -439,6 +451,7 @@ mod tests {
     use datafusion::common::Column;
     use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::SessionContext;
+    use iceberg::arrow::type_to_arrow_type;
     use iceberg::io::FileIO;
     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
     use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
@@ -725,6 +738,53 @@ mod tests {
             "test_table".to_string(),
             temp_dir,
         )
+    }
+
+    #[test]
+    fn test_literal_to_scalar_value_matches_column_arrow_type() {
+        let uuid = "f79c3e09-677c-4bbd-a479-3f349cb785e7";
+        let micros = 1_700_000_000i64;
+        let decimal = PrimitiveType::Decimal {
+            precision: 9,
+            scale: 2,
+        };
+        let cases: Vec<(PrimitiveType, Literal)> = vec![
+            (PrimitiveType::Boolean, Literal::bool(true)),
+            (PrimitiveType::Int, Literal::int(7)),
+            (PrimitiveType::Long, Literal::long(7i64)),
+            (PrimitiveType::Float, Literal::float(1.5f32)),
+            (PrimitiveType::Double, Literal::double(1.5f64)),
+            (PrimitiveType::String, Literal::string("general")),
+            (PrimitiveType::Date, Literal::date(19000)),
+            (PrimitiveType::Time, Literal::time(3_600_000_000i64)),
+            (PrimitiveType::Timestamp, Literal::timestamp(micros)),
+            (PrimitiveType::Timestamptz, Literal::timestamptz(micros)),
+            (PrimitiveType::TimestampNs, Literal::long(micros)),
+            (PrimitiveType::TimestamptzNs, Literal::long(micros)),
+            (decimal, Literal::decimal(12345)),
+            (PrimitiveType::Binary, Literal::binary(vec![1u8, 2, 3])),
+            (PrimitiveType::Fixed(4), Literal::fixed(vec![1u8, 2, 3, 4])),
+            (PrimitiveType::Uuid, Literal::uuid_from_str(uuid).unwrap()),
+        ];
+
+        for (primitive, literal) in cases {
+            let field_type = Type::Primitive(primitive);
+            let scalar = literal_to_scalar_value(&field_type, &literal)
+                .unwrap_or_else(|| panic!("no scalar produced for {field_type:?}"));
+            let expected = type_to_arrow_type(&field_type).unwrap();
+            assert_eq!(
+                scalar.data_type(),
+                expected,
+                "the scalar must carry the column's arrow type for {field_type:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_literal_to_scalar_value_skips_fixed_default_of_wrong_width() {
+        // a default whose length contradicts the declared width has no faithful scalar
+        let field_type = Type::Primitive(PrimitiveType::Fixed(4));
+        assert!(literal_to_scalar_value(&field_type, &Literal::fixed(vec![1u8, 2, 3])).is_none());
     }
 
     #[tokio::test]
