@@ -46,7 +46,9 @@ pub const SQL_CATALOG_PROP_BIND_STYLE: &str = "sql.bind-style";
 /// backward compatibility.
 const SQL_CATALOG_PROP_BIND_STYLE_LEGACY: &str = "sql_bind_style";
 /// Expected catalog schema version.
-/// If set to `V1` while the catalog table is actually `V0`, it will be migrated from `V0` to `V1`.
+///
+/// If this property is set and it is newer than the detected schema version,
+/// a migration will be attempted.
 pub const SQL_CATALOG_PROP_SCHEMA_VERSION: &str = "sql.schema-version";
 
 static CATALOG_TABLE_NAME: &str = "iceberg_tables";
@@ -296,7 +298,10 @@ struct SqlCatalogConfig {
 }
 
 #[derive(Debug)]
-/// Sql catalog implementation.
+/// SQL catalog implementation.
+///
+/// The catalog supports SQL catalog schema V1, as well as limited support for V0.
+/// Catalogs can opt-in to automatic migration by configuring the `sql.schema-version` catalog property.
 pub struct SqlCatalog {
     name: String,
     connection: AnyPool,
@@ -439,31 +444,47 @@ impl SqlCatalog {
         let detected_schema_version = SchemaVersion::detect(&pool).await?;
         let desired_schema_version = config.schema_version;
 
-        // Migrate the schema to V1 if the catalog table does not support views and the caller
-        // opted in via `sql.schema-version=V1`.
-        let schema_version = if detected_schema_version == SchemaVersion::V1 {
-            tracing::debug!("detected {CATALOG_TABLE_NAME} schema v1 which already supports views");
-            SchemaVersion::V1
-        } else if desired_schema_version == Some(SchemaVersion::V1) {
-            tracing::warn!(
-                "table {CATALOG_TABLE_NAME} has inferred schema {} but desired schema {}, performing migration",
-                detected_schema_version,
-                SchemaVersion::V1,
-            );
-            if let Some(migration_sql) = SchemaVersion::V1.migration_sql() {
-                sqlx::query(&migration_sql)
-                    .execute(&pool)
-                    .await
-                    .map_err(from_sqlx_error)?;
+        // Detect schema by describing columns. If desired schema is configured then automigrate, otherwise gracefully support older schemas.
+        let schema_version = match (detected_schema_version, desired_schema_version) {
+            (SchemaVersion::V1, Some(SchemaVersion::V1) | None) => {
+                tracing::debug!(
+                    "detected {CATALOG_TABLE_NAME} schema {} which already supports views",
+                    detected_schema_version,
+                );
+                SchemaVersion::V1
             }
-            SchemaVersion::V1
-        } else {
-            tracing::warn!(
-                "table {CATALOG_TABLE_NAME} has inferred schema {}; SQL catalog is initialized without view support. To auto-migrate the database's schema and enable view support, set {}=V1",
-                SchemaVersion::V0,
-                SQL_CATALOG_PROP_SCHEMA_VERSION,
-            );
-            SchemaVersion::V0
+            (SchemaVersion::V0, Some(desired_schema_version @ SchemaVersion::V1)) => {
+                tracing::warn!(
+                    "table {CATALOG_TABLE_NAME} has inferred schema {} but desired schema {}, performing migration",
+                    detected_schema_version,
+                    desired_schema_version,
+                );
+                if let Some(migration_sql) = SchemaVersion::V1.migration_sql() {
+                    sqlx::query(&migration_sql)
+                        .execute(&pool)
+                        .await
+                        .map_err(from_sqlx_error)?;
+                }
+                SchemaVersion::V1
+            }
+            (SchemaVersion::V0, Some(SchemaVersion::V0) | None) => {
+                tracing::warn!(
+                    "table {CATALOG_TABLE_NAME} has inferred schema {}; SQL catalog is initialized without view support, table creation, and table registration. \
+                    To auto-migrate the database schema, set {}=V1",
+                    detected_schema_version,
+                    SQL_CATALOG_PROP_SCHEMA_VERSION,
+                );
+                SchemaVersion::V0
+            }
+            (SchemaVersion::V1, Some(desired_schema_version @ SchemaVersion::V0)) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!(
+                        "table {CATALOG_TABLE_NAME} has inferred schema {} but desired schema {}, downgrade migration is not supported",
+                        detected_schema_version, desired_schema_version,
+                    ),
+                ));
+            }
         };
 
         Ok(SqlCatalog {
@@ -981,6 +1002,16 @@ impl Catalog for SqlCatalog {
         namespace: &NamespaceIdent,
         creation: TableCreation,
     ) -> Result<Table> {
+        if self.schema_version != SchemaVersion::V1 {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "Table creation is not supported for SQL catalog schema version {}",
+                    self.schema_version
+                ),
+            ));
+        }
+
         if !self.namespace_exists(namespace).await? {
             return no_such_namespace_err(namespace);
         }
@@ -1091,6 +1122,16 @@ impl Catalog for SqlCatalog {
         table_ident: &TableIdent,
         metadata_location: String,
     ) -> Result<Table> {
+        if self.schema_version != SchemaVersion::V1 {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "Table registration is not supported for SQL catalog schema version {}",
+                    self.schema_version
+                ),
+            ));
+        }
+
         if self.table_exists(table_ident).await? {
             return table_already_exists_err(table_ident);
         }
@@ -2270,7 +2311,7 @@ mod tests {
         sqlx::query(
             "INSERT INTO iceberg_tables
              (catalog_name, table_namespace, table_name, metadata_location)
-             VALUES ('iceberg', 'ns', 'tbl', '/tmp/fake-location')",
+             VALUES ('iceberg', 'test_namespace', 'existing_test_table', '/tmp/fake-location')",
         )
         .execute(&pool)
         .await
@@ -2306,13 +2347,56 @@ mod tests {
         sqlx::query(
             "INSERT INTO iceberg_tables
              (catalog_name, table_namespace, table_name, metadata_location, iceberg_type)
-             VALUES ('iceberg', 'ns', 'tbl', '/tmp/fake-location', 'TABLE')",
+             VALUES ('iceberg', 'test_namespace', 'existing_test_table', '/tmp/fake-location', 'TABLE')",
         )
         .execute(&pool)
         .await
         .unwrap();
         pool.close().await;
         (uri, temp_dir)
+    }
+
+    /// Catalog properties for opening `uri` with `warehouse` as the warehouse location,
+    /// optionally requesting a specific `sql.schema-version`.
+    fn catalog_props(
+        uri: &str,
+        warehouse: &TempDir,
+        schema_version: Option<SchemaVersion>,
+    ) -> HashMap<String, String> {
+        let mut props = HashMap::from_iter([
+            (SQL_CATALOG_PROP_URI.to_string(), uri.to_string()),
+            (
+                SQL_CATALOG_PROP_WAREHOUSE.to_string(),
+                warehouse.path().to_str().unwrap().to_string(),
+            ),
+            (
+                SQL_CATALOG_PROP_BIND_STYLE.to_string(),
+                SqlBindStyle::QMark.to_string(),
+            ),
+        ]);
+        if let Some(schema_version) = schema_version {
+            props.insert(
+                SQL_CATALOG_PROP_SCHEMA_VERSION.to_string(),
+                schema_version.to_string(),
+            );
+        }
+        props
+    }
+
+    /// Whether the catalog table in the database at `uri` has the `iceberg_type` column.
+    ///
+    /// Connects independently of any catalog under test, so it reports what is actually on disk.
+    async fn record_type_column_exists(uri: &str) -> bool {
+        let probe_pool = sqlx::AnyPool::connect(uri).await.unwrap();
+        let column_exists = probe_pool
+            .describe(&format!("SELECT * FROM {CATALOG_TABLE_NAME}"))
+            .await
+            .expect("connection and query should succeed")
+            .columns()
+            .iter()
+            .any(|column| column.name() == CATALOG_FIELD_RECORD_TYPE);
+        probe_pool.close().await;
+        column_exists
     }
 
     #[tokio::test]
@@ -2399,26 +2483,13 @@ mod tests {
             .expect("should open V0 catalog and migrate schema when sql.schema-version=V1");
 
         // The V0 row (no "iceberg_type" column) should be treated as a TABLE after migration.
-        let ns = NamespaceIdent::from_strs(["ns"]).unwrap();
-        let tables = catalog.list_tables(&ns).await.unwrap();
+        let namespace = NamespaceIdent::from_strs(["test_namespace"]).unwrap();
+        let tables = catalog.list_tables(&namespace).await.unwrap();
         assert_eq!(tables.len(), 1);
-        assert_eq!(tables[0].name(), "tbl");
+        assert_eq!(tables[0].name(), "existing_test_table");
 
-        // Confirm the column WAS added to the database.
-        let column_exists = {
-            let probe_pool = sqlx::AnyPool::connect(&uri).await.unwrap();
-            let column_exists = probe_pool
-                .describe(&format!("SELECT * FROM {CATALOG_TABLE_NAME}"))
-                .await
-                .expect("connection and query should succeed")
-                .columns()
-                .iter()
-                .any(|column| column.name() == CATALOG_FIELD_RECORD_TYPE);
-            probe_pool.close().await;
-            column_exists
-        };
         assert!(
-            column_exists,
+            record_type_column_exists(&uri).await,
             "iceberg_type column should exist when sql.schema-version=V1 was set",
         );
     }
@@ -2450,27 +2521,195 @@ mod tests {
         assert_eq!(catalog.schema_version, SchemaVersion::V0);
 
         // The table should still be visible via V0 queries (no iceberg_type filter).
-        let ns = NamespaceIdent::from_strs(["ns"]).unwrap();
-        let tables = catalog.list_tables(&ns).await.unwrap();
+        let namespace = NamespaceIdent::from_strs(["test_namespace"]).unwrap();
+        let tables = catalog.list_tables(&namespace).await.unwrap();
         assert_eq!(tables.len(), 1);
-        assert_eq!(tables[0].name(), "tbl");
+        assert_eq!(tables[0].name(), "existing_test_table");
 
-        // Confirm the column was NOT added to the database.
-        let column_exists = {
-            let probe_pool = sqlx::AnyPool::connect(&uri).await.unwrap();
-            let column_exists = probe_pool
-                .describe(&format!("SELECT * FROM {CATALOG_TABLE_NAME}"))
-                .await
-                .expect("connection and query should succeed")
-                .columns()
-                .iter()
-                .any(|column| column.name() == CATALOG_FIELD_RECORD_TYPE);
-            probe_pool.close().await;
-            column_exists
-        };
         assert!(
-            !column_exists,
+            !record_type_column_exists(&uri).await,
             "iceberg_type column should not exist when sql.schema-version=V1 was not set"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_explicit_v0_schema_version_is_honored() {
+        install_default_drivers();
+
+        let (uri, temp_dir) = create_v0_sqlite_db().await;
+
+        let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load(
+                "iceberg",
+                catalog_props(&uri, &temp_dir, Some(SchemaVersion::V0)),
+            )
+            .await
+            .expect("requesting V0 against a V0 catalog table should succeed");
+
+        assert_eq!(catalog.schema_version, SchemaVersion::V0);
+
+        let namespace = NamespaceIdent::from_strs(["test_namespace"]).unwrap();
+        let tables = catalog.list_tables(&namespace).await.unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].name(), "existing_test_table");
+
+        assert!(
+            !record_type_column_exists(&uri).await,
+            "iceberg_type column should not be added when V0 was requested"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_v1_schema_downgrade_is_rejected() {
+        install_default_drivers();
+
+        let (uri, temp_dir) = create_v1_sqlite_db().await;
+
+        let result = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load(
+                "iceberg",
+                catalog_props(&uri, &temp_dir, Some(SchemaVersion::V0)),
+            )
+            .await;
+
+        let err = result.expect_err("downgrading a V1 catalog table to V0 should be rejected");
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(
+            err.to_string()
+                .contains("downgrade migration is not supported"),
+            "error should explain that the downgrade was refused, got: {err}"
+        );
+
+        assert!(
+            record_type_column_exists(&uri).await,
+            "a refused downgrade should leave the iceberg_type column in place"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_table_unsupported_on_v0_schema() {
+        install_default_drivers();
+
+        let (uri, temp_dir) = create_v0_sqlite_db().await;
+
+        let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load("iceberg", catalog_props(&uri, &temp_dir, None))
+            .await
+            .expect("should open V0 catalog without migrating");
+        assert_eq!(catalog.schema_version, SchemaVersion::V0);
+
+        // Inserts always populate `iceberg_type`, which a V0 catalog table does not have, so
+        // creation is refused up front rather than failing in the database.
+        let namespace = NamespaceIdent::from_strs(["test_namespace"]).unwrap();
+        let err = catalog
+            .create_table(
+                &namespace,
+                TableCreation::builder()
+                    .name("created_test_table".to_string())
+                    .schema(simple_table_schema())
+                    .location(temp_path())
+                    .build(),
+            )
+            .await
+            .expect_err("table creation should be rejected on a V0 catalog table");
+
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(
+            err.to_string().contains("Table creation is not supported"),
+            "error should explain that table creation is unsupported, got: {err}"
+        );
+
+        let tables = catalog.list_tables(&namespace).await.unwrap();
+        assert_eq!(
+            tables.len(),
+            1,
+            "only the pre-existing row should be present, got: {tables:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_table_unsupported_on_v0_schema() {
+        install_default_drivers();
+
+        let (uri, temp_dir) = create_v0_sqlite_db().await;
+
+        let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load("iceberg", catalog_props(&uri, &temp_dir, None))
+            .await
+            .expect("should open V0 catalog without migrating");
+        assert_eq!(catalog.schema_version, SchemaVersion::V0);
+
+        let namespace = NamespaceIdent::from_strs(["test_namespace"]).unwrap();
+        let table_ident = TableIdent::new(namespace.clone(), "registered_test_table".to_string());
+        // Register with non-existent table to ensure test is verifying that schema version is checked first.
+        let err = catalog
+            .register_table(
+                &table_ident,
+                "/tmp/does-not-exist/metadata.json".to_string(),
+            )
+            .await
+            .expect_err("table registration should be rejected on a V0 catalog table");
+
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(
+            err.to_string()
+                .contains("Table registration is not supported"),
+            "error should explain that table registration is unsupported, got: {err}"
+        );
+
+        let tables = catalog.list_tables(&namespace).await.unwrap();
+        assert_eq!(
+            tables.len(),
+            1,
+            "only the pre-existing row should be present, got: {tables:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_table_supported_after_v0_migration() {
+        install_default_drivers();
+
+        let (uri, temp_dir) = create_v0_sqlite_db().await;
+
+        let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load(
+                "iceberg",
+                catalog_props(&uri, &temp_dir, Some(SchemaVersion::V1)),
+            )
+            .await
+            .expect("should open V0 catalog and migrate schema when sql.schema-version=V1");
+        assert_eq!(catalog.schema_version, SchemaVersion::V1);
+
+        let namespace = NamespaceIdent::from_strs(["test_namespace"]).unwrap();
+        catalog
+            .create_table(
+                &namespace,
+                TableCreation::builder()
+                    .name("created_test_table".to_string())
+                    .schema(simple_table_schema())
+                    .location(temp_path())
+                    .build(),
+            )
+            .await
+            .expect("table creation should succeed once the schema is migrated to V1");
+
+        let table_names = catalog
+            .list_tables(&namespace)
+            .await
+            .unwrap()
+            .iter()
+            .map(|table_ident| table_ident.name().to_string())
+            .sorted()
+            .collect_vec();
+        assert_eq!(
+            table_names,
+            vec!["created_test_table", "existing_test_table"],
+            "the migrated pre-existing row and the new table should both be listed"
         );
     }
 
