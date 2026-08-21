@@ -394,7 +394,7 @@ pub struct TableCommit {
     requirements: Vec<TableRequirement>,
     /// The updates of the table.
     updates: Vec<TableUpdate>,
-    #[builder(default, setter(skip))]
+    #[builder(default, setter(strip_option))]
     staged_table: Option<Table>,
 }
 
@@ -417,11 +417,6 @@ impl TableCommit {
     /// Return whether this commit creates a table.
     pub fn is_create(&self) -> bool {
         self.staged_table.is_some()
-    }
-
-    pub(crate) fn with_staged_table(mut self, staged_table: Table) -> Self {
-        self.staged_table = Some(staged_table);
-        self
     }
 
     /// Apply a create commit when no table currently exists.

@@ -271,14 +271,13 @@ impl Transaction {
         let table_commit = TableCommit::builder()
             .ident(self.table.identifier().to_owned())
             .updates(existing_updates)
-            .requirements(existing_requirements)
-            .build();
+            .requirements(existing_requirements);
         if matches!(self.transaction_type, TransactionType::Create) {
             catalog
-                .update_table(table_commit.with_staged_table(current_table))
+                .update_table(table_commit.staged_table(current_table).build())
                 .await
         } else {
-            catalog.update_table(table_commit).await
+            catalog.update_table(table_commit.build()).await
         }
     }
 }
