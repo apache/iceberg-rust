@@ -17,7 +17,7 @@
 
 mod error;
 pub use error::*;
-mod catalog_access;
+mod catalog_adapter;
 
 mod catalog_provider;
 pub use options::IcebergOptions;
