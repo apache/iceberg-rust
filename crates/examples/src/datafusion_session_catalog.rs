@@ -30,8 +30,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::catalog::Session as DataFusionSession;
-use datafusion::error::{DataFusionError, Result as DataFusionResult};
 use datafusion::prelude::{SessionConfig, SessionContext as DataFusionSessionContext};
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalog, MemoryCatalogBuilder};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
@@ -40,37 +38,7 @@ use iceberg::{
     Catalog, CatalogBuilder, Namespace, NamespaceIdent, Result, SessionCatalog,
     SessionContext as IcebergSessionContext, TableCommit, TableCreation, TableIdent,
 };
-use iceberg_datafusion::{IcebergCatalogProvider, SessionContextResolver};
-
-/// User metadata stored as an application-specific DataFusion extension.
-#[derive(Debug)]
-struct UserContext {
-    name: String,
-}
-
-/// Maps the application's DataFusion user context to an Iceberg session.
-#[derive(Debug)]
-struct UserSessionContextResolver;
-
-impl SessionContextResolver for UserSessionContextResolver {
-    fn resolve(&self, session: &dyn DataFusionSession) -> DataFusionResult<IcebergSessionContext> {
-        let user = session
-            .config()
-            .get_extension::<UserContext>()
-            .ok_or_else(|| {
-                DataFusionError::Configuration(
-                    "the DataFusion session has no UserContext extension".to_string(),
-                )
-            })?;
-
-        Ok(IcebergSessionContext::builder()
-            // Reusing the DataFusion session ID gives the catalog a stable key
-            // for session-scoped caches.
-            .session_id(session.session_id().to_string())
-            .identity(user.name.to_string())
-            .build())
-    }
-}
+use iceberg_datafusion::{IcebergCatalogProvider, IcebergOptions};
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -81,20 +49,18 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Provider construction discovers namespaces and tables with one stable,
     // anonymous fallback context. Session-dependent catalogs must make that
     // discovery set available to the fallback context.
-    let provider = IcebergCatalogProvider::try_new_with_session_catalog(
-        session_catalog,
-        Arc::new(UserSessionContextResolver),
-    )
-    .await?;
+    let provider = IcebergCatalogProvider::try_new_with_session_catalog(session_catalog).await?;
 
-    let config = SessionConfig::new().with_extension(Arc::new(UserContext {
-        name: "user123".to_string(),
-    }));
+    let mut iceberg_options = IcebergOptions::default();
+    iceberg_options.identity = Some("user123".to_string());
+
+    let config = SessionConfig::new().with_extension(Arc::new(iceberg_options));
     let datafusion = DataFusionSessionContext::new_with_config(config);
     datafusion.register_catalog("iceberg", Arc::new(provider));
 
-    // Planning the scan invokes the resolver and forwards its Iceberg context
-    // to the session catalog's `load_table` operation.
+    // Planning the scan derives an Iceberg context from the DataFusion session
+    // and its IcebergOptions, then forwards it to the session catalog's
+    // `load_table` operation.
     datafusion
         .sql("SELECT COUNT(*) AS event_count FROM iceberg.datafusion.example")
         .await?

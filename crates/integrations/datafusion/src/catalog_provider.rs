@@ -22,7 +22,6 @@ use datafusion::catalog::{CatalogProvider, SchemaProvider};
 use futures::future::try_join_all;
 use iceberg::{Catalog, NamespaceIdent, Result, SessionCatalog, SessionContext};
 
-use crate::SessionContextResolver;
 use crate::catalog_access::CatalogAccess;
 use crate::schema_provider::IcebergSchemaProvider;
 
@@ -53,22 +52,19 @@ impl IcebergCatalogProvider {
 
     /// Creates an [`IcebergCatalogProvider`] backed by a [`SessionCatalog`].
     ///
-    /// The [`SessionContextResolver`] derives an Iceberg session context for
-    /// scans and inserts. Provider initialization, metadata-table lookup,
-    /// table registration, and table deregistration do not receive a
-    /// DataFusion session; they share one anonymous fallback context instead.
+    /// Each DataFusion session that has [`IcebergOptions`] configured will
+    /// propagate an Iceberg [`SessionContext`] for scans and inserts. Provider
+    /// initialization, metadata-table lookup, table registration, and table
+    /// deregistration do not receive a DataFusion session; they share one
+    /// anonymous fallback context instead.
     ///
     /// Namespace and table discovery is performed once during construction and
     /// shared by all DataFusion sessions. Catalogs with session-dependent
     /// visibility must make the intended discovery set available to the
     /// anonymous fallback; discovery is not repeated per DataFusion session.
-    pub async fn try_new_with_session_catalog(
-        catalog: Arc<dyn SessionCatalog>,
-        resolver: Arc<dyn SessionContextResolver>,
-    ) -> Result<Self> {
+    pub async fn try_new_with_session_catalog(catalog: Arc<dyn SessionCatalog>) -> Result<Self> {
         let session_aware = CatalogAccess::SessionAware {
             catalog,
-            resolver,
             // One session context that's shared for all query-unrelated catalog operations.
             fallback_context: SessionContext::empty(),
         };
@@ -144,21 +140,15 @@ mod tests {
     use datafusion::prelude::SessionContext as DFSessionContext;
 
     use super::*;
-    use crate::test_utils::{
-        FailingSessionContextResolver, FixedSessionContextResolver, create_recording_catalog,
-        resolved_session_context,
-    };
+    use crate::test_utils::create_recording_catalog;
 
     #[tokio::test]
     async fn test_session_aware_scan_uses_resolved_context() {
         let (session_catalog, namespace, table_name, _temp_dir) = create_recording_catalog().await;
-        let resolver = Arc::new(FixedSessionContextResolver::new(resolved_session_context()));
-        let provider = IcebergCatalogProvider::try_new_with_session_catalog(
-            session_catalog.clone(),
-            resolver.clone(),
-        )
-        .await
-        .unwrap();
+        let provider =
+            IcebergCatalogProvider::try_new_with_session_catalog(session_catalog.clone())
+                .await
+                .unwrap();
 
         let bootstrap_calls = session_catalog.calls();
         assert_eq!(
@@ -177,7 +167,6 @@ mod tests {
                 && call.properties.is_empty()
                 && call.credential_keys.is_empty()
         }));
-        assert_eq!(resolver.calls(), 0);
 
         let schema = provider.schema(namespace[0].as_str()).unwrap();
         let table = schema.table(&table_name).await.unwrap().unwrap();
@@ -188,7 +177,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resolver.calls(), 1);
         let calls = session_catalog.calls();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].operation, "load_table");
@@ -204,12 +192,10 @@ mod tests {
     #[tokio::test]
     async fn test_session_resolution_errors_prevent_catalog_access() {
         let (session_catalog, namespace, table_name, _temp_dir) = create_recording_catalog().await;
-        let provider = IcebergCatalogProvider::try_new_with_session_catalog(
-            session_catalog.clone(),
-            Arc::new(FailingSessionContextResolver),
-        )
-        .await
-        .unwrap();
+        let provider =
+            IcebergCatalogProvider::try_new_with_session_catalog(session_catalog.clone())
+                .await
+                .unwrap();
         let schema = provider.schema(namespace[0].as_str()).unwrap();
         let table = schema.table(&table_name).await.unwrap().unwrap();
         session_catalog.clear_calls();
@@ -236,13 +222,10 @@ mod tests {
     #[tokio::test]
     async fn test_session_aware_insert_reuses_resolved_context_for_commit() {
         let (session_catalog, namespace, table_name, _temp_dir) = create_recording_catalog().await;
-        let resolver = Arc::new(FixedSessionContextResolver::new(resolved_session_context()));
-        let provider = IcebergCatalogProvider::try_new_with_session_catalog(
-            session_catalog.clone(),
-            resolver.clone(),
-        )
-        .await
-        .unwrap();
+        let provider =
+            IcebergCatalogProvider::try_new_with_session_catalog(session_catalog.clone())
+                .await
+                .unwrap();
         let schema = provider.schema(namespace[0].as_str()).unwrap();
         let table = schema.table(&table_name).await.unwrap().unwrap();
         session_catalog.clear_calls();
@@ -257,7 +240,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resolver.calls(), 1);
         let calls = session_catalog.calls();
         let load = calls
             .iter()
@@ -277,13 +259,10 @@ mod tests {
     #[tokio::test]
     async fn test_sessionless_schema_operations_share_fallback_context() {
         let (session_catalog, namespace, table_name, _temp_dir) = create_recording_catalog().await;
-        let resolver = Arc::new(FixedSessionContextResolver::new(resolved_session_context()));
-        let provider = IcebergCatalogProvider::try_new_with_session_catalog(
-            session_catalog.clone(),
-            resolver.clone(),
-        )
-        .await
-        .unwrap();
+        let provider =
+            IcebergCatalogProvider::try_new_with_session_catalog(session_catalog.clone())
+                .await
+                .unwrap();
         let schema = provider.schema(namespace[0].as_str()).unwrap();
         session_catalog.clear_calls();
 
@@ -322,6 +301,5 @@ mod tests {
                 && call.properties.is_empty()
                 && call.credential_keys.is_empty()
         }));
-        assert_eq!(resolver.calls(), 0);
     }
 }

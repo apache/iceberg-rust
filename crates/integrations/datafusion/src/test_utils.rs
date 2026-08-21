@@ -16,14 +16,10 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use datafusion::catalog::Session as DFSession;
-use datafusion::error::{DataFusionError, Result as DFResult};
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
-use iceberg::sensitive::SensitiveString;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::table::Table;
 use iceberg::{
@@ -31,8 +27,6 @@ use iceberg::{
     TableCommit, TableCreation, TableIdent,
 };
 use tempfile::TempDir;
-
-use crate::SessionContextResolver;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CatalogCall {
@@ -208,58 +202,6 @@ impl SessionCatalog for RecordingSessionCatalog {
         self.record("update_table", context);
         self.inner.update_table(commit).await
     }
-}
-
-#[derive(Debug)]
-pub(crate) struct FixedSessionContextResolver {
-    context: SessionContext,
-    calls: AtomicUsize,
-}
-
-impl FixedSessionContextResolver {
-    pub(crate) fn new(context: SessionContext) -> Self {
-        Self {
-            context,
-            calls: AtomicUsize::new(0),
-        }
-    }
-
-    pub(crate) fn calls(&self) -> usize {
-        self.calls.load(Ordering::SeqCst)
-    }
-}
-
-impl SessionContextResolver for FixedSessionContextResolver {
-    fn resolve(&self, _session: &dyn DFSession) -> DFResult<SessionContext> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(self.context.clone())
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct FailingSessionContextResolver;
-
-impl SessionContextResolver for FailingSessionContextResolver {
-    fn resolve(&self, _session: &dyn DFSession) -> DFResult<SessionContext> {
-        Err(DataFusionError::External(
-            "session resolution failed".into(),
-        ))
-    }
-}
-
-pub(crate) fn resolved_session_context() -> SessionContext {
-    SessionContext::builder()
-        .session_id("resolved-session".to_string())
-        .identity("test-user".to_string())
-        .properties(HashMap::from([(
-            "test-property".to_string(),
-            "test-value".to_string(),
-        )]))
-        .credentials(HashMap::from([(
-            "test-token".to_string(),
-            SensitiveString::from("test-secret".to_string()),
-        )]))
-        .build()
 }
 
 pub(crate) async fn create_recording_catalog() -> (
