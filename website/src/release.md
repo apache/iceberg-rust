@@ -230,6 +230,18 @@ git push origin "v${iceberg_version}-rc.${rc}"
 
 If an RC has a problem, abandon that RC and increment the RC number.
 
+### Trigger release candidate PyPI publish
+
+Python packages based on the release candidate are published to PyPI.
+These are published by a workflow that must be triggered manually.
+
+Trigger this now using the following GitHub CLI command, or the equivalent on the GitHub website.
+It must use the published release tag as the reference for the workflow run.
+
+```shell
+gh workflow run --repo apache/iceberg-rust release_python.yml -f release_tag=${rc_tag} --ref refs/tags/${rc_tag}
+```
+
 ### Draft an Apache Iceberg blog post
 
 The [Apache Iceberg blog](https://iceberg.apache.org/blog/) is one mechanism to share news about the project,
@@ -525,7 +537,7 @@ Trigger this now using the following GitHub CLI command, or the equivalent on th
 It must use the published release tag as the reference for the workflow run.
 
 ```shell
-gh workflow run --repo apache/iceberg-rust release_python.yml -f release_tag=v${iceberg_version} --ref refs/tags/v{iceberg_version}
+gh workflow run --repo apache/iceberg-rust release_python.yml -f release_tag=v${iceberg_version} --ref refs/tags/v${iceberg_version}
 ```
 
 Verify that the workflow succeeds, indicating that the Python packages are released.
