@@ -881,7 +881,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "datafusion", specifier = ">=52,<55" },
+    { name = "datafusion", specifier = "==54.*" },
     { name = "fastavro", specifier = ">=1.11.1" },
     { name = "huggingface-hub", specifier = ">=0.20" },
     { name = "maturin", specifier = ">=1.9.4,<2.0" },
