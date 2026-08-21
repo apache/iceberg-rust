@@ -95,7 +95,6 @@ pub struct Transaction {
     table: Table,
     actions: Vec<BoxedTransactionAction>,
     transaction_type: TransactionType,
-    initial_updates: Vec<TableUpdate>,
 }
 
 impl Transaction {
@@ -105,22 +104,22 @@ impl Transaction {
             table: table.clone(),
             actions: vec![],
             transaction_type: TransactionType::Update,
-            initial_updates: vec![],
         }
     }
 
     /// Creates a transaction from table metadata staged by a catalog.
     pub fn new_create(table: Table) -> Self {
-        let initial_updates = create_updates(table.metadata());
         Self {
             table,
             actions: vec![],
             transaction_type: TransactionType::Create,
-            initial_updates,
         }
     }
 
     /// Returns the table state visible inside this transaction.
+    ///
+    /// For create transactions, this provides the staged table metadata and
+    /// catalog-configured file IO needed to write data files before commit.
     pub fn table(&self) -> &Table {
         &self.table
     }
@@ -249,7 +248,10 @@ impl Transaction {
         }
 
         let mut current_table = self.table.clone();
-        let mut existing_updates = self.initial_updates.clone();
+        let mut existing_updates = match self.transaction_type {
+            TransactionType::Create => create_updates(current_table.metadata()),
+            TransactionType::Update => Vec::new(),
+        };
         let mut existing_requirements: Vec<TableRequirement> = vec![];
 
         for action in &self.actions {
