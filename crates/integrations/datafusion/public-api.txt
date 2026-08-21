@@ -94,12 +94,22 @@ pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::
 pub struct iceberg_datafusion::IcebergCatalogProvider
 impl iceberg_datafusion::IcebergCatalogProvider
 pub async fn iceberg_datafusion::IcebergCatalogProvider::try_new(catalog: alloc::sync::Arc<dyn iceberg::catalog::Catalog>) -> iceberg::error::Result<Self>
-pub async fn iceberg_datafusion::IcebergCatalogProvider::try_new_with_session_catalog(catalog: alloc::sync::Arc<dyn iceberg::catalog::session::SessionCatalog>, resolver: alloc::sync::Arc<dyn iceberg_datafusion::SessionContextResolver>) -> iceberg::error::Result<Self>
+pub async fn iceberg_datafusion::IcebergCatalogProvider::try_new_with_session_catalog(catalog: alloc::sync::Arc<dyn iceberg::catalog::session::SessionCatalog>) -> iceberg::error::Result<Self>
 impl core::fmt::Debug for iceberg_datafusion::IcebergCatalogProvider
 pub fn iceberg_datafusion::IcebergCatalogProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl datafusion_catalog::catalog::CatalogProvider for iceberg_datafusion::IcebergCatalogProvider
 pub fn iceberg_datafusion::IcebergCatalogProvider::schema(&self, name: &str) -> core::option::Option<alloc::sync::Arc<dyn datafusion_catalog::schema::SchemaProvider>>
 pub fn iceberg_datafusion::IcebergCatalogProvider::schema_names(&self) -> alloc::vec::Vec<alloc::string::String>
+pub struct iceberg_datafusion::IcebergOptions
+pub iceberg_datafusion::IcebergOptions::credentials: std::collections::hash::map::HashMap<alloc::string::String, iceberg::sensitive::SensitiveString>
+pub iceberg_datafusion::IcebergOptions::identity: core::option::Option<alloc::string::String>
+pub iceberg_datafusion::IcebergOptions::properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+impl core::clone::Clone for iceberg_datafusion::IcebergOptions
+pub fn iceberg_datafusion::IcebergOptions::clone(&self) -> iceberg_datafusion::IcebergOptions
+impl core::default::Default for iceberg_datafusion::IcebergOptions
+pub fn iceberg_datafusion::IcebergOptions::default() -> iceberg_datafusion::IcebergOptions
+impl core::fmt::Debug for iceberg_datafusion::IcebergOptions
+pub fn iceberg_datafusion::IcebergOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg_datafusion::IcebergStaticTableProvider
 impl iceberg_datafusion::IcebergStaticTableProvider
 pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table(table: iceberg::table::Table) -> iceberg::error::Result<Self>
@@ -135,7 +145,5 @@ impl core::fmt::Debug for iceberg_datafusion::table_provider_factory::IcebergTab
 pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl datafusion_catalog::table::TableProviderFactory for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
 pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::create<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, cmd: &'life2 datafusion_expr::logical_plan::ddl::CreateExternalTable) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_catalog::table::TableProvider>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
-pub trait iceberg_datafusion::SessionContextResolver: core::fmt::Debug + core::marker::Send + core::marker::Sync
-pub fn iceberg_datafusion::SessionContextResolver::resolve(&self, session: &dyn datafusion_session::session::Session) -> datafusion_common::error::Result<iceberg::catalog::session::SessionContext>
 pub fn iceberg_datafusion::from_datafusion_error(error: datafusion_common::error::DataFusionError) -> iceberg::error::Error
 pub fn iceberg_datafusion::to_datafusion_error(error: iceberg::error::Error) -> datafusion_common::error::DataFusionError

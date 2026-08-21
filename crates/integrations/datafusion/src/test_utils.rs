@@ -16,12 +16,9 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use datafusion::catalog::Session as DFSession;
-use datafusion::error::{DataFusionError, Result as DFResult};
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg::sensitive::SensitiveString;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
@@ -32,7 +29,7 @@ use iceberg::{
 };
 use tempfile::TempDir;
 
-use crate::SessionContextResolver;
+use crate::IcebergOptions;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CatalogCall {
@@ -40,19 +37,17 @@ pub(crate) struct CatalogCall {
     pub(crate) session_id: String,
     pub(crate) identity: Option<String>,
     pub(crate) properties: HashMap<String, String>,
-    pub(crate) credential_keys: Vec<String>,
+    pub(crate) credentials: HashMap<String, SensitiveString>,
 }
 
 impl CatalogCall {
     fn new(operation: &'static str, context: &SessionContext) -> Self {
-        let mut credential_keys = context.credentials().keys().cloned().collect::<Vec<_>>();
-        credential_keys.sort();
         Self {
             operation,
             session_id: context.session_id().to_string(),
             identity: context.identity().map(ToString::to_string),
             properties: context.properties().clone(),
-            credential_keys,
+            credentials: context.credentials().clone(),
         }
     }
 }
@@ -210,58 +205,6 @@ impl SessionCatalog for RecordingSessionCatalog {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct FixedSessionContextResolver {
-    context: SessionContext,
-    calls: AtomicUsize,
-}
-
-impl FixedSessionContextResolver {
-    pub(crate) fn new(context: SessionContext) -> Self {
-        Self {
-            context,
-            calls: AtomicUsize::new(0),
-        }
-    }
-
-    pub(crate) fn calls(&self) -> usize {
-        self.calls.load(Ordering::SeqCst)
-    }
-}
-
-impl SessionContextResolver for FixedSessionContextResolver {
-    fn resolve(&self, _session: &dyn DFSession) -> DFResult<SessionContext> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(self.context.clone())
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct FailingSessionContextResolver;
-
-impl SessionContextResolver for FailingSessionContextResolver {
-    fn resolve(&self, _session: &dyn DFSession) -> DFResult<SessionContext> {
-        Err(DataFusionError::External(
-            "session resolution failed".into(),
-        ))
-    }
-}
-
-pub(crate) fn resolved_session_context() -> SessionContext {
-    SessionContext::builder()
-        .session_id("resolved-session".to_string())
-        .identity("test-user".to_string())
-        .properties(HashMap::from([(
-            "test-property".to_string(),
-            "test-value".to_string(),
-        )]))
-        .credentials(HashMap::from([(
-            "test-token".to_string(),
-            SensitiveString::from("test-secret".to_string()),
-        )]))
-        .build()
-}
-
 pub(crate) async fn create_recording_catalog() -> (
     Arc<RecordingSessionCatalog>,
     NamespaceIdent,
@@ -308,4 +251,15 @@ pub(crate) async fn create_recording_catalog() -> (
         table_name,
         temp_dir,
     )
+}
+
+pub(crate) fn iceberg_options() -> Arc<IcebergOptions> {
+    Arc::new(IcebergOptions {
+        identity: Some("test-user".to_string()),
+        properties: HashMap::from([("test-property".to_string(), "test-value".to_string())]),
+        credentials: HashMap::from([(
+            "test-token".to_string(),
+            SensitiveString::from("test-secret".to_string()),
+        )]),
+    })
 }
