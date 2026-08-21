@@ -22,7 +22,7 @@ use datafusion::catalog::{CatalogProvider, SchemaProvider};
 use futures::future::try_join_all;
 use iceberg::{Catalog, NamespaceIdent, Result, SessionCatalog, SessionContext};
 
-use crate::catalog_access::CatalogAccess;
+use crate::catalog_access::SessionBindingCatalogAdapter;
 use crate::schema_provider::IcebergSchemaProvider;
 
 /// Provides a DataFusion interface to schemas in an Iceberg [`Catalog`] or
@@ -46,8 +46,8 @@ impl IcebergCatalogProvider {
     /// This method retrieves the namespace names and collects an initialized
     /// schema provider for each namespace into a `HashMap`.
     pub async fn try_new(catalog: Arc<dyn Catalog>) -> Result<Self> {
-        let direct = CatalogAccess::Direct(catalog);
-        Self::try_new_with_access(direct).await
+        let session_binding_catalog = SessionBindingCatalogAdapter::new_without_context(catalog);
+        Self::try_new_with_binding_catalog(Arc::new(session_binding_catalog)).await
     }
 
     /// Creates an [`IcebergCatalogProvider`] backed by a [`SessionCatalog`].
@@ -63,20 +63,18 @@ impl IcebergCatalogProvider {
     /// visibility must make the intended discovery set available to the
     /// anonymous fallback; discovery is not repeated per DataFusion session.
     pub async fn try_new_with_session_catalog(catalog: Arc<dyn SessionCatalog>) -> Result<Self> {
-        let session_aware = CatalogAccess::SessionAware {
-            catalog,
-            // One session context that's shared for all query-unrelated catalog operations.
-            fallback_context: SessionContext::empty(),
-        };
-        Self::try_new_with_access(session_aware).await
+        let shared_fallback_context = SessionContext::empty();
+        let session_bound = SessionBindingCatalogAdapter::new(shared_fallback_context, catalog);
+        Self::try_new_with_binding_catalog(Arc::new(session_bound)).await
     }
 
-    async fn try_new_with_access(catalog: CatalogAccess) -> Result<Self> {
+    async fn try_new_with_binding_catalog(
+        catalog: Arc<SessionBindingCatalogAdapter>,
+    ) -> Result<Self> {
         // TODO:
         // Schemas and providers should be cached and evicted based on time
         // As of right now; schemas might become stale.
         let schema_names: Vec<_> = catalog
-            .without_session()
             .list_namespaces(None)
             .await?
             .iter()
@@ -100,7 +98,7 @@ impl CatalogProvider for IcebergCatalogProvider {
 }
 
 async fn load_schema_providers(
-    catalog_access: CatalogAccess,
+    catalog: Arc<SessionBindingCatalogAdapter>,
     schema_names: Vec<String>,
 ) -> Result<HashMap<String, Arc<dyn SchemaProvider>>> {
     let iceberg_providers = try_join_all(
@@ -108,7 +106,7 @@ async fn load_schema_providers(
             .iter()
             .map(|name| {
                 IcebergSchemaProvider::try_new(
-                    catalog_access.clone(),
+                    Arc::clone(&catalog),
                     NamespaceIdent::new(name.clone()),
                 )
             })
