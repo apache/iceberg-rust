@@ -288,7 +288,7 @@ mod tests {
     use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
 
     use super::*;
-    use crate::catalog_access::SessionBindingCatalogAdapter;
+    use crate::catalog_adapter::SessionBindingCatalogAdapter;
     use crate::physical_plan::DATA_FILES_COL_NAME;
     use crate::table::IcebergTableProvider;
 

@@ -48,7 +48,7 @@ use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
 
-use crate::catalog_access::SessionBindingCatalogAdapter;
+use crate::catalog_adapter::SessionBindingCatalogAdapter;
 use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::project::project_with_partition;

@@ -22,7 +22,7 @@ use datafusion::catalog::{CatalogProvider, SchemaProvider};
 use futures::future::try_join_all;
 use iceberg::{Catalog, NamespaceIdent, Result, SessionCatalog, SessionContext};
 
-use crate::catalog_access::SessionBindingCatalogAdapter;
+use crate::catalog_adapter::SessionBindingCatalogAdapter;
 use crate::schema_provider::IcebergSchemaProvider;
 
 /// Provides a DataFusion interface to schemas in an Iceberg [`Catalog`] or
