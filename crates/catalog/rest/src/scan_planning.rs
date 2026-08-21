@@ -30,7 +30,7 @@ use iceberg::scan::{FileScanTask, ScanPlanner, ScanPlanningRequest, ScanPlanning
 use iceberg::spec::DataContentType;
 use iceberg::{Error, ErrorKind, Result, TableIdent};
 use rand::Rng;
-use reqwest::{Method, Response, StatusCode};
+use reqwest::{Method, StatusCode};
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize, Serializer};
 use uuid::{Uuid, Variant, Version};
@@ -41,6 +41,7 @@ use crate::endpoint::{
     Endpoint, V1_CANCEL_PLANNING, V1_FETCH_PLAN_RESULT, V1_FETCH_SCAN_TASKS, V1_PLAN_TABLE_SCAN,
 };
 use crate::request::HttpRequest;
+use crate::response::HttpResponse;
 use crate::types::{ErrorModel, ErrorResponse, StorageCredential};
 
 const HEADER_IDEMPOTENCY_KEY: &str = "Idempotency-Key";
@@ -553,16 +554,15 @@ impl RestSessionCatalog {
         }
         let http_response = client.query_catalog(HttpRequest::build(builder)?).await?;
         let resp: PlanTableScanResponse = match http_response.status() {
-            StatusCode::OK => deserialize_catalog_response(http_response).await?,
+            StatusCode::OK => deserialize_catalog_response(http_response)?,
             StatusCode::NOT_FOUND => {
-                return Err(map_plan_not_found(http_response, PlanNotFoundKind::Submit).await);
+                return Err(map_plan_not_found(http_response, PlanNotFoundKind::Submit));
             }
             _ => {
                 return Err(deserialize_unexpected_catalog_error(
                     http_response,
                     client.http_client.disable_header_redaction(),
-                )
-                .await);
+                ));
             }
         };
         match resp.status {
@@ -607,8 +607,7 @@ impl RestSessionCatalog {
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
                 client.http_client.disable_header_redaction(),
-            )
-            .await),
+            )),
         }
     }
 
@@ -630,30 +629,29 @@ impl RestSessionCatalog {
         let http_response = client.query_catalog(HttpRequest::build(builder)?).await?;
         match http_response.status() {
             StatusCode::OK => {
-                let bytes = http_response.bytes().await?;
+                let bytes = http_response.body();
                 if bytes.is_empty() {
                     return Err(Error::new(
                         ErrorKind::Unexpected,
                         "fetchScanTasks response was empty",
                     ));
                 }
-                serde_json::from_slice(&bytes).map_err(|e| {
+                serde_json::from_slice(bytes).map_err(|e| {
                     Error::new(
                         ErrorKind::Unexpected,
                         "Failed to parse response from rest catalog server",
                     )
-                    .with_context("json", String::from_utf8_lossy(&bytes))
+                    .with_context("json", String::from_utf8_lossy(bytes))
                     .with_source(e)
                 })
             }
             StatusCode::NOT_FOUND => {
-                Err(map_plan_not_found(http_response, PlanNotFoundKind::Tasks).await)
+                Err(map_plan_not_found(http_response, PlanNotFoundKind::Tasks))
             }
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
                 client.http_client.disable_header_redaction(),
-            )
-            .await),
+            )),
         }
     }
 
@@ -776,9 +774,8 @@ impl RestSessionCatalog {
             parse_retry_after(http_response.headers().get(reqwest::header::RETRY_AFTER));
         match status {
             StatusCode::OK => {
-                let resp: FetchPlanningResultResponse = deserialize_catalog_response(http_response)
-                    .await
-                    .map_err(PollError::Terminal)?;
+                let resp: FetchPlanningResultResponse =
+                    deserialize_catalog_response(http_response).map_err(PollError::Terminal)?;
                 match resp.status {
                     PlanStatus::Failed => {
                         Err(PollError::Terminal(failed_plan_error(resp.error.as_ref())))
@@ -790,9 +787,10 @@ impl RestSessionCatalog {
                     PlanStatus::Completed | PlanStatus::Submitted => Ok(resp),
                 }
             }
-            StatusCode::NOT_FOUND => Err(PollError::Terminal(
-                map_plan_not_found(http_response, PlanNotFoundKind::Fetch).await,
-            )),
+            StatusCode::NOT_FOUND => Err(PollError::Terminal(map_plan_not_found(
+                http_response,
+                PlanNotFoundKind::Fetch,
+            ))),
             StatusCode::REQUEST_TIMEOUT
             | StatusCode::TOO_MANY_REQUESTS
             | StatusCode::INTERNAL_SERVER_ERROR
@@ -803,17 +801,13 @@ impl RestSessionCatalog {
                     http_response,
                     client.http_client.disable_header_redaction(),
                 )
-                .await
                 .with_retryable(true);
                 Err(PollError::Retry { retry_after, error })
             }
-            _ => Err(PollError::Terminal(
-                deserialize_unexpected_catalog_error(
-                    http_response,
-                    client.http_client.disable_header_redaction(),
-                )
-                .await,
-            )),
+            _ => Err(PollError::Terminal(deserialize_unexpected_catalog_error(
+                http_response,
+                client.http_client.disable_header_redaction(),
+            ))),
         }
     }
 
@@ -981,12 +975,9 @@ enum PlanNotFoundKind {
     Tasks,
 }
 
-async fn map_plan_not_found(response: Response, kind: PlanNotFoundKind) -> Error {
-    let bytes = match response.bytes().await {
-        Ok(bytes) => bytes,
-        Err(err) => return err.into(),
-    };
-    let err_type = serde_json::from_slice::<ErrorResponse>(&bytes)
+fn map_plan_not_found(response: HttpResponse, kind: PlanNotFoundKind) -> Error {
+    let bytes = response.body();
+    let err_type = serde_json::from_slice::<ErrorResponse>(bytes)
         .ok()
         .map(|parsed| parsed.error_type().to_string());
     match (kind, err_type.as_deref()) {
@@ -1009,7 +1000,7 @@ async fn map_plan_not_found(response: Response, kind: PlanNotFoundKind) -> Error
             "Received response with unexpected status code",
         )
         .with_context("status", "404")
-        .with_context("json", String::from_utf8_lossy(&bytes)),
+        .with_context("json", String::from_utf8_lossy(bytes)),
     }
 }
 
