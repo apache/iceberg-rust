@@ -3810,7 +3810,7 @@ pub fn iceberg::TableCommit::take_updates(&mut self) -> alloc::vec::Vec<iceberg:
 impl core::fmt::Debug for iceberg::TableCommit
 pub fn iceberg::TableCommit::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::TableCommit
-pub fn iceberg::TableCommit::builder() -> TableCommitBuilder<((), (), ())>
+pub fn iceberg::TableCommit::builder() -> TableCommitBuilder<((), (), (), ())>
 pub struct iceberg::TableCreation
 pub iceberg::TableCreation::format_version: iceberg::spec::FormatVersion
 pub iceberg::TableCreation::location: core::option::Option<alloc::string::String>
