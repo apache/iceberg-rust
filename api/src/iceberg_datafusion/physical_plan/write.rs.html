@@ -209,7 +209,7 @@
 <a href=#209 id=209 data-nosnippet>209</a>            .map_err(to_datafusion_error)<span class="question-mark">?</span>;
 <a href=#210 id=210 data-nosnippet>210</a>
 <a href=#211 id=211 data-nosnippet>211</a>        <span class="comment">// Check data file format
-<a href=#212 id=212 data-nosnippet>212</a>        </span><span class="kw">let </span>file_format = DataFileFormat::from_str(<span class="kw-2">&amp;</span>table_props.write_format_default)
+<a href=#212 id=212 data-nosnippet>212</a>        </span><span class="kw">let </span>file_format = DataFileFormat::from_str(table_props.write_format_default())
 <a href=#213 id=213 data-nosnippet>213</a>            .map_err(to_datafusion_error)<span class="question-mark">?</span>;
 <a href=#214 id=214 data-nosnippet>214</a>        <span class="kw">if </span>file_format != DataFileFormat::Parquet {
 <a href=#215 id=215 data-nosnippet>215</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(to_datafusion_error(Error::new(
@@ -231,7 +231,7 @@
 <a href=#231 id=231 data-nosnippet>231</a>            parquet_file_writer_builder =
 <a href=#232 id=232 data-nosnippet>232</a>                parquet_file_writer_builder.with_encryption_manager(encryption_manager.clone());
 <a href=#233 id=233 data-nosnippet>233</a>        }
-<a href=#234 id=234 data-nosnippet>234</a>        <span class="kw">let </span>target_file_size = table_props.write_target_file_size_bytes;
+<a href=#234 id=234 data-nosnippet>234</a>        <span class="kw">let </span>target_file_size = table_props.write_target_file_size_bytes();
 <a href=#235 id=235 data-nosnippet>235</a>
 <a href=#236 id=236 data-nosnippet>236</a>        <span class="kw">let </span>file_io = <span class="self">self</span>.table.file_io().clone();
 <a href=#237 id=237 data-nosnippet>237</a>        <span class="comment">// todo location_gen and file_name_gen should be configurable
@@ -250,7 +250,7 @@
 <a href=#250 id=250 data-nosnippet>250</a>        <span class="kw">let </span>data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 <a href=#251 id=251 data-nosnippet>251</a>
 <a href=#252 id=252 data-nosnippet>252</a>        <span class="comment">// Create TaskWriter
-<a href=#253 id=253 data-nosnippet>253</a>        </span><span class="kw">let </span>fanout_enabled = table_props.write_datafusion_fanout_enabled;
+<a href=#253 id=253 data-nosnippet>253</a>        </span><span class="kw">let </span>fanout_enabled = table_props.write_datafusion_fanout_enabled();
 <a href=#254 id=254 data-nosnippet>254</a>        <span class="kw">let </span>schema = <span class="self">self</span>.table.metadata().current_schema().clone();
 <a href=#255 id=255 data-nosnippet>255</a>        <span class="kw">let </span>partition_spec = <span class="self">self</span>.table.metadata().default_partition_spec().clone();
 <a href=#256 id=256 data-nosnippet>256</a>        <span class="kw">let </span>task_writer = TaskWriter::try_new(

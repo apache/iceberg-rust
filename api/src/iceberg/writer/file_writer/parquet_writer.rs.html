@@ -88,19 +88,19 @@
 <a href=#88 id=88 data-nosnippet>88</a>    /// schema, translating `write.parquet.*` settings into `WriterProperties`
 <a href=#89 id=89 data-nosnippet>89</a>    /// instead of using parquet-rs defaults.
 <a href=#90 id=90 data-nosnippet>90</a>    </span><span class="kw">pub fn </span>from_table_properties(table_props: <span class="kw-2">&amp;</span>TableProperties, schema: SchemaRef) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#91 id=91 data-nosnippet>91</a>        <span class="kw">let </span>cdc = table_props.cdc_enabled.then_some(CdcOptions {
-<a href=#92 id=92 data-nosnippet>92</a>            min_chunk_size: table_props.cdc_min_chunk_size,
-<a href=#93 id=93 data-nosnippet>93</a>            max_chunk_size: table_props.cdc_max_chunk_size,
-<a href=#94 id=94 data-nosnippet>94</a>            norm_level: table_props.cdc_norm_level,
+<a href=#91 id=91 data-nosnippet>91</a>        <span class="kw">let </span>cdc = table_props.cdc_enabled().then_some(CdcOptions {
+<a href=#92 id=92 data-nosnippet>92</a>            min_chunk_size: table_props.cdc_min_chunk_size(),
+<a href=#93 id=93 data-nosnippet>93</a>            max_chunk_size: table_props.cdc_max_chunk_size(),
+<a href=#94 id=94 data-nosnippet>94</a>            norm_level: table_props.cdc_norm_level(),
 <a href=#95 id=95 data-nosnippet>95</a>        });
-<a href=#96 id=96 data-nosnippet>96</a>        <span class="kw">let </span>compression = parquet_compression(table_props.parquet_compression_codec)<span class="question-mark">?</span>;
+<a href=#96 id=96 data-nosnippet>96</a>        <span class="kw">let </span>compression = parquet_compression(<span class="kw-2">*</span>table_props.parquet_compression_codec())<span class="question-mark">?</span>;
 <a href=#97 id=97 data-nosnippet>97</a>        <span class="kw">let </span>props = WriterProperties::builder()
 <a href=#98 id=98 data-nosnippet>98</a>            .set_content_defined_chunking(cdc)
 <a href=#99 id=99 data-nosnippet>99</a>            .set_compression(compression)
-<a href=#100 id=100 data-nosnippet>100</a>            .set_max_row_group_bytes(<span class="prelude-val">Some</span>(table_props.parquet_row_group_size_bytes))
-<a href=#101 id=101 data-nosnippet>101</a>            .set_data_page_size_limit(table_props.parquet_page_size_bytes)
-<a href=#102 id=102 data-nosnippet>102</a>            .set_data_page_row_count_limit(table_props.parquet_page_row_limit)
-<a href=#103 id=103 data-nosnippet>103</a>            .set_dictionary_page_size_limit(table_props.parquet_dict_size_bytes)
+<a href=#100 id=100 data-nosnippet>100</a>            .set_max_row_group_bytes(<span class="prelude-val">Some</span>(table_props.parquet_row_group_size_bytes()))
+<a href=#101 id=101 data-nosnippet>101</a>            .set_data_page_size_limit(table_props.parquet_page_size_bytes())
+<a href=#102 id=102 data-nosnippet>102</a>            .set_data_page_row_count_limit(table_props.parquet_page_row_limit())
+<a href=#103 id=103 data-nosnippet>103</a>            .set_dictionary_page_size_limit(table_props.parquet_dict_size_bytes())
 <a href=#104 id=104 data-nosnippet>104</a>            .build();
 <a href=#105 id=105 data-nosnippet>105</a>        <span class="prelude-val">Ok</span>(<span class="self">Self</span>::new_with_match_mode(props, schema, FieldMatchMode::Id))
 <a href=#106 id=106 data-nosnippet>106</a>    }

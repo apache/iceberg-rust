@@ -114,7 +114,7 @@
 <a href=#114 id=114 data-nosnippet>114</a>        }
 <a href=#115 id=115 data-nosnippet>115</a>
 <a href=#116 id=116 data-nosnippet>116</a>        <span class="kw">let </span>table_properties = metadata.table_properties()<span class="question-mark">?</span>;
-<a href=#117 id=117 data-nosnippet>117</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(table_key_id) = table_properties.encryption_key_id.as_deref() <span class="kw">else </span>{
+<a href=#117 id=117 data-nosnippet>117</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(table_key_id) = table_properties.encryption_key_id().as_deref() <span class="kw">else </span>{
 <a href=#118 id=118 data-nosnippet>118</a>            <span class="kw">if </span>kms_client.is_some() {
 <a href=#119 id=119 data-nosnippet>119</a>                <span class="macro">tracing::warn!</span>(
 <a href=#120 id=120 data-nosnippet>120</a>                    <span class="string">"KeyManagementClient provided but table does not have encryption.key-id set"

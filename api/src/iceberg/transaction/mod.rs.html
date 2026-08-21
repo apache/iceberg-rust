@@ -181,7 +181,7 @@
 <a href=#181 id=181 data-nosnippet>181</a>        <span class="kw">let </span>table_props = <span class="self">self</span>.table.metadata().table_properties()<span class="question-mark">?</span>;
 <a href=#182 id=182 data-nosnippet>182</a>
 <a href=#183 id=183 data-nosnippet>183</a>        <span class="comment">// TODO(https://github.com/apache/iceberg-rust/issues/2034): remove once encrypted writes are supported
-<a href=#184 id=184 data-nosnippet>184</a>        </span><span class="kw">if </span>table_props.encryption_key_id.is_some() {
+<a href=#184 id=184 data-nosnippet>184</a>        </span><span class="kw">if </span>table_props.encryption_key_id().is_some() {
 <a href=#185 id=185 data-nosnippet>185</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#186 id=186 data-nosnippet>186</a>                ErrorKind::FeatureUnsupported,
 <a href=#187 id=187 data-nosnippet>187</a>                <span class="string">"Cannot commit to an encrypted table: encrypted writes are not yet supported"</span>,
@@ -205,12 +205,12 @@
 <a href=#205 id=205 data-nosnippet>205</a>
 <a href=#206 id=206 data-nosnippet>206</a>    <span class="kw">fn </span>build_backoff(props: TableProperties) -&gt; <span class="prelude-ty">Result</span>&lt;ExponentialBackoff&gt; {
 <a href=#207 id=207 data-nosnippet>207</a>        <span class="prelude-val">Ok</span>(ExponentialBuilder::new()
-<a href=#208 id=208 data-nosnippet>208</a>            .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms))
-<a href=#209 id=209 data-nosnippet>209</a>            .with_max_delay(Duration::from_millis(props.commit_max_retry_wait_ms))
+<a href=#208 id=208 data-nosnippet>208</a>            .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms()))
+<a href=#209 id=209 data-nosnippet>209</a>            .with_max_delay(Duration::from_millis(props.commit_max_retry_wait_ms()))
 <a href=#210 id=210 data-nosnippet>210</a>            .with_total_delay(<span class="prelude-val">Some</span>(Duration::from_millis(
-<a href=#211 id=211 data-nosnippet>211</a>                props.commit_total_retry_timeout_ms,
+<a href=#211 id=211 data-nosnippet>211</a>                props.commit_total_retry_timeout_ms(),
 <a href=#212 id=212 data-nosnippet>212</a>            )))
-<a href=#213 id=213 data-nosnippet>213</a>            .with_max_times(props.commit_num_retries)
+<a href=#213 id=213 data-nosnippet>213</a>            .with_max_times(props.commit_num_retries())
 <a href=#214 id=214 data-nosnippet>214</a>            .with_factor(<span class="number">2.0</span>)
 <a href=#215 id=215 data-nosnippet>215</a>            .build())
 <a href=#216 id=216 data-nosnippet>216</a>    }
