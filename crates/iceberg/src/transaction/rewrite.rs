@@ -277,6 +277,57 @@ mod tests {
         assert_eq!(live_files, vec!["test/3.parquet", "test/merged.parquet"]);
     }
 
+    /// Rewrite on an empty table (no snapshot) should fail because
+    /// the delete target doesn't exist.
+    #[tokio::test]
+    async fn test_rewrite_files_empty_table() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
+        let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
+        let tx = Transaction::new(&table);
+        let action = tx.rewrite_files().delete_file(f1).add_file(merged);
+        let tx = action.apply(tx).unwrap();
+        let result = tx.commit(&catalog).await;
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .message()
+                .contains("Failed to find the following files to delete"),
+        );
+    }
+
+    /// Rewrite where all files in a manifest are deleted should omit
+    /// the manifest entirely (not leave an empty one).
+    #[tokio::test]
+    async fn test_rewrite_files_removes_empty_manifest() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // Append 1 file → 1 manifest.
+        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
+        let table = append_files(&catalog, &table, vec![f1.clone()]).await;
+
+        // Rewrite: delete f1, add merged → f1's manifest should be omitted.
+        let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
+        let tx = Transaction::new(&table);
+        let action = tx.rewrite_files().delete_file(f1).add_file(merged);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Verify: only 1 manifest (the new one), not 2.
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
+        assert_eq!(
+            manifest_list.entries().len(),
+            1,
+            "empty manifest should be omitted, not kept"
+        );
+    }
+
     /// Rewrite with no adds should fail validation.
     #[tokio::test]
     async fn test_rewrite_files_no_adds() {
