@@ -117,7 +117,7 @@ fn parse_parquet_compression(
 }
 
 /// TableProperties that contains the properties of a table.
-#[derive(Clone, Debug, PartialEq, Properties)]
+#[derive(Clone, Debug, Eq, PartialEq, Properties)]
 pub struct TableProperties {
     /// The number of times to retry a commit.
     #[property(

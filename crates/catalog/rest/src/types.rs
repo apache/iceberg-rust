@@ -205,7 +205,7 @@ pub struct RenameTableRequest {
     pub destination: TableIdent,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 /// Result returned when a table is successfully loaded or created.
 ///
@@ -294,7 +294,7 @@ pub struct CommitTableRequest {
     pub updates: Vec<TableUpdate>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 /// Response returned when a table is successfully updated.
 ///

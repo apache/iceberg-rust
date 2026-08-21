@@ -291,10 +291,9 @@ pub(crate) mod test {
     use uuid::Uuid;
 
     use super::LocationGenerator;
-    use crate::TableCreation;
     use crate::spec::{
-        Literal, NestedField, PartitionKey, PartitionSpec, PrimitiveType, Schema, Struct,
-        TableMetadata, TableMetadataBuilder, TableProperties, Transform, Type,
+        FormatVersion, Literal, NestedField, PartitionKey, PartitionSpec, PrimitiveType, Schema,
+        Struct, StructType, TableMetadata, TableProperties, Transform, Type,
     };
     use crate::writer::file_writer::location_generator::{
         DefaultLocationGenerator, FileNameGenerator, ObjectStorageLocationGenerator,
@@ -616,20 +615,35 @@ pub(crate) mod test {
         );
     }
 
-    /// Build table metadata for location generator tests.
+    /// Build a minimal `TableMetadata` for location generator tests.
     fn table_metadata_with(location: &str, properties: HashMap<String, String>) -> TableMetadata {
-        let table_creation = TableCreation::builder()
-            .name("test_table".to_string())
-            .location(location.to_string())
-            .schema(Schema::builder().build().unwrap())
-            .properties(properties)
-            .build();
-
-        TableMetadataBuilder::from_table_creation(table_creation)
-            .unwrap()
-            .assign_uuid(Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap())
-            .build()
-            .unwrap()
-            .metadata
+        let table_properties = TableProperties::try_from(&properties).unwrap();
+        TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
+            location: location.to_string(),
+            last_updated_ms: 1515100955770,
+            last_column_id: 2,
+            schemas: HashMap::new(),
+            current_schema_id: 1,
+            partition_specs: HashMap::new(),
+            default_spec: PartitionSpec::unpartition_spec().into(),
+            default_partition_type: StructType::new(vec![]),
+            last_partition_id: 1000,
+            default_sort_order_id: 0,
+            sort_orders: HashMap::from_iter(vec![]),
+            snapshots: HashMap::default(),
+            current_snapshot_id: None,
+            last_sequence_number: 1,
+            properties,
+            table_properties,
+            snapshot_log: Vec::new(),
+            metadata_log: vec![],
+            refs: HashMap::new(),
+            statistics: HashMap::new(),
+            partition_statistics: HashMap::new(),
+            encryption_keys: HashMap::new(),
+            next_row_id: 0,
+        }
     }
 }

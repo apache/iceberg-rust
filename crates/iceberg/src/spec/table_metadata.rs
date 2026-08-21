@@ -33,9 +33,9 @@ use uuid::Uuid;
 use super::snapshot::SnapshotReference;
 pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 use super::{
-    DEFAULT_PARTITION_SPEC_ID, PartitionSpec, PartitionSpecRef, PartitionStatisticsFile, SchemaId,
-    SchemaRef, SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
-    TableProperties, UNPARTITIONED_LAST_ASSIGNED_ID,
+    DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
+    SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
+    TableProperties,
 };
 use crate::catalog::{METADATA_FOLDER_NAME, MetadataLocation};
 use crate::compression::CompressionCodec;
@@ -60,7 +60,7 @@ pub const MIN_FORMAT_VERSION_ROW_LINEAGE: FormatVersion = FormatVersion::V3;
 /// Reference to [`TableMetadata`].
 pub type TableMetadataRef = Arc<TableMetadata>;
 
-#[derive(Debug, PartialEq, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Deserialize, Eq, Clone)]
 #[serde(try_from = "TableMetadataEnum")]
 /// Fields for the version 2 of the table metadata.
 ///
@@ -96,7 +96,7 @@ pub struct TableMetadata {
     /// For example, commit.retry.num-retries is used to control the number of commit retries.
     pub(crate) properties: HashMap<String, String>,
     /// Typed table properties parsed from `properties` and kept in sync by the metadata builder.
-    table_properties: TableProperties,
+    pub(crate) table_properties: TableProperties,
     /// long ID of the current table snapshot; must be the same as the current
     /// ID of the main branch in refs.
     pub(crate) current_snapshot_id: Option<i64>,
@@ -143,48 +143,6 @@ pub struct TableMetadata {
 }
 
 impl TableMetadata {
-    /// Create empty table metadata for initialization by [`TableMetadataBuilder`].
-    pub(super) fn new_empty(format_version: FormatVersion) -> Result<Self> {
-        let properties = HashMap::new();
-        let table_properties = TableProperties::try_from(&properties)?;
-
-        Ok(Self {
-            format_version,
-            table_uuid: Uuid::now_v7(),
-            location: String::new(),
-            last_sequence_number: 0,
-            last_updated_ms: 0,
-            last_column_id: -1,
-            schemas: HashMap::new(),
-            current_schema_id: -1,
-            partition_specs: HashMap::new(),
-            default_spec: Arc::new(PartitionSpec::unpartition_spec().with_spec_id(-1)),
-            default_partition_type: StructType::new(vec![]),
-            last_partition_id: UNPARTITIONED_LAST_ASSIGNED_ID,
-            properties,
-            table_properties,
-            current_snapshot_id: None,
-            snapshots: HashMap::new(),
-            snapshot_log: vec![],
-            metadata_log: vec![],
-            sort_orders: HashMap::new(),
-            default_sort_order_id: -1,
-            refs: HashMap::new(),
-            statistics: HashMap::new(),
-            partition_statistics: HashMap::new(),
-            encryption_keys: HashMap::new(),
-            next_row_id: INITIAL_ROW_ID,
-        })
-    }
-
-    /// Replace the raw and typed table properties together.
-    pub(super) fn replace_properties(&mut self, properties: HashMap<String, String>) -> Result<()> {
-        let table_properties = TableProperties::try_from(&properties)?;
-        self.properties = properties;
-        self.table_properties = table_properties;
-        Ok(())
-    }
-
     /// Convert this Table Metadata into a builder for modification.
     ///
     /// `current_file_location` is the location where the current version
@@ -428,9 +386,8 @@ impl TableMetadata {
     /// # Errors
     ///
     /// Returns an error if the compression codec property has an invalid value.
-    #[allow(clippy::clone_on_copy)]
     pub fn metadata_compression_codec(&self) -> Result<CompressionCodec> {
-        Ok(self.table_properties.metadata_compression_codec().clone())
+        Ok(*self.table_properties.metadata_compression_codec())
     }
 
     /// Returns the typed table properties parsed when this metadata was constructed or modified.
@@ -535,7 +492,6 @@ impl TableMetadata {
     }
 
     /// Write table metadata to the given location.
-    #[allow(clippy::clone_on_copy)]
     pub async fn write_to(
         &self,
         file_io: &FileIO,
@@ -544,7 +500,7 @@ impl TableMetadata {
         let json_data = serde_json::to_vec(self)?;
 
         // Check if compression codec from properties matches the one in metadata_location
-        let codec = self.table_properties.metadata_compression_codec().clone();
+        let codec = *self.table_properties.metadata_compression_codec();
 
         if codec != metadata_location.compression_codec() {
             return Err(Error::new(
