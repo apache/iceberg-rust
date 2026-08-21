@@ -3893,9 +3893,11 @@ name = "iceberg-catalog-rest"
 version = "0.10.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "futures",
+ "hmac 0.12.1",
  "http 1.5.0",
  "iceberg",
  "iceberg_test_utils",
@@ -3905,6 +3907,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tracing",
  "typed-builder",
