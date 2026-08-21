@@ -3967,9 +3967,12 @@ dependencies = [
 name = "iceberg-examples"
 version = "0.10.0"
 dependencies = [
+ "async-trait",
+ "datafusion",
  "futures",
  "iceberg",
  "iceberg-catalog-rest",
+ "iceberg-datafusion",
  "iceberg-storage-opendal",
  "tokio",
 ]
