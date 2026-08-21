@@ -15,33 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
+[engines]
+df = { type = "datafusion" }
 
-  paths-ignore:
-    - "LICENSE"
-    - "NOTICE"
-    - ".gitattributes"
-    - "**/*.json"
-    # Generated content by mdbook
-    - "website/book"
-    # Generated content by scripts
-    - "**/DEPENDENCIES.*.tsv"
-    # Generated content by cargo-public-api
-    - "**/public-api.txt"
-    # Generated content by trybuild
-    - "**/*.stderr"
-    # Release distributions
-    - "dist/*"
-    - "target"
-    - "Cargo.lock"
-    - "bindings/python/uv.lock"
-    # GitHub configuration
-    - ".github/PULL_REQUEST_TEMPLATE.md"
-    - ".github/copilot-instructions.md"
-    # Python environment
-    - "bindings/python/.venv/"
-    - "bindings/python/.pytest_cache/"
-  comment: on-failure
+[[steps]]
+engine = "df"
+slt = "df_test/encrypted_insert_round_trip.slt"

@@ -2793,34 +2793,6 @@ pub fn iceberg::spec::TableMetadataBuilder::clone(&self) -> iceberg::spec::Table
 impl core::fmt::Debug for iceberg::spec::TableMetadataBuilder
 pub fn iceberg::spec::TableMetadataBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::spec::TableProperties
-pub iceberg::spec::TableProperties::cdc_enabled: bool
-pub iceberg::spec::TableProperties::cdc_max_chunk_size: usize
-pub iceberg::spec::TableProperties::cdc_min_chunk_size: usize
-pub iceberg::spec::TableProperties::cdc_norm_level: i32
-pub iceberg::spec::TableProperties::commit_max_retry_wait_ms: u64
-pub iceberg::spec::TableProperties::commit_min_retry_wait_ms: u64
-pub iceberg::spec::TableProperties::commit_num_retries: usize
-pub iceberg::spec::TableProperties::commit_total_retry_timeout_ms: u64
-pub iceberg::spec::TableProperties::encryption_data_key_length: usize
-pub iceberg::spec::TableProperties::encryption_key_id: core::option::Option<alloc::string::String>
-pub iceberg::spec::TableProperties::gc_enabled: bool
-pub iceberg::spec::TableProperties::max_ref_age_ms: i64
-pub iceberg::spec::TableProperties::max_snapshot_age_ms: i64
-pub iceberg::spec::TableProperties::metadata_compression_codec: iceberg::compression::CompressionCodec
-pub iceberg::spec::TableProperties::min_snapshots_to_keep: usize
-pub iceberg::spec::TableProperties::parquet_compression_codec: iceberg::compression::CompressionCodec
-pub iceberg::spec::TableProperties::parquet_dict_size_bytes: usize
-pub iceberg::spec::TableProperties::parquet_page_row_limit: usize
-pub iceberg::spec::TableProperties::parquet_page_size_bytes: usize
-pub iceberg::spec::TableProperties::parquet_row_group_size_bytes: usize
-pub iceberg::spec::TableProperties::write_data_location: core::option::Option<alloc::string::String>
-pub iceberg::spec::TableProperties::write_datafusion_fanout_enabled: bool
-pub iceberg::spec::TableProperties::write_folder_storage_location: core::option::Option<alloc::string::String>
-pub iceberg::spec::TableProperties::write_format_default: alloc::string::String
-pub iceberg::spec::TableProperties::write_metadata_path: core::option::Option<alloc::string::String>
-pub iceberg::spec::TableProperties::write_object_storage_location: core::option::Option<alloc::string::String>
-pub iceberg::spec::TableProperties::write_object_storage_partitioned_paths: bool
-pub iceberg::spec::TableProperties::write_target_file_size_bytes: usize
 impl iceberg::spec::TableProperties
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64

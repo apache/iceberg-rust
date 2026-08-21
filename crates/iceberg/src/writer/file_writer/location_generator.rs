@@ -69,8 +69,9 @@ impl DefaultLocationGenerator {
         let table_location = strip_trailing_slash(table_metadata.location());
         let prop = TableProperties::try_from(table_metadata.properties())?;
         let data_location = strip_trailing_slash(
-            prop.write_data_location
-                .or(prop.write_folder_storage_location)
+            prop.write_data_location()
+                .clone()
+                .or_else(|| prop.write_folder_storage_location().clone())
                 .unwrap_or(format!("{table_location}{DEFAULT_DATA_DIR}"))
                 .as_ref(),
         )
@@ -136,9 +137,10 @@ impl ObjectStorageLocationGenerator {
         let table_location = strip_trailing_slash(table_metadata.location());
         let prop = TableProperties::try_from(table_metadata.properties())?;
         let storage_location = strip_trailing_slash(
-            prop.write_data_location
-                .or(prop.write_object_storage_location)
-                .or(prop.write_folder_storage_location)
+            prop.write_data_location()
+                .clone()
+                .or_else(|| prop.write_object_storage_location().clone())
+                .or_else(|| prop.write_folder_storage_location().clone())
                 .unwrap_or(format!("{table_location}{DEFAULT_DATA_DIR}"))
                 .as_ref(),
         )
@@ -152,7 +154,7 @@ impl ObjectStorageLocationGenerator {
             Some(path_context(table_location))
         };
 
-        let include_partition_paths = prop.write_object_storage_partitioned_paths;
+        let include_partition_paths = prop.write_object_storage_partitioned_paths();
 
         Ok(Self {
             storage_location,

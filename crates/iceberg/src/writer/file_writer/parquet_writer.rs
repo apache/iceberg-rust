@@ -88,19 +88,19 @@ impl ParquetWriterBuilder {
     /// schema, translating `write.parquet.*` settings into `WriterProperties`
     /// instead of using parquet-rs defaults.
     pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Result<Self> {
-        let cdc = table_props.cdc_enabled.then_some(CdcOptions {
-            min_chunk_size: table_props.cdc_min_chunk_size,
-            max_chunk_size: table_props.cdc_max_chunk_size,
-            norm_level: table_props.cdc_norm_level,
+        let cdc = table_props.cdc_enabled().then_some(CdcOptions {
+            min_chunk_size: table_props.cdc_min_chunk_size(),
+            max_chunk_size: table_props.cdc_max_chunk_size(),
+            norm_level: table_props.cdc_norm_level(),
         });
-        let compression = parquet_compression(table_props.parquet_compression_codec)?;
+        let compression = parquet_compression(*table_props.parquet_compression_codec())?;
         let props = WriterProperties::builder()
             .set_content_defined_chunking(cdc)
             .set_compression(compression)
-            .set_max_row_group_bytes(Some(table_props.parquet_row_group_size_bytes))
-            .set_data_page_size_limit(table_props.parquet_page_size_bytes)
-            .set_data_page_row_count_limit(table_props.parquet_page_row_limit)
-            .set_dictionary_page_size_limit(table_props.parquet_dict_size_bytes)
+            .set_max_row_group_bytes(Some(table_props.parquet_row_group_size_bytes()))
+            .set_data_page_size_limit(table_props.parquet_page_size_bytes())
+            .set_data_page_row_count_limit(table_props.parquet_page_row_limit())
+            .set_dictionary_page_size_limit(table_props.parquet_dict_size_bytes())
             .build();
         Ok(Self::new_with_match_mode(props, schema, FieldMatchMode::Id))
     }
