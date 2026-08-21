@@ -288,7 +288,7 @@ mod tests {
     use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
 
     use super::*;
-    use crate::catalog_access::CatalogAccess;
+    use crate::catalog_access::SessionBindingCatalogAdapter;
     use crate::physical_plan::DATA_FILES_COL_NAME;
     use crate::table::IcebergTableProvider;
 
@@ -660,8 +660,9 @@ mod tests {
         let source_table = Arc::new(MemTable::try_new(Arc::clone(&arrow_schema), partitions)?);
         ctx.register_table("source_table", source_table)?;
 
+        let session_binding_catalog = SessionBindingCatalogAdapter::new_without_context(catalog);
         let iceberg_table_provider = IcebergTableProvider::try_new(
-            CatalogAccess::Direct(catalog),
+            Arc::new(session_binding_catalog),
             namespace.clone(),
             table_name.to_string(),
         )
