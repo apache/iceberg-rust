@@ -35,7 +35,7 @@ use itertools::Itertools;
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, {self},
 };
-use reqwest::{Client, Method, Response, StatusCode, Url};
+use reqwest::{Client, Method, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
@@ -45,6 +45,7 @@ use crate::client::{
 };
 use crate::endpoint::{Endpoint, V1_NAMESPACE_EXISTS, V1_TABLE_EXISTS};
 use crate::request::HttpRequest;
+use crate::response::HttpResponse;
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
     CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
@@ -292,7 +293,7 @@ impl RestCatalogConfig {
 
     /// Merge the `RestCatalogConfig` with the a [`CatalogConfig`] (fetched from the REST server).
     pub(crate) fn merge_with_config(mut self, mut config: CatalogConfig) -> Self {
-        if let Some(uri) = config.overrides.remove("uri") {
+        if let Some(uri) = config.overrides.remove(REST_CATALOG_PROP_URI) {
             self.uri = uri;
         }
 
@@ -479,7 +480,7 @@ impl RestClient {
     }
 
     /// Sends `request`, authenticated by the client's session.
-    pub(crate) async fn query_catalog(&self, request: HttpRequest) -> Result<Response> {
+    pub(crate) async fn query_catalog(&self, request: HttpRequest) -> Result<HttpResponse> {
         self.http_client.query_catalog(request).await
     }
 
@@ -520,12 +521,11 @@ impl RestClient {
         let http_response = http_client.query_catalog(request).await?;
 
         match http_response.status() {
-            StatusCode::OK => deserialize_catalog_response(http_response).await,
+            StatusCode::OK => deserialize_catalog_response(http_response),
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
                 http_client.disable_header_redaction(),
-            )
-            .await),
+            )),
         }
     }
 }
@@ -782,8 +782,7 @@ impl RestSessionCatalog {
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
                 client.http_client.disable_header_redaction(),
-            )
-            .await),
+            )),
         }
     }
 
@@ -868,8 +867,7 @@ impl RestSessionCatalog {
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
                 client.http_client.disable_header_redaction(),
-            )
-            .await),
+            )),
         }
     }
 
@@ -946,8 +944,7 @@ impl SessionCatalog for RestSessionCatalog {
             match http_response.status() {
                 StatusCode::OK => {
                     let response =
-                        deserialize_catalog_response::<ListNamespaceResponse>(http_response)
-                            .await?;
+                        deserialize_catalog_response::<ListNamespaceResponse>(http_response)?;
 
                     namespaces.extend(response.namespaces);
 
@@ -966,8 +963,7 @@ impl SessionCatalog for RestSessionCatalog {
                     return Err(deserialize_unexpected_catalog_error(
                         http_response,
                         client.http_client.disable_header_redaction(),
-                    )
-                    .await);
+                    ));
                 }
             }
         }
@@ -997,8 +993,7 @@ impl SessionCatalog for RestSessionCatalog {
 
         match http_response.status() {
             StatusCode::OK => {
-                let response =
-                    deserialize_catalog_response::<NamespaceResponse>(http_response).await?;
+                let response = deserialize_catalog_response::<NamespaceResponse>(http_response)?;
                 Ok(Namespace::from(response))
             }
             StatusCode::CONFLICT => Err(Error::new(
@@ -1008,8 +1003,7 @@ impl SessionCatalog for RestSessionCatalog {
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
                 client.http_client.disable_header_redaction(),
-            )
-            .await),
+            )),
         }
     }
 
@@ -1030,8 +1024,7 @@ impl SessionCatalog for RestSessionCatalog {
 
         match http_response.status() {
             StatusCode::OK => {
-                let response =
-                    deserialize_catalog_response::<NamespaceResponse>(http_response).await?;
+                let response = deserialize_catalog_response::<NamespaceResponse>(http_response)?;
                 Ok(Namespace::from(response))
             }
             StatusCode::NOT_FOUND => Err(Error::new(
@@ -1041,8 +1034,7 @@ impl SessionCatalog for RestSessionCatalog {
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
                 client.http_client.disable_header_redaction(),
-            )
-            .await),
+            )),
         }
     }
 
@@ -1104,8 +1096,7 @@ impl SessionCatalog for RestSessionCatalog {
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
                 client.http_client.disable_header_redaction(),
-            )
-            .await),
+            )),
         }
     }
 
@@ -1131,7 +1122,7 @@ impl SessionCatalog for RestSessionCatalog {
             match http_response.status() {
                 StatusCode::OK => {
                     let response =
-                        deserialize_catalog_response::<ListTablesResponse>(http_response).await?;
+                        deserialize_catalog_response::<ListTablesResponse>(http_response)?;
 
                     identifiers.extend(response.identifiers);
 
@@ -1150,8 +1141,7 @@ impl SessionCatalog for RestSessionCatalog {
                     return Err(deserialize_unexpected_catalog_error(
                         http_response,
                         client.http_client.disable_header_redaction(),
-                    )
-                    .await);
+                    ));
                 }
             }
         }
@@ -1193,9 +1183,7 @@ impl SessionCatalog for RestSessionCatalog {
         let http_response = client.query_catalog(request).await?;
 
         let response = match http_response.status() {
-            StatusCode::OK => {
-                deserialize_catalog_response::<LoadTableResult>(http_response).await?
-            }
+            StatusCode::OK => deserialize_catalog_response::<LoadTableResult>(http_response)?,
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
                     ErrorKind::NamespaceNotFound,
@@ -1212,8 +1200,7 @@ impl SessionCatalog for RestSessionCatalog {
                 return Err(deserialize_unexpected_catalog_error(
                     http_response,
                     client.http_client.disable_header_redaction(),
-                )
-                .await);
+                ));
             }
         };
 
@@ -1270,7 +1257,7 @@ impl SessionCatalog for RestSessionCatalog {
 
         let response = match http_response.status() {
             StatusCode::OK | StatusCode::NOT_MODIFIED => {
-                deserialize_catalog_response::<LoadTableResult>(http_response).await?
+                deserialize_catalog_response::<LoadTableResult>(http_response)?
             }
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
@@ -1282,8 +1269,7 @@ impl SessionCatalog for RestSessionCatalog {
                 return Err(deserialize_unexpected_catalog_error(
                     http_response,
                     client.http_client.disable_header_redaction(),
-                )
-                .await);
+                ));
             }
         };
 
@@ -1376,8 +1362,7 @@ impl SessionCatalog for RestSessionCatalog {
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
                 client.http_client.disable_header_redaction(),
-            )
-            .await),
+            )),
         }
     }
 
@@ -1408,9 +1393,7 @@ impl SessionCatalog for RestSessionCatalog {
         let http_response = client.query_catalog(request).await?;
 
         let response: LoadTableResult = match http_response.status() {
-            StatusCode::OK => {
-                deserialize_catalog_response::<LoadTableResult>(http_response).await?
-            }
+            StatusCode::OK => deserialize_catalog_response::<LoadTableResult>(http_response)?,
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
                     ErrorKind::NamespaceNotFound,
@@ -1427,8 +1410,7 @@ impl SessionCatalog for RestSessionCatalog {
                 return Err(deserialize_unexpected_catalog_error(
                     http_response,
                     client.http_client.disable_header_redaction(),
-                )
-                .await);
+                ));
             }
         };
 
@@ -1475,7 +1457,7 @@ impl SessionCatalog for RestSessionCatalog {
         let http_response = client.query_catalog(request).await?;
 
         let response: CommitTableResponse = match http_response.status() {
-            StatusCode::OK => deserialize_catalog_response(http_response).await?,
+            StatusCode::OK => deserialize_catalog_response(http_response)?,
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
                     ErrorKind::TableNotFound,
@@ -1511,8 +1493,7 @@ impl SessionCatalog for RestSessionCatalog {
                 return Err(deserialize_unexpected_catalog_error(
                     http_response,
                     client.http_client.disable_header_redaction(),
-                )
-                .await);
+                ));
             }
         };
 

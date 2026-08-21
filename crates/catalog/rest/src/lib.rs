@@ -91,6 +91,8 @@ mod client;
 pub use client::HttpClient;
 mod request;
 pub use request::{HttpRequest, HttpRequestBody};
+mod response;
+pub use response::HttpResponse;
 mod endpoint;
 mod scan_planning;
 mod types;
