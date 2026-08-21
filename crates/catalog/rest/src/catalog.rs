@@ -895,86 +895,6 @@ impl RestSessionCatalog {
 
         Ok(file_io)
     }
-
-    async fn create_table_internal(
-        &self,
-        namespace: &NamespaceIdent,
-        creation: TableCreation,
-        stage_create: bool,
-    ) -> Result<Table> {
-        let client = self.client().await?;
-        let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
-        let mut properties = creation.properties;
-        properties.insert(
-            iceberg::spec::TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
-            (creation.format_version as u8).to_string(),
-        );
-        let request = HttpRequest::build(
-            client
-                .http_client
-                .request(Method::POST, client.config.tables_endpoint(namespace))
-                .json(&CreateTableRequest {
-                    name: creation.name,
-                    location: creation.location,
-                    schema: creation.schema,
-                    partition_spec: creation.partition_spec,
-                    write_order: creation.sort_order,
-                    stage_create: Some(stage_create),
-                    properties,
-                }),
-        )?;
-        let http_response = client.query_catalog(request).await?;
-        let response = match http_response.status() {
-            StatusCode::OK => deserialize_catalog_response::<LoadTableResult>(http_response)?,
-            StatusCode::NOT_FOUND => {
-                return Err(Error::new(
-                    ErrorKind::NamespaceNotFound,
-                    "Tried to create a table under a namespace that does not exist",
-                ));
-            }
-            StatusCode::CONFLICT => {
-                return Err(Error::new(
-                    ErrorKind::TableAlreadyExists,
-                    "The table already exists",
-                ));
-            }
-            _ => {
-                return Err(deserialize_unexpected_catalog_error(
-                    http_response,
-                    client.http_client.disable_header_redaction(),
-                ));
-            }
-        };
-        if !stage_create && response.metadata_location.is_none() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Metadata location missing in `create_table` response!",
-            ));
-        }
-        let io_location = response
-            .metadata_location
-            .as_deref()
-            .unwrap_or_else(|| response.metadata.location());
-        let config = response
-            .config
-            .into_iter()
-            .chain(self.user_config.props.clone())
-            .collect();
-        let file_io = self.load_file_io(Some(io_location), Some(config)).await?;
-        let mut table_builder = Table::builder()
-            .identifier(table_ident)
-            .file_io(file_io)
-            .metadata(response.metadata)
-            .runtime(self.runtime.clone());
-        if let Some(kms_client) = self.kms_client.clone() {
-            table_builder = table_builder.kms_client(kms_client);
-        }
-        if let Some(metadata_location) = response.metadata_location {
-            table_builder.metadata_location(metadata_location).build()
-        } else {
-            table_builder.build()
-        }
-    }
 }
 
 /// All requests and expected responses are derived from the REST catalog API spec:
@@ -1512,6 +1432,88 @@ impl SessionCatalog for RestSessionCatalog {
             table_builder = table_builder.kms_client(kms_client);
         }
         table_builder.build()
+    }
+}
+
+impl RestSessionCatalog {
+    async fn create_table_internal(
+        &self,
+        namespace: &NamespaceIdent,
+        creation: TableCreation,
+        stage_create: bool,
+    ) -> Result<Table> {
+        let client = self.client().await?;
+        let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
+        let mut properties = creation.properties;
+        properties.insert(
+            iceberg::spec::TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
+            (creation.format_version as u8).to_string(),
+        );
+        let request = HttpRequest::build(
+            client
+                .http_client
+                .request(Method::POST, client.config.tables_endpoint(namespace))
+                .json(&CreateTableRequest {
+                    name: creation.name,
+                    location: creation.location,
+                    schema: creation.schema,
+                    partition_spec: creation.partition_spec,
+                    write_order: creation.sort_order,
+                    stage_create: Some(stage_create),
+                    properties,
+                }),
+        )?;
+        let http_response = client.query_catalog(request).await?;
+        let response = match http_response.status() {
+            StatusCode::OK => deserialize_catalog_response::<LoadTableResult>(http_response)?,
+            StatusCode::NOT_FOUND => {
+                return Err(Error::new(
+                    ErrorKind::NamespaceNotFound,
+                    "Tried to create a table under a namespace that does not exist",
+                ));
+            }
+            StatusCode::CONFLICT => {
+                return Err(Error::new(
+                    ErrorKind::TableAlreadyExists,
+                    "The table already exists",
+                ));
+            }
+            _ => {
+                return Err(deserialize_unexpected_catalog_error(
+                    http_response,
+                    client.http_client.disable_header_redaction(),
+                ));
+            }
+        };
+        if !stage_create && response.metadata_location.is_none() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Metadata location missing in `create_table` response!",
+            ));
+        }
+        let io_location = response
+            .metadata_location
+            .as_deref()
+            .unwrap_or_else(|| response.metadata.location());
+        let config = response
+            .config
+            .into_iter()
+            .chain(self.user_config.props.clone())
+            .collect();
+        let file_io = self.load_file_io(Some(io_location), Some(config)).await?;
+        let mut table_builder = Table::builder()
+            .identifier(table_ident)
+            .file_io(file_io)
+            .metadata(response.metadata)
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            table_builder = table_builder.kms_client(kms_client);
+        }
+        if let Some(metadata_location) = response.metadata_location {
+            table_builder.metadata_location(metadata_location).build()
+        } else {
+            table_builder.build()
+        }
     }
 }
 
