@@ -31,9 +31,10 @@ use crate::io::{FileIO, FileIOBuilder, MemoryStorageFactory, StorageFactory};
 use crate::runtime::Runtime;
 use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
+use crate::transaction::Transaction;
 use crate::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    TableCommit, TableCreation, TableIdent, TransactionalCatalog,
 };
 
 /// Memory catalog warehouse location
@@ -413,13 +414,16 @@ impl Catalog for MemoryCatalog {
     /// Update a table in the catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
         let mut root_namespace_state = self.root_namespace_state.lock().await;
-
-        let current_table = self
-            .load_table_from_locked_state(commit.identifier(), &root_namespace_state)
-            .await?;
-
-        // Apply TableCommit to get staged table
-        let staged_table = commit.apply(current_table)?;
+        let creating =
+            commit.is_create() && !root_namespace_state.table_exists(commit.identifier())?;
+        let staged_table = if creating {
+            commit.apply_new()?
+        } else {
+            let current_table = self
+                .load_table_from_locked_state(commit.identifier(), &root_namespace_state)
+                .await?;
+            commit.apply(current_table)?
+        };
 
         // Write table metadata to the new location
         let metadata_location =
@@ -429,10 +433,55 @@ impl Catalog for MemoryCatalog {
             .write_to(staged_table.file_io(), &metadata_location)
             .await?;
 
-        // Flip the pointer to reference the new metadata file.
-        let updated_table = root_namespace_state.commit_table_update(staged_table)?;
+        if creating {
+            root_namespace_state
+                .insert_new_table(staged_table.identifier(), metadata_location.to_string())?;
+            Ok(staged_table)
+        } else {
+            root_namespace_state.commit_table_update(staged_table)
+        }
+    }
+}
 
-        Ok(updated_table)
+#[async_trait]
+impl TransactionalCatalog for MemoryCatalog {
+    async fn create_table_transaction(
+        &self,
+        namespace: &NamespaceIdent,
+        mut creation: TableCreation,
+    ) -> Result<Transaction> {
+        let root_namespace_state = self.root_namespace_state.lock().await;
+        let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
+        if root_namespace_state.table_exists(&table_ident)? {
+            return Err(Error::new(
+                ErrorKind::TableAlreadyExists,
+                format!("Cannot create table {table_ident:?}. Table already exists."),
+            ));
+        }
+        if creation.location.is_none() {
+            let namespace_properties = root_namespace_state.get_properties(namespace)?;
+            let location_prefix = namespace_properties
+                .get(LOCATION)
+                .cloned()
+                .unwrap_or_else(|| format!("{}/{}", self.warehouse_location, namespace.join("/")));
+            creation.location = Some(format!("{location_prefix}/{}", table_ident.name()));
+        }
+        drop(root_namespace_state);
+
+        let metadata = TableMetadataBuilder::from_table_creation(creation)?
+            .build()?
+            .metadata;
+        let metadata_location = MetadataLocation::try_new_with_metadata(&metadata)?;
+        let mut builder = Table::builder()
+            .file_io(self.file_io.clone())
+            .metadata_location(metadata_location.to_string())
+            .metadata(metadata)
+            .identifier(table_ident)
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        Ok(Transaction::new_create(builder.build()?))
     }
 }
 
@@ -449,7 +498,10 @@ pub(crate) mod tests {
     use super::*;
     use crate::encryption::kms::MemoryKmsClientFactory;
     use crate::io::{FileIO, LocalFsStorageFactory};
-    use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
+    use crate::spec::{
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, NestedField, PartitionSpec,
+        PrimitiveType, Schema, SortOrder, Struct, Type,
+    };
     use crate::test_utils::test_runtime;
     use crate::transaction::{ApplyTransactionAction, Transaction};
 
@@ -458,7 +510,7 @@ pub(crate) mod tests {
         temp_dir.path().to_str().unwrap().to_string()
     }
 
-    pub(crate) async fn new_memory_catalog() -> impl Catalog {
+    pub(crate) async fn new_memory_catalog() -> impl TransactionalCatalog {
         let warehouse_location = temp_path();
         MemoryCatalogBuilder::default()
             .load(
@@ -491,6 +543,22 @@ pub(crate) mod tests {
             .with_fields(vec![
                 NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
             ])
+            .build()
+            .unwrap()
+    }
+
+    fn data_file(table: &Table, name: &str) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(format!(
+                "{}/data/{name}.parquet",
+                table.metadata().location()
+            ))
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::empty())
             .build()
             .unwrap()
     }
@@ -1952,6 +2020,64 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::TableNotFound);
+    }
+
+    #[tokio::test]
+    async fn test_create_transaction_creates_atomically() {
+        let catalog = new_memory_catalog().await;
+        let namespace = NamespaceIdent::new("create_tx".to_string());
+        create_namespace(&catalog, &namespace).await;
+        let ident = TableIdent::new(namespace.clone(), "table".to_string());
+        let creation = TableCreation::builder()
+            .name(ident.name().to_string())
+            .schema(simple_table_schema())
+            .build();
+
+        let transaction = catalog
+            .create_table_transaction(&namespace, creation)
+            .await
+            .unwrap();
+        let file = data_file(transaction.table(), "created");
+        let action = transaction.fast_append().add_data_files([file]);
+        let transaction = action.apply(transaction).unwrap();
+
+        assert!(!catalog.table_exists(&ident).await.unwrap());
+
+        let table = transaction.commit(&catalog).await.unwrap();
+
+        assert!(catalog.table_exists(&ident).await.unwrap());
+        assert!(table.metadata().current_snapshot().is_some());
+        assert_eq!(1, table.metadata().snapshots().len());
+    }
+
+    #[tokio::test]
+    async fn test_create_transaction_rejects_concurrent_create() {
+        let catalog = new_memory_catalog().await;
+        let namespace = NamespaceIdent::new("concurrent_create_tx".to_string());
+        create_namespace(&catalog, &namespace).await;
+        let ident = TableIdent::new(namespace.clone(), "table".to_string());
+        let creation = TableCreation::builder()
+            .name(ident.name().to_string())
+            .schema(simple_table_schema())
+            .build();
+        let transaction = catalog
+            .create_table_transaction(&namespace, creation)
+            .await
+            .unwrap();
+
+        create_table(&catalog, &ident).await;
+        let error = transaction.commit(&catalog).await.unwrap_err();
+
+        assert_eq!(ErrorKind::CatalogCommitConflicts, error.kind());
+        assert!(
+            catalog
+                .load_table(&ident)
+                .await
+                .unwrap()
+                .metadata()
+                .current_snapshot()
+                .is_none()
+        );
     }
 
     /// Master key bytes used to generate the encrypted testdata fixtures.

@@ -83,11 +83,19 @@ use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
 
+#[derive(Clone)]
+enum TransactionType {
+    Update,
+    Create,
+}
+
 /// Table transaction.
 #[derive(Clone)]
 pub struct Transaction {
     table: Table,
     actions: Vec<BoxedTransactionAction>,
+    transaction_type: TransactionType,
+    initial_updates: Vec<TableUpdate>,
 }
 
 impl Transaction {
@@ -96,7 +104,25 @@ impl Transaction {
         Self {
             table: table.clone(),
             actions: vec![],
+            transaction_type: TransactionType::Update,
+            initial_updates: vec![],
         }
+    }
+
+    /// Creates a transaction from table metadata staged by a catalog.
+    pub fn new_create(table: Table) -> Self {
+        let initial_updates = create_updates(table.metadata());
+        Self {
+            table,
+            actions: vec![],
+            transaction_type: TransactionType::Create,
+            initial_updates,
+        }
+    }
+
+    /// Returns the table state visible inside this transaction.
+    pub fn table(&self) -> &Table {
+        &self.table
     }
 
     fn update_table_metadata(table: Table, updates: &[TableUpdate]) -> Result<Table> {
@@ -173,12 +199,16 @@ impl Transaction {
 
     /// Commit transaction.
     pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
-        if self.actions.is_empty() {
-            // nothing to commit
+        if self.actions.is_empty() && matches!(self.transaction_type, TransactionType::Update) {
             return Ok(self.table);
         }
 
         let table_props = self.table.metadata().table_properties()?;
+
+        if matches!(self.transaction_type, TransactionType::Create) {
+            let mut tx = self;
+            return tx.do_commit(catalog).await;
+        }
 
         let backoff = Self::build_backoff(table_props)?;
         let tx = self;
@@ -208,17 +238,18 @@ impl Transaction {
     }
 
     async fn do_commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {
-        let refreshed = catalog.load_table(self.table.identifier()).await?;
+        if matches!(self.transaction_type, TransactionType::Update) {
+            let refreshed = catalog.load_table(self.table.identifier()).await?;
 
-        if self.table.metadata() != refreshed.metadata()
-            || self.table.metadata_location() != refreshed.metadata_location()
-        {
-            // current base is stale, use refreshed as base and re-apply transaction actions
-            self.table = refreshed.clone();
+            if self.table.metadata() != refreshed.metadata()
+                || self.table.metadata_location() != refreshed.metadata_location()
+            {
+                self.table = refreshed;
+            }
         }
 
         let mut current_table = self.table.clone();
-        let mut existing_updates: Vec<TableUpdate> = vec![];
+        let mut existing_updates = self.initial_updates.clone();
         let mut existing_requirements: Vec<TableRequirement> = vec![];
 
         for action in &self.actions {
@@ -232,14 +263,72 @@ impl Transaction {
             )?;
         }
 
+        existing_requirements = match &self.transaction_type {
+            TransactionType::Update => existing_requirements,
+            TransactionType::Create => vec![TableRequirement::NotExist],
+        };
+
         let table_commit = TableCommit::builder()
             .ident(self.table.identifier().to_owned())
             .updates(existing_updates)
             .requirements(existing_requirements)
             .build();
-
-        catalog.update_table(table_commit).await
+        if matches!(self.transaction_type, TransactionType::Create) {
+            catalog
+                .update_table(table_commit.with_staged_table(current_table))
+                .await
+        } else {
+            catalog.update_table(table_commit).await
+        }
     }
+}
+
+fn create_updates(metadata: &crate::spec::TableMetadata) -> Vec<TableUpdate> {
+    let mut updates = vec![
+        TableUpdate::AssignUuid {
+            uuid: metadata.uuid(),
+        },
+        TableUpdate::UpgradeFormatVersion {
+            format_version: metadata.format_version(),
+        },
+        TableUpdate::AddSchema {
+            schema: metadata.current_schema().as_ref().clone(),
+        },
+        TableUpdate::SetCurrentSchema {
+            schema_id: crate::spec::TableMetadataBuilder::LAST_ADDED,
+        },
+        TableUpdate::AddSpec {
+            spec: metadata
+                .default_partition_spec()
+                .as_ref()
+                .clone()
+                .into_unbound(),
+        },
+        TableUpdate::SetDefaultSpec {
+            spec_id: crate::spec::TableMetadataBuilder::LAST_ADDED,
+        },
+        TableUpdate::AddSortOrder {
+            sort_order: metadata.default_sort_order().as_ref().clone(),
+        },
+        TableUpdate::SetDefaultSortOrder {
+            sort_order_id: i64::from(crate::spec::TableMetadataBuilder::LAST_ADDED),
+        },
+        TableUpdate::SetLocation {
+            location: metadata.location().to_string(),
+        },
+    ];
+    if !metadata.properties().is_empty() {
+        updates.push(TableUpdate::SetProperties {
+            updates: metadata.properties().clone(),
+        });
+    }
+    updates.extend(
+        metadata
+            .encryption_keys_iter()
+            .cloned()
+            .map(|encryption_key| TableUpdate::AddEncryptionKey { encryption_key }),
+    );
+    updates
 }
 
 #[cfg(test)]
