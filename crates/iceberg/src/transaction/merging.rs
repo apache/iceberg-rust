@@ -43,6 +43,7 @@ fn new_manifest_writer(
     table: &Table,
     output_file: OutputFile,
     snapshot_id: Option<i64>,
+    content: ManifestContentType,
     schema: SchemaRef,
     partition_spec: PartitionSpec,
 ) -> Result<ManifestWriter> {
@@ -59,8 +60,14 @@ fn new_manifest_writer(
 
     match table.metadata().format_version() {
         FormatVersion::V1 => Ok(builder.build_v1()),
-        FormatVersion::V2 => Ok(builder.build_v2_data()),
-        FormatVersion::V3 => Ok(builder.build_v3_data()),
+        FormatVersion::V2 => match content {
+            ManifestContentType::Data => Ok(builder.build_v2_data()),
+            ManifestContentType::Deletes => Ok(builder.build_v2_deletes()),
+        },
+        FormatVersion::V3 => match content {
+            ManifestContentType::Data => Ok(builder.build_v3_data()),
+            ManifestContentType::Deletes => Ok(builder.build_v3_deletes()),
+        },
     }
 }
 
@@ -111,7 +118,7 @@ impl ManifestFilterManager {
                 continue;
             }
 
-            let manifest = manifest_file.load_manifest(table.file_io()).await?;
+            let manifest = table.manifest_reader().read(manifest_file).await?;
 
             // Check whether this manifest contains any files we want to delete.
             let has_deletes = manifest
@@ -192,6 +199,7 @@ impl ManifestFilterManager {
                 table,
                 output_file,
                 Some(snapshot_id),
+                ManifestContentType::Data,
                 schema.clone(),
                 manifest_spec.as_ref().clone(),
             )?;
@@ -243,7 +251,6 @@ pub(crate) struct MergingSnapshotProducer {
     added_data_files: Vec<DataFile>,
     deleted_data_files: Vec<DataFile>,
     filter_manager: ManifestFilterManager,
-    snapshot_properties: HashMap<String, String>,
     commit_uuid: Uuid,
 }
 
@@ -254,7 +261,6 @@ impl MergingSnapshotProducer {
             added_data_files: Vec::new(),
             deleted_data_files: Vec::new(),
             filter_manager: ManifestFilterManager::new(true),
-            snapshot_properties: HashMap::new(),
             commit_uuid: Uuid::now_v7(),
         }
     }
@@ -337,6 +343,7 @@ impl MergingSnapshotProducer {
             table,
             output_file,
             Some(snapshot_id),
+            ManifestContentType::Data,
             schema,
             partition_spec,
         )?;
@@ -346,7 +353,7 @@ impl MergingSnapshotProducer {
             if data_file.content_type() != DataContentType::Data {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    "Only data content type is allowed for rewrite files",
+                    "Only data content type is allowed in added_data_files",
                 ));
             }
             let entry_builder = ManifestEntry::builder()
@@ -380,12 +387,9 @@ impl MergingSnapshotProducer {
         // Merge removal metrics from the filter manager.
         collector.merge(removed_collector);
 
-        let mut additional_properties = self.snapshot_properties.clone();
-        additional_properties.extend(collector.build());
-
         let summary = Summary {
             operation: self.operation.clone(),
-            additional_properties,
+            additional_properties: collector.build(),
         };
 
         let previous_snapshot = table_metadata.current_snapshot();

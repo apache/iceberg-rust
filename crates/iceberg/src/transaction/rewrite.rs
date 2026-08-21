@@ -54,12 +54,17 @@ use crate::{Error, ErrorKind};
 /// ```
 pub struct RewriteFilesAction {
     producer: MergingSnapshotProducer,
+    /// The snapshot ID at which this rewrite started reading. Used to
+    /// detect conflicting deletes added after this point.
+    #[allow(dead_code)] // Will be used for conflict detection in a follow-up PR.
+    starting_snapshot_id: Option<i64>,
 }
 
 impl RewriteFilesAction {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(starting_snapshot_id: Option<i64>) -> Self {
         Self {
             producer: MergingSnapshotProducer::new(Operation::Replace),
+            starting_snapshot_id,
         }
     }
 
@@ -107,42 +112,12 @@ impl TransactionAction for RewriteFilesAction {
 
 #[cfg(test)]
 mod tests {
-    use crate::Catalog;
     use crate::memory::tests::new_memory_catalog;
-    use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, Operation, Struct,
+    use crate::spec::Operation;
+    use crate::transaction::tests::{
+        append_files, make_data_file, make_v3_minimal_table_in_catalog,
     };
-    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
     use crate::transaction::{ApplyTransactionAction, Transaction};
-
-    fn make_data_file(
-        table: &crate::table::Table,
-        path: &str,
-        records: u64,
-        size: u64,
-    ) -> crate::spec::DataFile {
-        DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path(path.to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(size)
-            .record_count(records)
-            .partition(Struct::from_iter([Some(Literal::long(1))]))
-            .partition_spec_id(table.metadata().default_partition_spec_id())
-            .build()
-            .unwrap()
-    }
-
-    /// Helper: append data files to a table and return the updated table.
-    async fn append_files(
-        catalog: &impl Catalog,
-        table: &crate::table::Table,
-        files: Vec<crate::spec::DataFile>,
-    ) -> crate::table::Table {
-        let tx = Transaction::new(table);
-        let tx = tx.fast_append().add_data_files(files).apply(tx).unwrap();
-        tx.commit(catalog).await.unwrap()
-    }
 
     /// E2E: Compact 3 small files into 1 merged file.
     /// Verify: operation=Replace, file counts, record counts.
@@ -193,7 +168,8 @@ mod tests {
         let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
         let mut live_files: Vec<String> = Vec::new();
         for manifest_entry in manifest_list.entries() {
-            let manifest = manifest_entry.load_manifest(table.file_io()).await.unwrap();
+            let manifest = table.manifest_reader().read(manifest_entry).await.unwrap()
+;
             for entry in manifest.entries() {
                 if entry.is_alive() {
                     live_files.push(entry.file_path().to_string());
@@ -289,7 +265,8 @@ mod tests {
         let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
         let mut live_files: Vec<String> = Vec::new();
         for manifest_entry in manifest_list.entries() {
-            let manifest = manifest_entry.load_manifest(table.file_io()).await.unwrap();
+            let manifest = table.manifest_reader().read(manifest_entry).await.unwrap()
+;
             for entry in manifest.entries() {
                 if entry.is_alive() {
                     live_files.push(entry.file_path().to_string());
