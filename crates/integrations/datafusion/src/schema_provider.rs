@@ -31,7 +31,7 @@ use iceberg::inspect::MetadataTableType;
 use iceberg::spec::FormatVersion;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableCreation, TableIdent};
 
-use crate::catalog_access::SessionBindingCatalogAdapter;
+use crate::catalog_adapter::SessionBindingCatalogAdapter;
 use crate::table::IcebergTableProvider;
 use crate::to_datafusion_error;
 
