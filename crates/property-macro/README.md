@@ -26,12 +26,16 @@ or any other trait.
 
 ## Generated API
 
-For every annotated struct, `#[derive(Properties)]` generates this inherent
-constructor:
+For every annotated struct, `#[derive(Properties)]` generates these inherent
+constructors:
 
 ```text
 impl MyProperties {
     pub fn from_properties(
+        properties: &HashMap<String, String>,
+    ) -> iceberg::Result<Self>;
+
+    pub fn try_from_loosely(
         properties: &HashMap<String, String>,
     ) -> iceberg::Result<Self>;
 }
@@ -41,6 +45,11 @@ impl MyProperties {
 uses its annotated default when a property is absent. Unknown keys are ignored.
 An invalid value returns an `iceberg::Error` with `ErrorKind::DataInvalid` and a
 message containing its primary property key.
+
+`try_from_loosely` parses fields independently. When a configured value cannot
+be parsed, that field uses its annotated default while successfully parsed
+fields are retained. A failed prefix field uses an empty map, and nested
+property structs are also parsed loosely.
 
 Adding `getter` to a field generates a public immutable accessor with the field
 name. Primitive `Copy` types, references, pointers, and compositions of those
@@ -206,6 +215,13 @@ fn main() -> iceberg::Result<()> {
     .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::DataInvalid);
     assert!(format!("{error}").contains(LOCATION));
+
+    let loose = TableLikeProperties::try_from_loosely(&HashMap::from([
+        (RETRIES.to_string(), "invalid".to_string()),
+        (OWNER.to_string(), "iceberg".to_string()),
+    ]))?;
+    assert_eq!(loose.commit().retries(), 4);
+    assert_eq!(loose.owner().as_deref(), Some("iceberg"));
 
     Ok(())
 }
