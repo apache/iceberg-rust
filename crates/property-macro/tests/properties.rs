@@ -161,6 +161,27 @@ fn reports_the_property_with_an_invalid_value() {
     assert!(format!("{dimensions_error}").contains(WIDTH));
 }
 
+#[test]
+fn loose_parsing_defaults_only_invalid_fields() {
+    let raw = HashMap::from([
+        (RETRIES.to_string(), "many".to_string()),
+        (OWNER.to_string(), "iceberg".to_string()),
+        (FORMAT.to_string(), "orc".to_string()),
+        (FANOUT_ENABLED.to_string(), "sometimes".to_string()),
+        (format!("{COLUMN_FPP_PREFIX}id"), "low".to_string()),
+        (WIDTH.to_string(), "wide".to_string()),
+    ]);
+
+    let properties = TestProperties::try_from_loosely(&raw).unwrap();
+
+    assert_eq!(properties.retries(), 4);
+    assert_eq!(properties.owner().as_deref(), Some("iceberg"));
+    assert_eq!(properties.format(), "orc");
+    assert!(properties.fanout_enabled());
+    assert!(properties.column_fpp().is_empty());
+    assert_eq!(properties.dimensions(), (640, 480, 320));
+}
+
 #[derive(Debug, Properties)]
 struct CommitProperties {
     /// Maximum number of times to retry a commit.
@@ -180,6 +201,14 @@ fn nested_properties_read_the_same_flat_map() {
     let properties = NestedProperties::from_properties(&raw).unwrap();
 
     assert_eq!(properties.commit().retries(), 9);
+}
+
+#[test]
+fn nested_properties_are_parsed_loosely() {
+    let raw = HashMap::from([(RETRIES.to_string(), "many".to_string())]);
+    let properties = NestedProperties::try_from_loosely(&raw).unwrap();
+
+    assert_eq!(properties.commit().retries(), 4);
 }
 
 fn parse_non_empty(value: &str) -> iceberg::Result<String> {
@@ -225,6 +254,13 @@ fn custom_single_value_parser_can_validate_and_normalize() {
     assert_eq!(error.kind(), ErrorKind::DataInvalid);
     assert_eq!(error.message(), "value must not be empty");
     assert!(format!("{error}").contains("property: location"));
+
+    let properties = ValidatedProperties::try_from_loosely(&HashMap::from([(
+        "location".to_string(),
+        "  ".to_string(),
+    )]))
+    .unwrap();
+    assert_eq!(properties.location(), "default");
 }
 
 #[derive(Debug, Properties)]
@@ -258,6 +294,13 @@ fn custom_single_value_parser_wraps_present_optional_values() {
     assert_eq!(error.kind(), ErrorKind::DataInvalid);
     assert_eq!(error.message(), "value must not be empty");
     assert!(format!("{error}").contains("property: optional-location"));
+
+    let properties = OptionalValidatedProperties::try_from_loosely(&HashMap::from([(
+        "optional-location".to_string(),
+        "  ".to_string(),
+    )]))
+    .unwrap();
+    assert_eq!(properties.location(), &None);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

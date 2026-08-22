@@ -2884,6 +2884,7 @@ pub fn iceberg::spec::TableProperties::parquet_dict_size_bytes(&self) -> usize
 pub fn iceberg::spec::TableProperties::parquet_page_row_limit(&self) -> usize
 pub fn iceberg::spec::TableProperties::parquet_page_size_bytes(&self) -> usize
 pub fn iceberg::spec::TableProperties::parquet_row_group_size_bytes(&self) -> usize
+pub fn iceberg::spec::TableProperties::try_from_loosely(properties: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<Self>
 pub fn iceberg::spec::TableProperties::write_data_location(&self) -> &core::option::Option<alloc::string::String>
 pub fn iceberg::spec::TableProperties::write_datafusion_fanout_enabled(&self) -> bool
 pub fn iceberg::spec::TableProperties::write_folder_storage_location(&self) -> &core::option::Option<alloc::string::String>

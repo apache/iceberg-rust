@@ -119,7 +119,11 @@ pub(crate) fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2>
         .collect::<syn::Result<Vec<_>>>()?;
     let parses = fields
         .iter()
-        .map(parse_field)
+        .map(|field| parse_field(field, false))
+        .collect::<syn::Result<Vec<_>>>()?;
+    let loose_parses = fields
+        .iter()
+        .map(|field| parse_field(field, true))
         .collect::<syn::Result<Vec<_>>>()?;
     let accessors = fields.iter().map(field_getter);
     let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
@@ -137,6 +141,19 @@ pub(crate) fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2>
             ) -> ::iceberg::Result<Self> {
                 Ok(Self {
                     #(#parses,)*
+                })
+            }
+
+            /// Parses this typed property set from a flat string-to-string map,
+            /// using each field's default when that field cannot be parsed.
+            pub fn try_from_loosely(
+                properties: &::std::collections::HashMap<
+                    ::std::string::String,
+                    ::std::string::String,
+                >,
+            ) -> ::iceberg::Result<Self> {
+                Ok(Self {
+                    #(#loose_parses,)*
                 })
             }
         }
@@ -392,11 +409,16 @@ fn find_attribute<'a>(
     Ok(first)
 }
 
-fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
+fn parse_field(field: &PropertyField, loosely: bool) -> syn::Result<TokenStream2> {
     let ident = &field.ident;
     if field.nested {
         let ty = &field.ty;
-        return Ok(quote!(#ident: <#ty>::from_properties(properties)?));
+        let constructor = if loosely {
+            quote!(<#ty>::try_from_loosely(properties)?)
+        } else {
+            quote!(<#ty>::from_properties(properties)?)
+        };
+        return Ok(quote!(#ident: #constructor));
     }
 
     let ty = &field.ty;
@@ -415,8 +437,18 @@ fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
             )
         })?;
         let default = typed_default(field)?;
-        return Ok(quote! {
-            #ident: {
+        let parse = if loosely {
+            quote! {
+                #parse_properties_with(
+                    properties,
+                    #key,
+                    &[#(#additional_keys),*],
+                    #default,
+                )
+                .unwrap_or_else(|_| #default)
+            }
+        } else {
+            quote! {{
                 let parsed: ::iceberg::Result<#ty> = #parse_properties_with(
                     properties,
                     #key,
@@ -424,8 +456,9 @@ fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
                     #default,
                 );
                 parsed.map_err(|error| error.with_context("property", #key))?
-            }
-        });
+            }}
+        };
+        return Ok(quote!(#ident: #parse));
     }
 
     if let Some(prefix) = &field.prefix {
@@ -440,8 +473,8 @@ fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
         } else {
             quote!(value.parse::<#value_type>())
         };
-        return Ok(quote! {
-            #ident: properties
+        let parse = quote! {
+            properties
                 .iter()
                 .filter_map(|(key, value)| {
                     key.strip_prefix(#prefix).map(|suffix| {
@@ -455,8 +488,14 @@ fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
                             })
                     })
                 })
-                .collect::<::iceberg::Result<::std::collections::HashMap<_, _>>>()?
-        });
+                .collect::<::iceberg::Result<::std::collections::HashMap<_, _>>>()
+        };
+        let parse = if loosely {
+            quote!(#parse.unwrap_or_default())
+        } else {
+            quote!(#parse?)
+        };
+        return Ok(quote!(#ident: #parse));
     }
 
     let key = field
@@ -464,51 +503,86 @@ fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
         .as_ref()
         .ok_or_else(|| Error::new_spanned(&field.ident, "property fields must declare key"))?;
     let default = typed_default(field)?;
-    let parse = match (&field.parse_with, &field.option_inner_type) {
-        (Some(parse_with), Some(inner_type)) => quote! {
-            {
-                let parsed: ::iceberg::Result<#inner_type> = #parse_with(value);
-                Some(parsed.map_err(|error| error.with_context("property", #key))?)
-            }
-        },
-        (Some(parse_with), None) => quote! {
-            {
-                let parsed: ::iceberg::Result<#ty> = #parse_with(value);
-                parsed.map_err(|error| error.with_context("property", #key))?
-            }
-        },
-        (None, Some(inner_type)) if is_bool(inner_type) => quote! {
-            Some(value.to_ascii_lowercase().parse::<#inner_type>().map_err(|error| {
-                ::iceberg::Error::new(
-                    ::iceberg::ErrorKind::DataInvalid,
-                    format!("Invalid value for {}: {error}", #key),
-                )
-            })?)
-        },
-        (None, Some(inner_type)) => quote! {
-            Some(value.parse::<#inner_type>().map_err(|error| {
-                ::iceberg::Error::new(
-                    ::iceberg::ErrorKind::DataInvalid,
-                    format!("Invalid value for {}: {error}", #key),
-                )
-            })?)
-        },
-        (None, None) if is_bool(ty) => quote! {
-            value.to_ascii_lowercase().parse::<#ty>().map_err(|error| {
-                ::iceberg::Error::new(
-                    ::iceberg::ErrorKind::DataInvalid,
-                    format!("Invalid value for {}: {error}", #key),
-                )
-            })?
-        },
-        (None, None) => quote! {
-            value.parse::<#ty>().map_err(|error| {
-                ::iceberg::Error::new(
-                    ::iceberg::ErrorKind::DataInvalid,
-                    format!("Invalid value for {}: {error}", #key),
-                )
-            })?
-        },
+    let parse = if loosely {
+        match (&field.parse_with, &field.option_inner_type) {
+            (Some(parse_with), Some(inner_type)) => quote! {
+                #parse_with(value)
+                    .map(|parsed: #inner_type| Some(parsed))
+                    .unwrap_or_else(|_| #default)
+            },
+            (Some(parse_with), None) => quote! {
+                #parse_with(value).unwrap_or_else(|_| #default)
+            },
+            (None, Some(inner_type)) if is_bool(inner_type) => quote! {
+                value
+                    .to_ascii_lowercase()
+                    .parse::<#inner_type>()
+                    .map(Some)
+                    .unwrap_or_else(|_| #default)
+            },
+            (None, Some(inner_type)) => quote! {
+                value
+                    .parse::<#inner_type>()
+                    .map(Some)
+                    .unwrap_or_else(|_| #default)
+            },
+            (None, None) if is_bool(ty) => quote! {
+                value
+                    .to_ascii_lowercase()
+                    .parse::<#ty>()
+                    .unwrap_or_else(|_| #default)
+            },
+            (None, None) => quote! {
+                value.parse::<#ty>().unwrap_or_else(|_| #default)
+            },
+        }
+    } else {
+        match (&field.parse_with, &field.option_inner_type) {
+            (Some(parse_with), Some(inner_type)) => quote! {
+                {
+                    let parsed: ::iceberg::Result<#inner_type> = #parse_with(value);
+                    Some(parsed.map_err(|error| error.with_context("property", #key))?)
+                }
+            },
+            (Some(parse_with), None) => quote! {
+                {
+                    let parsed: ::iceberg::Result<#ty> = #parse_with(value);
+                    parsed.map_err(|error| error.with_context("property", #key))?
+                }
+            },
+            (None, Some(inner_type)) if is_bool(inner_type) => quote! {
+                Some(value.to_ascii_lowercase().parse::<#inner_type>().map_err(|error| {
+                    ::iceberg::Error::new(
+                        ::iceberg::ErrorKind::DataInvalid,
+                        format!("Invalid value for {}: {error}", #key),
+                    )
+                })?)
+            },
+            (None, Some(inner_type)) => quote! {
+                Some(value.parse::<#inner_type>().map_err(|error| {
+                    ::iceberg::Error::new(
+                        ::iceberg::ErrorKind::DataInvalid,
+                        format!("Invalid value for {}: {error}", #key),
+                    )
+                })?)
+            },
+            (None, None) if is_bool(ty) => quote! {
+                value.to_ascii_lowercase().parse::<#ty>().map_err(|error| {
+                    ::iceberg::Error::new(
+                        ::iceberg::ErrorKind::DataInvalid,
+                        format!("Invalid value for {}: {error}", #key),
+                    )
+                })?
+            },
+            (None, None) => quote! {
+                value.parse::<#ty>().map_err(|error| {
+                    ::iceberg::Error::new(
+                        ::iceberg::ErrorKind::DataInvalid,
+                        format!("Invalid value for {}: {error}", #key),
+                    )
+                })?
+            },
+        }
     };
 
     Ok(quote! {
