@@ -46,7 +46,7 @@ use iceberg::inspect::MetadataTableType;
 use iceberg::spec::TableProperties;
 use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
-use metadata_table::IcebergMetadataTableProvider;
+pub use metadata_table::IcebergMetadataTableProvider;
 
 use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
@@ -70,8 +70,11 @@ pub struct IcebergTableProvider {
     catalog: Arc<dyn Catalog>,
     /// The table identifier (namespace + name)
     table_ident: TableIdent,
-    /// A reference-counted arrow `Schema` (cached at construction)
+    /// A reference-counted arrow `Schema`
     schema: ArrowSchemaRef,
+    /// When present, threaded into the nodes `scan`/`insert_into` produce, so a
+    /// distributed engine can rebuild them and their catalog on a worker.
+    config: Option<crate::IcebergCatalogConfig>,
 }
 
 impl IcebergTableProvider {
@@ -81,6 +84,7 @@ impl IcebergTableProvider {
     /// reference for future metadata refreshes on each operation.
     pub(crate) async fn try_new(
         catalog: Arc<dyn Catalog>,
+        config: Option<crate::IcebergCatalogConfig>,
         namespace: NamespaceIdent,
         name: impl Into<String>,
     ) -> Result<Self> {
@@ -94,7 +98,35 @@ impl IcebergTableProvider {
             catalog,
             table_ident,
             schema,
+            config,
         })
+    }
+
+    /// Creates a catalog-backed table provider that carries a serializable
+    /// [`IcebergCatalogConfig`](crate::IcebergCatalogConfig).
+    ///
+    /// The `catalog` must already be built from the same `config`. The config is
+    /// threaded into the execution plan nodes this provider produces so that a
+    /// distributed engine can serialize those nodes and rebuild the
+    /// catalog/storage on remote workers.
+    pub async fn try_new_with_config(
+        catalog: Arc<dyn Catalog>,
+        config: crate::IcebergCatalogConfig,
+        namespace: NamespaceIdent,
+        name: impl Into<String>,
+    ) -> Result<Self> {
+        Self::try_new(catalog, Some(config), namespace, name).await
+    }
+
+    /// Returns the serializable catalog/storage config, if this provider was
+    /// created with one.
+    pub fn config(&self) -> Option<&crate::IcebergCatalogConfig> {
+        self.config.as_ref()
+    }
+
+    /// Returns the identifier of the table this provider serves.
+    pub fn table_ident(&self) -> &TableIdent {
+        &self.table_ident
     }
 
     pub(crate) async fn metadata_table(
@@ -103,7 +135,8 @@ impl IcebergTableProvider {
     ) -> Result<IcebergMetadataTableProvider> {
         // Load fresh table metadata for metadata table access
         let table = self.catalog.load_table(&self.table_ident).await?;
-        Ok(IcebergMetadataTableProvider { table, r#type })
+        Ok(IcebergMetadataTableProvider::new(table, r#type)
+            .with_catalog_config(self.config.clone()))
     }
 }
 
@@ -131,15 +164,11 @@ impl TableProvider for IcebergTableProvider {
             .await
             .map_err(to_datafusion_error)?;
 
-        // Create scan with fresh metadata (always use current snapshot)
-        Ok(Arc::new(IcebergTableScan::new(
-            table,
-            None, // Always use current snapshot for catalog-backed provider
-            self.schema.clone(),
-            projection,
-            filters,
-            limit,
-        )))
+        // Create scan with fresh metadata
+        Ok(Arc::new(
+            IcebergTableScan::new(table, None, self.schema.clone(), projection, filters, limit)
+                .with_catalog_config(self.config.clone()),
+        ))
     }
 
     fn supports_filters_pushdown(
@@ -218,17 +247,23 @@ impl TableProvider for IcebergTableProvider {
             sort_by_partition(repartitioned_plan)?
         };
 
-        let write_plan = Arc::new(IcebergWriteExec::new(table.clone(), write_input));
+        let write_plan = Arc::new(
+            IcebergWriteExec::new(table.clone(), write_input)
+                .with_catalog_config(self.config.clone()),
+        );
 
         // Merge the outputs of write_plan into one so we can commit all files together
         let coalesce_partitions = Arc::new(CoalescePartitionsExec::new(write_plan));
 
-        Ok(Arc::new(IcebergCommitExec::new(
-            table,
-            self.catalog.clone(),
-            coalesce_partitions,
-            self.schema.clone(),
-        )))
+        Ok(Arc::new(
+            IcebergCommitExec::new(
+                table,
+                self.catalog.clone(),
+                coalesce_partitions,
+                self.schema.clone(),
+            )
+            .with_catalog_config(self.config.clone()),
+        ))
     }
 }
 
@@ -248,6 +283,9 @@ pub struct IcebergStaticTableProvider {
     snapshot_id: Option<i64>,
     /// A reference-counted arrow `Schema`
     schema: ArrowSchemaRef,
+    /// Identifies where `table` came from. Purely descriptive — this provider
+    /// never talks to the catalog. See [`Self::with_catalog_config`].
+    config: Option<crate::IcebergCatalogConfig>,
 }
 
 impl IcebergStaticTableProvider {
@@ -260,6 +298,7 @@ impl IcebergStaticTableProvider {
             table,
             snapshot_id: None,
             schema,
+            config: None,
         })
     }
 
@@ -286,7 +325,37 @@ impl IcebergStaticTableProvider {
             table,
             snapshot_id: Some(snapshot_id),
             schema,
+            config: None,
         })
+    }
+
+    /// Records the catalog/storage config the table was loaded from.
+    ///
+    /// The provider still never contacts the catalog. The config is carried so
+    /// that the scan nodes it produces can rebuild storage on a worker, and so
+    /// that it, [`Self::table_ident`] and [`Self::snapshot_id`] together are
+    /// enough to rebuild an equivalent provider elsewhere.
+    ///
+    /// The caller must pass the config the table was actually loaded from;
+    /// nothing here validates that.
+    pub fn with_catalog_config(mut self, config: crate::IcebergCatalogConfig) -> Self {
+        self.config = Some(config);
+        self
+    }
+
+    /// Returns the config recorded with [`Self::with_catalog_config`], if any.
+    pub fn config(&self) -> Option<&crate::IcebergCatalogConfig> {
+        self.config.as_ref()
+    }
+
+    /// Returns the identifier of the table this provider serves.
+    pub fn table_ident(&self) -> &TableIdent {
+        self.table.identifier()
+    }
+
+    /// Returns the snapshot this provider reads, if pinned for time travel.
+    pub fn snapshot_id(&self) -> Option<i64> {
+        self.snapshot_id
     }
 }
 
@@ -308,14 +377,17 @@ impl TableProvider for IcebergStaticTableProvider {
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         // Use cached table (no refresh)
-        Ok(Arc::new(IcebergTableScan::new(
-            self.table.clone(),
-            self.snapshot_id,
-            self.schema.clone(),
-            projection,
-            filters,
-            limit,
-        )))
+        Ok(Arc::new(
+            IcebergTableScan::new(
+                self.table.clone(),
+                self.snapshot_id,
+                self.schema.clone(),
+                projection,
+                filters,
+                limit,
+            )
+            .with_catalog_config(self.config.clone()),
+        ))
     }
 
     fn supports_filters_pushdown(
@@ -357,6 +429,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::IcebergCatalogConfig;
 
     async fn get_test_table_from_metadata_file() -> Table {
         let metadata_file_name = "TableMetadataV2Valid.json";
@@ -512,6 +585,83 @@ mod tests {
         assert!(physical_plan.is_ok());
     }
 
+    fn test_catalog_config() -> IcebergCatalogConfig {
+        IcebergCatalogConfig::new(
+            "rest",
+            "test_catalog",
+            HashMap::from([("uri".to_string(), "http://localhost:8181".to_string())]),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_static_provider_has_no_catalog_config_by_default() {
+        let table = get_test_table_from_metadata_file().await;
+        let snapshot_id = table.metadata().snapshots().next().unwrap().snapshot_id();
+
+        let provider = IcebergStaticTableProvider::try_new_from_table(table.clone())
+            .await
+            .unwrap();
+        assert!(provider.config().is_none());
+
+        let pinned = IcebergStaticTableProvider::try_new_from_table_snapshot(table, snapshot_id)
+            .await
+            .unwrap();
+        assert!(pinned.config().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_static_provider_exposes_catalog_identity() {
+        let table = get_test_table_from_metadata_file().await;
+        let ident = table.identifier().clone();
+        let snapshot_id = table.metadata().snapshots().next().unwrap().snapshot_id();
+        let config = test_catalog_config();
+
+        let provider = IcebergStaticTableProvider::try_new_from_table_snapshot(table, snapshot_id)
+            .await
+            .unwrap()
+            .with_catalog_config(config.clone());
+
+        // Together these are enough to reconstruct an equivalent provider
+        // elsewhere, which is the whole point of recording the config.
+        assert_eq!(provider.config(), Some(&config));
+        assert_eq!(provider.table_ident(), &ident);
+        assert_eq!(provider.snapshot_id(), Some(snapshot_id));
+    }
+
+    #[tokio::test]
+    async fn test_static_provider_propagates_catalog_config_into_scan() {
+        let table = get_test_table_from_metadata_file().await;
+        let config = test_catalog_config();
+        let provider = IcebergStaticTableProvider::try_new_from_table(table)
+            .await
+            .unwrap()
+            .with_catalog_config(config.clone());
+
+        let ctx = SessionContext::new();
+        let plan = provider.scan(&ctx.state(), None, &[], None).await.unwrap();
+
+        // The scan node has to carry the config too: it is what rebuilds
+        // storage when the node is executed on a remote worker.
+        let scan = plan
+            .downcast_ref::<IcebergTableScan>()
+            .expect("static provider should produce an IcebergTableScan");
+        assert_eq!(scan.catalog_config(), Some(&config));
+    }
+
+    #[tokio::test]
+    async fn test_static_provider_without_config_leaves_scan_config_unset() {
+        let table = get_test_table_from_metadata_file().await;
+        let provider = IcebergStaticTableProvider::try_new_from_table(table)
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let plan = provider.scan(&ctx.state(), None, &[], None).await.unwrap();
+
+        let scan = plan.downcast_ref::<IcebergTableScan>().unwrap();
+        assert!(scan.catalog_config().is_none());
+    }
+
     // Tests for IcebergTableProvider
 
     #[tokio::test]
@@ -519,10 +669,14 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
         // Test creating a catalog-backed provider
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         // Verify the schema is loaded correctly
         let schema = provider.schema();
@@ -535,10 +689,14 @@ mod tests {
     async fn test_catalog_backed_provider_scan() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -561,10 +719,14 @@ mod tests {
     async fn test_catalog_backed_provider_insert() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -588,10 +750,14 @@ mod tests {
     async fn test_physical_input_schema_consistent_with_logical_input_schema() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -707,7 +873,7 @@ mod tests {
         use datafusion::physical_plan::empty::EmptyExec;
 
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
-        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+        let provider = IcebergTableProvider::try_new(catalog, None, namespace, table_name)
             .await
             .unwrap();
         let ctx = SessionContext::new();
@@ -748,10 +914,14 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) =
             get_partitioned_test_catalog_and_table(Some(true)).await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         let input_schema = provider.schema();
@@ -780,10 +950,14 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) =
             get_partitioned_test_catalog_and_table(Some(false)).await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         let input_schema = provider.schema();
@@ -839,10 +1013,14 @@ mod tests {
 
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         let state = ctx.state();
@@ -889,5 +1067,322 @@ mod tests {
             None,
             "Limit should be None when not specified"
         );
+    }
+
+    /// Runs `SELECT * FROM t` against `provider` and returns the result batches.
+    async fn scan_rows(
+        provider: Arc<dyn TableProvider>,
+    ) -> Vec<datafusion::arrow::array::RecordBatch> {
+        let ctx = SessionContext::new();
+        ctx.register_table("t", provider).unwrap();
+        ctx.sql("SELECT * FROM t")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap()
+    }
+
+    async fn current_snapshot_id(
+        catalog: &Arc<dyn Catalog>,
+        namespace: &NamespaceIdent,
+        table_name: &str,
+    ) -> i64 {
+        catalog
+            .load_table(&TableIdent::new(namespace.clone(), table_name.to_string()))
+            .await
+            .unwrap()
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .snapshot_id()
+    }
+
+    #[tokio::test]
+    async fn test_pinned_snapshot_reads_historical_data() {
+        use datafusion::assert_batches_sorted_eq;
+
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+
+        // Built while the table still has no snapshot at all, then left alone —
+        // the shape of the providers the catalog builds once and caches.
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
+
+        let ctx = SessionContext::new();
+        ctx.register_table("t", Arc::new(provider.clone())).unwrap();
+        ctx.sql("INSERT INTO t VALUES (1, 'a')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let first_snapshot = current_snapshot_id(&catalog, &namespace, &table_name).await;
+        ctx.sql("INSERT INTO t VALUES (2, 'b')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        // The catalog-backed provider reloads on every scan and sees the latest
+        // state.
+        assert_batches_sorted_eq!(
+            [
+                "+----+------+",
+                "| id | name |",
+                "+----+------+",
+                "| 1  | a    |",
+                "| 2  | b    |",
+                "+----+------+",
+            ],
+            &scan_rows(Arc::new(provider.clone())).await
+        );
+
+        // Time travel is the static provider's job: pinning `first_snapshot`
+        // hides the newer row.
+        let table = catalog
+            .load_table(&TableIdent::new(namespace.clone(), table_name.clone()))
+            .await
+            .unwrap();
+        let pinned = IcebergStaticTableProvider::try_new_from_table_snapshot(table, first_snapshot)
+            .await
+            .unwrap();
+        assert_eq!(pinned.snapshot_id(), Some(first_snapshot));
+        assert_batches_sorted_eq!(
+            [
+                "+----+------+",
+                "| id | name |",
+                "+----+------+",
+                "| 1  | a    |",
+                "+----+------+",
+            ],
+            &scan_rows(Arc::new(pinned.clone())).await
+        );
+
+        // The pin is carried on the scan node itself, so a distributed engine's
+        // codec can serialize it.
+        let scan_plan = pinned
+            .scan(&SessionContext::new().state(), None, &[], None)
+            .await
+            .unwrap();
+        assert_eq!(
+            scan_plan
+                .downcast_ref::<IcebergTableScan>()
+                .expect("Expected IcebergTableScan")
+                .snapshot_id(),
+            Some(first_snapshot),
+            "pinned snapshot should propagate to the scan node"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pinned_static_provider_uses_historical_schema_on_evolution() {
+        use datafusion::assert_batches_sorted_eq;
+        use iceberg::transaction::{AddColumn, ApplyTransactionAction, Transaction};
+
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+        let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
+
+        // Append under the original {id, name} schema.
+        let writer = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("t", Arc::new(writer)).unwrap();
+        ctx.sql("INSERT INTO t VALUES (1, 'a')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let snapshot = current_snapshot_id(&catalog, &namespace, &table_name).await;
+
+        // Evolve the schema. The snapshot above still references {id, name}.
+        let table = catalog.load_table(&table_ident).await.unwrap();
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_schema()
+            .add_column(AddColumn::optional(
+                "email",
+                Type::Primitive(PrimitiveType::String),
+            ))
+            .apply(tx)
+            .unwrap();
+        tx.commit(catalog.as_ref()).await.unwrap();
+
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(provider.schema().fields().len(), 3);
+
+        // Pinning derives the historical schema: `email` came after `snapshot`,
+        // so a read pinned to it must not advertise the column — otherwise the
+        // scan fails with "Column email not found in table".
+        let table = catalog.load_table(&table_ident).await.unwrap();
+        let pinned =
+            IcebergStaticTableProvider::try_new_from_table_snapshot(table.clone(), snapshot)
+                .await
+                .unwrap();
+        assert_eq!(
+            pinned
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.name().as_str())
+                .collect::<Vec<_>>(),
+            ["id", "name"]
+        );
+        assert_batches_sorted_eq!(
+            [
+                "+----+------+",
+                "| id | name |",
+                "+----+------+",
+                "| 1  | a    |",
+                "+----+------+",
+            ],
+            &scan_rows(Arc::new(pinned)).await
+        );
+
+        // A snapshot the table doesn't have is rejected up front. Falling back to
+        // the current schema would turn a stale pin into wrong output instead of
+        // an error.
+        let error = IcebergStaticTableProvider::try_new_from_table_snapshot(table, 9_999_999)
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("snapshot id 9999999"), "{message}");
+        assert!(message.contains("test_table"), "{message}");
+    }
+
+    const PINNED_SNAPSHOT: i64 = 3_051_729_675_574_597_004;
+
+    /// A table with two schemas: `PINNED_SNAPSHOT` was written under
+    /// `{id, name}`, and `email` was added after it.
+    fn evolved_table() -> Table {
+        use iceberg::spec::{
+            FormatVersion, Operation, PartitionSpec, Snapshot, SortOrder, Summary,
+            TableMetadataBuilder,
+        };
+        use iceberg::test_utils::test_runtime;
+
+        let v1 = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+        let v2 = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(3, "email", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        // Two stages, so the snapshot can use the schema id the builder actually
+        // assigned to `v1` instead of a guessed one.
+        let base = TableMetadataBuilder::new(
+            v1,
+            PartitionSpec::unpartition_spec(),
+            SortOrder::unsorted_order(),
+            "/test/table".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+        let v1_schema_id = base.current_schema().schema_id();
+
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(PINNED_SNAPSHOT)
+            .with_sequence_number(1)
+            .with_timestamp_ms(base.last_updated_ms())
+            .with_manifest_list("/test/snap-1.avro")
+            .with_schema_id(v1_schema_id)
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        let metadata = TableMetadataBuilder::new_from_metadata(base, None)
+            .add_snapshot(snapshot)
+            .unwrap()
+            .add_schema(v2)
+            .unwrap()
+            .set_current_schema(-1)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        Table::builder()
+            .metadata(metadata)
+            .identifier(TableIdent::from_strs(["ns", "tbl"]).unwrap())
+            .file_io(FileIO::new_with_fs())
+            .metadata_location("/test/metadata.json")
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
+    fn field_names(schema: &ArrowSchemaRef) -> Vec<&str> {
+        schema.fields().iter().map(|f| f.name().as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn pinned_static_provider_uses_that_snapshot_schema() {
+        // `email` came later, so a read pinned to this snapshot must not
+        // advertise it.
+        let provider = IcebergStaticTableProvider::try_new_from_table_snapshot(
+            evolved_table(),
+            PINNED_SNAPSHOT,
+        )
+        .await
+        .unwrap();
+        let schema = provider.schema();
+        assert_eq!(field_names(&schema), vec!["id", "name"]);
+    }
+
+    #[tokio::test]
+    async fn unpinned_static_provider_uses_current_schema() {
+        let provider = IcebergStaticTableProvider::try_new_from_table(evolved_table())
+            .await
+            .unwrap();
+        let schema = provider.schema();
+        assert_eq!(field_names(&schema), vec!["id", "name", "email"]);
+    }
+
+    #[tokio::test]
+    async fn unknown_snapshot_errors() {
+        // Falling back to the current schema would turn a stale pin into wrong
+        // output instead of a failure.
+        let err = IcebergStaticTableProvider::try_new_from_table_snapshot(evolved_table(), -1)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("snapshot id -1"), "names the snapshot: {msg}");
+        assert!(msg.contains("tbl"), "names the table: {msg}");
     }
 }
