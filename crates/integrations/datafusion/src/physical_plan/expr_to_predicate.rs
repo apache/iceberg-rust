@@ -19,17 +19,57 @@ use std::vec;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::expr::ScalarFunction;
-use datafusion::logical_expr::{BinaryExpr, Expr, Like, Operator};
+use datafusion::logical_expr::{BinaryExpr, Expr, Like, Operator, TableProviderFilterPushDown};
 use datafusion::scalar::ScalarValue;
 use iceberg::expr::{BinaryExpression, Predicate, PredicateOperator, Reference, UnaryExpression};
 use iceberg::spec::{Datum, PrimitiveLiteral};
 
-// A datafusion expression could be an Iceberg predicate, column, or literal.
-enum TransformedResult {
+// A DataFusion expression could be an Iceberg predicate, column, or literal.
+enum TransformedValue {
     Predicate(Predicate),
     Column(Reference),
     Literal(Datum),
     NotTransformed,
+}
+
+struct TransformedResult {
+    value: TransformedValue,
+    exact: bool,
+}
+
+impl TransformedResult {
+    fn predicate(predicate: Predicate, exact: bool) -> Self {
+        Self {
+            value: TransformedValue::Predicate(predicate),
+            exact,
+        }
+    }
+
+    fn column(column: Reference) -> Self {
+        Self {
+            value: TransformedValue::Column(column),
+            exact: true,
+        }
+    }
+
+    fn literal(literal: Datum) -> Self {
+        Self {
+            value: TransformedValue::Literal(literal),
+            exact: true,
+        }
+    }
+
+    fn not_transformed() -> Self {
+        Self {
+            value: TransformedValue::NotTransformed,
+            exact: false,
+        }
+    }
+
+    fn mark_inexact(mut self) -> Self {
+        self.exact = false;
+        self
+    }
 }
 
 enum OpTransformedResult {
@@ -45,27 +85,39 @@ enum OpTransformedResult {
 pub fn convert_filters_to_predicate(filters: &[Expr]) -> Option<Predicate> {
     filters
         .iter()
-        .filter_map(convert_filter_to_predicate)
+        .filter_map(|filter| convert_filter_to_predicate(filter).map(|(predicate, _)| predicate))
         .reduce(Predicate::and)
 }
 
-fn convert_filter_to_predicate(expr: &Expr) -> Option<Predicate> {
-    match to_iceberg_predicate(expr) {
-        TransformedResult::Predicate(predicate) => Some(predicate),
-        TransformedResult::Column(column) => {
+fn convert_filter_to_predicate(expr: &Expr) -> Option<(Predicate, bool)> {
+    let transformed = to_iceberg_predicate(expr);
+    match transformed.value {
+        TransformedValue::Predicate(predicate) => Some((predicate, transformed.exact)),
+        TransformedValue::Column(column) => {
             // A bare column in a filter context represents a boolean column check
             // Convert it to: column = true
-            Some(Predicate::Binary(BinaryExpression::new(
-                PredicateOperator::Eq,
-                column,
-                Datum::bool(true),
-            )))
+            Some((
+                Predicate::Binary(BinaryExpression::new(
+                    PredicateOperator::Eq,
+                    column,
+                    Datum::bool(true),
+                )),
+                transformed.exact,
+            ))
         }
-        TransformedResult::Literal(_) => {
+        TransformedValue::Literal(_) => {
             // Literal values in filter context cannot be pushed down
             None
         }
         _ => None,
+    }
+}
+
+pub(crate) fn classify_filter_pushdown(expr: &Expr) -> TableProviderFilterPushDown {
+    match convert_filter_to_predicate(expr) {
+        Some((_, true)) => TableProviderFilterPushDown::Exact,
+        Some((_, false)) => TableProviderFilterPushDown::Inexact,
+        None => TableProviderFilterPushDown::Unsupported,
     }
 }
 
@@ -79,64 +131,82 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
                 OpTransformedResult::Operator(op) => to_iceberg_binary_predicate(left, right, op),
                 OpTransformedResult::And => to_iceberg_and_predicate(left, right),
                 OpTransformedResult::Or => to_iceberg_or_predicate(left, right),
-                OpTransformedResult::NotTransformed => TransformedResult::NotTransformed,
+                OpTransformedResult::NotTransformed => TransformedResult::not_transformed(),
             }
         }
         Expr::Not(exp) => {
             let expr = to_iceberg_predicate(exp);
-            match expr {
-                TransformedResult::Predicate(p) => TransformedResult::Predicate(!p),
-                TransformedResult::Column(column) => {
+            match expr.value {
+                TransformedValue::Predicate(p) if expr.exact => TransformedResult::predicate(
+                    !p,
+                    !matches!(
+                        exp.as_ref(),
+                        Expr::ScalarFunction(ScalarFunction { func, .. }) if func.name() == "isnan"
+                    ),
+                ),
+                TransformedValue::Column(column) => {
                     // NOT of a bare boolean column: NOT col => col = false
-                    TransformedResult::Predicate(Predicate::Binary(BinaryExpression::new(
-                        PredicateOperator::Eq,
-                        column,
-                        Datum::bool(false),
-                    )))
+                    TransformedResult::predicate(
+                        Predicate::Binary(BinaryExpression::new(
+                            PredicateOperator::Eq,
+                            column,
+                            Datum::bool(false),
+                        )),
+                        expr.exact,
+                    )
                 }
-                _ => TransformedResult::NotTransformed,
+                // Negating an inexact predicate can turn a safe superset into
+                // a subset and incorrectly prune matching rows.
+                _ => TransformedResult::not_transformed(),
             }
         }
-        Expr::Column(column) => TransformedResult::Column(Reference::new(column.name())),
+        Expr::Column(column) => TransformedResult::column(Reference::new(column.name())),
         Expr::Literal(literal, _) => match scalar_value_to_datum(literal) {
-            Some(data) => TransformedResult::Literal(data),
-            None => TransformedResult::NotTransformed,
+            Some(data) => TransformedResult::literal(data),
+            None => TransformedResult::not_transformed(),
         },
         Expr::InList(inlist) => {
             let mut datums = vec![];
+            let mut exact = true;
             for expr in &inlist.list {
                 let p = to_iceberg_predicate(expr);
-                match p {
-                    TransformedResult::Literal(l) => datums.push(l),
-                    _ => return TransformedResult::NotTransformed,
+                exact &= p.exact;
+                match p.value {
+                    TransformedValue::Literal(l) => datums.push(l),
+                    _ => return TransformedResult::not_transformed(),
                 }
             }
 
             let expr = to_iceberg_predicate(&inlist.expr);
-            match expr {
-                TransformedResult::Column(r) => match inlist.negated {
-                    false => TransformedResult::Predicate(r.is_in(datums)),
-                    true => TransformedResult::Predicate(r.is_not_in(datums)),
+            exact &= expr.exact;
+            match expr.value {
+                TransformedValue::Column(r) => match inlist.negated {
+                    false => TransformedResult::predicate(r.is_in(datums), exact),
+                    // The Arrow reader conservatively matches NOT IN when the
+                    // column is absent from an older data file.
+                    true => TransformedResult::predicate(r.is_not_in(datums), false),
                 },
-                _ => TransformedResult::NotTransformed,
+                _ => TransformedResult::not_transformed(),
             }
         }
         Expr::IsNull(expr) => {
             let p = to_iceberg_predicate(expr);
-            match p {
-                TransformedResult::Column(r) => TransformedResult::Predicate(Predicate::Unary(
-                    UnaryExpression::new(PredicateOperator::IsNull, r),
-                )),
-                _ => TransformedResult::NotTransformed,
+            match p.value {
+                TransformedValue::Column(r) => TransformedResult::predicate(
+                    Predicate::Unary(UnaryExpression::new(PredicateOperator::IsNull, r)),
+                    p.exact,
+                ),
+                _ => TransformedResult::not_transformed(),
             }
         }
         Expr::IsNotNull(expr) => {
             let p = to_iceberg_predicate(expr);
-            match p {
-                TransformedResult::Column(r) => TransformedResult::Predicate(Predicate::Unary(
-                    UnaryExpression::new(PredicateOperator::NotNull, r),
-                )),
-                _ => TransformedResult::NotTransformed,
+            match p.value {
+                TransformedValue::Column(r) => TransformedResult::predicate(
+                    Predicate::Unary(UnaryExpression::new(PredicateOperator::NotNull, r)),
+                    p.exact,
+                ),
+                _ => TransformedResult::not_transformed(),
             }
         }
         Expr::Cast(c) => {
@@ -144,9 +214,12 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
             {
                 // Casts to date truncate the expression, we cannot simply extract it as it
                 // can create erroneous predicates.
-                return TransformedResult::NotTransformed;
+                return TransformedResult::not_transformed();
             }
-            to_iceberg_predicate(&c.expr)
+            // Keep using the cast-stripped predicate for pruning, but retain the
+            // original DataFusion filter because this layer cannot prove the cast
+            // preserves comparison semantics.
+            to_iceberg_predicate(&c.expr).mark_inexact()
         }
         Expr::Like(Like {
             negated,
@@ -160,16 +233,19 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
             // push down case-insensitive LIKE (ILIKE) patterns
             // Escape characters are also not supported for pushdown
             if escape_char.is_some() || *case_insensitive {
-                return TransformedResult::NotTransformed;
+                return TransformedResult::not_transformed();
             }
 
             // Extract the pattern string
             let pattern_str = match to_iceberg_predicate(pattern) {
-                TransformedResult::Literal(d) => match d.literal() {
+                TransformedResult {
+                    value: TransformedValue::Literal(d),
+                    ..
+                } => match d.literal() {
                     PrimitiveLiteral::String(s) => s.clone(),
-                    _ => return TransformedResult::NotTransformed,
+                    _ => return TransformedResult::not_transformed(),
                 },
-                _ => return TransformedResult::NotTransformed,
+                _ => return TransformedResult::not_transformed(),
             };
 
             // Check if it's a simple prefix pattern (ends with % and no other wildcards)
@@ -181,8 +257,11 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
 
                 // Get the column reference
                 let column = match to_iceberg_predicate(expr) {
-                    TransformedResult::Column(r) => r,
-                    _ => return TransformedResult::NotTransformed,
+                    TransformedResult {
+                        value: TransformedValue::Column(r),
+                        ..
+                    } => r,
+                    _ => return TransformedResult::not_transformed(),
                 };
 
                 // Create the appropriate predicate
@@ -192,16 +271,18 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
                     column.starts_with(Datum::string(prefix))
                 };
 
-                TransformedResult::Predicate(predicate)
+                // The Arrow reader conservatively matches NOT STARTS WITH when
+                // the column is absent from an older data file.
+                TransformedResult::predicate(predicate, !*negated)
             } else {
                 // Complex LIKE patterns cannot be pushed down
-                TransformedResult::NotTransformed
+                TransformedResult::not_transformed()
             }
         }
         Expr::ScalarFunction(ScalarFunction { func, args }) => {
             scalar_function_to_iceberg_predicate(func.name(), args)
         }
-        _ => TransformedResult::NotTransformed,
+        _ => TransformedResult::not_transformed(),
     }
 }
 
@@ -227,10 +308,10 @@ fn to_iceberg_operation(op: Operator) -> OpTransformedResult {
 fn scalar_function_to_iceberg_predicate(func_name: &str, args: &[Expr]) -> TransformedResult {
     match func_name {
         "isnan" if args.len() == 1 => match resolve_nan_preserving_reference(&args[0]) {
-            Some(r) => TransformedResult::Predicate(r.is_nan()),
-            None => TransformedResult::NotTransformed,
+            Some(r) => TransformedResult::predicate(r.is_nan(), true),
+            None => TransformedResult::not_transformed(),
         },
-        _ => TransformedResult::NotTransformed,
+        _ => TransformedResult::not_transformed(),
     }
 }
 
@@ -238,13 +319,11 @@ fn scalar_function_to_iceberg_predicate(func_name: &str, args: &[Expr]) -> Trans
 /// [`Reference`] such that `isnan(arg)` is logically equivalent to
 /// `isnan(reference)`.
 ///
-/// Filter pushdown is reported as `Inexact` (see
-/// [`IcebergTableProvider::supports_filters_pushdown`]), so DataFusion
-/// re-applies the original predicate after scanning. We therefore only need the
-/// pushed-down predicate to be implied by the original filter (it may match
-/// extra rows, but must never drop a matching one). Every transformation handled
-/// here preserves NaN-ness *exactly* — the result is NaN if and only if the
-/// wrapped column is NaN — so both `isnan(arg)` and `NOT isnan(arg)` are sound:
+/// Positive `isnan` filters produced here may be reported as `Exact` by
+/// [`IcebergTableProvider::supports_filters_pushdown`], so every transformation
+/// handled here must preserve NaN-ness in both directions: the result is NaN if
+/// and only if the wrapped column is NaN. Negated `isnan` remains `Inexact`
+/// because DataFusion and the Iceberg Arrow predicate differ for null values.
 ///
 /// * negation: `-x` is NaN iff `x` is NaN
 /// * `abs(x)`: `abs(x)` is NaN iff `x` is NaN
@@ -359,22 +438,24 @@ fn to_iceberg_and_predicate(
     left: TransformedResult,
     right: TransformedResult,
 ) -> TransformedResult {
-    match (left, right) {
-        (TransformedResult::Predicate(left), TransformedResult::Predicate(right)) => {
-            TransformedResult::Predicate(left.and(right))
+    let exact = left.exact && right.exact;
+    match (left.value, right.value) {
+        (TransformedValue::Predicate(left), TransformedValue::Predicate(right)) => {
+            TransformedResult::predicate(left.and(right), exact)
         }
-        (TransformedResult::Predicate(left), _) => TransformedResult::Predicate(left),
-        (_, TransformedResult::Predicate(right)) => TransformedResult::Predicate(right),
-        _ => TransformedResult::NotTransformed,
+        (TransformedValue::Predicate(left), _) => TransformedResult::predicate(left, false),
+        (_, TransformedValue::Predicate(right)) => TransformedResult::predicate(right, false),
+        _ => TransformedResult::not_transformed(),
     }
 }
 
 fn to_iceberg_or_predicate(left: TransformedResult, right: TransformedResult) -> TransformedResult {
-    match (left, right) {
-        (TransformedResult::Predicate(left), TransformedResult::Predicate(right)) => {
-            TransformedResult::Predicate(left.or(right))
+    let exact = left.exact && right.exact;
+    match (left.value, right.value) {
+        (TransformedValue::Predicate(left), TransformedValue::Predicate(right)) => {
+            TransformedResult::predicate(left.or(right), exact)
         }
-        _ => TransformedResult::NotTransformed,
+        _ => TransformedResult::not_transformed(),
     }
 }
 
@@ -383,16 +464,29 @@ fn to_iceberg_binary_predicate(
     right: TransformedResult,
     op: PredicateOperator,
 ) -> TransformedResult {
-    let (r, d, op) = match (left, right) {
-        (TransformedResult::NotTransformed, _) => return TransformedResult::NotTransformed,
-        (_, TransformedResult::NotTransformed) => return TransformedResult::NotTransformed,
-        (TransformedResult::Column(r), TransformedResult::Literal(d)) => (r, d, op),
-        (TransformedResult::Literal(d), TransformedResult::Column(r)) => {
+    let exact = left.exact && right.exact;
+    let (r, d, op) = match (left.value, right.value) {
+        (TransformedValue::NotTransformed, _) => {
+            return TransformedResult::not_transformed();
+        }
+        (_, TransformedValue::NotTransformed) => {
+            return TransformedResult::not_transformed();
+        }
+        (TransformedValue::Column(r), TransformedValue::Literal(d)) => (r, d, op),
+        (TransformedValue::Literal(d), TransformedValue::Column(r)) => {
             (r, d, reverse_predicate_operator(op))
         }
-        _ => return TransformedResult::NotTransformed,
+        _ => return TransformedResult::not_transformed(),
     };
-    TransformedResult::Predicate(Predicate::Binary(BinaryExpression::new(op, r, d)))
+    // For schema-evolved files that do not contain the referenced column, the
+    // Arrow reader conservatively matches < and <= predicates. They remain safe
+    // pruning predicates, but DataFusion must apply the original filter again.
+    let exact = exact
+        && !matches!(
+            op,
+            PredicateOperator::LessThan | PredicateOperator::LessThanOrEq
+        );
+    TransformedResult::predicate(Predicate::Binary(BinaryExpression::new(op, r, d)), exact)
 }
 
 fn reverse_predicate_operator(op: PredicateOperator) -> PredicateOperator {
@@ -442,13 +536,14 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion::common::DFSchema;
+    use datafusion::logical_expr::TableProviderFilterPushDown;
     use datafusion::logical_expr::utils::split_conjunction;
     use datafusion::prelude::{Expr, SessionContext};
     use iceberg::expr::{Predicate, Reference};
     use iceberg::spec::Datum;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-    use super::convert_filters_to_predicate;
+    use super::{classify_filter_pushdown, convert_filters_to_predicate};
 
     fn create_test_schema() -> DFSchema {
         let arrow_schema = Schema::new(vec![
@@ -478,6 +573,70 @@ mod tests {
             .unwrap();
         let exprs: Vec<Expr> = split_conjunction(&expr).into_iter().cloned().collect();
         convert_filters_to_predicate(&exprs[..])
+    }
+
+    fn classify_sql_filter(sql: &str) -> TableProviderFilterPushDown {
+        let df_schema = create_test_schema();
+        let expr = SessionContext::new()
+            .parse_sql_expr(sql, &df_schema)
+            .unwrap();
+        classify_filter_pushdown(&expr)
+    }
+
+    #[test]
+    fn test_filter_pushdown_classification() {
+        assert_eq!(
+            classify_sql_filter("foo > 1 AND bar = 'test'"),
+            TableProviderFilterPushDown::Exact
+        );
+        assert_eq!(
+            classify_sql_filter("foo > 1 AND length(bar) = 1"),
+            TableProviderFilterPushDown::Inexact
+        );
+        assert_eq!(
+            classify_sql_filter("length(bar) = 1"),
+            TableProviderFilterPushDown::Unsupported
+        );
+        assert_eq!(
+            classify_sql_filter("foo < 1"),
+            TableProviderFilterPushDown::Inexact
+        );
+        assert_eq!(
+            classify_sql_filter("bar NOT IN ('test')"),
+            TableProviderFilterPushDown::Inexact
+        );
+        assert_eq!(
+            classify_sql_filter("bar NOT LIKE 'test%'"),
+            TableProviderFilterPushDown::Inexact
+        );
+    }
+
+    #[test]
+    fn test_filter_pushdown_with_cast_is_inexact() {
+        assert_eq!(
+            classify_sql_filter("ts >= timestamp '2023-01-05T00:00:00'"),
+            TableProviderFilterPushDown::Inexact
+        );
+    }
+
+    #[test]
+    fn test_negated_partial_filter_is_unsupported() {
+        assert_eq!(
+            classify_sql_filter("NOT (foo > 1 AND length(bar) = 1)"),
+            TableProviderFilterPushDown::Unsupported
+        );
+    }
+
+    #[test]
+    fn test_negated_isnan_filter_is_inexact() {
+        assert_eq!(
+            classify_sql_filter("isnan(qux)"),
+            TableProviderFilterPushDown::Exact
+        );
+        assert_eq!(
+            classify_sql_filter("NOT isnan(qux)"),
+            TableProviderFilterPushDown::Inexact
+        );
     }
 
     #[test]
