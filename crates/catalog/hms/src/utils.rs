@@ -16,10 +16,14 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{env, process};
 
 use chrono::Utc;
 use hive_metastore::{Database, PrincipalType, SerDeInfo, StorageDescriptor};
 use iceberg::spec::Schema;
+use iceberg::table::Table;
 use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
 use pilota::{AHashMap, FastStr};
 
@@ -153,6 +157,54 @@ pub(crate) fn convert_to_database(
     }
 
     Ok(db)
+}
+
+pub(crate) fn update_hive_table_from_table(
+    hive_tbl: &hive_metastore::Table,
+    tbl: &Table,
+) -> Result<hive_metastore::Table> {
+    let mut new_tbl = hive_tbl.clone();
+    let metadata = tbl.metadata();
+    let schema = metadata.current_schema();
+
+    let hive_schema = HiveSchemaBuilder::from_iceberg(schema)?.build();
+
+    match new_tbl.sd.as_mut() {
+        Some(sd) => {
+            sd.cols = Some(hive_schema);
+        }
+        None => {
+            // Highly unlikely for a real HMS table, but be defensive
+            new_tbl.sd = Some(StorageDescriptor {
+                cols: Some(hive_schema),
+                ..Default::default()
+            });
+        }
+    }
+
+    let metadata_location = tbl.metadata_location_result()?.to_string();
+
+    let mut params: AHashMap<FastStr, FastStr> = new_tbl.parameters.take().unwrap_or_default();
+    for (k, v) in metadata.properties().iter() {
+        if k == METADATA_LOCATION || k == TABLE_TYPE || k == EXTERNAL {
+            continue;
+        }
+        params.insert(
+            FastStr::from_string(k.to_string()),
+            FastStr::from_string(v.to_string()),
+        );
+    }
+
+    params.insert(FastStr::from(EXTERNAL), FastStr::from("TRUE"));
+    params.insert(FastStr::from(TABLE_TYPE), FastStr::from("ICEBERG"));
+    params.insert(
+        FastStr::from(METADATA_LOCATION),
+        FastStr::from(metadata_location),
+    );
+
+    new_tbl.parameters = Some(params);
+
+    Ok(new_tbl)
 }
 
 pub(crate) fn convert_to_hive_table(
@@ -307,6 +359,53 @@ fn get_current_time() -> Result<i32> {
             "Current time is out of range for i32",
         )
     })
+}
+
+fn lock_user() -> String {
+    env::var("USER")
+        .or_else(|_| env::var("USERNAME"))
+        .unwrap_or_else(|_| format!("iceberg-rust-user-{}", lock_identity_suffix()))
+}
+
+fn lock_hostname() -> String {
+    env::var("HOSTNAME")
+        .or_else(|_| env::var("COMPUTERNAME"))
+        .unwrap_or_else(|_| format!("iceberg-rust-host-{}", lock_identity_suffix()))
+}
+
+fn lock_identity_suffix() -> &'static str {
+    static LOCK_IDENTITY_SUFFIX: OnceLock<String> = OnceLock::new();
+
+    LOCK_IDENTITY_SUFFIX.get_or_init(|| {
+        let since_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let stack_addr = &since_epoch as *const u128 as usize as u128;
+        let process_id = process::id() as u128;
+
+        format!("{:x}", since_epoch ^ (process_id << 64) ^ stack_addr)
+    })
+}
+
+pub(crate) fn create_lock_request(db_name: &str, tbl_name: &str) -> hive_metastore::LockRequest {
+    let component = hive_metastore::LockComponent {
+        r#type: hive_metastore::LockType::EXCLUSIVE,
+        level: hive_metastore::LockLevel::TABLE,
+        dbname: FastStr::from_string(db_name.to_string()),
+        tablename: Some(FastStr::from_string(tbl_name.to_string())),
+        partitionname: None,
+        operation_type: None,
+        is_acid: Some(true),
+        is_dynamic_partition_write: None,
+    };
+    hive_metastore::LockRequest {
+        component: vec![component],
+        txnid: None,
+        user: FastStr::from_string(lock_user()),
+        hostname: FastStr::from_string(lock_hostname()),
+        agent_info: None,
+    }
 }
 
 #[cfg(test)]
