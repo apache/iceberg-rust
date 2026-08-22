@@ -1020,7 +1020,7 @@ pub(super) mod _serde {
                 .into();
             let default_partition_type = default_spec.partition_type(current_schema)?;
             let properties = value.properties.unwrap_or_default();
-            let table_properties = TableProperties::try_from(&properties)?;
+            let table_properties = TableProperties::try_from_loosely(&properties)?;
 
             let mut metadata = TableMetadata {
                 format_version: FormatVersion::V3,
@@ -1136,7 +1136,7 @@ pub(super) mod _serde {
                 .into();
             let default_partition_type = default_spec.partition_type(current_schema)?;
             let properties = value.properties.unwrap_or_default();
-            let table_properties = TableProperties::try_from(&properties)?;
+            let table_properties = TableProperties::try_from_loosely(&properties)?;
 
             let mut metadata = TableMetadata {
                 format_version: FormatVersion::V2,
@@ -1289,7 +1289,7 @@ pub(super) mod _serde {
                 .into();
             let default_partition_type = default_spec.partition_type(&current_schema)?;
             let properties = value.properties.unwrap_or_default();
-            let table_properties = TableProperties::try_from(&properties)?;
+            let table_properties = TableProperties::try_from_loosely(&properties)?;
 
             let mut metadata = TableMetadata {
                 format_version: FormatVersion::V1,
@@ -4120,6 +4120,64 @@ mod tests {
 
         assert_eq!(props.commit_num_retries(), 10);
         assert_eq!(props.write_target_file_size_bytes(), 1024);
+    }
+
+    #[test]
+    fn test_deserialize_metadata_with_invalid_table_properties_loosely() {
+        let invalid_retries = "not_a_number";
+        let target_file_size = "1024";
+        let invalid_codec = "unknown";
+
+        for file_name in [
+            "TableMetadataV1Valid.json",
+            "TableMetadataV2ValidMinimal.json",
+            "TableMetadataV3ValidMinimal.json",
+        ] {
+            let path = format!("testdata/table_metadata/{file_name}");
+            let mut json: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+            json["properties"] = serde_json::json!({
+                (TableProperties::PROPERTY_COMMIT_NUM_RETRIES): invalid_retries,
+                (TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES): target_file_size,
+                (TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC): invalid_codec,
+            });
+
+            let metadata: TableMetadata = serde_json::from_value(json).unwrap();
+            let raw_properties = metadata.properties();
+            assert_eq!(
+                raw_properties
+                    .get(TableProperties::PROPERTY_COMMIT_NUM_RETRIES)
+                    .map(String::as_str),
+                Some(invalid_retries)
+            );
+            assert_eq!(
+                raw_properties
+                    .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
+                    .map(String::as_str),
+                Some(invalid_codec)
+            );
+
+            let table_properties = metadata.table_properties();
+            assert_eq!(
+                table_properties.commit_num_retries(),
+                TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
+            );
+            assert_eq!(table_properties.write_target_file_size_bytes(), 1024);
+            assert_eq!(
+                table_properties.metadata_compression_codec(),
+                &CompressionCodec::None
+            );
+
+            let serialized = serde_json::to_value(metadata).unwrap();
+            assert_eq!(
+                serialized["properties"][TableProperties::PROPERTY_COMMIT_NUM_RETRIES],
+                invalid_retries
+            );
+            assert_eq!(
+                serialized["properties"][TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC],
+                invalid_codec
+            );
+        }
     }
 
     #[test]
