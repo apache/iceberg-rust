@@ -32,29 +32,6 @@ fn parse_location_property(path: &str) -> Result<String> {
     Ok(strip_trailing_slash(path).to_string())
 }
 
-/// Parse compression codec for metadata files from table properties.
-/// Retrieves the compression codec property, applies defaults, and parses the value.
-/// Only "none" (or empty string) and "gzip" are supported for metadata compression.
-///
-/// # Arguments
-///
-/// * `properties` - HashMap containing table properties
-///
-/// # Errors
-///
-/// Returns an error if the codec is not "none", "", or "gzip" (case-insensitive).
-/// Lz4 and Zstd are not supported for metadata file compression.
-pub(crate) fn parse_metadata_file_compression(
-    properties: &HashMap<String, String>,
-) -> Result<CompressionCodec> {
-    let value = properties
-        .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
-        .map(|s| s.as_str())
-        .unwrap_or(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT);
-
-    parse_metadata_compression(value)
-}
-
 fn parse_metadata_compression(value: &str) -> Result<CompressionCodec> {
     // Handle empty string as None
     if value.is_empty() {
@@ -140,7 +117,7 @@ fn parse_parquet_compression(
 }
 
 /// TableProperties that contains the properties of a table.
-#[derive(Debug, Properties)]
+#[derive(Clone, Debug, Eq, PartialEq, Properties)]
 pub struct TableProperties {
     /// The number of times to retry a commit.
     #[property(
@@ -564,7 +541,9 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
     type Error = Error;
 
     fn try_from(properties: &HashMap<String, String>) -> Result<Self> {
-        Self::from_properties(properties)
+        Self::from_properties(properties).map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(e)
+        })
     }
 }
 
@@ -854,98 +833,6 @@ mod tests {
             assert!(
                 err_msg.contains(&format!("Invalid metadata compression codec: {codec}")),
                 "Expected error message to contain codec '{codec}', got: {err_msg}"
-            );
-            assert!(
-                err_msg.contains("Only 'none' and 'gzip' are supported"),
-                "Expected error message to contain supported codecs, got: {err_msg}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_parse_metadata_file_compression_valid() {
-        // Test with "none"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "none".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::None
-        );
-
-        // Test with empty string
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::None
-        );
-
-        // Test with "gzip"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "gzip".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::gzip_default()
-        );
-
-        // Test case insensitivity - "NONE"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "NONE".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::None
-        );
-
-        // Test case insensitivity - "GZIP"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "GZIP".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::gzip_default()
-        );
-
-        // Test case insensitivity - "GzIp"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "GzIp".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::gzip_default()
-        );
-
-        // Test default when property is missing
-        let props = HashMap::new();
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::None
-        );
-    }
-
-    #[test]
-    fn test_parse_metadata_file_compression_invalid() {
-        let invalid_codecs = ["lz4", "zstd", "snappy"];
-
-        for codec in invalid_codecs {
-            let props = HashMap::from([(
-                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-                codec.to_string(),
-            )]);
-            let err = parse_metadata_file_compression(&props).unwrap_err();
-            let err_msg = err.to_string();
-            assert!(
-                err_msg.contains("Invalid metadata compression codec"),
-                "Expected error message to contain 'Invalid metadata compression codec', got: {err_msg}"
             );
             assert!(
                 err_msg.contains("Only 'none' and 'gzip' are supported"),

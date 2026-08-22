@@ -301,7 +301,7 @@ struct ExpirePlan {
 impl TransactionAction for ExpireSnapshotsAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
         let metadata = table.metadata();
-        let properties = metadata.table_properties()?;
+        let properties = metadata.table_properties();
 
         // Expiring metadata defeats a user's explicit decision to disable GC (Java refuses too).
         if !properties.gc_enabled() {
@@ -311,7 +311,7 @@ impl TransactionAction for ExpireSnapshotsAction {
             ));
         }
 
-        let plan = self.plan(table, &properties)?;
+        let plan = self.plan(table, properties)?;
 
         if plan.ids_to_remove.is_empty() && plan.refs_to_remove.is_empty() {
             return Ok(ActionCommit::new(vec![], vec![]));

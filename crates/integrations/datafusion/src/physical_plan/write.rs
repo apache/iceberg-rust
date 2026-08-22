@@ -202,11 +202,7 @@ impl ExecutionPlan for IcebergWriteExec {
         let format_version = self.table.metadata().format_version();
 
         // Get typed table properties
-        let table_props = self
-            .table
-            .metadata()
-            .table_properties()
-            .map_err(to_datafusion_error)?;
+        let table_props = self.table.metadata().table_properties();
 
         // Check data file format
         let file_format = DataFileFormat::from_str(table_props.write_format_default())
@@ -222,7 +218,7 @@ impl ExecutionPlan for IcebergWriteExec {
         // `write.parquet.*` settings (e.g. CDC). Arrow batches flowing through
         // DataFusion carry no field-id metadata, so match fields by name.
         let mut parquet_file_writer_builder = ParquetWriterBuilder::from_table_properties(
-            &table_props,
+            table_props,
             self.table.metadata().current_schema().clone(),
         )
         .map_err(to_datafusion_error)?
