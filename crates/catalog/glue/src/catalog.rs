@@ -898,6 +898,13 @@ impl Catalog for GlueCatalog {
     }
 
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+        if commit.is_create() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Creating a table through a staged transaction is not supported yet",
+            ));
+        }
+
         let table_ident = commit.identifier().clone();
         let table_namespace = validate_namespace(table_ident.namespace())?;
 

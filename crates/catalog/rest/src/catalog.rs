@@ -1445,10 +1445,12 @@ impl RestSessionCatalog {
         let client = self.client().await?;
         let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
         let mut properties = creation.properties;
-        properties.insert(
-            iceberg::spec::TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
-            (creation.format_version as u8).to_string(),
-        );
+        // `format-version` is how the format version reaches a REST server; it has no field on
+        // the create request. An explicit property wins, since `creation.format_version` cannot
+        // distinguish a deliberate choice from its own default.
+        properties
+            .entry(iceberg::spec::TableProperties::PROPERTY_FORMAT_VERSION.to_string())
+            .or_insert_with(|| (creation.format_version as u8).to_string());
         let request = HttpRequest::build(
             client
                 .http_client
@@ -1696,14 +1698,15 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use iceberg::io::LocalFsStorageFactory;
     use iceberg::spec::{
-        FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
-        SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
-        UnboundPartitionField, UnboundPartitionSpec,
+        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, NestedField, NullOrder,
+        Operation, PrimitiveType, Schema, Snapshot, SnapshotLog, SortDirection, SortField,
+        SortOrder, Struct, Summary, Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
     };
     use iceberg::test_utils::test_runtime;
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
     use mockito::{Mock, Server, ServerGuard};
     use serde_json::json;
+    use tempfile::TempDir;
     use uuid::uuid;
 
     use super::*;
@@ -3963,6 +3966,63 @@ mod tests {
         create_table_mock.assert_async().await;
     }
 
+    /// The format version reaches a REST server only as the `format-version` property, so
+    /// `TableCreation::format_version` has to be translated into one — without overriding a
+    /// property the caller set deliberately.
+    #[tokio::test]
+    async fn test_create_table_sends_format_version_as_a_property() {
+        for (creation_properties, expected) in [
+            (HashMap::new(), r#""format-version":"2""#),
+            (
+                HashMap::from([("format-version".to_string(), "1".to_string())]),
+                r#""format-version":"1""#,
+            ),
+        ] {
+            let mut server = Server::new_async().await;
+            let config_mock = create_config_mock(&mut server).await;
+            let create_table_mock = server
+                .mock("POST", "/v1/namespaces/ns1/tables")
+                .match_body(mockito::Matcher::Regex(expected.to_string()))
+                .with_status(200)
+                .with_body_from_file(format!(
+                    "{}/testdata/{}",
+                    env!("CARGO_MANIFEST_DIR"),
+                    "create_table_response.json"
+                ))
+                .create_async()
+                .await;
+
+            let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+            catalog
+                .create_table(
+                    &SessionContext::empty(),
+                    &NamespaceIdent::from_strs(["ns1"]).unwrap(),
+                    TableCreation::builder()
+                        .name("test1".to_string())
+                        .schema(
+                            Schema::builder()
+                                .with_fields(vec![
+                                    NestedField::required(
+                                        1,
+                                        "id",
+                                        Type::Primitive(PrimitiveType::Long),
+                                    )
+                                    .into(),
+                                ])
+                                .build()
+                                .unwrap(),
+                        )
+                        .properties(creation_properties)
+                        .build(),
+                )
+                .await
+                .unwrap();
+
+            config_mock.assert_async().await;
+            create_table_mock.assert_async().await;
+        }
+    }
+
     #[tokio::test]
     async fn test_create_table_409() {
         let mut server = Server::new_async().await;
@@ -4245,6 +4305,110 @@ mod tests {
         config_mock.assert_async().await;
         stage_create_mock.assert_async().await;
         commit_mock.assert_async().await;
+    }
+
+    /// The point of staging a create is writing to the table before it exists, so exercise the
+    /// whole path: stage, append a data file, and check the commit carries both the table and
+    /// the snapshot, with the snapshot's manifests actually written under the staged location.
+    #[tokio::test]
+    async fn test_create_table_transaction_appends_before_the_table_exists() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let table_dir = TempDir::new().unwrap();
+        let table_location = table_dir.path().to_str().unwrap().to_string();
+        let mut stage_response = serde_json::from_reader::<_, serde_json::Value>(
+            File::open(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "create_table_response.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let stage_body = stage_response.as_object_mut().unwrap();
+        stage_body.remove("metadata-location");
+        stage_body["metadata"]["location"] = json!(table_location);
+
+        let stage_create_mock = server
+            .mock("POST", "/v1/namespaces/ns1/tables")
+            .match_body(mockito::Matcher::Regex(
+                r#""stage-create":true"#.to_string(),
+            ))
+            .with_status(200)
+            .with_body(stage_response.to_string())
+            .create_async()
+            .await;
+        let commit_mock = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex(r#""type":"assert-create""#.to_string()),
+                mockito::Matcher::Regex(r#""action":"add-schema""#.to_string()),
+                mockito::Matcher::Regex(r#""action":"add-snapshot""#.to_string()),
+            ]))
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "update_table_response.json"
+            ))
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+        let creation = TableCreation::builder()
+            .name("test1".to_string())
+            .schema(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+
+        let transaction = catalog
+            .create_table_transaction(&NamespaceIdent::new("ns1".to_string()), creation)
+            .await
+            .unwrap();
+        let staged = transaction.table().clone();
+        assert_eq!(table_location, staged.metadata().location());
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(format!("{table_location}/data/0.parquet"))
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(staged.metadata().default_partition_spec_id())
+            .partition(Struct::empty())
+            .build()
+            .unwrap();
+        let action = transaction.fast_append().add_data_files([data_file]);
+        let transaction = action.apply(transaction).unwrap();
+
+        transaction.commit(&catalog).await.unwrap();
+
+        config_mock.assert_async().await;
+        stage_create_mock.assert_async().await;
+        commit_mock.assert_async().await;
+
+        let manifests: Vec<_> = std::fs::read_dir(table_dir.path().join("metadata"))
+            .expect("the append should have written manifests under the staged location")
+            .map(|entry| entry.unwrap().file_name().to_str().unwrap().to_string())
+            .collect();
+        assert!(
+            manifests.iter().any(|name| name.starts_with("snap-")),
+            "no manifest list written: {manifests:?}"
+        );
     }
 
     #[tokio::test]

@@ -701,6 +701,13 @@ impl Catalog for S3TablesCatalog {
 
     /// Updates an existing table within the s3tables catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+        if commit.is_create() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Creating a table through a staged transaction is not supported yet",
+            ));
+        }
+
         let table_ident = commit.identifier().clone();
         let table_namespace = table_ident.namespace();
         let (current_table, version_token) =

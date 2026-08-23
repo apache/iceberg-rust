@@ -70,7 +70,7 @@ use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWi
 pub use update_schema::AddColumn;
 
 use crate::error::Result;
-use crate::spec::TableProperties;
+use crate::spec::{TableMetadata, TableMetadataBuilder, TableProperties};
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
@@ -81,11 +81,16 @@ use crate::transaction::update_properties::UpdatePropertiesAction;
 use crate::transaction::update_schema::UpdateSchemaAction;
 use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
-use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
+use crate::{Catalog, TableCommit, TableCommitKind, TableRequirement, TableUpdate};
 
+/// Which commit protocol a [`Transaction`] follows.
 #[derive(Clone)]
-enum TransactionType {
+enum TransactionKind {
+    /// Commit against an existing table: refresh the base, assert it has not moved
+    /// under us, and retry on conflict.
     Update,
+    /// Commit a table that does not exist yet: no base to refresh, and the only
+    /// requirement is that the table still does not exist.
     Create,
 }
 
@@ -94,7 +99,7 @@ enum TransactionType {
 pub struct Transaction {
     table: Table,
     actions: Vec<BoxedTransactionAction>,
-    transaction_type: TransactionType,
+    kind: TransactionKind,
 }
 
 impl Transaction {
@@ -103,23 +108,37 @@ impl Transaction {
         Self {
             table: table.clone(),
             actions: vec![],
-            transaction_type: TransactionType::Update,
+            kind: TransactionKind::Update,
         }
     }
 
-    /// Creates a transaction from table metadata staged by a catalog.
+    /// Creates a transaction that creates `table` when committed.
+    ///
+    /// `table` is metadata staged by a catalog: it is not registered anywhere until the
+    /// transaction commits. Intended for [`TransactionalCatalog::create_table_transaction`]
+    /// implementations rather than direct use.
+    ///
+    /// The transaction must be committed to the catalog that staged it. Catalogs that do
+    /// not support staged creates reject the commit with [`ErrorKind::FeatureUnsupported`].
+    ///
+    /// [`TransactionalCatalog::create_table_transaction`]: crate::TransactionalCatalog::create_table_transaction
+    /// [`ErrorKind::FeatureUnsupported`]: crate::ErrorKind::FeatureUnsupported
     pub fn new_create(table: Table) -> Self {
         Self {
             table,
             actions: vec![],
-            transaction_type: TransactionType::Create,
+            kind: TransactionKind::Create,
         }
     }
 
-    /// Returns the table state visible inside this transaction.
+    /// Returns the table state this transaction's actions are applied on top of.
     ///
-    /// For create transactions, this provides the staged table metadata and
-    /// catalog-configured file IO needed to write data files before commit.
+    /// For a create transaction this is the staged table: its metadata and
+    /// catalog-configured file IO are what you need to write data files before commit.
+    ///
+    /// For an update transaction this is the base the transaction was opened on, which
+    /// may already be stale — [`Transaction::commit`] re-reads the table and replays the
+    /// actions against whatever it finds. Do not treat it as the table's current state.
     pub fn table(&self) -> &Table {
         &self.table
     }
@@ -198,22 +217,57 @@ impl Transaction {
 
     /// Commit transaction.
     pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
-        if self.actions.is_empty() && matches!(self.transaction_type, TransactionType::Update) {
+        match self.kind {
+            TransactionKind::Create => self.commit_create(catalog).await,
+            TransactionKind::Update => self.commit_update(catalog).await,
+        }
+    }
+
+    /// Commits a staged create.
+    ///
+    /// The commit describes the whole table rather than a diff, since the receiving catalog has
+    /// nothing to diff against. It never refreshes a base table, because there is none, and it
+    /// is never retried: the commit asserts that the table does not exist, so a conflict means
+    /// another writer created it and no number of retries can make the assertion hold again.
+    async fn commit_create(self, catalog: &dyn Catalog) -> Result<Table> {
+        // Derived before the actions run, so the list describes the staged table alone and
+        // the actions' own updates follow it.
+        let mut updates = create_updates(self.table.metadata());
+
+        // Requirements the actions derive are assertions about a base table. A create has
+        // no base, so they are trivially true and `NotExist` is the only one that matters.
+        let mut discarded_requirements = vec![];
+        self.run_actions(
+            self.table.clone(),
+            &mut updates,
+            &mut discarded_requirements,
+        )
+        .await?;
+
+        catalog
+            .update_table(
+                TableCommit::builder()
+                    .ident(self.table.identifier().to_owned())
+                    .updates(updates)
+                    .requirements(vec![TableRequirement::NotExist])
+                    .kind(TableCommitKind::Create)
+                    .build(),
+            )
+            .await
+    }
+
+    /// Commits against an existing table, retrying while the catalog reports a conflict.
+    async fn commit_update(self, catalog: &dyn Catalog) -> Result<Table> {
+        if self.actions.is_empty() {
+            // nothing to commit
             return Ok(self.table);
         }
 
-        let table_props = self.table.metadata().table_properties()?;
-
-        if matches!(self.transaction_type, TransactionType::Create) {
-            let mut tx = self;
-            return tx.do_commit(catalog).await;
-        }
-
-        let backoff = Self::build_backoff(table_props)?;
+        let backoff = Self::build_backoff(self.table.metadata().table_properties()?)?;
         let tx = self;
 
         (|mut tx: Transaction| async {
-            let result = tx.do_commit(catalog).await;
+            let result = tx.do_commit_update(catalog).await;
             (tx, result)
         })
         .retry(backoff)
@@ -236,55 +290,63 @@ impl Transaction {
             .build())
     }
 
-    async fn do_commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {
-        if matches!(self.transaction_type, TransactionType::Update) {
-            let refreshed = catalog.load_table(self.table.identifier()).await?;
+    async fn do_commit_update(&mut self, catalog: &dyn Catalog) -> Result<Table> {
+        let refreshed = catalog.load_table(self.table.identifier()).await?;
 
-            if self.table.metadata() != refreshed.metadata()
-                || self.table.metadata_location() != refreshed.metadata_location()
-            {
-                self.table = refreshed;
-            }
+        if self.table.metadata() != refreshed.metadata()
+            || self.table.metadata_location() != refreshed.metadata_location()
+        {
+            // current base is stale, use refreshed as base and re-apply transaction actions
+            self.table = refreshed;
         }
 
-        let mut current_table = self.table.clone();
-        let mut existing_updates = match self.transaction_type {
-            TransactionType::Create => create_updates(current_table.metadata()),
-            TransactionType::Update => Vec::new(),
-        };
-        let mut existing_requirements: Vec<TableRequirement> = vec![];
+        let mut updates = vec![];
+        let mut requirements = vec![];
+        self.run_actions(self.table.clone(), &mut updates, &mut requirements)
+            .await?;
+
+        catalog
+            .update_table(
+                TableCommit::builder()
+                    .ident(self.table.identifier().to_owned())
+                    .updates(updates)
+                    .requirements(requirements)
+                    .build(),
+            )
+            .await
+    }
+
+    /// Runs every action against `base` in order, threading each action's result into the
+    /// next, and appends the updates and requirements they derive to the given vectors.
+    async fn run_actions(
+        &self,
+        base: Table,
+        updates: &mut Vec<TableUpdate>,
+        requirements: &mut Vec<TableRequirement>,
+    ) -> Result<Table> {
+        let mut current_table = base;
 
         for action in &self.actions {
             let action_commit = Arc::clone(action).commit(&current_table).await?;
-            // apply action commit to current_table
-            current_table = Self::apply(
-                current_table,
-                action_commit,
-                &mut existing_updates,
-                &mut existing_requirements,
-            )?;
+            current_table = Self::apply(current_table, action_commit, updates, requirements)?;
         }
 
-        existing_requirements = match &self.transaction_type {
-            TransactionType::Update => existing_requirements,
-            TransactionType::Create => vec![TableRequirement::NotExist],
-        };
-
-        let table_commit = TableCommit::builder()
-            .ident(self.table.identifier().to_owned())
-            .updates(existing_updates)
-            .requirements(existing_requirements);
-        if matches!(self.transaction_type, TransactionType::Create) {
-            catalog
-                .update_table(table_commit.staged_table(current_table).build())
-                .await
-        } else {
-            catalog.update_table(table_commit.build()).await
-        }
+        Ok(current_table)
     }
 }
 
-fn create_updates(metadata: &crate::spec::TableMetadata) -> Vec<TableUpdate> {
+/// Builds the update list that recreates `metadata` starting from an empty table.
+///
+/// A staged create is committed against a table that does not exist, so the commit has to
+/// carry the whole table rather than a diff. Receivers apply these updates to an empty
+/// metadata builder, which is why the schema, spec and sort order are referred to by
+/// [`TableMetadataBuilder::LAST_ADDED`] rather than by their concrete ids, and why the
+/// format version is sent as an upgrade from nothing.
+///
+/// Only the current schema and the default spec and sort order are emitted: a staged
+/// create has no history to preserve, and snapshots produced by the transaction's actions
+/// are appended after this list by [`Transaction::commit_create`].
+fn create_updates(metadata: &TableMetadata) -> Vec<TableUpdate> {
     let mut updates = vec![
         TableUpdate::AssignUuid {
             uuid: metadata.uuid(),
@@ -296,7 +358,7 @@ fn create_updates(metadata: &crate::spec::TableMetadata) -> Vec<TableUpdate> {
             schema: metadata.current_schema().as_ref().clone(),
         },
         TableUpdate::SetCurrentSchema {
-            schema_id: crate::spec::TableMetadataBuilder::LAST_ADDED,
+            schema_id: TableMetadataBuilder::LAST_ADDED,
         },
         TableUpdate::AddSpec {
             spec: metadata
@@ -306,13 +368,13 @@ fn create_updates(metadata: &crate::spec::TableMetadata) -> Vec<TableUpdate> {
                 .into_unbound(),
         },
         TableUpdate::SetDefaultSpec {
-            spec_id: crate::spec::TableMetadataBuilder::LAST_ADDED,
+            spec_id: TableMetadataBuilder::LAST_ADDED,
         },
         TableUpdate::AddSortOrder {
             sort_order: metadata.default_sort_order().as_ref().clone(),
         },
         TableUpdate::SetDefaultSortOrder {
-            sort_order_id: i64::from(crate::spec::TableMetadataBuilder::LAST_ADDED),
+            sort_order_id: i64::from(TableMetadataBuilder::LAST_ADDED),
         },
         TableUpdate::SetLocation {
             location: metadata.location().to_string(),
@@ -344,13 +406,14 @@ mod tests {
     use crate::io::FileIO;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
-        TableProperties,
+        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, NestedField,
+        NullOrder, PartitionSpec, PrimitiveType, Schema, SortDirection, SortField, SortOrder,
+        Struct, TableMetadata, TableMetadataBuilder, TableProperties, Transform, Type,
     };
     use crate::table::Table;
     use crate::test_utils::{make_encrypted_table, test_runtime};
-    use crate::transaction::{ApplyTransactionAction, Transaction};
-    use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
+    use crate::transaction::{ApplyTransactionAction, Transaction, create_updates};
+    use crate::{Catalog, Error, ErrorKind, TableCommit, TableCreation, TableIdent, TableUpdate};
 
     pub fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -436,7 +499,7 @@ mod tests {
             .partition_spec((**base_metadata.default_partition_spec()).clone())
             .sort_order((**base_metadata.default_sort_order()).clone())
             .name(table_ident.name().to_string())
-            .format_version(crate::spec::FormatVersion::V3)
+            .format_version(FormatVersion::V3)
             .build();
 
         catalog
@@ -546,6 +609,157 @@ mod tests {
             });
 
         mock_catalog
+    }
+
+    /// A staged create is committed against a table that does not exist, so `create_updates`
+    /// has to describe the whole table. Pinning the list keeps an update from silently going
+    /// missing, which would leave the created table subtly different from the staged one.
+    #[test]
+    fn test_create_updates_describes_the_whole_staged_table() {
+        let metadata = staged_metadata(FormatVersion::V3);
+
+        let last_added = TableMetadataBuilder::LAST_ADDED;
+        assert_eq!(
+            vec![
+                TableUpdate::AssignUuid {
+                    uuid: metadata.uuid()
+                },
+                TableUpdate::UpgradeFormatVersion {
+                    format_version: FormatVersion::V3
+                },
+                TableUpdate::AddSchema {
+                    schema: metadata.current_schema().as_ref().clone()
+                },
+                TableUpdate::SetCurrentSchema {
+                    schema_id: last_added
+                },
+                TableUpdate::AddSpec {
+                    spec: metadata
+                        .default_partition_spec()
+                        .as_ref()
+                        .clone()
+                        .into_unbound()
+                },
+                TableUpdate::SetDefaultSpec {
+                    spec_id: last_added
+                },
+                TableUpdate::AddSortOrder {
+                    sort_order: metadata.default_sort_order().as_ref().clone()
+                },
+                TableUpdate::SetDefaultSortOrder {
+                    sort_order_id: i64::from(last_added)
+                },
+                TableUpdate::SetLocation {
+                    location: "s3://bucket/staged".to_string()
+                },
+                TableUpdate::SetProperties {
+                    updates: metadata.properties().clone()
+                },
+            ],
+            create_updates(&metadata)
+        );
+        assert!(
+            metadata.properties().contains_key("custom.property"),
+            "creation properties should survive into the staged metadata"
+        );
+    }
+
+    /// Metadata as a catalog stages it: built from a [`TableCreation`], never persisted.
+    fn staged_metadata(format_version: FormatVersion) -> TableMetadata {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "ts", Type::Primitive(PrimitiveType::Date)).into(),
+            ])
+            .build()
+            .unwrap();
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .add_partition_field("ts", "ts_day", Transform::Day)
+            .unwrap()
+            .build()
+            .unwrap();
+        let sort_order = SortOrder::builder()
+            .with_sort_field(
+                SortField::builder()
+                    .source_id(1)
+                    .transform(Transform::Identity)
+                    .direction(SortDirection::Ascending)
+                    .null_order(NullOrder::First)
+                    .build(),
+            )
+            .build(&schema)
+            .unwrap();
+
+        TableMetadataBuilder::from_table_creation(
+            TableCreation::builder()
+                .name("staged".to_string())
+                .location("s3://bucket/staged".to_string())
+                .schema(schema)
+                .partition_spec(partition_spec)
+                .sort_order(sort_order)
+                .properties(HashMap::from([(
+                    "custom.property".to_string(),
+                    "custom.value".to_string(),
+                )]))
+                .format_version(format_version)
+                .build(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata
+    }
+
+    /// The whole point of the list: a catalog that owns its metadata rebuilds the staged table
+    /// from it, exactly as a REST server does. Anything `create_updates` leaves out is lost.
+    #[test]
+    fn test_create_updates_rebuild_the_staged_table() {
+        for format_version in [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3] {
+            let staged = staged_metadata(format_version);
+            let rebuilt = TableCommit::rebuild_metadata(create_updates(&staged)).unwrap();
+
+            // Stamped at build time, and no part of what the updates describe.
+            let without_timestamp = |metadata: &TableMetadata| {
+                let mut json = serde_json::to_value(metadata).unwrap();
+                json.as_object_mut().unwrap().remove("last-updated-ms");
+                json
+            };
+            assert_eq!(
+                without_timestamp(&staged),
+                without_timestamp(&rebuilt),
+                "rebuilt {format_version} metadata differs from the staged metadata"
+            );
+        }
+    }
+
+    /// The properties update is skipped entirely when there is nothing to set, since some
+    /// catalogs reject an empty one.
+    #[test]
+    fn test_create_updates_omits_empty_properties() {
+        let table = make_v2_table();
+        let metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .remove_properties(
+                &table
+                    .metadata()
+                    .properties()
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert!(metadata.properties().is_empty());
+        assert!(
+            !create_updates(&metadata)
+                .iter()
+                .any(|update| matches!(update, TableUpdate::SetProperties { .. }))
+        );
     }
 
     #[tokio::test]

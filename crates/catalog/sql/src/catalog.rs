@@ -1006,6 +1006,13 @@ impl Catalog for SqlCatalog {
 
     /// Updates an existing table within the SQL catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+        if commit.is_create() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Creating a table through a staged transaction is not supported yet",
+            ));
+        }
+
         let table_ident = commit.identifier().clone();
         let current_table = self.load_table(&table_ident).await?;
         let current_metadata_location = current_table.metadata_location_result()?.to_string();

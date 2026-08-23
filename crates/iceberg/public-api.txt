@@ -3488,6 +3488,18 @@ impl core::fmt::Display for iceberg::ErrorKind
 pub fn iceberg::ErrorKind::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for iceberg::ErrorKind
 impl core::marker::StructuralPartialEq for iceberg::ErrorKind
+pub enum iceberg::TableCommitKind
+pub iceberg::TableCommitKind::Create
+pub iceberg::TableCommitKind::Update
+impl core::clone::Clone for iceberg::TableCommitKind
+pub fn iceberg::TableCommitKind::clone(&self) -> iceberg::TableCommitKind
+impl core::cmp::Eq for iceberg::TableCommitKind
+impl core::cmp::PartialEq for iceberg::TableCommitKind
+pub fn iceberg::TableCommitKind::eq(&self, other: &iceberg::TableCommitKind) -> bool
+impl core::fmt::Debug for iceberg::TableCommitKind
+pub fn iceberg::TableCommitKind::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for iceberg::TableCommitKind
+impl core::marker::StructuralPartialEq for iceberg::TableCommitKind
 pub enum iceberg::TableRequirement
 pub iceberg::TableRequirement::CurrentSchemaIdMatch
 pub iceberg::TableRequirement::CurrentSchemaIdMatch::current_schema_id: iceberg::spec::SchemaId
@@ -3774,7 +3786,7 @@ pub fn iceberg::SessionContext::builder() -> SessionContextBuilder<((), (), (), 
 pub struct iceberg::TableCommit
 impl iceberg::TableCommit
 pub fn iceberg::TableCommit::apply(self, table: iceberg::table::Table) -> iceberg::Result<iceberg::table::Table>
-pub fn iceberg::TableCommit::apply_new(self) -> iceberg::Result<iceberg::table::Table>
+pub fn iceberg::TableCommit::apply_create(self) -> iceberg::Result<iceberg::spec::TableMetadata>
 pub fn iceberg::TableCommit::identifier(&self) -> &iceberg::TableIdent
 pub fn iceberg::TableCommit::is_create(&self) -> bool
 pub fn iceberg::TableCommit::take_requirements(&mut self) -> alloc::vec::Vec<iceberg::TableRequirement>

@@ -89,25 +89,43 @@ impl TableMetadataBuilder {
             Self::reassign_ids(schema, spec.into(), sort_order)?;
         let schema_id = fresh_schema.schema_id();
 
-        let builder = Self {
+        Self::from_empty()
+            .with_format_version(format_version)
+            .with_last_added_schema_id(schema_id)
+            .set_location(location)
+            .add_current_schema(fresh_schema)?
+            .add_default_partition_spec(fresh_spec.into_unbound())?
+            .add_default_sort_order(fresh_sort_order)?
+            .set_properties(properties)
+    }
+
+    /// Creates a builder for a table that does not exist yet, holding no schema, spec, sort
+    /// order or location.
+    ///
+    /// The result is not a valid table: [`TableMetadataBuilder::build`] fails until at least a
+    /// current schema and default sort order have been added. Use it to rebuild a table from a
+    /// list of [`TableUpdate`]s that describes it in full, as a staged create does.
+    ///
+    /// The format version starts at the lowest, so that an
+    /// [`TableUpdate::UpgradeFormatVersion`] in that list decides it.
+    pub(crate) fn from_empty() -> Self {
+        Self {
             metadata: TableMetadata {
-                format_version,
+                format_version: FormatVersion::V1,
                 table_uuid: Uuid::now_v7(),
-                location: "".to_string(), // Overwritten immediately by set_location
+                location: "".to_string(), // Overwritten by set_location
                 last_sequence_number: 0,
                 last_updated_ms: 0,    // Overwritten by build() if not set before
-                last_column_id: -1,    // Overwritten immediately by add_current_schema
-                current_schema_id: -1, // Overwritten immediately by add_current_schema
+                last_column_id: -1,    // Overwritten by add_current_schema
+                current_schema_id: -1, // Overwritten by add_current_schema
                 schemas: HashMap::new(),
                 partition_specs: HashMap::new(),
                 default_spec: Arc::new(
                     // The spec id (-1) is just a proxy value and can be any negative number.
                     // 0 would lead to wrong changes in the builder if the provided spec by the user is
                     // also unpartitioned.
-                    // The `default_spec` value is always replaced at the end of this method by he `add_default_partition_spec`
-                    // method.
                     PartitionSpec::unpartition_spec().with_spec_id(-1),
-                ), // Overwritten immediately by add_default_partition_spec
+                ), // Overwritten by add_default_partition_spec
                 default_partition_type: StructType::new(vec![]),
                 last_partition_id: UNPARTITIONED_LAST_ASSIGNED_ID,
                 properties: HashMap::new(),
@@ -125,18 +143,22 @@ impl TableMetadataBuilder {
             },
             last_updated_ms: None,
             changes: vec![],
-            last_added_schema_id: Some(schema_id),
+            last_added_schema_id: None,
             last_added_spec_id: None,
             last_added_order_id: None,
             previous_history_entry: None,
-        };
+        }
+    }
 
-        builder
-            .set_location(location)
-            .add_current_schema(fresh_schema)?
-            .add_default_partition_spec(fresh_spec.into_unbound())?
-            .add_default_sort_order(fresh_sort_order)?
-            .set_properties(properties)
+    fn with_last_added_schema_id(mut self, schema_id: i32) -> Self {
+        self.last_added_schema_id = Some(schema_id);
+        self
+    }
+
+    /// Sets the format version without recording a change, for a table that has no version yet.
+    fn with_format_version(mut self, format_version: FormatVersion) -> Self {
+        self.metadata.format_version = format_version;
+        self
     }
 
     /// Creates a new table metadata builder from the given metadata to modify it.
@@ -1131,6 +1153,13 @@ impl TableMetadataBuilder {
 
     /// Build the table metadata.
     pub fn build(mut self) -> Result<TableMetadataBuildResult> {
+        if self.metadata.location.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Cannot build table metadata without a location",
+            ));
+        }
+
         self.metadata.last_updated_ms = self
             .last_updated_ms
             .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());

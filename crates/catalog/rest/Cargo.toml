@@ -51,6 +51,7 @@ iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
 # `stream` lets tests build a streaming body to exercise HttpRequestBody::Streaming.
 reqwest = { workspace = true, features = ["stream"] }
+tempfile = { workspace = true }
 tokio = { workspace = true }
 
 [lints]
