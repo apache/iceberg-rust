@@ -1135,7 +1135,7 @@ impl SessionCatalog for RestSessionCatalog {
         let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
 
         let mut properties = creation.properties;
-        
+
         if properties.contains_key(TableProperties::PROPERTY_FORMAT_VERSION) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
