@@ -74,12 +74,6 @@ impl UpdatePropertiesAction {
     }
 }
 
-impl Default for UpdatePropertiesAction {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[async_trait]
 impl TransactionAction for UpdatePropertiesAction {
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {

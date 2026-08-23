@@ -3233,24 +3233,16 @@ impl iceberg::transaction::ExpireSnapshotsAction
 pub fn iceberg::transaction::ExpireSnapshotsAction::expire_older_than_ms(self, older_than_ms: i64) -> Self
 pub fn iceberg::transaction::ExpireSnapshotsAction::expire_snapshot_ids(self, snapshot_ids: impl core::iter::traits::collect::IntoIterator<Item = i64>) -> Self
 pub fn iceberg::transaction::ExpireSnapshotsAction::retain_last(self, retain_last: usize) -> Self
-impl iceberg::transaction::TransactionAction for iceberg::transaction::ExpireSnapshotsAction
-pub fn iceberg::transaction::ExpireSnapshotsAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct iceberg::transaction::FastAppendAction
 impl iceberg::transaction::FastAppendAction
 pub fn iceberg::transaction::FastAppendAction::add_data_files(self, data_files: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::DataFile>) -> Self
 pub fn iceberg::transaction::FastAppendAction::set_commit_uuid(self, commit_uuid: uuid::Uuid) -> Self
 pub fn iceberg::transaction::FastAppendAction::set_snapshot_properties(self, snapshot_properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
 pub fn iceberg::transaction::FastAppendAction::with_check_duplicate(self, v: bool) -> Self
-impl iceberg::transaction::TransactionAction for iceberg::transaction::FastAppendAction
-pub fn iceberg::transaction::FastAppendAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct iceberg::transaction::ReplaceSortOrderAction
 impl iceberg::transaction::ReplaceSortOrderAction
 pub fn iceberg::transaction::ReplaceSortOrderAction::asc(self, name: &str, null_order: iceberg::spec::NullOrder) -> Self
 pub fn iceberg::transaction::ReplaceSortOrderAction::desc(self, name: &str, null_order: iceberg::spec::NullOrder) -> Self
-impl core::default::Default for iceberg::transaction::ReplaceSortOrderAction
-pub fn iceberg::transaction::ReplaceSortOrderAction::default() -> Self
-impl iceberg::transaction::TransactionAction for iceberg::transaction::ReplaceSortOrderAction
-pub fn iceberg::transaction::ReplaceSortOrderAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct iceberg::transaction::Transaction
 impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
@@ -3268,61 +3260,25 @@ pub fn iceberg::transaction::Transaction::clone(&self) -> iceberg::transaction::
 pub struct iceberg::transaction::UpdateLocationAction
 impl iceberg::transaction::UpdateLocationAction
 pub fn iceberg::transaction::UpdateLocationAction::set_location(self, location: alloc::string::String) -> Self
-impl core::default::Default for iceberg::transaction::UpdateLocationAction
-pub fn iceberg::transaction::UpdateLocationAction::default() -> Self
-impl iceberg::transaction::TransactionAction for iceberg::transaction::UpdateLocationAction
-pub fn iceberg::transaction::UpdateLocationAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, _table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct iceberg::transaction::UpdatePropertiesAction
 impl iceberg::transaction::UpdatePropertiesAction
 pub fn iceberg::transaction::UpdatePropertiesAction::remove(self, key: alloc::string::String) -> Self
 pub fn iceberg::transaction::UpdatePropertiesAction::set(self, key: alloc::string::String, value: alloc::string::String) -> Self
-impl core::default::Default for iceberg::transaction::UpdatePropertiesAction
-pub fn iceberg::transaction::UpdatePropertiesAction::default() -> Self
-impl iceberg::transaction::TransactionAction for iceberg::transaction::UpdatePropertiesAction
-pub fn iceberg::transaction::UpdatePropertiesAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, _table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct iceberg::transaction::UpdateSchemaAction
 impl iceberg::transaction::UpdateSchemaAction
 pub fn iceberg::transaction::UpdateSchemaAction::add_column(self, add_column: iceberg::transaction::AddColumn) -> Self
 pub fn iceberg::transaction::UpdateSchemaAction::delete_column(self, name: impl alloc::string::ToString) -> Self
-impl iceberg::transaction::TransactionAction for iceberg::transaction::UpdateSchemaAction
-pub fn iceberg::transaction::UpdateSchemaAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct iceberg::transaction::UpdateStatisticsAction
 impl iceberg::transaction::UpdateStatisticsAction
 pub fn iceberg::transaction::UpdateStatisticsAction::remove_statistics(self, snapshot_id: i64) -> Self
 pub fn iceberg::transaction::UpdateStatisticsAction::set_statistics(self, statistics_file: iceberg::spec::StatisticsFile) -> Self
-impl core::default::Default for iceberg::transaction::UpdateStatisticsAction
-pub fn iceberg::transaction::UpdateStatisticsAction::default() -> Self
-impl iceberg::transaction::TransactionAction for iceberg::transaction::UpdateStatisticsAction
-pub fn iceberg::transaction::UpdateStatisticsAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, _table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct iceberg::transaction::UpgradeFormatVersionAction
 impl iceberg::transaction::UpgradeFormatVersionAction
 pub fn iceberg::transaction::UpgradeFormatVersionAction::set_format_version(self, format_version: iceberg::spec::FormatVersion) -> Self
-impl core::default::Default for iceberg::transaction::UpgradeFormatVersionAction
-pub fn iceberg::transaction::UpgradeFormatVersionAction::default() -> Self
-impl iceberg::transaction::TransactionAction for iceberg::transaction::UpgradeFormatVersionAction
-pub fn iceberg::transaction::UpgradeFormatVersionAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, _table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub trait iceberg::transaction::ApplyTransactionAction
 pub fn iceberg::transaction::ApplyTransactionAction::apply(self, tx: iceberg::transaction::Transaction) -> iceberg::Result<iceberg::transaction::Transaction>
-impl<T: iceberg::transaction::TransactionAction + 'static> iceberg::transaction::ApplyTransactionAction for T
+impl<T: TransactionAction + 'static> iceberg::transaction::ApplyTransactionAction for T
 pub fn T::apply(self, tx: iceberg::transaction::Transaction) -> core::result::Result<iceberg::transaction::Transaction, iceberg::Error>
-pub trait iceberg::transaction::TransactionAction: as_any::AsAny + core::marker::Sync + core::marker::Send
-pub fn iceberg::transaction::TransactionAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-impl iceberg::transaction::TransactionAction for iceberg::transaction::ExpireSnapshotsAction
-pub fn iceberg::transaction::ExpireSnapshotsAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-impl iceberg::transaction::TransactionAction for iceberg::transaction::FastAppendAction
-pub fn iceberg::transaction::FastAppendAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-impl iceberg::transaction::TransactionAction for iceberg::transaction::ReplaceSortOrderAction
-pub fn iceberg::transaction::ReplaceSortOrderAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-impl iceberg::transaction::TransactionAction for iceberg::transaction::UpdateLocationAction
-pub fn iceberg::transaction::UpdateLocationAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, _table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-impl iceberg::transaction::TransactionAction for iceberg::transaction::UpdatePropertiesAction
-pub fn iceberg::transaction::UpdatePropertiesAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, _table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-impl iceberg::transaction::TransactionAction for iceberg::transaction::UpdateSchemaAction
-pub fn iceberg::transaction::UpdateSchemaAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-impl iceberg::transaction::TransactionAction for iceberg::transaction::UpdateStatisticsAction
-pub fn iceberg::transaction::UpdateStatisticsAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, _table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-impl iceberg::transaction::TransactionAction for iceberg::transaction::UpgradeFormatVersionAction
-pub fn iceberg::transaction::UpgradeFormatVersionAction::commit<'life0, 'async_trait>(self: alloc::sync::Arc<Self>, _table: &'life0 iceberg::table::Table) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::transaction::ActionCommit>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub mod iceberg::transform
 pub trait iceberg::transform::TransformFunction: core::marker::Send + core::marker::Sync + core::fmt::Debug
 pub fn iceberg::transform::TransformFunction::transform(&self, input: arrow_array::array::ArrayRef) -> iceberg::Result<arrow_array::array::ArrayRef>

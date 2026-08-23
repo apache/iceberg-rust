@@ -57,12 +57,6 @@ impl UpgradeFormatVersionAction {
     }
 }
 
-impl Default for UpgradeFormatVersionAction {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[async_trait]
 impl TransactionAction for UpgradeFormatVersionAction {
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {

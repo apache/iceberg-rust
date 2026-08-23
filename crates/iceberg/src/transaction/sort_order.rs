@@ -91,12 +91,6 @@ impl ReplaceSortOrderAction {
     }
 }
 
-impl Default for ReplaceSortOrderAction {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[async_trait]
 impl TransactionAction for ReplaceSortOrderAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {

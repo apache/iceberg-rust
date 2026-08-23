@@ -68,12 +68,6 @@ impl UpdateStatisticsAction {
     }
 }
 
-impl Default for UpdateStatisticsAction {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[async_trait]
 impl TransactionAction for UpdateStatisticsAction {
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
