@@ -1135,9 +1135,7 @@ impl SessionCatalog for RestSessionCatalog {
         let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
 
         let mut properties = creation.properties;
-        // `format-version` is how the format version reaches a REST server; the create request
-        // has no field for it. It is a reserved property, so a caller-supplied one is rejected
-        // here as `TableMetadataBuilder::set_properties` rejects it for local catalogs.
+        
         if properties.contains_key(TableProperties::PROPERTY_FORMAT_VERSION) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
