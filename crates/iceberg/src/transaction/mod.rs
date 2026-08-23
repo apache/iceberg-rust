@@ -63,6 +63,7 @@ mod update_schema;
 mod update_statistics;
 mod upgrade_format_version;
 
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -81,25 +82,13 @@ use crate::transaction::update_properties::UpdatePropertiesAction;
 use crate::transaction::update_schema::UpdateSchemaAction;
 use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
-use crate::{Catalog, TableCommit, TableCommitKind, TableRequirement, TableUpdate};
-
-/// Which commit protocol a [`Transaction`] follows.
-#[derive(Clone)]
-enum TransactionKind {
-    /// Commit against an existing table: refresh the base, assert it has not moved
-    /// under us, and retry on conflict.
-    Update,
-    /// Commit a table that does not exist yet: no base to refresh, and the only
-    /// requirement is that the table still does not exist.
-    Create,
-}
+use crate::{Catalog, StagedCreateCatalog, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
 #[derive(Clone)]
 pub struct Transaction {
     table: Table,
     actions: Vec<BoxedTransactionAction>,
-    kind: TransactionKind,
 }
 
 impl Transaction {
@@ -108,36 +97,12 @@ impl Transaction {
         Self {
             table: table.clone(),
             actions: vec![],
-            kind: TransactionKind::Update,
         }
     }
 
-    /// Creates a transaction that creates `table` when committed.
+    /// Returns the base this transaction's actions are applied on top of.
     ///
-    /// `table` is metadata staged by a catalog: it is not registered anywhere until the
-    /// transaction commits. Intended for [`TransactionalCatalog::create_table_transaction`]
-    /// implementations rather than direct use.
-    ///
-    /// The transaction must be committed to the catalog that staged it. Catalogs that do
-    /// not support staged creates reject the commit with [`ErrorKind::FeatureUnsupported`].
-    ///
-    /// [`TransactionalCatalog::create_table_transaction`]: crate::TransactionalCatalog::create_table_transaction
-    /// [`ErrorKind::FeatureUnsupported`]: crate::ErrorKind::FeatureUnsupported
-    pub fn new_create(table: Table) -> Self {
-        Self {
-            table,
-            actions: vec![],
-            kind: TransactionKind::Create,
-        }
-    }
-
-    /// Returns the table state this transaction's actions are applied on top of.
-    ///
-    /// For a create transaction this is the staged table: its metadata and
-    /// catalog-configured file IO are what you need to write data files before commit.
-    ///
-    /// For an update transaction this is the base the transaction was opened on, which
-    /// may already be stale — [`Transaction::commit`] re-reads the table and replays the
+    /// It may already be stale — [`Transaction::commit`] re-reads the table and replays the
     /// actions against whatever it finds. Do not treat it as the table's current state.
     pub fn table(&self) -> &Table {
         &self.table
@@ -215,49 +180,8 @@ impl Transaction {
         ExpireSnapshotsAction::new()
     }
 
-    /// Commit transaction.
-    pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
-        match self.kind {
-            TransactionKind::Create => self.commit_create(catalog).await,
-            TransactionKind::Update => self.commit_update(catalog).await,
-        }
-    }
-
-    /// Commits a staged create.
-    ///
-    /// The commit describes the whole table rather than a diff, since the receiving catalog has
-    /// nothing to diff against. It never refreshes a base table, because there is none, and it
-    /// is never retried: the commit asserts that the table does not exist, so a conflict means
-    /// another writer created it and no number of retries can make the assertion hold again.
-    async fn commit_create(self, catalog: &dyn Catalog) -> Result<Table> {
-        // Derived before the actions run, so the list describes the staged table alone and
-        // the actions' own updates follow it.
-        let mut updates = create_updates(self.table.metadata());
-
-        // Requirements the actions derive are assertions about a base table. A create has
-        // no base, so they are trivially true and `NotExist` is the only one that matters.
-        let mut discarded_requirements = vec![];
-        self.run_actions(
-            self.table.clone(),
-            &mut updates,
-            &mut discarded_requirements,
-        )
-        .await?;
-
-        catalog
-            .update_table(
-                TableCommit::builder()
-                    .ident(self.table.identifier().to_owned())
-                    .updates(updates)
-                    .requirements(vec![TableRequirement::NotExist])
-                    .kind(TableCommitKind::Create)
-                    .build(),
-            )
-            .await
-    }
-
     /// Commits against an existing table, retrying while the catalog reports a conflict.
-    async fn commit_update(self, catalog: &dyn Catalog) -> Result<Table> {
+    pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
         if self.actions.is_empty() {
             // nothing to commit
             return Ok(self.table);
@@ -335,6 +259,69 @@ impl Transaction {
     }
 }
 
+/// A transaction that creates the table it is opened on.
+///
+/// Handed out by [`StagedCreateCatalog::create_table_transaction`] over metadata the catalog
+/// has staged but not registered. Actions are added exactly as on a [`Transaction`] — it
+/// derefs to one — so data files can be written before anything can read the table. Only
+/// [`CreateTableTransaction::commit`] makes it appear, atomically and already populated.
+///
+/// Separate from [`Transaction`] so that it can only be committed to a catalog that supports
+/// staged creates.
+#[derive(Clone)]
+pub struct CreateTableTransaction(Transaction);
+
+impl CreateTableTransaction {
+    /// Creates a transaction that creates `table` when committed.
+    ///
+    /// `table` is metadata a catalog has staged: it is not registered anywhere until the
+    /// transaction commits. Intended for [`TransactionalCatalog::create_table_transaction`]
+    /// implementations rather than direct use.
+    ///
+    /// [`TransactionalCatalog::create_table_transaction`]: crate::StagedCreateCatalog::create_table_transaction
+    pub fn new(table: Table) -> Self {
+        Self(Transaction {
+            table,
+            actions: vec![],
+        })
+    }
+
+    /// Creates the table, with everything this transaction's actions produced already in it.
+    ///
+    /// The commit describes the whole table rather than a diff, since the catalog has nothing
+    /// to diff against. It never refreshes a base table, because there is none, and it is
+    /// never retried: it asserts that the table does not exist, so a conflict means another
+    /// writer created it and no number of retries can make the assertion hold again.
+    pub async fn commit(self, catalog: &dyn StagedCreateCatalog) -> Result<Table> {
+        // Derived before the actions run, so the list describes the staged table alone and
+        // the actions' own updates follow it.
+        let mut updates = create_updates(self.0.table.metadata());
+
+        // Requirements the actions derive are assertions about a base table. A create has no
+        // base, so they are trivially true; the catalog asserts non-existence itself.
+        let mut discarded_requirements = vec![];
+        self.0
+            .run_actions(
+                self.0.table.clone(),
+                &mut updates,
+                &mut discarded_requirements,
+            )
+            .await?;
+
+        catalog
+            .commit_create_table(self.0.table.identifier().to_owned(), updates)
+            .await
+    }
+}
+
+impl Deref for CreateTableTransaction {
+    type Target = Transaction;
+
+    fn deref(&self) -> &Transaction {
+        &self.0
+    }
+}
+
 /// Builds the update list that recreates `metadata` starting from an empty table.
 ///
 /// A staged create is committed against a table that does not exist, so the commit has to
@@ -345,7 +332,7 @@ impl Transaction {
 ///
 /// Only the current schema and the default spec and sort order are emitted: a staged
 /// create has no history to preserve, and snapshots produced by the transaction's actions
-/// are appended after this list by [`Transaction::commit_create`].
+/// are appended after this list by [`CreateTableTransaction::commit`].
 fn create_updates(metadata: &TableMetadata) -> Vec<TableUpdate> {
     let mut updates = vec![
         TableUpdate::AssignUuid {
@@ -413,7 +400,7 @@ mod tests {
     use crate::table::Table;
     use crate::test_utils::{make_encrypted_table, test_runtime};
     use crate::transaction::{ApplyTransactionAction, Transaction, create_updates};
-    use crate::{Catalog, Error, ErrorKind, TableCommit, TableCreation, TableIdent, TableUpdate};
+    use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent, TableUpdate};
 
     pub fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -716,7 +703,7 @@ mod tests {
     fn test_create_updates_rebuild_the_staged_table() {
         for format_version in [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3] {
             let staged = staged_metadata(format_version);
-            let rebuilt = TableCommit::rebuild_metadata(create_updates(&staged)).unwrap();
+            let rebuilt = TableMetadata::from_updates(create_updates(&staged)).unwrap();
 
             // Stamped at build time, and no part of what the updates describe.
             let without_timestamp = |metadata: &TableMetadata| {

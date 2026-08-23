@@ -27,10 +27,11 @@ use async_trait::async_trait;
 use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::table::Table;
-use iceberg::transaction::Transaction;
+use iceberg::transaction::CreateTableTransaction;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, Runtime,
-    SessionCatalog, SessionContext, TableCommit, TableCreation, TableIdent, TransactionalCatalog,
+    SessionCatalog, SessionContext, StagedCreateCatalog, TableCommit, TableCreation, TableIdent,
+    TableRequirement, TableUpdate,
 };
 use itertools::Itertools;
 use reqwest::header::{
@@ -683,17 +684,29 @@ impl Catalog for RestCatalog {
 }
 
 #[async_trait]
-impl TransactionalCatalog for RestCatalog {
+impl StagedCreateCatalog for RestCatalog {
     async fn create_table_transaction(
         &self,
         namespace: &NamespaceIdent,
         creation: TableCreation,
-    ) -> Result<Transaction> {
+    ) -> Result<CreateTableTransaction> {
         let table = self
             .inner
             .create_table_internal(namespace, creation, true)
             .await?;
-        Ok(Transaction::new_create(table))
+        Ok(CreateTableTransaction::new(table))
+    }
+
+    async fn commit_create_table(
+        &self,
+        ident: TableIdent,
+        updates: Vec<TableUpdate>,
+    ) -> Result<Table> {
+        // `assert-create` is how the commit tells the server the table must not exist; the
+        // server applies the updates to an empty table and registers the result.
+        self.inner
+            .commit_table_internal(ident, vec![TableRequirement::NotExist], updates, true)
+            .await
     }
 }
 
@@ -1351,20 +1364,36 @@ impl SessionCatalog for RestSessionCatalog {
         _context: &SessionContext,
         mut commit: TableCommit,
     ) -> Result<Table> {
+        let ident = commit.identifier().clone();
+        let requirements = commit.take_requirements();
+        let updates = commit.take_updates();
+        self.commit_table_internal(ident, requirements, updates, false)
+            .await
+    }
+}
+
+impl RestSessionCatalog {
+    /// Posts a commit for `ident` and builds the table the server returns.
+    ///
+    /// `is_create` only distinguishes what a 409 means: for a create the commit asserted the
+    /// table did not exist, so a conflict means it now does and retrying cannot help.
+    async fn commit_table_internal(
+        &self,
+        ident: TableIdent,
+        requirements: Vec<TableRequirement>,
+        updates: Vec<TableUpdate>,
+        is_create: bool,
+    ) -> Result<Table> {
         let client = self.client().await?;
-        let is_create = commit.is_create();
 
         let request = HttpRequest::build(
             client
                 .http_client
-                .request(
-                    Method::POST,
-                    client.config.table_endpoint(commit.identifier()),
-                )
+                .request(Method::POST, client.config.table_endpoint(&ident))
                 .json(&CommitTableRequest {
-                    identifier: Some(commit.identifier().clone()),
-                    requirements: commit.take_requirements(),
-                    updates: commit.take_updates(),
+                    identifier: Some(ident.clone()),
+                    requirements,
+                    updates,
                 }),
         )?;
 
@@ -1423,7 +1452,7 @@ impl SessionCatalog for RestSessionCatalog {
             .await?;
 
         let mut table_builder = Table::builder()
-            .identifier(commit.identifier().clone())
+            .identifier(ident)
             .file_io(file_io)
             .metadata(response.metadata)
             .metadata_location(response.metadata_location)
@@ -1433,9 +1462,7 @@ impl SessionCatalog for RestSessionCatalog {
         }
         table_builder.build()
     }
-}
 
-impl RestSessionCatalog {
     async fn create_table_internal(
         &self,
         namespace: &NamespaceIdent,

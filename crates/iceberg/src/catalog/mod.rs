@@ -50,7 +50,7 @@ use crate::spec::{
     UnboundPartitionSpec, ViewFormatVersion, ViewRepresentations, ViewVersion,
 };
 use crate::table::Table;
-use crate::transaction::Transaction;
+use crate::transaction::CreateTableTransaction;
 use crate::{Error, ErrorKind, Result};
 
 /// The catalog API for Iceberg Rust.
@@ -133,15 +133,16 @@ pub trait Catalog: Debug + Sync + Send {
 /// populated. Without it, creating and then filling a table are two commits, and readers can
 /// see the empty table in between.
 ///
-/// Implemented separately from [`Catalog`] because it needs catalog-side support: the commit
-/// carries a whole table rather than a diff against an existing one.
+/// Implemented separately from [`Catalog`] because it needs catalog-side support: creating a
+/// table atomically from a whole-table description, rather than a diff against an existing one.
+/// A catalog can only offer that if its backing store has an atomic create-if-absent.
 #[async_trait]
-pub trait TransactionalCatalog: Catalog {
+pub trait StagedCreateCatalog: Catalog {
     /// Stages a table in `namespace`, returning a transaction that creates it when committed.
     ///
     /// The table is not registered anywhere until then, and nothing else can see it. Commit
-    /// the transaction to this same catalog: it holds the only record that the table is
-    /// pending, and another catalog would reject the commit.
+    /// the transaction to this same catalog: for catalogs that stage server-side it holds the
+    /// only record that the table is pending, and another catalog would reject the commit.
     ///
     /// Commit fails with [`ErrorKind::TableAlreadyExists`] if the table has appeared
     /// meanwhile. That is not retryable — the transaction's whole premise is that the table
@@ -150,7 +151,19 @@ pub trait TransactionalCatalog: Catalog {
         &self,
         namespace: &NamespaceIdent,
         creation: TableCreation,
-    ) -> Result<Transaction>;
+    ) -> Result<CreateTableTransaction>;
+
+    /// Creates the table `ident` that `updates` describes, failing if it already exists.
+    ///
+    /// `updates` describes the whole table rather than a diff, since there is no base table to
+    /// diff against; [`TableMetadata::from_updates`] turns it back into metadata for catalogs
+    /// that apply commits locally. Called by [`CreateTableTransaction::commit`] rather than
+    /// directly.
+    async fn commit_create_table(
+        &self,
+        ident: TableIdent,
+        updates: Vec<TableUpdate>,
+    ) -> Result<Table>;
 }
 
 /// Common interface for all catalog builders.
@@ -395,16 +408,6 @@ pub struct TableCreation {
     pub format_version: FormatVersion,
 }
 
-/// What a [`TableCommit`] does to the table it names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TableCommitKind {
-    /// Commit against a table that already exists. The updates are a diff against it.
-    Update,
-    /// Create the table, failing if it already exists. The updates describe it in full,
-    /// since there is no base table to diff against.
-    Create,
-}
-
 /// TableCommit represents the commit of a table in the catalog.
 ///
 /// The builder is marked as private since it's dangerous and error-prone to construct
@@ -421,9 +424,6 @@ pub struct TableCommit {
     requirements: Vec<TableRequirement>,
     /// The updates of the table.
     updates: Vec<TableUpdate>,
-    /// Whether the commit updates an existing table or creates a new one.
-    #[builder(default = TableCommitKind::Update)]
-    kind: TableCommitKind,
 }
 
 impl TableCommit {
@@ -440,47 +440,6 @@ impl TableCommit {
     /// Take all updates.
     pub fn take_updates(&mut self) -> Vec<TableUpdate> {
         take(&mut self.updates)
-    }
-
-    /// Return whether this commit creates a table rather than updating one.
-    ///
-    /// Catalogs that cannot create a table through [`Catalog::update_table`] should reject
-    /// such a commit with [`ErrorKind::FeatureUnsupported`] rather than fall through to
-    /// their update path, which would report the table as merely missing.
-    pub fn is_create(&self) -> bool {
-        self.kind == TableCommitKind::Create
-    }
-
-    /// Applies a create commit, returning the metadata of the table it describes.
-    ///
-    /// There is no base table to apply the updates to and none may exist, so they are applied
-    /// to an empty one — the same thing a REST server does with the same commit. The caller
-    /// owns what follows: writing the metadata and registering the table under a location
-    /// derived from it, which is why no [`Table`] is returned.
-    ///
-    /// Returns an error if this is an update commit; use [`TableCommit::apply`] for those.
-    pub fn apply_create(self) -> Result<TableMetadata> {
-        if self.kind != TableCommitKind::Create {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot apply an update commit as a create; use `TableCommit::apply` instead",
-            ));
-        }
-
-        for requirement in self.requirements {
-            requirement.check(None)?;
-        }
-
-        Self::rebuild_metadata(self.updates)
-    }
-
-    /// Builds the metadata a create commit's updates describe, from nothing.
-    pub(crate) fn rebuild_metadata(updates: Vec<TableUpdate>) -> Result<TableMetadata> {
-        let mut builder = TableMetadataBuilder::from_empty();
-        for update in updates {
-            builder = update.apply(builder)?;
-        }
-        Ok(builder.build()?.metadata)
     }
 
     /// Applies this [`TableCommit`] to the given [`Table`] as part of a catalog update.

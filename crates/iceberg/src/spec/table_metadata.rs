@@ -42,7 +42,7 @@ use crate::compression::CompressionCodec;
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
 use crate::spec::EncryptedKey;
-use crate::{Error, ErrorKind};
+use crate::{Error, ErrorKind, TableUpdate};
 
 static MAIN_BRANCH: &str = "main";
 pub(crate) static ONE_MINUTE_MS: i64 = 60_000;
@@ -141,6 +141,19 @@ pub struct TableMetadata {
 }
 
 impl TableMetadata {
+    /// Builds the metadata that `updates` describes, starting from nothing.
+    ///
+    /// For catalogs applying a create commit locally: the updates describe a whole table
+    /// rather than a diff, so there is no base metadata to apply them to. This is the same
+    /// thing a REST server does with the same commit.
+    pub fn from_updates(updates: Vec<TableUpdate>) -> Result<Self> {
+        let mut builder = TableMetadataBuilder::from_empty();
+        for update in updates {
+            builder = update.apply(builder)?;
+        }
+        Ok(builder.build()?.metadata)
+    }
+
     /// Convert this Table Metadata into a builder for modification.
     ///
     /// `current_file_location` is the location where the current version

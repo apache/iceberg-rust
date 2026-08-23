@@ -31,10 +31,10 @@ use crate::io::{FileIO, FileIOBuilder, MemoryStorageFactory, StorageFactory};
 use crate::runtime::Runtime;
 use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
-use crate::transaction::Transaction;
+use crate::transaction::CreateTableTransaction;
 use crate::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent, TransactionalCatalog,
+    StagedCreateCatalog, TableCommit, TableCreation, TableIdent, TableUpdate,
 };
 
 /// Memory catalog warehouse location
@@ -443,27 +443,6 @@ impl Catalog for MemoryCatalog {
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
         let mut root_namespace_state = self.root_namespace_state.lock().await;
 
-        if commit.is_create() {
-            let ident = commit.identifier().clone();
-            if root_namespace_state.table_exists(&ident)? {
-                return Err(Error::new(
-                    ErrorKind::TableAlreadyExists,
-                    format!("Cannot create table {ident}: table already exists"),
-                ));
-            }
-
-            let metadata = commit.apply_create()?;
-            // Derived from the committed metadata, so that the metadata directory and the
-            // compression codec follow the properties the commit ends up with.
-            let metadata_location = MetadataLocation::try_new_with_metadata(&metadata)?;
-            let new_table =
-                self.build_table(ident, metadata, Some(metadata_location.to_string()))?;
-            Self::write_metadata(&new_table).await?;
-            root_namespace_state
-                .insert_new_table(new_table.identifier(), metadata_location.to_string())?;
-            return Ok(new_table);
-        }
-
         let current_table = self
             .load_table_from_locked_state(commit.identifier(), &root_namespace_state)
             .await?;
@@ -474,12 +453,12 @@ impl Catalog for MemoryCatalog {
 }
 
 #[async_trait]
-impl TransactionalCatalog for MemoryCatalog {
+impl StagedCreateCatalog for MemoryCatalog {
     async fn create_table_transaction(
         &self,
         namespace: &NamespaceIdent,
         mut creation: TableCreation,
-    ) -> Result<Transaction> {
+    ) -> Result<CreateTableTransaction> {
         let root_namespace_state = self.root_namespace_state.lock().await;
         let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
         if root_namespace_state.table_exists(&table_ident)? {
@@ -504,7 +483,31 @@ impl TransactionalCatalog for MemoryCatalog {
         // No metadata location: nothing is persisted until the transaction commits, and the
         // final location is derived from the metadata the commit carries at that point.
         let staged_table = self.build_table(table_ident, metadata, None)?;
-        Ok(Transaction::new_create(staged_table))
+        Ok(CreateTableTransaction::new(staged_table))
+    }
+
+    async fn commit_create_table(
+        &self,
+        ident: TableIdent,
+        updates: Vec<TableUpdate>,
+    ) -> Result<Table> {
+        let mut root_namespace_state = self.root_namespace_state.lock().await;
+        if root_namespace_state.table_exists(&ident)? {
+            return Err(Error::new(
+                ErrorKind::TableAlreadyExists,
+                format!("Cannot create table {ident}: table already exists"),
+            ));
+        }
+
+        let metadata = TableMetadata::from_updates(updates)?;
+        // Derived from the committed metadata, so that the metadata directory and the
+        // compression codec follow the properties the commit ends up with.
+        let metadata_location = MetadataLocation::try_new_with_metadata(&metadata)?;
+        let new_table = self.build_table(ident, metadata, Some(metadata_location.to_string()))?;
+        Self::write_metadata(&new_table).await?;
+        root_namespace_state
+            .insert_new_table(new_table.identifier(), metadata_location.to_string())?;
+        Ok(new_table)
     }
 }
 
@@ -533,7 +536,7 @@ pub(crate) mod tests {
         temp_dir.path().to_str().unwrap().to_string()
     }
 
-    pub(crate) async fn new_memory_catalog() -> impl TransactionalCatalog {
+    pub(crate) async fn new_memory_catalog() -> impl StagedCreateCatalog {
         let warehouse_location = temp_path();
         MemoryCatalogBuilder::default()
             .load(
