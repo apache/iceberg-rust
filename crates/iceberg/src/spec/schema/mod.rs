@@ -95,6 +95,7 @@ pub struct SchemaBuilder {
     alias_to_id: BiHashMap<String, i32>,
     identifier_field_ids: HashSet<i32>,
     reassign_field_ids_from: Option<i32>,
+    reuse_field_ids_from: Option<SchemaRef>,
 }
 
 impl SchemaBuilder {
@@ -110,6 +111,16 @@ impl SchemaBuilder {
     /// All specified aliases and identifier fields will be updated to the new field-ids.
     pub(crate) fn with_reassigned_field_ids(mut self, start_from: i32) -> Self {
         self.reassign_field_ids_from = Some(start_from);
+        self
+    }
+
+    /// Reassign all field-ids on build as [`SchemaBuilder::with_reassigned_field_ids`] does,
+    /// except that a field whose full name `base` already knows keeps the field-id it has
+    /// there. Only the remaining fields are assigned from `start_from`, which must be above
+    /// every field-id in `base` for the result to be unique.
+    pub(crate) fn with_field_ids_reused_from(mut self, base: SchemaRef, start_from: i32) -> Self {
+        self.reassign_field_ids_from = Some(start_from);
+        self.reuse_field_ids_from = Some(base);
         self
     }
 
@@ -173,7 +184,12 @@ impl SchemaBuilder {
         };
 
         if let Some(start_from) = self.reassign_field_ids_from {
-            let mut id_reassigner = ReassignFieldIds::new(start_from);
+            let mut id_reassigner = match self.reuse_field_ids_from {
+                Some(base) => {
+                    ReassignFieldIds::reusing_ids_from(&base, schema.id_to_name.clone(), start_from)
+                }
+                None => ReassignFieldIds::new(start_from),
+            };
             let new_fields = id_reassigner.reassign_field_ids(schema.r#struct.fields().to_vec())?;
             let new_identifier_field_ids =
                 id_reassigner.apply_to_identifier_fields(schema.identifier_field_ids)?;
@@ -320,6 +336,7 @@ impl Schema {
             identifier_field_ids: HashSet::default(),
             alias_to_id: BiHashMap::default(),
             reassign_field_ids_from: None,
+            reuse_field_ids_from: None,
         }
     }
 
@@ -331,6 +348,7 @@ impl Schema {
             alias_to_id: self.alias_to_id,
             identifier_field_ids: self.identifier_field_ids,
             reassign_field_ids_from: None,
+            reuse_field_ids_from: None,
         }
     }
 
