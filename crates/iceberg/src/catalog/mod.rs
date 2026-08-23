@@ -460,25 +460,18 @@ impl TableCommit {
     ///
     /// Returns an error if this is an update commit; use [`TableCommit::apply`] for those.
     pub fn apply_create(self) -> Result<TableMetadata> {
-        let Self {
-            requirements,
-            updates,
-            kind,
-            ..
-        } = self;
-
-        if kind != TableCommitKind::Create {
+        if self.kind != TableCommitKind::Create {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "Cannot apply an update commit as a create; use `TableCommit::apply` instead",
             ));
         }
 
-        for requirement in requirements {
+        for requirement in self.requirements {
             requirement.check(None)?;
         }
 
-        Self::rebuild_metadata(updates)
+        Self::rebuild_metadata(self.updates)
     }
 
     /// Builds the metadata a create commit's updates describe, from nothing.
