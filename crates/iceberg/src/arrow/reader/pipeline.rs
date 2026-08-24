@@ -270,7 +270,7 @@ impl FileScanTaskReader {
         // Parquet leaf index of the physically-stored column, resolved by its embedded
         // reserved field id. `find_leaf_by_field_id` tolerates id-less leaves (e.g. a
         // Variant column's internal metadata/value leaves, which the spec requires to have
-        // no id), so an unprojected variant alongside a correctly-IDed metadata column does
+        // no id), so an unprojected variant alongside a metadata column with correct ID does
         // not hide it.
         let phys_last_updated_seq_leaf = if project_last_updated_seq {
             find_leaf_by_field_id(
