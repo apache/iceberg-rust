@@ -164,6 +164,7 @@ mod tests {
     use crate::encryption::kms::MemoryKeyManagementClient;
     use crate::encryption::{SensitiveBytes, StandardKeyMetadata};
     use crate::io::FileIO;
+    use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
         ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, SnapshotRef,
@@ -171,9 +172,9 @@ mod tests {
     };
     use crate::table::Table;
     use crate::test_utils::{make_encrypted_table, test_runtime};
-    use crate::transaction::tests::make_v2_minimal_table;
-    use crate::transaction::{Transaction, TransactionAction};
-    use crate::{TableIdent, TableRequirement, TableUpdate};
+    use crate::transaction::tests::{make_v2_minimal_table, make_v3_minimal_table_in_catalog};
+    use crate::transaction::{ApplyTransactionAction, Transaction, TransactionAction};
+    use crate::{Catalog, TableIdent, TableRequirement, TableUpdate};
 
     fn render_template(template: &str, ctx: Value) -> String {
         let mut env = Environment::new();
@@ -921,5 +922,154 @@ mod tests {
             manifest.entries()[0].snapshot_id().unwrap()
         );
         assert_eq!(data_file, *manifest.entries()[0].data_file());
+    }
+
+    /// `Transaction::stage` on a fast-append must produce exactly what a committed
+    /// fast-append produces: the same update/requirement shape, and a real
+    /// manifest on storage carrying the staged file.
+    #[tokio::test]
+    async fn test_stage_fast_append_matches_committed_fast_append() {
+        let table = make_v2_minimal_table();
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/3.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .add_data_files(vec![data_file.clone()])
+            .apply(tx)
+            .unwrap();
+        let mut commit = tx.stage().await.unwrap();
+        assert_eq!(table.identifier(), commit.identifier());
+        let updates = commit.take_updates();
+        let requirements = commit.take_requirements();
+
+        assert!(
+            matches!((&updates[0],&updates[1]), (TableUpdate::AddSnapshot { snapshot },TableUpdate::SetSnapshotRef { reference,ref_name }) if snapshot.snapshot_id() == reference.snapshot_id && ref_name == MAIN_BRANCH)
+        );
+        assert_eq!(
+            vec![
+                TableRequirement::UuidMatch {
+                    uuid: table.metadata().uuid()
+                },
+                TableRequirement::RefSnapshotIdMatch {
+                    r#ref: MAIN_BRANCH.to_string(),
+                    snapshot_id: table.metadata().current_snapshot_id
+                }
+            ],
+            requirements
+        );
+
+        assert_eq!(
+            vec![data_file],
+            committed_data_files(&table, &updates).await
+        );
+    }
+
+    /// Staging must not advance any catalog pointer; the staged commit must then
+    /// be committable through the caller's own catalog round-trip.
+    #[tokio::test]
+    async fn test_stage_fast_append_leaves_commit_to_the_caller() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(10)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(0))]))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .add_data_files(vec![data_file.clone()])
+            .apply(tx)
+            .unwrap();
+        let commit = tx.stage().await.unwrap();
+
+        // Nothing committed yet: the catalog still serves the pre-stage metadata.
+        let reloaded = catalog.load_table(table.identifier()).await.unwrap();
+        assert_eq!(table.metadata(), reloaded.metadata());
+        assert!(reloaded.metadata().current_snapshot().is_none());
+
+        // The caller's own commit path: the staged TableCommit goes to the catalog as-is.
+        let committed = catalog.update_table(commit).await.unwrap();
+
+        let snapshot = committed.metadata().current_snapshot().unwrap();
+        let manifest_list = committed
+            .manifest_list_reader(snapshot)
+            .load()
+            .await
+            .unwrap();
+        assert_eq!(1, manifest_list.entries().len());
+        let manifest = committed
+            .manifest_reader()
+            .read(&manifest_list.entries()[0])
+            .await
+            .unwrap();
+        assert_eq!(1, manifest.entries().len());
+        assert_eq!(
+            data_file.file_path(),
+            manifest.entries()[0].data_file().file_path()
+        );
+    }
+
+    /// `with_check_duplicate` is a read-only precondition: the staged manifest
+    /// content and requirements are identical whether it runs or not.
+    #[tokio::test]
+    async fn test_stage_fast_append_check_duplicate_stages_identical_content() {
+        let table = make_v2_minimal_table();
+
+        let make_file = || {
+            DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path("test/3.parquet".to_string())
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(100)
+                .record_count(1)
+                .partition_spec_id(table.metadata().default_partition_spec_id())
+                .partition(Struct::from_iter([Some(Literal::long(300))]))
+                .build()
+                .unwrap()
+        };
+
+        async fn stage(
+            table: &Table,
+            data_file: DataFile,
+            check_duplicate: bool,
+        ) -> (Vec<TableUpdate>, Vec<TableRequirement>) {
+            let tx = Transaction::new(table);
+            let tx = tx
+                .fast_append()
+                .with_check_duplicate(check_duplicate)
+                .add_data_files(vec![data_file])
+                .apply(tx)
+                .unwrap();
+            let mut commit = tx.stage().await.unwrap();
+            (commit.take_updates(), commit.take_requirements())
+        }
+
+        let (updates_on, reqs_on) = stage(&table, make_file(), true).await;
+        let (updates_off, reqs_off) = stage(&table, make_file(), false).await;
+
+        assert_eq!(reqs_on, reqs_off);
+        let files_on = committed_data_files(&table, &updates_on).await;
+        let files_off = committed_data_files(&table, &updates_off).await;
+        assert_eq!(files_on, files_off);
+        assert_eq!(vec![make_file()], files_off);
     }
 }

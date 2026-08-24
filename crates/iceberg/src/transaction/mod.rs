@@ -171,6 +171,37 @@ impl Transaction {
         ExpireSnapshotsAction::new()
     }
 
+    /// Stage this transaction: run every action against the transaction's
+    /// base table and return the resulting [`TableCommit`] **without** sending
+    /// it to a catalog.
+    ///
+    /// This is the first half of [`commit`](Self::commit). It produces the
+    /// exact same updates and requirements that `commit` would pass to
+    /// [`Catalog::update_table`] on its first attempt — including any files an
+    /// action writes to the table's storage, such as a fast-append's manifest
+    /// and manifest list. The second half (refresh-and-retry against the
+    /// catalog) is left to the caller.
+    ///
+    /// Use this when you own the commit path: an embedded writer that swaps
+    /// the metadata pointer itself, or a caller that folds several tables'
+    /// staged commits into one atomic multi-table commit. The staged
+    /// [`TableCommit`] can be applied locally with [`TableCommit::apply`],
+    /// taken apart with [`TableCommit::take_updates`] /
+    /// [`TableCommit::take_requirements`], or handed to
+    /// [`Catalog::update_table`] as-is.
+    ///
+    /// Staging is against the transaction's base table snapshot as it was when
+    /// the transaction was created; it does not refresh from a catalog.
+    pub async fn stage(&self) -> Result<TableCommit> {
+        let (_, updates, requirements) = self.apply_actions(self.table.clone()).await?;
+
+        Ok(TableCommit::builder()
+            .ident(self.table.identifier().to_owned())
+            .updates(updates)
+            .requirements(requirements)
+            .build())
+    }
+
     /// Commit transaction.
     pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
         if self.actions.is_empty() {
@@ -195,6 +226,31 @@ impl Transaction {
         .1
     }
 
+    /// Run every action in order against `base`, threading each action's
+    /// result into the next. Returns the final table plus the accumulated
+    /// updates and requirements.
+    async fn apply_actions(
+        &self,
+        base: Table,
+    ) -> Result<(Table, Vec<TableUpdate>, Vec<TableRequirement>)> {
+        let mut current_table = base;
+        let mut existing_updates: Vec<TableUpdate> = vec![];
+        let mut existing_requirements: Vec<TableRequirement> = vec![];
+
+        for action in &self.actions {
+            let action_commit = Arc::clone(action).commit(&current_table).await?;
+            // apply action commit to current_table
+            current_table = Self::apply(
+                current_table,
+                action_commit,
+                &mut existing_updates,
+                &mut existing_requirements,
+            )?;
+        }
+
+        Ok((current_table, existing_updates, existing_requirements))
+    }
+
     fn build_backoff(props: TableProperties) -> Result<ExponentialBackoff> {
         Ok(ExponentialBuilder::new()
             .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms()))
@@ -217,20 +273,8 @@ impl Transaction {
             self.table = refreshed.clone();
         }
 
-        let mut current_table = self.table.clone();
-        let mut existing_updates: Vec<TableUpdate> = vec![];
-        let mut existing_requirements: Vec<TableRequirement> = vec![];
-
-        for action in &self.actions {
-            let action_commit = Arc::clone(action).commit(&current_table).await?;
-            // apply action commit to current_table
-            current_table = Self::apply(
-                current_table,
-                action_commit,
-                &mut existing_updates,
-                &mut existing_requirements,
-            )?;
-        }
+        let (_, existing_updates, existing_requirements) =
+            self.apply_actions(self.table.clone()).await?;
 
         let table_commit = TableCommit::builder()
             .ident(self.table.identifier().to_owned())
@@ -260,7 +304,7 @@ mod tests {
     use crate::table::Table;
     use crate::test_utils::{make_encrypted_table, test_runtime};
     use crate::transaction::{ApplyTransactionAction, Transaction};
-    use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
+    use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent, TableUpdate};
 
     pub fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -384,6 +428,67 @@ mod tests {
             .metadata;
 
         table.with_metadata(Arc::new(metadata))
+    }
+
+    /// `stage` runs every action in order and returns the combined TableCommit
+    /// without touching the catalog; the staged commit then round-trips through
+    /// `Catalog::update_table` as-is.
+    #[tokio::test]
+    async fn test_stage_returns_commit_without_touching_catalog() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_table_properties()
+            .set("a".to_string(), "1".to_string())
+            .apply(tx)
+            .unwrap();
+        let tx = tx
+            .update_location()
+            .set_location(format!("{}/moved", table.metadata().location()))
+            .apply(tx)
+            .unwrap();
+
+        let mut commit = tx.stage().await.unwrap();
+        assert_eq!(table.identifier(), commit.identifier());
+        let updates = commit.take_updates();
+        let requirements = commit.take_requirements();
+        // UpdatePropertiesAction emits SetProperties + RemoveProperties, UpdateLocationAction
+        // emits SetLocation; neither carries a requirement.
+        assert_eq!(3, updates.len());
+        assert!(matches!(updates[0], TableUpdate::SetProperties { .. }));
+        assert!(matches!(updates[1], TableUpdate::RemoveProperties { .. }));
+        assert!(matches!(updates[2], TableUpdate::SetLocation { .. }));
+        assert!(requirements.is_empty());
+
+        // The catalog has not seen anything.
+        let reloaded = catalog.load_table(table.identifier()).await.unwrap();
+        assert_eq!(table.metadata(), reloaded.metadata());
+
+        // Re-stage and hand the untouched TableCommit to the catalog ourselves.
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_table_properties()
+            .set("a".to_string(), "1".to_string())
+            .apply(tx)
+            .unwrap();
+        let committed = catalog
+            .update_table(tx.stage().await.unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            Some(&"1".to_string()),
+            committed.metadata().properties().get("a")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stage_empty_transaction_is_empty_commit() {
+        let table = make_v2_table();
+        let mut commit = Transaction::new(&table).stage().await.unwrap();
+        assert!(commit.take_updates().is_empty());
+        assert!(commit.take_requirements().is_empty());
     }
 
     /// Helper function to create a transaction with a simple update action
