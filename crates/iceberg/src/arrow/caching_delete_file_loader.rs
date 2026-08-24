@@ -344,6 +344,10 @@ impl CachingDeleteFileLoader {
         let mut run_positions: Vec<u64> = Vec::new();
 
         while let Some(batch) = stream.next().await {
+            // run_positions is reused across batches, so the end-of-batch flush
+            // below must drain it before the next batch opens a new run.
+            debug_assert!(run_positions.is_empty());
+
             let batch = batch?;
             let columns = batch.columns();
 
@@ -415,13 +419,21 @@ impl CachingDeleteFileLoader {
         debug_assert!(!positions.is_empty());
 
         let delete_vector = result.entry(file_path.to_string()).or_default();
-        // A run is a strictly ascending slice in the spec-compliant case, which
-        // `insert_positions` bulk-appends in one pass. Fall back to per-position
-        // inserts when the append precondition doesn't hold (unsorted rows, or a
-        // run that overlaps positions already recorded from an earlier batch).
-        // `insert` is idempotent, so re-inserting any prefix the failed append
-        // already added is harmless.
-        if delete_vector.insert_positions(positions).is_err() {
+        // In spec-compliant files rows are sorted by (file_path, pos), so a run is
+        // usually ascending with no value already recorded, which `insert_positions`
+        // bulk-appends in one pass. Its precondition is stricter than the spec,
+        // though: it rejects duplicate positions (sorted means non-decreasing, so
+        // ties are compliant) as well as out-of-order rows and runs that overlap
+        // positions from an earlier batch. Fall back to per-position inserts in
+        // those cases; `insert` is idempotent, so re-inserting any prefix the failed
+        // append already added is harmless.
+        if let Err(err) = delete_vector.insert_positions(positions) {
+            tracing::debug!(
+                file_path,
+                run_len = positions.len(),
+                error = %err,
+                "positional delete run fell back to per-position insert"
+            );
             for &pos in positions {
                 delete_vector.insert(pos);
             }
@@ -978,8 +990,9 @@ mod tests {
     }
 
     /// Spec-compliant input: rows sorted by (file_path, pos). Exercises the
-    /// common shape: multi-position runs, several files in one batch, and a
-    /// run for "b" that continues across the batch boundary.
+    /// common shape: multi-position runs, several files in one batch, and a path
+    /// "b" whose positions span two batches, so its two runs merge into one
+    /// delete vector.
     #[tokio::test]
     async fn test_parse_positional_deletes_merges_sorted_runs() {
         let schema = crate::arrow::delete_filter::tests::create_pos_del_schema();
@@ -1029,6 +1042,57 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(sorted_positions(&result["a"]), vec![1, 3]);
         assert_eq!(sorted_positions(&result["b"]), vec![2]);
+    }
+
+    /// Cross-batch overlap: batch2 carries lower positions for "a" than batch1
+    /// already recorded, so the run fails the append precondition (every value
+    /// must exceed all recorded) and drops to the per-position fallback. All
+    /// positions must still merge.
+    #[tokio::test]
+    async fn test_parse_positional_deletes_merges_overlapping_cross_batch_runs() {
+        let schema = crate::arrow::delete_filter::tests::create_pos_del_schema();
+
+        let batch1 = RecordBatch::try_new(schema.clone(), vec![
+            Arc::new(StringArray::from_iter_values(vec!["a", "a"])),
+            Arc::new(Int64Array::from_iter_values(vec![5i64, 10])),
+        ])
+        .unwrap();
+        let batch2 = RecordBatch::try_new(schema, vec![
+            Arc::new(StringArray::from_iter_values(vec!["a", "a"])),
+            Arc::new(Int64Array::from_iter_values(vec![3i64, 7])),
+        ])
+        .unwrap();
+        let stream = futures::stream::iter(vec![Ok(batch1), Ok(batch2)]).boxed();
+
+        let result = CachingDeleteFileLoader::parse_positional_deletes_record_batch_stream(stream)
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(sorted_positions(&result["a"]), vec![3, 5, 7, 10]);
+    }
+
+    /// Spec-compliant duplicate positions: sorted by (file_path, pos) is only
+    /// non-decreasing, so a repeated position is valid input. It fails the
+    /// strictly-ascending append precondition and exercises the fallback, whose
+    /// idempotent inserts collapse the duplicate.
+    #[tokio::test]
+    async fn test_parse_positional_deletes_merges_duplicate_positions() {
+        let schema = crate::arrow::delete_filter::tests::create_pos_del_schema();
+
+        let batch = RecordBatch::try_new(schema, vec![
+            Arc::new(StringArray::from_iter_values(vec!["a", "a", "a"])),
+            Arc::new(Int64Array::from_iter_values(vec![3i64, 3, 7])),
+        ])
+        .unwrap();
+        let stream = futures::stream::iter(vec![Ok(batch)]).boxed();
+
+        let result = CachingDeleteFileLoader::parse_positional_deletes_record_batch_stream(stream)
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(sorted_positions(&result["a"]), vec![3, 7]);
     }
 
     /// Verifies that evolve_schema on partial-schema equality deletes works correctly
