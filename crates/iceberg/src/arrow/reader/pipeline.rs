@@ -1657,9 +1657,9 @@ mod tests {
     #[tokio::test]
     async fn test_row_id_resolves_alongside_id_less_leaf() {
         // A file with an id-less leaf (mimicking a Variant column's internal metadata/value
-        // leaves, which the spec requires to have no field id) plus a correctly-IDed
-        // physical `_row_id`. The reserved id must still resolve -- an all-or-nothing field
-        // map would bail on the id-less leaf and wrongly reject the file.
+        // leaves, which the spec requires to have no field id) plus a physical `_row_id`
+        // that carries its embedded id. The reserved id must still resolve -- an
+        // all-or-nothing field map would bail on the id-less leaf and wrongly reject the file.
         let tmp_dir = TempDir::new().unwrap();
         let dir = tmp_dir.path().to_str().unwrap();
         let idless_field = Field::new("variant_internal", DataType::Utf8, true);
