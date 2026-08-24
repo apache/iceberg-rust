@@ -186,9 +186,8 @@ impl CompressionCodec {
         match self {
             CompressionCodec::None => Ok(bytes),
             CompressionCodec::Lz4 => {
-                // The Puffin spec requires "LZ4 single compression frame with content size
-                // present" for footer payloads, so we set content_size on the frame header.
-                // See https://iceberg.apache.org/puffin-spec/#footer-payload
+                // Puffin requires one LZ4 frame with content size present:
+                // https://iceberg.apache.org/puffin-spec/#footer-payload
                 let frame_info = FrameInfo::new().content_size(Some(bytes.len() as u64));
                 let mut encoder = FrameEncoder::with_frame_info(frame_info, Vec::new());
                 encoder.write_all(&bytes)?;
@@ -238,10 +237,7 @@ impl CompressionCodec {
     ///
     /// # Errors
     ///
-    /// Returns an error for codecs without a canonical file-extension convention
-    /// (Lz4, Zstd, Snappy). LZ4 is fully supported for compression and decompression,
-    /// but is used in framed form (e.g., inside Puffin footers) where no separate
-    /// file suffix is required.
+    /// Returns an error for codecs without a file extension suffix.
     pub fn suffix(&self) -> Result<&'static str> {
         match self {
             CompressionCodec::None => Ok(""),
@@ -283,18 +279,15 @@ mod tests {
         ];
 
         for codec in compression_codecs {
-            // Empty input round-trips (the frame still carries header/footer bytes).
             let empty: Vec<u8> = vec![];
             let compressed = codec.compress(empty.clone()).unwrap();
             assert_eq!(codec.decompress(compressed).unwrap(), empty);
 
-            // Highly compressible input (all zeros) shrinks and round-trips.
             let zeros = vec![0_u8; 100];
             let compressed = codec.compress(zeros.clone()).unwrap();
             assert!(compressed.len() < zeros.len());
             assert_eq!(codec.decompress(compressed).unwrap(), zeros);
 
-            // Less-compressible input (mixed bytes) round-trips.
             let mixed: Vec<u8> = (0..10_000).map(|i| (i % 251) as u8).collect();
             let compressed = codec.compress(mixed.clone()).unwrap();
             assert_eq!(codec.decompress(compressed).unwrap(), mixed);
@@ -303,9 +296,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_lz4_frame_magic_number() {
-        // LZ4 footers use the framed format; the frame must begin with the LZ4 frame
-        // magic number 0x184D2204 (little-endian) per
-        // https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md.
         let compressed = CompressionCodec::Lz4.compress(vec![0u8; 10_000]).unwrap();
         assert_eq!(&compressed[..4], &[0x04, 0x22, 0x4D, 0x18]);
     }
