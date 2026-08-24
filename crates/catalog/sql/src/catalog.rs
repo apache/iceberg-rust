@@ -564,9 +564,12 @@ impl SqlCatalog {
             Some(t) => sqlx_query.execute(&mut **t).await.map_err(from_sqlx_error),
             None => {
                 let mut tx = self.connection.begin().await.map_err(from_sqlx_error)?;
-                let result = sqlx_query.execute(&mut *tx).await.map_err(from_sqlx_error);
-                let _ = tx.commit().await.map_err(from_sqlx_error);
-                result
+                let result = sqlx_query
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(from_sqlx_error)?;
+                tx.commit().await.map_err(from_sqlx_error)?;
+                Ok(result)
             }
         }
     }
@@ -1384,6 +1387,70 @@ mod tests {
         // catalog instantiation should not fail even if tables exist
         new_sql_catalog(warehouse_loc.clone(), Some("iceberg")).await;
         new_sql_catalog(warehouse_loc.clone(), Some("iceberg")).await;
+    }
+
+    #[tokio::test]
+    async fn test_execute_returns_commit_error() {
+        let sql_lite_uri = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
+        let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .prop("pool.max-connections", "1")
+            .load(
+                "iceberg",
+                HashMap::from_iter([
+                    (SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri),
+                    (SQL_CATALOG_PROP_WAREHOUSE.to_string(), temp_path()),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        catalog
+            .connection
+            .execute("PRAGMA foreign_keys = ON")
+            .await
+            .unwrap();
+        catalog
+            .connection
+            .execute("CREATE TABLE parent(id INTEGER PRIMARY KEY)")
+            .await
+            .unwrap();
+        catalog
+            .connection
+            .execute(
+                "CREATE TABLE child(parent_id INTEGER REFERENCES parent(id) \
+                 DEFERRABLE INITIALLY DEFERRED)",
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            catalog
+                .execute("INSERT INTO child VALUES (1)", vec![], None)
+                .await
+                .is_err()
+        );
+        let child_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM child")
+            .fetch_one(&catalog.connection)
+            .await
+            .unwrap();
+        assert_eq!(child_count, 0);
+
+        catalog
+            .connection
+            .execute("INSERT INTO parent VALUES (1)")
+            .await
+            .unwrap();
+        catalog
+            .execute("INSERT INTO child VALUES (1)", vec![], None)
+            .await
+            .unwrap();
+        let child_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM child")
+            .fetch_one(&catalog.connection)
+            .await
+            .unwrap();
+        assert_eq!(child_count, 1);
     }
 
     // Regression test: storage-backend props set on the catalog must reach
