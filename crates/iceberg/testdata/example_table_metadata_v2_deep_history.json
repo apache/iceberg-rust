@@ -53,7 +53,8 @@
       "timestamp-ms": 1515100955770,
       "sequence-number": 0,
       "summary": {"operation": "append"},
-      "manifest-list": "{{ manifest_list_s1_location }}"
+      "manifest-list": "{{ manifest_list_s1_location }}",
+      "schema-id": 1
     },
     {
       "snapshot-id": 3055729675574597004,

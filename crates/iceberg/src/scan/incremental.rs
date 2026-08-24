@@ -23,34 +23,23 @@ use std::sync::Arc;
 use crate::expr::Predicate;
 use crate::scan::context::{ManifestEntryFilter, ManifestFileFilter};
 use crate::scan::{ScanConfig, TableScan, build_table_scan};
-use crate::spec::{ManifestContentType, ManifestStatus, Operation, TableMetadataRef};
+use crate::spec::{ManifestContentType, ManifestStatus, Operation, SnapshotRef, TableMetadataRef};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::util::snapshot::ancestors_between;
 use crate::{Error, ErrorKind, Result};
 
-/// Represents a validated range of snapshots for incremental scanning.
+/// A validated range of snapshots for incremental scanning.
 ///
-/// This struct is used to track which snapshot IDs are included in an incremental
-/// scan range, allowing efficient filtering of manifest entries.
+/// Holds the APPEND snapshots of the range: their manifest lists are the scan's
+/// manifest source, and their IDs select which manifests and entries it keeps.
 #[derive(Debug, Clone)]
-pub(crate) struct AppendSnapshotSet {
-    /// Snapshot IDs in the range
-    snapshot_ids: HashSet<i64>,
+pub(crate) struct AppendRange {
+    /// Newest first.
+    snapshots: Vec<SnapshotRef>,
 }
 
-impl AppendSnapshotSet {
-    /// Build a snapshot range by walking the snapshot ancestry chain.
-    ///
-    /// Validates that `from_snapshot_id` is an ancestor of `to_snapshot_id` and
-    /// collects all snapshot IDs in between. Also validates that all snapshots
-    /// in the range have APPEND operations.
-    ///
-    /// # Arguments
-    /// * `table_metadata` - The table metadata containing snapshot information
-    /// * `from_snapshot_id` - The starting snapshot ID
-    /// * `to_snapshot_id` - The ending snapshot ID
-    /// * `from_inclusive` - Whether to include the from_snapshot in the range
+impl AppendRange {
     pub(crate) fn build(
         table_metadata: &TableMetadataRef,
         from_snapshot_id: i64,
@@ -89,7 +78,7 @@ impl AppendSnapshotSet {
             // In inclusive mode, we should have exactly one snapshot.
             if !from_inclusive {
                 return Ok(Self {
-                    snapshot_ids: HashSet::new(),
+                    snapshots: Vec::new(),
                 });
             }
         } else if snapshots.is_empty() {
@@ -120,42 +109,50 @@ impl AppendSnapshotSet {
             }
         }
 
-        // Collect only APPEND snapshot IDs, silently skipping non-APPEND
-        // snapshots (e.g. replace/compaction, overwrite, delete). This matches
-        // the Java BaseIncrementalAppendScan behavior — only append operations
-        // contribute new data files to an incremental append scan.
-        let mut snapshot_ids = HashSet::with_capacity(snapshots.len());
-        for snapshot in &snapshots {
-            if snapshot.summary().operation == Operation::Append {
-                snapshot_ids.insert(snapshot.snapshot_id());
-            }
-        }
+        // Keep only APPEND snapshots, silently skipping the rest (replace, overwrite,
+        // delete)
+        let snapshots = snapshots
+            .into_iter()
+            .filter(|snapshot| snapshot.summary().operation == Operation::Append)
+            .collect();
 
-        Ok(Self { snapshot_ids })
+        Ok(Self { snapshots })
     }
 
-    /// Check if a snapshot_id is within this set
-    pub(crate) fn contains(&self, snapshot_id: i64) -> bool {
-        self.snapshot_ids.contains(&snapshot_id)
+    /// The APPEND snapshots in the range, newest first. Every one's manifest list
+    /// must be read; see [`PlanContext::manifest_list_snapshots`].
+    ///
+    /// [`PlanContext::manifest_list_snapshots`]: crate::scan::context::PlanContext::manifest_list_snapshots
+    pub(crate) fn snapshots(&self) -> &[SnapshotRef] {
+        &self.snapshots
+    }
+
+    fn snapshot_ids(&self) -> HashSet<i64> {
+        self.snapshots
+            .iter()
+            .map(|snapshot| snapshot.snapshot_id())
+            .collect()
     }
 
     /// Create a manifest file filter that skips delete manifests and data
-    /// manifests whose `added_snapshot_id` is outside this set.
-    pub(crate) fn manifest_file_filter(self: &Arc<Self>) -> ManifestFileFilter {
-        let set = self.clone();
+    /// manifests whose `added_snapshot_id` is outside this range.
+    pub(crate) fn manifest_file_filter(&self) -> ManifestFileFilter {
+        let snapshot_ids = self.snapshot_ids();
         Arc::new(move |manifest_file| {
             manifest_file.content != ManifestContentType::Deletes
-                && set.contains(manifest_file.added_snapshot_id)
+                && snapshot_ids.contains(&manifest_file.added_snapshot_id)
         })
     }
 
     /// Create a manifest entry filter that includes only entries with
-    /// status ADDED and a snapshot_id within this set.
-    pub(crate) fn manifest_entry_filter(self: &Arc<Self>) -> ManifestEntryFilter {
-        let set = self.clone();
+    /// status ADDED and a snapshot_id within this range.
+    pub(crate) fn manifest_entry_filter(&self) -> ManifestEntryFilter {
+        let snapshot_ids = self.snapshot_ids();
         Arc::new(move |entry| {
             entry.status() == ManifestStatus::Added
-                && entry.snapshot_id().is_some_and(|id| set.contains(id))
+                && entry
+                    .snapshot_id()
+                    .is_some_and(|id| snapshot_ids.contains(&id))
         })
     }
 }
@@ -319,12 +316,12 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
             }
         };
 
-        let append_set = Arc::new(AppendSnapshotSet::build(
+        let append_range = AppendRange::build(
             &self.table.metadata_ref(),
             self.from_snapshot_id,
             to_snapshot.snapshot_id(),
             self.from_inclusive,
-        )?);
+        )?;
 
         build_table_scan(
             ScanConfig {
@@ -344,9 +341,9 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
                 // the current schema, so newer columns become `NULL`.
                 schema: self.table.metadata().current_schema().clone(),
             },
-            to_snapshot,
-            Some(append_set.manifest_file_filter()),
-            Some(append_set.manifest_entry_filter()),
+            append_range.snapshots().to_vec(),
+            Some(append_range.manifest_file_filter()),
+            Some(append_range.manifest_entry_filter()),
         )
     }
 }
@@ -355,8 +352,34 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
 mod tests {
     use futures::TryStreamExt;
 
-    use super::AppendSnapshotSet;
+    use super::AppendRange;
+    use crate::scan::TableScan;
     use crate::scan::tests::TableTestFixture;
+
+    /// Sorted base names of the data files `scan` yields. Duplicates are kept so
+    /// double-counting is visible.
+    async fn planned_file_names(scan: &TableScan) -> Vec<String> {
+        let tasks: Vec<_> = scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let mut names: Vec<String> = tasks
+            .iter()
+            .map(|task| {
+                task.data_file_path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&task.data_file_path)
+                    .to_string()
+            })
+            .collect();
+        names.sort();
+        names
+    }
 
     #[test]
     fn test_incremental_scan_invalid_from_snapshot_exclusive() {
@@ -493,8 +516,8 @@ mod tests {
             "Inclusive scan of a single append snapshot should succeed"
         );
 
-        // Verify AppendSnapshotSet directly
-        let set = AppendSnapshotSet::build(
+        // Verify AppendRange directly
+        let set = AppendRange::build(
             &table.metadata_ref(),
             current_snapshot_id,
             current_snapshot_id,
@@ -502,7 +525,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            set.contains(current_snapshot_id),
+            set.snapshot_ids().contains(&current_snapshot_id),
             "Inclusive set should contain the from_snapshot"
         );
     }
@@ -522,8 +545,8 @@ mod tests {
             "Exclusive scan from=to should succeed with empty range"
         );
 
-        // Verify AppendSnapshotSet directly
-        let set = AppendSnapshotSet::build(
+        // Verify AppendRange directly
+        let set = AppendRange::build(
             &table.metadata_ref(),
             current_snapshot_id,
             current_snapshot_id,
@@ -531,7 +554,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !set.contains(current_snapshot_id),
+            !set.snapshot_ids().contains(&current_snapshot_id),
             "Exclusive set should not contain the from_snapshot"
         );
     }
@@ -553,7 +576,7 @@ mod tests {
             "Should succeed, skipping non-APPEND snapshots"
         );
 
-        let set = AppendSnapshotSet::build(
+        let set = AppendRange::build(
             &table.metadata_ref(),
             3051729675574597004,
             3059729675574597004,
@@ -561,23 +584,23 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !set.contains(3051729675574597004),
+            !set.snapshot_ids().contains(&3051729675574597004),
             "S1 (from) should be excluded"
         );
         assert!(
-            set.contains(3055729675574597004),
+            set.snapshot_ids().contains(&3055729675574597004),
             "S2 (append) should be in set"
         );
         assert!(
-            set.contains(3056729675574597004),
+            set.snapshot_ids().contains(&3056729675574597004),
             "S3 (append) should be in set"
         );
         assert!(
-            !set.contains(3057729675574597004),
+            !set.snapshot_ids().contains(&3057729675574597004),
             "S4 (overwrite) should be skipped"
         );
         assert!(
-            set.contains(3059729675574597004),
+            set.snapshot_ids().contains(&3059729675574597004),
             "S5 (append) should be in set"
         );
     }
@@ -589,7 +612,7 @@ mod tests {
         let table = TableTestFixture::new_with_deep_history().table;
 
         // Scanning from S1 to S3 (all appends)
-        let set = AppendSnapshotSet::build(
+        let set = AppendRange::build(
             &table.metadata_ref(),
             3051729675574597004,
             3056729675574597004,
@@ -597,11 +620,17 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !set.contains(3051729675574597004),
+            !set.snapshot_ids().contains(&3051729675574597004),
             "from_snapshot should be excluded"
         );
-        assert!(set.contains(3055729675574597004), "S2 should be in range");
-        assert!(set.contains(3056729675574597004), "S3 should be in range");
+        assert!(
+            set.snapshot_ids().contains(&3055729675574597004),
+            "S2 should be in range"
+        );
+        assert!(
+            set.snapshot_ids().contains(&3056729675574597004),
+            "S3 should be in range"
+        );
     }
 
     #[tokio::test]
@@ -690,42 +719,26 @@ mod tests {
         // Scanning from S1 (exclusive) to S5 should return only files from
         // APPEND snapshots: s2.parquet, s3.parquet, s5.parquet. The compacted
         // s4.parquet must be skipped.
+        //
+        // Uses the rewritten manifest layout: compaction also replaces the manifests
+        // it compacts, so S4 re-emits s1/s2/s3 as EXISTING under a manifest it owns.
         let mut fixture = TableTestFixture::new_with_deep_history_compaction();
-        fixture.setup_manifest_files_deep_history().await;
+        fixture.setup_manifest_files_deep_history_rewritten().await;
 
         let s1_id = 3051729675574597004_i64;
         let s5_id = 3059729675574597004_i64;
 
-        let table_scan = fixture
+        let scan = fixture
             .table
             .incremental_append_scan(s1_id, Some(s5_id))
             .build()
             .unwrap();
 
-        let mut tasks: Vec<_> = table_scan
-            .plan_files()
-            .await
-            .unwrap()
-            .try_collect()
-            .await
-            .unwrap();
-
-        tasks.sort_by(|a, b| a.data_file_path.cmp(&b.data_file_path));
-
-        let file_names: Vec<&str> = tasks
-            .iter()
-            .map(|t| {
-                t.data_file_path
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&t.data_file_path)
-            })
-            .collect();
-
         assert_eq!(
-            file_names,
+            planned_file_names(&scan).await,
             vec!["s2.parquet", "s3.parquet", "s5.parquet"],
-            "Compacted file (s4, from the replace snapshot) must be skipped"
+            "Compacted file (s4, from the replace snapshot) must be skipped, and the \
+             appends it rewrote must each be returned exactly once"
         );
     }
 
@@ -857,6 +870,101 @@ mod tests {
             to_snapshot.schema(table.metadata()).unwrap().schema_id(),
             0,
             "to-snapshot should reference the older single-column schema"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_incremental_scan_merge_append_does_not_drop_earlier_appends() {
+        // S2 merge-appends S1's manifest away: s1 survives only as an EXISTING entry
+        // in a manifest S2 owns. Sourcing manifests from the to-snapshot's list alone
+        // would drop it, losing a row appended inside the range.
+        let mut fixture = TableTestFixture::new_with_deep_history();
+        fixture.setup_manifest_files_deep_history_rewritten().await;
+
+        let s1_id = 3051729675574597004_i64;
+        let s2_id = 3055729675574597004_i64;
+
+        let scan = fixture
+            .table
+            .incremental_append_scan_inclusive(s1_id, Some(s2_id))
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            planned_file_names(&scan).await,
+            vec!["s1.parquet", "s2.parquet"],
+            "both appends in the range must be returned even though S2 merged S1's manifest away"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_incremental_scan_rewritten_manifests_do_not_drop_appends() {
+        // S4 (overwrite) rewrites every live manifest into one it owns, re-emitting
+        // s1/s2/s3 as EXISTING. Its added_snapshot_id is not an append, so the whole
+        // manifest is filtered out and S2/S3's appends are reachable only through
+        // their own manifest lists.
+        let mut fixture = TableTestFixture::new_with_deep_history();
+        fixture.setup_manifest_files_deep_history_rewritten().await;
+
+        let s1_id = 3051729675574597004_i64;
+        let s4_id = 3057729675574597004_i64;
+
+        let scan = fixture
+            .table
+            .incremental_append_scan(s1_id, Some(s4_id))
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            planned_file_names(&scan).await,
+            vec!["s2.parquet", "s3.parquet"],
+            "appends rewritten into an overwrite's manifest must still be returned"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_incremental_scan_rewritten_manifests_with_later_append() {
+        // Same rewritten history, but scanning past the overwrite to S5. s4 came
+        // from the overwrite and must stay excluded; s2, s3 and s5 are appends.
+        let mut fixture = TableTestFixture::new_with_deep_history();
+        fixture.setup_manifest_files_deep_history_rewritten().await;
+
+        let s1_id = 3051729675574597004_i64;
+        let s5_id = 3059729675574597004_i64;
+
+        let scan = fixture
+            .table
+            .incremental_append_scan(s1_id, Some(s5_id))
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            planned_file_names(&scan).await,
+            vec!["s2.parquet", "s3.parquet", "s5.parquet"],
+            "appends across a manifest-rewriting overwrite must be returned exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_incremental_scan_does_not_duplicate_carried_forward_manifests() {
+        // S1's manifest appears in S1's, S2's and S3's lists. Reading every append
+        // snapshot's list must not emit the same manifest — and rows — twice.
+        let mut fixture = TableTestFixture::new_with_deep_history();
+        fixture.setup_manifest_files_deep_history().await;
+
+        let s1_id = 3051729675574597004_i64;
+        let s3_id = 3056729675574597004_i64;
+
+        let scan = fixture
+            .table
+            .incremental_append_scan_inclusive(s1_id, Some(s3_id))
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            planned_file_names(&scan).await,
+            vec!["s1.parquet", "s2.parquet", "s3.parquet"],
+            "each file must appear exactly once despite cumulative manifest lists"
         );
     }
 

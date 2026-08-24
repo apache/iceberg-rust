@@ -79,7 +79,7 @@ pub(crate) struct ScanConfig<'a> {
 /// and constructs [`PlanContext`] + [`TableScan`].
 pub(crate) fn build_table_scan(
     config: ScanConfig<'_>,
-    snapshot: SnapshotRef,
+    manifest_list_snapshots: Vec<SnapshotRef>,
     manifest_file_filter: Option<ManifestFileFilter>,
     manifest_entry_filter: Option<ManifestEntryFilter>,
 ) -> Result<TableScan> {
@@ -179,7 +179,7 @@ pub(crate) fn build_table_scan(
     };
 
     let plan_context = PlanContext {
-        snapshot,
+        manifest_list_snapshots,
         table_metadata: config.table.metadata_ref(),
         snapshot_schema: schema,
         case_sensitive: config.case_sensitive,
@@ -399,7 +399,7 @@ impl<'a> TableScanBuilder<'a> {
                 row_selection_enabled: self.row_selection_enabled,
                 schema,
             },
-            snapshot,
+            vec![snapshot],
             None,
             None,
         )
@@ -455,13 +455,15 @@ impl TableScan {
 
         let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new(self.runtime.clone());
 
-        let manifest_list = plan_context.get_manifest_list().await?;
+        let manifest_lists = plan_context
+            .collect_manifest_lists(concurrency_limit_manifest_files)
+            .await?;
 
-        // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
+        // get the [`ManifestFile`]s from the [`ManifestList`]s, filtering out any
         // whose partitions cannot match this
         // scan's filter
         let manifest_file_contexts = plan_context.build_manifest_file_contexts(
-            manifest_list,
+            manifest_lists,
             manifest_entry_data_ctx_tx,
             delete_file_idx.clone(),
             manifest_entry_delete_ctx_tx,
@@ -577,11 +579,6 @@ impl TableScan {
     /// Returns a reference to the column names of the table scan.
     pub fn column_names(&self) -> Option<&[String]> {
         self.column_names.as_deref()
-    }
-
-    /// Returns a reference to the snapshot of the table scan.
-    pub fn snapshot(&self) -> Option<&SnapshotRef> {
-        self.plan_context.as_ref().map(|x| &x.snapshot)
     }
 
     async fn process_data_manifest_entry(
@@ -730,7 +727,7 @@ pub mod tests {
         FormatVersion, Literal, MAIN_BRANCH, ManifestEntry, ManifestFile, ManifestListWriter,
         ManifestStatus, ManifestWriterBuilder, NestedField, Operation, PartitionSpec,
         PrimitiveType, Schema, Snapshot, Struct, StructType, Summary, TableMetadata,
-        TableMetadataBuilder, Type, UnboundPartitionSpec,
+        TableMetadataBuilder, Type, UNASSIGNED_SEQUENCE_NUMBER, UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -1217,6 +1214,158 @@ pub mod tests {
                     .unwrap();
                 manifest_list_write.close().await.unwrap();
             }
+        }
+
+        /// Like [`Self::setup_manifest_files_deep_history`], but the manifest lists
+        /// model writers that *rewrite* manifests rather than carrying every one
+        /// forward verbatim:
+        ///
+        /// ```text
+        /// S1 append     -> [A1]        A1 = {s1 ADDED@S1}
+        /// S2 append     -> [M2]        M2 = {s1 EXISTING@S1, s2 ADDED@S2}   (merge-append: A1 is gone)
+        /// S3 append     -> [M2, A3]    A3 = {s3 ADDED@S3}
+        /// S4 overwrite  -> [C4]        C4 = {s1,s2,s3 EXISTING, s4 ADDED@S4} (rewrite: M2, A3 are gone)
+        /// S5 append     -> [C4, A5]    A5 = {s5 ADDED@S5}
+        /// ```
+        ///
+        /// The surviving copies of the earlier entries are `EXISTING`, not `ADDED`, so
+        /// a scan reading only the to-snapshot's list silently drops them.
+        pub async fn setup_manifest_files_deep_history_rewritten(&mut self) {
+            let file_size = self.write_parquet_data_files_deep_history();
+
+            let (s1, s2, s3, s4, s5) = (
+                3051729675574597004_i64,
+                3055729675574597004_i64,
+                3056729675574597004_i64,
+                3057729675574597004_i64,
+                3059729675574597004_i64,
+            );
+
+            // (file index, originating snapshot, that snapshot's sequence number)
+            let (f1, f2, f3, f4, f5) = ((1, s1, 0), (2, s2, 1), (3, s3, 2), (4, s4, 3), (5, s5, 4));
+
+            let a1 = self
+                .write_rewritten_manifest(s1, &[f1], &[], file_size)
+                .await;
+            let m2 = self
+                .write_rewritten_manifest(s2, &[f2], &[f1], file_size)
+                .await;
+            let a3 = self
+                .write_rewritten_manifest(s3, &[f3], &[], file_size)
+                .await;
+            let c4 = self
+                .write_rewritten_manifest(s4, &[f4], &[f1, f2, f3], file_size)
+                .await;
+            let a5 = self
+                .write_rewritten_manifest(s5, &[f5], &[], file_size)
+                .await;
+
+            self.write_deep_history_manifest_list(s1, vec![a1]).await;
+            self.write_deep_history_manifest_list(s2, vec![m2.clone()])
+                .await;
+            self.write_deep_history_manifest_list(s3, vec![m2, a3])
+                .await;
+            self.write_deep_history_manifest_list(s4, vec![c4.clone()])
+                .await;
+            self.write_deep_history_manifest_list(s5, vec![c4, a5])
+                .await;
+        }
+
+        /// Writes one data manifest owned by `owner_snapshot_id`.
+        ///
+        /// `added` and `existing` are `(file index, originating snapshot id, sequence
+        /// number)` triples naming `s{index}.parquet`. Added entries take the owning
+        /// snapshot's ID (the writer enforces this); existing entries keep the ID and
+        /// sequence number of the snapshot that first added them.
+        async fn write_rewritten_manifest(
+            &self,
+            owner_snapshot_id: i64,
+            added: &[(usize, i64, i64)],
+            existing: &[(usize, i64, i64)],
+            file_size: u64,
+        ) -> ManifestFile {
+            let snapshot = self
+                .table
+                .metadata()
+                .snapshot_by_id(owner_snapshot_id)
+                .unwrap()
+                .clone();
+            let schema = snapshot.schema(self.table.metadata()).unwrap();
+            let partition_spec = self.table.metadata().default_partition_spec();
+
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(owner_snapshot_id),
+                schema,
+                partition_spec.as_ref().clone(),
+            )
+            .build_v2_data();
+
+            let data_file = |index: usize| {
+                DataFileBuilder::default()
+                    .partition_spec_id(0)
+                    .content(DataContentType::Data)
+                    .file_path(format!("{}/s{}.parquet", &self.table_location, index))
+                    .file_format(DataFileFormat::Parquet)
+                    .file_size_in_bytes(file_size)
+                    .record_count(1)
+                    .partition(Struct::from_iter([Some(Literal::long(index as i64 * 100))]))
+                    .key_metadata(None)
+                    .build()
+                    .unwrap()
+            };
+
+            for &(index, _, sequence_number) in added {
+                writer.add_file(data_file(index), sequence_number).unwrap();
+            }
+            for &(index, snapshot_id, sequence_number) in existing {
+                writer
+                    .add_existing_file(
+                        data_file(index),
+                        snapshot_id,
+                        sequence_number,
+                        Some(sequence_number),
+                    )
+                    .unwrap();
+            }
+
+            let mut manifest = writer.write_manifest_file().await.unwrap();
+            manifest.sequence_number = snapshot.sequence_number();
+            if manifest.min_sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
+                manifest.min_sequence_number = snapshot.sequence_number();
+            }
+            manifest
+        }
+
+        /// Writes `manifests` as the manifest list of the named snapshot.
+        async fn write_deep_history_manifest_list(
+            &self,
+            snapshot_id: i64,
+            manifests: Vec<ManifestFile>,
+        ) {
+            let snapshot = self
+                .table
+                .metadata()
+                .snapshot_by_id(snapshot_id)
+                .unwrap()
+                .clone();
+
+            let output = self
+                .table
+                .file_io()
+                .new_output(snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap();
+            let mut writer = ManifestListWriter::v2(
+                output,
+                snapshot_id,
+                snapshot.parent_snapshot_id(),
+                snapshot.sequence_number(),
+            );
+            writer.add_manifests(manifests.into_iter()).unwrap();
+            writer.close().await.unwrap();
         }
 
         /// Writes parquet data files for the deep history fixture (3-column schema: x, y, z).
@@ -2022,6 +2171,22 @@ pub mod tests {
         assert!(table_scan.is_err());
     }
 
+    /// The snapshot a standard scan resolved to, which is the single snapshot it
+    /// sources manifests from.
+    fn resolved_snapshot_id(scan: &super::TableScan) -> i64 {
+        let snapshots = &scan
+            .plan_context
+            .as_ref()
+            .expect("scan should have a plan context")
+            .manifest_list_snapshots;
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "a standard scan reads exactly one manifest list"
+        );
+        snapshots[0].snapshot_id()
+    }
+
     #[tokio::test]
     async fn test_table_scan_default_snapshot_id() {
         let table = TableTestFixture::new().table;
@@ -2029,7 +2194,7 @@ pub mod tests {
         let table_scan = table.scan().build().unwrap();
         assert_eq!(
             table.metadata().current_snapshot().unwrap().snapshot_id(),
-            table_scan.snapshot().unwrap().snapshot_id()
+            resolved_snapshot_id(&table_scan)
         );
     }
 
@@ -2051,10 +2216,7 @@ pub mod tests {
             .with_row_selection_enabled(true)
             .build()
             .unwrap();
-        assert_eq!(
-            table_scan.snapshot().unwrap().snapshot_id(),
-            3051729675574597004
-        );
+        assert_eq!(resolved_snapshot_id(&table_scan), 3051729675574597004);
     }
 
     fn table_with_property(key: &str, value: &str) -> Table {
