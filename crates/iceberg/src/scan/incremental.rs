@@ -73,46 +73,38 @@ impl AppendRange {
         let snapshots: Vec<_> =
             ancestors_between(table_metadata, to_snapshot_id, oldest_exclusive).collect();
 
-        // ancestors_between silently returns the full chain to root if
-        // oldest_exclusive isn't in the ancestry chain. Detect this:
-        // if we got snapshots but from_snapshot_id wasn't encountered as
-        // the stop point, the chain doesn't connect. Without a from-snapshot
-        // there is no ancestry to verify — walking to the root is the intent.
+        // Verify the walk actually reached from_snapshot_id: ancestors_between
+        // silently returns the whole chain to the root when oldest_exclusive is
+        // not in the ancestry. Without a from-snapshot there is nothing to
+        // verify — walking to the root is the intent.
+        //
+        // This mirrors the preconditions in Java's BaseIncrementalScan. Inclusive
+        // mode requires from to be an ancestor of to, and a snapshot is its own
+        // ancestor, so `from == to` is a valid single-snapshot range. Exclusive
+        // mode requires an ancestor of to whose parent is from, which `from == to`
+        // can never satisfy — the walk stops immediately and yields nothing.
         if let Some(from_snapshot_id) = from_snapshot_id {
-            if from_snapshot_id == to_snapshot_id {
-                // Edge case: from == to. In exclusive mode, range is empty.
-                // In inclusive mode, we should have exactly one snapshot.
-                if !from_inclusive {
-                    return Ok(Self {
-                        snapshots: Vec::new(),
-                    });
+            let connects = snapshots.last().is_some_and(|oldest| {
+                if from_inclusive {
+                    oldest.snapshot_id() == from_snapshot_id
+                } else {
+                    oldest.parent_snapshot_id() == Some(from_snapshot_id)
                 }
-            } else if snapshots.is_empty() {
-                // to_snapshot_id doesn't exist
+            });
+
+            if !connects {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    format!(
-                        "from_snapshot {from_snapshot_id} is not an ancestor of to_snapshot {to_snapshot_id}",
-                    ),
-                ));
-            } else {
-                // Verify the oldest snapshot in our walk is actually connected
-                // to from_snapshot_id. The last snapshot's parent (for exclusive)
-                // or the last snapshot itself (for inclusive) should be from_snapshot_id.
-                let oldest_collected = snapshots.last().unwrap();
-                let connects = if from_inclusive {
-                    oldest_collected.snapshot_id() == from_snapshot_id
-                } else {
-                    oldest_collected.parent_snapshot_id() == Some(from_snapshot_id)
-                };
-                if !connects {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
+                    if from_inclusive {
                         format!(
-                            "from_snapshot {from_snapshot_id} is not an ancestor of to_snapshot {to_snapshot_id}",
-                        ),
-                    ));
-                }
+                            "Starting snapshot (inclusive) {from_snapshot_id} is not an ancestor of end snapshot {to_snapshot_id}"
+                        )
+                    } else {
+                        format!(
+                            "Starting snapshot (exclusive) {from_snapshot_id} is not a parent ancestor of end snapshot {to_snapshot_id}"
+                        )
+                    },
+                ));
             }
         }
 
@@ -400,7 +392,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            err.to_string().contains("not an ancestor"),
+            err.to_string().contains("is not a parent ancestor"),
             "Expected ancestry error, got: {err}"
         );
     }
@@ -543,29 +535,72 @@ mod tests {
     fn test_incremental_scan_from_snapshot_exclusive() {
         // Fixture has S1 (append) -> S2 (append, current)
         let table = TableTestFixture::new().table;
+        let parent_id = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .parent_snapshot_id()
+            .unwrap();
         let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
 
-        // Verify the scan builds successfully
-        let result = table
-            .incremental_append_scan(Some(current_snapshot_id), Some(current_snapshot_id))
-            .build();
-        assert!(
-            result.is_ok(),
-            "Exclusive scan from=to should succeed with empty range"
-        );
-
-        // Verify AppendRange directly
-        let set = AppendRange::build(
+        // The from-snapshot itself is excluded from the range.
+        let range = AppendRange::build(
             &table.metadata_ref(),
-            Some(current_snapshot_id),
+            Some(parent_id),
             current_snapshot_id,
             false,
         )
         .unwrap();
         assert!(
-            !set.snapshot_ids().contains(&current_snapshot_id),
-            "Exclusive set should not contain the from_snapshot"
+            !range.snapshot_ids().contains(&parent_id),
+            "Exclusive range should not contain the from_snapshot"
         );
+        assert!(
+            range.snapshot_ids().contains(&current_snapshot_id),
+            "Exclusive range should contain the to_snapshot"
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_exclusive_same_snapshot_is_rejected() {
+        // Java requires an ancestor of the to-snapshot whose parent is the
+        // from-snapshot, which from == to can never satisfy, so it rejects this
+        // rather than returning an empty range. Match that.
+        let table = TableTestFixture::new().table;
+        let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        let err = table
+            .incremental_append_scan(Some(current_snapshot_id), Some(current_snapshot_id))
+            .build()
+            .expect_err("exclusive scan from == to should be rejected");
+
+        assert!(
+            err.to_string().contains("is not a parent ancestor"),
+            "Expected parent-ancestor error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_inclusive_same_snapshot_is_allowed() {
+        // A snapshot is its own ancestor, so inclusive from == to is a valid
+        // single-snapshot range in Java. Match that too.
+        let table = TableTestFixture::new().table;
+        let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        let range = AppendRange::build(
+            &table.metadata_ref(),
+            Some(current_snapshot_id),
+            current_snapshot_id,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            range.snapshots().len(),
+            1,
+            "inclusive from == to should yield exactly the one snapshot"
+        );
+        assert!(range.snapshot_ids().contains(&current_snapshot_id));
     }
 
     #[test]
@@ -686,22 +721,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_incremental_scan_exclusive_same_snapshot_returns_empty() {
-        // Fixture has S1 (append) -> S2 (append, current)
-        let mut fixture = TableTestFixture::new();
-        fixture.setup_manifest_files().await;
+    async fn test_incremental_scan_range_without_appends_returns_empty() {
+        // Deep history: S3 (append) -> S4 (overwrite). Scanning from S3 exclusive
+        // to S4 is a valid range, but it contains no append snapshots, so there is
+        // no manifest list to read and the plan must come back empty.
+        let mut fixture = TableTestFixture::new_with_deep_history();
+        fixture.setup_manifest_files_deep_history().await;
 
-        let current_snapshot_id = fixture
-            .table
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .snapshot_id();
+        let s3_id = 3056729675574597004_i64;
+        let s4_id = 3057729675574597004_i64;
 
-        // Incremental scan from S2 to S2 (exclusive) should return nothing
         let table_scan = fixture
             .table
-            .incremental_append_scan(Some(current_snapshot_id), Some(current_snapshot_id))
+            .incremental_append_scan(Some(s3_id), Some(s4_id))
             .build()
             .unwrap();
 
@@ -715,7 +747,7 @@ mod tests {
 
         assert!(
             tasks.is_empty(),
-            "Exclusive scan from=to should return no files"
+            "a range containing only non-append snapshots should return no files"
         );
     }
 

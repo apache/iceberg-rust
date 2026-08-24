@@ -289,6 +289,11 @@ impl Table {
     ///
     /// If `from_snapshot_id` is `None` the scan starts from the oldest ancestor of
     /// the end snapshot, inclusive.
+    ///
+    /// Building fails if `from_snapshot_id` equals the end snapshot, matching Java:
+    /// an exclusive range needs an ancestor of the end snapshot whose parent is the
+    /// from-snapshot. Use [`Self::incremental_append_scan_inclusive`] to scan a
+    /// single snapshot.
     pub fn incremental_append_scan(
         &self,
         from_snapshot_id: Option<i64>,
