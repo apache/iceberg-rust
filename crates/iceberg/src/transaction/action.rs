@@ -22,7 +22,7 @@ use as_any::AsAny;
 use async_trait::async_trait;
 
 use crate::table::Table;
-use crate::transaction::Transaction;
+use crate::transaction::{CreateTableTransaction, Transaction};
 use crate::{Result, TableRequirement, TableUpdate};
 
 /// A boxed, thread-safe reference to a `TransactionAction`.
@@ -49,11 +49,14 @@ pub(crate) trait TransactionAction: AsAny + Sync + Send {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit>;
 }
 
-/// A helper trait for applying a `TransactionAction` to a `Transaction`.
+/// A helper trait for applying a `TransactionAction` to a transaction.
 ///
 /// This is implemented for all `TransactionAction` types
 /// to allow easy chaining of actions into a transaction context.
-pub trait ApplyTransactionAction {
+///
+/// `Tx` is the kind of transaction being added to, either [`Transaction`] or
+/// [`CreateTableTransaction`].
+pub trait ApplyTransactionAction<Tx> {
     /// Adds this action to the given transaction.
     ///
     /// # Arguments
@@ -63,13 +66,21 @@ pub trait ApplyTransactionAction {
     /// # Returns
     ///
     /// The modified transaction containing this action, or an error if the operation fails.
-    fn apply(self, tx: Transaction) -> Result<Transaction>;
+    fn apply(self, tx: Tx) -> Result<Tx>;
 }
 
-impl<T: TransactionAction + 'static> ApplyTransactionAction for T {
+impl<T: TransactionAction + 'static> ApplyTransactionAction<Transaction> for T {
     fn apply(self, mut tx: Transaction) -> Result<Transaction>
     where Self: Sized {
         tx.actions.push(Arc::new(self));
+        Ok(tx)
+    }
+}
+
+impl<T: TransactionAction + 'static> ApplyTransactionAction<CreateTableTransaction> for T {
+    fn apply(self, mut tx: CreateTableTransaction) -> Result<CreateTableTransaction>
+    where Self: Sized {
+        tx.0.actions.push(Arc::new(self));
         Ok(tx)
     }
 }

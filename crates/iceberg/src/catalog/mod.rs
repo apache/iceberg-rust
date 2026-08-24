@@ -50,6 +50,7 @@ use crate::spec::{
     UnboundPartitionSpec, ViewFormatVersion, ViewRepresentations, ViewVersion,
 };
 use crate::table::Table;
+use crate::transaction::CreateTableTransaction;
 use crate::{Error, ErrorKind, Result};
 
 /// The catalog API for Iceberg Rust.
@@ -122,6 +123,47 @@ pub trait Catalog: Debug + Sync + Send {
 
     /// Update a table to the catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table>;
+}
+
+/// A [`Catalog`] that can stage a table so it becomes visible only once written to.
+///
+/// Staging lets a table be populated before anything can read it: the catalog hands back a
+/// transaction over metadata it has not registered, data files are written through that
+/// transaction's actions, and only the commit makes the table appear — atomically, already
+/// populated. Without it, creating and then filling a table are two commits, and readers can
+/// see the empty table in between.
+///
+/// Implemented separately from [`Catalog`] because it needs catalog-side support: creating a
+/// table atomically from a whole-table description, rather than a diff against an existing one.
+/// A catalog can only offer that if its backing store has an atomic create-if-absent.
+#[async_trait]
+pub trait StagedCreateCatalog: Catalog {
+    /// Stages a table in `namespace`, returning a transaction that creates it when committed.
+    ///
+    /// The table is not registered anywhere until then, and nothing else can see it. Commit
+    /// the transaction to this same catalog: for catalogs that stage server-side it holds the
+    /// only record that the table is pending, and another catalog would reject the commit.
+    ///
+    /// Commit fails with [`ErrorKind::TableAlreadyExists`] if the table has appeared
+    /// meanwhile. That is not retryable — the transaction's whole premise is that the table
+    /// does not exist, so it has to be rebuilt against the table that now does.
+    async fn create_table_transaction(
+        &self,
+        namespace: &NamespaceIdent,
+        creation: TableCreation,
+    ) -> Result<CreateTableTransaction>;
+
+    /// Creates the table `ident` that `updates` describes, failing if it already exists.
+    ///
+    /// `updates` describes the whole table rather than a diff, since there is no base table to
+    /// diff against; [`TableMetadata::from_updates`] turns it back into metadata for catalogs
+    /// that apply commits locally. Called by [`CreateTableTransaction::commit`] rather than
+    /// directly.
+    async fn commit_create_table(
+        &self,
+        ident: TableIdent,
+        updates: Vec<TableUpdate>,
+    ) -> Result<Table>;
 }
 
 /// Common interface for all catalog builders.
