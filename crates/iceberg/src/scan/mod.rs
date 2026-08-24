@@ -45,7 +45,7 @@ use crate::metadata_columns::{
 use crate::partitioning::compute_unified_partition_type;
 use crate::runtime::Runtime;
 use crate::spec::{
-    DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, SchemaRef, SnapshotRef,
+    DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, Schema, SchemaRef, SnapshotRef,
 };
 use crate::table::Table;
 use crate::util::available_parallelism;
@@ -53,6 +53,17 @@ use crate::{Error, ErrorKind, Result};
 
 /// A stream of arrow [`RecordBatch`]es.
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
+
+/// Resolves a column name to its field ID, honouring the scan's case sensitivity.
+fn resolve_field_id(schema: &Schema, column_name: &str, case_sensitive: bool) -> Option<i32> {
+    if case_sensitive {
+        schema.field_id_by_name(column_name)
+    } else {
+        schema
+            .field_by_name_case_insensitive(column_name)
+            .map(|field| field.id)
+    }
+}
 
 /// Shared configuration extracted from scan builders, used by both
 /// [`TableScanBuilder`] and [`IncrementalAppendScanBuilder`].
@@ -75,8 +86,8 @@ pub(crate) struct ScanConfig<'a> {
     schema: SchemaRef,
 }
 
-/// Shared build logic: validates columns, resolves field IDs, binds predicates,
-/// and constructs [`PlanContext`] + [`TableScan`].
+/// Shared build logic: resolves field IDs, binds predicates, and constructs
+/// [`PlanContext`] + [`TableScan`].
 pub(crate) fn build_table_scan(
     config: ScanConfig<'_>,
     manifest_list_snapshots: Vec<SnapshotRef>,
@@ -84,21 +95,6 @@ pub(crate) fn build_table_scan(
     manifest_entry_filter: Option<ManifestEntryFilter>,
 ) -> Result<TableScan> {
     let schema = config.schema.clone();
-
-    // Check that all column names exist in the schema (skip reserved columns).
-    if let Some(column_names) = config.column_names.as_ref() {
-        for column_name in column_names {
-            if is_metadata_column_name(column_name) {
-                continue;
-            }
-            if schema.field_by_name(column_name).is_none() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Column {column_name} not found in table. Schema: {schema}"),
-                ));
-            }
-        }
-    }
 
     let mut field_ids = vec![];
     let column_names = config.column_names.clone().unwrap_or_else(|| {
@@ -116,12 +112,13 @@ pub(crate) fn build_table_scan(
             continue;
         }
 
-        let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Column {column_name} not found in table. Schema: {schema}"),
-            )
-        })?;
+        let field_id =
+            resolve_field_id(&schema, column_name, config.case_sensitive).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Column {column_name} not found in table. Schema: {schema}"),
+                )
+            })?;
 
         schema
             .as_struct()
@@ -139,7 +136,7 @@ pub(crate) fn build_table_scan(
     }
 
     let snapshot_bound_predicate = if let Some(ref predicates) = config.filter {
-        Some(predicates.bind(schema.clone(), true)?)
+        Some(predicates.bind(schema.clone(), config.case_sensitive)?)
     } else {
         None
     };
@@ -2185,6 +2182,68 @@ pub mod tests {
             "a standard scan reads exactly one manifest list"
         );
         snapshots[0].snapshot_id()
+    }
+
+    #[test]
+    fn test_case_sensitive_scan_rejects_mismatched_column_case() {
+        let table = TableTestFixture::new().table;
+
+        // Case sensitivity defaults to true, so "X" must not resolve to "x".
+        assert!(table.scan().select(["X"]).build().is_err());
+        assert!(
+            table
+                .scan()
+                .with_filter(Reference::new("X").greater_than(Datum::long(1)))
+                .build()
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_case_insensitive_scan_resolves_mismatched_column_case() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // The schema declares lowercase "x" and "z"; a case-insensitive scan must
+        // resolve the upper-cased names in both the projection and the filter.
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_case_sensitive(false)
+            .select(["X", "Z"])
+            .with_filter(Reference::new("Y").greater_than(Datum::long(1)))
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(batches[0].num_columns(), 2);
+        assert_eq!(
+            batches[0]
+                .column_by_name("x")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            1
+        );
+        assert_eq!(
+            batches[0]
+                .column_by_name("z")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            3
+        );
     }
 
     #[tokio::test]
