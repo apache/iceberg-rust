@@ -286,9 +286,12 @@ impl Table {
     ///
     /// Returns only data files added in APPEND snapshots after `from_snapshot_id`,
     /// up to `to_snapshot_id` or the current snapshot if `None`.
+    ///
+    /// If `from_snapshot_id` is `None` the scan starts from the oldest ancestor of
+    /// the end snapshot, inclusive.
     pub fn incremental_append_scan(
         &self,
-        from_snapshot_id: i64,
+        from_snapshot_id: Option<i64>,
         to_snapshot_id: Option<i64>,
     ) -> IncrementalAppendScanBuilder<'_> {
         IncrementalAppendScanBuilder::new(self, from_snapshot_id, to_snapshot_id, false)
@@ -298,9 +301,13 @@ impl Table {
     ///
     /// Returns only data files added in APPEND snapshots from `from_snapshot_id` (inclusive),
     /// up to `to_snapshot_id` or the current snapshot if `None`.
+    ///
+    /// If `from_snapshot_id` is `None` the scan starts from the oldest ancestor of
+    /// the end snapshot, inclusive, so this behaves identically to
+    /// [`Self::incremental_append_scan`].
     pub fn incremental_append_scan_inclusive(
         &self,
-        from_snapshot_id: i64,
+        from_snapshot_id: Option<i64>,
         to_snapshot_id: Option<i64>,
     ) -> IncrementalAppendScanBuilder<'_> {
         IncrementalAppendScanBuilder::new(self, from_snapshot_id, to_snapshot_id, true)
@@ -419,7 +426,7 @@ impl StaticTable {
     /// Creates an incremental append scan starting from the given snapshot (exclusive).
     pub fn incremental_append_scan(
         &self,
-        from_snapshot_id: i64,
+        from_snapshot_id: Option<i64>,
         to_snapshot_id: Option<i64>,
     ) -> IncrementalAppendScanBuilder<'_> {
         self.0
@@ -429,7 +436,7 @@ impl StaticTable {
     /// Creates an incremental append scan starting from the given snapshot (inclusive).
     pub fn incremental_append_scan_inclusive(
         &self,
-        from_snapshot_id: i64,
+        from_snapshot_id: Option<i64>,
         to_snapshot_id: Option<i64>,
     ) -> IncrementalAppendScanBuilder<'_> {
         self.0

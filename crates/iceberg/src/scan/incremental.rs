@@ -42,28 +42,32 @@ pub(crate) struct AppendRange {
 impl AppendRange {
     pub(crate) fn build(
         table_metadata: &TableMetadataRef,
-        from_snapshot_id: i64,
+        from_snapshot_id: Option<i64>,
         to_snapshot_id: i64,
         from_inclusive: bool,
     ) -> Result<Self> {
         // Determine the exclusive stop point for the ancestry walk.
+        // Without a from-snapshot the walk runs to the root, so the range starts at
+        // the oldest ancestor of the to-snapshot, inclusive.
         // For inclusive mode the from-snapshot must exist so we can look up
         // its parent. For exclusive mode the snapshot may have been expired
         // (the parent pointer on its child still references it), so we only
         // need the ID — matching Java's BaseIncrementalScan semantics.
-        let oldest_exclusive = if from_inclusive {
-            let from_snapshot =
-                table_metadata
-                    .snapshot_by_id(from_snapshot_id)
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Snapshot {from_snapshot_id} not found"),
-                        )
-                    })?;
-            from_snapshot.parent_snapshot_id()
-        } else {
-            Some(from_snapshot_id)
+        let oldest_exclusive = match from_snapshot_id {
+            None => None,
+            Some(from_snapshot_id) if from_inclusive => {
+                let from_snapshot =
+                    table_metadata
+                        .snapshot_by_id(from_snapshot_id)
+                        .ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Snapshot {from_snapshot_id} not found"),
+                            )
+                        })?;
+                from_snapshot.parent_snapshot_id()
+            }
+            Some(from_snapshot_id) => Some(from_snapshot_id),
         };
 
         let snapshots: Vec<_> =
@@ -72,40 +76,43 @@ impl AppendRange {
         // ancestors_between silently returns the full chain to root if
         // oldest_exclusive isn't in the ancestry chain. Detect this:
         // if we got snapshots but from_snapshot_id wasn't encountered as
-        // the stop point, the chain doesn't connect.
-        if from_snapshot_id == to_snapshot_id {
-            // Edge case: from == to. In exclusive mode, range is empty.
-            // In inclusive mode, we should have exactly one snapshot.
-            if !from_inclusive {
-                return Ok(Self {
-                    snapshots: Vec::new(),
-                });
-            }
-        } else if snapshots.is_empty() {
-            // to_snapshot_id doesn't exist
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "from_snapshot {from_snapshot_id} is not an ancestor of to_snapshot {to_snapshot_id}",
-                ),
-            ));
-        } else {
-            // Verify the oldest snapshot in our walk is actually connected
-            // to from_snapshot_id. The last snapshot's parent (for exclusive)
-            // or the last snapshot itself (for inclusive) should be from_snapshot_id.
-            let oldest_collected = snapshots.last().unwrap();
-            let connects = if from_inclusive {
-                oldest_collected.snapshot_id() == from_snapshot_id
-            } else {
-                oldest_collected.parent_snapshot_id() == Some(from_snapshot_id)
-            };
-            if !connects {
+        // the stop point, the chain doesn't connect. Without a from-snapshot
+        // there is no ancestry to verify — walking to the root is the intent.
+        if let Some(from_snapshot_id) = from_snapshot_id {
+            if from_snapshot_id == to_snapshot_id {
+                // Edge case: from == to. In exclusive mode, range is empty.
+                // In inclusive mode, we should have exactly one snapshot.
+                if !from_inclusive {
+                    return Ok(Self {
+                        snapshots: Vec::new(),
+                    });
+                }
+            } else if snapshots.is_empty() {
+                // to_snapshot_id doesn't exist
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "from_snapshot {from_snapshot_id} is not an ancestor of to_snapshot {to_snapshot_id}",
                     ),
                 ));
+            } else {
+                // Verify the oldest snapshot in our walk is actually connected
+                // to from_snapshot_id. The last snapshot's parent (for exclusive)
+                // or the last snapshot itself (for inclusive) should be from_snapshot_id.
+                let oldest_collected = snapshots.last().unwrap();
+                let connects = if from_inclusive {
+                    oldest_collected.snapshot_id() == from_snapshot_id
+                } else {
+                    oldest_collected.parent_snapshot_id() == Some(from_snapshot_id)
+                };
+                if !connects {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "from_snapshot {from_snapshot_id} is not an ancestor of to_snapshot {to_snapshot_id}",
+                        ),
+                    ));
+                }
             }
         }
 
@@ -176,7 +183,7 @@ impl AppendRange {
 /// [`Table::incremental_append_scan_inclusive`] to create an instance.
 pub struct IncrementalAppendScanBuilder<'a> {
     table: &'a Table,
-    from_snapshot_id: i64,
+    from_snapshot_id: Option<i64>,
     from_inclusive: bool,
     to_snapshot_id: Option<i64>,
     column_names: Option<Vec<String>>,
@@ -193,7 +200,7 @@ pub struct IncrementalAppendScanBuilder<'a> {
 impl<'a> IncrementalAppendScanBuilder<'a> {
     pub(crate) fn new(
         table: &'a Table,
-        from_snapshot_id: i64,
+        from_snapshot_id: Option<i64>,
         to_snapshot_id: Option<i64>,
         from_inclusive: bool,
     ) -> Self {
@@ -388,7 +395,7 @@ mod tests {
         // Exclusive mode doesn't require from-snapshot to exist, but it must
         // be an ancestor of the to-snapshot. 999999999 is not in the ancestry
         // chain so this should fail.
-        let result = table.incremental_append_scan(999999999, None).build();
+        let result = table.incremental_append_scan(Some(999999999), None).build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -404,7 +411,7 @@ mod tests {
 
         // Inclusive mode requires from-snapshot to exist (we need its parent ID).
         let result = table
-            .incremental_append_scan_inclusive(999999999, None)
+            .incremental_append_scan_inclusive(Some(999999999), None)
             .build();
 
         assert!(result.is_err());
@@ -437,7 +444,9 @@ mod tests {
             Some(s1_id)
         );
 
-        let result = table.incremental_append_scan(s1_id, Some(s2_id)).build();
+        let result = table
+            .incremental_append_scan(Some(s1_id), Some(s2_id))
+            .build();
 
         assert!(
             result.is_ok(),
@@ -450,7 +459,7 @@ mod tests {
         let table = TableTestFixture::new().table;
 
         let result = table
-            .incremental_append_scan(3051729675574597004, Some(999999999))
+            .incremental_append_scan(Some(3051729675574597004), Some(999999999))
             .build();
 
         assert!(result.is_err());
@@ -464,7 +473,7 @@ mod tests {
         let table = TableTestFixture::new().table;
 
         let result = table
-            .incremental_append_scan(3051729675574597004, None)
+            .incremental_append_scan(Some(3051729675574597004), None)
             .build();
         assert!(
             result.is_ok(),
@@ -492,7 +501,7 @@ mod tests {
             .expect("Current snapshot should have a parent");
 
         let result = table
-            .incremental_append_scan(parent_id, Some(current_snapshot_id))
+            .incremental_append_scan(Some(parent_id), Some(current_snapshot_id))
             .build();
 
         assert!(
@@ -509,7 +518,7 @@ mod tests {
 
         // Verify the scan builds successfully
         let result = table
-            .incremental_append_scan_inclusive(current_snapshot_id, Some(current_snapshot_id))
+            .incremental_append_scan_inclusive(Some(current_snapshot_id), Some(current_snapshot_id))
             .build();
         assert!(
             result.is_ok(),
@@ -519,7 +528,7 @@ mod tests {
         // Verify AppendRange directly
         let set = AppendRange::build(
             &table.metadata_ref(),
-            current_snapshot_id,
+            Some(current_snapshot_id),
             current_snapshot_id,
             true,
         )
@@ -538,7 +547,7 @@ mod tests {
 
         // Verify the scan builds successfully
         let result = table
-            .incremental_append_scan(current_snapshot_id, Some(current_snapshot_id))
+            .incremental_append_scan(Some(current_snapshot_id), Some(current_snapshot_id))
             .build();
         assert!(
             result.is_ok(),
@@ -548,7 +557,7 @@ mod tests {
         // Verify AppendRange directly
         let set = AppendRange::build(
             &table.metadata_ref(),
-            current_snapshot_id,
+            Some(current_snapshot_id),
             current_snapshot_id,
             false,
         )
@@ -568,7 +577,7 @@ mod tests {
         // Scanning from S1 to S5 crosses S4 (overwrite) — should succeed
         // but only include APPEND snapshots (S2, S3, S5), skipping S4
         let result = table
-            .incremental_append_scan(3051729675574597004, Some(3059729675574597004))
+            .incremental_append_scan(Some(3051729675574597004), Some(3059729675574597004))
             .build();
 
         assert!(
@@ -578,7 +587,7 @@ mod tests {
 
         let set = AppendRange::build(
             &table.metadata_ref(),
-            3051729675574597004,
+            Some(3051729675574597004),
             3059729675574597004,
             false,
         )
@@ -614,7 +623,7 @@ mod tests {
         // Scanning from S1 to S3 (all appends)
         let set = AppendRange::build(
             &table.metadata_ref(),
-            3051729675574597004,
+            Some(3051729675574597004),
             3056729675574597004,
             false,
         )
@@ -649,7 +658,10 @@ mod tests {
         // Incremental scan from S1 (exclusive) to S2 should return only 1.parquet
         let table_scan = fixture
             .table
-            .incremental_append_scan(parent_snapshot_id, Some(current_snapshot.snapshot_id()))
+            .incremental_append_scan(
+                Some(parent_snapshot_id),
+                Some(current_snapshot.snapshot_id()),
+            )
             .build()
             .unwrap();
 
@@ -689,7 +701,7 @@ mod tests {
         // Incremental scan from S2 to S2 (exclusive) should return nothing
         let table_scan = fixture
             .table
-            .incremental_append_scan(current_snapshot_id, Some(current_snapshot_id))
+            .incremental_append_scan(Some(current_snapshot_id), Some(current_snapshot_id))
             .build()
             .unwrap();
 
@@ -730,7 +742,7 @@ mod tests {
 
         let scan = fixture
             .table
-            .incremental_append_scan(s1_id, Some(s5_id))
+            .incremental_append_scan(Some(s1_id), Some(s5_id))
             .build()
             .unwrap();
 
@@ -740,6 +752,72 @@ mod tests {
             "Compacted file (s4, from the replace snapshot) must be skipped, and the \
              appends it rewrote must each be returned exactly once"
         );
+    }
+
+    #[tokio::test]
+    async fn test_incremental_scan_without_from_snapshot_starts_at_oldest_ancestor() {
+        // Deep history: S1 (append) -> S2 -> S3 -> S4 (overwrite) -> S5 (append)
+        // Omitting from_snapshot_id must scan from the oldest ancestor inclusive,
+        // so S1's file is included and only the overwrite's file is skipped.
+        let mut fixture = TableTestFixture::new_with_deep_history();
+        fixture.setup_manifest_files_deep_history().await;
+
+        let s5_id = 3059729675574597004_i64;
+
+        let scan = fixture
+            .table
+            .incremental_append_scan(None, Some(s5_id))
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            planned_file_names(&scan).await,
+            vec!["s1.parquet", "s2.parquet", "s3.parquet", "s5.parquet"],
+            "a missing from_snapshot_id scans the whole ancestry, skipping non-appends"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_incremental_scan_without_from_snapshot_ignores_inclusivity() {
+        // With no from-snapshot there is nothing to include or exclude, so the
+        // inclusive and exclusive entry points must agree.
+        let mut fixture = TableTestFixture::new_with_deep_history();
+        fixture.setup_manifest_files_deep_history().await;
+
+        let s5_id = 3059729675574597004_i64;
+
+        let exclusive = fixture
+            .table
+            .incremental_append_scan(None, Some(s5_id))
+            .build()
+            .unwrap();
+        let inclusive = fixture
+            .table
+            .incremental_append_scan_inclusive(None, Some(s5_id))
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            planned_file_names(&exclusive).await,
+            planned_file_names(&inclusive).await
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_without_from_snapshot_defaults_to_current_snapshot() {
+        // Neither end of the range set: the whole history up to the current snapshot.
+        let table = TableTestFixture::new_with_deep_history().table;
+
+        let range = AppendRange::build(&table.metadata_ref(), None, 3059729675574597004, false)
+            .unwrap()
+            .snapshot_ids();
+
+        // Every append in the chain, but not the overwrite S4.
+        assert!(range.contains(&3051729675574597004));
+        assert!(range.contains(&3055729675574597004));
+        assert!(range.contains(&3056729675574597004));
+        assert!(!range.contains(&3057729675574597004));
+        assert!(range.contains(&3059729675574597004));
     }
 
     #[tokio::test]
@@ -759,7 +837,7 @@ mod tests {
 
         let table_scan = fixture
             .table
-            .incremental_append_scan(s1_id, Some(s5_id))
+            .incremental_append_scan(Some(s1_id), Some(s5_id))
             .build()
             .unwrap();
 
@@ -808,7 +886,7 @@ mod tests {
 
         let table_scan = fixture
             .table
-            .incremental_append_scan(s2_id, Some(s3_id))
+            .incremental_append_scan(Some(s2_id), Some(s3_id))
             .build()
             .unwrap();
 
@@ -841,7 +919,7 @@ mod tests {
         let s5_id = 3059729675574597004_i64;
 
         let scan = table
-            .incremental_append_scan(s1_id, Some(s5_id))
+            .incremental_append_scan(Some(s1_id), Some(s5_id))
             .build()
             .unwrap();
 
@@ -886,7 +964,7 @@ mod tests {
 
         let scan = fixture
             .table
-            .incremental_append_scan_inclusive(s1_id, Some(s2_id))
+            .incremental_append_scan_inclusive(Some(s1_id), Some(s2_id))
             .build()
             .unwrap();
 
@@ -911,7 +989,7 @@ mod tests {
 
         let scan = fixture
             .table
-            .incremental_append_scan(s1_id, Some(s4_id))
+            .incremental_append_scan(Some(s1_id), Some(s4_id))
             .build()
             .unwrap();
 
@@ -934,7 +1012,7 @@ mod tests {
 
         let scan = fixture
             .table
-            .incremental_append_scan(s1_id, Some(s5_id))
+            .incremental_append_scan(Some(s1_id), Some(s5_id))
             .build()
             .unwrap();
 
@@ -957,7 +1035,7 @@ mod tests {
 
         let scan = fixture
             .table
-            .incremental_append_scan_inclusive(s1_id, Some(s3_id))
+            .incremental_append_scan_inclusive(Some(s1_id), Some(s3_id))
             .build()
             .unwrap();
 
@@ -981,7 +1059,7 @@ mod tests {
 
         let table_scan = fixture
             .table
-            .incremental_append_scan_inclusive(s3_id, Some(s5_id))
+            .incremental_append_scan_inclusive(Some(s3_id), Some(s5_id))
             .build()
             .unwrap();
 
