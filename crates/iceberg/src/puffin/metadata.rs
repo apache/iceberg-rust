@@ -571,9 +571,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_lz4_compressed_footer_is_decoded() {
-        // Hand-built file with FooterPayloadCompressed=1 and a real LZ4 frame in place
-        // of the raw JSON. This confirms the reader honors the flag rather than
-        // assuming the payload is always uncompressed.
         let temp_dir = TempDir::new().unwrap();
 
         let compressed_payload = CompressionCodec::Lz4
@@ -585,7 +582,6 @@ mod tests {
         bytes.extend(FileMetadata::MAGIC.to_vec());
         bytes.extend(&compressed_payload);
         bytes.extend(u32::to_le_bytes(compressed_payload.len() as u32));
-        // FooterPayloadCompressed bit set in the first flag byte.
         bytes.extend(vec![0b00000001, 0, 0, 0]);
         bytes.extend(FileMetadata::MAGIC.to_vec());
 

@@ -308,14 +308,9 @@ mod tests {
             .unwrap()
             .to_input_file();
 
-        // Blob round-trip must yield the original bytes after LZ4 framed decompression.
         assert_eq!(read_all_blobs_from_puffin_file(input_file).await, blobs);
     }
 
-    /// With `compress_footer = true` the writer sets the FooterPayloadCompressed flag and
-    /// records LZ4 as the footer codec. Until LZ4 was wired through `CompressionCodec`,
-    /// `close()` failed with `FeatureUnsupported`; this verifies the footer is now
-    /// LZ4-encoded on write and the reader decodes it back to the original metadata and blob.
     #[tokio::test]
     async fn test_compress_footer_lz4_round_trips() {
         let temp_dir = TempDir::new().unwrap();
@@ -323,15 +318,12 @@ mod tests {
         let path = temp_dir.path().join("compressed_footer.bin");
         let output_file = file_io.new_output(path.to_str().unwrap()).unwrap();
 
-        // compress_footer=true sets the footer codec to LZ4.
         let mut writer = PuffinWriter::new(&output_file, file_properties(), true)
             .await
             .unwrap();
         writer.add(blob_0(), CompressionCodec::None).await.unwrap();
         writer.close().await.unwrap();
 
-        // Reader must be able to LZ4-decompress the footer and recover both the
-        // file metadata and the blob payload.
         let input_file = output_file.to_input_file();
         let metadata = read_file_metadata(&input_file).await.unwrap();
         assert_eq!(metadata.properties, file_properties());
@@ -341,9 +333,6 @@ mod tests {
         ]);
     }
 
-    /// `close()` must succeed with `compress_footer = true` even when no blobs are written —
-    /// an empty footer still produces a valid LZ4 frame that the reader parses back to an
-    /// empty FileMetadata.
     #[tokio::test]
     async fn test_compress_empty_footer_lz4_succeeds() {
         let temp_dir = TempDir::new().unwrap();
@@ -356,7 +345,6 @@ mod tests {
             .unwrap();
         writer.close().await.unwrap();
 
-        // The compressed empty footer must still parse back to an empty FileMetadata.
         let input_file = output_file.to_input_file();
         let metadata = read_file_metadata(&input_file).await.unwrap();
         assert!(metadata.blobs.is_empty());
