@@ -21,7 +21,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use http::StatusCode;
-use iceberg::{Credential, Error, ErrorKind, Result};
+use iceberg::sensitive::SensitiveString;
+use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
 use tokio::sync::Mutex;
 
@@ -37,7 +38,7 @@ use crate::types::{ErrorResponse, TokenResponse};
 struct OAuth2Params {
     extra_headers: HeaderMap,
     token_endpoint: String,
-    credential: Option<(Option<String>, Credential)>,
+    credential: Option<(Option<String>, SensitiveString)>,
     extra_oauth_params: HashMap<String, String>,
 }
 
@@ -48,7 +49,7 @@ struct OAuth2Params {
 /// for a token at the token endpoint and cached. The cached token is shared
 /// across sessions so it survives the config handshake.
 pub struct OAuth2Manager {
-    token: Arc<Mutex<Option<Credential>>>,
+    token: Arc<Mutex<Option<SensitiveString>>>,
     init_params: OAuth2Params,
     /// True when the token endpoint was derived from the catalog URI (not
     /// explicitly configured): it is then recomputed from the merged URI in
@@ -80,7 +81,7 @@ impl OAuth2Manager {
 
     /// Sets a bearer token used directly (takes precedence over `credential`).
     pub fn with_token(mut self, token: impl Into<String>) -> Self {
-        self.token = Arc::new(Mutex::new(Some(Credential::from(token.into()))));
+        self.token = Arc::new(Mutex::new(Some(SensitiveString::from(token.into()))));
         self
     }
 
@@ -106,7 +107,7 @@ impl OAuth2Manager {
 
     pub(crate) fn from_config(cfg: &RestCatalogConfig) -> Result<Self> {
         Ok(Self {
-            token: Arc::new(Mutex::new(cfg.token().map(Credential::from))),
+            token: Arc::new(Mutex::new(cfg.token().map(SensitiveString::from))),
             init_params: OAuth2Params {
                 extra_headers: cfg.extra_headers()?,
                 token_endpoint: cfg.get_token_endpoint(),
@@ -157,7 +158,7 @@ impl OAuth2Manager {
     ) -> Result<OAuth2Session> {
         // The properties may carry a new token (or restate the user's).
         if let Some(token) = props.get("token") {
-            *self.token.lock().await = Some(Credential::from(token.clone()));
+            *self.token.lock().await = Some(SensitiveString::from(token.clone()));
         }
 
         let mut extra_headers = self.init_params.extra_headers.clone();
@@ -208,7 +209,7 @@ impl OAuth2Manager {
 
 /// Attaches `token` as a `Authorization: Bearer <token>` header, marked
 /// sensitive so `Debug`-formatted requests redact it.
-fn attach_bearer(req: &mut HttpRequest, token: &Credential) -> Result<()> {
+fn attach_bearer(req: &mut HttpRequest, token: &SensitiveString) -> Result<()> {
     let mut value: http::HeaderValue =
         format!("Bearer {}", token.expose()).parse().map_err(|e| {
             Error::new(
@@ -231,7 +232,7 @@ fn attach_bearer(req: &mut HttpRequest, token: &Credential) -> Result<()> {
 ///
 /// # TODO: Support automatic token refreshing.
 struct OAuth2Session {
-    token: Arc<Mutex<Option<Credential>>>,
+    token: Arc<Mutex<Option<SensitiveString>>>,
     token_source: TokenSource,
 }
 
@@ -246,7 +247,7 @@ enum TokenSource {
 
 struct ClientCredentialsConfig {
     client: HttpClient,
-    credential: (Option<String>, Credential),
+    credential: (Option<String>, SensitiveString),
     token_endpoint: String,
     extra_headers: HeaderMap,
     extra_oauth_params: HashMap<String, String>,
@@ -278,29 +279,31 @@ impl ClientCredentialsConfig {
                 .map(|(k, v)| (k.as_str(), v.as_str())),
         );
 
-        let (status, body) = self
+        let response = self
             .client
             .post_form(&self.token_endpoint, &self.extra_headers, &params)
             .await?;
+        let status = response.status();
+        let body = response.body();
 
         let auth_res: TokenResponse = if status == StatusCode::OK {
-            Ok(serde_json::from_slice(&body).map_err(|e| {
+            Ok(serde_json::from_slice(body).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
                 .with_context("operation", "auth")
                 .with_context("url", self.token_endpoint.clone())
-                .with_context("json", String::from_utf8_lossy(&body))
+                .with_context("json", String::from_utf8_lossy(body))
                 .with_source(e)
             })?)
         } else {
-            let e: ErrorResponse = serde_json::from_slice(&body).map_err(|e| {
+            let e: ErrorResponse = serde_json::from_slice(body).map_err(|e| {
                 Error::new(ErrorKind::Unexpected, "Received unexpected response")
                     .with_context("code", status.to_string())
                     .with_context("operation", "auth")
                     .with_context("url", self.token_endpoint.clone())
-                    .with_context("json", String::from_utf8_lossy(&body))
+                    .with_context("json", String::from_utf8_lossy(body))
                     .with_source(e)
             })?;
             Err(Error::from(e))
@@ -323,7 +326,8 @@ impl AuthSession for OAuth2Session {
                 (Some(token), _) => Some(token.clone()),
                 (None, TokenSource::StaticToken) => None,
                 (None, TokenSource::ClientCredentials(config)) => {
-                    let new_token = Credential::from(config.exchange_credential_for_token().await?);
+                    let new_token =
+                        SensitiveString::from(config.exchange_credential_for_token().await?);
                     *token = Some(new_token.clone());
                     Some(new_token)
                 }

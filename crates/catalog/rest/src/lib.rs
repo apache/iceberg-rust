@@ -17,8 +17,14 @@
 
 //! Iceberg REST API implementation.
 //!
-//! To build a rest catalog with configurations
-//! # Example
+//! The crate provides two REST catalog APIs:
+//!
+//! - [`RestCatalog`] implements [`iceberg::Catalog`] by binding one
+//!   [`iceberg::SessionContext`] to every operation.
+//! - [`RestSessionCatalog`] implements [`iceberg::SessionCatalog`] and accepts a
+//!   session context with each operation.
+//!
+//! # Catalog compatibility API
 //!
 //! ```rust, no_run
 //! use std::collections::HashMap;
@@ -48,6 +54,34 @@
 //!         .unwrap();
 //! }
 //! ```
+//!
+//! # Session catalog API
+//!
+//! ```rust, no_run
+//! use std::collections::HashMap;
+//!
+//! use iceberg::{SessionCatalog, SessionContext};
+//! use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestSessionCatalogBuilder};
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let catalog = RestSessionCatalogBuilder::default()
+//!         .load(
+//!             "rest",
+//!             HashMap::from([(
+//!                 REST_CATALOG_PROP_URI.to_string(),
+//!                 "http://localhost:8181".to_string(),
+//!             )]),
+//!         )
+//!         .await
+//!         .unwrap();
+//!     let context = SessionContext::builder()
+//!         .identity("user123".to_string())
+//!         .build();
+//!
+//!     let namespaces = catalog.list_namespaces(&context, None).await.unwrap();
+//! }
+//! ```
 
 #![deny(missing_docs)]
 
@@ -57,6 +91,8 @@ mod client;
 pub use client::HttpClient;
 mod request;
 pub use request::{HttpRequest, HttpRequestBody};
+mod response;
+pub use response::HttpResponse;
 mod endpoint;
 mod types;
 
