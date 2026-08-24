@@ -32,6 +32,7 @@ use parquet::arrow::{
 };
 use parquet::encryption::decrypt::FileDecryptionProperties;
 
+use super::row_lineage::synthesize_row_id_column;
 use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
     apply_name_mapping_to_arrow_schema, find_leaf_by_field_id,
@@ -307,8 +308,13 @@ impl FileScanTaskReader {
             None
         };
 
-        // Present by name but without the embedded id: unthreadable, rejected below.
+        // A column named `_row_id` that carries no embedded field id, in a file that DOES
+        // use embedded ids -- an unthreadable physically-stored `_row_id`, rejected below.
+        // Gated on `!use_position_fallback`: under positional fallback every column lacks an
+        // embedded id and synthetic ids are assigned by position, so a user column that
+        // happens to be named `_row_id` is real data, not a reserved metadata column.
         let row_id_present_by_name_only = project_row_id
+            && !use_position_fallback
             && phys_row_id_leaf.is_none()
             && record_batch_stream_builder
                 .schema()
@@ -353,6 +359,11 @@ impl FileScanTaskReader {
         //
         // This runs BEFORE the union so the physical leaves are added onto a `none` base,
         // pruning the read to just those leaves (`union` with an `all` base stays `all`).
+        //
+        // Known follow-up: a `_row_id`-only (or `_last_updated_sequence_number`-only)
+        // projection with a null `first_row_id` has no row-count source here, so it still
+        // reads all columns just to emit an all-null column. Pruning that to a minimal
+        // row-count source is left as a future optimization.
         if project_field_ids_without_metadata.is_empty()
             && (need_row_number || coalesce_last_updated_seq_leaf.is_some())
         {
@@ -457,11 +468,10 @@ impl FileScanTaskReader {
         }
 
         if project_row_id {
-            // Synthesize the column, gated on `first_row_id`. Java gates it the same way
-            // (`ValueReaders.rowIds` returns nulls when the base row id is null); unlike
-            // `_last_updated_sequence_number` there is no data-sequence-number dependency.
-            // Reject a name-only physical column, but only when we would read it.
-            if task.first_row_id.is_some() && row_id_present_by_name_only {
+            // A name-only physical `_row_id` can't be threaded (synthesis keys the physical
+            // leaf by its reserved field id), and no conformant writer emits it, so reject
+            // it -- regardless of `first_row_id`, since it never threads either way.
+            if row_id_present_by_name_only {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     "Reading a physically-stored _row_id column without an embedded field id \
@@ -469,12 +479,11 @@ impl FileScanTaskReader {
                 ));
             }
 
-            // Synthesis (first_row_id set) and the null gate (first_row_id absent) both use
-            // this builder, producing a plain Int64 column either way. When synthesizing,
-            // the transformer resolves the physical `_row_id` source by field id if present,
-            // else falls back to `first_row_id + pos`.
-            record_batch_transformer_builder = record_batch_transformer_builder
-                .with_row_id_column(RESERVED_FIELD_ID_ROW_ID, task.first_row_id);
+            // `_row_id` is synthesized downstream over the record-batch stream (see
+            // `row_lineage::synthesize_row_id_column`); the transformer only passes the
+            // resulting column through, like `_pos`.
+            record_batch_transformer_builder =
+                record_batch_transformer_builder.with_virtual_field(RESERVED_FIELD_ID_ROW_ID);
         }
 
         if let (Some(partition_spec), Some(partition_data)) =
@@ -653,17 +662,18 @@ impl FileScanTaskReader {
         }
 
         // Build the batch stream and send all the RecordBatches that it generates
-        // to the requester.
-        let record_batch_stream =
-            record_batch_stream_builder
-                .build()?
-                .map(move |batch| match batch {
-                    Ok(batch) => {
-                        // Process the record batch (type promotion, column reordering, virtual fields, etc.)
-                        record_batch_transformer.process_record_batch(batch)
-                    }
-                    Err(err) => Err(err.into()),
-                });
+        // to the requester. When `_row_id` is projected, synthesize it over the raw parquet
+        // batches (using the reader-produced `_pos` position) before the transformer, which
+        // then passes it through as a virtual field.
+        let first_row_id = task.first_row_id;
+        let record_batch_stream = record_batch_stream_builder.build()?.map(move |batch| {
+            let mut batch = batch.map_err(|err| -> Error { err.into() })?;
+            if project_row_id {
+                batch = synthesize_row_id_column(batch, first_row_id)?;
+            }
+            // Process the record batch (type promotion, column reordering, virtual fields, etc.)
+            record_batch_transformer.process_record_batch(batch)
+        });
 
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
     }
@@ -2025,6 +2035,163 @@ mod tests {
         // row's null (which would have fallen back to 100 + 1) is gone -- proving the
         // physical column and the positional fallback are filtered by the same selection.
         assert_row_id_column(&batches, &[Some(5), Some(8)]);
+    }
+
+    #[tokio::test]
+    async fn test_row_id_global_across_row_groups() {
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+
+        // 5 rows written with max_row_group_size = 2 -> 3 row groups. `_pos` must be the
+        // GLOBAL file position, so `_row_id` continues across row-group boundaries rather
+        // than restarting per group (which would silently duplicate ids).
+        let file_path = format!("{dir}/row_id_multi_rg.parquet");
+        let field = Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "1".to_string(),
+        )]));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![field]));
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int32Array::from(
+            vec![1, 2, 3, 4, 5],
+        ))])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .set_max_row_group_row_count(Some(2))
+            .build();
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let task = row_id_task(file_path, Some(0));
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_row_id_column(&batches, &[Some(0), Some(1), Some(2), Some(3), Some(4)]);
+    }
+
+    /// Writes a positional delete file (`file_path` + `pos` reserved columns) marking the
+    /// given `positions` of `data_file_path` as deleted.
+    fn write_positional_delete(
+        dir: &str,
+        name: &str,
+        data_file_path: &str,
+        positions: &[i64],
+    ) -> String {
+        use arrow_array::StringArray;
+
+        let file_path_field =
+            Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2147483546".to_string(),
+            )]));
+        let pos_field = Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "2147483545".to_string(),
+        )]));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![file_path_field, pos_field]));
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(StringArray::from(vec![data_file_path; positions.len()])),
+            Arc::new(Int64Array::from(positions.to_vec())),
+        ])
+        .unwrap();
+
+        let path = format!("{dir}/{name}");
+        let file = File::create(&path).unwrap();
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn test_row_id_survives_positional_delete() {
+        use crate::scan::FileScanTaskDeleteFile;
+        use crate::spec::DataContentType;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+        // id = [1, 2, 3]; a positional delete drops the middle physical row (pos = 1).
+        let data_path = write_plain_parquet(dir, "row_id_posdel_data.parquet", vec![], vec![]);
+        let del_path = write_positional_delete(dir, "row_id_posdel.parquet", &data_path, &[1]);
+
+        let mut task = row_id_task(data_path, Some(100));
+        task.deletes = vec![FileScanTaskDeleteFile {
+            file_path: del_path.clone(),
+            file_size_in_bytes: std::fs::metadata(&del_path).unwrap().len(),
+            file_type: DataContentType::PositionDeletes,
+            partition_spec_id: 0,
+            equality_ids: None,
+            key_metadata: None,
+        }];
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        // Survivors keep their ABSOLUTE positions -- [100, 102], not renumbered [100, 101].
+        // Positional-delete selection reaches the reader via a different path than predicate
+        // selection, so this covers it explicitly.
+        assert_row_id_column(&batches, &[Some(100), Some(102)]);
+    }
+
+    #[tokio::test]
+    async fn test_row_id_name_collision_under_positional_fallback() {
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+
+        // A file with NO embedded field ids (positional fallback) whose columns include one
+        // literally named `_row_id` (user data). Projecting `_row_id` must NOT be rejected as
+        // an unthreadable physical metadata column -- under fallback the reserved column is
+        // synthesized and the same-named user column is just data.
+        let file_path = format!("{dir}/fallback_row_id_name.parquet");
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(RESERVED_COL_NAME_ROW_ID, DataType::Int64, true),
+        ]));
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(Int64Array::from(vec![7i64, 8, 9])),
+        ])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let task = row_id_task(file_path, Some(100));
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        // Not rejected; `_row_id` is synthesized as first_row_id + pos.
+        assert_row_id_column(&batches, &[Some(100), Some(101), Some(102)]);
     }
 
     #[tokio::test]

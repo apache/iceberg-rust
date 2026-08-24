@@ -19,7 +19,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_arith::boolean::is_not_null;
-use arrow_arith::numeric::add;
 use arrow_array::{
     Array as ArrowArray, ArrayRef, Int32Array, Int64Array, RecordBatch, RecordBatchOptions,
     RunArray, StructArray,
@@ -38,8 +37,7 @@ use crate::arrow::{
     type_to_arrow_type,
 };
 use crate::metadata_columns::{
-    RESERVED_COL_NAME_PARTITION, RESERVED_FIELD_ID_PARTITION, RESERVED_FIELD_ID_POS,
-    RESERVED_FIELD_ID_ROW_ID, get_metadata_field,
+    RESERVED_COL_NAME_PARTITION, RESERVED_FIELD_ID_PARTITION, get_metadata_field,
 };
 use crate::spec::{
     Datum, Literal, PartitionSpec, PrimitiveLiteral, Schema as IcebergSchema, Struct, StructType,
@@ -183,17 +181,6 @@ pub(crate) enum ColumnSource {
         fallback: PrimitiveLiteral,
         target_type: DataType,
     },
-
-    // The `_row_id` metadata column: the per-row value where the file physically
-    // carries `_row_id` (at `id_source_index`), else `first_row_id` plus the row's
-    // position (from the `_pos` column at `pos_source_index`). Produced as a plain
-    // Int64 array -- row ids are unique per row, so run-end encoding would add one run
-    // per row with no benefit.
-    RowIdSynthesis {
-        id_source_index: Option<usize>,
-        pos_source_index: usize,
-        first_row_id: i64,
-    },
     // The iceberg spec refers to other permissible schema evolution actions
     // (see https://iceberg.apache.org/spec/#schema-evolution):
     // renaming fields, deleting fields and reordering fields.
@@ -276,11 +263,6 @@ pub(crate) enum ColumnConstant {
     /// per-row value is null (e.g. `_last_updated_sequence_number` on a file that
     /// carries the column, falling back to the data sequence number).
     CoalesceLastUpdatedSeq(Datum),
-    /// The `_row_id` metadata column. `Some(first_row_id)` synthesizes it (the per-row
-    /// value where the file physically carries `_row_id`, else `first_row_id` plus the
-    /// row's position); `None` produces an all-null column (a file with a null
-    /// `first_row_id`).
-    RowId(Option<i64>),
 }
 
 /// Pre-computed data for a struct constant column.
@@ -350,16 +332,6 @@ impl RecordBatchTransformerBuilder {
     ) -> Self {
         self.constant_fields
             .insert(field_id, ColumnConstant::CoalesceLastUpdatedSeq(datum));
-        self
-    }
-
-    /// Add the `_row_id` column for a specific field ID. `Some(first_row_id)` synthesizes
-    /// it (the file's per-row value where it physically carries `_row_id`, falling back to
-    /// `first_row_id` plus the row's position); `None` produces an all-null column (a file
-    /// with a null `first_row_id`).
-    pub(crate) fn with_row_id_column(mut self, field_id: i32, first_row_id: Option<i64>) -> Self {
-        self.constant_fields
-            .insert(field_id, ColumnConstant::RowId(first_row_id));
         self
     }
 
@@ -614,19 +586,6 @@ impl RecordBatchTransformer {
                         );
                         return Ok(Arc::new(arrow_field));
                     }
-                    Some(ColumnConstant::RowId(_)) => {
-                        // Plain Int64 (not run-end-encoded): `_row_id` is unique per row, so
-                        // REE would add one run per row with no benefit. Both the synthesis
-                        // and null paths use Int64, so mixed files still share one type.
-                        let iceberg_field = get_metadata_field(*field_id)?;
-                        let arrow_field = field_with_id(
-                            &iceberg_field.name,
-                            DataType::Int64,
-                            true,
-                            iceberg_field.id,
-                        );
-                        return Ok(Arc::new(arrow_field));
-                    }
                     None => {}
                 }
 
@@ -822,38 +781,6 @@ impl RecordBatchTransformer {
                             target_type: datum_to_arrow_type_with_ree(datum),
                         });
                     }
-                    Some(ColumnConstant::RowId(Some(first_row_id))) => {
-                        // The `_pos` position column is required for the `first_row_id + pos`
-                        // fallback; the pipeline adds the RowNumber virtual column whenever
-                        // `_row_id` is synthesized.
-                        let (_, pos_source_index) = field_id_to_source_schema_map
-                            .get(&RESERVED_FIELD_ID_POS)
-                            .ok_or_else(|| {
-                                Error::new(
-                                    ErrorKind::Unexpected,
-                                    "_row_id synthesis requires the _pos position column in the \
-                                     source batch",
-                                )
-                            })?;
-                        // The physical `_row_id` column is optional -- present only when a
-                        // rewrite carried the column forward.
-                        let id_source_index = field_id_to_source_schema_map
-                            .get(&RESERVED_FIELD_ID_ROW_ID)
-                            .map(|(_, idx)| *idx);
-                        return Ok(ColumnSource::RowIdSynthesis {
-                            id_source_index,
-                            pos_source_index: *pos_source_index,
-                            first_row_id: *first_row_id,
-                        });
-                    }
-                    Some(ColumnConstant::RowId(None)) => {
-                        // Null first_row_id: an all-null Int64 column, matching the type the
-                        // synthesis path produces.
-                        return Ok(ColumnSource::Add {
-                            value: None,
-                            target_type: DataType::Int64,
-                        });
-                    }
                     None => {}
                 }
 
@@ -1018,16 +945,6 @@ impl RecordBatchTransformer {
                         fallback,
                         target_type,
                     )?,
-
-                    ColumnSource::RowIdSynthesis {
-                        id_source_index,
-                        pos_source_index,
-                        first_row_id,
-                    } => Self::create_row_id_column(
-                        id_source_index.map(|idx| &columns[idx]),
-                        &columns[*pos_source_index],
-                        *first_row_id,
-                    )?,
                 })
             })
             .collect()
@@ -1060,41 +977,6 @@ impl RecordBatchTransformer {
         // constant/null/coalesce paths (not for compression -- a per-row-varying column
         // gains nothing from REE).
         Ok(cast(&coalesced, target_type)?)
-    }
-
-    /// Builds the `_row_id` column as a plain Int64 array: `first_row_id + pos` per row,
-    /// overridden by the physically-stored `_row_id` value where the file carries one and
-    /// it is non-null.
-    fn create_row_id_column(
-        id: Option<&ArrayRef>,
-        pos: &ArrayRef,
-        first_row_id: i64,
-    ) -> Result<ArrayRef> {
-        if pos.data_type() != &DataType::Int64 {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                format!(
-                    "_pos position column must be Int64, got {}",
-                    pos.data_type()
-                ),
-            ));
-        }
-        // first_row_id + pos, the fallback for every row.
-        let base = add(pos, &Int64Array::new_scalar(first_row_id))?;
-        match id {
-            Some(id) => {
-                if id.data_type() != &DataType::Int64 {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("_row_id source must be Int64, got {}", id.data_type()),
-                    ));
-                }
-
-                let mask = is_not_null(id)?;
-                Ok(zip(&mask, id, &base)?)
-            }
-            None => Ok(base),
-        }
     }
 
     fn create_column(
@@ -1224,8 +1106,8 @@ mod test {
     use std::sync::Arc;
 
     use arrow_array::{
-        Array, ArrayRef, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
-        RecordBatch, StringArray,
+        Array, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
+        StringArray,
     };
     use arrow_cast::cast;
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
@@ -2612,191 +2494,6 @@ mod test {
 
         assert_eq!(result.num_rows(), 0);
         assert_last_updated_seq_column(&result, &[]);
-    }
-
-    /// Builds a transformer + a file batch for `_row_id`: `id`, the `_pos` position
-    /// column, and (when `id_values` is `Some`) a physical `_row_id` column. `pos_values`
-    /// are the row positions the reader would supply via the RowNumber virtual column.
-    fn row_id_transformer_and_batch(
-        id_values: Option<Vec<Option<i64>>>,
-        pos_values: Vec<i64>,
-        first_row_id: i64,
-    ) -> (RecordBatchTransformer, RecordBatch) {
-        use crate::metadata_columns::{
-            RESERVED_COL_NAME_POS, RESERVED_COL_NAME_ROW_ID, RESERVED_FIELD_ID_POS,
-            RESERVED_FIELD_ID_ROW_ID,
-        };
-
-        let snapshot_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(0)
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-
-        let id_count = pos_values.len();
-        let mut fields = vec![
-            field_with_id("id", DataType::Int32, false, 1),
-            field_with_id(
-                RESERVED_COL_NAME_POS,
-                DataType::Int64,
-                false,
-                RESERVED_FIELD_ID_POS,
-            ),
-        ];
-        let mut columns: Vec<ArrayRef> = vec![
-            Arc::new(Int32Array::from((0..id_count as i32).collect::<Vec<_>>())),
-            Arc::new(Int64Array::from(pos_values)),
-        ];
-        if let Some(id_values) = id_values {
-            fields.push(field_with_id(
-                RESERVED_COL_NAME_ROW_ID,
-                DataType::Int64,
-                true,
-                RESERVED_FIELD_ID_ROW_ID,
-            ));
-            columns.push(Arc::new(Int64Array::from(id_values)));
-        }
-
-        let parquet_schema = Arc::new(ArrowSchema::new(fields));
-        let projected_field_ids = [1, RESERVED_FIELD_ID_ROW_ID];
-        let transformer = RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
-            .with_row_id_column(RESERVED_FIELD_ID_ROW_ID, Some(first_row_id))
-            .build();
-        let batch = RecordBatch::try_new(parquet_schema, columns).unwrap();
-        (transformer, batch)
-    }
-
-    /// Reads the `_row_id` column by name (encoding-agnostic: casts through the
-    /// run-end-encoding to logical Int64) and asserts its per-row values.
-    fn assert_row_id_column(result: &RecordBatch, expected: &[Option<i64>]) {
-        use crate::metadata_columns::RESERVED_COL_NAME_ROW_ID;
-
-        let col = result
-            .column_by_name(RESERVED_COL_NAME_ROW_ID)
-            .expect("_row_id column should be present");
-        let logical = cast(col, &DataType::Int64).unwrap();
-        let values = logical.as_any().downcast_ref::<Int64Array>().unwrap();
-        let actual: Vec<Option<i64>> = (0..values.len())
-            .map(|i| (!values.is_null(i)).then(|| values.value(i)))
-            .collect();
-        assert_eq!(&actual, expected);
-    }
-
-    #[test]
-    fn row_id_pure_synthesis() {
-        // No physical column: every row is first_row_id + pos.
-        let (mut transformer, batch) = row_id_transformer_and_batch(None, vec![0, 1, 2], 100);
-        let result = transformer.process_record_batch(batch).unwrap();
-
-        assert_row_id_column(&result, &[Some(100), Some(101), Some(102)]);
-    }
-
-    #[test]
-    fn row_id_coalesce_with_physical_column() {
-        // Physical value where non-null, else first_row_id + pos.
-        let (mut transformer, batch) =
-            row_id_transformer_and_batch(Some(vec![Some(5), None, Some(8)]), vec![0, 1, 2], 100);
-        let result = transformer.process_record_batch(batch).unwrap();
-
-        assert_row_id_column(&result, &[Some(5), Some(101), Some(8)]);
-    }
-
-    #[test]
-    fn row_id_all_physical_present() {
-        // Every physical value is present: the fallback is never used.
-        let (mut transformer, batch) =
-            row_id_transformer_and_batch(Some(vec![Some(5), Some(6), Some(7)]), vec![0, 1, 2], 100);
-        let result = transformer.process_record_batch(batch).unwrap();
-
-        assert_row_id_column(&result, &[Some(5), Some(6), Some(7)]);
-    }
-
-    #[test]
-    fn row_id_all_fallback() {
-        // Every physical value is null: every row falls back to first_row_id + pos. This
-        // is the only input that distinguishes the `is_not_null` mask from `is_null`.
-        let (mut transformer, batch) =
-            row_id_transformer_and_batch(Some(vec![None, None, None]), vec![0, 1, 2], 50);
-        let result = transformer.process_record_batch(batch).unwrap();
-
-        assert_row_id_column(&result, &[Some(50), Some(51), Some(52)]);
-    }
-
-    #[test]
-    fn row_id_non_zero_start_position() {
-        // Positions need not start at 0 (e.g. a later row group): first_row_id + pos.
-        let (mut transformer, batch) = row_id_transformer_and_batch(None, vec![10, 11, 12], 100);
-        let result = transformer.process_record_batch(batch).unwrap();
-
-        assert_row_id_column(&result, &[Some(110), Some(111), Some(112)]);
-    }
-
-    #[test]
-    fn row_id_empty_batch() {
-        // A 0-row batch must still produce a well-formed, empty column of the shared type.
-        let (mut transformer, batch) = row_id_transformer_and_batch(None, vec![], 100);
-        let result = transformer.process_record_batch(batch).unwrap();
-
-        assert_eq!(result.num_rows(), 0);
-        assert_row_id_column(&result, &[]);
-    }
-
-    #[test]
-    fn row_id_non_int64_physical_column_is_rejected() {
-        use crate::metadata_columns::{
-            RESERVED_COL_NAME_POS, RESERVED_COL_NAME_ROW_ID, RESERVED_FIELD_ID_POS,
-            RESERVED_FIELD_ID_ROW_ID,
-        };
-
-        let snapshot_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(0)
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-
-        // A malformed file storing the reserved `_row_id` id on an Int32 column.
-        let parquet_schema = Arc::new(ArrowSchema::new(vec![
-            field_with_id("id", DataType::Int32, false, 1),
-            field_with_id(
-                RESERVED_COL_NAME_POS,
-                DataType::Int64,
-                false,
-                RESERVED_FIELD_ID_POS,
-            ),
-            field_with_id(
-                RESERVED_COL_NAME_ROW_ID,
-                DataType::Int32,
-                true,
-                RESERVED_FIELD_ID_ROW_ID,
-            ),
-        ]));
-        let projected_field_ids = [1, RESERVED_FIELD_ID_ROW_ID];
-        let mut transformer =
-            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
-                .with_row_id_column(RESERVED_FIELD_ID_ROW_ID, Some(100))
-                .build();
-
-        let batch = RecordBatch::try_new(parquet_schema, vec![
-            Arc::new(Int32Array::from(vec![0, 1, 2])),
-            Arc::new(Int64Array::from(vec![0i64, 1, 2])),
-            Arc::new(Int32Array::from(vec![Some(5), None, Some(8)])),
-        ])
-        .unwrap();
-
-        let err = transformer.process_record_batch(batch).unwrap_err();
-        assert_eq!(err.kind(), crate::ErrorKind::DataInvalid);
-        assert!(
-            format!("{err}").contains("_row_id source must be Int64"),
-            "unexpected error: {err}"
-        );
     }
 
     /// field 1 and RESERVED_FIELD_ID_POS are of identical type
