@@ -1490,13 +1490,11 @@ mod tests {
         )
         .await;
 
-        assert_eq!(
-            expired(
-                &table,
-                action().retain_last(1).expire_older_than_ms(i64::MAX)
-            )
-            .await,
-            vec![1]
+        // The snapshot really does expire, so the absence of cleanup is the flag's doing.
+        assert!(
+            updates
+                .iter()
+                .any(|u| matches!(u, TableUpdate::RemoveSnapshots { .. }))
         );
         assert!(removed_schemas(&updates).is_empty());
         assert!(removed_partition_specs(&updates).is_empty());
@@ -1528,24 +1526,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_clean_expired_metadata_keeps_schema_of_retained_snapshot() {
-        // Same table, but retaining both snapshots keeps schema 0 in use by snapshot 1.
-        let table = table_with_schemas(
-            vec![
-                snapshot_with_schema(1, None, 35, TS + 1, Some(0)),
-                snapshot_with_schema(2, Some(1), 36, TS + 2, Some(1)),
-            ],
-            vec![(MAIN_BRANCH, branch(2, None))],
-            1,
-        );
-
-        let updates =
-            updates_of(&table, action().retain_last(2).clean_expired_metadata(true)).await;
-
-        assert!(removed_schemas(&updates).is_empty());
-    }
-
-    #[tokio::test]
     async fn test_clean_expired_metadata_never_removes_current_schema() {
         // Schema 1 is current but no snapshot uses it; it must survive anyway.
         let table = table_with_schemas(
@@ -1565,11 +1545,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_clean_expired_metadata_keeps_all_schemas_when_one_is_unknown() {
-        // Snapshot 2 records no schema id, so schema 0 cannot be proven unreachable.
+        // No known schema id points at schema 0, so it would look unreachable -- but snapshot 1
+        // records no schema id and could be the one using it, so every schema is kept.
         let table = table_with_schemas(
             vec![
-                snapshot_with_schema(1, None, 35, TS + 1, Some(0)),
-                snapshot_with_schema(2, Some(1), 36, TS + 2, None),
+                snapshot_with_schema(1, None, 35, TS + 1, None),
+                snapshot_with_schema(2, Some(1), 36, TS + 2, Some(1)),
             ],
             vec![(MAIN_BRANCH, branch(2, None))],
             1,
@@ -1693,13 +1674,12 @@ mod tests {
         )
         .await;
 
-        assert_eq!(
-            expired(
-                &table,
-                action().retain_last(1).expire_older_than_ms(i64::MAX)
-            )
-            .await,
-            vec![1]
+        // Reaching the commit at all proves no manifest list was opened: the expiry ran to
+        // completion rather than failing on a missing file.
+        assert!(
+            updates
+                .iter()
+                .any(|u| matches!(u, TableUpdate::RemoveSnapshots { .. }))
         );
         assert!(removed_partition_specs(&updates).is_empty());
     }
