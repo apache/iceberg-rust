@@ -23,6 +23,7 @@
 //! [`SnapshotProducer`].
 
 use std::collections::{HashMap, HashSet};
+use std::ops::RangeFrom;
 
 use uuid::Uuid;
 
@@ -102,6 +103,8 @@ impl ManifestFilterManager {
         table: &Table,
         manifests: Vec<ManifestFile>,
         snapshot_id: i64,
+        commit_uuid: Uuid,
+        manifest_counter: &mut RangeFrom<u64>,
     ) -> Result<(Vec<ManifestFile>, SnapshotSummaryCollector)> {
         if self.deleted_file_paths.is_empty() {
             return Ok((manifests, SnapshotSummaryCollector::default()));
@@ -163,6 +166,24 @@ impl ManifestFilterManager {
                     );
                 } else if entry.is_alive() {
                     // Surviving entry — re-emit as EXISTING with original ids preserved.
+                    let seq = entry.sequence_number().ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Manifest entry for {} is missing sequence_number",
+                                entry.file_path(),
+                            ),
+                        )
+                    })?;
+                    let file_seq = entry.file_sequence_number.ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Manifest entry for {} is missing file_sequence_number",
+                                entry.file_path(),
+                            ),
+                        )
+                    })?;
                     let existing = ManifestEntry::builder()
                         .status(ManifestStatus::Existing)
                         .snapshot_id(
@@ -170,8 +191,8 @@ impl ManifestFilterManager {
                                 .snapshot_id()
                                 .unwrap_or(manifest_file.added_snapshot_id),
                         )
-                        .sequence_number(entry.sequence_number().unwrap_or(0))
-                        .file_sequence_number(entry.file_sequence_number.unwrap_or(0))
+                        .sequence_number(seq)
+                        .file_sequence_number(file_seq)
                         .data_file(entry.data_file().clone())
                         .build();
                     surviving_entries.push(existing);
@@ -186,10 +207,10 @@ impl ManifestFilterManager {
 
             // Write the filtered manifest using the manifest's own partition spec.
             let new_manifest_path = format!(
-                "{}/{}-m-filter-{}.{}",
+                "{}/{}-m{}.{}",
                 table.metadata().metadata_location()?,
-                Uuid::now_v7(),
-                manifest_file.partition_spec_id,
+                commit_uuid,
+                manifest_counter.next().unwrap(),
                 DataFileFormat::Avro,
             );
             let output_file = table.file_io().new_output(new_manifest_path)?;
@@ -290,6 +311,7 @@ impl MergingSnapshotProducer {
         let snapshot_producer =
             SnapshotProducer::new(table, self.commit_uuid, HashMap::new(), Vec::new());
         let snapshot_id = snapshot_producer.snapshot_id;
+        let mut manifest_counter: RangeFrom<u64> = (0..);
 
         // 1. Load existing manifests from the current snapshot.
         let existing_manifests = match table.metadata().current_snapshot() {
@@ -310,12 +332,18 @@ impl MergingSnapshotProducer {
         // 2. Filter existing manifests — remove deleted file entries.
         let (mut filtered_manifests, removed_collector) = self
             .filter_manager
-            .filter_manifests(table, existing_manifests, snapshot_id)
+            .filter_manifests(
+                table,
+                existing_manifests,
+                snapshot_id,
+                self.commit_uuid,
+                &mut manifest_counter,
+            )
             .await?;
 
         // 3. Write a new manifest for added files.
         if !self.added_data_files.is_empty() {
-            let added_manifest = self.write_added_manifest(table, snapshot_id).await?;
+            let added_manifest = self.write_added_manifest(table, snapshot_id, &mut manifest_counter).await?;
             filtered_manifests.push(added_manifest);
         }
 
@@ -328,11 +356,17 @@ impl MergingSnapshotProducer {
             .await
     }
 
-    async fn write_added_manifest(&self, table: &Table, snapshot_id: i64) -> Result<ManifestFile> {
+    async fn write_added_manifest(
+        &self,
+        table: &Table,
+        snapshot_id: i64,
+        manifest_counter: &mut RangeFrom<u64>,
+    ) -> Result<ManifestFile> {
         let new_manifest_path = format!(
-            "{}/{}-m-added.{}",
+            "{}/{}-m{}.{}",
             table.metadata().metadata_location()?,
             self.commit_uuid,
+            manifest_counter.next().unwrap(),
             DataFileFormat::Avro,
         );
         let output_file = table.file_io().new_output(new_manifest_path)?;
