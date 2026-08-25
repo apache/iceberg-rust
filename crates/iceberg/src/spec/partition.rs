@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::transform::Transform;
-use super::{NestedField, PrimitiveType, Schema, SchemaRef, StructType, Type};
+use super::{NestedField, Schema, SchemaRef, StructType};
 use crate::spec::Struct;
 use crate::{Error, ErrorKind, Result};
 
@@ -570,21 +570,20 @@ impl PartitionSpecBuilder {
     fn partition_type(fields: &Vec<PartitionField>, schema: &Schema) -> Result<StructType> {
         let mut struct_fields = Vec::with_capacity(fields.len());
         for partition_field in fields {
-            let res_type = match schema.field_by_id(partition_field.source_id) {
-                Some(field) => partition_field.transform.result_type(&field.field_type)?,
-                None if partition_field.transform == Transform::Void => {
-                    Type::Primitive(PrimitiveType::Int)
-                }
-                None => {
-                    return Err(Error::new(
+            let field = schema
+                .field_by_id(partition_field.source_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        // This should never occur as check_transform_compatibility
+                        // already ensures that the source field exists in the schema
                         ErrorKind::Unexpected,
                         format!(
                             "No column with source column id {} in schema {:?}",
                             partition_field.source_id, schema
                         ),
-                    ));
-                }
-            };
+                    )
+                })?;
+            let res_type = partition_field.transform.result_type(&field.field_type)?;
             let field =
                 NestedField::optional(partition_field.field_id, &partition_field.name, res_type)
                     .into();
@@ -603,19 +602,14 @@ impl PartitionSpecBuilder {
     ) -> Result<()> {
         match schema.field_by_name(field.name.as_str()) {
             Some(schema_collision) => {
-                if matches!(field.transform, Transform::Identity | Transform::Void) {
+                if field.transform == Transform::Identity {
                     if schema_collision.id == field.source_id {
                         Ok(())
                     } else {
-                        let transform = if field.transform == Transform::Identity {
-                            "identity"
-                        } else {
-                            "void"
-                        };
                         Err(Error::new(
                             ErrorKind::DataInvalid,
                             format!(
-                                "Cannot create {transform} partition sourced from different field in schema. Field name '{}' has id `{}` in schema but partition source id is `{}`",
+                                "Cannot create identity partition sourced from different field in schema. Field name '{}' has id `{}` in schema but partition source id is `{}`",
                                 field.name, schema_collision.id, field.source_id
                             ),
                         ))
@@ -634,13 +628,9 @@ impl PartitionSpecBuilder {
         }
     }
 
-    /// Ensure that the transformation is compatible with its source field. A void transform may
-    /// refer to a source that is no longer present, as required by v1 partition evolution.
+    /// Ensure that the transformation of the field is compatible with type of the field
+    /// in the schema. Implicitly also checks if the source field exists in the schema.
     fn check_transform_compatibility(field: &UnboundPartitionField, schema: &Schema) -> Result<()> {
-        if field.transform == Transform::Void {
-            return Ok(());
-        }
-
         let schema_field = schema.field_by_id(field.source_id).ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
@@ -651,29 +641,31 @@ impl PartitionSpecBuilder {
             )
         })?;
 
-        if !schema_field.field_type.is_primitive() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot partition by non-primitive source field: '{}'.",
-                    schema_field.field_type
-                ),
-            ));
-        }
+        if field.transform != Transform::Void {
+            if !schema_field.field_type.is_primitive() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot partition by non-primitive source field: '{}'.",
+                        schema_field.field_type
+                    ),
+                ));
+            }
 
-        if field
-            .transform
-            .result_type(&schema_field.field_type)
-            .is_err()
-        {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid source type: '{}' for transform: '{}'.",
-                    schema_field.field_type,
-                    field.transform.dedup_name()
-                ),
-            ));
+            if field
+                .transform
+                .result_type(&schema_field.field_type)
+                .is_err()
+            {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Invalid source type: '{}' for transform: '{}'.",
+                        schema_field.field_type,
+                        field.transform.dedup_name()
+                    ),
+                ));
+            }
         }
 
         Ok(())
