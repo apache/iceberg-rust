@@ -20,12 +20,13 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
+use super::schema::assign_fresh_ids;
 use super::{
     DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
     ONE_MINUTE_MS, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile, Schema, SchemaRef,
     Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef,
-    StatisticsFile, StructType, TableMetadata, TableProperties, UNPARTITIONED_LAST_ASSIGNED_ID,
-    UnboundPartitionSpec,
+    StatisticsFile, StructType, TableMetadata, TableProperties, Transform,
+    UNPARTITIONED_LAST_ASSIGNED_ID, UnboundPartitionField, UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result};
 use crate::spec::{EncryptedKey, INITIAL_ROW_ID, MIN_FORMAT_VERSION_ROW_LINEAGE};
@@ -207,14 +208,14 @@ impl TableMetadataBuilder {
     /// share. New columns are assigned ids above the current `last_column_id`, never the id
     /// of a dropped column.
     ///
-    /// `location` moves the table; `None` leaves it where it is. `properties` is applied on
-    /// top of the existing ones, as [`TableMetadataBuilder::set_properties`] does. The format
-    /// version is left alone — use [`TableMetadataBuilder::upgrade_format_version`] to raise
-    /// it.
+    /// `location` moves the table; `None` leaves it where it is. Ordinary `properties` are applied
+    /// on top of the existing ones, as [`TableMetadataBuilder::set_properties`] does. The reserved
+    /// `format-version` property upgrades the table without being persisted; other reserved
+    /// properties are ignored.
     ///
     /// # Errors
     /// - The partition spec or sort order refers to a column the given schema does not have.
-    /// - `properties` contains a reserved property.
+    /// - `format-version` is invalid or would downgrade the table.
     pub fn build_replacement(
         self,
         schema: Schema,
@@ -223,22 +224,50 @@ impl TableMetadataBuilder {
         location: Option<String>,
         properties: HashMap<String, String>,
     ) -> Result<Self> {
+        let format_version = properties
+            .get(TableProperties::PROPERTY_FORMAT_VERSION)
+            .map(|value| {
+                serde_json::from_str::<FormatVersion>(value).map_err(|err| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Unsupported format version: {value}"),
+                    )
+                    .with_source(err)
+                })
+            })
+            .transpose()?
+            .unwrap_or(self.metadata.format_version);
+        let properties = properties
+            .into_iter()
+            .filter(|(key, _)| !TableProperties::RESERVED_PROPERTIES.contains(&key.as_str()))
+            .collect();
+        let spec = spec.into();
+
+        if self.metadata.format_version == FormatVersion::V1
+            && !spec.clone().bind(schema.clone())?.has_sequential_ids()
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Spec does not use sequential IDs that are required in v1",
+            ));
+        }
+
         let previous_id_to_name = schema.field_id_to_name_map().clone();
-        let fresh_schema = schema
-            .into_builder()
-            .with_field_ids_reused_from(
-                self.get_current_schema()?.clone(),
-                self.metadata.last_column_id + 1,
-            )
-            .build()?;
+        let fresh_schema = assign_fresh_ids(
+            schema,
+            self.get_current_schema()?,
+            self.metadata.last_column_id + 1,
+        )?;
 
         let (fresh_spec, fresh_sort_order) =
-            Self::rebind_to_schema(&previous_id_to_name, &fresh_schema, spec.into(), sort_order)?;
+            Self::rebind_to_schema(&previous_id_to_name, &fresh_schema, spec, sort_order)?;
+        let fresh_spec = self.reassign_partition_ids(fresh_spec)?;
 
         let builder = self
+            .upgrade_format_version(format_version)?
             .remove_ref(MAIN_BRANCH)
             .add_current_schema(fresh_schema)?
-            .add_default_partition_spec(fresh_spec.into_unbound())?
+            .add_default_partition_spec(fresh_spec)?
             .add_default_sort_order(fresh_sort_order)?;
 
         let builder = match location {
@@ -842,11 +871,11 @@ impl TableMetadataBuilder {
 
             // If name exists in schemas, validate against current schema rules
             if let Some(schema_field) = current_schema.field_by_name(&partition_field.name) {
-                let is_identity_transform =
-                    partition_field.transform == crate::spec::Transform::Identity;
+                let is_identity_transform = partition_field.transform == Transform::Identity;
+                let is_void_transform = partition_field.transform == Transform::Void;
                 let has_matching_source_id = schema_field.id == partition_field.source_id;
 
-                if !is_identity_transform {
+                if !is_identity_transform && !is_void_transform {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!(
@@ -857,10 +886,15 @@ impl TableMetadataBuilder {
                 }
 
                 if !has_matching_source_id {
+                    let transform = if is_identity_transform {
+                        "identity"
+                    } else {
+                        "void"
+                    };
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!(
-                            "Cannot create identity partition sourced from different field in schema. \
+                            "Cannot create {transform} partition sourced from different field in schema. \
                              Field name '{}' has id `{}` in schema but partition source id is `{}`",
                             partition_field.name, schema_field.id, partition_field.source_id
                         ),
@@ -1323,6 +1357,113 @@ impl TableMetadataBuilder {
                 _ => None,
             })
             .collect()
+    }
+
+    fn next_partition_field_id(last_partition_id: &mut i32) -> Result<i32> {
+        *last_partition_id = last_partition_id.checked_add(1).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Partition field ID overflowed, cannot add more fields",
+            )
+        })?;
+        Ok(*last_partition_id)
+    }
+
+    fn reassign_partition_ids(&self, fresh_spec: PartitionSpec) -> Result<UnboundPartitionSpec> {
+        let mut last_partition_id = self.metadata.last_partition_id;
+        let fields = if self.metadata.format_version > FormatVersion::V1 {
+            let mut existing_ids = HashMap::new();
+            for field in self
+                .metadata
+                .partition_specs
+                .values()
+                .flat_map(|spec| spec.fields())
+            {
+                existing_ids
+                    .entry((field.source_id, field.transform))
+                    .and_modify(|id: &mut i32| *id = (*id).max(field.field_id))
+                    .or_insert(field.field_id);
+            }
+
+            fresh_spec
+                .fields()
+                .iter()
+                .map(|field| {
+                    let field_id = match existing_ids.get(&(field.source_id, field.transform)) {
+                        Some(field_id) => *field_id,
+                        None => Self::next_partition_field_id(&mut last_partition_id)?,
+                    };
+                    Ok(UnboundPartitionField {
+                        source_id: field.source_id,
+                        field_id: Some(field_id),
+                        name: field.name.clone(),
+                        transform: field.transform,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            let new_field_names = fresh_spec
+                .fields()
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<HashSet<_>>();
+            let mut new_fields = fresh_spec
+                .fields()
+                .iter()
+                .cloned()
+                .map(Some)
+                .collect::<Vec<_>>();
+            let mut fields = Vec::new();
+
+            for existing_field in self.metadata.default_spec.fields() {
+                let matching_index = new_fields.iter().position(|new_field| {
+                    new_field.as_ref().is_some_and(|new_field| {
+                        new_field.source_id == existing_field.source_id
+                            && new_field.transform == existing_field.transform
+                    })
+                });
+
+                if let Some(index) = matching_index {
+                    let new_field = new_fields[index]
+                        .take()
+                        .expect("matching partition field must exist");
+                    fields.push(UnboundPartitionField {
+                        source_id: new_field.source_id,
+                        field_id: Some(existing_field.field_id),
+                        name: new_field.name,
+                        transform: new_field.transform,
+                    });
+                } else {
+                    let name = if new_field_names.contains(existing_field.name.as_str()) {
+                        format!("{}_{}", existing_field.name, existing_field.field_id)
+                    } else {
+                        existing_field.name.clone()
+                    };
+                    fields.push(UnboundPartitionField {
+                        source_id: existing_field.source_id,
+                        field_id: Some(existing_field.field_id),
+                        name,
+                        transform: Transform::Void,
+                    });
+                }
+            }
+
+            for new_field in new_fields.into_iter().flatten() {
+                fields.push(UnboundPartitionField {
+                    source_id: new_field.source_id,
+                    field_id: Some(Self::next_partition_field_id(&mut last_partition_id)?),
+                    name: new_field.name,
+                    transform: new_field.transform,
+                });
+            }
+
+            fields
+        };
+
+        UnboundPartitionSpec::builder()
+            .with_spec_id(fresh_spec.spec_id())
+            .add_partition_fields(fields)
+            .map(|builder| builder.build())
     }
 
     fn reassign_ids(
@@ -3691,6 +3832,38 @@ mod tests {
             .unwrap()
     }
 
+    fn partition_replacement_builder(format_version: FormatVersion) -> TableMetadataBuilder {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+        let spec = UnboundPartitionSpec::builder()
+            .add_partition_field(1, "x", Transform::Identity)
+            .unwrap()
+            .add_partition_field(2, "y", Transform::Identity)
+            .unwrap()
+            .build();
+
+        TableMetadataBuilder::new(
+            schema,
+            spec,
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            format_version,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata
+        .into_builder(Some(
+            "s3://bucket/test/location/metadata/metadata1.json".to_string(),
+        ))
+    }
+
     fn populated_builder() -> TableMetadataBuilder {
         let builder = builder_without_changes(FormatVersion::V2);
         let snapshot = Snapshot::builder()
@@ -3774,7 +3947,198 @@ mod tests {
             metadata.default_partition_spec().fields()[0].source_id,
             w_id
         );
+        assert_eq!(metadata.default_partition_spec().fields()[0].field_id, 1001);
         assert_eq!(metadata.default_sort_order().fields[0].source_id, w_id);
+    }
+
+    #[test]
+    fn test_build_replacement_reassigns_partition_ids_for_v1() {
+        let updated_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "z", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(3, "y", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+        let updated_spec = UnboundPartitionSpec::builder()
+            .add_partition_field(2, "z_bucket", Transform::Bucket(8))
+            .unwrap()
+            .add_partition_field(1, "x", Transform::Identity)
+            .unwrap()
+            .build();
+
+        let metadata = partition_replacement_builder(FormatVersion::V1)
+            .build_replacement(
+                updated_schema,
+                updated_spec,
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let fields = metadata
+            .default_partition_spec()
+            .fields()
+            .iter()
+            .map(|field| {
+                (
+                    field.source_id,
+                    field.field_id,
+                    field.name.as_str(),
+                    field.transform,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(metadata.default_partition_spec().spec_id(), 1);
+        assert_eq!(fields, vec![
+            (1, 1000, "x", Transform::Identity),
+            (2, 1001, "y", Transform::Void),
+            (3, 1002, "z_bucket", Transform::Bucket(8)),
+        ]);
+        assert_eq!(metadata.last_partition_id, 1002);
+    }
+
+    #[test]
+    fn test_build_replacement_reassigns_partition_ids_for_v2() {
+        let updated_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "z", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+        let updated_spec = UnboundPartitionSpec::builder()
+            .add_partition_field(2, "z_bucket", Transform::Bucket(8))
+            .unwrap()
+            .add_partition_field(1, "x", Transform::Identity)
+            .unwrap()
+            .build();
+
+        let metadata = partition_replacement_builder(FormatVersion::V2)
+            .build_replacement(
+                updated_schema,
+                updated_spec,
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let fields = metadata
+            .default_partition_spec()
+            .fields()
+            .iter()
+            .map(|field| {
+                (
+                    field.source_id,
+                    field.field_id,
+                    field.name.as_str(),
+                    field.transform,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(metadata.default_partition_spec().spec_id(), 1);
+        assert_eq!(fields, vec![
+            (3, 1002, "z_bucket", Transform::Bucket(8)),
+            (1, 1000, "x", Transform::Identity),
+        ]);
+        assert_eq!(metadata.last_partition_id, 1002);
+    }
+
+    #[test]
+    fn test_build_replacement_carries_a_dropped_v1_partition_source_as_void() {
+        let updated_spec = UnboundPartitionSpec::builder()
+            .add_partition_field(3, "w", Transform::Identity)
+            .unwrap()
+            .build();
+        let metadata = builder_without_changes(FormatVersion::V1)
+            .build_replacement(
+                replacement_schema(),
+                updated_spec,
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let fields = metadata.default_partition_spec().fields();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].source_id, 2);
+        assert_eq!(fields[0].field_id, 1000);
+        assert_eq!(fields[0].name, "y");
+        assert_eq!(fields[0].transform, Transform::Void);
+        assert_eq!(fields[1].source_id, 4);
+        assert_eq!(fields[1].field_id, 1001);
+        assert_eq!(fields[1].name, "w");
+        assert_eq!(fields[1].transform, Transform::Identity);
+        assert_eq!(
+            *metadata.default_partition_type.fields()[0].field_type,
+            Type::Primitive(PrimitiveType::Int)
+        );
+    }
+
+    #[test]
+    fn test_build_replacement_renames_a_conflicting_v1_void_field() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "z", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+        let initial_spec = UnboundPartitionSpec::builder()
+            .add_partition_field(1, "partition", Transform::Identity)
+            .unwrap()
+            .build();
+        let updated_spec = UnboundPartitionSpec::builder()
+            .add_partition_field(2, "partition", Transform::Bucket(8))
+            .unwrap()
+            .build();
+        let builder = TableMetadataBuilder::new(
+            schema.clone(),
+            initial_spec,
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V1,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata
+        .into_builder(None);
+
+        let metadata = builder
+            .build_replacement(
+                schema,
+                updated_spec,
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let fields = metadata.default_partition_spec().fields();
+        assert_eq!(fields[0].name, "partition_1000");
+        assert_eq!(fields[0].field_id, 1000);
+        assert_eq!(fields[0].transform, Transform::Void);
+        assert_eq!(fields[1].name, "partition");
+        assert_eq!(fields[1].field_id, 1001);
+        assert_eq!(fields[1].transform, Transform::Bucket(8));
     }
 
     #[test]
@@ -3870,22 +4234,84 @@ mod tests {
     }
 
     #[test]
-    fn test_build_replacement_rejects_reserved_properties() {
-        let err = builder_without_changes(FormatVersion::V2)
+    fn test_build_replacement_applies_format_version_without_persisting_reserved_properties() {
+        let result = builder_without_changes(FormatVersion::V1)
+            .set_properties(HashMap::from_iter([(
+                "existing".to_string(),
+                "value".to_string(),
+            )]))
+            .unwrap()
             .build_replacement(
                 replacement_schema(),
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
                 None,
-                HashMap::from_iter(vec![(
-                    TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
-                    "2".to_string(),
-                )]),
+                HashMap::from_iter([
+                    (
+                        TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
+                        "2".to_string(),
+                    ),
+                    (
+                        TableProperties::PROPERTY_UUID.to_string(),
+                        "ignored".to_string(),
+                    ),
+                    ("new".to_string(), "value".to_string()),
+                ]),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_eq!(result.metadata.format_version, FormatVersion::V2);
+        let replacement_field = &result.metadata.default_partition_spec().fields()[0];
+        assert_eq!(replacement_field.source_id, 2);
+        assert_eq!(replacement_field.field_id, 1000);
+        assert_eq!(replacement_field.transform, Transform::Void);
+        assert_eq!(result.metadata.properties.get("existing").unwrap(), "value");
+        assert_eq!(result.metadata.properties.get("new").unwrap(), "value");
+        assert!(
+            !result
+                .metadata
+                .properties
+                .contains_key(TableProperties::PROPERTY_FORMAT_VERSION)
+        );
+        assert!(
+            !result
+                .metadata
+                .properties
+                .contains_key(TableProperties::PROPERTY_UUID)
+        );
+        assert!(result.changes.iter().any(|change| matches!(
+            change,
+            TableUpdate::UpgradeFormatVersion {
+                format_version: FormatVersion::V2
+            }
+        )));
+    }
+
+    #[test]
+    fn test_build_replacement_rejects_non_sequential_v1_partition_ids() {
+        let spec = UnboundPartitionSpec::builder()
+            .add_partition_fields([UnboundPartitionField {
+                source_id: 3,
+                field_id: Some(1001),
+                name: "w".to_string(),
+                transform: Transform::Identity,
+            }])
+            .unwrap()
+            .build();
+        let err = builder_without_changes(FormatVersion::V1)
+            .build_replacement(
+                replacement_schema(),
+                spec,
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
             )
             .unwrap_err();
 
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.to_string().contains("reserved properties"), "{err}");
+        assert!(err.to_string().contains("sequential IDs"), "{err}");
     }
 
     #[test]

@@ -21,14 +21,6 @@ use super::*;
 pub struct ReassignFieldIds {
     next_field_id: i32,
     old_to_new_id: HashMap<i32, i32>,
-    reuse: Option<ReuseIdsByName>,
-}
-
-struct ReuseIdsByName {
-    /// Full name of each field being reassigned, by the id it currently has.
-    names: HashMap<i32, String>,
-    /// Id to reuse for a field of a given full name.
-    ids: HashMap<String, i32>,
 }
 
 // We are not using the visitor here, as post order traversal is not desired.
@@ -38,40 +30,7 @@ impl ReassignFieldIds {
         Self {
             next_field_id: start_from,
             old_to_new_id: HashMap::new(),
-            reuse: None,
         }
-    }
-
-    /// Reassigns ids as [`ReassignFieldIds::new`] does, except that a field whose full name
-    /// `base` already knows keeps the id it has there. `names` maps the ids of the fields
-    /// being reassigned to their full names, as [`Schema::field_id_to_name_map`] gives them.
-    /// `start_from` must be above every id in `base` for the reassigned ids to stay unique.
-    pub fn reusing_ids_from(base: &Schema, names: HashMap<i32, String>, start_from: i32) -> Self {
-        Self {
-            next_field_id: start_from,
-            old_to_new_id: HashMap::new(),
-            reuse: Some(ReuseIdsByName {
-                names,
-                ids: base
-                    .field_id_to_name_map()
-                    .iter()
-                    .map(|(id, name)| (name.clone(), *id))
-                    .collect(),
-            }),
-        }
-    }
-
-    /// The id a reuse base gives a field of the same name as `old_id`, or the next unused one.
-    fn take_id(&mut self, old_id: i32) -> Result<i32> {
-        if let Some(reuse) = &self.reuse
-            && let Some(id) = reuse.names.get(&old_id).and_then(|n| reuse.ids.get(n))
-        {
-            return Ok(*id);
-        }
-
-        let id = self.next_field_id;
-        self.increase_next_field_id()?;
-        Ok(id)
     }
 
     pub fn reassign_field_ids(
@@ -82,9 +41,9 @@ impl ReassignFieldIds {
         let outer_fields = fields
             .into_iter()
             .map(|field| {
-                let new_id = self.take_id(field.id)?;
-                try_insert_field(&mut self.old_to_new_id, field.id, new_id)?;
-                let new_field = Arc::unwrap_or_clone(field).with_id(new_id);
+                try_insert_field(&mut self.old_to_new_id, field.id, self.next_field_id)?;
+                let new_field = Arc::unwrap_or_clone(field).with_id(self.next_field_id);
+                self.increase_next_field_id()?;
                 Ok(Arc::new(new_field))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -112,10 +71,11 @@ impl ReassignFieldIds {
                 Ok(Type::Struct(StructType::new(new_fields)))
             }
             Type::List(l) => {
-                let new_id = self.take_id(l.element_field.id)?;
-                self.old_to_new_id.insert(l.element_field.id, new_id);
+                self.old_to_new_id
+                    .insert(l.element_field.id, self.next_field_id);
                 let mut element_field = Arc::unwrap_or_clone(l.element_field);
-                element_field.id = new_id;
+                element_field.id = self.next_field_id;
+                self.increase_next_field_id()?;
                 *element_field.field_type =
                     self.reassign_ids_visit_type(*element_field.field_type)?;
                 Ok(Type::List(ListType {
@@ -123,16 +83,18 @@ impl ReassignFieldIds {
                 }))
             }
             Type::Map(m) => {
-                let new_key_id = self.take_id(m.key_field.id)?;
-                self.old_to_new_id.insert(m.key_field.id, new_key_id);
+                self.old_to_new_id
+                    .insert(m.key_field.id, self.next_field_id);
                 let mut key_field = Arc::unwrap_or_clone(m.key_field);
-                key_field.id = new_key_id;
+                key_field.id = self.next_field_id;
+                self.increase_next_field_id()?;
                 *key_field.field_type = self.reassign_ids_visit_type(*key_field.field_type)?;
 
-                let new_value_id = self.take_id(m.value_field.id)?;
-                self.old_to_new_id.insert(m.value_field.id, new_value_id);
+                self.old_to_new_id
+                    .insert(m.value_field.id, self.next_field_id);
                 let mut value_field = Arc::unwrap_or_clone(m.value_field);
-                value_field.id = new_value_id;
+                value_field.id = self.next_field_id;
+                self.increase_next_field_id()?;
                 *value_field.field_type = self.reassign_ids_visit_type(*value_field.field_type)?;
 
                 Ok(Type::Map(MapType {
@@ -386,59 +348,5 @@ mod tests {
             .unwrap_err();
 
         assert!(reassigned_schema.message().contains("'field.id' 3"));
-    }
-
-    #[test]
-    fn test_reassign_ids_reusing_ids_from_a_base_schema() {
-        let base = Schema::builder()
-            .with_schema_id(0)
-            .with_fields(vec![
-                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::optional(
-                    3,
-                    "nested",
-                    Type::Struct(StructType::new(vec![
-                        NestedField::optional(4, "a", Type::Primitive(PrimitiveType::Int)).into(),
-                    ])),
-                )
-                .into(),
-            ])
-            .build()
-            .unwrap();
-
-        // Drops `y`, keeps `x` and `nested.a`, adds `z` and `nested.b`. The ids here are the
-        // caller's own, unrelated to the base's.
-        let replacement = Schema::builder()
-            .with_schema_id(1)
-            .with_fields(vec![
-                NestedField::optional(
-                    1,
-                    "nested",
-                    Type::Struct(StructType::new(vec![
-                        NestedField::optional(2, "b", Type::Primitive(PrimitiveType::Int)).into(),
-                        NestedField::optional(3, "a", Type::Primitive(PrimitiveType::Int)).into(),
-                    ])),
-                )
-                .into(),
-                NestedField::required(4, "x", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(5, "z", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()
-            .unwrap();
-
-        let reassigned = replacement
-            .into_builder()
-            .with_field_ids_reused_from(Arc::new(base), 5)
-            .build()
-            .unwrap();
-
-        assert_eq!(reassigned.field_by_name("x").unwrap().id, 1);
-        assert_eq!(reassigned.field_by_name("nested").unwrap().id, 3);
-        assert_eq!(reassigned.field_by_name("nested.a").unwrap().id, 4);
-        // New columns are assigned from `start_from`, in traversal order.
-        assert_eq!(reassigned.field_by_name("z").unwrap().id, 5);
-        assert_eq!(reassigned.field_by_name("nested.b").unwrap().id, 6);
-        assert_eq!(reassigned.highest_field_id(), 6);
     }
 }
