@@ -41,7 +41,7 @@ pub(crate) enum CachedObjectKey {
     // manifest inherits it onto its entries: the same physical manifest can be
     // referenced with different offsets across snapshots and branches, so it
     // cannot be shared under the path alone.
-    Manifest((String, Option<u64>)),
+    Manifest((String, Option<i64>)),
 }
 
 /// Caches metadata objects deserialized from immutable files

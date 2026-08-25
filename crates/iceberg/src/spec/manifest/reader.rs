@@ -314,7 +314,7 @@ mod tests {
 
     /// Builds a manifest file with the given content type and manifest-level
     /// `first_row_id`. Other fields are irrelevant to row-id assignment.
-    fn manifest_file(content: ManifestContentType, first_row_id: Option<u64>) -> ManifestFile {
+    fn manifest_file(content: ManifestContentType, first_row_id: Option<i64>) -> ManifestFile {
         ManifestFile {
             manifest_path: "memory:///m.avro".to_string(),
             manifest_length: 0,
@@ -398,7 +398,7 @@ mod tests {
     fn test_assign_first_row_ids_rejects_oversized_manifest_first_row_id() {
         // A manifest-level first_row_id above i64::MAX cannot be represented as the
         // signed running counter and must be rejected.
-        let manifest = manifest_file(ManifestContentType::Data, Some(i64::MAX as u64 + 1));
+        let manifest = manifest_file(ManifestContentType::Data, Some((i64::MAX as u64 + 1) as i64));
         let mut entries = vec![data_entry(ManifestStatus::Added, 3, None)];
 
         let err = test_reader()
@@ -412,7 +412,7 @@ mod tests {
     fn test_assign_first_row_ids_rejects_counter_overflow() {
         // Advancing the running counter past i64::MAX must be rejected rather than
         // wrapping to a negative value that would corrupt subsequent assignments.
-        let manifest = manifest_file(ManifestContentType::Data, Some(i64::MAX as u64));
+        let manifest = manifest_file(ManifestContentType::Data, Some(i64::MAX));
         let mut entries = vec![data_entry(ManifestStatus::Added, 1, None)];
 
         let err = test_reader()

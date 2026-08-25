@@ -880,9 +880,9 @@ pub(super) mod _serde {
         #[serde(skip_serializing_if = "Option::is_none")]
         schema_id: Option<SchemaId>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        first_row_id: Option<u64>,
+        first_row_id: Option<i64>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        added_rows: Option<u64>,
+        added_rows: Option<i64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         key_id: Option<String>,
     }
@@ -2360,7 +2360,7 @@ mod tests {
                 {
                     "action": "remove-schemas",
                     "schema-ids": [1, 2]
-                }        
+                }
             "#,
             TableUpdate::RemoveSchemas {
                 schema_ids: vec![1, 2],
@@ -2382,7 +2382,7 @@ mod tests {
                         "encrypted-key-metadata": "{encoded_key}",
                         "encrypted-by-id": "b"
                     }}
-                }}        
+                }}
             "#
             ),
             TableUpdate::AddEncryptionKey {
@@ -2402,7 +2402,7 @@ mod tests {
                 {
                     "action": "remove-encryption-key",
                     "key-id": "a"
-                }        
+                }
             "#,
             TableUpdate::RemoveEncryptionKey {
                 key_id: "a".to_string(),

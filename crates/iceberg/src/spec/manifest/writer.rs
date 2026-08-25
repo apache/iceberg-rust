@@ -207,7 +207,7 @@ pub struct ManifestWriter {
     existing_rows: u64,
     deleted_files: u32,
     deleted_rows: u64,
-    first_row_id: Option<u64>,
+    first_row_id: Option<i64>,
 
     min_seq_num: Option<i64>,
 
@@ -226,7 +226,7 @@ impl ManifestWriter {
         snapshot_id: Option<i64>,
         key_metadata: Option<Vec<u8>>,
         metadata: ManifestMetadata,
-        first_row_id: Option<u64>,
+        first_row_id: Option<i64>,
     ) -> Self {
         Self {
             writer_future,

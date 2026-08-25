@@ -36,7 +36,7 @@ pub struct ManifestListWriter {
     avro_writer: Writer<'static, Vec<u8>>,
     sequence_number: i64,
     snapshot_id: i64,
-    next_row_id: Option<u64>,
+    next_row_id: Option<i64>,
 }
 
 impl std::fmt::Debug for ManifestListWriter {
@@ -50,7 +50,7 @@ impl std::fmt::Debug for ManifestListWriter {
 
 impl ManifestListWriter {
     /// Get the next row ID that will be assigned to the next data manifest added.
-    pub fn next_row_id(&self) -> Option<u64> {
+    pub fn next_row_id(&self) -> Option<i64> {
         self.next_row_id
     }
 
@@ -107,7 +107,7 @@ impl ManifestListWriter {
         snapshot_id: i64,
         parent_snapshot_id: Option<i64>,
         sequence_number: i64,
-        first_row_id: Option<u64>, // Always None for delete manifests
+        first_row_id: Option<i64>, // Always None for delete manifests
     ) -> Self {
         let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
@@ -142,7 +142,7 @@ impl ManifestListWriter {
         metadata: HashMap<String, String>,
         sequence_number: i64,
         snapshot_id: i64,
-        first_row_id: Option<u64>,
+        first_row_id: Option<i64>, // Always None for delete manifests
     ) -> Self {
         let avro_schema = match format_version {
             FormatVersion::V1 => &MANIFEST_LIST_AVRO_SCHEMA_V1,
@@ -289,7 +289,7 @@ impl ManifestListWriter {
     }
 }
 
-fn require_row_counts_in_manifest(manifest: &ManifestFile) -> Result<(u64, u64)> {
+fn require_row_counts_in_manifest(manifest: &ManifestFile) -> Result<(i64, i64)> {
     let existing_rows_count = manifest.existing_rows_count.ok_or_else(|| {
         Error::new(
             ErrorKind::DataInvalid,
@@ -308,7 +308,7 @@ fn require_row_counts_in_manifest(manifest: &ManifestFile) -> Result<(u64, u64)>
             ),
         )
     })?;
-    Ok((existing_rows_count, added_rows_count))
+    Ok((existing_rows_count as i64, added_rows_count as i64))
 }
 
 #[cfg(test)]

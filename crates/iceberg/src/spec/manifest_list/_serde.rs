@@ -193,7 +193,7 @@ pub(super) struct ManifestFileV3 {
     pub deleted_rows_count: i64,
     pub partitions: Option<Vec<FieldSummary>>,
     pub key_metadata: Option<ByteBuf>,
-    pub first_row_id: Option<u64>,
+    pub first_row_id: Option<i64>,
 }
 
 impl ManifestFileV3 {

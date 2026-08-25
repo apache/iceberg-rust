@@ -102,7 +102,7 @@ pub struct ManifestFile {
     /// field 520
     ///
     /// The starting _row_id to assign to rows added by ADDED data files
-    pub first_row_id: Option<u64>,
+    pub first_row_id: Option<i64>,
 }
 
 impl ManifestFile {

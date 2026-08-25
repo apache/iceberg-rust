@@ -54,7 +54,7 @@ pub(crate) static EMPTY_SNAPSHOT_ID: i64 = -1;
 pub(crate) static INITIAL_SEQUENCE_NUMBER: i64 = 0;
 
 /// Initial row id for row lineage for new v3 tables and older tables upgrading to v3.
-pub const INITIAL_ROW_ID: u64 = 0;
+pub const INITIAL_ROW_ID: i64 = 0;
 /// Minimum format version that supports row lineage (v3).
 pub const MIN_FORMAT_VERSION_ROW_LINEAGE: FormatVersion = FormatVersion::V3;
 /// Reference to [`TableMetadata`].
@@ -137,7 +137,7 @@ pub struct TableMetadata {
     /// Encryption Keys - map of key id to the actual key
     pub(crate) encryption_keys: HashMap<String, EncryptedKey>,
     /// Next row id to be assigned for Row Lineage (v3)
-    pub(crate) next_row_id: u64,
+    pub(crate) next_row_id: i64,
 }
 
 impl TableMetadata {
@@ -454,7 +454,7 @@ impl TableMetadata {
 
     /// Get the next row id to be assigned
     #[inline]
-    pub fn next_row_id(&self) -> u64 {
+    pub fn next_row_id(&self) -> i64 {
         self.next_row_id
     }
 
@@ -815,7 +815,7 @@ pub(super) mod _serde {
         pub format_version: VersionNumber<3>,
         #[serde(flatten)]
         pub shared: TableMetadataV2V3Shared,
-        pub next_row_id: u64,
+        pub next_row_id: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub encryption_keys: Option<Vec<EncryptedKey>>,
         #[serde(skip_serializing_if = "Option::is_none")]
