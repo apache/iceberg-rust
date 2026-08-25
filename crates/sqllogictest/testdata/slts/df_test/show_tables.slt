@@ -29,6 +29,10 @@ default default test_binary_table BASE TABLE
 default default test_binary_table$history BASE TABLE
 default default test_binary_table$manifests BASE TABLE
 default default test_binary_table$snapshots BASE TABLE
+default default test_encrypted_round_trip BASE TABLE
+default default test_encrypted_round_trip$history BASE TABLE
+default default test_encrypted_round_trip$manifests BASE TABLE
+default default test_encrypted_round_trip$snapshots BASE TABLE
 default default test_partitioned_table BASE TABLE
 default default test_partitioned_table$history BASE TABLE
 default default test_partitioned_table$manifests BASE TABLE
