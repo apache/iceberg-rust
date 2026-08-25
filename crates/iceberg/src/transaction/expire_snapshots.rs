@@ -20,12 +20,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use futures::{StreamExt, TryStreamExt, stream};
 
 use crate::spec::{
     MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMetadata, TableProperties,
 };
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
+use crate::util::available_parallelism;
 use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 
 /// A transaction action that removes snapshots from table metadata.
@@ -51,10 +53,14 @@ use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 ///   explicitly is an error, since
 ///   [`remove_snapshots`](crate::spec::TableMetadataBuilder::remove_snapshots) would otherwise
 ///   drop the ref silently.
+///
+/// [`clean_expired_metadata`](Self::clean_expired_metadata) additionally drops the partition specs
+/// and schemas that no surviving snapshot references anymore.
 pub struct ExpireSnapshotsAction {
     explicit_ids_to_remove: Vec<i64>,
     older_than_ms: Option<i64>,
     retain_last: Option<usize>,
+    clean_expired_metadata: bool,
 }
 
 impl ExpireSnapshotsAction {
@@ -63,6 +69,7 @@ impl ExpireSnapshotsAction {
             explicit_ids_to_remove: vec![],
             older_than_ms: None,
             retain_last: None,
+            clean_expired_metadata: false,
         }
     }
 
@@ -95,6 +102,17 @@ impl ExpireSnapshotsAction {
     /// [`commit`](TransactionAction::commit) fail.
     pub fn retain_last(mut self, retain_last: usize) -> Self {
         self.retain_last = Some(retain_last);
+        self
+    }
+
+    /// Also remove partition specs and schemas that no retained snapshot uses anymore.
+    /// Off by default.
+    ///
+    /// Determining the reachable specs requires reading the manifest list of every retained
+    /// snapshot, so this adds I/O proportional to the number of retained snapshots. It is skipped
+    /// entirely for the common single-spec table, where no spec can be unreachable.
+    pub fn clean_expired_metadata(mut self, clean_expired_metadata: bool) -> Self {
+        self.clean_expired_metadata = clean_expired_metadata;
         self
     }
 
@@ -209,13 +227,110 @@ impl ExpireSnapshotsAction {
             }
         }
 
+        // The snapshots that survive this expiry. Note this is not `retained_ids`: a snapshot named
+        // explicitly is expired even when the age/branch policy would have retained it.
+        let surviving_ids: Vec<i64> = metadata
+            .snapshots()
+            .map(|snapshot| snapshot.snapshot_id())
+            .filter(|id| !expiring_ids.contains(id))
+            .collect();
+
         let mut ids_to_remove: Vec<i64> = expiring_ids.into_iter().collect();
         ids_to_remove.sort_unstable();
         removed_ref_names.sort();
         Ok(ExpirePlan {
             ids_to_remove,
             refs_to_remove: removed_ref_names,
+            surviving_ids,
         })
+    }
+
+    /// Computes the `RemoveSchemas`/`RemovePartitionSpecs` updates for specs and schemas that no
+    /// surviving snapshot references anymore.
+    ///
+    /// The current schema and the default spec are always treated as reachable, so they are never
+    /// removed even when no snapshot uses them yet.
+    async fn clean_expired_metadata_updates(
+        &self,
+        table: &Table,
+        surviving_ids: &[i64],
+    ) -> Result<Vec<TableUpdate>> {
+        let metadata = table.metadata();
+        let mut updates = vec![];
+
+        // Reading a manifest list per surviving snapshot is the expensive part, so skip it when
+        // there is at most one spec: the default spec is reachable by definition, leaving nothing
+        // to remove.
+        if metadata.partition_specs_iter().len() > 1 {
+            let mut reachable_specs: HashSet<i32> =
+                HashSet::from([metadata.default_partition_spec_id()]);
+            let total_specs = metadata.partition_specs_iter().len();
+
+            let readers: Vec<_> = surviving_ids
+                .iter()
+                .filter_map(|id| metadata.snapshot_by_id(*id))
+                .map(|snapshot| table.manifest_list_reader(snapshot))
+                .collect();
+            let mut manifest_lists = stream::iter(readers)
+                .map(|reader| async move {
+                    let manifest_list = reader.load().await?;
+                    Ok::<HashSet<i32>, Error>(
+                        manifest_list
+                            .entries()
+                            .iter()
+                            .map(|entry| entry.partition_spec_id)
+                            .collect(),
+                    )
+                })
+                .buffer_unordered(available_parallelism().get());
+            while let Some(spec_ids) = manifest_lists.try_next().await? {
+                reachable_specs.extend(spec_ids);
+                // Every spec is in use, so no further reads can change the outcome.
+                if reachable_specs.len() >= total_specs {
+                    break;
+                }
+            }
+
+            let mut spec_ids: Vec<i32> = metadata
+                .partition_specs_iter()
+                .map(|spec| spec.spec_id())
+                .filter(|spec_id| !reachable_specs.contains(spec_id))
+                .collect();
+            if !spec_ids.is_empty() {
+                spec_ids.sort_unstable();
+                updates.push(TableUpdate::RemovePartitionSpecs { spec_ids });
+            }
+        }
+
+        // Unlike specs, a snapshot's schema is recorded in metadata, so this needs no I/O. A
+        // snapshot that predates `schema-id` leaves its schema unknown; treating it as referencing
+        // nothing could drop a schema that is still in use, so keep every schema in that case.
+        let mut reachable_schemas: HashSet<i32> = HashSet::from([metadata.current_schema_id()]);
+        let mut schema_of_every_snapshot_known = true;
+        for snapshot in surviving_ids
+            .iter()
+            .filter_map(|id| metadata.snapshot_by_id(*id))
+        {
+            match snapshot.schema_id() {
+                Some(schema_id) => {
+                    reachable_schemas.insert(schema_id);
+                }
+                None => schema_of_every_snapshot_known = false,
+            }
+        }
+        if schema_of_every_snapshot_known {
+            let mut schema_ids: Vec<i32> = metadata
+                .schemas_iter()
+                .map(|schema| schema.schema_id())
+                .filter(|schema_id| !reachable_schemas.contains(schema_id))
+                .collect();
+            if !schema_ids.is_empty() {
+                schema_ids.sort_unstable();
+                updates.push(TableUpdate::RemoveSchemas { schema_ids });
+            }
+        }
+
+        Ok(updates)
     }
 
     /// Whether a non-main ref should be dropped because its head is older than its `max_ref_age_ms`,
@@ -295,6 +410,8 @@ impl ExpireSnapshotsAction {
 struct ExpirePlan {
     ids_to_remove: Vec<i64>,
     refs_to_remove: Vec<String>,
+    /// The snapshots left after this expiry, whose specs and schemas are still reachable.
+    surviving_ids: Vec<i64>,
 }
 
 #[async_trait]
@@ -313,7 +430,12 @@ impl TransactionAction for ExpireSnapshotsAction {
 
         let plan = self.plan(table, &properties)?;
 
-        if plan.ids_to_remove.is_empty() && plan.refs_to_remove.is_empty() {
+        // Cleaning expired metadata can still find unreachable specs and schemas when no snapshot
+        // expires, so only the plain expiry path can bail out early here.
+        if plan.ids_to_remove.is_empty()
+            && plan.refs_to_remove.is_empty()
+            && !self.clean_expired_metadata
+        {
             return Ok(ActionCommit::new(vec![], vec![]));
         }
 
@@ -349,6 +471,18 @@ impl TransactionAction for ExpireSnapshotsAction {
         }
         updates.extend(stats_updates);
 
+        if self.clean_expired_metadata {
+            updates.extend(
+                self.clean_expired_metadata_updates(table, &plan.surviving_ids)
+                    .await?,
+            );
+        }
+
+        // Nothing was reachable-but-unused either, so skip the commit entirely.
+        if updates.is_empty() {
+            return Ok(ActionCommit::new(vec![], vec![]));
+        }
+
         // The ref assertion closes the race where a concurrent writer advances `main` between
         // selection and commit, which could orphan a snapshot whose parent we are about to remove.
         Ok(ActionCommit::new(updates, vec![
@@ -371,8 +505,9 @@ mod tests {
     use chrono::Utc;
 
     use crate::spec::{
-        MAIN_BRANCH, Operation, PartitionStatisticsFile, Snapshot, SnapshotReference,
-        SnapshotRetention, StatisticsFile, Summary,
+        MAIN_BRANCH, ManifestContentType, ManifestFile, ManifestListWriter, NestedField, Operation,
+        PartitionStatisticsFile, PrimitiveType, Schema, Snapshot, SnapshotReference,
+        SnapshotRetention, StatisticsFile, Summary, Transform, Type, UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::transaction::Transaction;
@@ -531,6 +666,172 @@ mod tests {
             statistics_path: format!("/partition-stats-{snapshot_id}.puffin"),
             file_size_in_bytes: 1,
         }
+    }
+
+    /// A second schema, so a table can have one schema go unreferenced while another stays in use.
+    /// It keeps every field the minimal table's sort order references, differing from schema 0 only
+    /// in that `z` is optional.
+    fn other_schema(schema_id: i32) -> Schema {
+        Schema::builder()
+            .with_schema_id(schema_id)
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    /// A second partition spec, bound to the minimal table's schema.
+    fn other_spec(spec_id: i32) -> UnboundPartitionSpec {
+        UnboundPartitionSpec::builder()
+            .with_spec_id(spec_id)
+            .add_partition_field(2, "y", Transform::Identity)
+            .unwrap()
+            .build()
+    }
+
+    /// Like [`snapshot`], but records which schema the snapshot was written with. `None` models a
+    /// snapshot written before `schema-id` was tracked.
+    fn snapshot_with_schema(
+        id: i64,
+        parent: Option<i64>,
+        sequence_number: i64,
+        timestamp_ms: i64,
+        schema_id: Option<i32>,
+    ) -> Snapshot {
+        let builder = Snapshot::builder()
+            .with_snapshot_id(id)
+            .with_parent_snapshot_id(parent)
+            .with_sequence_number(sequence_number)
+            .with_timestamp_ms(timestamp_ms)
+            .with_manifest_list(format!("/snap-{id}.avro"))
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            });
+        match schema_id {
+            Some(schema_id) => builder.with_schema_id(schema_id).build(),
+            None => builder.build(),
+        }
+    }
+
+    /// Builds a table carrying an extra schema (id 1) alongside the minimal table's schema 0,
+    /// with `current_schema_id` selected as current.
+    fn table_with_schemas(
+        snapshots: Vec<Snapshot>,
+        refs: Vec<(&str, SnapshotReference)>,
+        current_schema_id: i32,
+    ) -> Table {
+        let base = make_v2_minimal_table();
+        let mut builder = base
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .add_schema(other_schema(1))
+            .unwrap()
+            .set_current_schema(current_schema_id)
+            .unwrap();
+        for snapshot in snapshots {
+            builder = builder.add_snapshot(snapshot).unwrap();
+        }
+        for (name, reference) in refs {
+            builder = builder.set_ref(name, reference).unwrap();
+        }
+        base.with_metadata(Arc::new(builder.build().unwrap().metadata))
+    }
+
+    /// Builds a table carrying an extra partition spec (id 1) alongside the minimal table's spec 0,
+    /// and writes a real manifest list per snapshot into the table's (in-memory) `FileIO` so the
+    /// spec-reachability walk has something to read. `manifest_specs` maps a snapshot id to the
+    /// spec ids its manifests were written with.
+    async fn table_with_specs(
+        snapshots: Vec<Snapshot>,
+        refs: Vec<(&str, SnapshotReference)>,
+        default_spec_id: i32,
+        manifest_specs: HashMap<i64, Vec<i32>>,
+    ) -> Table {
+        let base = make_v2_minimal_table();
+        let mut builder = base
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .add_partition_spec(other_spec(1))
+            .unwrap()
+            .set_default_partition_spec(default_spec_id)
+            .unwrap();
+        for snapshot in &snapshots {
+            builder = builder.add_snapshot(snapshot.clone()).unwrap();
+        }
+        for (name, reference) in refs {
+            builder = builder.set_ref(name, reference).unwrap();
+        }
+        let table = base.with_metadata(Arc::new(builder.build().unwrap().metadata));
+
+        for snapshot in &snapshots {
+            let spec_ids = manifest_specs
+                .get(&snapshot.snapshot_id())
+                .cloned()
+                .unwrap_or_default();
+            write_manifest_list(&table, snapshot, &spec_ids).await;
+        }
+        table
+    }
+
+    /// Writes a manifest list for `snapshot` containing one entry per spec id.
+    async fn write_manifest_list(table: &Table, snapshot: &Snapshot, spec_ids: &[i32]) {
+        let output = table
+            .file_io()
+            .new_output(snapshot.manifest_list())
+            .unwrap();
+        let mut writer = ManifestListWriter::v2(
+            output.writer().await.unwrap(),
+            snapshot.snapshot_id(),
+            snapshot.parent_snapshot_id(),
+            snapshot.sequence_number(),
+        );
+        writer
+            .add_manifests(spec_ids.iter().map(|spec_id| ManifestFile {
+                manifest_path: format!("/manifest-{}-{spec_id}.avro", snapshot.snapshot_id()),
+                manifest_length: 1,
+                partition_spec_id: *spec_id,
+                content: ManifestContentType::Data,
+                sequence_number: snapshot.sequence_number(),
+                min_sequence_number: snapshot.sequence_number(),
+                added_snapshot_id: snapshot.snapshot_id(),
+                added_files_count: Some(0),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
+                added_rows_count: Some(0),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: Some(vec![]),
+                key_metadata: None,
+                first_row_id: None,
+            }))
+            .unwrap();
+        writer.close().await.unwrap();
+    }
+
+    fn removed_schemas(updates: &[TableUpdate]) -> Vec<i32> {
+        updates
+            .iter()
+            .find_map(|update| match update {
+                TableUpdate::RemoveSchemas { schema_ids } => Some(schema_ids.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    fn removed_partition_specs(updates: &[TableUpdate]) -> Vec<i32> {
+        updates
+            .iter()
+            .find_map(|update| match update {
+                TableUpdate::RemovePartitionSpecs { spec_ids } => Some(spec_ids.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 
     fn removed_statistics(updates: &[TableUpdate]) -> Vec<i64> {
@@ -1169,6 +1470,238 @@ mod tests {
         assert_eq!(removed_refs(&updates), vec!["old-tag".to_string()]);
         assert_eq!(removed_statistics(&updates), vec![1]);
         assert_eq!(removed_partition_statistics(&updates), vec![1]);
+    }
+
+    #[tokio::test]
+    async fn test_clean_expired_metadata_is_off_by_default() {
+        // Snapshot 1 (schema 0) expires, leaving schema 0 unreferenced, but the flag is not set.
+        let table = table_with_schemas(
+            vec![
+                snapshot_with_schema(1, None, 35, TS + 1, Some(0)),
+                snapshot_with_schema(2, Some(1), 36, TS + 2, Some(1)),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+            1,
+        );
+
+        let updates = updates_of(
+            &table,
+            action().retain_last(1).expire_older_than_ms(i64::MAX),
+        )
+        .await;
+
+        assert_eq!(
+            expired(
+                &table,
+                action().retain_last(1).expire_older_than_ms(i64::MAX)
+            )
+            .await,
+            vec![1]
+        );
+        assert!(removed_schemas(&updates).is_empty());
+        assert!(removed_partition_specs(&updates).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_clean_expired_metadata_removes_unreferenced_schema() {
+        // main: 1 (schema 0) -> 2 (schema 1), with schema 1 current. Expiring 1 leaves schema 0
+        // referenced by nothing.
+        let table = table_with_schemas(
+            vec![
+                snapshot_with_schema(1, None, 35, TS + 1, Some(0)),
+                snapshot_with_schema(2, Some(1), 36, TS + 2, Some(1)),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+            1,
+        );
+
+        let updates = updates_of(
+            &table,
+            action()
+                .retain_last(1)
+                .expire_older_than_ms(i64::MAX)
+                .clean_expired_metadata(true),
+        )
+        .await;
+
+        assert_eq!(removed_schemas(&updates), vec![0]);
+    }
+
+    #[tokio::test]
+    async fn test_clean_expired_metadata_keeps_schema_of_retained_snapshot() {
+        // Same table, but retaining both snapshots keeps schema 0 in use by snapshot 1.
+        let table = table_with_schemas(
+            vec![
+                snapshot_with_schema(1, None, 35, TS + 1, Some(0)),
+                snapshot_with_schema(2, Some(1), 36, TS + 2, Some(1)),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+            1,
+        );
+
+        let updates =
+            updates_of(&table, action().retain_last(2).clean_expired_metadata(true)).await;
+
+        assert!(removed_schemas(&updates).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_clean_expired_metadata_never_removes_current_schema() {
+        // Schema 1 is current but no snapshot uses it; it must survive anyway.
+        let table = table_with_schemas(
+            vec![
+                snapshot_with_schema(1, None, 35, TS + 1, Some(0)),
+                snapshot_with_schema(2, Some(1), 36, TS + 2, Some(0)),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+            1,
+        );
+
+        let updates =
+            updates_of(&table, action().retain_last(2).clean_expired_metadata(true)).await;
+
+        assert!(removed_schemas(&updates).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_clean_expired_metadata_keeps_all_schemas_when_one_is_unknown() {
+        // Snapshot 2 records no schema id, so schema 0 cannot be proven unreachable.
+        let table = table_with_schemas(
+            vec![
+                snapshot_with_schema(1, None, 35, TS + 1, Some(0)),
+                snapshot_with_schema(2, Some(1), 36, TS + 2, None),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+            1,
+        );
+
+        let updates =
+            updates_of(&table, action().retain_last(2).clean_expired_metadata(true)).await;
+
+        assert!(removed_schemas(&updates).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_clean_expired_metadata_runs_when_nothing_expires() {
+        // No snapshot expires (retain_last covers both), but schema 0 is already unreferenced, so
+        // the action still has work to do.
+        let table = table_with_schemas(
+            vec![
+                snapshot_with_schema(1, None, 35, TS + 1, Some(1)),
+                snapshot_with_schema(2, Some(1), 36, TS + 2, Some(1)),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+            1,
+        );
+
+        let updates =
+            updates_of(&table, action().retain_last(2).clean_expired_metadata(true)).await;
+
+        assert!(
+            !updates
+                .iter()
+                .any(|u| matches!(u, TableUpdate::RemoveSnapshots { .. }))
+        );
+        assert_eq!(removed_schemas(&updates), vec![0]);
+    }
+
+    #[tokio::test]
+    async fn test_clean_expired_metadata_removes_unreferenced_partition_spec() {
+        // main: 1 (manifests on spec 1) -> 2 (manifests on spec 0), with spec 0 default. Expiring
+        // snapshot 1 leaves spec 1 referenced by no manifest.
+        let table = table_with_specs(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+            0,
+            HashMap::from([(1, vec![1]), (2, vec![0])]),
+        )
+        .await;
+
+        let updates = updates_of(
+            &table,
+            action()
+                .retain_last(1)
+                .expire_older_than_ms(i64::MAX)
+                .clean_expired_metadata(true),
+        )
+        .await;
+
+        assert_eq!(removed_partition_specs(&updates), vec![1]);
+    }
+
+    #[tokio::test]
+    async fn test_clean_expired_metadata_keeps_spec_used_by_retained_snapshot() {
+        // Same table, but both snapshots are retained, so spec 1 is still reachable via snapshot 1.
+        let table = table_with_specs(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+            0,
+            HashMap::from([(1, vec![1]), (2, vec![0])]),
+        )
+        .await;
+
+        let updates =
+            updates_of(&table, action().retain_last(2).clean_expired_metadata(true)).await;
+
+        assert!(removed_partition_specs(&updates).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_clean_expired_metadata_never_removes_default_spec() {
+        // Spec 1 is the default but no manifest uses it; it must survive anyway.
+        let table = table_with_specs(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+            1,
+            HashMap::from([(1, vec![0]), (2, vec![0])]),
+        )
+        .await;
+
+        let updates =
+            updates_of(&table, action().retain_last(2).clean_expired_metadata(true)).await;
+
+        assert!(removed_partition_specs(&updates).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_clean_expired_metadata_skips_manifest_reads_for_single_spec_table() {
+        // The minimal table has one spec, so the spec walk is skipped and the snapshots' manifest
+        // lists are never read -- these paths point at files that were never written.
+        let table = table_with(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+        );
+
+        let updates = updates_of(
+            &table,
+            action()
+                .retain_last(1)
+                .expire_older_than_ms(i64::MAX)
+                .clean_expired_metadata(true),
+        )
+        .await;
+
+        assert_eq!(
+            expired(
+                &table,
+                action().retain_last(1).expire_older_than_ms(i64::MAX)
+            )
+            .await,
+            vec![1]
+        );
+        assert!(removed_partition_specs(&updates).is_empty());
     }
 
     #[tokio::test]
