@@ -25,7 +25,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use iceberg::Result;
+use iceberg::{Result, SessionContext};
 pub use oauth2::OAuth2Manager;
 
 use crate::client::HttpClient;
@@ -73,6 +73,26 @@ pub trait AuthManager: Debug + Send + Sync {
         client: &HttpClient,
         props: &HashMap<String, String>,
     ) -> Result<Arc<dyn AuthSession>>;
+
+    /// Returns the authentication session for a specific context.
+    ///
+    /// The catalog calls this method only after [`Self::catalog_session`] has
+    /// succeeded. `catalog_session` is the catalog session returned by this
+    /// manager. If the context does not require different authentication,
+    /// implementations should return `catalog_session` unchanged.
+    ///
+    /// The catalog does not cache the returned session. Implementations should
+    /// cache context-specific sessions internally using
+    /// [`SessionContext::session_id`] and are responsible for eviction and
+    /// releasing any associated resources. Reusing a session ID with different
+    /// context may therefore return the previously cached session.
+    async fn contextual_session(
+        &self,
+        _context: &SessionContext,
+        catalog_session: Arc<dyn AuthSession>,
+    ) -> Result<Arc<dyn AuthSession>> {
+        Ok(catalog_session)
+    }
 }
 
 /// Authenticates outgoing REST catalog requests.
