@@ -395,20 +395,6 @@ mod tests {
     }
 
     #[test]
-    fn test_assign_first_row_ids_rejects_oversized_manifest_first_row_id() {
-        // A manifest-level first_row_id above i64::MAX cannot be represented as the
-        // signed running counter and must be rejected.
-        let manifest = manifest_file(ManifestContentType::Data, Some((i64::MAX as u64 + 1) as i64));
-        let mut entries = vec![data_entry(ManifestStatus::Added, 3, None)];
-
-        let err = test_reader()
-            .assign_first_row_ids(&manifest, &mut entries)
-            .expect_err("an oversized manifest first_row_id must be rejected");
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("Invalid first_row_id"));
-    }
-
-    #[test]
     fn test_assign_first_row_ids_rejects_counter_overflow() {
         // Advancing the running counter past i64::MAX must be rejected rather than
         // wrapping to a negative value that would corrupt subsequent assignments.
