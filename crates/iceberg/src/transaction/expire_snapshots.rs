@@ -266,25 +266,31 @@ impl ExpireSnapshotsAction {
                 HashSet::from([metadata.default_partition_spec_id()]);
             let total_specs = metadata.partition_specs_iter().len();
 
+            let runtime = table.runtime();
             let readers: Vec<_> = surviving_ids
                 .iter()
                 .filter_map(|id| metadata.snapshot_by_id(*id))
                 .map(|snapshot| table.manifest_list_reader(snapshot))
                 .collect();
+            // Bounded rather than a plain `FuturesUnordered`: this fans out over every surviving
+            // snapshot, so an unbounded spawn could open thousands of reads at once.
             let mut manifest_lists = stream::iter(readers)
-                .map(|reader| async move {
-                    let manifest_list = reader.load().await?;
-                    Ok::<HashSet<i32>, Error>(
-                        manifest_list
-                            .entries()
-                            .iter()
-                            .map(|entry| entry.partition_spec_id)
-                            .collect(),
-                    )
+                .map(|reader| {
+                    runtime.io().spawn(async move {
+                        let manifest_list = reader.load().await?;
+                        Ok::<HashSet<i32>, Error>(
+                            manifest_list
+                                .entries()
+                                .iter()
+                                .map(|entry| entry.partition_spec_id)
+                                .collect(),
+                        )
+                    })
                 })
                 .buffer_unordered(available_parallelism().get());
+            // The outer `?` surfaces a failed spawn, the inner one a failed read.
             while let Some(spec_ids) = manifest_lists.try_next().await? {
-                reachable_specs.extend(spec_ids);
+                reachable_specs.extend(spec_ids?);
                 // Every spec is in use, so no further reads can change the outcome.
                 if reachable_specs.len() >= total_specs {
                     break;
