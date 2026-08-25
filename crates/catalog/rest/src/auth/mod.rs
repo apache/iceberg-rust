@@ -44,11 +44,13 @@ pub const AUTH_TYPE_OAUTH2: &str = "oauth2";
 /// [`RestCatalogBuilder::with_auth_manager`](crate::RestCatalogBuilder::with_auth_manager) or
 /// [`RestSessionCatalogBuilder::with_auth_manager`](crate::RestSessionCatalogBuilder::with_auth_manager).
 /// Catalog initialization calls [`AuthManager::catalog_session`] exactly once;
-/// later sessions may rely on the state established by that call.
+/// the context-specific sessions that [`AuthManager::contextual_session`]
+/// derives from it may rely on the state established by that call.
 ///
-/// Both methods are handed the catalog's [`HttpClient`], which an
-/// implementation may reuse for its own requests (e.g. a token exchange) so
-/// that they share the catalog's connection pool and configuration.
+/// [`Self::init_session`] and [`Self::catalog_session`] are handed the
+/// catalog's [`HttpClient`], which an implementation may reuse for its own
+/// requests (e.g. a token exchange) so that they share the catalog's
+/// connection pool and configuration.
 #[async_trait]
 pub trait AuthManager: Debug + Send + Sync {
     /// Session used for the initial `/v1/config` handshake, given the
