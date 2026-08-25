@@ -217,9 +217,26 @@ mod tests {
     #[test]
     fn test_assign_fresh_ids_with_type() {
         for test_type in [
-            Type::Variant(VariantType),
+            Type::Primitive(PrimitiveType::Boolean),
+            Type::Primitive(PrimitiveType::Int),
+            Type::Primitive(PrimitiveType::Long),
+            Type::Primitive(PrimitiveType::Float),
+            Type::Primitive(PrimitiveType::Double),
+            Type::Primitive(PrimitiveType::Decimal {
+                precision: 9,
+                scale: 2,
+            }),
+            Type::Primitive(PrimitiveType::Date),
+            Type::Primitive(PrimitiveType::Time),
+            Type::Primitive(PrimitiveType::Timestamp),
+            Type::Primitive(PrimitiveType::Timestamptz),
             Type::Primitive(PrimitiveType::TimestampNs),
             Type::Primitive(PrimitiveType::TimestamptzNs),
+            Type::Primitive(PrimitiveType::String),
+            Type::Primitive(PrimitiveType::Uuid),
+            Type::Primitive(PrimitiveType::Fixed(16)),
+            Type::Primitive(PrimitiveType::Binary),
+            Type::Variant(VariantType),
         ] {
             let schema = Schema::builder()
                 .with_fields(vec![
