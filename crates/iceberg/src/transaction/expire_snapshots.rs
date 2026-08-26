@@ -74,8 +74,7 @@ impl ExpireSnapshotsAction {
     /// alone.
     ///
     /// Ids accumulate across calls (like [`add_data_files`](crate::transaction::Transaction::fast_append)).
-    /// An id that is still referenced by a branch or tag cannot be expired and causes
-    /// [`commit`](TransactionAction::commit) to fail.
+    /// An id that is still referenced by a branch or tag cannot be expired and causes commits to fail.
     pub fn expire_snapshot_ids(mut self, snapshot_ids: impl IntoIterator<Item = i64>) -> Self {
         self.explicit_ids_to_remove.extend(snapshot_ids);
         self
@@ -91,8 +90,7 @@ impl ExpireSnapshotsAction {
     /// (defaults to the table's `history.expire.min-snapshots-to-keep`, must be at least 1).
     ///
     /// This only bounds the age cutoff; it does not protect snapshots named via
-    /// [`expire_snapshot_ids`](Self::expire_snapshot_ids). Setting it to 0 makes
-    /// [`commit`](TransactionAction::commit) fail.
+    /// [`expire_snapshot_ids`](Self::expire_snapshot_ids). Setting it to 0 makes commit fail.
     pub fn retain_last(mut self, retain_last: usize) -> Self {
         self.retain_last = Some(retain_last);
         self
