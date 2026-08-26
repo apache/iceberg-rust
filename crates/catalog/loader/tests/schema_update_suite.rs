@@ -282,3 +282,69 @@ async fn test_catalog_schema_update_persisted_after_reload(
 
     Ok(())
 }
+
+// Common behavior: compatible updates, an explicitly allowed nullability change, renames, and
+// moves are committed atomically and preserve field IDs.
+#[rstest]
+#[case::rest_catalog(CatalogKind::Rest)]
+#[case::glue_catalog(CatalogKind::Glue)]
+#[case::sql_catalog(CatalogKind::Sql)]
+#[case::s3tables_catalog(CatalogKind::S3Tables)]
+#[case::memory_catalog(CatalogKind::Memory)]
+#[tokio::test]
+async fn test_catalog_schema_evolution_operations(#[case] kind: CatalogKind) -> Result<()> {
+    let Some(harness) = load_catalog(kind).await else {
+        return Ok(());
+    };
+    let catalog = harness.catalog;
+    let namespace = NamespaceIdent::new(normalize_test_name_with_parts!(
+        "catalog_schema_evolution_operations",
+        harness.label
+    ));
+
+    cleanup_namespace_dyn(catalog.as_ref(), &namespace).await;
+    catalog.create_namespace(&namespace, HashMap::new()).await?;
+    let table_name = normalize_test_name_with_parts!(
+        "catalog_schema_evolution_operations",
+        harness.label,
+        "table"
+    );
+    let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
+    let table = catalog
+        .create_table(
+            &namespace,
+            TableCreation::builder()
+                .name(table_name)
+                .schema(base_schema())
+                .build(),
+        )
+        .await?;
+
+    let tx = Transaction::new(&table);
+    let tx = tx
+        .update_schema()
+        .allow_incompatible_changes()
+        .rename_column("foo", "payload")
+        .update_column_doc("foo", Some("renamed payload".to_string()))
+        .update_column_type("bar", PrimitiveType::Long)
+        .require_column("baz")
+        .move_column_first("baz")
+        .set_identifier_fields(["bar"])
+        .apply(tx)?;
+    tx.commit(catalog.as_ref()).await?;
+
+    let reloaded = catalog.load_table(&table_ident).await?;
+    let schema = reloaded.metadata().current_schema();
+    let payload = schema.field_by_name("payload").unwrap();
+    assert_eq!(payload.id, 1);
+    assert_eq!(payload.doc.as_deref(), Some("renamed payload"));
+    assert_eq!(
+        schema.field_by_name("bar").unwrap().field_type.as_ref(),
+        &Type::Primitive(PrimitiveType::Long)
+    );
+    assert!(schema.field_by_name("baz").unwrap().required);
+    assert_eq!(schema.as_struct().fields()[0].id, 3);
+    assert_eq!(schema.identifier_field_ids().collect::<Vec<_>>(), vec![2]);
+
+    Ok(())
+}
