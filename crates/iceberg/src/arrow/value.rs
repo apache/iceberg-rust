@@ -864,24 +864,24 @@ pub(crate) fn create_primitive_array_repeated(
         (DataType::Float64, Some(PrimitiveLiteral::Double(value))) => {
             Arc::new(Float64Array::from(vec![value.0; num_rows]))
         }
-        (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => {
-            Arc::new(StringArray::from(vec![value.clone(); num_rows]))
-        }
-        (DataType::Binary, Some(PrimitiveLiteral::Binary(value))) => {
-            Arc::new(BinaryArray::from_vec(vec![value; num_rows]))
-        }
-        (DataType::LargeBinary, Some(PrimitiveLiteral::Binary(value))) => {
-            Arc::new(LargeBinaryArray::from_vec(vec![value; num_rows]))
-        }
-        (DataType::FixedSizeBinary(len), Some(PrimitiveLiteral::Binary(value))) => {
-            let repeated: Vec<&[u8]> = vec![value.as_slice(); num_rows];
-            Arc::new(FixedSizeBinaryArray::try_from_iter(repeated.into_iter()).map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Failed to create FixedSizeBinary({len}) array: {e}"),
-                )
-            })?)
-        }
+        (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => Arc::new(
+            StringArray::from_iter_values(std::iter::repeat_n(value.as_str(), num_rows)),
+        ),
+        (DataType::Binary, Some(PrimitiveLiteral::Binary(value))) => Arc::new(
+            BinaryArray::from_iter_values(std::iter::repeat_n(value.as_slice(), num_rows)),
+        ),
+        (DataType::LargeBinary, Some(PrimitiveLiteral::Binary(value))) => Arc::new(
+            LargeBinaryArray::from_iter_values(std::iter::repeat_n(value.as_slice(), num_rows)),
+        ),
+        (DataType::FixedSizeBinary(len), Some(PrimitiveLiteral::Binary(value))) => Arc::new(
+            FixedSizeBinaryArray::try_from_iter(std::iter::repeat_n(value.as_slice(), num_rows))
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Failed to create FixedSizeBinary({len}) array: {e}"),
+                    )
+                })?,
+        ),
         (DataType::Time64(TimeUnit::Microsecond), Some(PrimitiveLiteral::Long(value))) => {
             Arc::new(Time64MicrosecondArray::from(vec![*value; num_rows]))
         }
@@ -1913,5 +1913,67 @@ mod test {
 
         assert_eq!(array.data_type(), &target_type);
         assert_eq!(array.len(), num_rows);
+    }
+
+    #[test]
+    fn test_create_string_and_binary_arrays_repeated() {
+        let text = "partition-value-2026";
+        let bytes: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let num_rows = 4;
+
+        let utf8 = create_primitive_array_repeated(
+            &DataType::Utf8,
+            &Some(PrimitiveLiteral::String(text.to_string())),
+            num_rows,
+        )
+        .unwrap();
+        let utf8 = utf8.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(utf8.len(), num_rows);
+        assert!((0..num_rows).all(|i| utf8.value(i) == text));
+
+        let binary = create_primitive_array_repeated(
+            &DataType::Binary,
+            &Some(PrimitiveLiteral::Binary(bytes.clone())),
+            num_rows,
+        )
+        .unwrap();
+        let binary = binary.as_any().downcast_ref::<BinaryArray>().unwrap();
+        assert_eq!(binary.len(), num_rows);
+        assert!((0..num_rows).all(|i| binary.value(i) == bytes.as_slice()));
+
+        let large = create_primitive_array_repeated(
+            &DataType::LargeBinary,
+            &Some(PrimitiveLiteral::Binary(bytes.clone())),
+            num_rows,
+        )
+        .unwrap();
+        let large = large.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
+        assert_eq!(large.len(), num_rows);
+        assert!((0..num_rows).all(|i| large.value(i) == bytes.as_slice()));
+
+        let fixed = create_primitive_array_repeated(
+            &DataType::FixedSizeBinary(bytes.len() as i32),
+            &Some(PrimitiveLiteral::Binary(bytes.clone())),
+            num_rows,
+        )
+        .unwrap();
+        let fixed = fixed
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(fixed.len(), num_rows);
+        assert!((0..num_rows).all(|i| fixed.value(i) == bytes.as_slice()));
+    }
+
+    #[test]
+    fn test_create_string_array_repeated_empty() {
+        // num_rows == 0 must produce an empty (not one-element) array.
+        let array = create_primitive_array_repeated(
+            &DataType::Utf8,
+            &Some(PrimitiveLiteral::String("x".to_string())),
+            0,
+        )
+        .unwrap();
+        assert_eq!(array.len(), 0);
     }
 }
