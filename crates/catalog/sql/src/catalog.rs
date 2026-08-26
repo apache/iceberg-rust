@@ -1245,10 +1245,10 @@ mod tests {
 
     use crate::catalog::{
         CATALOG_FIELD_RECORD_TYPE, CATALOG_TABLE_NAME, NAMESPACE_LOCATION_PROPERTY_KEY,
-        SQL_CATALOG_PROP_BIND_STYLE, SQL_CATALOG_PROP_BIND_STYLE_LEGACY,
+        NAMESPACE_TABLE_NAME, SQL_CATALOG_PROP_BIND_STYLE, SQL_CATALOG_PROP_BIND_STYLE_LEGACY,
         SQL_CATALOG_PROP_SCHEMA_VERSION, SQL_CATALOG_PROP_URI, SQL_CATALOG_PROP_WAREHOUSE,
     };
-    use crate::{SchemaVersion, SqlBindStyle, SqlCatalogBuilder};
+    use crate::{SchemaVersion, SqlBindStyle, SqlCatalog, SqlCatalogBuilder};
 
     const UUID_REGEX_STR: &str = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
@@ -1389,8 +1389,7 @@ mod tests {
         new_sql_catalog(warehouse_loc.clone(), Some("iceberg")).await;
     }
 
-    #[tokio::test]
-    async fn test_execute_returns_commit_error() {
+    async fn new_commit_error_catalog() -> SqlCatalog {
         let sql_lite_uri = format!("sqlite:{}", temp_path());
         sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
         let catalog = SqlCatalogBuilder::default()
@@ -1406,13 +1405,12 @@ mod tests {
             .await
             .unwrap();
 
-        // A deferred foreign-key constraint makes the INSERT succeed while COMMIT
-        // reliably fails, allowing both transaction ownership paths to be tested.
         catalog
             .connection
             .execute("PRAGMA foreign_keys = ON")
             .await
             .unwrap();
+        // This deferred constraint lets an INSERT succeed while COMMIT fails.
         catalog
             .connection
             .execute("CREATE TABLE parent(id INTEGER PRIMARY KEY)")
@@ -1427,18 +1425,52 @@ mod tests {
             .await
             .unwrap();
 
-        // When execute owns the transaction, it must return the commit error.
-        assert!(
-            catalog
-                .execute("INSERT INTO child VALUES (1)", vec![], None)
-                .await
-                .is_err()
+        catalog
+    }
+
+    #[tokio::test]
+    async fn test_execute_returns_commit_error() {
+        let catalog = new_commit_error_catalog().await;
+
+        // Make the public namespace operation insert a child row whose deferred
+        // foreign-key constraint succeeds during execution but fails at commit.
+        let trigger = format!(
+            "CREATE TRIGGER fail_namespace_commit
+             AFTER INSERT ON {NAMESPACE_TABLE_NAME}
+             BEGIN INSERT INTO child VALUES (1); END"
         );
-        let child_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM child")
-            .fetch_one(&catalog.connection)
+        catalog.connection.execute(trigger.as_str()).await.unwrap();
+
+        let failed_namespace = NamespaceIdent::new("failed".into());
+        let error = catalog
+            .create_namespace(&failed_namespace, HashMap::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Unexpected);
+        assert!(!catalog.namespace_exists(&failed_namespace).await.unwrap());
+
+        // A valid relationship confirms that successful transactions still commit.
+        catalog
+            .connection
+            .execute("INSERT INTO parent VALUES (1)")
             .await
             .unwrap();
-        assert_eq!(child_count, 0);
+        let committed_namespace = NamespaceIdent::new("committed".into());
+        catalog
+            .create_namespace(&committed_namespace, HashMap::new())
+            .await
+            .unwrap();
+        assert!(
+            catalog
+                .namespace_exists(&committed_namespace)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_external_transaction_returns_commit_error() {
+        let catalog = new_commit_error_catalog().await;
 
         // When the caller owns the transaction, execute returns the successful
         // statement result and the caller receives the commit error.
@@ -1457,22 +1489,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(child_count, 0);
-
-        // A valid relationship confirms that successful owned transactions commit.
-        catalog
-            .connection
-            .execute("INSERT INTO parent VALUES (1)")
-            .await
-            .unwrap();
-        catalog
-            .execute("INSERT INTO child VALUES (1)", vec![], None)
-            .await
-            .unwrap();
-        let child_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM child")
-            .fetch_one(&catalog.connection)
-            .await
-            .unwrap();
-        assert_eq!(child_count, 1);
     }
 
     // Regression test: storage-backend props set on the catalog must reach
