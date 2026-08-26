@@ -145,14 +145,13 @@ impl PyManifestFile {
     }
 
     #[getter]
-    fn partitions(&self) -> Vec<PyFieldSummary> {
-        self.inner
-            .partitions
-            .as_deref()
-            .unwrap_or_default()
-            .iter()
-            .map(|s| PyFieldSummary { inner: s.clone() })
-            .collect()
+    fn partitions(&self) -> Option<Vec<PyFieldSummary>> {
+        self.inner.partitions.as_ref().map(|partitions| {
+            partitions
+                .iter()
+                .map(|s| PyFieldSummary { inner: s.clone() })
+                .collect()
+        })
     }
 
     #[getter]
@@ -268,6 +267,6 @@ mod tests {
             },
         };
 
-        assert!(manifest_file.partitions().is_empty());
+        assert!(manifest_file.partitions().is_none());
     }
 }
