@@ -211,6 +211,7 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
             .with_referenced_data_file(ctx.manifest_entry.data_file.referenced_data_file.clone())
             .with_content_offset(ctx.manifest_entry.data_file.content_offset)
             .with_content_size_in_bytes(ctx.manifest_entry.data_file.content_size_in_bytes)
+            .with_record_count(Some(ctx.manifest_entry.record_count()))
             .with_key_metadata(
                 ctx.manifest_entry
                     .data_file
@@ -256,12 +257,19 @@ pub struct FileScanTaskDeleteFile {
     #[builder(default)]
     pub content_offset: Option<i64>,
 
-    /// For a deletion vector, the length in bytes of the blob within its Puffin file. Set
-    /// whenever `content_offset` is.
+    /// For a deletion vector, the length in bytes of the blob within its Puffin file.
+    /// Required together with `content_offset`; both are absent for non-DV delete files.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[builder(default)]
     pub content_size_in_bytes: Option<i64>,
+
+    /// The number of records in the delete file, from the manifest entry; for a deletion vector,
+    /// the cardinality of its bitmap. `None` only for a task not built from a manifest entry.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub record_count: Option<u64>,
 
     /// Key metadata for encrypted delete files (Parquet Modular Encryption).
     /// When present, the reader uses this to build `FileDecryptionProperties`.

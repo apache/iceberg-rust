@@ -240,6 +240,7 @@ mod tests {
             referenced_data_file: None,
             content_offset: None,
             content_size_in_bytes: None,
+            record_count: None,
         };
 
         let scan_metrics = ScanMetrics::new();
@@ -317,6 +318,7 @@ mod tests {
             referenced_data_file: None,
             content_offset: None,
             content_size_in_bytes: None,
+            record_count: None,
         };
 
         let scan_metrics = ScanMetrics::new();

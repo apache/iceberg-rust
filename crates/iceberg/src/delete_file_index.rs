@@ -759,8 +759,8 @@ mod tests {
     fn test_deletion_vector_context_carries_coordinates() {
         // A deletion vector is a PositionDeletes entry stored as a Puffin blob, located by
         // content_offset / content_size_in_bytes and scoped by referenced_data_file. Those
-        // three fields must survive the conversion into a FileScanTaskDeleteFile so the loader
-        // can find and apply the blob.
+        // three fields, and the record count its bitmap is validated against, must survive the
+        // conversion into a FileScanTaskDeleteFile so the loader can find and apply the blob.
         let dv = DataFileBuilder::default()
             .file_path("s3://bucket/data/part-0.parquet-deletes.puffin".to_string())
             .file_format(DataFileFormat::Puffin)
@@ -784,6 +784,7 @@ mod tests {
         assert_eq!(task.file_type, DataContentType::PositionDeletes);
         assert_eq!(task.content_offset, Some(4));
         assert_eq!(task.content_size_in_bytes, Some(40));
+        assert_eq!(task.record_count, Some(3));
         assert_eq!(
             task.referenced_data_file.as_deref(),
             Some("s3://bucket/data/part-0.parquet")
