@@ -148,42 +148,42 @@ pub struct TableProperties {
         default = Self::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT,
         getter
     )]
-    pub commit_num_retries: usize,
+    commit_num_retries: usize,
     /// The minimum wait time between retries.
     #[property(
         key = Self::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS,
         default = Self::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT,
         getter
     )]
-    pub commit_min_retry_wait_ms: u64,
+    commit_min_retry_wait_ms: u64,
     /// The maximum wait time between retries.
     #[property(
         key = Self::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS,
         default = Self::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT,
         getter
     )]
-    pub commit_max_retry_wait_ms: u64,
+    commit_max_retry_wait_ms: u64,
     /// The total timeout for commit retries.
     #[property(
         key = Self::PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS,
         default = Self::PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT,
         getter
     )]
-    pub commit_total_retry_timeout_ms: u64,
+    commit_total_retry_timeout_ms: u64,
     /// The default format for files.
     #[property(
         key = Self::PROPERTY_DEFAULT_FILE_FORMAT,
         default = Self::PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT,
         getter
     )]
-    pub write_format_default: String,
+    write_format_default: String,
     /// The target file size for files.
     #[property(
         key = Self::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
         default = Self::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
         getter
     )]
-    pub write_target_file_size_bytes: usize,
+    write_target_file_size_bytes: usize,
     /// Base directory for metadata files (manifests, manifest lists), with any
     /// trailing slash trimmed. `None` if `write.metadata.path` is not set.
     #[property(
@@ -192,7 +192,7 @@ pub struct TableProperties {
         parse_with = parse_location_property,
         getter
     )]
-    pub write_metadata_path: Option<String>,
+    write_metadata_path: Option<String>,
     /// Compression codec for metadata files (JSON)
     #[property(
         key = Self::PROPERTY_METADATA_COMPRESSION_CODEC,
@@ -200,14 +200,14 @@ pub struct TableProperties {
         parse_with = parse_metadata_compression,
         getter
     )]
-    pub metadata_compression_codec: CompressionCodec,
+    metadata_compression_codec: CompressionCodec,
     /// Whether to use `FanoutWriter` for partitioned tables.
     #[property(
         key = Self::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
         default = Self::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT,
         getter
     )]
-    pub write_datafusion_fanout_enabled: bool,
+    write_datafusion_fanout_enabled: bool,
     /// Whether garbage collection is enabled on drop.
     /// When `false`, data files will not be deleted when a table is dropped.
     #[property(
@@ -215,28 +215,28 @@ pub struct TableProperties {
         default = Self::PROPERTY_GC_ENABLED_DEFAULT,
         getter
     )]
-    pub gc_enabled: bool,
+    gc_enabled: bool,
     /// Default maximum age of a snapshot to keep when expiring snapshots.
     #[property(
         key = Self::PROPERTY_MAX_SNAPSHOT_AGE_MS,
         default = Self::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT,
         getter
     )]
-    pub max_snapshot_age_ms: i64,
+    max_snapshot_age_ms: i64,
     /// Default minimum number of snapshots to keep per branch when expiring snapshots.
     #[property(
         key = Self::PROPERTY_MIN_SNAPSHOTS_TO_KEEP,
         default = Self::PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT,
         getter
     )]
-    pub min_snapshots_to_keep: usize,
+    min_snapshots_to_keep: usize,
     /// Default maximum age of a snapshot reference to keep when expiring snapshots.
     #[property(
         key = Self::PROPERTY_MAX_REF_AGE_MS,
         default = Self::PROPERTY_MAX_REF_AGE_MS_DEFAULT,
         getter
     )]
-    pub max_ref_age_ms: i64,
+    max_ref_age_ms: i64,
     /// Whether content-defined chunking is enabled.
     /// `true` only when `write.parquet.content-defined-chunking.enabled = "true"`.
     #[property(
@@ -244,28 +244,28 @@ pub struct TableProperties {
         default = Self::PROPERTY_PARQUET_CDC_ENABLED_DEFAULT,
         getter
     )]
-    pub cdc_enabled: bool,
+    cdc_enabled: bool,
     /// Content-defined chunking minimum chunk size in bytes.
     #[property(
         key = Self::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE,
         default = Self::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE_DEFAULT,
         getter
     )]
-    pub cdc_min_chunk_size: usize,
+    cdc_min_chunk_size: usize,
     /// Content-defined chunking maximum chunk size in bytes.
     #[property(
         key = Self::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE,
         default = Self::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE_DEFAULT,
         getter
     )]
-    pub cdc_max_chunk_size: usize,
+    cdc_max_chunk_size: usize,
     /// Content-defined chunking normalization level (gearhash bit adjustment).
     #[property(
         key = Self::PROPERTY_PARQUET_CDC_NORM_LEVEL,
         default = Self::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT,
         getter
     )]
-    pub cdc_norm_level: i32,
+    cdc_norm_level: i32,
     /// Parquet compression codec for data files, with the resolved compression
     /// level folded in (from `write.parquet.compression-level`, or the codec's
     /// default when unset).
@@ -276,35 +276,35 @@ pub struct TableProperties {
         parse_properties_with = parse_parquet_compression,
         getter
     )]
-    pub parquet_compression_codec: CompressionCodec,
+    parquet_compression_codec: CompressionCodec,
     /// Approximate maximum Parquet row group size in bytes.
     #[property(
         key = Self::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES,
         default = Self::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT,
         getter
     )]
-    pub parquet_row_group_size_bytes: usize,
+    parquet_row_group_size_bytes: usize,
     /// Approximate maximum Parquet data page size in bytes.
     #[property(
         key = Self::PROPERTY_PARQUET_PAGE_SIZE_BYTES,
         default = Self::PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT,
         getter
     )]
-    pub parquet_page_size_bytes: usize,
+    parquet_page_size_bytes: usize,
     /// Maximum number of rows per Parquet data page.
     #[property(
         key = Self::PROPERTY_PARQUET_PAGE_ROW_LIMIT,
         default = Self::PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT,
         getter
     )]
-    pub parquet_page_row_limit: usize,
+    parquet_page_row_limit: usize,
     /// Approximate maximum Parquet dictionary page size in bytes.
     #[property(
         key = Self::PROPERTY_PARQUET_DICT_SIZE_BYTES,
         default = Self::PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT,
         getter
     )]
-    pub parquet_dict_size_bytes: usize,
+    parquet_dict_size_bytes: usize,
     /// The master key id used to encrypt this table's manifest list and data
     /// files. `None` if `encryption.key-id` is not set.
     #[property(
@@ -312,14 +312,14 @@ pub struct TableProperties {
         default = None,
         getter
     )]
-    pub encryption_key_id: Option<String>,
+    encryption_key_id: Option<String>,
     /// The encryption data encryption key length in bytes.
     #[property(
         key = Self::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
         default = Self::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT,
         getter
     )]
-    pub encryption_data_key_length: usize,
+    encryption_data_key_length: usize,
     /// Base directory for data files, with any trailing slash trimmed.
     #[property(
         key = Self::PROPERTY_WRITE_DATA_LOCATION,
@@ -327,37 +327,37 @@ pub struct TableProperties {
         parse_with = parse_location_property,
         getter
     )]
-    pub write_data_location: Option<String>,
+    write_data_location: Option<String>,
     /// Deprecated table property for data file write location, with any trailing slash trimmed.
     ///
     /// Property will be removed at a later date.
-    /// Superseded by [write_data_location].
+    /// Superseded by [`TableProperties::write_data_location`].
     #[property(
         key = Self::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION,
         default = None,
         parse_with = parse_location_property,
         getter
     )]
-    pub write_folder_storage_location: Option<String>,
+    write_folder_storage_location: Option<String>,
     /// Deprecated table property for data file write location for object storage location generator,
     /// with any trailing slash trimmed.
     ///
     /// Property will be removed at a later date.
-    /// Superseded by [write_data_location].
+    /// Superseded by [`TableProperties::write_data_location`].
     #[property(
         key = Self::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION,
         default = None,
         parse_with = parse_location_property,
         getter
     )]
-    pub write_object_storage_location: Option<String>,
+    write_object_storage_location: Option<String>,
     /// Whether partition values are included in object storage paths.
     #[property(
         key = Self::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS,
         default = Self::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT,
         getter
     )]
-    pub write_object_storage_partitioned_paths: bool,
+    write_object_storage_partitioned_paths: bool,
 }
 
 impl TableProperties {
@@ -534,7 +534,7 @@ impl TableProperties {
     pub const PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT: usize = 2 * 1024 * 1024;
 
     /// Property key for the master key id used to encrypt the table's manifest
-    /// list and data files as defined in https://iceberg.apache.org/docs/nightly/encryption/.
+    /// list and data files as defined in <https://iceberg.apache.org/docs/nightly/encryption/>.
     pub const PROPERTY_ENCRYPTION_KEY_ID: &str = "encryption.key-id";
 
     /// Property key for the encryption data encryption key (DEK) length in bytes.
@@ -543,14 +543,14 @@ impl TableProperties {
     pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT: usize = 16;
     /// Property key for the base directory for data files
     pub const PROPERTY_WRITE_DATA_LOCATION: &str = "write.data.path";
-    /// Property key for deprecated [write_folder_storage_location]
+    /// Property key for deprecated [`TableProperties::write_folder_storage_location`]
     pub const PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &str = "write.folder-storage.path";
     /// Property key for deprecated object storage path, kept as a fallback for compatibility.
     pub const PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &str = "write.object-storage.path";
     /// Property key for controlling whether partition values are included in object storage paths.
     pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &str =
         "write.object-storage.partitioned-paths";
-    /// Default value for [PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS]
+    /// Default value for [`TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS`]
     pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool = true;
 
     /// The AES key size to use when generating data encryption keys, derived
