@@ -468,10 +468,12 @@ impl FileScanTaskReader {
         }
 
         if project_row_id {
-            // A name-only physical `_row_id` can't be threaded (synthesis keys the physical
-            // leaf by its reserved field id), and no conformant writer emits it, so reject
-            // it -- regardless of `first_row_id`, since it never threads either way.
-            if row_id_present_by_name_only {
+            // A name-only physical `_row_id` can't be threaded (synthesis keys the leaf by
+            // its reserved field id). Reject only when `first_row_id` is set; otherwise the
+            // leaf is never read and `_row_id` is nulled out downstream (matching Java
+            // `ValueReaders.rowIds`), so a pre-v3 file with a user column named `_row_id`
+            // reads back as null rather than erroring.
+            if task.first_row_id.is_some() && row_id_present_by_name_only {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     "Reading a physically-stored _row_id column without an embedded field id \
@@ -1921,6 +1923,38 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_row_id_present_by_name_without_id_nulls_when_no_lineage() {
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+        // Same name-only shape as the reject test above, but the file carries no row lineage
+        // (`first_row_id = None`), as a migrated pre-v3 file with a user column named
+        // `_row_id` would. The physical leaf is never read, so `_row_id` is nulled out
+        // rather than rejected (matching Java `ValueReaders.rowIds`).
+        let id_field = Field::new(RESERVED_COL_NAME_ROW_ID, DataType::Int64, true);
+        let id_col = Arc::new(Int64Array::from(vec![Some(5), None, Some(8)])) as ArrayRef;
+        let file_path = write_plain_parquet(
+            dir,
+            "row_id_by_name_no_lineage.parquet",
+            vec![id_field],
+            vec![id_col],
+        );
+
+        let task = row_id_task(file_path, None);
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_row_id_column(&batches, &[None, None, None]);
+    }
+
     /// Builds a `row_id_task` (see above) that additionally carries a bound predicate,
     /// so a `RowSelection` is applied when the reader has row selection enabled.
     fn row_id_task_with_predicate(
@@ -2076,6 +2110,65 @@ mod tests {
             .unwrap();
 
         assert_row_id_column(&batches, &[Some(0), Some(1), Some(2), Some(3), Some(4)]);
+    }
+
+    #[tokio::test]
+    async fn test_row_id_global_when_first_row_group_pruned() {
+        use parquet::file::reader::{FileReader, SerializedFileReader};
+
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+
+        // 6 rows with max_row_group_size = 2 -> 3 row groups. A byte-range split that prunes
+        // row group 0 reaches the reader via `with_row_groups()` -- a different path than the
+        // `RowSelection` cases above. The survivors must keep their GLOBAL positions (starting
+        // at 2), so a per-group RowNumber restart would surface as duplicate ids here.
+        let file_path = format!("{dir}/row_id_prune_rg0.parquet");
+        let field = Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "1".to_string(),
+        )]));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![field]));
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int32Array::from(
+            vec![1, 2, 3, 4, 5, 6],
+        ))])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .set_max_row_group_row_count(Some(2))
+            .build();
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // A byte range starting just past row group 0 prunes it (its midpoint falls below
+        // `start`) while keeping groups 1 and 2 (physical rows 2..6).
+        let metadata = SerializedFileReader::new(File::open(&file_path).unwrap())
+            .unwrap()
+            .metadata()
+            .clone();
+        assert_eq!(metadata.num_row_groups(), 3);
+        let start = 4 + metadata.row_group(0).compressed_size() as u64;
+        let file_size = std::fs::metadata(&file_path).unwrap().len();
+
+        let mut task = row_id_task(file_path, Some(100));
+        task.start = start;
+        task.length = file_size - start;
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        // Groups 1 and 2 survive at physical positions 2..6 -> _row_id 102..106, not a
+        // per-group restart at 100.
+        assert_row_id_column(&batches, &[Some(102), Some(103), Some(104), Some(105)]);
     }
 
     /// Writes a positional delete file (`file_path` + `pos` reserved columns) marking the

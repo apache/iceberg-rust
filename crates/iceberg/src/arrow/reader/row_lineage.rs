@@ -134,7 +134,7 @@ fn append_row_id(batch: RecordBatch, row_id: ArrayRef) -> Result<RecordBatch> {
     columns.push(row_id);
 
     Ok(RecordBatch::try_new(
-        Arc::new(Schema::new(fields)),
+        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
         columns,
     )?)
 }
