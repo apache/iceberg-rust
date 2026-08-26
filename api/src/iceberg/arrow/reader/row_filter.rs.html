@@ -1246,44 +1246,48 @@
 <a href=#1246 id=1246 data-nosnippet>1246</a>                partition_spec_id: <span class="number">0</span>,
 <a href=#1247 id=1247 data-nosnippet>1247</a>                equality_ids: <span class="prelude-val">None</span>,
 <a href=#1248 id=1248 data-nosnippet>1248</a>                file_size_in_bytes: std::fs::metadata(<span class="kw-2">&amp;</span>pos_del_path).unwrap().len(),
-<a href=#1249 id=1249 data-nosnippet>1249</a>                key_metadata: <span class="prelude-val">None</span>,
-<a href=#1250 id=1250 data-nosnippet>1250</a>            }],
-<a href=#1251 id=1251 data-nosnippet>1251</a>            partition: <span class="prelude-val">None</span>,
-<a href=#1252 id=1252 data-nosnippet>1252</a>            partition_spec: <span class="prelude-val">None</span>,
-<a href=#1253 id=1253 data-nosnippet>1253</a>            name_mapping: <span class="prelude-val">None</span>,
-<a href=#1254 id=1254 data-nosnippet>1254</a>            unified_partition_type: <span class="prelude-val">None</span>,
-<a href=#1255 id=1255 data-nosnippet>1255</a>            case_sensitive: <span class="bool-val">false</span>,
-<a href=#1256 id=1256 data-nosnippet>1256</a>            key_metadata: <span class="prelude-val">None</span>,
-<a href=#1257 id=1257 data-nosnippet>1257</a>        };
-<a href=#1258 id=1258 data-nosnippet>1258</a>
-<a href=#1259 id=1259 data-nosnippet>1259</a>        <span class="kw">let </span>stream_sub2 =
-<a href=#1260 id=1260 data-nosnippet>1260</a>            Box::pin(futures::stream::iter(<span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(task_sub2)])) <span class="kw">as </span>FileScanTaskStream;
-<a href=#1261 id=1261 data-nosnippet>1261</a>        <span class="kw">let </span>batches_sub2: Vec&lt;RecordBatch&gt; = reader_sub2
-<a href=#1262 id=1262 data-nosnippet>1262</a>            .read(stream_sub2)
-<a href=#1263 id=1263 data-nosnippet>1263</a>            .unwrap()
-<a href=#1264 id=1264 data-nosnippet>1264</a>            .stream()
-<a href=#1265 id=1265 data-nosnippet>1265</a>            .try_collect()
-<a href=#1266 id=1266 data-nosnippet>1266</a>            .<span class="kw">await
-<a href=#1267 id=1267 data-nosnippet>1267</a>            </span>.unwrap();
-<a href=#1268 id=1268 data-nosnippet>1268</a>
-<a href=#1269 id=1269 data-nosnippet>1269</a>        <span class="kw">let </span>ids_sub2: Vec&lt;i32&gt; = batches_sub2
-<a href=#1270 id=1270 data-nosnippet>1270</a>            .iter()
-<a href=#1271 id=1271 data-nosnippet>1271</a>            .flat_map(|b| {
-<a href=#1272 id=1272 data-nosnippet>1272</a>                b.column(<span class="number">0</span>)
-<a href=#1273 id=1273 data-nosnippet>1273</a>                    .as_any()
-<a href=#1274 id=1274 data-nosnippet>1274</a>                    .downcast_ref::&lt;Int32Array&gt;()
-<a href=#1275 id=1275 data-nosnippet>1275</a>                    .unwrap()
-<a href=#1276 id=1276 data-nosnippet>1276</a>                    .values()
-<a href=#1277 id=1277 data-nosnippet>1277</a>                    .iter()
-<a href=#1278 id=1278 data-nosnippet>1278</a>                    .copied()
-<a href=#1279 id=1279 data-nosnippet>1279</a>            })
-<a href=#1280 id=1280 data-nosnippet>1280</a>            .collect();
-<a href=#1281 id=1281 data-nosnippet>1281</a>
-<a href=#1282 id=1282 data-nosnippet>1282</a>        <span class="macro">assert_eq!</span>(
-<a href=#1283 id=1283 data-nosnippet>1283</a>            ids_sub2,
-<a href=#1284 id=1284 data-nosnippet>1284</a>            <span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">4</span>, <span class="number">5</span>],
-<a href=#1285 id=1285 data-nosnippet>1285</a>            <span class="string">"positional deletes must be applied correctly even when page indexes are absent"
-<a href=#1286 id=1286 data-nosnippet>1286</a>        </span>);
-<a href=#1287 id=1287 data-nosnippet>1287</a>    }
-<a href=#1288 id=1288 data-nosnippet>1288</a>}
+<a href=#1249 id=1249 data-nosnippet>1249</a>                referenced_data_file: <span class="prelude-val">None</span>,
+<a href=#1250 id=1250 data-nosnippet>1250</a>                content_offset: <span class="prelude-val">None</span>,
+<a href=#1251 id=1251 data-nosnippet>1251</a>                content_size_in_bytes: <span class="prelude-val">None</span>,
+<a href=#1252 id=1252 data-nosnippet>1252</a>                record_count: <span class="prelude-val">None</span>,
+<a href=#1253 id=1253 data-nosnippet>1253</a>                key_metadata: <span class="prelude-val">None</span>,
+<a href=#1254 id=1254 data-nosnippet>1254</a>            }],
+<a href=#1255 id=1255 data-nosnippet>1255</a>            partition: <span class="prelude-val">None</span>,
+<a href=#1256 id=1256 data-nosnippet>1256</a>            partition_spec: <span class="prelude-val">None</span>,
+<a href=#1257 id=1257 data-nosnippet>1257</a>            name_mapping: <span class="prelude-val">None</span>,
+<a href=#1258 id=1258 data-nosnippet>1258</a>            unified_partition_type: <span class="prelude-val">None</span>,
+<a href=#1259 id=1259 data-nosnippet>1259</a>            case_sensitive: <span class="bool-val">false</span>,
+<a href=#1260 id=1260 data-nosnippet>1260</a>            key_metadata: <span class="prelude-val">None</span>,
+<a href=#1261 id=1261 data-nosnippet>1261</a>        };
+<a href=#1262 id=1262 data-nosnippet>1262</a>
+<a href=#1263 id=1263 data-nosnippet>1263</a>        <span class="kw">let </span>stream_sub2 =
+<a href=#1264 id=1264 data-nosnippet>1264</a>            Box::pin(futures::stream::iter(<span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(task_sub2)])) <span class="kw">as </span>FileScanTaskStream;
+<a href=#1265 id=1265 data-nosnippet>1265</a>        <span class="kw">let </span>batches_sub2: Vec&lt;RecordBatch&gt; = reader_sub2
+<a href=#1266 id=1266 data-nosnippet>1266</a>            .read(stream_sub2)
+<a href=#1267 id=1267 data-nosnippet>1267</a>            .unwrap()
+<a href=#1268 id=1268 data-nosnippet>1268</a>            .stream()
+<a href=#1269 id=1269 data-nosnippet>1269</a>            .try_collect()
+<a href=#1270 id=1270 data-nosnippet>1270</a>            .<span class="kw">await
+<a href=#1271 id=1271 data-nosnippet>1271</a>            </span>.unwrap();
+<a href=#1272 id=1272 data-nosnippet>1272</a>
+<a href=#1273 id=1273 data-nosnippet>1273</a>        <span class="kw">let </span>ids_sub2: Vec&lt;i32&gt; = batches_sub2
+<a href=#1274 id=1274 data-nosnippet>1274</a>            .iter()
+<a href=#1275 id=1275 data-nosnippet>1275</a>            .flat_map(|b| {
+<a href=#1276 id=1276 data-nosnippet>1276</a>                b.column(<span class="number">0</span>)
+<a href=#1277 id=1277 data-nosnippet>1277</a>                    .as_any()
+<a href=#1278 id=1278 data-nosnippet>1278</a>                    .downcast_ref::&lt;Int32Array&gt;()
+<a href=#1279 id=1279 data-nosnippet>1279</a>                    .unwrap()
+<a href=#1280 id=1280 data-nosnippet>1280</a>                    .values()
+<a href=#1281 id=1281 data-nosnippet>1281</a>                    .iter()
+<a href=#1282 id=1282 data-nosnippet>1282</a>                    .copied()
+<a href=#1283 id=1283 data-nosnippet>1283</a>            })
+<a href=#1284 id=1284 data-nosnippet>1284</a>            .collect();
+<a href=#1285 id=1285 data-nosnippet>1285</a>
+<a href=#1286 id=1286 data-nosnippet>1286</a>        <span class="macro">assert_eq!</span>(
+<a href=#1287 id=1287 data-nosnippet>1287</a>            ids_sub2,
+<a href=#1288 id=1288 data-nosnippet>1288</a>            <span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">4</span>, <span class="number">5</span>],
+<a href=#1289 id=1289 data-nosnippet>1289</a>            <span class="string">"positional deletes must be applied correctly even when page indexes are absent"
+<a href=#1290 id=1290 data-nosnippet>1290</a>        </span>);
+<a href=#1291 id=1291 data-nosnippet>1291</a>    }
+<a href=#1292 id=1292 data-nosnippet>1292</a>}
 </code></pre></div></section></main></body></html>

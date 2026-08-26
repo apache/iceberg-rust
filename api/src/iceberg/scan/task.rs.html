@@ -208,46 +208,78 @@
 <a href=#208 id=208 data-nosnippet>208</a>            .with_file_type(ctx.manifest_entry.content_type())
 <a href=#209 id=209 data-nosnippet>209</a>            .with_partition_spec_id(ctx.partition_spec_id)
 <a href=#210 id=210 data-nosnippet>210</a>            .with_equality_ids(ctx.manifest_entry.data_file.equality_ids.clone())
-<a href=#211 id=211 data-nosnippet>211</a>            .with_key_metadata(
-<a href=#212 id=212 data-nosnippet>212</a>                ctx.manifest_entry
-<a href=#213 id=213 data-nosnippet>213</a>                    .data_file
-<a href=#214 id=214 data-nosnippet>214</a>                    .key_metadata
-<a href=#215 id=215 data-nosnippet>215</a>                    .as_deref()
-<a href=#216 id=216 data-nosnippet>216</a>                    .map(Box::from),
-<a href=#217 id=217 data-nosnippet>217</a>            )
-<a href=#218 id=218 data-nosnippet>218</a>            .build()
-<a href=#219 id=219 data-nosnippet>219</a>    }
-<a href=#220 id=220 data-nosnippet>220</a>}
-<a href=#221 id=221 data-nosnippet>221</a>
-<a href=#222 id=222 data-nosnippet>222</a><span class="doccomment">/// A task to scan part of file.
-<a href=#223 id=223 data-nosnippet>223</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TypedBuilder)]
-<a href=#224 id=224 data-nosnippet>224</a>#[builder(field_defaults(setter(prefix = <span class="string">"with_"</span>)))]
-<a href=#225 id=225 data-nosnippet>225</a></span><span class="kw">pub struct </span>FileScanTaskDeleteFile {
-<a href=#226 id=226 data-nosnippet>226</a>    <span class="doccomment">/// The delete file path
-<a href=#227 id=227 data-nosnippet>227</a>    </span><span class="kw">pub </span>file_path: String,
-<a href=#228 id=228 data-nosnippet>228</a>
-<a href=#229 id=229 data-nosnippet>229</a>    <span class="doccomment">/// The total size of the delete file in bytes, from the manifest entry.
-<a href=#230 id=230 data-nosnippet>230</a>    </span><span class="kw">pub </span>file_size_in_bytes: u64,
-<a href=#231 id=231 data-nosnippet>231</a>
-<a href=#232 id=232 data-nosnippet>232</a>    <span class="doccomment">/// delete file type
-<a href=#233 id=233 data-nosnippet>233</a>    </span><span class="kw">pub </span>file_type: DataContentType,
-<a href=#234 id=234 data-nosnippet>234</a>
-<a href=#235 id=235 data-nosnippet>235</a>    <span class="doccomment">/// partition id
-<a href=#236 id=236 data-nosnippet>236</a>    </span><span class="kw">pub </span>partition_spec_id: i32,
-<a href=#237 id=237 data-nosnippet>237</a>
-<a href=#238 id=238 data-nosnippet>238</a>    <span class="doccomment">/// equality ids for equality deletes (null for anything other than equality-deletes)
-<a href=#239 id=239 data-nosnippet>239</a>    </span><span class="attr">#[builder(default)]
-<a href=#240 id=240 data-nosnippet>240</a>    </span><span class="kw">pub </span>equality_ids: <span class="prelude-ty">Option</span>&lt;Vec&lt;i32&gt;&gt;,
+<a href=#211 id=211 data-nosnippet>211</a>            .with_referenced_data_file(ctx.manifest_entry.data_file.referenced_data_file.clone())
+<a href=#212 id=212 data-nosnippet>212</a>            .with_content_offset(ctx.manifest_entry.data_file.content_offset)
+<a href=#213 id=213 data-nosnippet>213</a>            .with_content_size_in_bytes(ctx.manifest_entry.data_file.content_size_in_bytes)
+<a href=#214 id=214 data-nosnippet>214</a>            .with_record_count(<span class="prelude-val">Some</span>(ctx.manifest_entry.record_count()))
+<a href=#215 id=215 data-nosnippet>215</a>            .with_key_metadata(
+<a href=#216 id=216 data-nosnippet>216</a>                ctx.manifest_entry
+<a href=#217 id=217 data-nosnippet>217</a>                    .data_file
+<a href=#218 id=218 data-nosnippet>218</a>                    .key_metadata
+<a href=#219 id=219 data-nosnippet>219</a>                    .as_deref()
+<a href=#220 id=220 data-nosnippet>220</a>                    .map(Box::from),
+<a href=#221 id=221 data-nosnippet>221</a>            )
+<a href=#222 id=222 data-nosnippet>222</a>            .build()
+<a href=#223 id=223 data-nosnippet>223</a>    }
+<a href=#224 id=224 data-nosnippet>224</a>}
+<a href=#225 id=225 data-nosnippet>225</a>
+<a href=#226 id=226 data-nosnippet>226</a><span class="doccomment">/// A task to scan part of file.
+<a href=#227 id=227 data-nosnippet>227</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TypedBuilder)]
+<a href=#228 id=228 data-nosnippet>228</a>#[builder(field_defaults(setter(prefix = <span class="string">"with_"</span>)))]
+<a href=#229 id=229 data-nosnippet>229</a></span><span class="kw">pub struct </span>FileScanTaskDeleteFile {
+<a href=#230 id=230 data-nosnippet>230</a>    <span class="doccomment">/// The delete file path
+<a href=#231 id=231 data-nosnippet>231</a>    </span><span class="kw">pub </span>file_path: String,
+<a href=#232 id=232 data-nosnippet>232</a>
+<a href=#233 id=233 data-nosnippet>233</a>    <span class="doccomment">/// The total size of the delete file in bytes, from the manifest entry.
+<a href=#234 id=234 data-nosnippet>234</a>    </span><span class="kw">pub </span>file_size_in_bytes: u64,
+<a href=#235 id=235 data-nosnippet>235</a>
+<a href=#236 id=236 data-nosnippet>236</a>    <span class="doccomment">/// delete file type
+<a href=#237 id=237 data-nosnippet>237</a>    </span><span class="kw">pub </span>file_type: DataContentType,
+<a href=#238 id=238 data-nosnippet>238</a>
+<a href=#239 id=239 data-nosnippet>239</a>    <span class="doccomment">/// partition id
+<a href=#240 id=240 data-nosnippet>240</a>    </span><span class="kw">pub </span>partition_spec_id: i32,
 <a href=#241 id=241 data-nosnippet>241</a>
-<a href=#242 id=242 data-nosnippet>242</a>    <span class="doccomment">/// Key metadata for encrypted delete files (Parquet Modular Encryption).
-<a href=#243 id=243 data-nosnippet>243</a>    /// When present, the reader uses this to build `FileDecryptionProperties`.
-<a href=#244 id=244 data-nosnippet>244</a>    ///
-<a href=#245 id=245 data-nosnippet>245</a>    /// Same plaintext-DEK trust boundary as [`FileScanTask::key_metadata`]:
-<a href=#246 id=246 data-nosnippet>246</a>    /// this is serialized into the scan plan and crosses the planner -&gt; worker
-<a href=#247 id=247 data-nosnippet>247</a>    /// channel in the clear for the standard encryption scheme.
+<a href=#242 id=242 data-nosnippet>242</a>    <span class="doccomment">/// equality ids for equality deletes (null for anything other than equality-deletes)
+<a href=#243 id=243 data-nosnippet>243</a>    </span><span class="attr">#[builder(default)]
+<a href=#244 id=244 data-nosnippet>244</a>    </span><span class="kw">pub </span>equality_ids: <span class="prelude-ty">Option</span>&lt;Vec&lt;i32&gt;&gt;,
+<a href=#245 id=245 data-nosnippet>245</a>
+<a href=#246 id=246 data-nosnippet>246</a>    <span class="doccomment">/// For a deletion vector, the location of the data file whose rows it deletes. Required for
+<a href=#247 id=247 data-nosnippet>247</a>    /// deletion vectors, and may also be set on a position delete file scoped to one data file.
 <a href=#248 id=248 data-nosnippet>248</a>    </span><span class="attr">#[serde(default)]
 <a href=#249 id=249 data-nosnippet>249</a>    #[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
 <a href=#250 id=250 data-nosnippet>250</a>    #[builder(default)]
-<a href=#251 id=251 data-nosnippet>251</a>    </span><span class="kw">pub </span>key_metadata: <span class="prelude-ty">Option</span>&lt;Box&lt;[u8]&gt;&gt;,
-<a href=#252 id=252 data-nosnippet>252</a>}
+<a href=#251 id=251 data-nosnippet>251</a>    </span><span class="kw">pub </span>referenced_data_file: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#252 id=252 data-nosnippet>252</a>
+<a href=#253 id=253 data-nosnippet>253</a>    <span class="doccomment">/// For a deletion vector, the offset of the blob within its Puffin file. Set only for
+<a href=#254 id=254 data-nosnippet>254</a>    /// deletion vectors, where it locates the blob for direct access.
+<a href=#255 id=255 data-nosnippet>255</a>    </span><span class="attr">#[serde(default)]
+<a href=#256 id=256 data-nosnippet>256</a>    #[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#257 id=257 data-nosnippet>257</a>    #[builder(default)]
+<a href=#258 id=258 data-nosnippet>258</a>    </span><span class="kw">pub </span>content_offset: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+<a href=#259 id=259 data-nosnippet>259</a>
+<a href=#260 id=260 data-nosnippet>260</a>    <span class="doccomment">/// For a deletion vector, the length in bytes of the blob within its Puffin file.
+<a href=#261 id=261 data-nosnippet>261</a>    /// Required together with `content_offset`; both are absent for non-DV delete files.
+<a href=#262 id=262 data-nosnippet>262</a>    </span><span class="attr">#[serde(default)]
+<a href=#263 id=263 data-nosnippet>263</a>    #[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#264 id=264 data-nosnippet>264</a>    #[builder(default)]
+<a href=#265 id=265 data-nosnippet>265</a>    </span><span class="kw">pub </span>content_size_in_bytes: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+<a href=#266 id=266 data-nosnippet>266</a>
+<a href=#267 id=267 data-nosnippet>267</a>    <span class="doccomment">/// The number of records in the delete file, from the manifest entry; for a deletion vector,
+<a href=#268 id=268 data-nosnippet>268</a>    /// the cardinality of its bitmap. `None` only for a task not built from a manifest entry.
+<a href=#269 id=269 data-nosnippet>269</a>    </span><span class="attr">#[serde(default)]
+<a href=#270 id=270 data-nosnippet>270</a>    #[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#271 id=271 data-nosnippet>271</a>    #[builder(default)]
+<a href=#272 id=272 data-nosnippet>272</a>    </span><span class="kw">pub </span>record_count: <span class="prelude-ty">Option</span>&lt;u64&gt;,
+<a href=#273 id=273 data-nosnippet>273</a>
+<a href=#274 id=274 data-nosnippet>274</a>    <span class="doccomment">/// Key metadata for encrypted delete files (Parquet Modular Encryption).
+<a href=#275 id=275 data-nosnippet>275</a>    /// When present, the reader uses this to build `FileDecryptionProperties`.
+<a href=#276 id=276 data-nosnippet>276</a>    ///
+<a href=#277 id=277 data-nosnippet>277</a>    /// Same plaintext-DEK trust boundary as [`FileScanTask::key_metadata`]:
+<a href=#278 id=278 data-nosnippet>278</a>    /// this is serialized into the scan plan and crosses the planner -&gt; worker
+<a href=#279 id=279 data-nosnippet>279</a>    /// channel in the clear for the standard encryption scheme.
+<a href=#280 id=280 data-nosnippet>280</a>    </span><span class="attr">#[serde(default)]
+<a href=#281 id=281 data-nosnippet>281</a>    #[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+<a href=#282 id=282 data-nosnippet>282</a>    #[builder(default)]
+<a href=#283 id=283 data-nosnippet>283</a>    </span><span class="kw">pub </span>key_metadata: <span class="prelude-ty">Option</span>&lt;Box&lt;[u8]&gt;&gt;,
+<a href=#284 id=284 data-nosnippet>284</a>}
 </code></pre></div></section></main></body></html>
