@@ -387,6 +387,15 @@ fn json_timestamptz_ns() {
 }
 
 #[test]
+fn json_pre_epoch_timestamptz_ns() {
+    check_json_serde(
+        r#""1969-12-31T23:59:59.999999999+00:00""#,
+        Literal::timestamptz_nano(-1),
+        &Primitive(PrimitiveType::TimestamptzNs),
+    );
+}
+
+#[test]
 fn json_timestamptz_ns_rejects_non_utc_offset() {
     // Per the spec, timestamptz_ns single-value serialization must use offset "+00:00"; Java's
     // SingleValueParser enforces the same (DateTimeUtil.isUTCTimestamptz). A non-UTC offset is not a

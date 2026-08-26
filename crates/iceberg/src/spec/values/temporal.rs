@@ -397,7 +397,10 @@ pub(crate) mod timestamptz {
     }
 
     pub(crate) fn nanoseconds_to_datetimetz(nanos: i64) -> DateTime<Utc> {
-        let (secs, rem) = (nanos / 1_000_000_000, nanos % 1_000_000_000);
+        let (secs, rem) = (
+            nanos.div_euclid(1_000_000_000),
+            nanos.rem_euclid(1_000_000_000),
+        );
 
         DateTime::from_timestamp(secs, rem as u32).unwrap()
     }
