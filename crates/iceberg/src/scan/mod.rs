@@ -51,13 +51,17 @@ use crate::{Error, ErrorKind, Result};
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
 
 /// Resolves a column name to its field ID, honouring the scan's case sensitivity.
-fn resolve_field_id(schema: &Schema, column_name: &str, case_sensitive: bool) -> Option<i32> {
+fn resolve_field_id(
+    schema: &Schema,
+    column_name: &str,
+    case_sensitive: bool,
+) -> Result<Option<i32>> {
     if case_sensitive {
-        schema.field_id_by_name(column_name)
+        Ok(schema.field_id_by_name(column_name))
     } else {
-        schema
-            .field_by_name_case_insensitive(column_name)
-            .map(|field| field.id)
+        Ok(schema
+            .field_by_name_case_insensitive_checked(column_name)?
+            .map(|field| field.id))
     }
 }
 
@@ -251,8 +255,8 @@ impl<'a> TableScanBuilder<'a> {
                 continue;
             }
 
-            let field_id =
-                resolve_field_id(&schema, column_name, self.case_sensitive).ok_or_else(|| {
+            let field_id = resolve_field_id(&schema, column_name, self.case_sensitive)?
+                .ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
                         format!("Column {column_name} not found in table. Schema: {schema}"),
@@ -653,8 +657,9 @@ pub mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
+    use super::resolve_field_id;
     use crate::arrow::ArrowReaderBuilder;
-    use crate::expr::{BoundPredicate, Reference};
+    use crate::expr::{Bind, BoundPredicate, Reference};
     use crate::io::{FileIO, OutputFile};
     use crate::metadata_columns::{
         RESERVED_COL_NAME_DELETE_FILE_PATH, RESERVED_COL_NAME_DELETE_FILE_POS,
@@ -1778,6 +1783,29 @@ pub mod tests {
                 .build()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_case_insensitive_scan_rejects_ambiguous_column_name() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+                NestedField::optional(2, "ID", PrimitiveType::Int.into()).into(),
+            ])
+            .build()
+            .unwrap();
+
+        assert_eq!(resolve_field_id(&schema, "id", true).unwrap(), Some(1));
+        let error = resolve_field_id(&schema, "Id", false).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(error.to_string().contains("ambiguous"), "{error}");
+
+        let error = Reference::new("Id")
+            .is_null()
+            .bind(Arc::new(schema), false)
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(error.to_string().contains("ambiguous"), "{error}");
     }
 
     #[tokio::test]
