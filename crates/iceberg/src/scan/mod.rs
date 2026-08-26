@@ -42,13 +42,24 @@ use crate::metadata_columns::{
 };
 use crate::partitioning::compute_unified_partition_type;
 use crate::runtime::Runtime;
-use crate::spec::{DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, SnapshotRef};
+use crate::spec::{DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, Schema, SnapshotRef};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::{Error, ErrorKind, Result};
 
 /// A stream of arrow [`RecordBatch`]es.
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
+
+/// Resolves a column name to its field ID, honouring the scan's case sensitivity.
+fn resolve_field_id(schema: &Schema, column_name: &str, case_sensitive: bool) -> Option<i32> {
+    if case_sensitive {
+        schema.field_id_by_name(column_name)
+    } else {
+        schema
+            .field_by_name_case_insensitive(column_name)
+            .map(|field| field.id)
+    }
+}
 
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
@@ -223,22 +234,6 @@ impl<'a> TableScanBuilder<'a> {
 
         let schema = snapshot.schema(self.table.metadata())?;
 
-        // Check that all column names exist in the schema (skip reserved columns).
-        if let Some(column_names) = self.column_names.as_ref() {
-            for column_name in column_names {
-                // Skip reserved columns that don't exist in the schema
-                if is_metadata_column_name(column_name) {
-                    continue;
-                }
-                if schema.field_by_name(column_name).is_none() {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Column {column_name} not found in table. Schema: {schema}"),
-                    ));
-                }
-            }
-        }
-
         let mut field_ids = vec![];
         let column_names = self.column_names.clone().unwrap_or_else(|| {
             schema
@@ -256,12 +251,13 @@ impl<'a> TableScanBuilder<'a> {
                 continue;
             }
 
-            let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Column {column_name} not found in table. Schema: {schema}"),
-                )
-            })?;
+            let field_id =
+                resolve_field_id(&schema, column_name, self.case_sensitive).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Column {column_name} not found in table. Schema: {schema}"),
+                    )
+                })?;
 
             schema
                 .as_struct()
@@ -279,7 +275,7 @@ impl<'a> TableScanBuilder<'a> {
         }
 
         let snapshot_bound_predicate = if let Some(ref predicates) = self.filter {
-            Some(predicates.bind(schema.clone(), true)?)
+            Some(predicates.bind(schema.clone(), self.case_sensitive)?)
         } else {
             None
         };
@@ -1767,6 +1763,68 @@ pub mod tests {
 
         let table_scan = table.scan().select(["x", "y", "z", "a", "b"]).build();
         assert!(table_scan.is_err());
+    }
+
+    #[test]
+    fn test_case_sensitive_scan_rejects_mismatched_column_case() {
+        let table = TableTestFixture::new().table;
+
+        // Case sensitivity defaults to true, so "X" must not resolve to "x".
+        assert!(table.scan().select(["X"]).build().is_err());
+        assert!(
+            table
+                .scan()
+                .with_filter(Reference::new("X").greater_than(Datum::long(1)))
+                .build()
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_case_insensitive_scan_resolves_mismatched_column_case() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // The schema declares lowercase "x" and "z"; a case-insensitive scan must
+        // resolve the upper-cased names in both the projection and the filter.
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_case_sensitive(false)
+            .select(["X", "Z"])
+            .with_filter(Reference::new("Y").greater_than(Datum::long(1)))
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(batches[0].num_columns(), 2);
+        assert_eq!(
+            batches[0]
+                .column_by_name("x")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            1
+        );
+        assert_eq!(
+            batches[0]
+                .column_by_name("z")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            3
+        );
     }
 
     #[tokio::test]

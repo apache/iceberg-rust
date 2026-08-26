@@ -167,7 +167,7 @@ impl Type {
         }
     }
 
-    /// Return max precision for decimal given [`num_bytes`] bytes.
+    /// Return max precision for decimal given `num_bytes` bytes.
     #[inline(always)]
     pub fn decimal_max_precision(num_bytes: u32) -> Result<u32> {
         ensure_data_valid!(
@@ -177,7 +177,7 @@ impl Type {
         Ok(MAX_PRECISION[num_bytes as usize - 1])
     }
 
-    /// Returns minimum bytes required for decimal with [`precision`].
+    /// Returns minimum bytes required for decimal with `precision`.
     #[inline(always)]
     pub fn decimal_required_bytes(precision: u32) -> Result<u32> {
         ensure_data_valid!(
