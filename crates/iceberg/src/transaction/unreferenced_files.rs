@@ -95,7 +95,7 @@ pub async fn unreferenced_files(
     expired_snapshot_ids: &HashSet<i64>,
 ) -> Result<UnreferencedFiles> {
     let metadata = table.metadata();
-    let gc_enabled = metadata.table_properties()?.gc_enabled;
+    let gc_enabled = metadata.table_properties()?.gc_enabled();
 
     let (expired, retained): (Vec<&SnapshotRef>, Vec<&SnapshotRef>) = metadata
         .snapshots()
