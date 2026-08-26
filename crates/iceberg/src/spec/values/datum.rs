@@ -299,16 +299,16 @@ impl Display for Datum {
             (_, PrimitiveLiteral::Float(val)) => write!(f, "{val}"),
             (_, PrimitiveLiteral::Double(val)) => write!(f, "{val}"),
             (PrimitiveType::Date, PrimitiveLiteral::Int(val)) => {
-                write!(f, "{}", date::days_to_date(*val))
+                write!(f, "{}", date::days_to_iso_date(*val))
             }
             (PrimitiveType::Time, PrimitiveLiteral::Long(val)) => {
                 write!(f, "{}", time::microseconds_to_time(*val))
             }
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(val)) => {
-                write!(f, "{}", timestamp::microseconds_to_datetime(*val))
+                write!(f, "{}", timestamp::microseconds_to_display(*val))
             }
             (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(val)) => {
-                write!(f, "{}", timestamptz::microseconds_to_datetimetz(*val))
+                write!(f, "{}", timestamptz::microseconds_to_display(*val))
             }
             (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(val)) => {
                 write!(f, "{}", timestamp::nanoseconds_to_datetime(*val))

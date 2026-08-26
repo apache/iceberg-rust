@@ -214,6 +214,157 @@ fn json_timestamptz() {
 }
 
 #[test]
+fn json_pre_epoch_timestamptz() {
+    check_json_serde(
+        r#""1969-12-31T23:59:59.999999+00:00""#,
+        Literal::Primitive(PrimitiveLiteral::Long(-1)),
+        &Primitive(PrimitiveType::Timestamptz),
+    );
+}
+
+#[test]
+fn json_date_boundaries() {
+    for (value, encoded) in [
+        (i32::MAX, r#""+5881580-07-11""#),
+        (i32::MIN, r#""-5877641-06-23""#),
+    ] {
+        check_json_serde(
+            encoded,
+            Literal::date(value),
+            &Primitive(PrimitiveType::Date),
+        );
+    }
+
+    for (encoded, value, canonical) in [
+        ("+0005881580-07-11", i32::MAX, "+5881580-07-11"),
+        ("-0005877641-06-23", i32::MIN, "-5877641-06-23"),
+    ] {
+        let parsed = Literal::try_from_json(
+            JsonValue::String(encoded.to_string()),
+            &Primitive(PrimitiveType::Date),
+        )
+        .unwrap();
+        assert_eq!(parsed, Some(Literal::date(value)));
+        assert_eq!(
+            parsed
+                .unwrap()
+                .try_into_json(&Primitive(PrimitiveType::Date))
+                .unwrap(),
+            JsonValue::String(canonical.to_string())
+        );
+    }
+}
+
+#[test]
+fn json_date_extended_year_transitions() {
+    let date_type = Primitive(PrimitiveType::Date);
+    for encoded in ["-10000-01-01", "-0001-12-31", "0000-01-01", "+10000-01-01"] {
+        let parsed = Literal::try_from_json(JsonValue::String(encoded.to_string()), &date_type)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            parsed.try_into_json(&date_type).unwrap(),
+            JsonValue::String(encoded.to_string())
+        );
+    }
+
+    let positive_zero =
+        Literal::try_from_json(JsonValue::String("+00000-01-01".to_string()), &date_type)
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        positive_zero.try_into_json(&date_type).unwrap(),
+        JsonValue::String("0000-01-01".to_string())
+    );
+    assert!(
+        Literal::try_from_json(JsonValue::String("-0000-01-01".to_string()), &date_type).is_err()
+    );
+
+    let timestamp_type = Primitive(PrimitiveType::Timestamp);
+    let positive_zero_timestamp = Literal::try_from_json(
+        JsonValue::String("+00000-01-01T00:00:00".to_string()),
+        &timestamp_type,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        positive_zero_timestamp
+            .try_into_json(&timestamp_type)
+            .unwrap(),
+        JsonValue::String("0000-01-01T00:00:00".to_string())
+    );
+}
+
+#[test]
+fn json_microsecond_timestamp_boundaries() {
+    for (value, timestamp, timestamptz) in [
+        (
+            i64::MAX,
+            r#""+294247-01-10T04:00:54.775807""#,
+            r#""+294247-01-10T04:00:54.775807+00:00""#,
+        ),
+        (
+            i64::MIN,
+            r#""-290308-12-21T19:59:05.224192""#,
+            r#""-290308-12-21T19:59:05.224192+00:00""#,
+        ),
+    ] {
+        check_json_serde(
+            timestamp,
+            Literal::timestamp(value),
+            &Primitive(PrimitiveType::Timestamp),
+        );
+        check_json_serde(
+            timestamptz,
+            Literal::timestamptz(value),
+            &Primitive(PrimitiveType::Timestamptz),
+        );
+    }
+}
+
+#[test]
+fn json_microsecond_timestamp_fraction_rendering() {
+    for (value, encoded) in [
+        (0, r#""1970-01-01T00:00:00""#),
+        (1, r#""1970-01-01T00:00:00.000001""#),
+        (10, r#""1970-01-01T00:00:00.00001""#),
+        (100, r#""1970-01-01T00:00:00.0001""#),
+        (1_000, r#""1970-01-01T00:00:00.001""#),
+        (10_000, r#""1970-01-01T00:00:00.01""#),
+        (100_000, r#""1970-01-01T00:00:00.1""#),
+        (-1, r#""1969-12-31T23:59:59.999999""#),
+    ] {
+        check_json_serde(
+            encoded,
+            Literal::timestamp(value),
+            &Primitive(PrimitiveType::Timestamp),
+        );
+    }
+}
+
+#[test]
+fn datum_temporal_boundary_display() {
+    assert_eq!(Datum::date(i32::MAX).to_string(), "+5881580-07-11");
+    assert_eq!(Datum::date(i32::MIN).to_string(), "-5877641-06-23");
+    assert_eq!(
+        Datum::timestamp_micros(i64::MAX).to_string(),
+        "+294247-01-10 04:00:54.775807"
+    );
+    assert_eq!(
+        Datum::timestamp_micros(i64::MIN).to_string(),
+        "-290308-12-21 19:59:05.224192"
+    );
+    assert_eq!(
+        Datum::timestamptz_micros(i64::MAX).to_string(),
+        "+294247-01-10 04:00:54.775807 UTC"
+    );
+    assert_eq!(
+        Datum::timestamptz_micros(i64::MIN).to_string(),
+        "-290308-12-21 19:59:05.224192 UTC"
+    );
+}
+
+#[test]
 fn json_timestamp_ns() {
     let record = r#""2017-11-16T22:31:08.123456789""#;
 

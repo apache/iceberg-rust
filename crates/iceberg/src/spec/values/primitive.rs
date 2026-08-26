@@ -47,6 +47,18 @@ pub enum PrimitiveLiteral {
 }
 
 impl PrimitiveLiteral {
+    pub(crate) fn same_value(&self, other: &Self) -> bool {
+        match (self, other) {
+            (PrimitiveLiteral::Float(left), PrimitiveLiteral::Float(right)) => {
+                (left.is_nan() && right.is_nan()) || left.0.to_bits() == right.0.to_bits()
+            }
+            (PrimitiveLiteral::Double(left), PrimitiveLiteral::Double(right)) => {
+                (left.is_nan() && right.is_nan()) || left.0.to_bits() == right.0.to_bits()
+            }
+            _ => self == other,
+        }
+    }
+
     /// Returns true if the Literal represents a primitive type
     /// that can be a NaN, and that it's value is NaN
     pub fn is_nan(&self) -> bool {
@@ -55,5 +67,29 @@ impl PrimitiveLiteral {
             PrimitiveLiteral::Float(val) => val.is_nan(),
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_same_value_uses_java_floating_point_equality() {
+        assert!(
+            !PrimitiveLiteral::Float(OrderedFloat(-0.0))
+                .same_value(&PrimitiveLiteral::Float(OrderedFloat(0.0)))
+        );
+        assert!(
+            !PrimitiveLiteral::Double(OrderedFloat(-0.0))
+                .same_value(&PrimitiveLiteral::Double(OrderedFloat(0.0)))
+        );
+
+        let first_nan = f32::from_bits(0x7fc0_0001);
+        let second_nan = f32::from_bits(0x7fc0_0002);
+        assert!(
+            PrimitiveLiteral::Float(OrderedFloat(first_nan))
+                .same_value(&PrimitiveLiteral::Float(OrderedFloat(second_nan)))
+        );
     }
 }
