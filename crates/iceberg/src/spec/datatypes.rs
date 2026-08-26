@@ -133,8 +133,8 @@ impl Type {
     /// Minimum [`FormatVersion`] required to support this type, **without** taking
     /// nested field types into account.
     ///
-    /// `TimestampNs` / `TimestamptzNs` / `Variant` require [`FormatVersion::V3`]; every
-    /// other type is valid from [`FormatVersion::V1`]. Mirrors Java's
+    /// `Unknown` / `TimestampNs` / `TimestamptzNs` / `Variant` require
+    /// [`FormatVersion::V3`]; every other type is valid from [`FormatVersion::V1`]. Mirrors Java's
     /// `Schema.MIN_FORMAT_VERSIONS` (a shallow lookup keyed by type id), so it
     /// intentionally does not recurse: callers needing the floor for a whole schema
     /// iterate its flattened fields (see [`Schema::calc_min_compatible_format`]).
@@ -142,7 +142,9 @@ impl Type {
     /// [`Schema::calc_min_compatible_format`]: crate::spec::Schema::calc_min_compatible_format
     pub(crate) fn min_format_version(&self) -> FormatVersion {
         match self {
-            Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs)
+            Type::Primitive(
+                PrimitiveType::Unknown | PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+            )
             | Type::Variant(_) => FormatVersion::V3,
             _ => FormatVersion::V1,
         }
@@ -273,6 +275,8 @@ pub enum PrimitiveType {
     Fixed(u64),
     /// Arbitrary-length byte array.
     Binary,
+    /// Default / null column type used when a more specific type is not known.
+    Unknown,
 }
 
 impl PrimitiveType {
@@ -390,6 +394,7 @@ where S: Serializer {
 impl fmt::Display for PrimitiveType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            PrimitiveType::Unknown => write!(f, "unknown"),
             PrimitiveType::Boolean => write!(f, "boolean"),
             PrimitiveType::Int => write!(f, "int"),
             PrimitiveType::Long => write!(f, "long"),
@@ -594,16 +599,98 @@ impl TryFrom<SerdeNestedField> for NestedField {
     type Error = crate::Error;
 
     fn try_from(value: SerdeNestedField) -> Result<Self> {
-        let initial_default = value
-            .initial_default
-            .map(|x| Literal::try_from_json(x, &value.field_type))
-            .transpose()?
-            .flatten();
-        let write_default = value
-            .write_default
-            .map(|x| Literal::try_from_json(x, &value.field_type))
-            .transpose()?
-            .flatten();
+        fn validate_unknown_values(default: &JsonValue, field_type: &Type) -> Result<()> {
+            if default.is_null() {
+                return Ok(());
+            }
+
+            match (field_type, default) {
+                (Type::Primitive(PrimitiveType::Unknown), _) => {
+                    ensure_data_valid!(false, "Unknown type only supports null default values",);
+                }
+                (Type::Struct(struct_type), JsonValue::Object(object)) => {
+                    for field in struct_type.fields() {
+                        if let Some(value) = object.get(&field.id.to_string()) {
+                            validate_unknown_values(value, &field.field_type)?;
+                        }
+                    }
+                }
+                (Type::List(list_type), JsonValue::Array(values)) => {
+                    for value in values {
+                        validate_unknown_values(value, &list_type.element_field.field_type)?;
+                    }
+                }
+                (Type::Map(map_type), JsonValue::Object(object)) => {
+                    if let Some(JsonValue::Array(keys)) = object.get("keys") {
+                        for key in keys {
+                            validate_unknown_values(key, &map_type.key_field.field_type)?;
+                        }
+                    }
+                    if let Some(JsonValue::Array(values)) = object.get("values") {
+                        for value in values {
+                            validate_unknown_values(value, &map_type.value_field.field_type)?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            Ok(())
+        }
+
+        fn validate_unknown_is_optional(
+            required: bool,
+            field_type: &Type,
+            field_name: &str,
+        ) -> Result<()> {
+            match field_type {
+                Type::Primitive(PrimitiveType::Unknown) => {
+                    ensure_data_valid!(
+                        !required,
+                        "Field {} cannot be required because unknown type must be optional",
+                        field_name
+                    );
+                }
+                Type::Struct(struct_type) => {
+                    for field in struct_type.fields() {
+                        validate_unknown_is_optional(
+                            field.required,
+                            &field.field_type,
+                            &field.name,
+                        )?;
+                    }
+                }
+                Type::List(list_type) => {
+                    let field = &list_type.element_field;
+                    validate_unknown_is_optional(field.required, &field.field_type, &field.name)?;
+                }
+                Type::Map(map_type) => {
+                    for field in [&map_type.key_field, &map_type.value_field] {
+                        validate_unknown_is_optional(
+                            field.required,
+                            &field.field_type,
+                            &field.name,
+                        )?;
+                    }
+                }
+                Type::Primitive(_) | Type::Variant(_) => {}
+            }
+
+            Ok(())
+        }
+
+        fn parse_default(default: Option<JsonValue>, field_type: &Type) -> Result<Option<Literal>> {
+            let Some(default) = default else {
+                return Ok(None);
+            };
+            validate_unknown_values(&default, field_type)?;
+            Literal::try_from_json(default, field_type)
+        }
+
+        validate_unknown_is_optional(value.required, &value.field_type, &value.name)?;
+
+        let initial_default = parse_default(value.initial_default, &value.field_type)?;
+        let write_default = parse_default(value.write_default, &value.field_type)?;
 
         Ok(NestedField {
             id: value.id,
@@ -940,6 +1027,7 @@ mod tests {
     {
         "type": "struct",
         "fields": [
+            {"id": 17, "name": "unknown_field", "required": false, "type": "unknown"},
             {"id": 1, "name": "bool_field", "required": true, "type": "boolean"},
             {"id": 2, "name": "int_field", "required": true, "type": "int"},
             {"id": 3, "name": "long_field", "required": true, "type": "long"},
@@ -964,6 +1052,12 @@ mod tests {
             record,
             Type::Struct(StructType {
                 fields: vec![
+                    NestedField::optional(
+                        17,
+                        "unknown_field",
+                        Type::Primitive(PrimitiveType::Unknown),
+                    )
+                    .into(),
                     NestedField::required(1, "bool_field", Type::Primitive(PrimitiveType::Boolean))
                         .into(),
                     NestedField::required(2, "int_field", Type::Primitive(PrimitiveType::Int))
@@ -1344,6 +1438,71 @@ mod tests {
         ];
         for (ty, literal) in pairs {
             assert!(ty.compatible(&literal));
+        }
+
+        assert!(!PrimitiveType::Unknown.compatible(&PrimitiveLiteral::Int(1)));
+    }
+
+    #[test]
+    fn unknown_nested_field_deserialization_rejects_required() {
+        let json = r#"{"id":1,"name":"empty","required":true,"type":"unknown"}"#;
+
+        let error = serde_json::from_str::<NestedField>(json).unwrap_err();
+        assert!(
+            error.to_string().contains("unknown type must be optional"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn unknown_nested_field_deserialization_rejects_required_in_containers() {
+        let cases = [
+            (
+                "list element",
+                serde_json::json!({
+                    "type": "list",
+                    "element-id": 2,
+                    "element-required": true,
+                    "element": "unknown"
+                }),
+            ),
+            (
+                "map key",
+                serde_json::json!({
+                    "type": "map",
+                    "key-id": 2,
+                    "key": "unknown",
+                    "value-id": 3,
+                    "value-required": false,
+                    "value": "string"
+                }),
+            ),
+            (
+                "map value",
+                serde_json::json!({
+                    "type": "map",
+                    "key-id": 2,
+                    "key": "string",
+                    "value-id": 3,
+                    "value-required": true,
+                    "value": "unknown"
+                }),
+            ),
+        ];
+
+        for (name, field_type) in cases {
+            let field = serde_json::json!({
+                "id": 1,
+                "name": name,
+                "required": false,
+                "type": field_type
+            });
+
+            let error = serde_json::from_value::<NestedField>(field).unwrap_err();
+            assert!(
+                error.to_string().contains("unknown type must be optional"),
+                "unexpected error for {name}: {error}"
+            );
         }
     }
 
