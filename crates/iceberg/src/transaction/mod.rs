@@ -67,7 +67,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWithContext};
-pub use update_schema::AddColumn;
+pub use update_schema::{AddColumn, UpdateSchemaAction};
 
 use crate::error::Result;
 use crate::spec::TableProperties;
@@ -78,7 +78,6 @@ use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
-use crate::transaction::update_schema::UpdateSchemaAction;
 use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};

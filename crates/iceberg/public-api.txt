@@ -3236,16 +3236,33 @@ pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transac
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::sort_order::ReplaceSortOrderAction
 pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::update_location::UpdateLocationAction
-pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::update_schema::UpdateSchemaAction
+pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::UpdateSchemaAction
 pub fn iceberg::transaction::Transaction::update_statistics(&self) -> iceberg::transaction::update_statistics::UpdateStatisticsAction
 pub fn iceberg::transaction::Transaction::update_table_properties(&self) -> iceberg::transaction::update_properties::UpdatePropertiesAction
 pub fn iceberg::transaction::Transaction::upgrade_table_version(&self) -> iceberg::transaction::upgrade_format_version::UpgradeFormatVersionAction
 impl core::clone::Clone for iceberg::transaction::Transaction
 pub fn iceberg::transaction::Transaction::clone(&self) -> iceberg::transaction::Transaction
+pub struct iceberg::transaction::UpdateSchemaAction
+impl iceberg::transaction::UpdateSchemaAction
+pub fn iceberg::transaction::UpdateSchemaAction::add_column(self, add_column: iceberg::transaction::AddColumn) -> Self
+pub fn iceberg::transaction::UpdateSchemaAction::allow_incompatible_changes(self) -> Self
+pub fn iceberg::transaction::UpdateSchemaAction::case_sensitive(self, case_sensitive: bool) -> Self
+pub fn iceberg::transaction::UpdateSchemaAction::delete_column(self, name: impl alloc::string::ToString) -> Self
+pub fn iceberg::transaction::UpdateSchemaAction::make_column_optional(self, name: impl alloc::string::ToString) -> Self
+pub fn iceberg::transaction::UpdateSchemaAction::move_column_after(self, name: impl alloc::string::ToString, after_name: impl alloc::string::ToString) -> Self
+pub fn iceberg::transaction::UpdateSchemaAction::move_column_before(self, name: impl alloc::string::ToString, before_name: impl alloc::string::ToString) -> Self
+pub fn iceberg::transaction::UpdateSchemaAction::move_column_first(self, name: impl alloc::string::ToString) -> Self
+pub fn iceberg::transaction::UpdateSchemaAction::rename_column(self, name: impl alloc::string::ToString, new_name: impl alloc::string::ToString) -> Self
+pub fn iceberg::transaction::UpdateSchemaAction::require_column(self, name: impl alloc::string::ToString) -> Self
+pub fn iceberg::transaction::UpdateSchemaAction::set_identifier_fields<I, S>(self, names: I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = S>, S: alloc::string::ToString
+pub fn iceberg::transaction::UpdateSchemaAction::union_by_name(self, new_schema: iceberg::spec::Schema) -> Self
+pub fn iceberg::transaction::UpdateSchemaAction::update_column_default(self, name: impl alloc::string::ToString, default: core::option::Option<iceberg::spec::Literal>) -> Self
+pub fn iceberg::transaction::UpdateSchemaAction::update_column_doc(self, name: impl alloc::string::ToString, doc: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::transaction::UpdateSchemaAction::update_column_type(self, name: impl alloc::string::ToString, new_type: iceberg::spec::PrimitiveType) -> Self
 pub trait iceberg::transaction::ApplyTransactionAction
 pub fn iceberg::transaction::ApplyTransactionAction::apply(self, tx: iceberg::transaction::Transaction) -> iceberg::Result<iceberg::transaction::Transaction>
 impl<T: TransactionAction + 'static> iceberg::transaction::ApplyTransactionAction for T
-pub fn T::apply(self, tx: iceberg::transaction::Transaction) -> iceberg::Result<iceberg::transaction::Transaction> where Self: core::marker::Sized
+pub fn T::apply(self, tx: iceberg::transaction::Transaction) -> core::result::Result<iceberg::transaction::Transaction, iceberg::Error>
 pub mod iceberg::transform
 pub trait iceberg::transform::TransformFunction: core::marker::Send + core::marker::Sync + core::fmt::Debug
 pub fn iceberg::transform::TransformFunction::transform(&self, input: arrow_array::array::ArrayRef) -> iceberg::Result<arrow_array::array::ArrayRef>
