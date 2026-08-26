@@ -55,6 +55,8 @@ mod action;
 pub use action::*;
 mod append;
 mod expire_snapshots;
+mod merging;
+mod rewrite;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -75,6 +77,7 @@ use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
+use crate::transaction::rewrite::RewriteFilesAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -149,6 +152,15 @@ impl Transaction {
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
+    }
+
+    /// Creates a rewrite files action for compaction.
+    ///
+    /// This action replaces a set of data files with a new set while keeping
+    /// the logical table contents unchanged. The resulting snapshot uses
+    /// [`Operation::Replace`](crate::spec::Operation::Replace).
+    pub fn rewrite_files(&self) -> RewriteFilesAction {
+        RewriteFilesAction::new(self.table.metadata().current_snapshot_id())
     }
 
     /// Creates replace sort order action.
@@ -254,13 +266,38 @@ mod tests {
     use crate::io::FileIO;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
         TableProperties,
     };
     use crate::table::Table;
     use crate::test_utils::{make_encrypted_table, test_runtime};
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
+
+    /// Create a test data file with the given path, record count, and file size.
+    pub(crate) fn make_data_file(table: &Table, path: &str, records: u64, size: u64) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(size)
+            .record_count(records)
+            .partition(Struct::from_iter([Some(Literal::long(1))]))
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .build()
+            .unwrap()
+    }
+
+    /// Append data files to a table via fast_append and return the updated table.
+    pub(crate) async fn append_files(
+        catalog: &impl Catalog,
+        table: &Table,
+        files: Vec<DataFile>,
+    ) -> Table {
+        let tx = Transaction::new(table);
+        let tx = tx.fast_append().add_data_files(files).apply(tx).unwrap();
+        tx.commit(catalog).await.unwrap()
+    }
 
     pub fn make_v1_table() -> Table {
         let file = File::open(format!(
