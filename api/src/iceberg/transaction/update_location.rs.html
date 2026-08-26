@@ -27,14 +27,14 @@
 <a href=#27 id=27 data-nosnippet>27</a>///
 <a href=#28 id=28 data-nosnippet>28</a>/// This action is used to explicitly set a new metadata location during a transaction,
 <a href=#29 id=29 data-nosnippet>29</a>/// typically as part of advanced commit or recovery flows. The location is optional until
-<a href=#30 id=30 data-nosnippet>30</a>/// explicitly set via [`set_location`].
+<a href=#30 id=30 data-nosnippet>30</a>/// explicitly set via [`UpdateLocationAction::set_location`].
 <a href=#31 id=31 data-nosnippet>31</a></span><span class="kw">pub struct </span>UpdateLocationAction {
 <a href=#32 id=32 data-nosnippet>32</a>    location: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#33 id=33 data-nosnippet>33</a>}
 <a href=#34 id=34 data-nosnippet>34</a>
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">impl </span>UpdateLocationAction {
 <a href=#36 id=36 data-nosnippet>36</a>    <span class="doccomment">/// Creates a new [`UpdateLocationAction`] with no location set.
-<a href=#37 id=37 data-nosnippet>37</a>    </span><span class="kw">pub fn </span>new() -&gt; <span class="self">Self </span>{
+<a href=#37 id=37 data-nosnippet>37</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new() -&gt; <span class="self">Self </span>{
 <a href=#38 id=38 data-nosnippet>38</a>        UpdateLocationAction { location: <span class="prelude-val">None </span>}
 <a href=#39 id=39 data-nosnippet>39</a>    }
 <a href=#40 id=40 data-nosnippet>40</a>
@@ -53,58 +53,52 @@
 <a href=#53 id=53 data-nosnippet>53</a>    </span>}
 <a href=#54 id=54 data-nosnippet>54</a>}
 <a href=#55 id=55 data-nosnippet>55</a>
-<a href=#56 id=56 data-nosnippet>56</a><span class="kw">impl </span>Default <span class="kw">for </span>UpdateLocationAction {
-<a href=#57 id=57 data-nosnippet>57</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#58 id=58 data-nosnippet>58</a>        <span class="self">Self</span>::new()
-<a href=#59 id=59 data-nosnippet>59</a>    }
-<a href=#60 id=60 data-nosnippet>60</a>}
-<a href=#61 id=61 data-nosnippet>61</a>
-<a href=#62 id=62 data-nosnippet>62</a><span class="attr">#[async_trait]
-<a href=#63 id=63 data-nosnippet>63</a></span><span class="kw">impl </span>TransactionAction <span class="kw">for </span>UpdateLocationAction {
-<a href=#64 id=64 data-nosnippet>64</a>    <span class="kw">async fn </span>commit(<span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;, _table: <span class="kw-2">&amp;</span>Table) -&gt; <span class="prelude-ty">Result</span>&lt;ActionCommit&gt; {
-<a href=#65 id=65 data-nosnippet>65</a>        <span class="kw">let </span>updates: Vec&lt;TableUpdate&gt;;
-<a href=#66 id=66 data-nosnippet>66</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(location) = <span class="self">self</span>.location.clone() {
-<a href=#67 id=67 data-nosnippet>67</a>            updates = <span class="macro">vec!</span>[TableUpdate::SetLocation { location }];
-<a href=#68 id=68 data-nosnippet>68</a>        } <span class="kw">else </span>{
-<a href=#69 id=69 data-nosnippet>69</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-<a href=#70 id=70 data-nosnippet>70</a>                ErrorKind::DataInvalid,
-<a href=#71 id=71 data-nosnippet>71</a>                <span class="string">"Location is not set for UpdateLocationAction!"</span>,
-<a href=#72 id=72 data-nosnippet>72</a>            ));
-<a href=#73 id=73 data-nosnippet>73</a>        }
-<a href=#74 id=74 data-nosnippet>74</a>
-<a href=#75 id=75 data-nosnippet>75</a>        <span class="prelude-val">Ok</span>(ActionCommit::new(updates, <span class="macro">vec!</span>[]))
-<a href=#76 id=76 data-nosnippet>76</a>    }
-<a href=#77 id=77 data-nosnippet>77</a>}
-<a href=#78 id=78 data-nosnippet>78</a>
-<a href=#79 id=79 data-nosnippet>79</a><span class="attr">#[cfg(test)]
-<a href=#80 id=80 data-nosnippet>80</a></span><span class="kw">mod </span>tests {
-<a href=#81 id=81 data-nosnippet>81</a>    <span class="kw">use </span>as_any::Downcast;
-<a href=#82 id=82 data-nosnippet>82</a>
-<a href=#83 id=83 data-nosnippet>83</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::Transaction;
-<a href=#84 id=84 data-nosnippet>84</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::action::ApplyTransactionAction;
-<a href=#85 id=85 data-nosnippet>85</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::tests::make_v2_table;
-<a href=#86 id=86 data-nosnippet>86</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::update_location::UpdateLocationAction;
-<a href=#87 id=87 data-nosnippet>87</a>
-<a href=#88 id=88 data-nosnippet>88</a>    <span class="attr">#[test]
-<a href=#89 id=89 data-nosnippet>89</a>    </span><span class="kw">fn </span>test_set_location() {
-<a href=#90 id=90 data-nosnippet>90</a>        <span class="kw">let </span>table = make_v2_table();
-<a href=#91 id=91 data-nosnippet>91</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
-<a href=#92 id=92 data-nosnippet>92</a>        <span class="kw">let </span>tx = tx
-<a href=#93 id=93 data-nosnippet>93</a>            .update_location()
-<a href=#94 id=94 data-nosnippet>94</a>            .set_location(String::from(<span class="string">"s3://bucket/prefix/new_table"</span>))
-<a href=#95 id=95 data-nosnippet>95</a>            .apply(tx)
+<a href=#56 id=56 data-nosnippet>56</a><span class="attr">#[async_trait]
+<a href=#57 id=57 data-nosnippet>57</a></span><span class="kw">impl </span>TransactionAction <span class="kw">for </span>UpdateLocationAction {
+<a href=#58 id=58 data-nosnippet>58</a>    <span class="kw">async fn </span>commit(<span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;, _table: <span class="kw-2">&amp;</span>Table) -&gt; <span class="prelude-ty">Result</span>&lt;ActionCommit&gt; {
+<a href=#59 id=59 data-nosnippet>59</a>        <span class="kw">let </span>updates: Vec&lt;TableUpdate&gt;;
+<a href=#60 id=60 data-nosnippet>60</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(location) = <span class="self">self</span>.location.clone() {
+<a href=#61 id=61 data-nosnippet>61</a>            updates = <span class="macro">vec!</span>[TableUpdate::SetLocation { location }];
+<a href=#62 id=62 data-nosnippet>62</a>        } <span class="kw">else </span>{
+<a href=#63 id=63 data-nosnippet>63</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+<a href=#64 id=64 data-nosnippet>64</a>                ErrorKind::DataInvalid,
+<a href=#65 id=65 data-nosnippet>65</a>                <span class="string">"Location is not set for UpdateLocationAction!"</span>,
+<a href=#66 id=66 data-nosnippet>66</a>            ));
+<a href=#67 id=67 data-nosnippet>67</a>        }
+<a href=#68 id=68 data-nosnippet>68</a>
+<a href=#69 id=69 data-nosnippet>69</a>        <span class="prelude-val">Ok</span>(ActionCommit::new(updates, <span class="macro">vec!</span>[]))
+<a href=#70 id=70 data-nosnippet>70</a>    }
+<a href=#71 id=71 data-nosnippet>71</a>}
+<a href=#72 id=72 data-nosnippet>72</a>
+<a href=#73 id=73 data-nosnippet>73</a><span class="attr">#[cfg(test)]
+<a href=#74 id=74 data-nosnippet>74</a></span><span class="kw">mod </span>tests {
+<a href=#75 id=75 data-nosnippet>75</a>    <span class="kw">use </span>as_any::Downcast;
+<a href=#76 id=76 data-nosnippet>76</a>
+<a href=#77 id=77 data-nosnippet>77</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::Transaction;
+<a href=#78 id=78 data-nosnippet>78</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::action::ApplyTransactionAction;
+<a href=#79 id=79 data-nosnippet>79</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::tests::make_v2_table;
+<a href=#80 id=80 data-nosnippet>80</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::update_location::UpdateLocationAction;
+<a href=#81 id=81 data-nosnippet>81</a>
+<a href=#82 id=82 data-nosnippet>82</a>    <span class="attr">#[test]
+<a href=#83 id=83 data-nosnippet>83</a>    </span><span class="kw">fn </span>test_set_location() {
+<a href=#84 id=84 data-nosnippet>84</a>        <span class="kw">let </span>table = make_v2_table();
+<a href=#85 id=85 data-nosnippet>85</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
+<a href=#86 id=86 data-nosnippet>86</a>        <span class="kw">let </span>tx = tx
+<a href=#87 id=87 data-nosnippet>87</a>            .update_location()
+<a href=#88 id=88 data-nosnippet>88</a>            .set_location(String::from(<span class="string">"s3://bucket/prefix/new_table"</span>))
+<a href=#89 id=89 data-nosnippet>89</a>            .apply(tx)
+<a href=#90 id=90 data-nosnippet>90</a>            .unwrap();
+<a href=#91 id=91 data-nosnippet>91</a>
+<a href=#92 id=92 data-nosnippet>92</a>        <span class="macro">assert_eq!</span>(tx.actions.len(), <span class="number">1</span>);
+<a href=#93 id=93 data-nosnippet>93</a>
+<a href=#94 id=94 data-nosnippet>94</a>        <span class="kw">let </span>action = (<span class="kw-2">*</span>tx.actions[<span class="number">0</span>])
+<a href=#95 id=95 data-nosnippet>95</a>            .downcast_ref::&lt;UpdateLocationAction&gt;()
 <a href=#96 id=96 data-nosnippet>96</a>            .unwrap();
 <a href=#97 id=97 data-nosnippet>97</a>
-<a href=#98 id=98 data-nosnippet>98</a>        <span class="macro">assert_eq!</span>(tx.actions.len(), <span class="number">1</span>);
-<a href=#99 id=99 data-nosnippet>99</a>
-<a href=#100 id=100 data-nosnippet>100</a>        <span class="kw">let </span>action = (<span class="kw-2">*</span>tx.actions[<span class="number">0</span>])
-<a href=#101 id=101 data-nosnippet>101</a>            .downcast_ref::&lt;UpdateLocationAction&gt;()
-<a href=#102 id=102 data-nosnippet>102</a>            .unwrap();
-<a href=#103 id=103 data-nosnippet>103</a>
-<a href=#104 id=104 data-nosnippet>104</a>        <span class="macro">assert_eq!</span>(
-<a href=#105 id=105 data-nosnippet>105</a>            action.location,
-<a href=#106 id=106 data-nosnippet>106</a>            <span class="prelude-val">Some</span>(String::from(<span class="string">"s3://bucket/prefix/new_table"</span>))
-<a href=#107 id=107 data-nosnippet>107</a>        )
-<a href=#108 id=108 data-nosnippet>108</a>    }
-<a href=#109 id=109 data-nosnippet>109</a>}
+<a href=#98 id=98 data-nosnippet>98</a>        <span class="macro">assert_eq!</span>(
+<a href=#99 id=99 data-nosnippet>99</a>            action.location,
+<a href=#100 id=100 data-nosnippet>100</a>            <span class="prelude-val">Some</span>(String::from(<span class="string">"s3://bucket/prefix/new_table"</span>))
+<a href=#101 id=101 data-nosnippet>101</a>        )
+<a href=#102 id=102 data-nosnippet>102</a>    }
+<a href=#103 id=103 data-nosnippet>103</a>}
 </code></pre></div></section></main></body></html>

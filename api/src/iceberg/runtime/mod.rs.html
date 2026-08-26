@@ -22,19 +22,19 @@
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>std::pin::Pin;
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>std::task::{Context, Poll};
 <a href=#24 id=24 data-nosnippet>24</a>
-<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>tokio::task;
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>tokio::task::JoinHandle <span class="kw">as </span>TokioJoinHandle;
 <a href=#26 id=26 data-nosnippet>26</a>
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>crate::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
 <a href=#28 id=28 data-nosnippet>28</a>
-<a href=#29 id=29 data-nosnippet>29</a><span class="doccomment">/// Wrapper around tokio's `JoinHandle` that converts task failures into
-<a href=#30 id=30 data-nosnippet>30</a>/// [`iceberg::Error`].
+<a href=#29 id=29 data-nosnippet>29</a><span class="doccomment">/// Wrapper around tokio's [`TokioJoinHandle`] that converts task failures into
+<a href=#30 id=30 data-nosnippet>30</a>/// [`crate::Error`].
 <a href=#31 id=31 data-nosnippet>31</a>///
 <a href=#32 id=32 data-nosnippet>32</a>/// Tokio's `JoinHandle&lt;T&gt;` resolves to `Result&lt;T, JoinError&gt;`, where a
-<a href=#33 id=33 data-nosnippet>33</a>/// `JoinError` means the task either panicked or was cancelled (typically from
-<a href=#34 id=34 data-nosnippet>34</a>/// runtime shutdown or `abort`). Both are surfaced here as
-<a href=#35 id=35 data-nosnippet>35</a>/// `ErrorKind::Unexpected` with the original `JoinError` preserved as the
-<a href=#36 id=36 data-nosnippet>36</a>/// source.
-<a href=#37 id=37 data-nosnippet>37</a></span><span class="kw">pub struct </span>JoinHandle&lt;T&gt;(task::JoinHandle&lt;T&gt;);
+<a href=#33 id=33 data-nosnippet>33</a>/// [`tokio::task::JoinError`] means the task either panicked or was cancelled
+<a href=#34 id=34 data-nosnippet>34</a>/// (typically from runtime shutdown or `abort`).
+<a href=#35 id=35 data-nosnippet>35</a>/// Both are surfaced here as `ErrorKind::Unexpected` with the original
+<a href=#36 id=36 data-nosnippet>36</a>/// [`tokio::task::JoinError`] preserved as the source.
+<a href=#37 id=37 data-nosnippet>37</a></span><span class="kw">pub struct </span>JoinHandle&lt;T&gt;(TokioJoinHandle&lt;T&gt;);
 <a href=#38 id=38 data-nosnippet>38</a>
 <a href=#39 id=39 data-nosnippet>39</a><span class="kw">impl</span>&lt;T&gt; Unpin <span class="kw">for </span>JoinHandle&lt;T&gt; {}
 <a href=#40 id=40 data-nosnippet>40</a>
@@ -52,8 +52,8 @@
 <a href=#52 id=52 data-nosnippet>52</a>///
 <a href=#53 id=53 data-nosnippet>53</a>/// Wraps a [`tokio::runtime::Handle`], which is cheap to clone. The caller is
 <a href=#54 id=54 data-nosnippet>54</a>/// responsible for keeping the underlying runtime alive while this handle is
-<a href=#55 id=55 data-nosnippet>55</a>/// in use; spawning on a shut-down runtime will surface as a `JoinError` via
-<a href=#56 id=56 data-nosnippet>56</a>/// [`JoinHandle`].
+<a href=#55 id=55 data-nosnippet>55</a>/// in use; spawning on a shut-down runtime will surface as a [`tokio::task::JoinError`]
+<a href=#56 id=56 data-nosnippet>56</a>/// via the returned [`JoinHandle`].
 <a href=#57 id=57 data-nosnippet>57</a></span><span class="attr">#[derive(Clone)]
 <a href=#58 id=58 data-nosnippet>58</a></span><span class="kw">pub struct </span>RuntimeHandle {
 <a href=#59 id=59 data-nosnippet>59</a>    handle: tokio::runtime::Handle,
@@ -98,10 +98,10 @@
 <a href=#98 id=98 data-nosnippet>98</a>///
 <a href=#99 id=99 data-nosnippet>99</a>/// # Lifetime
 <a href=#100 id=100 data-nosnippet>100</a>///
-<a href=#101 id=101 data-nosnippet>101</a>/// A `Runtime` stores only `tokio::runtime::Handle`s (weak references). The
-<a href=#102 id=102 data-nosnippet>102</a>/// caller owns the tokio runtime's lifetime. If the underlying runtime is
+<a href=#101 id=101 data-nosnippet>101</a>/// A `Runtime` stores only `tokio::runtime::Handle`s (weak references).
+<a href=#102 id=102 data-nosnippet>102</a>/// The caller owns the tokio runtime's lifetime. If the underlying runtime is
 <a href=#103 id=103 data-nosnippet>103</a>/// dropped while iceberg is still using it, subsequent spawns will surface as
-<a href=#104 id=104 data-nosnippet>104</a>/// task cancellation errors via [`JoinHandle`].
+<a href=#104 id=104 data-nosnippet>104</a>/// task cancellation errors via the returned `JoinHandle`.
 <a href=#105 id=105 data-nosnippet>105</a>///
 <a href=#106 id=106 data-nosnippet>106</a>/// Cloning is cheap.
 <a href=#107 id=107 data-nosnippet>107</a></span><span class="attr">#[derive(Clone)]

@@ -8,7 +8,7 @@
 
 <span class="comment">// Not contained in debug logs.
 </span><span class="macro">assert!</span>(!<span class="macro">format!</span>(<span class="string">"{:?}"</span>, sensitive_string).contains(sensitive_value));</code></pre></div><h2 id="display"><a class="doc-anchor" href="#display">§</a>Display</h2>
-<p><a href="struct.SensitiveString.html" title="struct iceberg::sensitive::SensitiveString"><code>SensitiveString</code></a> does <strong>not</strong> implement [<code>Display</code>] to prevent bugs like:</p>
+<p><a href="struct.SensitiveString.html" title="struct iceberg::sensitive::SensitiveString"><code>SensitiveString</code></a> does <strong>not</strong> implement <a href="https://doc.rust-lang.org/nightly/core/fmt/trait.Display.html" title="trait core::fmt::Display"><code>std::fmt::Display</code></a> to prevent bugs like:</p>
 
 <div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="comment">// We don't want to send a redacted `Bearer: *****`.
 </span><span class="kw">let </span>auth_header = <span class="macro">format!</span>(<span class="string">"Bearer {}"</span>, SensitiveString::from(<span class="string">"token"</span>.to_string()));</code></pre></div>

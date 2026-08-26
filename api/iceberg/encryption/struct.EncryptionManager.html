@@ -14,7 +14,7 @@ write, along with key metadata for later decryption.</p>
 ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt;</h4></section></summary><div class="docblock"><p>Wrap a manifest list key metadata with a KEK for storage in table metadata.</p>
 <p>Stores the resulting wrapped entry (and any newly created KEK) in the
 manager’s internal <code>encryption_keys</code> map. Callers persist the full set
-at commit time via <a href="struct.EncryptionManager.html#structfield.encryption_keys" title="field iceberg::encryption::EncryptionManager::encryption_keys"><code>Self::encryption_keys</code></a>.</p>
+at commit time via the manager’s <code>encryption_keys</code>.</p>
 <p>Returns the <code>key_id</code> of the wrapped entry, which should be recorded on
 the snapshot as <code>encryption_key_id</code> so readers can locate it later.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.decrypt_manifest_list_key_metadata" class="method"><a class="src rightside" href="../../src/iceberg/encryption/manager.rs.html#196-228">Source</a><h4 class="code-header">pub async fn <a href="#method.decrypt_manifest_list_key_metadata" class="fn">decrypt_manifest_list_key_metadata</a>(

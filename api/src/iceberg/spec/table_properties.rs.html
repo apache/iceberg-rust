@@ -331,7 +331,7 @@
 <a href=#331 id=331 data-nosnippet>331</a>    <span class="doccomment">/// Deprecated table property for data file write location, with any trailing slash trimmed.
 <a href=#332 id=332 data-nosnippet>332</a>    ///
 <a href=#333 id=333 data-nosnippet>333</a>    /// Property will be removed at a later date.
-<a href=#334 id=334 data-nosnippet>334</a>    /// Superseded by [write_data_location].
+<a href=#334 id=334 data-nosnippet>334</a>    /// Superseded by [`TableProperties::write_data_location`].
 <a href=#335 id=335 data-nosnippet>335</a>    </span><span class="attr">#[property(
 <a href=#336 id=336 data-nosnippet>336</a>        key = <span class="self">Self</span>::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION,
 <a href=#337 id=337 data-nosnippet>337</a>        default = <span class="prelude-val">None</span>,
@@ -343,7 +343,7 @@
 <a href=#343 id=343 data-nosnippet>343</a>    /// with any trailing slash trimmed.
 <a href=#344 id=344 data-nosnippet>344</a>    ///
 <a href=#345 id=345 data-nosnippet>345</a>    /// Property will be removed at a later date.
-<a href=#346 id=346 data-nosnippet>346</a>    /// Superseded by [write_data_location].
+<a href=#346 id=346 data-nosnippet>346</a>    /// Superseded by [`TableProperties::write_data_location`].
 <a href=#347 id=347 data-nosnippet>347</a>    </span><span class="attr">#[property(
 <a href=#348 id=348 data-nosnippet>348</a>        key = <span class="self">Self</span>::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION,
 <a href=#349 id=349 data-nosnippet>349</a>        default = <span class="prelude-val">None</span>,
@@ -534,7 +534,7 @@
 <a href=#534 id=534 data-nosnippet>534</a>    </span><span class="kw">pub const </span>PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT: usize = <span class="number">2 </span>* <span class="number">1024 </span>* <span class="number">1024</span>;
 <a href=#535 id=535 data-nosnippet>535</a>
 <a href=#536 id=536 data-nosnippet>536</a>    <span class="doccomment">/// Property key for the master key id used to encrypt the table's manifest
-<a href=#537 id=537 data-nosnippet>537</a>    /// list and data files as defined in https://iceberg.apache.org/docs/nightly/encryption/.
+<a href=#537 id=537 data-nosnippet>537</a>    /// list and data files as defined in &lt;https://iceberg.apache.org/docs/nightly/encryption/&gt;.
 <a href=#538 id=538 data-nosnippet>538</a>    </span><span class="kw">pub const </span>PROPERTY_ENCRYPTION_KEY_ID: <span class="kw-2">&amp;</span>str = <span class="string">"encryption.key-id"</span>;
 <a href=#539 id=539 data-nosnippet>539</a>
 <a href=#540 id=540 data-nosnippet>540</a>    <span class="doccomment">/// Property key for the encryption data encryption key (DEK) length in bytes.
@@ -543,14 +543,14 @@
 <a href=#543 id=543 data-nosnippet>543</a>    </span><span class="kw">pub const </span>PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT: usize = <span class="number">16</span>;
 <a href=#544 id=544 data-nosnippet>544</a>    <span class="doccomment">/// Property key for the base directory for data files
 <a href=#545 id=545 data-nosnippet>545</a>    </span><span class="kw">pub const </span>PROPERTY_WRITE_DATA_LOCATION: <span class="kw-2">&amp;</span>str = <span class="string">"write.data.path"</span>;
-<a href=#546 id=546 data-nosnippet>546</a>    <span class="doccomment">/// Property key for deprecated [write_folder_storage_location]
+<a href=#546 id=546 data-nosnippet>546</a>    <span class="doccomment">/// Property key for deprecated [`TableProperties::write_folder_storage_location`]
 <a href=#547 id=547 data-nosnippet>547</a>    </span><span class="kw">pub const </span>PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: <span class="kw-2">&amp;</span>str = <span class="string">"write.folder-storage.path"</span>;
 <a href=#548 id=548 data-nosnippet>548</a>    <span class="doccomment">/// Property key for deprecated object storage path, kept as a fallback for compatibility.
 <a href=#549 id=549 data-nosnippet>549</a>    </span><span class="kw">pub const </span>PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: <span class="kw-2">&amp;</span>str = <span class="string">"write.object-storage.path"</span>;
 <a href=#550 id=550 data-nosnippet>550</a>    <span class="doccomment">/// Property key for controlling whether partition values are included in object storage paths.
 <a href=#551 id=551 data-nosnippet>551</a>    </span><span class="kw">pub const </span>PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: <span class="kw-2">&amp;</span>str =
 <a href=#552 id=552 data-nosnippet>552</a>        <span class="string">"write.object-storage.partitioned-paths"</span>;
-<a href=#553 id=553 data-nosnippet>553</a>    <span class="doccomment">/// Default value for [PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS]
+<a href=#553 id=553 data-nosnippet>553</a>    <span class="doccomment">/// Default value for [`TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS`]
 <a href=#554 id=554 data-nosnippet>554</a>    </span><span class="kw">pub const </span>PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool = <span class="bool-val">true</span>;
 <a href=#555 id=555 data-nosnippet>555</a>
 <a href=#556 id=556 data-nosnippet>556</a>    <span class="doccomment">/// The AES key size to use when generating data encryption keys, derived

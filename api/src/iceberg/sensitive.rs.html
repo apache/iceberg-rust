@@ -37,7 +37,7 @@
 <a href=#37 id=37 data-nosnippet>37</a>/// ```
 <a href=#38 id=38 data-nosnippet>38</a>///
 <a href=#39 id=39 data-nosnippet>39</a>/// # Display
-<a href=#40 id=40 data-nosnippet>40</a>/// [`SensitiveString`] does **not** implement [`Display`] to prevent bugs like:
+<a href=#40 id=40 data-nosnippet>40</a>/// [`SensitiveString`] does **not** implement [`std::fmt::Display`] to prevent bugs like:
 <a href=#41 id=41 data-nosnippet>41</a>///
 <a href=#42 id=42 data-nosnippet>42</a>/// ```compile_fail
 <a href=#43 id=43 data-nosnippet>43</a>/// # use iceberg::sensitive::SensitiveString;
@@ -83,7 +83,7 @@
 <a href=#83 id=83 data-nosnippet>83</a>
 <a href=#84 id=84 data-nosnippet>84</a><span class="doccomment">/// Wrapper for sensitive byte data (encryption keys, DEKs, etc.) that:
 <a href=#85 id=85 data-nosnippet>85</a>/// - Zeroizes memory on drop
-<a href=#86 id=86 data-nosnippet>86</a>/// - Redacts content in [`Debug`] and [`Display`] output
+<a href=#86 id=86 data-nosnippet>86</a>/// - Redacts content in [`Debug`] and [`std::fmt::Display`] output
 <a href=#87 id=87 data-nosnippet>87</a>/// - Provides only `&amp;[u8]` access via [`as_bytes()`](Self::as_bytes)
 <a href=#88 id=88 data-nosnippet>88</a>/// - Uses `Box&lt;[u8]&gt;` (immutable boxed slice) since key bytes never grow
 <a href=#89 id=89 data-nosnippet>89</a>///

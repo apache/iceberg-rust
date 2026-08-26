@@ -169,7 +169,7 @@
 <a href=#169 id=169 data-nosnippet>169</a>    /// * `aad` - Additional authenticated data (optional)
 <a href=#170 id=170 data-nosnippet>170</a>    ///
 <a href=#171 id=171 data-nosnippet>171</a>    /// # Returns
-<a href=#172 id=172 data-nosnippet>172</a>    /// The encrypted data in the format: [12-byte nonce][ciphertext][16-byte auth tag]
+<a href=#172 id=172 data-nosnippet>172</a>    /// The encrypted data in the format: `[12-byte nonce][ciphertext][16-byte auth tag]`
 <a href=#173 id=173 data-nosnippet>173</a>    /// This matches the Java implementation format for compatibility.
 <a href=#174 id=174 data-nosnippet>174</a>    </span><span class="kw">pub fn </span>encrypt(<span class="kw-2">&amp;</span><span class="self">self</span>, plaintext: <span class="kw-2">&amp;</span>[u8], aad: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u8]&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;&gt; {
 <a href=#175 id=175 data-nosnippet>175</a>        <span class="kw">match </span><span class="self">self</span>.key_size {

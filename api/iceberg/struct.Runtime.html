@@ -4,10 +4,10 @@ with a single tokio runtime, both <code>io()</code> and <code>cpu()</code> route
 Use <a href="struct.Runtime.html#method.new_with_split" title="associated function iceberg::Runtime::new_with_split"><code>Runtime::new_with_split</code></a> to provide dedicated runtimes for each
 category.</p>
 <h2 id="lifetime"><a class="doc-anchor" href="#lifetime">§</a>Lifetime</h2>
-<p>A <code>Runtime</code> stores only <code>tokio::runtime::Handle</code>s (weak references). The
-caller owns the tokio runtime’s lifetime. If the underlying runtime is
+<p>A <code>Runtime</code> stores only <code>tokio::runtime::Handle</code>s (weak references).
+The caller owns the tokio runtime’s lifetime. If the underlying runtime is
 dropped while iceberg is still using it, subsequent spawns will surface as
-task cancellation errors via [<code>JoinHandle</code>].</p>
+task cancellation errors via the returned <code>JoinHandle</code>.</p>
 <p>Cloning is cheap.</p>
 </div></details><h2 id="implementations" class="section-header">Implementations<a href="#implementations" class="anchor">§</a></h2><div id="implementations-list"><details class="toggle implementors-toggle" open><summary><section id="impl-Runtime" class="impl"><a class="src rightside" href="../src/iceberg/runtime/mod.rs.html#119-184">Source</a><a href="#impl-Runtime" class="anchor">§</a><h3 class="code-header">impl <a class="struct" href="struct.Runtime.html" title="struct iceberg::Runtime">Runtime</a></h3></section></summary><div class="impl-items"><details class="toggle method-toggle" open><summary><section id="method.new" class="method"><a class="src rightside" href="../src/iceberg/runtime/mod.rs.html#121-127">Source</a><h4 class="code-header">pub fn <a href="#method.new" class="fn">new</a>(runtime: &amp;Runtime) -&gt; Self</h4></section></summary><div class="docblock"><p>Create a Runtime backed by a single tokio runtime for all work.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.new_with_split" class="method"><a class="src rightside" href="../src/iceberg/runtime/mod.rs.html#130-138">Source</a><h4 class="code-header">pub fn <a href="#method.new_with_split" class="fn">new_with_split</a>(io_runtime: &amp;Runtime, cpu_runtime: &amp;Runtime) -&gt; Self</h4></section></summary><div class="docblock"><p>Create a Runtime with separate tokio runtimes for IO and CPU work.</p>

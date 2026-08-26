@@ -9,7 +9,7 @@
 <li><code>aad</code> - Additional authenticated data (optional)</li>
 </ul>
 <h5 id="returns"><a class="doc-anchor" href="#returns">§</a>Returns</h5>
-<p>The encrypted data in the format: [12-byte nonce][ciphertext][16-byte auth tag]
+<p>The encrypted data in the format: <code>[12-byte nonce][ciphertext][16-byte auth tag]</code>
 This matches the Java implementation format for compatibility.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.decrypt" class="method"><a class="src rightside" href="../../src/iceberg/encryption/crypto.rs.html#196-219">Source</a><h4 class="code-header">pub fn <a href="#method.decrypt" class="fn">decrypt</a>(&amp;self, ciphertext: &amp;[<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u8.html">u8</a>], aad: <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;[<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u8.html">u8</a>]&gt;) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u8.html">u8</a>&gt;&gt;</h4></section></summary><div class="docblock"><p>Decrypts data using AES-GCM.</p>
 <h5 id="arguments-1"><a class="doc-anchor" href="#arguments-1">§</a>Arguments</h5>

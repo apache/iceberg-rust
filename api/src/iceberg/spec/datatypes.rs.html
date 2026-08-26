@@ -167,7 +167,7 @@
 <a href=#167 id=167 data-nosnippet>167</a>        </span>}
 <a href=#168 id=168 data-nosnippet>168</a>    }
 <a href=#169 id=169 data-nosnippet>169</a>
-<a href=#170 id=170 data-nosnippet>170</a>    <span class="doccomment">/// Return max precision for decimal given [`num_bytes`] bytes.
+<a href=#170 id=170 data-nosnippet>170</a>    <span class="doccomment">/// Return max precision for decimal given `num_bytes` bytes.
 <a href=#171 id=171 data-nosnippet>171</a>    </span><span class="attr">#[inline(always)]
 <a href=#172 id=172 data-nosnippet>172</a>    </span><span class="kw">pub fn </span>decimal_max_precision(num_bytes: u32) -&gt; <span class="prelude-ty">Result</span>&lt;u32&gt; {
 <a href=#173 id=173 data-nosnippet>173</a>        <span class="macro">ensure_data_valid!</span>(
@@ -177,7 +177,7 @@
 <a href=#177 id=177 data-nosnippet>177</a>        <span class="prelude-val">Ok</span>(MAX_PRECISION[num_bytes <span class="kw">as </span>usize - <span class="number">1</span>])
 <a href=#178 id=178 data-nosnippet>178</a>    }
 <a href=#179 id=179 data-nosnippet>179</a>
-<a href=#180 id=180 data-nosnippet>180</a>    <span class="doccomment">/// Returns minimum bytes required for decimal with [`precision`].
+<a href=#180 id=180 data-nosnippet>180</a>    <span class="doccomment">/// Returns minimum bytes required for decimal with `precision`.
 <a href=#181 id=181 data-nosnippet>181</a>    </span><span class="attr">#[inline(always)]
 <a href=#182 id=182 data-nosnippet>182</a>    </span><span class="kw">pub fn </span>decimal_required_bytes(precision: u32) -&gt; <span class="prelude-ty">Result</span>&lt;u32&gt; {
 <a href=#183 id=183 data-nosnippet>183</a>        <span class="macro">ensure_data_valid!</span>(
