@@ -74,16 +74,20 @@ impl UnreferencedFiles {
     }
 }
 
-/// Computes the files reachable only from the expired snapshots of `table`.
+/// Computes the files reachable only from the expired snapshots of `table` — the files that
+/// expiring them would leave unreferenced, and that are therefore eligible for physical deletion.
 ///
 /// `table` must be the metadata *before* expiry (still carrying the expired snapshots), and
 /// `expired_snapshot_ids` the ids about to be removed. The result is the reference-count difference
 /// `files(expired) - files(retained)`, mirroring Java `ReachableFileCleanup`: a file kept alive by
 /// any surviving snapshot is excluded.
 ///
-/// Data and delete files are only collected when the `gc.enabled` table property is `true`, matching
-/// [`crate::catalog::utils::drop_table_data`] — they may be shared with other tables (e.g. via
-/// shallow clones), whereas manifests, manifest lists, and statistics files are table-private.
+/// When the `gc.enabled` table property is `false` this returns an empty set. Expiry may still
+/// rewrite metadata to drop snapshots, but no file may be physically deleted: manifests, manifest
+/// lists, statistics, and data files can all be referenced from outside this table (e.g. via
+/// shallow clones, or catalogs that share metadata), so `gc.enabled=false` is a hard
+/// garbage-collection boundary — Java's `CleanupLevel.NONE`. Metadata-only physical cleanup would
+/// need a separate explicit opt-in rather than being implied by this flag.
 ///
 /// Reachability is resolved by reading manifests, so any I/O error aborts the whole call: a
 /// manifest list or manifest that cannot be read — for a retained or an expired snapshot alike —
@@ -95,14 +99,25 @@ pub async fn unreferenced_files(
     expired_snapshot_ids: &HashSet<i64>,
 ) -> Result<UnreferencedFiles> {
     let metadata = table.metadata();
-    let gc_enabled = metadata.table_properties()?.gc_enabled();
+
+    // gc.enabled=false forbids deleting any file, so there is nothing to report (see the fn docs).
+    if !metadata.table_properties()?.gc_enabled() {
+        return Ok(UnreferencedFiles {
+            manifest_lists: HashSet::new(),
+            manifests: HashSet::new(),
+            data_files: HashSet::new(),
+            delete_files: HashSet::new(),
+            statistics_files: HashSet::new(),
+            partition_statistics_files: HashSet::new(),
+        });
+    }
 
     let (expired, retained): (Vec<&SnapshotRef>, Vec<&SnapshotRef>) = metadata
         .snapshots()
         .partition(|snapshot| expired_snapshot_ids.contains(&snapshot.snapshot_id()));
 
-    let retained_reachable = collect_reachable(table, &retained, gc_enabled).await?;
-    let expired_reachable = collect_reachable(table, &expired, gc_enabled).await?;
+    let retained_reachable = collect_reachable(table, &retained).await?;
+    let expired_reachable = collect_reachable(table, &expired).await?;
 
     let (retained_stats, retained_partition_stats) = stats_paths(metadata, &retained);
     let (expired_stats, expired_partition_stats) = stats_paths(metadata, &expired);
@@ -132,11 +147,7 @@ struct Reachable {
     delete_files: HashSet<String>,
 }
 
-async fn collect_reachable(
-    table: &Table,
-    snapshots: &[&SnapshotRef],
-    gc_enabled: bool,
-) -> Result<Reachable> {
+async fn collect_reachable(table: &Table, snapshots: &[&SnapshotRef]) -> Result<Reachable> {
     let mut reachable = Reachable::default();
 
     // Load each snapshot's manifest list concurrently; any failure aborts (see the fn docs).
@@ -163,11 +174,10 @@ async fn collect_reachable(
         }
     }
 
-    // Data/delete files are only relevant under gc.enabled (see the function-level docs).
-    if gc_enabled {
-        let io = table.file_io();
-        // `ManifestReader` (unlike a raw read) transparently decrypts an encrypted manifest.
-        let manifests = futures::stream::iter(manifests_by_path.into_values())
+    let io = table.file_io();
+    // `ManifestReader` (unlike a raw read) transparently decrypts an encrypted manifest.
+    let manifests =
+        futures::stream::iter(manifests_by_path.into_values())
             .map(|manifest_file| async move {
                 ManifestReader::new(io.clone()).read(&manifest_file).await
             })
@@ -175,23 +185,22 @@ async fn collect_reachable(
             .try_collect::<Vec<_>>()
             .await?;
 
-        for manifest in manifests {
-            for entry in manifest.entries() {
-                // Only live (added/existing) entries reference a file; a Deleted entry means the
-                // snapshot dropped it, so it must not keep that file alive (matches Java's
-                // `liveEntries()`), otherwise a file deleted by a retained snapshot would never be
-                // reported even once every snapshot that still held it live has expired.
-                if !entry.is_alive() {
-                    continue;
-                }
-                let path = entry.file_path().to_string();
-                match entry.data_file().content_type() {
-                    DataContentType::Data => reachable.data_files.insert(path),
-                    DataContentType::PositionDeletes | DataContentType::EqualityDeletes => {
-                        reachable.delete_files.insert(path)
-                    }
-                };
+    for manifest in manifests {
+        for entry in manifest.entries() {
+            // Only live (added/existing) entries reference a file; a Deleted entry means the
+            // snapshot dropped it, so it must not keep that file alive (matches Java's
+            // `liveEntries()`), otherwise a file deleted by a retained snapshot would never be
+            // reported even once every snapshot that still held it live has expired.
+            if !entry.is_alive() {
+                continue;
             }
+            let path = entry.file_path().to_string();
+            match entry.data_file().content_type() {
+                DataContentType::Data => reachable.data_files.insert(path),
+                DataContentType::PositionDeletes | DataContentType::EqualityDeletes => {
+                    reachable.delete_files.insert(path)
+                }
+            };
         }
     }
 
@@ -735,7 +744,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gc_disabled_excludes_content_files_but_keeps_metadata() {
+    async fn gc_disabled_returns_empty() {
         let tmp = TempDir::new().unwrap();
         let file_io = FileIO::new_with_fs();
         let loc = tmp.path().join("table").to_str().unwrap().to_string();
@@ -748,22 +757,21 @@ mod tests {
             &tmp,
             file_io,
             vec![
-                snapshot(S1, None, 1, 1000, s1_list.clone()),
+                snapshot(S1, None, 1, 1000, s1_list),
                 snapshot(S2, Some(S1), 2, 2000, s2_list),
             ],
             S2,
             HashMap::from([("gc.enabled".to_string(), "false".to_string())]),
-            vec![],
+            vec![stats_file(S1, "/s1-stats.puffin")],
             vec![],
         );
 
         let files = unreferenced_files(&table, &HashSet::from([S1]))
             .await
             .unwrap();
-        // Data files are not collected with gc disabled, but the table-private metadata still is.
-        assert!(files.data_files.is_empty());
-        assert_eq!(files.manifest_lists, HashSet::from([s1_list]));
-        assert_eq!(files.manifests.len(), 1);
+        // gc.enabled=false is a hard boundary: nothing is eligible for physical deletion, not even
+        // the expired snapshot's orphaned manifest list or statistics.
+        assert!(files.is_empty());
     }
 
     #[tokio::test]
