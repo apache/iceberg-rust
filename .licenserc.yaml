@@ -31,12 +31,16 @@ header:
     - "**/DEPENDENCIES.*.tsv"
     # Generated content by cargo-public-api
     - "**/public-api.txt"
+    # Generated content by trybuild
+    - "**/*.stderr"
     # Release distributions
     - "dist/*"
     - "target"
     - "Cargo.lock"
     - "bindings/python/uv.lock"
+    # GitHub configuration
     - ".github/PULL_REQUEST_TEMPLATE.md"
+    - ".github/copilot-instructions.md"
     # Python environment
     - "bindings/python/.venv/"
     - "bindings/python/.pytest_cache/"
