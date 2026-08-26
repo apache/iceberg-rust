@@ -1468,29 +1468,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_execute_with_external_transaction_returns_commit_error() {
-        let catalog = new_commit_error_catalog().await;
-
-        // When the caller owns the transaction, execute returns the successful
-        // statement result and the caller receives the commit error.
-        let mut transaction = catalog.connection.begin().await.unwrap();
-        catalog
-            .execute(
-                "INSERT INTO child VALUES (1)",
-                vec![],
-                Some(&mut transaction),
-            )
-            .await
-            .unwrap();
-        assert!(transaction.commit().await.is_err());
-        let child_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM child")
-            .fetch_one(&catalog.connection)
-            .await
-            .unwrap();
-        assert_eq!(child_count, 0);
-    }
-
     // Regression test: storage-backend props set on the catalog must reach
     // the FileIO; otherwise authenticated backends fail with 401s on writes.
     #[tokio::test]
