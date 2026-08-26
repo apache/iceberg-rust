@@ -1406,6 +1406,8 @@ mod tests {
             .await
             .unwrap();
 
+        // A deferred foreign-key constraint makes the INSERT succeed while COMMIT
+        // reliably fails, allowing both transaction ownership paths to be tested.
         catalog
             .connection
             .execute("PRAGMA foreign_keys = ON")
@@ -1425,6 +1427,7 @@ mod tests {
             .await
             .unwrap();
 
+        // When execute owns the transaction, it must return the commit error.
         assert!(
             catalog
                 .execute("INSERT INTO child VALUES (1)", vec![], None)
@@ -1437,6 +1440,25 @@ mod tests {
             .unwrap();
         assert_eq!(child_count, 0);
 
+        // When the caller owns the transaction, execute returns the successful
+        // statement result and the caller receives the commit error.
+        let mut transaction = catalog.connection.begin().await.unwrap();
+        catalog
+            .execute(
+                "INSERT INTO child VALUES (1)",
+                vec![],
+                Some(&mut transaction),
+            )
+            .await
+            .unwrap();
+        assert!(transaction.commit().await.is_err());
+        let child_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM child")
+            .fetch_one(&catalog.connection)
+            .await
+            .unwrap();
+        assert_eq!(child_count, 0);
+
+        // A valid relationship confirms that successful owned transactions commit.
         catalog
             .connection
             .execute("INSERT INTO parent VALUES (1)")
