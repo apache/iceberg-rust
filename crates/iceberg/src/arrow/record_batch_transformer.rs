@@ -33,7 +33,10 @@ use arrow_select::zip::zip;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::schema::try_get_field_id_from_metadata;
-use crate::arrow::value::{create_primitive_array_repeated, create_primitive_array_single_element};
+use crate::arrow::value::{
+    create_literal_array_repeated, create_primitive_array_repeated,
+    create_primitive_array_single_element,
+};
 use crate::arrow::{
     datum_to_arrow_type_with_ree, primitive_type_to_arrow_type_with_ree, schema_to_arrow_schema,
     type_to_arrow_type,
@@ -169,7 +172,7 @@ pub(crate) enum ColumnSource {
     // this value comes from the table schema, not the per-file constant map.
     Add {
         target_type: DataType,
-        value: Option<PrimitiveLiteral>,
+        value: Option<Literal>,
     },
 
     // A metadata column read from the file and coalesced with a per-file
@@ -228,7 +231,7 @@ pub(crate) enum ChildPlan {
     },
     Add {
         target_type: DataType,
-        value: Option<PrimitiveLiteral>,
+        value: Option<Literal>,
     },
 }
 
@@ -238,6 +241,7 @@ impl PromotePlan {
         target: &DataType,
         snapshot_schema: &IcebergSchema,
         constant_fields: &HashMap<i32, ColumnConstant>,
+        use_position_fallback: bool,
     ) -> Result<Self> {
         if source == target {
             return Ok(PromotePlan::PassThrough);
@@ -250,6 +254,7 @@ impl PromotePlan {
                         target_fields,
                         snapshot_schema,
                         constant_fields,
+                        use_position_fallback,
                     )?,
                     fields: target_fields.clone(),
                 })
@@ -265,6 +270,7 @@ impl PromotePlan {
                     target_field.data_type(),
                     snapshot_schema,
                     constant_fields,
+                    use_position_fallback,
                 )?),
                 field: target_field.clone(),
             }),
@@ -287,6 +293,7 @@ impl PromotePlan {
                                             target_field.data_type(),
                                             snapshot_schema,
                                             constant_fields,
+                                            use_position_fallback,
                                         )?,
                                     })
                                 })
@@ -323,6 +330,7 @@ impl PromotePlan {
         target_fields: &Fields,
         snapshot_schema: &IcebergSchema,
         constant_fields: &HashMap<i32, ColumnConstant>,
+        use_position_fallback: bool,
     ) -> Result<Vec<ChildPlan>> {
         let mut source_by_id = HashMap::with_capacity(source_fields.len());
         for (idx, field) in source_fields.iter().enumerate() {
@@ -340,17 +348,46 @@ impl PromotePlan {
             ));
         }
 
+        let reconstruct_unknown = RecordBatchTransformer::data_type_contains_null(
+            &DataType::Struct(target_fields.clone()),
+        );
         target_fields
             .iter()
-            .map(|target_field| {
+            .enumerate()
+            .map(|(target_index, target_field)| {
+                if matches!(target_field.data_type(), DataType::Null) {
+                    return Ok(ChildPlan::Add {
+                        target_type: DataType::Null,
+                        value: None,
+                    });
+                }
                 let field_id = try_get_field_id_from_metadata(target_field)?;
-                match field_id.and_then(|id| source_by_id.get(&id).copied()) {
+                let source_index = field_id
+                    .and_then(|id| source_by_id.get(&id).copied())
+                    .or_else(|| {
+                        if !source_by_id.is_empty() || !reconstruct_unknown {
+                            return None;
+                        }
+                        let position = target_fields.iter().take(target_index)
+                            .filter(|field| !matches!(field.data_type(), DataType::Null))
+                            .count();
+                        if use_position_fallback {
+                            Some(position)
+                        } else {
+                            source_fields.iter()
+                                .position(|field| field.name() == target_field.name())
+                                .or(Some(position))
+                        }
+                    })
+                    .filter(|index| *index < source_fields.len());
+                match source_index {
                     Some(source_index) => Ok(ChildPlan::FromSource {
                         plan: Self::build(
                             source_fields[source_index].data_type(),
                             target_field.data_type(),
                             snapshot_schema,
                             constant_fields,
+                            use_position_fallback,
                         )?,
                         source_index,
                     }),
@@ -362,23 +399,15 @@ impl PromotePlan {
                         {
                             return Ok(ChildPlan::Add {
                                 target_type: target_field.data_type().clone(),
-                                value: Some(datum.literal().clone()),
+                                value: Some(Literal::Primitive(datum.literal().clone())),
                             });
                         }
-                        // Missing nested fields are null-filled. Applying an
-                        // initial-default here is not implemented yet (#3261).
                         let iceberg_field =
                             field_id.and_then(|id| snapshot_schema.field_by_id(id));
-                        if iceberg_field.is_some_and(|f| f.initial_default.is_some()) {
-                            return Err(Error::new(
-                                ErrorKind::FeatureUnsupported,
-                                format!(
-                                    "initial-default of nested field {} is not supported, see https://github.com/apache/iceberg-rust/issues/3261",
-                                    target_field.name()
-                                ),
-                            ));
-                        }
-                        if iceberg_field.map_or(!target_field.is_nullable(), |f| f.required) {
+                        let default_value = iceberg_field.and_then(|f| f.initial_default.clone());
+                        if default_value.is_none()
+                            && iceberg_field.map_or(!target_field.is_nullable(), |f| f.required)
+                        {
                             return Err(invalid_data!(
                                 "required nested field {} is absent from the data file and has no initial-default",
                                 target_field.name()
@@ -386,7 +415,7 @@ impl PromotePlan {
                         }
                         Ok(ChildPlan::Add {
                             target_type: target_field.data_type().clone(),
-                            value: None,
+                            value: default_value,
                         })
                     }
                 }
@@ -521,6 +550,7 @@ pub(crate) struct RecordBatchTransformerBuilder {
     projected_iceberg_field_ids: Vec<i32>,
     constant_fields: HashMap<i32, ColumnConstant>,
     virtual_fields: HashSet<i32>,
+    use_position_fallback: bool,
 }
 
 /// How a metadata (or identity-partition) column's values are supplied.
@@ -592,7 +622,14 @@ impl RecordBatchTransformerBuilder {
             projected_iceberg_field_ids: projected_iceberg_field_ids.to_vec(),
             constant_fields: HashMap::new(),
             virtual_fields: HashSet::new(),
+            use_position_fallback: false,
         }
+    }
+
+    /// Use positional, rather than name-first, matching for nested fields without IDs.
+    pub(crate) fn with_position_fallback(mut self, use_position_fallback: bool) -> Self {
+        self.use_position_fallback = use_position_fallback;
+        self
     }
 
     /// Add a scalar constant value for a specific field ID.
@@ -685,6 +722,7 @@ impl RecordBatchTransformerBuilder {
             projected_iceberg_field_ids: self.projected_iceberg_field_ids,
             constant_fields: self.constant_fields,
             virtual_fields: self.virtual_fields,
+            use_position_fallback: self.use_position_fallback,
             batch_transform: None,
         }
     }
@@ -732,12 +770,30 @@ pub(crate) struct RecordBatchTransformer {
     // Iceberg projection rules (name mapping / initial-default / null)
     virtual_fields: HashSet<i32>,
 
+    // True for the no-ID/no-name-mapping reader branch. Nested fields in that branch must follow
+    // positional fallback semantics instead of inferring identity from current names.
+    use_position_fallback: bool,
+
     // BatchTransform gets lazily constructed based on the schema of
     // the first RecordBatch we receive from the file
     batch_transform: Option<BatchTransform>,
 }
 
 impl RecordBatchTransformer {
+    fn data_type_contains_null(data_type: &DataType) -> bool {
+        match data_type {
+            DataType::Null => true,
+            DataType::Struct(fields) => fields
+                .iter()
+                .any(|field| Self::data_type_contains_null(field.data_type())),
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::FixedSizeList(field, _) => Self::data_type_contains_null(field.data_type()),
+            DataType::Map(entries, _) => Self::data_type_contains_null(entries.data_type()),
+            _ => false,
+        }
+    }
+
     pub(crate) fn process_record_batch(
         &mut self,
         record_batch: RecordBatch,
@@ -753,7 +809,11 @@ impl RecordBatchTransformer {
                     .with_row_count(Some(record_batch.num_rows()));
                 RecordBatch::try_new_with_options(
                     Arc::clone(target_schema),
-                    self.transform_columns(record_batch.columns(), operations)?,
+                    self.transform_columns(
+                        record_batch.columns(),
+                        operations,
+                        record_batch.num_rows(),
+                    )?,
                     &options,
                 )?
             }
@@ -774,6 +834,7 @@ impl RecordBatchTransformer {
                     &self.projected_iceberg_field_ids,
                     &self.constant_fields,
                     &self.virtual_fields,
+                    self.use_position_fallback,
                 )?);
 
                 self.process_record_batch(record_batch)?
@@ -794,6 +855,7 @@ impl RecordBatchTransformer {
         projected_iceberg_field_ids: &[i32],
         constant_fields: &HashMap<i32, ColumnConstant>,
         virtual_fields: &HashSet<i32>,
+        use_position_fallback: bool,
     ) -> Result<BatchTransform> {
         let mapped_unprojected_arrow_schema = Arc::new(schema_to_arrow_schema(snapshot_schema)?);
         let field_id_to_mapped_schema_map =
@@ -905,6 +967,7 @@ impl RecordBatchTransformer {
                     field_id_to_mapped_schema_map,
                     constant_fields,
                     virtual_fields,
+                    use_position_fallback,
                 )?,
                 target_schema,
             }),
@@ -974,6 +1037,7 @@ impl RecordBatchTransformer {
         field_id_to_mapped_schema_map: HashMap<i32, (FieldRef, usize)>,
         constant_fields: &HashMap<i32, ColumnConstant>,
         virtual_fields: &HashSet<i32>,
+        use_position_fallback: bool,
     ) -> Result<Vec<ColumnSource>> {
         let field_id_to_source_schema_map =
             Self::build_field_id_to_arrow_schema_map(source_schema)?;
@@ -1121,6 +1185,7 @@ impl RecordBatchTransformer {
                         target_type,
                         snapshot_schema,
                         constant_fields,
+                        use_position_fallback,
                     )? {
                         PromotePlan::PassThrough => ColumnSource::PassThrough {
                             source_index: *source_index,
@@ -1146,27 +1211,8 @@ impl RecordBatchTransformer {
                         return Err(invalid_data!("Missing required field: {}", iceberg_field.name));
                     }
 
-                    // TODO: Support the spec-defined non-null struct initial default `{}` by
-                    // creating a non-null struct and applying each child's initial default.
-                    // Tracked in https://github.com/apache/iceberg-rust/issues/3261.
-                    let default_value = match iceberg_field.initial_default.as_ref() {
-                        None => None,
-                        Some(Literal::Primitive(prim)) => Some(prim.clone()),
-                        Some(_) => {
-                            return Err(Error::new(
-                                ErrorKind::FeatureUnsupported,
-                                format!(
-                                    "Cannot read field {} that is absent from the data file: \
-                                     applying a non-primitive initial-default for {} is not yet \
-                                     supported",
-                                    iceberg_field.name, iceberg_field.field_type
-                                ),
-                            ));
-                        }
-                    };
-
                     ColumnSource::Add {
-                        value: default_value,
+                        value: iceberg_field.initial_default.clone(),
                         target_type: target_type.clone(),
                     }
                 };
@@ -1195,12 +1241,8 @@ impl RecordBatchTransformer {
         &self,
         columns: &[Arc<dyn ArrowArray>],
         operations: &[ColumnSource],
+        num_rows: usize,
     ) -> Result<Vec<Arc<dyn ArrowArray>>> {
-        if columns.is_empty() {
-            return Ok(columns.to_vec());
-        }
-        let num_rows = columns[0].len();
-
         operations
             .iter()
             .map(|op| {
@@ -1222,7 +1264,8 @@ impl RecordBatchTransformer {
                         target_type,
                     } => match self.constant_fields.get(field_id) {
                         Some(ColumnConstant::Scalar(datum)) => {
-                            Self::create_column(target_type, Some(datum.literal()), num_rows)?
+                            let literal = Literal::Primitive(datum.literal().clone());
+                            Self::create_column(target_type, Some(&literal), num_rows)?
                         }
                         Some(ColumnConstant::Null(_)) => {
                             Self::create_column(target_type, None, num_rows)?
@@ -1299,11 +1342,22 @@ impl RecordBatchTransformer {
 
     fn create_column(
         target_type: &DataType,
-        prim_lit: Option<&PrimitiveLiteral>,
+        literal: Option<&Literal>,
         num_rows: usize,
     ) -> Result<ArrayRef> {
         // Check if this is a RunEndEncoded type (for constant fields)
         if let DataType::RunEndEncoded(_, values_field) = target_type {
+            let prim_lit = match literal {
+                Some(Literal::Primitive(value)) => Some(value.clone()),
+                None => None,
+                Some(value) => {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Run-end encoded constant must be primitive, got {value:?}"),
+                    ));
+                }
+            };
+
             // Helper to create a Run-End Encoded array
             let create_ree_array = |values_array: ArrayRef| -> Result<ArrayRef> {
                 let run_ends = if num_rows == 0 {
@@ -1324,13 +1378,13 @@ impl RecordBatchTransformer {
 
             // Create the values array using the helper function
             let values_array =
-                create_primitive_array_single_element(values_field.data_type(), prim_lit)?;
+                create_primitive_array_single_element(values_field.data_type(), prim_lit.as_ref())?;
 
             // Wrap in Run-End Encoding
             create_ree_array(values_array)
         } else {
             // Non-REE type (simple arrays for non-constant fields)
-            create_primitive_array_repeated(target_type, prim_lit, num_rows)
+            create_literal_array_repeated(target_type, literal, num_rows)
         }
     }
 
@@ -1427,7 +1481,8 @@ mod test {
     use arrow_array::types::Int32Type;
     use arrow_array::{
         Array, ArrayRef, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
-        LargeListArray, ListArray, MapArray, RecordBatch, StringArray, StructArray, new_null_array,
+        LargeListArray, ListArray, MapArray, RecordBatch, RecordBatchOptions, StringArray,
+        StructArray, new_null_array,
     };
     use arrow_buffer::{NullBuffer, OffsetBuffer};
     use arrow_cast::cast;
@@ -1440,11 +1495,13 @@ mod test {
     };
     use crate::arrow::{DEFAULT_MAP_FIELD_NAME, build_partition_constant};
     use crate::spec::{
-        ListType, Literal, MapType, NestedField, PrimitiveType, Schema, Struct, StructType, Type,
+        ListType, Literal, Map as MapValue, MapType, NestedField, PrimitiveType, Schema, Struct,
+        StructType, Type,
     };
 
     fn promote(source: &ArrayRef, target: &DataType, schema: &Schema) -> crate::Result<ArrayRef> {
-        PromotePlan::build(source.data_type(), target, schema, &HashMap::new())?.apply(source)
+        PromotePlan::build(source.data_type(), target, schema, &HashMap::new(), false)?
+            .apply(source)
     }
 
     fn empty_schema() -> Schema {
@@ -1767,8 +1824,8 @@ mod test {
                 "map entries have 1 source fields, expected 2",
             ),
         ] {
-            let err =
-                PromotePlan::build(&source, &target, &empty_schema(), &HashMap::new()).unwrap_err();
+            let err = PromotePlan::build(&source, &target, &empty_schema(), &HashMap::new(), false)
+                .unwrap_err();
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
             assert!(err.to_string().contains(message), "{err}");
         }
@@ -1790,7 +1847,7 @@ mod test {
     }
 
     #[test]
-    fn promote_nested_field_with_initial_default_errors() {
+    fn promote_nested_field_with_initial_default() {
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::optional(6, "y", Type::Primitive(PrimitiveType::Int))
@@ -1801,9 +1858,19 @@ mod test {
             .unwrap();
         let source = unevolved_struct_data(vec![1, 2]) as ArrayRef;
 
-        let err = promote(&source, &evolved_struct_type(), &schema).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
-        assert!(err.to_string().contains("initial-default"));
+        let result = promote(&source, &evolved_struct_type(), &schema).unwrap();
+        let expected = StructArray::new(
+            Fields::from(vec![
+                field_with_id("x", DataType::Int32, true, 5),
+                field_with_id("y", DataType::Int32, true, 6),
+            ]),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![42, 42])) as ArrayRef,
+            ],
+            None,
+        );
+        assert_eq!(result.as_struct(), &expected);
     }
 
     #[test]
@@ -2107,6 +2174,444 @@ mod test {
     }
 
     #[test]
+    fn processor_materializes_unknown_from_zero_column_batch() {
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "unknown", PrimitiveType::Unknown).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let options = RecordBatchOptions::default().with_row_count(Some(2));
+        let source_batch =
+            RecordBatch::try_new_with_options(Arc::new(ArrowSchema::empty()), vec![], &options)
+                .unwrap();
+        let mut transformer = RecordBatchTransformerBuilder::new(snapshot_schema, &[1]).build();
+
+        let result = transformer.process_record_batch(source_batch).unwrap();
+
+        assert_eq!(result.num_rows(), 2);
+        assert_eq!(result.num_columns(), 1);
+        assert_eq!(result.column(0).data_type(), &DataType::Null);
+        assert_eq!(result.column(0).logical_null_count(), 2);
+    }
+
+    #[test]
+    fn processor_rebuilds_unknown_children_omitted_from_parquet_struct() {
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(
+                        1,
+                        "nested",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(2, "known", PrimitiveType::Int).into(),
+                            NestedField::optional(3, "unknown", PrimitiveType::Unknown).into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let source_fields = Fields::from(vec![field_with_id("known", DataType::Int32, true, 2)]);
+        let source_struct = Arc::new(StructArray::new(
+            source_fields.clone(),
+            vec![Arc::new(Int32Array::from(vec![Some(1), Some(2)]))],
+            None,
+        ));
+        let source_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "nested",
+            DataType::Struct(source_fields),
+            true,
+            1,
+        )]));
+        let source_batch = RecordBatch::try_new(source_schema, vec![source_struct]).unwrap();
+        let mut transformer = RecordBatchTransformerBuilder::new(snapshot_schema, &[1]).build();
+
+        let result = transformer.process_record_batch(source_batch).unwrap();
+
+        let nested = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(nested.num_columns(), 2);
+        assert_eq!(nested.fields()[1].data_type(), &DataType::Null);
+        assert_eq!(nested.column(1).logical_null_count(), 2);
+    }
+
+    #[test]
+    fn processor_materializes_missing_nested_children_during_unknown_reconstruction() {
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(
+                        1,
+                        "nested",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(2, "known", PrimitiveType::Int).into(),
+                            NestedField::optional(3, "unknown", PrimitiveType::Unknown).into(),
+                            NestedField::optional(4, "added_optional", PrimitiveType::String)
+                                .into(),
+                            NestedField::required(5, "added_default", PrimitiveType::Long)
+                                .with_initial_default(Literal::long(7))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let source_fields = Fields::from(vec![field_with_id("known", DataType::Int32, true, 2)]);
+        let source_struct = Arc::new(StructArray::new(
+            source_fields.clone(),
+            vec![Arc::new(Int32Array::from(vec![Some(1), Some(2)]))],
+            None,
+        ));
+        let source_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "nested",
+            DataType::Struct(source_fields),
+            true,
+            1,
+        )]));
+        let source_batch = RecordBatch::try_new(source_schema, vec![source_struct]).unwrap();
+        let mut transformer = RecordBatchTransformerBuilder::new(snapshot_schema, &[1]).build();
+
+        let result = transformer.process_record_batch(source_batch).unwrap();
+
+        let nested = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(nested.num_columns(), 4);
+        assert_eq!(nested.column(1).data_type(), &DataType::Null);
+        assert_eq!(nested.column(1).logical_null_count(), 2);
+        assert_eq!(nested.column(2).logical_null_count(), 2);
+        let added_default = nested
+            .column(3)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(added_default.values(), &[7, 7]);
+    }
+
+    #[test]
+    fn processor_position_fallback_does_not_prefer_reused_nested_name() {
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(
+                        1,
+                        "nested",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(2, "known", PrimitiveType::Int).into(),
+                            NestedField::optional(4, "unknown", PrimitiveType::Unknown).into(),
+                            NestedField::optional(3, "reused", PrimitiveType::Int)
+                                .with_initial_default(Literal::int(99))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let source_fields = Fields::from(vec![Field::new("reused", DataType::Int32, true)]);
+        let source_struct = Arc::new(StructArray::new(
+            source_fields.clone(),
+            vec![Arc::new(Int32Array::from(vec![10, 20]))],
+            None,
+        ));
+        let source_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "nested",
+            DataType::Struct(source_fields),
+            true,
+            1,
+        )]));
+        let source_batch = RecordBatch::try_new(source_schema, vec![source_struct]).unwrap();
+        let mut transformer = RecordBatchTransformerBuilder::new(snapshot_schema, &[1])
+            .with_position_fallback(true)
+            .build();
+
+        let result = transformer.process_record_batch(source_batch).unwrap();
+
+        let nested = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let reused = nested
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(reused.values(), &[99, 99]);
+    }
+
+    #[test]
+    fn processor_materializes_nested_container_defaults() {
+        let struct_default = Type::Struct(StructType::new(vec![
+            NestedField::optional(5, "value", PrimitiveType::Int).into(),
+        ]));
+        let list_default = Type::List(ListType::new(
+            NestedField::list_element(7, PrimitiveType::Int, false).into(),
+        ));
+        let map_default = Type::Map(MapType::optional(
+            9,
+            PrimitiveType::String,
+            10,
+            PrimitiveType::Int,
+        ));
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(
+                        1,
+                        "nested",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(2, "known", PrimitiveType::Int).into(),
+                            NestedField::optional(3, "unknown", PrimitiveType::Unknown).into(),
+                            NestedField::required(4, "added_struct", struct_default)
+                                .with_initial_default(Literal::Struct(Struct::from_iter([Some(
+                                    Literal::int(8),
+                                )])))
+                                .into(),
+                            NestedField::required(6, "added_list", list_default)
+                                .with_initial_default(Literal::List(vec![
+                                    Some(Literal::int(1)),
+                                    Some(Literal::int(2)),
+                                ]))
+                                .into(),
+                            NestedField::required(8, "added_map", map_default)
+                                .with_initial_default(Literal::Map(MapValue::from_iter([(
+                                    Literal::string("key"),
+                                    Some(Literal::int(9)),
+                                )])))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let source_fields = Fields::from(vec![field_with_id("known", DataType::Int32, true, 2)]);
+        let source_struct = Arc::new(StructArray::new(
+            source_fields.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2]))],
+            None,
+        ));
+        let source_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "nested",
+            DataType::Struct(source_fields),
+            true,
+            1,
+        )]));
+        let source_batch = RecordBatch::try_new(source_schema, vec![source_struct]).unwrap();
+        let mut transformer = RecordBatchTransformerBuilder::new(snapshot_schema, &[1]).build();
+
+        let result = transformer.process_record_batch(source_batch).unwrap();
+
+        let nested = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let added_struct = nested
+            .column(2)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let struct_values = added_struct
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(struct_values.values(), &[8, 8]);
+
+        let added_list = nested
+            .column(3)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(added_list.value_offsets(), &[0, 2, 4]);
+        let list_values = added_list
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(list_values.values(), &[1, 2, 1, 2]);
+
+        let added_map = nested
+            .column(4)
+            .as_any()
+            .downcast_ref::<MapArray>()
+            .unwrap();
+        assert_eq!(added_map.value_offsets(), &[0, 1, 2]);
+        let map_keys = added_map
+            .keys()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(map_keys.iter().collect::<Vec<_>>(), vec![Some("key"); 2]);
+        let map_values = added_map
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(map_values.values(), &[9, 9]);
+    }
+
+    #[test]
+    fn processor_materializes_top_level_container_defaults() {
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "known", PrimitiveType::Int).into(),
+                    NestedField::required(
+                        2,
+                        "added_struct",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(3, "value", PrimitiveType::Int).into(),
+                        ])),
+                    )
+                    .with_initial_default(Literal::Struct(Struct::from_iter([Some(Literal::int(
+                        8,
+                    ))])))
+                    .into(),
+                    NestedField::required(
+                        4,
+                        "added_list",
+                        Type::List(ListType::new(
+                            NestedField::list_element(5, PrimitiveType::Int, true).into(),
+                        )),
+                    )
+                    .with_initial_default(Literal::List(vec![
+                        Some(Literal::int(1)),
+                        Some(Literal::int(2)),
+                    ]))
+                    .into(),
+                    NestedField::required(
+                        6,
+                        "added_map",
+                        Type::Map(MapType::required(
+                            7,
+                            PrimitiveType::String,
+                            8,
+                            PrimitiveType::Int,
+                        )),
+                    )
+                    .with_initial_default(Literal::Map(MapValue::from_iter([(
+                        Literal::string("key"),
+                        Some(Literal::int(9)),
+                    )])))
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let source_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "known",
+            DataType::Int32,
+            false,
+            1,
+        )]));
+        let source_batch =
+            RecordBatch::try_new(source_schema, vec![Arc::new(Int32Array::from(vec![1, 2]))])
+                .unwrap();
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &[1, 2, 4, 6]).build();
+
+        let result = transformer.process_record_batch(source_batch).unwrap();
+
+        let added_struct = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let struct_values = added_struct
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(struct_values.values(), &[8, 8]);
+
+        let added_list = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(added_list.value_offsets(), &[0, 2, 4]);
+        let list_values = added_list
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(list_values.values(), &[1, 2, 1, 2]);
+
+        let added_map = result
+            .column(3)
+            .as_any()
+            .downcast_ref::<MapArray>()
+            .unwrap();
+        assert_eq!(added_map.value_offsets(), &[0, 1, 2]);
+        let map_keys = added_map
+            .keys()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(map_keys.iter().collect::<Vec<_>>(), vec![Some("key"); 2]);
+        let map_values = added_map
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(map_values.values(), &[9, 9]);
+    }
+
+    #[test]
+    fn processor_does_not_reuse_nested_name_when_field_ids_differ() {
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(
+                        1,
+                        "nested",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(3, "reused", PrimitiveType::Long).into(),
+                            NestedField::optional(4, "unknown", PrimitiveType::Unknown).into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let source_fields = Fields::from(vec![field_with_id("reused", DataType::Int32, true, 2)]);
+        let source_struct = Arc::new(StructArray::new(
+            source_fields.clone(),
+            vec![Arc::new(Int32Array::from(vec![Some(10), Some(20)]))],
+            None,
+        ));
+        let source_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "nested",
+            DataType::Struct(source_fields),
+            true,
+            1,
+        )]));
+        let source_batch = RecordBatch::try_new(source_schema, vec![source_struct]).unwrap();
+        let mut transformer = RecordBatchTransformerBuilder::new(snapshot_schema, &[1]).build();
+
+        let error = transformer.process_record_batch(source_batch).unwrap_err();
+
+        assert!(error.message().contains("required nested field reused"));
+    }
+
+    #[test]
     fn schema_evolution_adds_date_column_with_nulls() {
         // Reproduces TestSelect.readAndWriteWithBranchAfterSchemaChange from iceberg-spark.
         // When reading old snapshots after adding a DATE column, the transformer must
@@ -2217,7 +2722,7 @@ mod test {
     }
 
     #[test]
-    fn schema_evolution_absent_struct_with_initial_default_errors() {
+    fn schema_evolution_absent_struct_with_initial_default() {
         for required in [false, true] {
             let added_field = NestedField::new(
                 2,
@@ -2251,24 +2756,16 @@ mod test {
                 RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
                     .unwrap();
 
-            let err = transformer
-                .process_record_batch(file_batch)
-                .expect_err(&format!(
-                    "required={required}: complex default should be rejected"
-                ));
+            let result = transformer.process_record_batch(file_batch).unwrap();
+            let expected = StructArray::new(
+                Fields::from(vec![field_with_id("child", DataType::Int32, true, 3)]),
+                vec![Arc::new(Int32Array::from(vec![None; 3])) as ArrayRef],
+                None,
+            );
             assert_eq!(
-                err.kind(),
-                ErrorKind::FeatureUnsupported,
+                result.column(1).as_struct(),
+                &expected,
                 "required={required}"
-            );
-            assert!(
-                err.to_string().contains("Cannot read field added_struct"),
-                "required={required}: {err}"
-            );
-            assert!(
-                err.to_string()
-                    .contains("applying a non-primitive initial-default"),
-                "required={required}: {err}"
             );
         }
     }

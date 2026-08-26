@@ -2851,13 +2851,13 @@ mod tests {
     fn test_parquet_arrow_schema_omits_unknown_struct_fields() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "unknown", PrimitiveType::Unknown.into()).into(),
+                NestedField::optional(1, "unknown", PrimitiveType::Unknown).into(),
                 NestedField::optional(
                     2,
                     "struct",
                     Type::Struct(StructType::new(vec![
-                        NestedField::optional(3, "unknown", PrimitiveType::Unknown.into()).into(),
-                        NestedField::optional(4, "known", PrimitiveType::Int.into()).into(),
+                        NestedField::optional(3, "unknown", PrimitiveType::Unknown).into(),
+                        NestedField::optional(4, "known", PrimitiveType::Int).into(),
                     ])),
                 )
                 .into(),
@@ -2879,12 +2879,12 @@ mod tests {
     fn test_parquet_arrow_schema_rejects_empty_struct() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "known", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1, "known", PrimitiveType::Int).into(),
                 NestedField::optional(
                     2,
                     "empty_struct",
                     Type::Struct(StructType::new(vec![
-                        NestedField::optional(3, "unknown", PrimitiveType::Unknown.into()).into(),
+                        NestedField::optional(3, "unknown", PrimitiveType::Unknown).into(),
                     ])),
                 )
                 .into(),
@@ -2931,7 +2931,7 @@ mod tests {
     fn test_parquet_arrow_schema_rejects_all_unknown_fields() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "unknown", PrimitiveType::Unknown.into()).into(),
+                NestedField::optional(1, "unknown", PrimitiveType::Unknown).into(),
             ])
             .build()
             .unwrap();
@@ -2952,7 +2952,7 @@ mod tests {
                     1,
                     "list",
                     Type::List(ListType::new(
-                        NestedField::list_element(2, PrimitiveType::Unknown.into(), false).into(),
+                        NestedField::list_element(2, PrimitiveType::Unknown, false).into(),
                     )),
                 )
                 .into(),
@@ -2975,8 +2975,7 @@ mod tests {
                         NestedField::list_element(
                             2,
                             Type::Struct(StructType::new(vec![
-                                NestedField::optional(3, "unknown", PrimitiveType::Unknown.into())
-                                    .into(),
+                                NestedField::optional(3, "unknown", PrimitiveType::Unknown).into(),
                             ])),
                             false,
                         )
@@ -3000,9 +2999,8 @@ mod tests {
                     1,
                     "map",
                     Type::Map(MapType::new(
-                        NestedField::map_key_element(2, PrimitiveType::String.into()).into(),
-                        NestedField::map_value_element(3, PrimitiveType::Unknown.into(), false)
-                            .into(),
+                        NestedField::map_key_element(2, PrimitiveType::String).into(),
+                        NestedField::map_value_element(3, PrimitiveType::Unknown, false).into(),
                     )),
                 )
                 .into(),

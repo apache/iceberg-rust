@@ -1205,13 +1205,13 @@ mod tests {
     fn test_project_batch_for_parquet_omits_unknown_fields() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "unknown", PrimitiveType::Unknown.into()).into(),
+                NestedField::optional(1, "unknown", PrimitiveType::Unknown).into(),
                 NestedField::optional(
                     2,
                     "struct",
                     Type::Struct(StructType::new(vec![
-                        NestedField::optional(3, "unknown", PrimitiveType::Unknown.into()).into(),
-                        NestedField::optional(4, "known", PrimitiveType::Int.into()).into(),
+                        NestedField::optional(3, "unknown", PrimitiveType::Unknown).into(),
+                        NestedField::optional(4, "known", PrimitiveType::Int).into(),
                     ])),
                 )
                 .into(),
@@ -1265,7 +1265,7 @@ mod tests {
     fn test_project_batch_for_parquet_honors_name_match_mode() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "known", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1, "known", PrimitiveType::Int).into(),
             ])
             .build()
             .unwrap();
@@ -1301,13 +1301,13 @@ mod tests {
     fn test_project_batch_for_parquet_rejects_unexpected_fields() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "known", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1, "known", PrimitiveType::Int).into(),
                 NestedField::optional(
                     2,
                     "struct",
                     Type::Struct(StructType::new(vec![
-                        NestedField::optional(3, "unknown", PrimitiveType::Unknown.into()).into(),
-                        NestedField::optional(4, "known", PrimitiveType::Int.into()).into(),
+                        NestedField::optional(3, "unknown", PrimitiveType::Unknown).into(),
+                        NestedField::optional(4, "known", PrimitiveType::Int).into(),
                     ])),
                 )
                 .into(),
@@ -1398,7 +1398,7 @@ mod tests {
                     1,
                     "list",
                     Type::List(ListType::new(
-                        NestedField::list_element(2, PrimitiveType::Int.into(), false).into(),
+                        NestedField::list_element(2, PrimitiveType::Int, false).into(),
                     )),
                 )
                 .into(),
@@ -1476,7 +1476,7 @@ mod tests {
     fn test_project_batch_for_parquet_rejects_invalid_field_id_metadata() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "known", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1, "known", PrimitiveType::Int).into(),
             ])
             .build()
             .unwrap();
@@ -1523,8 +1523,8 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::optional(1, "known", PrimitiveType::Int.into()).into(),
-                    NestedField::optional(2, "unknown", PrimitiveType::Unknown.into()).into(),
+                    NestedField::optional(1, "known", PrimitiveType::Int).into(),
+                    NestedField::optional(2, "unknown", PrimitiveType::Unknown).into(),
                 ])
                 .build()?,
         );
