@@ -21,10 +21,13 @@ use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray,
     FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray,
     LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
-    Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray, new_null_array,
+    Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray, UInt32Array,
+    new_empty_array, new_null_array,
 };
-use arrow_buffer::NullBuffer;
+use arrow_buffer::{NullBuffer, OffsetBuffer};
 use arrow_schema::{DataType, FieldRef, TimeUnit};
+use arrow_select::concat::concat;
+use arrow_select::take::take;
 use uuid::Uuid;
 
 use super::get_field_id_from_metadata;
@@ -956,6 +959,139 @@ pub(crate) fn create_primitive_array_repeated(
             ));
         }
     })
+}
+
+/// Create an array by repeating an Iceberg literal, including nested container literals.
+pub(crate) fn create_literal_array_repeated(
+    data_type: &DataType,
+    literal: Option<&Literal>,
+    num_rows: usize,
+) -> Result<ArrayRef> {
+    let Some(literal) = literal else {
+        return create_primitive_array_repeated(data_type, &None, num_rows);
+    };
+
+    if let Literal::Primitive(primitive) = literal {
+        return create_primitive_array_repeated(data_type, &Some(primitive.clone()), num_rows);
+    }
+
+    let single = create_literal_array_single(data_type, literal)?;
+    if num_rows == 1 {
+        return Ok(single);
+    }
+    let indices = UInt32Array::from(vec![0; num_rows]);
+    Ok(take(single.as_ref(), &indices, None)?)
+}
+
+fn create_literal_array_single(data_type: &DataType, literal: &Literal) -> Result<ArrayRef> {
+    match (data_type, literal) {
+        (DataType::Struct(fields), Literal::Struct(value)) => {
+            if fields.len() != value.fields().len() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Struct default has {} values but Arrow type has {} fields",
+                        value.fields().len(),
+                        fields.len()
+                    ),
+                ));
+            }
+
+            let columns = fields
+                .iter()
+                .zip(value.iter())
+                .map(|(field, value)| match value {
+                    Some(value) => create_literal_array_single(field.data_type(), value),
+                    None => Ok(new_null_array(field.data_type(), 1)),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(StructArray::try_new(
+                fields.clone(),
+                columns,
+                None,
+            )?))
+        }
+        (DataType::List(element), Literal::List(values)) => {
+            let values =
+                create_literal_values(element.data_type(), values.iter().map(Option::as_ref))?;
+            Ok(Arc::new(ListArray::try_new(
+                element.clone(),
+                OffsetBuffer::from_lengths([values.len()]),
+                values,
+                None,
+            )?))
+        }
+        (DataType::LargeList(element), Literal::List(values)) => {
+            let values =
+                create_literal_values(element.data_type(), values.iter().map(Option::as_ref))?;
+            Ok(Arc::new(LargeListArray::try_new(
+                element.clone(),
+                OffsetBuffer::from_lengths([values.len()]),
+                values,
+                None,
+            )?))
+        }
+        (DataType::Map(entries, ordered), Literal::Map(value)) => {
+            let DataType::Struct(entry_fields) = entries.data_type() else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Map entries field must be a struct",
+                ));
+            };
+            if entry_fields.len() != 2 {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Map entries struct must contain key and value fields",
+                ));
+            }
+
+            let keys = create_literal_values(
+                entry_fields[0].data_type(),
+                value.iter().map(|(key, _)| Some(key)),
+            )?;
+            let values = create_literal_values(
+                entry_fields[1].data_type(),
+                value.iter().map(|(_, value)| value.as_ref()),
+            )?;
+            let entries_array =
+                StructArray::try_new(entry_fields.clone(), vec![keys, values], None)?;
+            Ok(Arc::new(MapArray::try_new(
+                entries.clone(),
+                OffsetBuffer::from_lengths([value.len()]),
+                entries_array,
+                None,
+                *ordered,
+            )?))
+        }
+        (_, Literal::Primitive(primitive)) => {
+            create_primitive_array_single_element(data_type, &Some(primitive.clone()))
+        }
+        _ => Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Default literal {literal:?} does not match Arrow type {data_type}"),
+        )),
+    }
+}
+
+fn create_literal_values<'a>(
+    data_type: &DataType,
+    values: impl IntoIterator<Item = Option<&'a Literal>>,
+) -> Result<ArrayRef> {
+    let arrays = values
+        .into_iter()
+        .map(|value| match value {
+            Some(value) => create_literal_array_single(data_type, value),
+            None => Ok(new_null_array(data_type, 1)),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if arrays.is_empty() {
+        return Ok(new_empty_array(data_type));
+    }
+    let arrays = arrays
+        .iter()
+        .map(|array| array.as_ref())
+        .collect::<Vec<_>>();
+    Ok(concat(&arrays)?)
 }
 
 #[cfg(test)]
