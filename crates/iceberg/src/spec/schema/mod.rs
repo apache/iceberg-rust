@@ -71,7 +71,8 @@ pub struct Schema {
     id_to_field: HashMap<i32, NestedFieldRef>,
 
     name_to_id: HashMap<String, i32>,
-    lowercase_name_to_id: HashMap<String, i32>,
+    // `None` marks a lower-cased name that resolves to more than one field.
+    lowercase_name_to_id: HashMap<String, Option<i32>>,
     id_to_name: HashMap<i32, String>,
 
     field_id_to_accessor: HashMap<i32, Arc<StructAccessor>>,
@@ -150,10 +151,13 @@ impl SchemaBuilder {
             index.indexes()
         };
 
-        let lowercase_name_to_id = name_to_id
-            .iter()
-            .map(|(k, v)| (k.to_lowercase(), *v))
-            .collect();
+        let mut lowercase_name_to_id = HashMap::new();
+        for (name, field_id) in &name_to_id {
+            lowercase_name_to_id
+                .entry(name.to_lowercase())
+                .and_modify(|existing| *existing = None)
+                .or_insert(Some(*field_id));
+        }
 
         let highest_field_id = id_to_field.keys().max().cloned().unwrap_or(0);
 
@@ -354,7 +358,21 @@ impl Schema {
     pub fn field_by_name_case_insensitive(&self, field_name: &str) -> Option<&NestedFieldRef> {
         self.lowercase_name_to_id
             .get(&field_name.to_lowercase())
-            .and_then(|id| self.field_by_id(*id))
+            .and_then(|id| id.and_then(|id| self.field_by_id(id)))
+    }
+
+    pub(crate) fn field_by_name_case_insensitive_checked(
+        &self,
+        field_name: &str,
+    ) -> Result<Option<&NestedFieldRef>> {
+        match self.lowercase_name_to_id.get(&field_name.to_lowercase()) {
+            Some(Some(id)) => Ok(self.field_by_id(*id)),
+            Some(None) => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Field name {field_name} is ambiguous when case sensitivity is disabled"),
+            )),
+            None => Ok(None),
+        }
     }
 
     /// Get field by alias.
