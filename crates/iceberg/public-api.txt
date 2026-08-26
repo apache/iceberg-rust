@@ -3228,18 +3228,33 @@ pub fn iceberg::transaction::AddColumn::optional(name: impl alloc::string::ToStr
 pub fn iceberg::transaction::AddColumn::required(name: impl alloc::string::ToString, field_type: iceberg::spec::Type, initial_default: iceberg::spec::Literal) -> Self
 impl iceberg::transaction::AddColumn
 pub fn iceberg::transaction::AddColumn::builder() -> AddColumnBuilder<((), (), (), (), (), (), ())>
+pub struct iceberg::transaction::ExpireSnapshotsAction
+impl iceberg::transaction::ExpireSnapshotsAction
+pub fn iceberg::transaction::ExpireSnapshotsAction::expire_older_than_ms(self, older_than_ms: i64) -> Self
+pub fn iceberg::transaction::ExpireSnapshotsAction::expire_snapshot_ids(self, snapshot_ids: impl core::iter::traits::collect::IntoIterator<Item = i64>) -> Self
+pub fn iceberg::transaction::ExpireSnapshotsAction::retain_last(self, retain_last: usize) -> Self
+pub struct iceberg::transaction::FastAppendAction
+impl iceberg::transaction::FastAppendAction
+pub fn iceberg::transaction::FastAppendAction::add_data_files(self, data_files: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::DataFile>) -> Self
+pub fn iceberg::transaction::FastAppendAction::set_commit_uuid(self, commit_uuid: uuid::Uuid) -> Self
+pub fn iceberg::transaction::FastAppendAction::set_snapshot_properties(self, snapshot_properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
+pub fn iceberg::transaction::FastAppendAction::with_check_duplicate(self, v: bool) -> Self
+pub struct iceberg::transaction::ReplaceSortOrderAction
+impl iceberg::transaction::ReplaceSortOrderAction
+pub fn iceberg::transaction::ReplaceSortOrderAction::asc(self, name: &str, null_order: iceberg::spec::NullOrder) -> Self
+pub fn iceberg::transaction::ReplaceSortOrderAction::desc(self, name: &str, null_order: iceberg::spec::NullOrder) -> Self
 pub struct iceberg::transaction::Transaction
 impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
-pub fn iceberg::transaction::Transaction::expire_snapshots(&self) -> iceberg::transaction::expire_snapshots::ExpireSnapshotsAction
-pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transaction::append::FastAppendAction
+pub fn iceberg::transaction::Transaction::expire_snapshots(&self) -> iceberg::transaction::ExpireSnapshotsAction
+pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transaction::FastAppendAction
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
-pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::sort_order::ReplaceSortOrderAction
-pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::update_location::UpdateLocationAction
-pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::update_schema::UpdateSchemaAction
-pub fn iceberg::transaction::Transaction::update_statistics(&self) -> iceberg::transaction::update_statistics::UpdateStatisticsAction
-pub fn iceberg::transaction::Transaction::update_table_properties(&self) -> iceberg::transaction::update_properties::UpdatePropertiesAction
-pub fn iceberg::transaction::Transaction::upgrade_table_version(&self) -> iceberg::transaction::upgrade_format_version::UpgradeFormatVersionAction
+pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::ReplaceSortOrderAction
+pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::UpdateLocationAction
+pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::UpdateSchemaAction
+pub fn iceberg::transaction::Transaction::update_statistics(&self) -> iceberg::transaction::UpdateStatisticsAction
+pub fn iceberg::transaction::Transaction::update_table_properties(&self) -> iceberg::transaction::UpdatePropertiesAction
+pub fn iceberg::transaction::Transaction::upgrade_table_version(&self) -> iceberg::transaction::UpgradeFormatVersionAction
 impl core::clone::Clone for iceberg::transaction::Transaction
 pub fn iceberg::transaction::Transaction::clone(&self) -> iceberg::transaction::Transaction
 pub struct iceberg::transaction::UnreferencedFiles
@@ -3255,10 +3270,28 @@ pub fn iceberg::transaction::UnreferencedFiles::is_empty(&self) -> bool
 pub fn iceberg::transaction::UnreferencedFiles::len(&self) -> usize
 impl core::fmt::Debug for iceberg::transaction::UnreferencedFiles
 pub fn iceberg::transaction::UnreferencedFiles::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg::transaction::UpdateLocationAction
+impl iceberg::transaction::UpdateLocationAction
+pub fn iceberg::transaction::UpdateLocationAction::set_location(self, location: alloc::string::String) -> Self
+pub struct iceberg::transaction::UpdatePropertiesAction
+impl iceberg::transaction::UpdatePropertiesAction
+pub fn iceberg::transaction::UpdatePropertiesAction::remove(self, key: alloc::string::String) -> Self
+pub fn iceberg::transaction::UpdatePropertiesAction::set(self, key: alloc::string::String, value: alloc::string::String) -> Self
+pub struct iceberg::transaction::UpdateSchemaAction
+impl iceberg::transaction::UpdateSchemaAction
+pub fn iceberg::transaction::UpdateSchemaAction::add_column(self, add_column: iceberg::transaction::AddColumn) -> Self
+pub fn iceberg::transaction::UpdateSchemaAction::delete_column(self, name: impl alloc::string::ToString) -> Self
+pub struct iceberg::transaction::UpdateStatisticsAction
+impl iceberg::transaction::UpdateStatisticsAction
+pub fn iceberg::transaction::UpdateStatisticsAction::remove_statistics(self, snapshot_id: i64) -> Self
+pub fn iceberg::transaction::UpdateStatisticsAction::set_statistics(self, statistics_file: iceberg::spec::StatisticsFile) -> Self
+pub struct iceberg::transaction::UpgradeFormatVersionAction
+impl iceberg::transaction::UpgradeFormatVersionAction
+pub fn iceberg::transaction::UpgradeFormatVersionAction::set_format_version(self, format_version: iceberg::spec::FormatVersion) -> Self
 pub trait iceberg::transaction::ApplyTransactionAction
 pub fn iceberg::transaction::ApplyTransactionAction::apply(self, tx: iceberg::transaction::Transaction) -> iceberg::Result<iceberg::transaction::Transaction>
 impl<T: TransactionAction + 'static> iceberg::transaction::ApplyTransactionAction for T
-pub fn T::apply(self, tx: iceberg::transaction::Transaction) -> iceberg::Result<iceberg::transaction::Transaction> where Self: core::marker::Sized
+pub fn T::apply(self, tx: iceberg::transaction::Transaction) -> core::result::Result<iceberg::transaction::Transaction, iceberg::Error>
 pub async fn iceberg::transaction::unreferenced_files(table: &iceberg::table::Table, expired_snapshot_ids: &std::collections::hash::set::HashSet<i64>) -> iceberg::Result<iceberg::transaction::UnreferencedFiles>
 pub mod iceberg::transform
 pub trait iceberg::transform::TransformFunction: core::marker::Send + core::marker::Sync + core::fmt::Debug
@@ -3662,6 +3695,11 @@ impl core::fmt::Debug for iceberg::Error
 pub fn iceberg::Error::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for iceberg::Error
 pub fn iceberg::Error::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg::JoinHandle<T>(_)
+impl<T: core::marker::Send + 'static> core::future::future::Future for iceberg::JoinHandle<T>
+pub type iceberg::JoinHandle<T>::Output = core::result::Result<T, iceberg::Error>
+pub fn iceberg::JoinHandle<T>::poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<Self::Output>
+impl<T> core::marker::Unpin for iceberg::JoinHandle<T>
 pub struct iceberg::MemoryCatalog
 impl core::fmt::Debug for iceberg::memory::MemoryCatalog
 pub fn iceberg::memory::MemoryCatalog::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -3760,8 +3798,8 @@ impl core::fmt::Debug for iceberg::Runtime
 pub fn iceberg::Runtime::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::RuntimeHandle
 impl iceberg::RuntimeHandle
-pub fn iceberg::RuntimeHandle::spawn<F>(&self, future: F) -> iceberg::runtime::JoinHandle<<F as core::future::future::Future>::Output> where F: core::future::future::Future + core::marker::Send + 'static, <F as core::future::future::Future>::Output: core::marker::Send + 'static
-pub fn iceberg::RuntimeHandle::spawn_blocking<F, T>(&self, f: F) -> iceberg::runtime::JoinHandle<T> where F: core::ops::function::FnOnce() -> T + core::marker::Send + 'static, T: core::marker::Send + 'static
+pub fn iceberg::RuntimeHandle::spawn<F>(&self, future: F) -> iceberg::JoinHandle<<F as core::future::future::Future>::Output> where F: core::future::future::Future + core::marker::Send + 'static, <F as core::future::future::Future>::Output: core::marker::Send + 'static
+pub fn iceberg::RuntimeHandle::spawn_blocking<F, T>(&self, f: F) -> iceberg::JoinHandle<T> where F: core::ops::function::FnOnce() -> T + core::marker::Send + 'static, T: core::marker::Send + 'static
 impl core::clone::Clone for iceberg::RuntimeHandle
 pub fn iceberg::RuntimeHandle::clone(&self) -> iceberg::RuntimeHandle
 impl core::fmt::Debug for iceberg::RuntimeHandle
