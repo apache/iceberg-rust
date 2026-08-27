@@ -19,21 +19,41 @@ use tokio::sync::OnceCell;
 
 use super::validate_puffin_compression;
 use crate::Result;
-use crate::io::InputFile;
+use crate::encryption::EncryptedInputFile;
+use crate::io::{FileRead, InputFile};
 use crate::puffin::blob::Blob;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata};
 
 /// Puffin reader
 pub struct PuffinReader {
-    input_file: InputFile,
+    file_read: Box<dyn FileRead>,
+    file_length: u64,
     file_metadata: OnceCell<FileMetadata>,
 }
 
 impl PuffinReader {
-    /// Returns a new Puffin reader
-    pub fn new(input_file: InputFile) -> Self {
+    /// Returns a new Puffin reader for an unencrypted file.
+    pub async fn new(input_file: InputFile) -> Result<Self> {
+        let file_length = input_file.metadata().await?.size;
+        let file_read = input_file.reader().await?;
+        Ok(Self::from_parts(file_read, file_length))
+    }
+
+    /// Returns a new Puffin reader from an [`EncryptedInputFile`].
+    ///
+    /// Use this when reading Puffin files with transparent decryption. The
+    /// reader operates over plaintext offsets and length, so all blob and
+    /// footer positions match those written to the unencrypted file.
+    pub async fn new_from_encrypted(encrypted_input: EncryptedInputFile) -> Result<Self> {
+        let file_length = encrypted_input.metadata().await?.size;
+        let file_read = encrypted_input.reader().await?;
+        Ok(Self::from_parts(file_read, file_length))
+    }
+
+    fn from_parts(file_read: Box<dyn FileRead>, file_length: u64) -> Self {
         Self {
-            input_file,
+            file_read,
+            file_length,
             file_metadata: OnceCell::new(),
         }
     }
@@ -41,7 +61,7 @@ impl PuffinReader {
     /// Returns file metadata
     pub async fn file_metadata(&self) -> Result<&FileMetadata> {
         self.file_metadata
-            .get_or_try_init(|| FileMetadata::read(&self.input_file))
+            .get_or_try_init(|| FileMetadata::read(self.file_read.as_ref(), self.file_length))
             .await
     }
 
@@ -49,10 +69,9 @@ impl PuffinReader {
     pub async fn blob(&self, blob_metadata: &BlobMetadata) -> Result<Blob> {
         validate_puffin_compression(blob_metadata.compression_codec)?;
 
-        let file_read = self.input_file.reader().await?;
         let start = blob_metadata.offset;
         let end = start + blob_metadata.length;
-        let bytes = file_read.read(start..end).await?;
+        let bytes = self.file_read.read(start..end).await?;
         let data = blob_metadata.compression_codec.decompress(bytes.to_vec())?;
 
         Ok(Blob {
@@ -83,7 +102,7 @@ mod tests {
     #[tokio::test]
     async fn test_puffin_reader_uncompressed_metric_data() {
         let input_file = java_uncompressed_metric_input_file();
-        let puffin_reader = PuffinReader::new(input_file);
+        let puffin_reader = PuffinReader::new(input_file).await.unwrap();
 
         let file_metadata = puffin_reader.file_metadata().await.unwrap().clone();
         assert_eq!(file_metadata, uncompressed_metric_file_metadata());
@@ -108,7 +127,7 @@ mod tests {
     #[tokio::test]
     async fn test_puffin_reader_zstd_compressed_metric_data() {
         let input_file = java_zstd_compressed_metric_input_file();
-        let puffin_reader = PuffinReader::new(input_file);
+        let puffin_reader = PuffinReader::new(input_file).await.unwrap();
 
         let file_metadata = puffin_reader.file_metadata().await.unwrap().clone();
         assert_eq!(file_metadata, zstd_compressed_metric_file_metadata());
@@ -134,7 +153,7 @@ mod tests {
     async fn test_gzip_compression_rejected_on_blob_access() {
         // Use a real puffin file
         let input_file = java_uncompressed_metric_input_file();
-        let reader = PuffinReader::new(input_file);
+        let reader = PuffinReader::new(input_file).await.unwrap();
 
         // Create a BlobMetadata with Gzip compression
         let gzip_blob_metadata = BlobMetadata {
