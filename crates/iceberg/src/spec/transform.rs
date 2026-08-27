@@ -152,33 +152,76 @@ impl Transform {
     /// | `Hour`    | `yyyy-MM-dd-HH` | `2017-06-15-16` |
     ///
     /// `Void` renders as `null`, as does an absent value for any transform.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iceberg::spec::{Literal, PrimitiveType, Transform, Type};
+    ///
+    /// let int = Type::Primitive(PrimitiveType::Int);
+    /// let date = Type::Primitive(PrimitiveType::Date);
+    ///
+    /// // A stored value carries no logical type of its own. For transforms that do
+    /// // not format it themselves, the declared field type decides how it renders.
+    /// let stored = Literal::int(17332);
+    /// assert_eq!(
+    ///     Transform::Identity.to_human_string(&int, Some(&stored)),
+    ///     "17332"
+    /// );
+    /// assert_eq!(
+    ///     Transform::Identity.to_human_string(&date, Some(&stored)),
+    ///     "2017-06-15"
+    /// );
+    ///
+    /// // The temporal transforms format their own ordinal and ignore the declared
+    /// // type. All four ordinals below are the same instant, 2017-06-15T16:00:00Z,
+    /// // counted at four granularities.
+    /// assert_eq!(
+    ///     Transform::Year.to_human_string(&int, Some(&Literal::int(47))),
+    ///     "2017"
+    /// );
+    /// assert_eq!(
+    ///     Transform::Month.to_human_string(&int, Some(&Literal::int(569))),
+    ///     "2017-06"
+    /// );
+    /// assert_eq!(
+    ///     Transform::Day.to_human_string(&int, Some(&Literal::int(17332))),
+    ///     "2017-06-15"
+    /// );
+    /// assert_eq!(
+    ///     Transform::Hour.to_human_string(&int, Some(&Literal::int(415984))),
+    ///     "2017-06-15-16"
+    /// );
+    ///
+    /// // `Void` and an absent value render as `null`.
+    /// assert_eq!(
+    ///     Transform::Void.to_human_string(&int, Some(&Literal::int(47))),
+    ///     "null"
+    /// );
+    /// assert_eq!(Transform::Year.to_human_string(&int, None), "null");
+    /// ```
     pub fn to_human_string(&self, field_type: &Type, value: Option<&Literal>) -> String {
         let Some(value) = value else {
             return "null".to_string();
         };
 
-        // Year, Month and Hour have an `int` result type holding an ordinal count
-        // since the Unix epoch, so the datum path below would render the raw count
-        // rather than a date. The Java reference implementation instead overrides
-        // `toHumanString` on each of these transforms (`Years`, `Months`, `Hours`)
-        // to format the ordinal. Day needs no arm: its result type is `date`, so
-        // the datum already renders as a calendar date. Any literal that is not an
-        // `int` falls through to the existing behaviour.
-        if let Literal::Primitive(PrimitiveLiteral::Int(ordinal)) = value {
-            match self {
-                Self::Year => return Self::human_year(*ordinal),
-                Self::Month => return Self::human_month(*ordinal),
-                Self::Hour => return Self::human_hour(*ordinal),
-                _ => {}
-            }
-        }
-
         if let Some(value) = value.as_primitive_literal() {
             let field_type = field_type.as_primitive_type().unwrap();
             let datum = Datum::new(field_type.clone(), value);
 
-            match self {
-                Self::Void => "null".to_string(),
+            match (self, datum.literal()) {
+                (Self::Void, _) => "null".to_string(),
+                // The temporal transforms produce an ordinal count since the Unix
+                // epoch, so `Datum::to_human_string` would render the raw count for
+                // `Year`, `Month` and `Hour`, and would leave `Day` dependent on the
+                // field type happening to be `date`. The Java reference
+                // implementation overrides `toHumanString` on each of these
+                // transforms and ignores the declared type, so do the same here.
+                // Any other literal falls through to the datum.
+                (Self::Year, PrimitiveLiteral::Int(ordinal)) => Self::human_year(*ordinal),
+                (Self::Month, PrimitiveLiteral::Int(ordinal)) => Self::human_month(*ordinal),
+                (Self::Day, PrimitiveLiteral::Int(ordinal)) => Self::human_day(*ordinal),
+                (Self::Hour, PrimitiveLiteral::Int(ordinal)) => Self::human_hour(*ordinal),
                 _ => datum.to_human_string(),
             }
         } else {
@@ -208,22 +251,26 @@ impl Transform {
         )
     }
 
+    /// Formats a day ordinal, the number of days since 1970-01-01, as `yyyy-MM-dd`.
+    ///
+    /// Mirrors `TransformUtil.humanDay`. Like the Java `Days` transform, whose
+    /// signature is `toHumanString(Type alwaysDate, Integer value)`, this ignores
+    /// the declared field type rather than relying on it being `date`.
+    fn human_day(day_ordinal: i32) -> String {
+        let date = date::days_to_date(day_ordinal);
+        format!("{:04}-{:02}-{:02}", date.year(), date.month(), date.day())
+    }
+
     /// Formats an hour ordinal, the number of hours since 1970-01-01T00:00:00Z,
     /// as `yyyy-MM-dd-HH`.
     ///
-    /// Mirrors `TransformUtil.humanHour`. The date component is delegated to
-    /// [`date::days_to_date`], the same conversion `Display for Datum` uses for
-    /// `date` values, so an hour partition path can never disagree with a day
-    /// partition path about the calendar date. `div_euclid` and `rem_euclid`
-    /// split the ordinal so that hours before 1970 round the same way they do in
-    /// the Java reference implementation.
+    /// Mirrors `TransformUtil.humanHour`. `div_euclid` and `rem_euclid` split the
+    /// ordinal into whole days and the hour within the day so that hours before
+    /// 1970 round the same way they do in the Java reference implementation.
     fn human_hour(hour_ordinal: i32) -> String {
-        let date = date::days_to_date(hour_ordinal.div_euclid(24));
         format!(
-            "{:04}-{:02}-{:02}-{:02}",
-            date.year(),
-            date.month(),
-            date.day(),
+            "{}-{:02}",
+            Self::human_day(hour_ordinal.div_euclid(24)),
             hour_ordinal.rem_euclid(24)
         )
     }
@@ -1193,80 +1240,113 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_human_year() {
-        assert_eq!(Transform::human_year(-1970), "0000");
-        assert_eq!(Transform::human_year(-1), "1969");
-        assert_eq!(Transform::human_year(0), "1970");
-        assert_eq!(Transform::human_year(47), "2017");
+    /// Renders `ordinal` through the public API with the given declared type.
+    fn human(transform: Transform, primitive: PrimitiveType, ordinal: i32) -> String {
+        transform.to_human_string(&Type::Primitive(primitive), Some(&Literal::int(ordinal)))
+    }
+
+    /// Renders `ordinal` for a transform whose result type is `int`.
+    fn human_int(transform: Transform, ordinal: i32) -> String {
+        human(transform, PrimitiveType::Int, ordinal)
     }
 
     #[test]
-    fn test_human_month() {
-        assert_eq!(Transform::human_month(-1970 * 12), "0000-01");
-        assert_eq!(Transform::human_month(-13), "1968-12");
-        assert_eq!(Transform::human_month(-12), "1969-01");
-        assert_eq!(Transform::human_month(-1), "1969-12");
-        assert_eq!(Transform::human_month(0), "1970-01");
-        assert_eq!(Transform::human_month(11), "1970-12");
-        assert_eq!(Transform::human_month(12), "1971-01");
-        assert_eq!(Transform::human_month(569), "2017-06");
+    fn test_to_human_string_year() {
+        assert_eq!(human_int(Transform::Year, -1970), "0000");
+        assert_eq!(human_int(Transform::Year, -1), "1969");
+        assert_eq!(human_int(Transform::Year, 0), "1970");
+        assert_eq!(human_int(Transform::Year, 47), "2017");
     }
 
     #[test]
-    fn test_human_hour() {
-        assert_eq!(Transform::human_hour(-24), "1969-12-31-00");
-        assert_eq!(Transform::human_hour(-1), "1969-12-31-23");
-        assert_eq!(Transform::human_hour(0), "1970-01-01-00");
-        assert_eq!(Transform::human_hour(23), "1970-01-01-23");
-        assert_eq!(Transform::human_hour(24), "1970-01-02-00");
-        assert_eq!(Transform::human_hour(1000), "1970-02-11-16");
+    fn test_to_human_string_month() {
+        assert_eq!(human_int(Transform::Month, -1970 * 12), "0000-01");
+        assert_eq!(human_int(Transform::Month, -13), "1968-12");
+        assert_eq!(human_int(Transform::Month, -12), "1969-01");
+        assert_eq!(human_int(Transform::Month, -1), "1969-12");
+        assert_eq!(human_int(Transform::Month, 0), "1970-01");
+        assert_eq!(human_int(Transform::Month, 11), "1970-12");
+        assert_eq!(human_int(Transform::Month, 12), "1971-01");
+        assert_eq!(human_int(Transform::Month, 569), "2017-06");
     }
 
     #[test]
-    fn test_to_human_string_dispatches_on_transform() {
-        let int = Type::Primitive(PrimitiveType::Int);
-        let date = Type::Primitive(PrimitiveType::Date);
+    fn test_to_human_string_day() {
+        assert_eq!(human_int(Transform::Day, -1), "1969-12-31");
+        assert_eq!(human_int(Transform::Day, 0), "1970-01-01");
+        assert_eq!(human_int(Transform::Day, 31), "1970-02-01");
+        assert_eq!(human_int(Transform::Day, 17332), "2017-06-15");
+    }
 
-        assert_eq!(
-            Transform::Year.to_human_string(&int, Some(&Literal::int(47))),
-            "2017"
-        );
-        assert_eq!(
-            Transform::Month.to_human_string(&int, Some(&Literal::int(569))),
-            "2017-06"
-        );
-        assert_eq!(
-            Transform::Hour.to_human_string(&int, Some(&Literal::int(1000))),
-            "1970-02-11-16"
-        );
+    #[test]
+    fn test_to_human_string_hour() {
+        assert_eq!(human_int(Transform::Hour, -24), "1969-12-31-00");
+        assert_eq!(human_int(Transform::Hour, -1), "1969-12-31-23");
+        assert_eq!(human_int(Transform::Hour, 0), "1970-01-01-00");
+        assert_eq!(human_int(Transform::Hour, 23), "1970-01-01-23");
+        assert_eq!(human_int(Transform::Hour, 24), "1970-01-02-00");
+        assert_eq!(human_int(Transform::Hour, 1000), "1970-02-11-16");
+        assert_eq!(human_int(Transform::Hour, 415984), "2017-06-15-16");
+    }
 
-        // Day needs no dispatch arm: its result type is `date`, so the datum path
-        // already renders a calendar date. Asserted so that a later reader knows
-        // Day was considered rather than overlooked.
+    /// The temporal transforms ignore the declared field type, matching the Java
+    /// signatures `toHumanString(Type alwaysInt, ..)` and
+    /// `toHumanString(Type alwaysDate, ..)`.
+    #[test]
+    fn test_to_human_string_ignores_declared_type_for_temporal_transforms() {
+        assert_eq!(human(Transform::Year, PrimitiveType::Date, 47), "2017");
+        assert_eq!(human(Transform::Month, PrimitiveType::Date, 569), "2017-06");
         assert_eq!(
-            Transform::Day.to_human_string(&date, Some(&Literal::int(0))),
-            "1970-01-01"
+            human(Transform::Day, PrimitiveType::Int, 17332),
+            "2017-06-15"
         );
+        assert_eq!(
+            human(Transform::Hour, PrimitiveType::Date, 415984),
+            "2017-06-15-16"
+        );
+    }
 
-        // Transforms without a temporal format are unaffected.
+    /// Transforms with no temporal format keep deferring to the datum, which
+    /// renders according to the declared field type.
+    #[test]
+    fn test_to_human_string_defers_to_datum_for_other_transforms() {
         assert_eq!(
-            Transform::Identity.to_human_string(&int, Some(&Literal::int(47))),
-            "47"
+            human(Transform::Identity, PrimitiveType::Int, 17332),
+            "17332"
         );
         assert_eq!(
-            Transform::Void.to_human_string(&int, Some(&Literal::int(47))),
-            "null"
+            human(Transform::Identity, PrimitiveType::Date, 17332),
+            "2017-06-15"
         );
-        assert_eq!(Transform::Year.to_human_string(&int, None), "null");
+        assert_eq!(human(Transform::Bucket(16), PrimitiveType::Int, 5), "5");
 
-        // A literal that is not an `int` falls through to the datum path rather
-        // than being reported as `null`, so the dispatch adds no second behaviour
-        // change for values it cannot format.
-        let string = Type::Primitive(PrimitiveType::String);
+        // A literal that is not an `int` also defers to the datum rather than being
+        // reported as `null`, so the temporal arms add no second behaviour change.
         assert_eq!(
-            Transform::Year.to_human_string(&string, Some(&Literal::string("unformatted"))),
+            Transform::Year.to_human_string(
+                &Type::Primitive(PrimitiveType::String),
+                Some(&Literal::string("unformatted"))
+            ),
             "unformatted"
         );
+    }
+
+    #[test]
+    fn test_to_human_string_null_cases() {
+        assert_eq!(human(Transform::Void, PrimitiveType::Int, 47), "null");
+        assert_eq!(human(Transform::Void, PrimitiveType::Date, 17332), "null");
+        for transform in [
+            Transform::Year,
+            Transform::Month,
+            Transform::Day,
+            Transform::Hour,
+            Transform::Identity,
+            Transform::Void,
+        ] {
+            assert_eq!(
+                transform.to_human_string(&Type::Primitive(PrimitiveType::Int), None),
+                "null"
+            );
+        }
     }
 }
