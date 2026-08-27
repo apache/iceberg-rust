@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/expr/visitors/page_index_evaluator.rs`."><title>page_index_evaluator.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0-nightly (b90dc1e59 2026-03-04)" data-channel="nightly" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">iceberg/expr/visitors/</div>page_index_evaluator.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/expr/visitors/page_index_evaluator.rs`."><title>page_index_evaluator.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.0-nightly (e8e4541ff 2026-04-15)" data-channel="nightly" data-search-js="search-b5634cc7.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">iceberg/expr/visitors/</div>page_index_evaluator.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 <a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
 <a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
 <a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
@@ -941,7 +941,7 @@
 <a href=#941 id=941 data-nosnippet>941</a>        <span class="kw">let </span>(iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()<span class="question-mark">?</span>;
 <a href=#942 id=942 data-nosnippet>942</a>
 <a href=#943 id=943 data-nosnippet>943</a>        <span class="kw">let </span>filter = Reference::new(<span class="string">"col_float"</span>)
-<a href=#944 id=944 data-nosnippet>944</a>            .greater_than(Datum::float(<span class="number">1.0</span>))
+<a href=#944 id=944 data-nosnippet>944</a>            .greater_than(Datum::float(<span class="number">1.0_f32</span>))
 <a href=#945 id=945 data-nosnippet>945</a>            .bind(iceberg_schema_ref.clone(), <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 <a href=#946 id=946 data-nosnippet>946</a>
 <a href=#947 id=947 data-nosnippet>947</a>        <span class="kw">let </span>row_group_metadata = metadata.row_group(<span class="number">0</span>);
@@ -1103,7 +1103,7 @@
 <a href=#1103 id=1103 data-nosnippet>1103</a>        <span class="kw">let </span>(iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()<span class="question-mark">?</span>;
 <a href=#1104 id=1104 data-nosnippet>1104</a>
 <a href=#1105 id=1105 data-nosnippet>1105</a>        <span class="kw">let </span>filter = Reference::new(<span class="string">"col_float"</span>)
-<a href=#1106 id=1106 data-nosnippet>1106</a>            .less_than(Datum::float(<span class="number">5.0</span>))
+<a href=#1106 id=1106 data-nosnippet>1106</a>            .less_than(Datum::float(<span class="number">5.0_f32</span>))
 <a href=#1107 id=1107 data-nosnippet>1107</a>            .bind(iceberg_schema_ref.clone(), <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 <a href=#1108 id=1108 data-nosnippet>1108</a>
 <a href=#1109 id=1109 data-nosnippet>1109</a>        <span class="kw">let </span>result = PageIndexEvaluator::eval(
@@ -1133,7 +1133,7 @@
 <a href=#1133 id=1133 data-nosnippet>1133</a>        <span class="kw">let </span>(iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()<span class="question-mark">?</span>;
 <a href=#1134 id=1134 data-nosnippet>1134</a>
 <a href=#1135 id=1135 data-nosnippet>1135</a>        <span class="kw">let </span>filter = Reference::new(<span class="string">"col_float"</span>)
-<a href=#1136 id=1136 data-nosnippet>1136</a>            .equal_to(Datum::float(<span class="number">5.0</span>))
+<a href=#1136 id=1136 data-nosnippet>1136</a>            .equal_to(Datum::float(<span class="number">5.0_f32</span>))
 <a href=#1137 id=1137 data-nosnippet>1137</a>            .bind(iceberg_schema_ref.clone(), <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 <a href=#1138 id=1138 data-nosnippet>1138</a>
 <a href=#1139 id=1139 data-nosnippet>1139</a>        <span class="kw">let </span>result = PageIndexEvaluator::eval(
@@ -1166,7 +1166,7 @@
 <a href=#1166 id=1166 data-nosnippet>1166</a>        <span class="kw">let </span>(iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()<span class="question-mark">?</span>;
 <a href=#1167 id=1167 data-nosnippet>1167</a>
 <a href=#1168 id=1168 data-nosnippet>1168</a>        <span class="kw">let </span>filter = Reference::new(<span class="string">"col_float"</span>)
-<a href=#1169 id=1169 data-nosnippet>1169</a>            .not_equal_to(Datum::float(<span class="number">5.0</span>))
+<a href=#1169 id=1169 data-nosnippet>1169</a>            .not_equal_to(Datum::float(<span class="number">5.0_f32</span>))
 <a href=#1170 id=1170 data-nosnippet>1170</a>            .bind(iceberg_schema_ref.clone(), <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 <a href=#1171 id=1171 data-nosnippet>1171</a>
 <a href=#1172 id=1172 data-nosnippet>1172</a>        <span class="kw">let </span>result = PageIndexEvaluator::eval(
@@ -1192,7 +1192,7 @@
 <a href=#1192 id=1192 data-nosnippet>1192</a>        <span class="kw">let </span>(iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()<span class="question-mark">?</span>;
 <a href=#1193 id=1193 data-nosnippet>1193</a>
 <a href=#1194 id=1194 data-nosnippet>1194</a>        <span class="kw">let </span>filter = Reference::new(<span class="string">"col_float"</span>)
-<a href=#1195 id=1195 data-nosnippet>1195</a>            .starts_with(Datum::float(<span class="number">5.0</span>))
+<a href=#1195 id=1195 data-nosnippet>1195</a>            .starts_with(Datum::float(<span class="number">5.0_f32</span>))
 <a href=#1196 id=1196 data-nosnippet>1196</a>            .bind(iceberg_schema_ref.clone(), <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 <a href=#1197 id=1197 data-nosnippet>1197</a>
 <a href=#1198 id=1198 data-nosnippet>1198</a>        <span class="kw">let </span>result = PageIndexEvaluator::eval(
@@ -1284,82 +1284,85 @@
 <a href=#1284 id=1284 data-nosnippet>1284</a>        <span class="kw">let </span>(iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()<span class="question-mark">?</span>;
 <a href=#1285 id=1285 data-nosnippet>1285</a>
 <a href=#1286 id=1286 data-nosnippet>1286</a>        <span class="kw">let </span>filter = Reference::new(<span class="string">"col_float"</span>)
-<a href=#1287 id=1287 data-nosnippet>1287</a>            .is_in(std::iter::repeat_with(|| Datum::float(rng.random_range(<span class="number">0.0</span>..<span class="number">10.0</span>))).take(<span class="number">1000</span>))
-<a href=#1288 id=1288 data-nosnippet>1288</a>            .bind(iceberg_schema_ref.clone(), <span class="bool-val">false</span>)<span class="question-mark">?</span>;
-<a href=#1289 id=1289 data-nosnippet>1289</a>
-<a href=#1290 id=1290 data-nosnippet>1290</a>        <span class="kw">let </span>result = PageIndexEvaluator::eval(
-<a href=#1291 id=1291 data-nosnippet>1291</a>            <span class="kw-2">&amp;</span>filter,
-<a href=#1292 id=1292 data-nosnippet>1292</a>            <span class="kw-2">&amp;</span>column_index,
-<a href=#1293 id=1293 data-nosnippet>1293</a>            <span class="kw-2">&amp;</span>offset_index,
-<a href=#1294 id=1294 data-nosnippet>1294</a>            row_group_metadata,
-<a href=#1295 id=1295 data-nosnippet>1295</a>            <span class="kw-2">&amp;</span>field_id_map,
-<a href=#1296 id=1296 data-nosnippet>1296</a>            iceberg_schema_ref.as_ref(),
-<a href=#1297 id=1297 data-nosnippet>1297</a>        )<span class="question-mark">?</span>;
-<a href=#1298 id=1298 data-nosnippet>1298</a>
-<a href=#1299 id=1299 data-nosnippet>1299</a>        <span class="kw">let </span>expected = <span class="macro">vec!</span>[RowSelector::select(<span class="number">4096</span>)];
-<a href=#1300 id=1300 data-nosnippet>1300</a>
-<a href=#1301 id=1301 data-nosnippet>1301</a>        <span class="macro">assert_eq!</span>(result, expected);
-<a href=#1302 id=1302 data-nosnippet>1302</a>
-<a href=#1303 id=1303 data-nosnippet>1303</a>        <span class="prelude-val">Ok</span>(())
-<a href=#1304 id=1304 data-nosnippet>1304</a>    }
+<a href=#1287 id=1287 data-nosnippet>1287</a>            .is_in(
+<a href=#1288 id=1288 data-nosnippet>1288</a>                std::iter::repeat_with(|| Datum::float(rng.random_range(<span class="number">0.0_f32</span>..<span class="number">10.0_f32</span>)))
+<a href=#1289 id=1289 data-nosnippet>1289</a>                    .take(<span class="number">1000</span>),
+<a href=#1290 id=1290 data-nosnippet>1290</a>            )
+<a href=#1291 id=1291 data-nosnippet>1291</a>            .bind(iceberg_schema_ref.clone(), <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+<a href=#1292 id=1292 data-nosnippet>1292</a>
+<a href=#1293 id=1293 data-nosnippet>1293</a>        <span class="kw">let </span>result = PageIndexEvaluator::eval(
+<a href=#1294 id=1294 data-nosnippet>1294</a>            <span class="kw-2">&amp;</span>filter,
+<a href=#1295 id=1295 data-nosnippet>1295</a>            <span class="kw-2">&amp;</span>column_index,
+<a href=#1296 id=1296 data-nosnippet>1296</a>            <span class="kw-2">&amp;</span>offset_index,
+<a href=#1297 id=1297 data-nosnippet>1297</a>            row_group_metadata,
+<a href=#1298 id=1298 data-nosnippet>1298</a>            <span class="kw-2">&amp;</span>field_id_map,
+<a href=#1299 id=1299 data-nosnippet>1299</a>            iceberg_schema_ref.as_ref(),
+<a href=#1300 id=1300 data-nosnippet>1300</a>        )<span class="question-mark">?</span>;
+<a href=#1301 id=1301 data-nosnippet>1301</a>
+<a href=#1302 id=1302 data-nosnippet>1302</a>        <span class="kw">let </span>expected = <span class="macro">vec!</span>[RowSelector::select(<span class="number">4096</span>)];
+<a href=#1303 id=1303 data-nosnippet>1303</a>
+<a href=#1304 id=1304 data-nosnippet>1304</a>        <span class="macro">assert_eq!</span>(result, expected);
 <a href=#1305 id=1305 data-nosnippet>1305</a>
-<a href=#1306 id=1306 data-nosnippet>1306</a>    <span class="attr">#[test]
-<a href=#1307 id=1307 data-nosnippet>1307</a>    </span><span class="kw">fn </span>eval_in_valid_set_size_some_rows() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#1308 id=1308 data-nosnippet>1308</a>        <span class="kw">let </span>(metadata, _temp_file) = create_test_parquet_file()<span class="question-mark">?</span>;
-<a href=#1309 id=1309 data-nosnippet>1309</a>        <span class="kw">let </span>(column_index, offset_index, row_group_metadata) = get_test_metadata(<span class="kw-2">&amp;</span>metadata);
-<a href=#1310 id=1310 data-nosnippet>1310</a>        <span class="kw">let </span>(iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()<span class="question-mark">?</span>;
-<a href=#1311 id=1311 data-nosnippet>1311</a>
-<a href=#1312 id=1312 data-nosnippet>1312</a>        <span class="comment">// Test is_in with multiple values using min/max bounds
-<a href=#1313 id=1313 data-nosnippet>1313</a>        // Our file has 4 pages: ["AARDVARK".."BISON"], ["DEER"], ["GIRAFFE".."HIPPO"], ["HIPPO"]
-<a href=#1314 id=1314 data-nosnippet>1314</a>        // Testing is_in(["AARDVARK", "GIRAFFE"]) - both are in different pages
-<a href=#1315 id=1315 data-nosnippet>1315</a>        </span><span class="kw">let </span>filter = Reference::new(<span class="string">"col_string"</span>)
-<a href=#1316 id=1316 data-nosnippet>1316</a>            .is_in([Datum::string(<span class="string">"AARDVARK"</span>), Datum::string(<span class="string">"GIRAFFE"</span>)])
-<a href=#1317 id=1317 data-nosnippet>1317</a>            .bind(iceberg_schema_ref.clone(), <span class="bool-val">false</span>)<span class="question-mark">?</span>;
-<a href=#1318 id=1318 data-nosnippet>1318</a>
-<a href=#1319 id=1319 data-nosnippet>1319</a>        <span class="kw">let </span>result = PageIndexEvaluator::eval(
-<a href=#1320 id=1320 data-nosnippet>1320</a>            <span class="kw-2">&amp;</span>filter,
-<a href=#1321 id=1321 data-nosnippet>1321</a>            <span class="kw-2">&amp;</span>column_index,
-<a href=#1322 id=1322 data-nosnippet>1322</a>            <span class="kw-2">&amp;</span>offset_index,
-<a href=#1323 id=1323 data-nosnippet>1323</a>            row_group_metadata,
-<a href=#1324 id=1324 data-nosnippet>1324</a>            <span class="kw-2">&amp;</span>field_id_map,
-<a href=#1325 id=1325 data-nosnippet>1325</a>            iceberg_schema_ref.as_ref(),
-<a href=#1326 id=1326 data-nosnippet>1326</a>        )<span class="question-mark">?</span>;
-<a href=#1327 id=1327 data-nosnippet>1327</a>
-<a href=#1328 id=1328 data-nosnippet>1328</a>        <span class="comment">// Page 0 contains "AARDVARK", page 1 doesn't contain either, page 2 contains "GIRAFFE", page 3 doesn't
-<a href=#1329 id=1329 data-nosnippet>1329</a>        </span><span class="kw">let </span>expected = <span class="macro">vec!</span>[
-<a href=#1330 id=1330 data-nosnippet>1330</a>            RowSelector::select(<span class="number">1024</span>),
-<a href=#1331 id=1331 data-nosnippet>1331</a>            RowSelector::skip(<span class="number">1024</span>),
-<a href=#1332 id=1332 data-nosnippet>1332</a>            RowSelector::select(<span class="number">1024</span>),
-<a href=#1333 id=1333 data-nosnippet>1333</a>            RowSelector::skip(<span class="number">1024</span>),
-<a href=#1334 id=1334 data-nosnippet>1334</a>        ];
-<a href=#1335 id=1335 data-nosnippet>1335</a>
-<a href=#1336 id=1336 data-nosnippet>1336</a>        <span class="macro">assert_eq!</span>(result, expected);
-<a href=#1337 id=1337 data-nosnippet>1337</a>
-<a href=#1338 id=1338 data-nosnippet>1338</a>        <span class="prelude-val">Ok</span>(())
-<a href=#1339 id=1339 data-nosnippet>1339</a>    }
+<a href=#1306 id=1306 data-nosnippet>1306</a>        <span class="prelude-val">Ok</span>(())
+<a href=#1307 id=1307 data-nosnippet>1307</a>    }
+<a href=#1308 id=1308 data-nosnippet>1308</a>
+<a href=#1309 id=1309 data-nosnippet>1309</a>    <span class="attr">#[test]
+<a href=#1310 id=1310 data-nosnippet>1310</a>    </span><span class="kw">fn </span>eval_in_valid_set_size_some_rows() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#1311 id=1311 data-nosnippet>1311</a>        <span class="kw">let </span>(metadata, _temp_file) = create_test_parquet_file()<span class="question-mark">?</span>;
+<a href=#1312 id=1312 data-nosnippet>1312</a>        <span class="kw">let </span>(column_index, offset_index, row_group_metadata) = get_test_metadata(<span class="kw-2">&amp;</span>metadata);
+<a href=#1313 id=1313 data-nosnippet>1313</a>        <span class="kw">let </span>(iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()<span class="question-mark">?</span>;
+<a href=#1314 id=1314 data-nosnippet>1314</a>
+<a href=#1315 id=1315 data-nosnippet>1315</a>        <span class="comment">// Test is_in with multiple values using min/max bounds
+<a href=#1316 id=1316 data-nosnippet>1316</a>        // Our file has 4 pages: ["AARDVARK".."BISON"], ["DEER"], ["GIRAFFE".."HIPPO"], ["HIPPO"]
+<a href=#1317 id=1317 data-nosnippet>1317</a>        // Testing is_in(["AARDVARK", "GIRAFFE"]) - both are in different pages
+<a href=#1318 id=1318 data-nosnippet>1318</a>        </span><span class="kw">let </span>filter = Reference::new(<span class="string">"col_string"</span>)
+<a href=#1319 id=1319 data-nosnippet>1319</a>            .is_in([Datum::string(<span class="string">"AARDVARK"</span>), Datum::string(<span class="string">"GIRAFFE"</span>)])
+<a href=#1320 id=1320 data-nosnippet>1320</a>            .bind(iceberg_schema_ref.clone(), <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+<a href=#1321 id=1321 data-nosnippet>1321</a>
+<a href=#1322 id=1322 data-nosnippet>1322</a>        <span class="kw">let </span>result = PageIndexEvaluator::eval(
+<a href=#1323 id=1323 data-nosnippet>1323</a>            <span class="kw-2">&amp;</span>filter,
+<a href=#1324 id=1324 data-nosnippet>1324</a>            <span class="kw-2">&amp;</span>column_index,
+<a href=#1325 id=1325 data-nosnippet>1325</a>            <span class="kw-2">&amp;</span>offset_index,
+<a href=#1326 id=1326 data-nosnippet>1326</a>            row_group_metadata,
+<a href=#1327 id=1327 data-nosnippet>1327</a>            <span class="kw-2">&amp;</span>field_id_map,
+<a href=#1328 id=1328 data-nosnippet>1328</a>            iceberg_schema_ref.as_ref(),
+<a href=#1329 id=1329 data-nosnippet>1329</a>        )<span class="question-mark">?</span>;
+<a href=#1330 id=1330 data-nosnippet>1330</a>
+<a href=#1331 id=1331 data-nosnippet>1331</a>        <span class="comment">// Page 0 contains "AARDVARK", page 1 doesn't contain either, page 2 contains "GIRAFFE", page 3 doesn't
+<a href=#1332 id=1332 data-nosnippet>1332</a>        </span><span class="kw">let </span>expected = <span class="macro">vec!</span>[
+<a href=#1333 id=1333 data-nosnippet>1333</a>            RowSelector::select(<span class="number">1024</span>),
+<a href=#1334 id=1334 data-nosnippet>1334</a>            RowSelector::skip(<span class="number">1024</span>),
+<a href=#1335 id=1335 data-nosnippet>1335</a>            RowSelector::select(<span class="number">1024</span>),
+<a href=#1336 id=1336 data-nosnippet>1336</a>            RowSelector::skip(<span class="number">1024</span>),
+<a href=#1337 id=1337 data-nosnippet>1337</a>        ];
+<a href=#1338 id=1338 data-nosnippet>1338</a>
+<a href=#1339 id=1339 data-nosnippet>1339</a>        <span class="macro">assert_eq!</span>(result, expected);
 <a href=#1340 id=1340 data-nosnippet>1340</a>
-<a href=#1341 id=1341 data-nosnippet>1341</a>    <span class="kw">fn </span>build_iceberg_schema_and_field_map() -&gt; <span class="prelude-ty">Result</span>&lt;(Arc&lt;Schema&gt;, HashMap&lt;i32, usize&gt;)&gt; {
-<a href=#1342 id=1342 data-nosnippet>1342</a>        <span class="kw">let </span>iceberg_schema = Schema::builder()
-<a href=#1343 id=1343 data-nosnippet>1343</a>            .with_fields([
-<a href=#1344 id=1344 data-nosnippet>1344</a>                Arc::new(NestedField::new(
-<a href=#1345 id=1345 data-nosnippet>1345</a>                    <span class="number">1</span>,
-<a href=#1346 id=1346 data-nosnippet>1346</a>                    <span class="string">"col_float"</span>,
-<a href=#1347 id=1347 data-nosnippet>1347</a>                    Type::Primitive(PrimitiveType::Float),
-<a href=#1348 id=1348 data-nosnippet>1348</a>                    <span class="bool-val">false</span>,
-<a href=#1349 id=1349 data-nosnippet>1349</a>                )),
-<a href=#1350 id=1350 data-nosnippet>1350</a>                Arc::new(NestedField::new(
-<a href=#1351 id=1351 data-nosnippet>1351</a>                    <span class="number">2</span>,
-<a href=#1352 id=1352 data-nosnippet>1352</a>                    <span class="string">"col_string"</span>,
-<a href=#1353 id=1353 data-nosnippet>1353</a>                    Type::Primitive(PrimitiveType::String),
-<a href=#1354 id=1354 data-nosnippet>1354</a>                    <span class="bool-val">false</span>,
-<a href=#1355 id=1355 data-nosnippet>1355</a>                )),
-<a href=#1356 id=1356 data-nosnippet>1356</a>            ])
-<a href=#1357 id=1357 data-nosnippet>1357</a>            .build()<span class="question-mark">?</span>;
-<a href=#1358 id=1358 data-nosnippet>1358</a>        <span class="kw">let </span>iceberg_schema_ref = Arc::new(iceberg_schema);
-<a href=#1359 id=1359 data-nosnippet>1359</a>
-<a href=#1360 id=1360 data-nosnippet>1360</a>        <span class="kw">let </span>field_id_map = HashMap::from_iter([(<span class="number">1</span>, <span class="number">0</span>), (<span class="number">2</span>, <span class="number">1</span>)]);
-<a href=#1361 id=1361 data-nosnippet>1361</a>
-<a href=#1362 id=1362 data-nosnippet>1362</a>        <span class="prelude-val">Ok</span>((iceberg_schema_ref, field_id_map))
-<a href=#1363 id=1363 data-nosnippet>1363</a>    }
-<a href=#1364 id=1364 data-nosnippet>1364</a>}
+<a href=#1341 id=1341 data-nosnippet>1341</a>        <span class="prelude-val">Ok</span>(())
+<a href=#1342 id=1342 data-nosnippet>1342</a>    }
+<a href=#1343 id=1343 data-nosnippet>1343</a>
+<a href=#1344 id=1344 data-nosnippet>1344</a>    <span class="kw">fn </span>build_iceberg_schema_and_field_map() -&gt; <span class="prelude-ty">Result</span>&lt;(Arc&lt;Schema&gt;, HashMap&lt;i32, usize&gt;)&gt; {
+<a href=#1345 id=1345 data-nosnippet>1345</a>        <span class="kw">let </span>iceberg_schema = Schema::builder()
+<a href=#1346 id=1346 data-nosnippet>1346</a>            .with_fields([
+<a href=#1347 id=1347 data-nosnippet>1347</a>                Arc::new(NestedField::new(
+<a href=#1348 id=1348 data-nosnippet>1348</a>                    <span class="number">1</span>,
+<a href=#1349 id=1349 data-nosnippet>1349</a>                    <span class="string">"col_float"</span>,
+<a href=#1350 id=1350 data-nosnippet>1350</a>                    Type::Primitive(PrimitiveType::Float),
+<a href=#1351 id=1351 data-nosnippet>1351</a>                    <span class="bool-val">false</span>,
+<a href=#1352 id=1352 data-nosnippet>1352</a>                )),
+<a href=#1353 id=1353 data-nosnippet>1353</a>                Arc::new(NestedField::new(
+<a href=#1354 id=1354 data-nosnippet>1354</a>                    <span class="number">2</span>,
+<a href=#1355 id=1355 data-nosnippet>1355</a>                    <span class="string">"col_string"</span>,
+<a href=#1356 id=1356 data-nosnippet>1356</a>                    Type::Primitive(PrimitiveType::String),
+<a href=#1357 id=1357 data-nosnippet>1357</a>                    <span class="bool-val">false</span>,
+<a href=#1358 id=1358 data-nosnippet>1358</a>                )),
+<a href=#1359 id=1359 data-nosnippet>1359</a>            ])
+<a href=#1360 id=1360 data-nosnippet>1360</a>            .build()<span class="question-mark">?</span>;
+<a href=#1361 id=1361 data-nosnippet>1361</a>        <span class="kw">let </span>iceberg_schema_ref = Arc::new(iceberg_schema);
+<a href=#1362 id=1362 data-nosnippet>1362</a>
+<a href=#1363 id=1363 data-nosnippet>1363</a>        <span class="kw">let </span>field_id_map = HashMap::from_iter([(<span class="number">1</span>, <span class="number">0</span>), (<span class="number">2</span>, <span class="number">1</span>)]);
+<a href=#1364 id=1364 data-nosnippet>1364</a>
+<a href=#1365 id=1365 data-nosnippet>1365</a>        <span class="prelude-val">Ok</span>((iceberg_schema_ref, field_id_map))
+<a href=#1366 id=1366 data-nosnippet>1366</a>    }
+<a href=#1367 id=1367 data-nosnippet>1367</a>}
 </code></pre></div></section></main></body></html>
