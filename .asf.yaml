@@ -59,6 +59,10 @@ github:
     - CTTY
   ghp_branch: gh-pages
   ghp_path: /
+  copilot_code_review:
+    enabled: true
+    review_drafts: false
+    review_on_push: false
 
 notifications:
   commits: commits@iceberg.apache.org

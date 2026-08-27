@@ -26,6 +26,8 @@ use expect_test::Expect;
 use itertools::Itertools;
 
 use crate::TableIdent;
+#[cfg(test)]
+use crate::encryption::EncryptionManager;
 use crate::encryption::SensitiveBytes;
 use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
 use crate::io::FileIO;
@@ -34,7 +36,7 @@ use crate::spec::TableMetadata;
 use crate::table::Table;
 
 /// Returns a process-wide [`Runtime`] suitable for tests that need to construct
-/// a [`Table`](crate::table::Table) outside a tokio context.
+/// a [`Table`] outside a tokio context.
 ///
 /// The returned [`Runtime`] wraps a single shared multi-thread tokio runtime
 /// that is lazily built on first call and lives until process exit. Cloning is
@@ -103,6 +105,19 @@ pub fn check_record_batches(
             })
             .format(",\n")
     ));
+}
+
+/// An [`EncryptionManager`] backed by an in-memory KMS holding `table_key_id`.
+#[cfg(test)]
+pub(crate) fn make_encryption_manager(table_key_id: &str) -> Arc<EncryptionManager> {
+    let kms = MemoryKeyManagementClient::new();
+    kms.add_master_key(table_key_id).unwrap();
+    Arc::new(
+        EncryptionManager::builder()
+            .kms_client(Arc::new(kms) as Arc<dyn KeyManagementClient>)
+            .table_key_id(table_key_id)
+            .build(),
+    )
 }
 
 /// Build a table backed by the V3 encryption fixture and an in-memory KMS,

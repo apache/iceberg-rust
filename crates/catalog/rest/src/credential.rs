@@ -278,7 +278,16 @@ impl RestVendedCredentialProvider {
 
         match response.status() {
             StatusCode::OK => {
-                let parsed: LoadCredentialsResponse = response.json().await?;
+                // Credential responses contain secrets. Do not include the
+                // response body in a deserialization error.
+                let parsed: LoadCredentialsResponse = serde_json::from_slice(response.body())
+                    .map_err(|error| {
+                        Error::new(
+                            ErrorKind::Unexpected,
+                            "failed to parse vended credential response",
+                        )
+                        .with_source(error)
+                    })?;
                 let mut entries = Vec::new();
                 let mut errors = Vec::new();
                 let matching_credentials = parsed
@@ -316,8 +325,7 @@ impl RestVendedCredentialProvider {
             _ => Err(deserialize_unexpected_catalog_error(
                 response,
                 self.client.disable_header_redaction(),
-            )
-            .await),
+            )),
         }
     }
 

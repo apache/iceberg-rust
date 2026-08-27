@@ -27,7 +27,9 @@ use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
 use crate::runtime::Runtime;
 use crate::scan::TableScanBuilder;
-use crate::spec::{ManifestListReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef};
+use crate::spec::{
+    ManifestListReader, ManifestReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef,
+};
 use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// Builder to create table scan.
@@ -271,8 +273,8 @@ impl Table {
     /// A manager is present iff the table metadata has the
     /// `encryption.key-id` property set and a [`KeyManagementClient`] was
     /// supplied to the [`TableBuilder`].
-    pub fn encryption_manager(&self) -> Option<&EncryptionManager> {
-        self.encryption_manager.as_deref()
+    pub fn encryption_manager(&self) -> Option<&Arc<EncryptionManager>> {
+        self.encryption_manager.as_ref()
     }
 
     /// Creates a table scan.
@@ -309,6 +311,11 @@ impl Table {
             self.metadata.clone(),
             self.encryption_manager.clone(),
         )
+    }
+
+    /// Creates a [`ManifestReader`] for loading manifests referenced by this table.
+    pub fn manifest_reader(&self) -> ManifestReader {
+        ManifestReader::new(self.file_io.clone())
     }
 
     /// Create a reader for the table.

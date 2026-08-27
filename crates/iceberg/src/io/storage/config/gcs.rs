@@ -18,7 +18,7 @@
 //! Google Cloud Storage configuration.
 //!
 //! This module provides configuration constants and types for Google Cloud Storage.
-//! Reference: https://github.com/apache/iceberg/blob/main/gcp/src/main/java/org/apache/iceberg/gcp/GCPProperties.java
+//! Reference: <https://github.com/apache/iceberg/blob/main/gcp/src/main/java/org/apache/iceberg/gcp/GCPProperties.java>
 
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
@@ -58,7 +58,6 @@ pub const GCS_DISABLE_CONFIG_LOAD: &str = "gcs.disable-config-load";
 ///
 /// This struct contains all the configuration options for connecting to Google Cloud Storage.
 /// Use the builder pattern via `GcsConfig::builder()` to construct instances.
-/// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
 pub struct GcsConfig {
     /// Google Cloud Project ID.

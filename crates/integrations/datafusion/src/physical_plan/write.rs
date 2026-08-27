@@ -209,7 +209,7 @@ impl ExecutionPlan for IcebergWriteExec {
             .map_err(to_datafusion_error)?;
 
         // Check data file format
-        let file_format = DataFileFormat::from_str(&table_props.write_format_default)
+        let file_format = DataFileFormat::from_str(table_props.write_format_default())
             .map_err(to_datafusion_error)?;
         if file_format != DataFileFormat::Parquet {
             return Err(to_datafusion_error(Error::new(
@@ -221,13 +221,17 @@ impl ExecutionPlan for IcebergWriteExec {
         // Build the writer from the already-parsed table properties so it honors
         // `write.parquet.*` settings (e.g. CDC). Arrow batches flowing through
         // DataFusion carry no field-id metadata, so match fields by name.
-        let parquet_file_writer_builder = ParquetWriterBuilder::from_table_properties(
+        let mut parquet_file_writer_builder = ParquetWriterBuilder::from_table_properties(
             &table_props,
             self.table.metadata().current_schema().clone(),
         )
         .map_err(to_datafusion_error)?
         .with_match_mode(FieldMatchMode::Name);
-        let target_file_size = table_props.write_target_file_size_bytes;
+        if let Some(encryption_manager) = self.table.encryption_manager() {
+            parquet_file_writer_builder =
+                parquet_file_writer_builder.with_encryption_manager(encryption_manager.clone());
+        }
+        let target_file_size = table_props.write_target_file_size_bytes();
 
         let file_io = self.table.file_io().clone();
         // todo location_gen and file_name_gen should be configurable
@@ -246,7 +250,7 @@ impl ExecutionPlan for IcebergWriteExec {
         let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 
         // Create TaskWriter
-        let fanout_enabled = table_props.write_datafusion_fanout_enabled;
+        let fanout_enabled = table_props.write_datafusion_fanout_enabled();
         let schema = self.table.metadata().current_schema().clone();
         let partition_spec = self.table.metadata().default_partition_spec().clone();
         let task_writer = TaskWriter::try_new(

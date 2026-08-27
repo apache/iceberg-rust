@@ -71,6 +71,8 @@ extern crate self as iceberg;
 mod error;
 pub use error::{Error, ErrorKind, Result};
 
+pub mod sensitive;
+
 mod catalog;
 
 pub use catalog::utils::drop_table_data;
@@ -92,7 +94,7 @@ pub mod transaction;
 pub mod transform;
 
 mod runtime;
-pub use runtime::{Runtime, RuntimeHandle};
+pub use runtime::{JoinHandle, Runtime, RuntimeHandle};
 
 pub mod arrow;
 pub(crate) mod delete_file_index;
