@@ -179,11 +179,14 @@ impl HttpClient {
     /// Sends `request` to the Iceberg REST catalog, authenticated by this
     /// client's session.
     pub(crate) async fn query_catalog(&self, mut request: HttpRequest) -> Result<HttpResponse> {
-        // Authenticate first, then apply extra headers, so a configured
-        // `header.authorization` keeps overriding a token (unchanged behavior).
-        self.auth_session.authenticate(&mut request).await?;
-        let mut request = request.into_inner();
+        // Authenticate last: extending afterwards would let a configured
+        // `header.authorization` overwrite a SigV4 signature and send the
+        // request unsigned. A configured header still wins over a token,
+        // because the OAuth2 session only sets one when absent, as Java's
+        // `OAuth2Util.AuthSession` does.
         request.headers_mut().extend(self.extra_headers.clone());
+        self.auth_session.authenticate(&mut request).await?;
+        let request = request.into_inner();
         HttpResponse::read(self.client.execute(request).await?).await
     }
 

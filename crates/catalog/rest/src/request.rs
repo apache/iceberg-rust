@@ -43,6 +43,14 @@ impl HttpRequest {
         Ok(Self::new(builder.build()?))
     }
 
+    /// The wrapped request, for crate-internal consumers that need the
+    /// concrete client type (e.g. handing it to [`SigV4Signer::sign`]).
+    ///
+    /// [`SigV4Signer::sign`]: crate::SigV4Signer::sign
+    pub(crate) fn inner_mut(&mut self) -> &mut Request {
+        &mut self.inner
+    }
+
     /// The wrapped request, for the client that sends it.
     pub(crate) fn into_inner(self) -> Request {
         self.inner
