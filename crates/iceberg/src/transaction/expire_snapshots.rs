@@ -74,8 +74,7 @@ impl ExpireSnapshotsAction {
     /// alone.
     ///
     /// Ids accumulate across calls (like [`add_data_files`](crate::transaction::Transaction::fast_append)).
-    /// An id that is still referenced by a branch or tag cannot be expired and causes
-    /// [`commit`](TransactionAction::commit) to fail.
+    /// An id that is still referenced by a branch or tag cannot be expired and causes commits to fail.
     pub fn expire_snapshot_ids(mut self, snapshot_ids: impl IntoIterator<Item = i64>) -> Self {
         self.explicit_ids_to_remove.extend(snapshot_ids);
         self
@@ -91,8 +90,7 @@ impl ExpireSnapshotsAction {
     /// (defaults to the table's `history.expire.min-snapshots-to-keep`, must be at least 1).
     ///
     /// This only bounds the age cutoff; it does not protect snapshots named via
-    /// [`expire_snapshot_ids`](Self::expire_snapshot_ids). Setting it to 0 makes
-    /// [`commit`](TransactionAction::commit) fail.
+    /// [`expire_snapshot_ids`](Self::expire_snapshot_ids). Setting it to 0 makes commit fail.
     pub fn retain_last(mut self, retain_last: usize) -> Self {
         self.retain_last = Some(retain_last);
         self
@@ -115,8 +113,10 @@ impl ExpireSnapshotsAction {
         // days) the age path always runs, so even an explicit-id-only call applies the default cutoff.
         let default_cutoff = self
             .older_than_ms
-            .unwrap_or_else(|| now.saturating_sub(properties.max_snapshot_age_ms));
-        let default_min_to_keep = self.retain_last.unwrap_or(properties.min_snapshots_to_keep);
+            .unwrap_or_else(|| now.saturating_sub(properties.max_snapshot_age_ms()));
+        let default_min_to_keep = self
+            .retain_last
+            .unwrap_or(properties.min_snapshots_to_keep());
 
         // Ref aging: `main` is always kept; any other ref whose head is older than its
         // `max_ref_age_ms` (defaulting to `history.expire.max-ref-age-ms`) is dropped, like Java's
@@ -125,7 +125,7 @@ impl ExpireSnapshotsAction {
         let mut retained_refs: Vec<&SnapshotReference> = vec![];
         for (ref_name, snapshot_ref) in &metadata.refs {
             if ref_name == MAIN_BRANCH
-                || !Self::ref_aged_out(metadata, snapshot_ref, now, properties.max_ref_age_ms)
+                || !Self::ref_aged_out(metadata, snapshot_ref, now, properties.max_ref_age_ms())
             {
                 retained_refs.push(snapshot_ref);
             } else {
@@ -302,7 +302,7 @@ impl TransactionAction for ExpireSnapshotsAction {
         let properties = metadata.table_properties()?;
 
         // Expiring metadata defeats a user's explicit decision to disable GC (Java refuses too).
-        if !properties.gc_enabled {
+        if !properties.gc_enabled() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "Cannot expire snapshots: gc.enabled is false",
