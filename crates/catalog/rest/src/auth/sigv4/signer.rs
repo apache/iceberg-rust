@@ -29,8 +29,8 @@ const EMPTY_BODY_HEX_SHA256: &str =
 /// How the payload hash is encoded in the `x-amz-content-sha256` header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PayloadHashMode {
-    /// Iceberg Java's RESTSigV4 style: base64 header for non-empty bodies, hex
-    /// for empty; the canonical request always uses hex.
+    /// Iceberg Java's RESTSigV4 style: base64 header when there is a body, hex
+    /// when there is none; the canonical request always uses hex.
     IcebergRest,
     /// Standard AWS SigV4 style: hex everywhere (e.g. AWS Glue).
     StandardAws,
@@ -69,17 +69,15 @@ fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8>
     hmac_sha256(&k_service, b"aws4_request")
 }
 
-/// Computes the value of the `x-amz-content-sha256` header.
-fn content_sha256_header(body: &[u8], mode: PayloadHashMode) -> String {
+/// Computes the value of the `x-amz-content-sha256` header. `None` is a request
+/// with no body at all, which the two modes disagree about.
+fn content_sha256_header(body: Option<&[u8]>, mode: PayloadHashMode) -> String {
     match mode {
-        PayloadHashMode::StandardAws => hex_sha256(body),
-        PayloadHashMode::IcebergRest => {
-            if body.is_empty() {
-                EMPTY_BODY_HEX_SHA256.to_string()
-            } else {
-                base64_encode(&Sha256::digest(body))
-            }
-        }
+        PayloadHashMode::StandardAws => hex_sha256(body.unwrap_or_default()),
+        PayloadHashMode::IcebergRest => match body {
+            None => EMPTY_BODY_HEX_SHA256.to_string(),
+            Some(body) => base64_encode(&Sha256::digest(body)),
+        },
     }
 }
 
@@ -129,8 +127,8 @@ impl SigV4Signer {
     /// `RequestBuilder::query` writes; encode a literal plus as `%2B`. AWS
     /// requires spaces as `%20` in a signed URL either way.
     ///
-    /// Note that `aws_sigv4` traces the request it is given, so `RUST_LOG` at
-    /// trace level will print these headers.
+    /// Fails rather than sign a request whose body is streaming or whose
+    /// headers are not UTF-8, since neither can be canonicalized faithfully.
     pub fn sign(&self, request: &mut reqwest::Request) -> Result<()> {
         self.sign_at(request, Utc::now())
     }
@@ -141,20 +139,24 @@ impl SigV4Signer {
             SigningSettings, UriPathNormalizationMode, sign,
         };
         use aws_sigv4::sign::v4;
+        use tracing::subscriber::NoSubscriber;
 
-        let body: Vec<u8> = match request.body() {
-            None => Vec::new(),
-            Some(b) => b
-                .as_bytes()
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::FeatureUnsupported,
-                        "cannot sign a streaming request body",
-                    )
-                })?
-                .to_vec(),
+        // An absent body is not the same as an empty one: Java branches on
+        // `encodedBody() == null`, so a present-but-empty body is hashed.
+        let body: Option<Vec<u8>> = match request.body() {
+            None => None,
+            Some(b) => Some(
+                b.as_bytes()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::FeatureUnsupported,
+                            "cannot sign a streaming request body",
+                        )
+                    })?
+                    .to_vec(),
+            ),
         };
-        let content_header = content_sha256_header(&body, self.mode);
+        let content_header = content_sha256_header(body.as_deref(), self.mode);
 
         // Renamed before signing, as Java's `convertHeaders` does, so a
         // delegate's bearer token travels along and is signed over.
@@ -242,22 +244,40 @@ impl SigV4Signer {
             })?
             .into();
 
+        // Skipping a header that is not UTF-8 would leave it unsigned but still
+        // on the wire, which AWS rejects for `x-amz-*` and is hard to diagnose.
         let headers: Vec<(&str, &str)> = request
             .headers()
             .iter()
-            .filter_map(|(n, v)| v.to_str().ok().map(|v| (n.as_str(), v)))
-            .collect();
+            .map(|(n, v)| {
+                let v = v.to_str().map_err(|e| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("cannot sign non-UTF-8 header value for `{n}`"),
+                    )
+                    .with_source(e)
+                })?;
+                Ok((n.as_str(), v))
+            })
+            .collect::<Result<_>>()?;
         let signable = SignableRequest::new(
             request.method().as_str(),
             request.url().as_str(),
             headers.into_iter(),
-            SignableBody::Bytes(&body),
+            SignableBody::Bytes(body.as_deref().unwrap_or_default()),
         )
         .map_err(|e| {
             Error::new(ErrorKind::DataInvalid, "request is not signable").with_source(e)
         })?;
 
-        let (instructions, _signature) = sign(signable, &params)
+        // `aws_sigv4` traces the request it signs, and its redaction list covers
+        // `authorization` but not the `Original-` copy we just made, so a
+        // delegate's bearer token would be printed verbatim at trace level.
+        // Signing is synchronous and logs nothing else worth keeping, so mute
+        // it for the call.
+        let signed =
+            tracing::subscriber::with_default(NoSubscriber::default(), || sign(signable, &params));
+        let (instructions, _signature) = signed
             .map_err(|e| Error::new(ErrorKind::Unexpected, "SigV4 signing failed").with_source(e))?
             .into_parts();
 
@@ -384,15 +404,27 @@ mod tests {
 
     #[test]
     fn content_sha256_header_iceberg_mode() {
-        let v = content_sha256_header(b"hello", PayloadHashMode::IcebergRest);
+        let v = content_sha256_header(Some(b"hello"), PayloadHashMode::IcebergRest);
         assert_eq!(v, "LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=");
-        let e = content_sha256_header(b"", PayloadHashMode::IcebergRest);
+        let e = content_sha256_header(None, PayloadHashMode::IcebergRest);
         assert_eq!(e, EMPTY_HEX);
+    }
+
+    /// Java branches on `encodedBody() == null`, so a body that is present but
+    /// empty is hashed like any other rather than taking the absent-body path.
+    #[test]
+    fn content_sha256_header_separates_an_empty_body_from_an_absent_one() {
+        let empty = content_sha256_header(Some(b""), PayloadHashMode::IcebergRest);
+        assert_eq!(empty, "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=");
+        assert_ne!(
+            empty,
+            content_sha256_header(None, PayloadHashMode::IcebergRest)
+        );
     }
 
     #[test]
     fn content_sha256_header_standard_mode() {
-        let v = content_sha256_header(b"hello", PayloadHashMode::StandardAws);
+        let v = content_sha256_header(Some(b"hello"), PayloadHashMode::StandardAws);
         assert_eq!(
             v,
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
@@ -422,6 +454,90 @@ mod tests {
             "execute-api".to_string(),
             mode,
         )
+    }
+
+    /// Collects every event field a subscriber would have been handed.
+    #[derive(Clone, Default)]
+    struct CapturedLog(std::sync::Arc<std::sync::Mutex<String>>);
+
+    impl tracing::field::Visit for CapturedLog {
+        fn record_debug(&mut self, _: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0.lock().unwrap().push_str(&format!("{value:?}"));
+        }
+    }
+
+    impl tracing::Subscriber for CapturedLog {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::Id {
+            tracing::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::Id, _: &tracing::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            event.record(&mut self.clone());
+        }
+        fn enter(&self, _: &tracing::Id) {}
+        fn exit(&self, _: &tracing::Id) {}
+    }
+
+    /// `aws_sigv4` traces the headers it is given, and its redaction list does
+    /// not cover the `Original-` copy of a relocated bearer token.
+    #[test]
+    fn signing_does_not_trace_a_relocated_bearer_token() {
+        use chrono::TimeZone;
+
+        const TOKEN: &str = "Bearer topsecretdelegatetoken";
+        let signer = test_signer(PayloadHashMode::IcebergRest);
+        let mut req = reqwest::Client::new()
+            .get("https://rest.example.com/v1/config")
+            .header(reqwest::header::AUTHORIZATION, TOKEN)
+            .build()
+            .unwrap();
+
+        let log = CapturedLog::default();
+        tracing::subscriber::with_default(log.clone(), || {
+            signer
+                .sign_at(
+                    &mut req,
+                    Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
+                )
+                .unwrap();
+            // Without this the assertion below would pass even if nothing was
+            // ever captured.
+            tracing::trace!(canary = "subscriber-is-live");
+        });
+
+        let captured = log.0.lock().unwrap().clone();
+        assert!(captured.contains("subscriber-is-live"), "captured nothing");
+        assert!(!captured.contains(TOKEN), "{captured}");
+        // The token still travels, it is just not logged.
+        assert_eq!(req.headers().get(RELOCATED_AUTHORIZATION).unwrap(), TOKEN);
+    }
+
+    #[test]
+    fn a_non_utf8_header_value_is_rejected_rather_than_left_unsigned() {
+        use chrono::TimeZone;
+
+        let signer = test_signer(PayloadHashMode::IcebergRest);
+        let mut req = reqwest::Client::new()
+            .get("https://rest.example.com/v1/config")
+            .header(
+                "x-amz-meta-tenant",
+                reqwest::header::HeaderValue::from_bytes(b"acme\xfa").unwrap(),
+            )
+            .build()
+            .unwrap();
+
+        let err = signer
+            .sign_at(
+                &mut req,
+                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
+            )
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("x-amz-meta-tenant"), "{err}");
     }
 
     #[test]
@@ -571,6 +687,44 @@ mod tests {
         for excluded in ["authorization", "user-agent"] {
             assert!(!signed.split(';').any(|h| h == excluded), "{signed}");
         }
+        // The relocated copy, on the other hand, is signed over — that is the
+        // point of renaming it before signing rather than after.
+        assert!(
+            signed.split(';').any(|h| h == "original-authorization"),
+            "{signed}"
+        );
+    }
+
+    /// Java groups all `Authorization` values under the relocated name, so
+    /// repeated credentials must survive together and stay redacted.
+    #[test]
+    fn every_repeated_authorization_is_relocated_and_kept_sensitive() {
+        use chrono::TimeZone;
+
+        let signer = test_signer(PayloadHashMode::StandardAws);
+        let mut req = reqwest::Client::new()
+            .get("https://rest.example.com/v1/config")
+            .header("authorization", "Bearer first")
+            .header("authorization", "Bearer second")
+            .build()
+            .unwrap();
+
+        signer
+            .sign_at(
+                &mut req,
+                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
+            )
+            .unwrap();
+
+        let relocated: Vec<_> = req
+            .headers()
+            .get_all(RELOCATED_AUTHORIZATION)
+            .iter()
+            .collect();
+        assert_eq!(relocated.len(), 2, "{relocated:?}");
+        assert_eq!(relocated[0], "Bearer first");
+        assert_eq!(relocated[1], "Bearer second");
+        assert!(relocated.iter().all(|v| v.is_sensitive()), "{relocated:?}");
     }
 
     #[test]
@@ -868,7 +1022,7 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
         // The header carries base64 while the pinned signature covers hex.
         assert_eq!(
             req.headers().get("x-amz-content-sha256").unwrap(),
-            content_sha256_header(body, PayloadHashMode::IcebergRest).as_str()
+            content_sha256_header(Some(body), PayloadHashMode::IcebergRest).as_str()
         );
         assert_ne!(
             req.headers().get("x-amz-content-sha256").unwrap(),
