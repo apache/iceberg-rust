@@ -873,15 +873,30 @@ pub(crate) fn create_primitive_array_repeated(
         (DataType::LargeBinary, Some(PrimitiveLiteral::Binary(value))) => Arc::new(
             LargeBinaryArray::from_iter_values(std::iter::repeat_n(value.as_slice(), num_rows)),
         ),
-        (DataType::FixedSizeBinary(len), Some(PrimitiveLiteral::Binary(value))) => Arc::new(
-            FixedSizeBinaryArray::try_from_iter(std::iter::repeat_n(value.as_slice(), num_rows))
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Failed to create FixedSizeBinary({len}) array: {e}"),
-                    )
-                })?,
-        ),
+        (DataType::FixedSizeBinary(len), Some(PrimitiveLiteral::Binary(value))) => {
+            // try_from_iter infers the width from the data, never from `len`, so a
+            // wrong-width literal would otherwise produce a FixedSizeBinary of the
+            // wrong width instead of erroring.
+            if value.len() != *len as usize {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "FixedSizeBinary literal length {} does not match declared width {len}",
+                        value.len()
+                    ),
+                ));
+            }
+
+            Arc::new(
+                FixedSizeBinaryArray::try_from_iter(std::iter::repeat_n(value.as_slice(), num_rows))
+                    .map_err(|e| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Failed to create FixedSizeBinary({len}) array: {e}"),
+                        )
+                    })?,
+            )
+        }
         (DataType::Time64(TimeUnit::Microsecond), Some(PrimitiveLiteral::Long(value))) => {
             Arc::new(Time64MicrosecondArray::from(vec![*value; num_rows]))
         }
@@ -1975,5 +1990,31 @@ mod test {
         )
         .unwrap();
         assert_eq!(array.len(), 0);
+    }
+
+    #[test]
+    fn test_create_fixed_size_binary_repeated_wrong_width_errors() {
+        // A literal whose length differs from the declared width must error rather
+        // than silently producing a FixedSizeBinary array of the literal's width.
+        let err = create_primitive_array_repeated(
+            &DataType::FixedSizeBinary(4),
+            &Some(PrimitiveLiteral::Binary(vec![0x01, 0x02, 0x03])),
+            2,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("does not match declared width"));
+    }
+
+    #[test]
+    fn test_create_fixed_size_binary_repeated_empty_errors() {
+        // arrow's try_from_iter cannot infer the fixed width from an empty iterator,
+        // so num_rows == 0 over a fixed[n] column surfaces as an error rather than an
+        // empty fixed[n] array.
+        let result = create_primitive_array_repeated(
+            &DataType::FixedSizeBinary(4),
+            &Some(PrimitiveLiteral::Binary(vec![0xDE, 0xAD, 0xBE, 0xEF])),
+            0,
+        );
+        assert!(result.is_err());
     }
 }
