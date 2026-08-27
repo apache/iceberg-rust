@@ -1240,8 +1240,8 @@ table {
             )]))),
             Some(Literal::List(vec![Some(Literal::Struct(
                 crate::spec::Struct::from_iter(vec![
-                    Some(Literal::float(52.509_09)),
-                    Some(Literal::float(-1.885_249)),
+                    Some(Literal::float(52.509_09_f32)),
+                    Some(Literal::float(-1.885_249_f32)),
                 ]),
             ))])),
             Some(Literal::Struct(crate::spec::Struct::from_iter(vec![

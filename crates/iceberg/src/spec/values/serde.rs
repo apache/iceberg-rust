@@ -681,7 +681,7 @@ pub(crate) mod _serde {
                                     .ok_or_else(|| {
                                         invalid_err_with_reason(
                                             "record",
-                                            &format!("field {} is not exist", &field_name),
+                                            &format!("field {} is not exist", field_name),
                                         )
                                     })?;
                                 let value = value.try_into(&field.field_type)?;
