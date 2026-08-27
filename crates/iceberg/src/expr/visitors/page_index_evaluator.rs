@@ -941,7 +941,7 @@ mod tests {
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
-            .greater_than(Datum::float(1.0))
+            .greater_than(Datum::float(1.0_f32))
             .bind(iceberg_schema_ref.clone(), false)?;
 
         let row_group_metadata = metadata.row_group(0);
@@ -1103,7 +1103,7 @@ mod tests {
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
-            .less_than(Datum::float(5.0))
+            .less_than(Datum::float(5.0_f32))
             .bind(iceberg_schema_ref.clone(), false)?;
 
         let result = PageIndexEvaluator::eval(
@@ -1133,7 +1133,7 @@ mod tests {
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
-            .equal_to(Datum::float(5.0))
+            .equal_to(Datum::float(5.0_f32))
             .bind(iceberg_schema_ref.clone(), false)?;
 
         let result = PageIndexEvaluator::eval(
@@ -1166,7 +1166,7 @@ mod tests {
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
-            .not_equal_to(Datum::float(5.0))
+            .not_equal_to(Datum::float(5.0_f32))
             .bind(iceberg_schema_ref.clone(), false)?;
 
         let result = PageIndexEvaluator::eval(
@@ -1192,7 +1192,7 @@ mod tests {
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
-            .starts_with(Datum::float(5.0))
+            .starts_with(Datum::float(5.0_f32))
             .bind(iceberg_schema_ref.clone(), false)?;
 
         let result = PageIndexEvaluator::eval(
@@ -1284,7 +1284,10 @@ mod tests {
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
-            .is_in(std::iter::repeat_with(|| Datum::float(rng.random_range(0.0..10.0))).take(1000))
+            .is_in(
+                std::iter::repeat_with(|| Datum::float(rng.random_range(0.0_f32..10.0_f32)))
+                    .take(1000),
+            )
             .bind(iceberg_schema_ref.clone(), false)?;
 
         let result = PageIndexEvaluator::eval(
