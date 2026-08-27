@@ -31,6 +31,9 @@ repository = { workspace = true }
 
 [dependencies]
 async-trait = { workspace = true }
+aws-credential-types = { workspace = true }
+aws-sigv4 = { workspace = true }
+base64 = { workspace = true }
 chrono = { workspace = true }
 http = { workspace = true }
 iceberg = { workspace = true }
@@ -39,6 +42,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 typed-builder = { workspace = true }
@@ -47,6 +51,7 @@ uuid = { workspace = true, features = ["v4"] }
 [dev-dependencies]
 bytes = { workspace = true }
 futures = { workspace = true }
+hmac = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
 # `stream` lets tests build a streaming body to exercise HttpRequestBody::Streaming.

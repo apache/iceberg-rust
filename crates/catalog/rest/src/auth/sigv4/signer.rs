@@ -1,0 +1,978 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use chrono::{DateTime, Utc};
+#[cfg(test)]
+use hmac::{Hmac, Mac};
+use iceberg::sensitive::SensitiveString;
+use iceberg::{Error, ErrorKind, Result};
+use sha2::{Digest, Sha256};
+
+/// Hex SHA-256 of the empty string.
+const EMPTY_BODY_HEX_SHA256: &str =
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+/// How the payload hash is encoded in the `x-amz-content-sha256` header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PayloadHashMode {
+    /// Iceberg Java's RESTSigV4 style: base64 header for non-empty bodies, hex
+    /// for empty; the canonical request always uses hex.
+    IcebergRest,
+    /// Standard AWS SigV4 style: hex everywhere (e.g. AWS Glue).
+    StandardAws,
+}
+
+/// Derives the AWS SigV4 signing key.
+#[cfg(test)]
+fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC takes a key of any size");
+    mac.update(data);
+    mac.finalize().into_bytes().to_vec()
+}
+
+fn hex_sha256(data: &[u8]) -> String {
+    encode_hex(&Sha256::digest(data))
+}
+
+#[cfg(test)]
+fn hex_hmac_sha256(key: &[u8], data: &[u8]) -> String {
+    encode_hex(&hmac_sha256(key, data))
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    base64::engine::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
+}
+
+#[cfg(test)]
+fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
+    let k_date = hmac_sha256(format!("AWS4{secret}").as_bytes(), date.as_bytes());
+    let k_region = hmac_sha256(&k_date, region.as_bytes());
+    let k_service = hmac_sha256(&k_region, service.as_bytes());
+    hmac_sha256(&k_service, b"aws4_request")
+}
+
+/// Computes the value of the `x-amz-content-sha256` header.
+fn content_sha256_header(body: &[u8], mode: PayloadHashMode) -> String {
+    match mode {
+        PayloadHashMode::StandardAws => hex_sha256(body),
+        PayloadHashMode::IcebergRest => {
+            if body.is_empty() {
+                EMPTY_BODY_HEX_SHA256.to_string()
+            } else {
+                base64_encode(&Sha256::digest(body))
+            }
+        }
+    }
+}
+
+/// Static AWS-style credentials used for SigV4 signing of catalog requests.
+#[derive(Clone)]
+pub struct AwsCredentials {
+    /// AWS access key id.
+    pub access_key_id: String,
+    /// AWS secret access key.
+    pub secret_access_key: SensitiveString,
+    /// Optional STS session token.
+    pub session_token: Option<SensitiveString>,
+}
+
+/// AWS SigV4 signer following Iceberg Java's `RESTSigV4AuthSession`: it adds the
+/// required amz headers and signs all request headers except a small blacklist.
+#[derive(Clone)]
+pub struct SigV4Signer {
+    credentials: AwsCredentials,
+    region: String,
+    service: String,
+    mode: PayloadHashMode,
+}
+
+impl SigV4Signer {
+    /// Creates a new SigV4 signer.
+    pub fn new(
+        credentials: AwsCredentials,
+        region: String,
+        service: String,
+        mode: PayloadHashMode,
+    ) -> Self {
+        Self {
+            credentials,
+            region,
+            service,
+            mode,
+        }
+    }
+
+    /// Signs `request` in place, rewriting it where signing requires it: an
+    /// existing `Authorization` moves to `Original-Authorization` and is signed
+    /// over, userinfo is dropped from the URL, and a `+` in the query becomes
+    /// `%20`.
+    ///
+    /// That last one means a `+` is taken to be an encoded space, which is what
+    /// `RequestBuilder::query` writes; encode a literal plus as `%2B`. AWS
+    /// requires spaces as `%20` in a signed URL either way.
+    ///
+    /// Note that `aws_sigv4` traces the request it is given, so `RUST_LOG` at
+    /// trace level will print these headers.
+    pub fn sign(&self, request: &mut reqwest::Request) -> Result<()> {
+        self.sign_at(request, Utc::now())
+    }
+
+    fn sign_at(&self, request: &mut reqwest::Request, now: DateTime<Utc>) -> Result<()> {
+        use aws_sigv4::http_request::{
+            PayloadChecksumKind, PercentEncodingMode, SignableBody, SignableRequest,
+            SigningSettings, UriPathNormalizationMode, sign,
+        };
+        use aws_sigv4::sign::v4;
+
+        let body: Vec<u8> = match request.body() {
+            None => Vec::new(),
+            Some(b) => b
+                .as_bytes()
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::FeatureUnsupported,
+                        "cannot sign a streaming request body",
+                    )
+                })?
+                .to_vec(),
+        };
+        let content_header = content_sha256_header(&body, self.mode);
+
+        // Renamed before signing, as Java's `convertHeaders` does, so a
+        // delegate's bearer token travels along and is signed over.
+        let displaced_authorization: Vec<_> = request
+            .headers()
+            .get_all(reqwest::header::AUTHORIZATION)
+            .iter()
+            .cloned()
+            .collect();
+        if !displaced_authorization.is_empty() {
+            request.headers_mut().remove(reqwest::header::AUTHORIZATION);
+            for mut value in displaced_authorization {
+                value.set_sensitive(true);
+                request.headers_mut().append(RELOCATED_AUTHORIZATION, value);
+            }
+        }
+
+        // Relocated after signing, as Java does, so the `Original-` copy is
+        // not itself signed.
+        let displaced_content_hash: Vec<_> = request
+            .headers()
+            .get_all("x-amz-content-sha256")
+            .iter()
+            .filter(|v| v.as_bytes() != content_header.as_bytes())
+            .cloned()
+            .collect();
+        request
+            .headers_mut()
+            .insert("x-amz-content-sha256", content_header.parse().unwrap());
+
+        // The wire Host never carries userinfo, so signing it would mismatch
+        // and would feed the password to the HMAC. `RequestBuilder` strips it,
+        // a hand-built request does not.
+        if !request.url().username().is_empty() || request.url().password().is_some() {
+            let url = request.url_mut();
+            let _ = url.set_username("");
+            let _ = url.set_password(None);
+        }
+
+        // Verifiers disagree on `+` in a query — a literal under RFC 3986, a
+        // space under form encoding — and reqwest writes spaces as `+`. Rewrite
+        // it so the wire and the canonical request agree either way.
+        if let Some(query) = request.url().query().filter(|q| q.contains('+')) {
+            let unambiguous = query.replace('+', "%20");
+            request.url_mut().set_query(Some(&unambiguous));
+        }
+
+        let mut settings = SigningSettings::default();
+        // `Aws4Signer` defaults: normalize the path and double-encode it.
+        settings.percent_encoding_mode = PercentEncodingMode::Double;
+        settings.uri_path_normalization_mode = UriPathNormalizationMode::Enabled;
+        // The header is ours to set: IcebergRest mode puts base64 there,
+        // while the signer hashes the body in hex for the canonical request.
+        settings.payload_checksum_kind = PayloadChecksumKind::NoHeader;
+        // Java's `AbstractAws4Signer` ignores these too; the crate's defaults
+        // do not.
+        let mut excluded = settings.excluded_headers.take().unwrap_or_default();
+        excluded.extend([
+            "expect".into(),
+            "connection".into(),
+            "x-forwarded-for".into(),
+        ]);
+        settings.excluded_headers = Some(excluded);
+
+        let identity = aws_credential_types::Credentials::new(
+            self.credentials.access_key_id.clone(),
+            self.credentials.secret_access_key.expose().to_string(),
+            self.credentials
+                .session_token
+                .as_ref()
+                .map(|t| t.expose().to_string()),
+            None,
+            "iceberg-rest",
+        )
+        .into();
+        let params = v4::SigningParams::builder()
+            .identity(&identity)
+            .region(&self.region)
+            .name(&self.service)
+            .time(now.into())
+            .settings(settings)
+            .build()
+            .map_err(|e| {
+                Error::new(ErrorKind::Unexpected, "failed to build SigV4 params").with_source(e)
+            })?
+            .into();
+
+        let headers: Vec<(&str, &str)> = request
+            .headers()
+            .iter()
+            .filter_map(|(n, v)| v.to_str().ok().map(|v| (n.as_str(), v)))
+            .collect();
+        let signable = SignableRequest::new(
+            request.method().as_str(),
+            request.url().as_str(),
+            headers.into_iter(),
+            SignableBody::Bytes(&body),
+        )
+        .map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "request is not signable").with_source(e)
+        })?;
+
+        let (instructions, _signature) = sign(signable, &params)
+            .map_err(|e| Error::new(ErrorKind::Unexpected, "SigV4 signing failed").with_source(e))?
+            .into_parts();
+
+        let (signed_headers, _params) = instructions.into_parts();
+        let h = request.headers_mut();
+        for mut value in displaced_content_hash {
+            // The original may carry a credential.
+            value.set_sensitive(true);
+            h.append(RELOCATED_CONTENT_SHA256, value);
+        }
+        for header in signed_headers {
+            let name: reqwest::header::HeaderName = header.name().parse().map_err(|e| {
+                Error::new(ErrorKind::Unexpected, "invalid signed header name").with_source(e)
+            })?;
+            // Moved aside rather than dropped, as Java does.
+            if let Some(relocated) = relocated_name(name.as_str()) {
+                relocate_conflicting(h, name.as_str(), header.value(), relocated);
+            }
+            let mut value: reqwest::header::HeaderValue = header.value().parse().map_err(|e| {
+                Error::new(ErrorKind::Unexpected, "invalid signed header value").with_source(e)
+            })?;
+            if name == reqwest::header::AUTHORIZATION || name == "x-amz-security-token" {
+                value.set_sensitive(true);
+            }
+            h.insert(name, value);
+        }
+        Ok(())
+    }
+}
+
+const RELOCATED_AUTHORIZATION: reqwest::header::HeaderName =
+    reqwest::header::HeaderName::from_static("original-authorization");
+const RELOCATED_AMZ_DATE: reqwest::header::HeaderName =
+    reqwest::header::HeaderName::from_static("original-x-amz-date");
+const RELOCATED_CONTENT_SHA256: reqwest::header::HeaderName =
+    reqwest::header::HeaderName::from_static("original-x-amz-content-sha256");
+const RELOCATED_SECURITY_TOKEN: reqwest::header::HeaderName =
+    reqwest::header::HeaderName::from_static("original-x-amz-security-token");
+
+/// The `Original-<name>` counterpart of a header the signer generates.
+fn relocated_name(name: &str) -> Option<reqwest::header::HeaderName> {
+    match name {
+        "x-amz-date" => Some(RELOCATED_AMZ_DATE),
+        "x-amz-content-sha256" => Some(RELOCATED_CONTENT_SHA256),
+        "x-amz-security-token" => Some(RELOCATED_SECURITY_TOKEN),
+        _ => None,
+    }
+}
+
+/// Moves `name`'s current values to `Original-<name>` when they differ from the
+/// value about to be signed, so a caller's header is not silently dropped
+/// (Java's `RESTSigV4AuthSession.updateRequestHeaders`).
+fn relocate_conflicting(
+    headers: &mut reqwest::header::HeaderMap,
+    name: &str,
+    signed: &str,
+    relocated: reqwest::header::HeaderName,
+) {
+    let conflicting: Vec<_> = headers
+        .get_all(name)
+        .iter()
+        .filter(|value| value.as_bytes() != signed.as_bytes())
+        .cloned()
+        .collect();
+    for mut value in conflicting {
+        // The original may carry a credential (e.g. a session token).
+        value.set_sensitive(true);
+        headers.append(relocated.clone(), value);
+    }
+}
+
+impl std::fmt::Debug for SigV4Signer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SigV4Signer")
+            .field("region", &self.region)
+            .field("service", &self.service)
+            .field("mode", &self.mode)
+            .field("access_key_id", &self.credentials.access_key_id)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EMPTY_HEX: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    #[test]
+    fn signing_rewrites_an_ambiguous_plus_out_of_the_query() {
+        use chrono::TimeZone;
+
+        // reqwest writes a space as `+`, which verifiers read either as a
+        // literal plus or as a space. Signing rewrites it to `%20`.
+        let mut request = reqwest::Client::new()
+            .get("https://rest.example.com/v1/namespaces")
+            .query(&[("parent", "my ns")])
+            .build()
+            .unwrap();
+        assert!(request.url().query().unwrap().contains("my+ns"));
+
+        let signer = SigV4Signer::new(
+            AwsCredentials {
+                access_key_id: "ak".to_string(),
+                secret_access_key: "sk".to_string().into(),
+                session_token: None,
+            },
+            "us-east-1".to_string(),
+            "execute-api".to_string(),
+            PayloadHashMode::StandardAws,
+        );
+        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+        signer.sign_at(&mut request, now).unwrap();
+
+        // The request that goes out no longer carries the ambiguous form.
+        let query = request.url().query().unwrap();
+        assert!(!query.contains('+'), "{query}");
+        assert!(query.contains("my%20ns"), "{query}");
+        assert_signature_is(
+            &request,
+            "b7bb5a323a1ce0ace18454171084deef2dac44c933c3949771fc70179d3cce2b",
+        );
+    }
+
+    #[test]
+    fn content_sha256_header_iceberg_mode() {
+        let v = content_sha256_header(b"hello", PayloadHashMode::IcebergRest);
+        assert_eq!(v, "LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=");
+        let e = content_sha256_header(b"", PayloadHashMode::IcebergRest);
+        assert_eq!(e, EMPTY_HEX);
+    }
+
+    #[test]
+    fn content_sha256_header_standard_mode() {
+        let v = content_sha256_header(b"hello", PayloadHashMode::StandardAws);
+        assert_eq!(
+            v,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    /// The signature the previous hand-rolled signer produced for this case,
+    /// pinned so a change in canonicalization is caught.
+    fn assert_signature_is(req: &reqwest::Request, expected: &str) {
+        let auth = req
+            .headers()
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(auth.ends_with(&format!("Signature={expected}")), "{auth}");
+    }
+
+    fn test_signer(mode: PayloadHashMode) -> SigV4Signer {
+        SigV4Signer::new(
+            AwsCredentials {
+                access_key_id: "ak".to_string(),
+                secret_access_key: "sk".to_string().into(),
+                session_token: None,
+            },
+            "us-east-1".to_string(),
+            "execute-api".to_string(),
+            mode,
+        )
+    }
+
+    #[test]
+    fn userinfo_is_stripped_before_signing() {
+        use chrono::TimeZone;
+
+        // `HttpRequest::new` is public, so a hand-built request can carry
+        // userinfo that the wire Host never has.
+        let signer = test_signer(PayloadHashMode::StandardAws);
+        let mut req = reqwest::Request::new(
+            reqwest::Method::GET,
+            "https://user:pw@rest.example.com/v1/config"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(req.url().username(), "user");
+        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+
+        signer.sign_at(&mut req, now).unwrap();
+
+        assert_eq!(req.url().username(), "");
+        assert_eq!(req.url().password(), None);
+        assert_signature_is(
+            &req,
+            "0f4a3487bcff9dd16bf0a42d06c24dc49b2366e8a928dc9666f8424cf5b306b3",
+        );
+    }
+
+    #[test]
+    fn a_doubled_slash_in_the_path_is_normalized() {
+        use chrono::TimeZone;
+
+        // A catalog URI with a trailing slash produces `//v1/...`; the signed
+        // path has to collapse it the way `Aws4Signer` does.
+        let signer = test_signer(PayloadHashMode::StandardAws);
+        let mut req = reqwest::Request::new(
+            reqwest::Method::GET,
+            "https://rest.example.com//v1//config".parse().unwrap(),
+        );
+        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+
+        signer.sign_at(&mut req, now).unwrap();
+
+        assert_signature_is(
+            &req,
+            "0f4a3487bcff9dd16bf0a42d06c24dc49b2366e8a928dc9666f8424cf5b306b3",
+        );
+    }
+
+    #[test]
+    fn caller_headers_the_signer_overwrites_are_relocated() {
+        use chrono::TimeZone;
+
+        // Java's `updateRequestHeaders` moves a conflicting caller value to
+        // `Original-<name>` rather than dropping it, credentials included.
+        let signer = SigV4Signer::new(
+            AwsCredentials {
+                access_key_id: "ak".to_string(),
+                secret_access_key: "sk".to_string().into(),
+                session_token: Some("signer-token".to_string().into()),
+            },
+            "us-east-1".to_string(),
+            "execute-api".to_string(),
+            PayloadHashMode::StandardAws,
+        );
+        let mut req = reqwest::Client::new()
+            .get("https://rest.example.com/v1/config")
+            .header("authorization", "Bearer caller-token")
+            .header("x-amz-date", "19700101T000000Z")
+            .header("x-amz-security-token", "caller-session")
+            .header("x-amz-content-sha256", "caller-hash")
+            .build()
+            .unwrap();
+
+        signer
+            .sign_at(
+                &mut req,
+                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
+            )
+            .unwrap();
+
+        let h = req.headers();
+        assert_eq!(
+            h.get("original-authorization").unwrap(),
+            "Bearer caller-token"
+        );
+        assert_eq!(h.get("original-x-amz-date").unwrap(), "19700101T000000Z");
+        assert_eq!(
+            h.get("original-x-amz-content-sha256").unwrap(),
+            "caller-hash"
+        );
+        let token = h.get("original-x-amz-security-token").unwrap();
+        assert_eq!(token, "caller-session");
+        // Relocated originals may be credentials themselves.
+        assert!(token.is_sensitive());
+        assert!(
+            h.get("original-x-amz-content-sha256")
+                .unwrap()
+                .is_sensitive()
+        );
+        // And the signer's own values took their place.
+        assert!(
+            h.get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("AWS4-HMAC-SHA256 ")
+        );
+        assert_eq!(h.get("x-amz-security-token").unwrap(), "signer-token");
+    }
+
+    #[test]
+    fn an_existing_authorization_is_never_signed() {
+        use chrono::TimeZone;
+
+        // `authorization` must stay out of `SignedHeaders`: the signer replaces
+        // it, so signing the caller's value would guarantee a mismatch. The
+        // crate's own defaults carry that exclusion.
+        let signer = test_signer(PayloadHashMode::StandardAws);
+        let mut req = reqwest::Client::new()
+            .get("https://rest.example.com/v1/config")
+            .header("authorization", "Bearer caller-token")
+            .header("user-agent", "example/1.0")
+            .build()
+            .unwrap();
+
+        signer
+            .sign_at(
+                &mut req,
+                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
+            )
+            .unwrap();
+
+        let auth = req
+            .headers()
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let signed = auth
+            .split("SignedHeaders=")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap();
+        for excluded in ["authorization", "user-agent"] {
+            assert!(!signed.split(';').any(|h| h == excluded), "{signed}");
+        }
+    }
+
+    #[test]
+    fn hop_by_hop_headers_are_not_signed() {
+        use chrono::TimeZone;
+
+        // A proxy or an HTTP/2 hop may drop or rewrite these, so signing them
+        // would make the request fail verification. Java's `AbstractAws4Signer`
+        // ignores them too.
+        let signer = test_signer(PayloadHashMode::StandardAws);
+        let mut req = reqwest::Client::new()
+            .get("https://rest.example.com/v1/config")
+            .header("expect", "100-continue")
+            .header("connection", "keep-alive")
+            .header("x-forwarded-for", "203.0.113.7")
+            .header("x-tenant", "acme")
+            .build()
+            .unwrap();
+        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+
+        signer.sign_at(&mut req, now).unwrap();
+
+        let auth = req
+            .headers()
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let signed = auth
+            .split("SignedHeaders=")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap();
+        for skipped in ["expect", "connection", "x-forwarded-for"] {
+            assert!(!signed.split(';').any(|h| h == skipped), "{signed}");
+        }
+        // An ordinary caller header is still signed.
+        assert!(signed.split(';').any(|h| h == "x-tenant"), "{signed}");
+        assert_signature_is(
+            &req,
+            "f938221412ed6b55cf3db380ce6ded476419ad3d7db4c76d932031c98465ce79",
+        );
+    }
+
+    #[test]
+    fn signed_credentials_are_marked_sensitive() {
+        use chrono::TimeZone;
+
+        // Both carry a credential, so a `Debug`-formatted request must not
+        // print them.
+        let signer = SigV4Signer::new(
+            AwsCredentials {
+                access_key_id: "ak".to_string(),
+                secret_access_key: "sk".to_string().into(),
+                session_token: Some("session-token".to_string().into()),
+            },
+            "us-east-1".to_string(),
+            "execute-api".to_string(),
+            PayloadHashMode::StandardAws,
+        );
+        let mut req = reqwest::Client::new()
+            .get("https://rest.example.com/v1/config")
+            .build()
+            .unwrap();
+
+        signer
+            .sign_at(
+                &mut req,
+                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
+            )
+            .unwrap();
+
+        assert!(req.headers().get("authorization").unwrap().is_sensitive());
+        assert!(
+            req.headers()
+                .get("x-amz-security-token")
+                .unwrap()
+                .is_sensitive()
+        );
+        let debug = format!("{req:?}");
+        assert!(!debug.contains("session-token"), "{debug}");
+    }
+
+    #[test]
+    fn a_caller_content_hash_is_relocated_not_dropped() {
+        use chrono::TimeZone;
+
+        // The signer overwrites `x-amz-content-sha256`; the caller's value
+        // moves aside instead of vanishing, after signing as Java does.
+        let signer = test_signer(PayloadHashMode::StandardAws);
+        let mut req = reqwest::Client::new()
+            .get("https://rest.example.com/v1/config")
+            .header("x-amz-content-sha256", "caller-supplied")
+            .build()
+            .unwrap();
+
+        signer
+            .sign_at(
+                &mut req,
+                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            req.headers().get("original-x-amz-content-sha256").unwrap(),
+            "caller-supplied"
+        );
+        assert_eq!(
+            req.headers().get("x-amz-content-sha256").unwrap(),
+            EMPTY_HEX
+        );
+    }
+
+    #[test]
+    fn signs_with_a_non_default_service_and_session_token() {
+        use chrono::TimeZone;
+
+        // What a non-AWS S3-compatible catalog vends: its own signing name
+        // rather than `execute-api`, its own region, and STS credentials.
+        let signer = SigV4Signer::new(
+            AwsCredentials {
+                access_key_id: "STS.EXAMPLEACCESSKEYID".into(),
+                secret_access_key: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+                    .to_string()
+                    .into(),
+                session_token: Some("example-session-token".to_string().into()),
+            },
+            "us-east-1".into(),
+            "custom-service".into(),
+            PayloadHashMode::IcebergRest,
+        );
+        let mut req = reqwest::Client::new()
+            .get("https://catalog.example.com/v1/config?warehouse=my-catalog")
+            .build()
+            .unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap();
+
+        signer.sign_at(&mut req, now).unwrap();
+
+        assert_signature_is(
+            &req,
+            "6b7065e5f44da4f5c3654126b8d5fe29599905afb6b98f4de65b6ec6e1be783f",
+        );
+        let auth = req
+            .headers()
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            auth.contains("/us-east-1/custom-service/aws4_request"),
+            "{auth}"
+        );
+        assert_eq!(
+            req.headers().get("x-amz-security-token").unwrap(),
+            "example-session-token"
+        );
+    }
+
+    #[test]
+    fn signing_key_and_signature_match_aws_vector() {
+        let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+        let date = "20150830";
+        let region = "us-east-1";
+        let service = "service";
+        let key = signing_key(secret, date, region, service);
+
+        let string_to_sign = "AWS4-HMAC-SHA256\n\
+20150830T123600Z\n\
+20150830/us-east-1/service/aws4_request\n\
+bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
+        let sig = hex_hmac_sha256(&key, string_to_sign.as_bytes());
+        assert_eq!(
+            sig,
+            "5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"
+        );
+    }
+
+    #[test]
+    fn signs_request_iceberg_mode() {
+        let creds = AwsCredentials {
+            access_key_id: "AKIDEXAMPLE".into(),
+            secret_access_key: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+                .to_string()
+                .into(),
+            session_token: Some("SESSIONTOKEN".to_string().into()),
+        };
+        let signer = SigV4Signer::new(
+            creds,
+            "us-east-1".into(),
+            "glue".into(),
+            PayloadHashMode::IcebergRest,
+        );
+        let client = reqwest::Client::new();
+        let mut req = client
+            .post("https://rest.example.com/v1/namespaces")
+            .body("{}")
+            .build()
+            .unwrap();
+
+        signer.sign(&mut req).unwrap();
+
+        let h = req.headers();
+        assert!(
+            h.get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/")
+        );
+        assert!(h.contains_key("x-amz-date"));
+        assert_eq!(h.get("x-amz-security-token").unwrap(), "SESSIONTOKEN");
+        let csha = h.get("x-amz-content-sha256").unwrap().to_str().unwrap();
+        assert_eq!(csha, "RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=");
+    }
+
+    /// Empty body uses the hex constant and existing headers are signed too
+    /// (mirrors Java's `TestRESTSigV4AuthSession::authenticateWithoutBody`).
+    #[test]
+    fn signs_empty_body_and_all_headers() {
+        let creds = AwsCredentials {
+            access_key_id: "AKIDEXAMPLE".into(),
+            secret_access_key: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+                .to_string()
+                .into(),
+            session_token: None,
+        };
+        let signer = SigV4Signer::new(
+            creds,
+            "us-east-1".into(),
+            "glue".into(),
+            PayloadHashMode::IcebergRest,
+        );
+        let client = reqwest::Client::new();
+        let mut req = client
+            .get("https://rest.example.com/v1/config")
+            .header("content-type", "application/json")
+            .header("content-encoding", "gzip")
+            .build()
+            .unwrap();
+
+        signer.sign(&mut req).unwrap();
+
+        let h = req.headers();
+        assert_eq!(h.get("x-amz-content-sha256").unwrap(), EMPTY_HEX);
+        assert!(!h.contains_key("x-amz-security-token"));
+        let auth = h.get("authorization").unwrap().to_str().unwrap();
+        assert!(auth.starts_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/"));
+        assert!(auth.contains(
+            "SignedHeaders=content-encoding;content-type;host;x-amz-content-sha256;x-amz-date"
+        ));
+    }
+
+    /// The signed `host` must include an explicit non-default port, matching
+    /// what reqwest/hyper put on the wire and what the AWS SDK signs.
+    #[test]
+    fn iceberg_mode_signs_the_hex_payload_hash_not_the_base64_header() {
+        // The IcebergRest split: `x-amz-content-sha256` carries base64, but the
+        // canonical request must hash in hex. A body is required to tell them
+        // apart — every other signing test uses an empty one, where the header
+        // is the hex constant and the two values coincide.
+        //
+        // Java has no counterpart: there the split lives inside the AWS SDK
+        // (`SignerChecksumParams` puts a base64 checksum in the header while
+        // `Aws4Signer` canonicalizes hex), so `TestRESTSigV4Signer` only checks
+        // that the header is present. Reimplementing the signer makes the
+        // invariant ours to keep.
+        use chrono::TimeZone;
+
+        let creds = AwsCredentials {
+            access_key_id: "AKIDEXAMPLE".into(),
+            secret_access_key: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+                .to_string()
+                .into(),
+            session_token: None,
+        };
+        let signer = SigV4Signer::new(
+            creds,
+            "us-east-1".into(),
+            "execute-api".into(),
+            PayloadHashMode::IcebergRest,
+        );
+        let body = br#"{"namespace":["ns"]}"#;
+        let mut req = reqwest::Client::new()
+            .post("https://rest.example.com/v1/namespaces")
+            .body(body.to_vec())
+            .build()
+            .unwrap();
+        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+
+        signer.sign_at(&mut req, now).unwrap();
+
+        // The header carries base64 while the pinned signature covers hex.
+        assert_eq!(
+            req.headers().get("x-amz-content-sha256").unwrap(),
+            content_sha256_header(body, PayloadHashMode::IcebergRest).as_str()
+        );
+        assert_ne!(
+            req.headers().get("x-amz-content-sha256").unwrap(),
+            hex_sha256(body).as_str()
+        );
+        assert_signature_is(
+            &req,
+            "c68682c26cab6a781256f83b0076f50014f4922c3907f4ff09c204a74d61fc1d",
+        );
+    }
+
+    #[test]
+    fn signs_host_with_non_default_port() {
+        use chrono::TimeZone;
+
+        let creds = AwsCredentials {
+            access_key_id: "AKIDEXAMPLE".into(),
+            secret_access_key: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+                .to_string()
+                .into(),
+            session_token: None,
+        };
+        let signer = SigV4Signer::new(
+            creds,
+            "us-east-1".into(),
+            "glue".into(),
+            PayloadHashMode::IcebergRest,
+        );
+        let client = reqwest::Client::new();
+        let mut req = client
+            .get("https://rest.example.com:8181/v1/config")
+            .build()
+            .unwrap();
+        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+
+        signer.sign_at(&mut req, now).unwrap();
+        assert_signature_is(
+            &req,
+            "f7801a4ecac5fe6dcc4ee385223428ec4833f21d0c2fc10d2fb00694b2c0def7",
+        );
+    }
+
+    /// AWS SDK v2 parity (`doubleUrlEncode`): the canonical URI encodes the
+    /// serialized path once more — literal `,` becomes `%2C`, an encoded
+    /// `%2C` becomes `%252C` — while plain paths stay byte-identical.
+    #[test]
+    fn canonical_uri_is_aws_double_encoded() {
+        use chrono::TimeZone;
+
+        let creds = AwsCredentials {
+            access_key_id: "AKIDEXAMPLE".into(),
+            secret_access_key: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+                .to_string()
+                .into(),
+            session_token: None,
+        };
+        let signer = SigV4Signer::new(
+            creds,
+            "us-east-1".into(),
+            "glue".into(),
+            PayloadHashMode::IcebergRest,
+        );
+        let client = reqwest::Client::new();
+        let mut req = client
+            .get("https://rest.example.com/v1/namespaces/a%2Cb/tables/x,y")
+            .build()
+            .unwrap();
+        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+
+        signer.sign_at(&mut req, now).unwrap();
+        assert_signature_is(
+            &req,
+            "4d966b6fc2dfb62be5a603e4e07e5dc85b2af1c7e6a181c5646bfbf38ddfa543",
+        );
+    }
+
+    #[test]
+    fn signs_request_standard_mode_uses_hex_header() {
+        let creds = AwsCredentials {
+            access_key_id: "AKIDEXAMPLE".into(),
+            secret_access_key: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+                .to_string()
+                .into(),
+            session_token: None,
+        };
+        let signer = SigV4Signer::new(
+            creds,
+            "us-east-1".into(),
+            "glue".into(),
+            PayloadHashMode::StandardAws,
+        );
+        let client = reqwest::Client::new();
+        let mut req = client
+            .post("https://rest.example.com/v1/namespaces")
+            .body("hello")
+            .build()
+            .unwrap();
+
+        signer.sign(&mut req).unwrap();
+
+        // StandardAws keeps the header in hex.
+        assert_eq!(
+            req.headers().get("x-amz-content-sha256").unwrap(),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+}
