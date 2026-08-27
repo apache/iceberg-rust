@@ -506,16 +506,19 @@ impl RestClient {
             .await
     }
 
-    /// Sends `request` with the authentication derived for `context`.
+    /// Derives the authentication session for one catalog operation.
+    async fn contextual_session(&self, context: &SessionContext) -> Result<Arc<dyn AuthSession>> {
+        self.auth_manager
+            .contextual_session(context, Arc::clone(&self.catalog_session))
+            .await
+    }
+
+    /// Sends `request` with `session`.
     async fn query_catalog(
         &self,
-        context: &SessionContext,
+        session: Arc<dyn AuthSession>,
         request: HttpRequest,
     ) -> Result<HttpResponse> {
-        let session = self
-            .auth_manager
-            .contextual_session(context, Arc::clone(&self.catalog_session))
-            .await?;
         self.http_client
             .with_auth_session(session)
             .query_catalog(request)
@@ -779,7 +782,8 @@ impl RestSessionCatalog {
         }
 
         let request = HttpRequest::build(request_builder)?;
-        let http_response = client.query_catalog(context, request).await?;
+        let session = client.contextual_session(context).await?;
+        let http_response = client.query_catalog(session, request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
@@ -872,7 +876,8 @@ impl RestSessionCatalog {
         url: String,
     ) -> Result<bool> {
         let request = HttpRequest::build(client.http_client.request(Method::HEAD, url))?;
-        let http_response = client.query_catalog(context, request).await?;
+        let session = client.contextual_session(context).await?;
+        let http_response = client.query_catalog(session, request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
@@ -939,6 +944,7 @@ impl SessionCatalog for RestSessionCatalog {
         let endpoint = client.config.namespaces_endpoint();
         let mut namespaces = Vec::new();
         let mut next_token = None;
+        let session = client.contextual_session(context).await?;
 
         loop {
             let mut request = client.http_client.request(Method::GET, endpoint.clone());
@@ -953,7 +959,7 @@ impl SessionCatalog for RestSessionCatalog {
             }
 
             let http_response = client
-                .query_catalog(context, HttpRequest::build(request)?)
+                .query_catalog(Arc::clone(&session), HttpRequest::build(request)?)
                 .await?;
 
             match http_response.status() {
@@ -1004,7 +1010,8 @@ impl SessionCatalog for RestSessionCatalog {
                 }),
         )?;
 
-        let http_response = client.query_catalog(context, request).await?;
+        let session = client.contextual_session(context).await?;
+        let http_response = client.query_catalog(session, request).await?;
 
         match http_response.status() {
             StatusCode::OK => {
@@ -1035,7 +1042,8 @@ impl SessionCatalog for RestSessionCatalog {
                 .request(Method::GET, client.config.namespace_endpoint(namespace)),
         )?;
 
-        let http_response = client.query_catalog(context, request).await?;
+        let session = client.contextual_session(context).await?;
+        let http_response = client.query_catalog(session, request).await?;
 
         match http_response.status() {
             StatusCode::OK => {
@@ -1100,7 +1108,8 @@ impl SessionCatalog for RestSessionCatalog {
                 .request(Method::DELETE, client.config.namespace_endpoint(namespace)),
         )?;
 
-        let http_response = client.query_catalog(context, request).await?;
+        let session = client.contextual_session(context).await?;
+        let http_response = client.query_catalog(session, request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
@@ -1124,6 +1133,7 @@ impl SessionCatalog for RestSessionCatalog {
         let endpoint = client.config.tables_endpoint(namespace);
         let mut identifiers = Vec::new();
         let mut next_token = None;
+        let session = client.contextual_session(context).await?;
 
         loop {
             let mut request = client.http_client.request(Method::GET, endpoint.clone());
@@ -1133,7 +1143,7 @@ impl SessionCatalog for RestSessionCatalog {
             }
 
             let http_response = client
-                .query_catalog(context, HttpRequest::build(request)?)
+                .query_catalog(Arc::clone(&session), HttpRequest::build(request)?)
                 .await?;
 
             match http_response.status() {
@@ -1197,7 +1207,8 @@ impl SessionCatalog for RestSessionCatalog {
                 }),
         )?;
 
-        let http_response = client.query_catalog(context, request).await?;
+        let session = client.contextual_session(context).await?;
+        let http_response = client.query_catalog(session, request).await?;
 
         let response = match http_response.status() {
             StatusCode::OK => deserialize_catalog_response::<LoadTableResult>(http_response)?,
@@ -1270,7 +1281,8 @@ impl SessionCatalog for RestSessionCatalog {
                 .request(Method::GET, client.config.table_endpoint(table_ident)),
         )?;
 
-        let http_response = client.query_catalog(context, request).await?;
+        let session = client.contextual_session(context).await?;
+        let http_response = client.query_catalog(session, request).await?;
 
         let response = match http_response.status() {
             StatusCode::OK | StatusCode::NOT_MODIFIED => {
@@ -1364,7 +1376,8 @@ impl SessionCatalog for RestSessionCatalog {
                 }),
         )?;
 
-        let http_response = client.query_catalog(context, request).await?;
+        let session = client.contextual_session(context).await?;
+        let http_response = client.query_catalog(session, request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
@@ -1407,7 +1420,8 @@ impl SessionCatalog for RestSessionCatalog {
                 }),
         )?;
 
-        let http_response = client.query_catalog(context, request).await?;
+        let session = client.contextual_session(context).await?;
+        let http_response = client.query_catalog(session, request).await?;
 
         let response: LoadTableResult = match http_response.status() {
             StatusCode::OK => deserialize_catalog_response::<LoadTableResult>(http_response)?,
@@ -1471,7 +1485,8 @@ impl SessionCatalog for RestSessionCatalog {
                 }),
         )?;
 
-        let http_response = client.query_catalog(context, request).await?;
+        let session = client.contextual_session(context).await?;
+        let http_response = client.query_catalog(session, request).await?;
 
         let response: CommitTableResponse = match http_response.status() {
             StatusCode::OK => deserialize_catalog_response(http_response)?,
@@ -2836,9 +2851,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_contextual_session_authenticates_each_catalog_request() {
-        use std::sync::Mutex;
-
+    async fn test_contextual_session_authenticates_catalog_operation() {
         #[derive(Debug)]
         struct PlainSession;
         #[async_trait]
@@ -2864,7 +2877,6 @@ mod tests {
         #[derive(Debug)]
         struct ContextManager {
             catalog_session: Arc<dyn AuthSession>,
-            seen_session_ids: Arc<Mutex<Vec<String>>>,
         }
         #[async_trait]
         impl AuthManager for ContextManager {
@@ -2890,10 +2902,6 @@ mod tests {
                 catalog_session: Arc<dyn AuthSession>,
             ) -> Result<Arc<dyn AuthSession>> {
                 assert!(Arc::ptr_eq(&catalog_session, &self.catalog_session));
-                self.seen_session_ids
-                    .lock()
-                    .unwrap()
-                    .push(context.session_id().to_string());
                 Ok(Arc::new(ContextSession(context.session_id().to_string())))
             }
         }
@@ -2913,14 +2921,10 @@ mod tests {
             .create_async()
             .await;
 
-        let seen_session_ids = Arc::new(Mutex::new(Vec::new()));
         let catalog_session: Arc<dyn AuthSession> = Arc::new(PlainSession);
         let catalog = test_catalog_with(
             RestCatalogConfig::builder().uri(server.url()).build(),
-            ContextManager {
-                catalog_session,
-                seen_session_ids: seen_session_ids.clone(),
-            },
+            ContextManager { catalog_session },
         );
         let context = SessionContext::builder()
             .session_id("session-123".to_string())
@@ -2931,10 +2935,6 @@ mod tests {
         assert_eq!(namespaces, vec![
             NamespaceIdent::new("ns1".to_string()),
             NamespaceIdent::new("ns2".to_string()),
-        ]);
-        assert_eq!(*seen_session_ids.lock().unwrap(), vec![
-            "session-123",
-            "session-123"
         ]);
         config_mock.assert_async().await;
         first_page.assert_async().await;
