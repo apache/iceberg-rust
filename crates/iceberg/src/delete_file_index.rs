@@ -26,7 +26,7 @@ use tokio::sync::Notify;
 use crate::metadata_columns::RESERVED_FIELD_ID_DELETE_FILE_PATH;
 use crate::runtime::Runtime;
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
-use crate::spec::{DataContentType, DataFile, PrimitiveLiteral, Struct};
+use crate::spec::{DataContentType, DataFile, DataFileFormat, PrimitiveLiteral, Struct};
 use crate::{Error, ErrorKind, Result};
 
 /// Index of delete files
@@ -180,8 +180,8 @@ impl PopulatedDeleteFileIndex {
     /// Creates a new populated delete file index from a list of delete file contexts, which
     /// allows for fast lookup when determining which delete files apply to a given data file.
     ///
-    /// 1. A V3 deletion vector (a `PositionDeletes` entry with `content_offset` set) is indexed
-    ///    by the `referenced_data_file` field, which the spec requires for deletion vectors.
+    /// 1. A V3 deletion vector (a `PositionDeletes` entry stored as `Puffin`) is indexed by the
+    ///    `referenced_data_file` field, which the spec requires for deletion vectors.
     ///    Fails if two deletion vectors reference the same data file: the spec allows at most
     ///    one deletion vector per data file per snapshot.
     /// 2. Other position deletes that reference a single data file, either through the
@@ -211,19 +211,34 @@ impl PopulatedDeleteFileIndex {
 
             match arc_ctx.manifest_entry.content_type() {
                 DataContentType::PositionDeletes => {
-                    if data_file.content_offset().is_some() {
-                        // The spec requires referenced_data_file whenever content_offset is set
-                        // (a deletion vector), so its absence here is a malformed manifest entry,
-                        // not an ordinary position delete to fall back on.
+                    // A deletion vector is a position delete stored as a Puffin blob. The file
+                    // format is what distinguishes it from a position delete parquet file.
+                    if data_file.file_format() == DataFileFormat::Puffin {
+                        // The spec requires referenced_data_file, content_offset and
+                        // content_size_in_bytes on a deletion vector, so a missing one is a
+                        // malformed manifest entry, not an ordinary position delete to fall back
+                        // on.
                         let Some(path) = data_file.referenced_data_file() else {
                             return Err(Error::new(
                                 ErrorKind::DataInvalid,
                                 format!(
-                                    "deletion vector {} sets content_offset but is missing referenced_data_file",
+                                    "deletion vector {} is missing referenced_data_file",
                                     arc_ctx.manifest_entry.file_path()
                                 ),
                             ));
                         };
+
+                        if data_file.content_offset().is_none()
+                            || data_file.content_size_in_bytes().is_none()
+                        {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "deletion vector {} is missing content_offset or content_size_in_bytes",
+                                    arc_ctx.manifest_entry.file_path()
+                                ),
+                            ));
+                        }
 
                         if let Some(existing) =
                             dvs_by_referenced_data_file.insert(path.clone(), arc_ctx)
@@ -1182,6 +1197,34 @@ mod tests {
         let err = PopulatedDeleteFileIndex::new(contexts).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.message().contains("missing referenced_data_file"));
+    }
+
+    #[test]
+    fn test_deletion_vector_missing_coordinates_is_rejected() {
+        let malformed_dv = DataFileBuilder::default()
+            .file_path("deletes.puffin".to_string())
+            .file_format(DataFileFormat::Puffin)
+            .content(DataContentType::PositionDeletes)
+            .record_count(1)
+            .referenced_data_file(Some("data.parquet".to_string()))
+            .content_size_in_bytes(Some(40))
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .file_size_in_bytes(60)
+            .build()
+            .unwrap();
+
+        let contexts = vec![DeleteFileContext {
+            manifest_entry: build_added_manifest_entry(5, &malformed_dv).into(),
+            partition_spec_id: 0,
+        }];
+
+        let err = PopulatedDeleteFileIndex::new(contexts).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message()
+                .contains("missing content_offset or content_size_in_bytes")
+        );
     }
 
     #[test]

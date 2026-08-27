@@ -450,6 +450,7 @@ mod tests {
                     .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
                     .with_file_path(delete_file_path)
                     .with_file_type(DataContentType::PositionDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
                     .build(),
             ])
@@ -668,6 +669,7 @@ mod tests {
                     .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
                     .with_file_path(delete_file_path)
                     .with_file_type(DataContentType::PositionDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
                     .build(),
             ])
@@ -880,6 +882,7 @@ mod tests {
                     .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
                     .with_file_path(delete_file_path)
                     .with_file_type(DataContentType::PositionDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
                     .build(),
             ])
@@ -993,6 +996,7 @@ mod tests {
                     .with_file_path(dv_path.clone())
                     .with_file_size_in_bytes(std::fs::metadata(&dv_path).unwrap().len())
                     .with_file_type(DataContentType::PositionDeletes)
+                    .with_file_format(DataFileFormat::Puffin)
                     .with_partition_spec_id(0)
                     .with_referenced_data_file(Some(data_file_path.clone()))
                     .with_content_offset(Some(content_offset))
@@ -1089,6 +1093,7 @@ mod tests {
                     .with_file_path(dv_path.clone())
                     .with_file_size_in_bytes(std::fs::metadata(&dv_path).unwrap().len())
                     .with_file_type(DataContentType::PositionDeletes)
+                    .with_file_format(DataFileFormat::Puffin)
                     .with_partition_spec_id(0)
                     .with_referenced_data_file(Some(data_file_path.clone()))
                     .with_content_offset(Some(0))

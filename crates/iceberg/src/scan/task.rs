@@ -206,6 +206,7 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
             .with_file_path(ctx.manifest_entry.file_path().to_string())
             .with_file_size_in_bytes(ctx.manifest_entry.file_size_in_bytes())
             .with_file_type(ctx.manifest_entry.content_type())
+            .with_file_format(ctx.manifest_entry.data_file().file_format())
             .with_partition_spec_id(ctx.partition_spec_id)
             .with_equality_ids(ctx.manifest_entry.data_file.equality_ids.clone())
             .with_referenced_data_file(ctx.manifest_entry.data_file.referenced_data_file.clone())
@@ -235,6 +236,10 @@ pub struct FileScanTaskDeleteFile {
 
     /// delete file type
     pub file_type: DataContentType,
+
+    /// The delete file's format, from the manifest entry. A `PositionDeletes` entry written as
+    /// `Puffin` is a V3 deletion vector; one written as `Parquet` is a position delete file.
+    pub file_format: DataFileFormat,
 
     /// partition id
     pub partition_spec_id: i32,

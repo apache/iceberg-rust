@@ -182,7 +182,7 @@ mod tests {
         use crate::arrow::delete_filter::tests::create_pos_del_schema;
         use crate::encryption::StandardKeyMetadata;
         use crate::scan::FileScanTaskDeleteFile;
-        use crate::spec::DataContentType;
+        use crate::spec::{DataContentType, DataFileFormat};
 
         let encryption_key = b"0123456789abcdef";
         let aad_prefix = b"aad_prefix";
@@ -234,6 +234,7 @@ mod tests {
             file_path: del_path.clone(),
             file_size_in_bytes: std::fs::metadata(&del_path).unwrap().len(),
             file_type: DataContentType::PositionDeletes,
+            file_format: DataFileFormat::Parquet,
             partition_spec_id: 0,
             equality_ids: None,
             key_metadata: Some(Box::from(key_metadata.as_ref())),
@@ -266,7 +267,7 @@ mod tests {
 
         use crate::encryption::StandardKeyMetadata;
         use crate::scan::FileScanTaskDeleteFile;
-        use crate::spec::DataContentType;
+        use crate::spec::{DataContentType, DataFileFormat};
 
         let encryption_key = b"0123456789abcdef";
         let aad_prefix = b"my-table-uuid!!";
@@ -312,6 +313,7 @@ mod tests {
             file_path: del_path.clone(),
             file_size_in_bytes: std::fs::metadata(&del_path).unwrap().len(),
             file_type: DataContentType::EqualityDeletes,
+            file_format: DataFileFormat::Parquet,
             partition_spec_id: 0,
             equality_ids: Some(vec![1]),
             key_metadata: Some(Box::from(key_metadata.as_ref())),

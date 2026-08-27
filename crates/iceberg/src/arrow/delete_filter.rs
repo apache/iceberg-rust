@@ -435,6 +435,7 @@ pub(crate) mod tests {
                 .len(),
             )
             .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
             .build();
 
@@ -452,6 +453,7 @@ pub(crate) mod tests {
                 .len(),
             )
             .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
             .build();
 
@@ -469,6 +471,7 @@ pub(crate) mod tests {
                 .len(),
             )
             .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
             .build();
 
@@ -543,6 +546,7 @@ pub(crate) mod tests {
                     .with_file_path("eq-del.parquet".to_string())
                     .with_file_size_in_bytes(1) // never read; this test fails before opening the file
                     .with_file_type(DataContentType::EqualityDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
                     .build(),
             ])
