@@ -114,7 +114,7 @@ impl EncryptionManager {
         }
 
         let table_properties = metadata.table_properties()?;
-        let Some(table_key_id) = table_properties.encryption_key_id.as_deref() else {
+        let Some(table_key_id) = table_properties.encryption_key_id().as_deref() else {
             if kms_client.is_some() {
                 tracing::warn!(
                     "KeyManagementClient provided but table does not have encryption.key-id set"
@@ -157,7 +157,7 @@ impl EncryptionManager {
     ///
     /// Stores the resulting wrapped entry (and any newly created KEK) in the
     /// manager's internal `encryption_keys` map. Callers persist the full set
-    /// at commit time via [`Self::encryption_keys`].
+    /// at commit time via the manager's `encryption_keys`.
     ///
     /// Returns the `key_id` of the wrapped entry, which should be recorded on
     /// the snapshot as `encryption_key_id` so readers can locate it later.

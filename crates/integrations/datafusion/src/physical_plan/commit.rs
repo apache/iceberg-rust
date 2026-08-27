@@ -518,8 +518,9 @@ mod tests {
         assert!(!manifest_list.entries().is_empty());
 
         // Load the first manifest and verify it contains our data files
-        let manifest = manifest_list.entries()[0]
-            .load_manifest(updated_table.file_io())
+        let manifest = updated_table
+            .manifest_reader()
+            .read(&manifest_list.entries()[0])
             .await?;
 
         // Verify that the manifest contains our data files
