@@ -266,9 +266,10 @@ impl PredicateConverter<'_> {
 
 /// Walks the Parquet column path (root to leaf) through the projected record batch to
 /// reach a primitive leaf. A single-element path returns the matching top-level column;
-/// a longer path descends through `StructArray` children by name. Predicates can only
-/// bind to primitive leaves in top-level or struct-nested positions (list/map interiors
-/// have no accessor), so every path segment before the leaf resolves to a struct.
+/// a longer path descends through `StructArray` children by name. `Schema::build_accessors`
+/// builds accessors only for primitives and primitives nested in structs — never for a list
+/// or map, nor for anything inside one — so `Reference::bind` rejects those predicates and
+/// every path segment before the leaf here is a struct.
 fn project_column(
     batch: &RecordBatch,
     path: &[String],
@@ -285,6 +286,7 @@ fn project_column(
             ))
         })?
         .clone();
+    let mut current_name = root_name;
 
     for part in rest {
         let struct_array = current
@@ -292,7 +294,7 @@ fn project_column(
             .downcast_ref::<StructArray>()
             .ok_or_else(|| {
                 ArrowError::SchemaError(format!(
-                    "Predicate column path expected a struct at `{part}` but found {:?}.",
+                    "Predicate column path expected a struct at `{current_name}` but found {:?}.",
                     current.data_type()
                 ))
             })?;
@@ -300,10 +302,11 @@ fn project_column(
             .column_by_name(part)
             .ok_or_else(|| {
                 ArrowError::SchemaError(format!(
-                    "Predicate column nested field `{part}` not found in struct."
+                    "Predicate column nested field `{part}` not found in struct `{current_name}`."
                 ))
             })?
             .clone();
+        current_name = part;
     }
 
     if matches!(current.data_type(), DataType::Struct(_)) {
