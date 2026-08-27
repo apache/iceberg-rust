@@ -28,7 +28,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use iceberg::Result;
 pub use oauth2::OAuth2Manager;
-pub use sigv4::{AwsCredentials, PayloadHashMode, SigV4Signer};
+pub use sigv4::{AwsCredentials, PayloadHashMode, SigV4AuthManager, SigV4Signer};
 
 use crate::client::HttpClient;
 use crate::request::HttpRequest;
@@ -37,6 +37,8 @@ use crate::request::HttpRequest;
 pub const AUTH_TYPE_NONE: &str = "none";
 /// `rest.auth.type` value selecting OAuth2 token authentication.
 pub const AUTH_TYPE_OAUTH2: &str = "oauth2";
+/// `rest.auth.type` value selecting AWS SigV4 request signing.
+pub const AUTH_TYPE_SIGV4: &str = "sigv4";
 
 /// Creates the [`AuthSession`]s used to authenticate REST catalog requests.
 ///
