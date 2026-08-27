@@ -19,6 +19,7 @@
 //! `AuthManager`/`AuthSession` API.
 
 mod oauth2;
+mod sigv4;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -27,6 +28,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use iceberg::Result;
 pub use oauth2::OAuth2Manager;
+pub use sigv4::{AwsCredentials, PayloadHashMode, SigV4Signer};
 
 use crate::client::HttpClient;
 use crate::request::HttpRequest;
