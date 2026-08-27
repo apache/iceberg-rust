@@ -602,6 +602,19 @@ On behalf of Apache Iceberg Community
 
 Example: <https://lists.apache.org/thread/oy77n55brvk72tnlb2bjzfs9nz3cfd0s>
 
+### Merge changes from the release branch into main
+
+As the release branch evolves, changes will be added there that should be introduced to `main` branch too.
+This is the case even for the first release on a branch, since every release includes `CHANGELOG.md` entry updates.
+
+Create a pull request that pulls back the changes from the release branch.
+To prepare the pull request,
+create a merge commit from the release branch into main,
+run `make generate-public-api` and `./dev/release/dependencies.sh generate`,
+and open the pull request with both changes.
+
+Once merged into `main`, `main` is then ready for future release branches being cut from it.
+
 ### Publish the release blog post
 
 If a release blog post has been drafted (introduced earlier in this guide), now is the time to ensure it is ready to merge and publish.
