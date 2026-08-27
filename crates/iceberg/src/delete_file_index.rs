@@ -1290,8 +1290,8 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
-    // A V3 deletion vector: a PositionDeletes entry stored as a Puffin blob (content_offset set)
-    // scoped to a single data file via referenced_data_file.
+    // A V3 deletion vector: a PositionDeletes entry stored as a Puffin blob, scoped to a single
+    // data file via referenced_data_file.
     fn build_deletion_vector(
         referenced_data_file: &str,
         partition: &Struct,
