@@ -70,8 +70,8 @@ fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8>
     hmac_sha256(&k_service, b"aws4_request")
 }
 
-/// Computes the value of the `x-amz-content-sha256` header. `None` is a request
-/// with no body at all, which the two modes disagree about.
+/// The `x-amz-content-sha256` value. `None` means no body at all, which the
+/// two modes encode differently.
 fn content_sha256_header(body: Option<&[u8]>, mode: PayloadHashMode) -> String {
     match mode {
         PayloadHashMode::StandardAws => hex_sha256(body.unwrap_or_default()),
@@ -82,8 +82,8 @@ fn content_sha256_header(body: Option<&[u8]>, mode: PayloadHashMode) -> String {
     }
 }
 
-/// AWS SigV4 signer following Iceberg Java's `RESTSigV4AuthSession`: it adds the
-/// required amz headers and signs all request headers except a small blacklist.
+/// Signs REST catalog requests the way Iceberg Java's `RESTSigV4AuthSession`
+/// does. Carries no credentials, so one signer serves every session.
 #[derive(Clone)]
 pub struct SigV4Signer {
     region: String,
@@ -101,17 +101,15 @@ impl SigV4Signer {
         }
     }
 
-    /// Signs `request` in place, rewriting it where signing requires it: an
-    /// existing `Authorization` moves to `Original-Authorization` and is signed
-    /// over, userinfo is dropped from the URL, and a `+` in the query becomes
-    /// `%20`.
+    /// Signs `request` in place, rewriting it as signing requires: an existing
+    /// `Authorization` becomes `Original-Authorization`, userinfo leaves the
+    /// URL, and a `+` in the query becomes `%20`.
     ///
-    /// That last one means a `+` is taken to be an encoded space, which is what
-    /// `RequestBuilder::query` writes; encode a literal plus as `%2B`. AWS
-    /// requires spaces as `%20` in a signed URL either way.
+    /// A `+` is therefore taken to be an encoded space; write a literal plus as
+    /// `%2B`.
     ///
-    /// Fails rather than sign a request whose body is streaming or whose
-    /// headers are not UTF-8, since neither can be canonicalized faithfully.
+    /// Fails rather than sign a streaming body or a non-UTF-8 header, neither
+    /// of which canonicalizes faithfully.
     pub fn sign(
         &self,
         request: &mut crate::HttpRequest,
@@ -133,8 +131,7 @@ impl SigV4Signer {
         use aws_sigv4::sign::v4;
         use tracing::subscriber::NoSubscriber;
 
-        // `HttpRequestBody` already separates absent from empty, which Java
-        // relies on: it branches on `encodedBody() == null`.
+        // Java branches on `encodedBody() == null`, so absent and empty differ.
         let body: Option<Vec<u8>> = match request.body() {
             crate::HttpRequestBody::Empty => None,
             crate::HttpRequestBody::Buffered(bytes) => Some(bytes.to_vec()),
@@ -149,8 +146,7 @@ impl SigV4Signer {
 
         convert_headers(request);
 
-        // Relocated after signing, as Java does, so the `Original-` copy is
-        // not itself signed.
+        // Relocated after signing, so the `Original-` copy is not signed.
         let displaced_content_hash: Vec<_> = request
             .headers()
             .get_all(CONTENT_SHA256)
@@ -163,17 +159,15 @@ impl SigV4Signer {
             .insert(CONTENT_SHA256, content_header.parse().unwrap());
 
         // The wire Host never carries userinfo, so signing it would mismatch
-        // and would feed the password to the HMAC. `RequestBuilder` strips it,
-        // a hand-built request does not.
+        // and feed the password to the HMAC. Only hand-built requests have it.
         if !request.url().username().is_empty() || request.url().password().is_some() {
             let url = request.url_mut();
             let _ = url.set_username("");
             let _ = url.set_password(None);
         }
 
-        // Verifiers disagree on `+` in a query — a literal under RFC 3986, a
-        // space under form encoding — and reqwest writes spaces as `+`. Rewrite
-        // it so the wire and the canonical request agree either way.
+        // Both AWS and Java read `+` as a space, so this leaves the signature
+        // alone; it makes the sent URL agree with an RFC 3986 verifier too.
         if let Some(query) = request.url().query().filter(|q| q.contains('+')) {
             let unambiguous = query.replace('+', "%20");
             request.url_mut().set_query(Some(&unambiguous));
@@ -183,11 +177,10 @@ impl SigV4Signer {
         // `Aws4Signer` defaults: normalize the path and double-encode it.
         settings.percent_encoding_mode = PercentEncodingMode::Double;
         settings.uri_path_normalization_mode = UriPathNormalizationMode::Enabled;
-        // The header is ours to set: IcebergRest mode puts base64 there,
-        // while the signer hashes the body in hex for the canonical request.
+        // The header is ours to set: IcebergRest puts base64 there, while the
+        // canonical request keeps hex.
         settings.payload_checksum_kind = PayloadChecksumKind::NoHeader;
-        // Java's `AbstractAws4Signer` ignores these too; the crate's defaults
-        // do not.
+        // In Java's ignore list but not the crate's defaults.
         let mut excluded = settings.excluded_headers.take().unwrap_or_default();
         excluded.extend([
             "expect".into(),
@@ -209,8 +202,8 @@ impl SigV4Signer {
             })?
             .into();
 
-        // Skipping a header that is not UTF-8 would leave it unsigned but still
-        // on the wire, which AWS rejects for `x-amz-*` and is hard to diagnose.
+        // Skipping one would leave it unsigned but still on the wire, which
+        // AWS rejects for `x-amz-*` and is hard to diagnose.
         let headers: Vec<(&str, &str)> = request
             .headers()
             .iter()
@@ -235,11 +228,8 @@ impl SigV4Signer {
             Error::new(ErrorKind::DataInvalid, "request is not signable").with_source(e)
         })?;
 
-        // `aws_sigv4` traces the request it signs, and its redaction list covers
-        // `authorization` but not the `Original-` copy we just made, so a
-        // delegate's bearer token would be printed verbatim at trace level.
-        // Signing is synchronous and logs nothing else worth keeping, so mute
-        // it for the call.
+        // The crate traces what it signs, and redacts `authorization` but not
+        // the `Original-` copy, so a bearer token would be logged verbatim.
         let signed =
             tracing::subscriber::with_default(NoSubscriber::default(), || sign(signable, &params));
         let (instructions, _signature) = signed
@@ -250,9 +240,8 @@ impl SigV4Signer {
     }
 }
 
-/// Renames `Authorization` to `Original-Authorization` so SigV4 can take the
-/// name, as Java's `convertHeaders` does. Runs *before* signing, so the
-/// relocated copy is itself signed over.
+/// Java's `convertHeaders`: renames `Authorization` so SigV4 can take the
+/// name. Runs before signing, so the relocated copy is signed too.
 fn convert_headers(request: &mut crate::HttpRequest) {
     let displaced: Vec<_> = request
         .headers()
@@ -270,9 +259,8 @@ fn convert_headers(request: &mut crate::HttpRequest) {
     }
 }
 
-/// Installs the signed headers, moving any conflicting caller value aside
-/// rather than dropping it, as Java's `updateRequestHeaders` does. Runs
-/// *after* signing, so these `Original-` copies are not themselves signed.
+/// Java's `updateRequestHeaders`: installs the signed headers, moving a
+/// conflicting caller value aside rather than dropping it.
 fn update_request_headers(
     request: &mut crate::HttpRequest,
     instructions: aws_sigv4::http_request::SigningInstructions,
@@ -303,7 +291,6 @@ fn update_request_headers(
     Ok(())
 }
 
-/// The payload-hash header SigV4 sets and Java relocates on conflict.
 const CONTENT_SHA256: reqwest::header::HeaderName =
     reqwest::header::HeaderName::from_static("x-amz-content-sha256");
 const AMZ_DATE: reqwest::header::HeaderName =
@@ -330,9 +317,8 @@ fn relocated_name(name: &str) -> Option<reqwest::header::HeaderName> {
     }
 }
 
-/// Moves `name`'s current values to `Original-<name>` when they differ from the
-/// value about to be signed, so a caller's header is not silently dropped
-/// (Java's `RESTSigV4AuthSession.updateRequestHeaders`).
+/// Moves `name`'s values aside when they differ from the one about to be
+/// signed, so a caller's header is not silently dropped.
 fn relocate_conflicting(
     headers: &mut reqwest::header::HeaderMap,
     name: &str,
