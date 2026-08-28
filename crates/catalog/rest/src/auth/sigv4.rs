@@ -461,7 +461,9 @@ async fn credentials_from_props(
 /// own `Authorization` is relocated and signed over.
 ///
 /// Mirrors Java's `RESTSigV4AuthManager`, which holds one signer for every
-/// session and leaves credentials to the session.
+/// session and leaves credentials to the session. It differs in one way:
+/// properties configure static credentials only, with no fallback to the AWS
+/// default provider chain. Pass a provider to [`Self::new`] for anything else.
 #[derive(Debug)]
 pub struct SigV4AuthManager {
     delegate: Arc<dyn AuthManager>,
@@ -1799,6 +1801,9 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
         let mut merged = base.clone();
         merged.insert(REST_CATALOG_PROP_SIGNING_REGION.into(), "eu-west-1".into());
         merged.insert(REST_CATALOG_PROP_SIGNING_NAME.into(), "glue".into());
+        // Credentials are rebuilt too, not just the signer: a catalog may vend
+        // a rotated key through `/v1/config`.
+        merged.insert(REST_CATALOG_PROP_ACCESS_KEY_ID.into(), "ROTATED".into());
 
         for session in [
             scope_of(
@@ -1820,6 +1825,7 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
         ] {
             assert!(session.contains("/eu-west-1/glue/"), "{session}");
             assert!(!session.contains("us-east-1"), "{session}");
+            assert!(session.starts_with("ROTATED/"), "{session}");
         }
     }
 
@@ -1853,5 +1859,56 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
         assert!(scope.starts_with("ak/"), "{scope}");
         assert!(scope.contains("/ap-south-1/custom/"), "{scope}");
         assert!(!scope.contains("eu-west-1"), "{scope}");
+    }
+
+    /// The signer's refusals have to reach the caller: a request it cannot sign
+    /// must not go out unsigned.
+    #[tokio::test]
+    async fn a_request_the_signer_rejects_fails_the_session() {
+        let session = SigV4Session {
+            delegate: Arc::new(crate::auth::NoopSession),
+            signer: test_signer(PayloadHashMode::IcebergRest),
+            credentials: test_credentials_provider(),
+        };
+        let mut request = HttpRequest::new(
+            reqwest::Client::new()
+                .post("https://rest.example.com/v1/namespaces")
+                .body(reqwest::Body::wrap_stream(futures::stream::once(async {
+                    Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"chunk"))
+                })))
+                .build()
+                .unwrap(),
+        );
+
+        let err = session.authenticate(&mut request).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        assert!(request.headers().get("authorization").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_failing_credentials_provider_fails_the_session() {
+        #[derive(Debug)]
+        struct Failing;
+        impl ProvideCredentials for Failing {
+            fn provide_credentials<'a>(
+                &'a self,
+            ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+            where Self: 'a {
+                aws_credential_types::provider::future::ProvideCredentials::ready(Err(
+                    aws_credential_types::provider::error::CredentialsError::not_loaded("no creds"),
+                ))
+            }
+        }
+
+        let session = SigV4Session {
+            delegate: Arc::new(crate::auth::NoopSession),
+            signer: test_signer(PayloadHashMode::IcebergRest),
+            credentials: SharedCredentialsProvider::new(Failing),
+        };
+        let mut request = request_with(&[]);
+
+        let err = session.authenticate(&mut request).await.unwrap_err();
+        assert!(err.message().contains("resolve AWS credentials"), "{err}");
+        assert!(request.headers().get("authorization").is_none());
     }
 }
