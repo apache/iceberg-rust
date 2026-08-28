@@ -1329,9 +1329,16 @@ impl serde_core::ser::Serialize for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::scan::IncrementalAppendScan
+impl iceberg::scan::IncrementalAppendScan
+pub fn iceberg::scan::IncrementalAppendScan::column_names(&self) -> core::option::Option<&[alloc::string::String]>
+pub async fn iceberg::scan::IncrementalAppendScan::plan_files(&self) -> iceberg::Result<iceberg::scan::FileScanTaskStream>
+pub async fn iceberg::scan::IncrementalAppendScan::to_arrow(&self) -> iceberg::Result<iceberg::scan::ArrowRecordBatchStream>
+impl core::fmt::Debug for iceberg::scan::IncrementalAppendScan
+pub fn iceberg::scan::IncrementalAppendScan::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::scan::IncrementalAppendScanBuilder<'a>
 impl<'a> iceberg::scan::IncrementalAppendScanBuilder<'a>
-pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::build(self) -> iceberg::Result<iceberg::scan::TableScan>
+pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::build(self) -> iceberg::Result<iceberg::scan::IncrementalAppendScan>
 pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::select(self, column_names: impl core::iter::traits::collect::IntoIterator<Item = impl alloc::string::ToString>) -> Self
 pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::select_all(self) -> Self
 pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::select_empty(self) -> Self
@@ -1358,6 +1365,7 @@ pub struct iceberg::scan::TableScan
 impl iceberg::scan::TableScan
 pub fn iceberg::scan::TableScan::column_names(&self) -> core::option::Option<&[alloc::string::String]>
 pub async fn iceberg::scan::TableScan::plan_files(&self) -> iceberg::Result<iceberg::scan::FileScanTaskStream>
+pub fn iceberg::scan::TableScan::snapshot(&self) -> core::option::Option<&iceberg::spec::SnapshotRef>
 pub async fn iceberg::scan::TableScan::to_arrow(&self) -> iceberg::Result<iceberg::scan::ArrowRecordBatchStream>
 impl core::fmt::Debug for iceberg::scan::TableScan
 pub fn iceberg::scan::TableScan::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result

@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use futures::channel::mpsc::Sender;
-use futures::{SinkExt, StreamExt, TryFutureExt, TryStreamExt};
+use futures::{SinkExt, TryFutureExt};
 
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
@@ -33,10 +32,6 @@ use crate::spec::{
     PartitionSpecRef, SchemaRef, SnapshotRef, StructType, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
-
-/// Filter applied to each [`ManifestFile`] before fetching it.
-/// Returns `true` to include the manifest, `false` to skip it.
-pub(crate) type ManifestFileFilter = Arc<dyn Fn(&ManifestFile) -> bool + Send + Sync>;
 
 /// Filter applied to each manifest entry after loading a manifest.
 /// Returns `true` to include the entry, `false` to skip it.
@@ -171,15 +166,11 @@ impl ManifestEntryContext {
     }
 }
 
-/// PlanContext holds everything required to perform a scan file plan.
+/// PlanContext wraps a [`SnapshotRef`] alongside all the other
+/// objects that are required to perform a scan file plan.
+#[derive(Debug)]
 pub(crate) struct PlanContext {
-    /// Snapshots whose manifest lists are read to source the scan's manifests.
-    ///
-    /// A standard scan reads only its own snapshot's list. An incremental scan
-    /// reads every append snapshot in the range, because operations that rewrite
-    /// manifests re-emit earlier `ADDED` entries as `EXISTING`, leaving those
-    /// rows reachable only via the list of the snapshot that added them.
-    pub manifest_list_snapshots: Vec<SnapshotRef>,
+    pub snapshot: SnapshotRef,
 
     pub table_metadata: TableMetadataRef,
     pub snapshot_schema: SchemaRef,
@@ -193,22 +184,18 @@ pub(crate) struct PlanContext {
     pub partition_filter_cache: Arc<PartitionFilterCache>,
     pub manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    pub manifest_file_filter: Option<ManifestFileFilter>,
-    pub manifest_entry_filter: Option<ManifestEntryFilter>,
 
     pub unified_partition_type: Option<Arc<StructType>>,
 }
 
-impl std::fmt::Debug for PlanContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PlanContext")
-            .field("manifest_list_snapshots", &self.manifest_list_snapshots)
-            .field("case_sensitive", &self.case_sensitive)
-            .finish_non_exhaustive()
-    }
-}
-
 impl PlanContext {
+    pub(crate) async fn get_manifest_list(&self) -> Result<Arc<ManifestList>> {
+        self.object_cache
+            .as_ref()
+            .get_manifest_list(&self.snapshot, &self.table_metadata)
+            .await
+    }
+
     /// Returns the partition filter for a manifest. See [`PartitionFilterCache::get`] for the
     /// always-true fallback when the manifest's spec cannot be resolved against the scan schema.
     fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
@@ -234,24 +221,12 @@ impl PlanContext {
 
     pub(crate) fn build_manifest_file_contexts(
         &self,
-        manifest_lists: Vec<Arc<ManifestList>>,
+        mut manifest_files: Vec<ManifestFile>,
+        manifest_entry_filter: Option<ManifestEntryFilter>,
         tx_data: Sender<ManifestEntryContext>,
         delete_file_idx: DeleteFileIndex,
         delete_file_tx: Sender<ManifestEntryContext>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
-        // Manifest lists are cumulative, so a manifest carried forward appears in
-        // several lists. Deduplicate by path to read each one exactly once, as Java's
-        // BaseIncrementalAppendScan#appendFilesFromSnapshots does.
-        let mut seen = HashSet::new();
-        let mut manifest_files = Vec::new();
-        for manifest_list in &manifest_lists {
-            for manifest_file in manifest_list.entries() {
-                if seen.insert(manifest_file.manifest_path.as_str()) {
-                    manifest_files.push(manifest_file);
-                }
-            }
-        }
-
         // Sort manifest files to process delete manifests first.
         // This avoids a deadlock where the producer blocks on sending data manifest entries
         // (because the data channel is full) while the delete manifest consumer is waiting
@@ -265,13 +240,7 @@ impl PlanContext {
 
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
-        for manifest_file in manifest_files {
-            if let Some(ref filter) = self.manifest_file_filter
-                && !filter(manifest_file)
-            {
-                continue;
-            }
-
+        for manifest_file in &manifest_files {
             let tx = if manifest_file.content == ManifestContentType::Deletes {
                 delete_file_tx.clone()
             } else {
@@ -304,6 +273,7 @@ impl PlanContext {
                 partition_bound_predicate,
                 tx,
                 delete_file_idx.clone(),
+                manifest_entry_filter.clone(),
             );
 
             filtered_mfcs.push(Ok(mfc));
@@ -318,6 +288,7 @@ impl PlanContext {
         partition_filter: Option<Arc<BoundPredicate>>,
         sender: Sender<ManifestEntryContext>,
         delete_file_index: DeleteFileIndex,
+        entry_filter: Option<ManifestEntryFilter>,
     ) -> ManifestFileContext {
         let bound_predicates =
             if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =
@@ -342,35 +313,12 @@ impl PlanContext {
             delete_file_index,
             name_mapping: self.name_mapping.clone(),
             case_sensitive: self.case_sensitive,
-            entry_filter: self.manifest_entry_filter.clone(),
+            entry_filter,
             partition_spec: self
                 .table_metadata
                 .partition_spec_by_id(manifest_file.partition_spec_id)
                 .cloned(),
             unified_partition_type: self.unified_partition_type.clone(),
         }
-    }
-
-    /// Reads the manifest list of every snapshot in [`Self::manifest_list_snapshots`],
-    /// in that order. Ordering only makes planning reproducible.
-    pub(crate) async fn collect_manifest_lists(
-        &self,
-        concurrency_limit: usize,
-    ) -> Result<Vec<Arc<ManifestList>>> {
-        let object_cache = self.object_cache.clone();
-        let table_metadata = self.table_metadata.clone();
-        futures::stream::iter(self.manifest_list_snapshots.clone())
-            .map(move |snapshot| {
-                let object_cache = object_cache.clone();
-                let table_metadata = table_metadata.clone();
-                async move {
-                    object_cache
-                        .get_manifest_list(&snapshot, &table_metadata)
-                        .await
-                }
-            })
-            .buffered(concurrency_limit.max(1))
-            .try_collect()
-            .await
     }
 }
