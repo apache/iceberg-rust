@@ -67,10 +67,6 @@ impl Map {
         self.pair.is_empty()
     }
 
-    pub(crate) fn iter(&self) -> impl ExactSizeIterator<Item = (&Literal, Option<&Literal>)> {
-        self.pair.iter().map(|(key, value)| (key, value.as_ref()))
-    }
-
     /// Inserts a key-value pair into the map.
     /// If the map did not have this key present, None is returned.
     /// If the map did have this key present, the value is updated, and the old value is returned.

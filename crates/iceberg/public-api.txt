@@ -1534,10 +1534,6 @@ pub fn iceberg::spec::Literal::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> c
 impl core::hash::Hash for iceberg::spec::Literal
 pub fn iceberg::spec::Literal::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
 impl core::marker::StructuralPartialEq for iceberg::spec::Literal
-impl serde_core::ser::Serialize for iceberg::spec::Literal
-pub fn iceberg::spec::Literal::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
-impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::Literal
-pub fn iceberg::spec::Literal::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
 pub enum iceberg::spec::ManifestContentType
 pub iceberg::spec::ManifestContentType::Data = 0
 pub iceberg::spec::ManifestContentType::Deletes = 1
@@ -2650,10 +2646,6 @@ impl core::marker::StructuralPartialEq for iceberg::spec::Struct
 impl core::ops::index::Index<usize> for iceberg::spec::Struct
 pub type iceberg::spec::Struct::Output = core::option::Option<iceberg::spec::Literal>
 pub fn iceberg::spec::Struct::index(&self, idx: usize) -> &Self::Output
-impl serde_core::ser::Serialize for iceberg::spec::Struct
-pub fn iceberg::spec::Struct::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
-impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::Struct
-pub fn iceberg::spec::Struct::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
 pub struct iceberg::spec::StructType
 impl iceberg::spec::StructType
 pub fn iceberg::spec::StructType::field_by_id(&self, id: i32) -> core::option::Option<&iceberg::spec::NestedFieldRef>

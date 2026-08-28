@@ -19,8 +19,6 @@
 
 use std::ops::Index;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
 use super::Literal;
 
 /// The partition struct stores the tuple of partition values for each file.
@@ -30,22 +28,6 @@ use super::Literal;
 pub struct Struct {
     /// Vector to store the field values
     fields: Vec<Option<Literal>>,
-}
-
-impl Serialize for Struct {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
-        self.fields.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for Struct {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where D: Deserializer<'de> {
-        Ok(Self {
-            fields: Vec::<Option<Literal>>::deserialize(deserializer)?,
-        })
-    }
 }
 
 impl Struct {
