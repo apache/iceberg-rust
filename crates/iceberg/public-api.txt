@@ -2730,6 +2730,7 @@ pub fn iceberg::spec::TableMetadata::sort_orders_iter(&self) -> impl core::iter:
 pub fn iceberg::spec::TableMetadata::statistics_for_snapshot(&self, snapshot_id: i64) -> core::option::Option<&iceberg::spec::StatisticsFile>
 pub fn iceberg::spec::TableMetadata::statistics_iter(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = &iceberg::spec::StatisticsFile>
 pub fn iceberg::spec::TableMetadata::table_properties(&self) -> iceberg::Result<iceberg::spec::TableProperties>
+pub fn iceberg::spec::TableMetadata::unified_partition_type(&self, schema: &iceberg::spec::Schema) -> iceberg::Result<iceberg::spec::StructType>
 pub fn iceberg::spec::TableMetadata::uuid(&self) -> uuid::Uuid
 pub async fn iceberg::spec::TableMetadata::write_to(&self, file_io: &iceberg::io::FileIO, metadata_location: &iceberg::MetadataLocation) -> iceberg::Result<()>
 impl core::clone::Clone for iceberg::spec::TableMetadata
@@ -2814,6 +2815,7 @@ pub const iceberg::spec::TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABL
 pub const iceberg::spec::TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool
 pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_FILE_FORMAT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_NAME_MAPPING: &str
 pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_PARTITION_SPEC: &str
 pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_SORT_ORDER: &str
 pub const iceberg::spec::TableProperties::PROPERTY_DELETE_DEFAULT_FILE_FORMAT: &str
@@ -2875,6 +2877,7 @@ pub fn iceberg::spec::TableProperties::commit_max_retry_wait_ms(&self) -> u64
 pub fn iceberg::spec::TableProperties::commit_min_retry_wait_ms(&self) -> u64
 pub fn iceberg::spec::TableProperties::commit_num_retries(&self) -> usize
 pub fn iceberg::spec::TableProperties::commit_total_retry_timeout_ms(&self) -> u64
+pub fn iceberg::spec::TableProperties::default_name_mapping(&self) -> &core::option::Option<alloc::sync::Arc<iceberg::spec::NameMapping>>
 pub fn iceberg::spec::TableProperties::encryption_data_key_length(&self) -> usize
 pub fn iceberg::spec::TableProperties::encryption_key_id(&self) -> &core::option::Option<alloc::string::String>
 pub fn iceberg::spec::TableProperties::from_properties(properties: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<Self>
@@ -3089,7 +3092,6 @@ pub fn iceberg::spec::ViewVersionLog::serialize<__S>(&self, __serializer: __S) -
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::ViewVersionLog
 pub fn iceberg::spec::ViewVersionLog::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub const iceberg::spec::DEFAULT_SCHEMA_ID: iceberg::spec::SchemaId
-pub const iceberg::spec::DEFAULT_SCHEMA_NAME_MAPPING: &str
 pub const iceberg::spec::INITIAL_ROW_ID: u64
 pub const iceberg::spec::LIST_FIELD_NAME: &str
 pub const iceberg::spec::MAIN_BRANCH: &str

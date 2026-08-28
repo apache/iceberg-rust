@@ -16,12 +16,14 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use iceberg_property_macro::Properties;
 
 use crate::compression::CompressionCodec;
 use crate::encryption::AesKeySize;
 use crate::error::{Error, ErrorKind, Result};
+use crate::spec::NameMapping;
 use crate::util::location::strip_trailing_slash;
 
 fn parse_location_property(path: &str) -> Result<String> {
@@ -30,6 +32,18 @@ fn parse_location_property(path: &str) -> Result<String> {
     }
 
     Ok(strip_trailing_slash(path).to_string())
+}
+
+fn parse_name_mapping(value: &str) -> Result<Arc<NameMapping>> {
+    serde_json::from_str::<NameMapping>(value)
+        .map(Arc::new)
+        .map_err(|error| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Failed to parse table property as a NameMapping",
+            )
+            .with_source(error)
+        })
 }
 
 /// Parse compression codec for metadata files from table properties.
@@ -358,6 +372,15 @@ pub struct TableProperties {
         getter
     )]
     write_object_storage_partitioned_paths: bool,
+    /// The table's default name mapping, used to assign field ids when reading data files
+    /// that carry no field id metadata. `None` if `schema.name-mapping.default` is not set.
+    #[property(
+        key = Self::PROPERTY_DEFAULT_NAME_MAPPING,
+        default = None,
+        parse_with = parse_name_mapping,
+        getter
+    )]
+    default_name_mapping: Option<Arc<NameMapping>>,
 }
 
 impl TableProperties {
@@ -451,6 +474,10 @@ impl TableProperties {
     /// When unset, metadata files default to the `metadata` directory under the table
     /// location.
     pub const PROPERTY_WRITE_METADATA_PATH: &str = "write.metadata.path";
+
+    /// Property key for the table's default name mapping, stored as a JSON
+    /// [`NameMapping`] document.
+    pub const PROPERTY_DEFAULT_NAME_MAPPING: &str = "schema.name-mapping.default";
 
     /// Compression codec for metadata files (JSON)
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
@@ -1232,5 +1259,41 @@ mod tests {
             let tp = TableProperties::try_from(&props).unwrap();
             assert!(tp.write_object_storage_partitioned_paths);
         }
+    }
+
+    #[test]
+    fn test_table_properties_default_name_mapping() {
+        // Test unset.
+        let table_properties = TableProperties::try_from(&HashMap::new()).unwrap();
+        assert!(table_properties.default_name_mapping().is_none());
+
+        let table_properties = TableProperties::try_from(&HashMap::from([(
+            TableProperties::PROPERTY_DEFAULT_NAME_MAPPING.to_string(),
+            r#"[{"field-id":1,"names":["id","record_id"]}]"#.to_string(),
+        )]))
+        .unwrap();
+        let mapping = table_properties.default_name_mapping().as_ref().unwrap();
+        assert_eq!(mapping.fields().len(), 1);
+        assert_eq!(mapping.fields()[0].field_id(), Some(1));
+        assert_eq!(mapping.fields()[0].names(), &[
+            "id".to_string(),
+            "record_id".to_string()
+        ]);
+    }
+
+    #[test]
+    fn test_table_properties_malformed_name_mapping() {
+        let error = TableProperties::try_from(&HashMap::from([(
+            TableProperties::PROPERTY_DEFAULT_NAME_MAPPING.to_string(),
+            "{ not valid json".to_string(),
+        )]))
+        .unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        // The property key must survive as error context.
+        assert!(
+            format!("{error}").contains(TableProperties::PROPERTY_DEFAULT_NAME_MAPPING),
+            "{error}"
+        );
     }
 }
