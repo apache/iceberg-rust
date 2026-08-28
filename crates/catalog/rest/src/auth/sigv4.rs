@@ -17,11 +17,20 @@
 
 //! AWS SigV4 request signing for the REST catalog.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
 use chrono::{DateTime, Utc};
 #[cfg(test)]
 use hmac::{Hmac, Mac};
 use iceberg::{Error, ErrorKind, Result};
 use sha2::{Digest, Sha256};
+
+use super::{AuthManager, AuthSession};
+use crate::client::HttpClient;
+use crate::request::{HttpRequest, HttpRequestBody};
 
 /// Hex SHA-256 of the empty string.
 const EMPTY_BODY_HEX_SHA256: &str =
@@ -112,7 +121,7 @@ impl SigV4Signer {
     /// of which canonicalizes faithfully.
     pub fn sign(
         &self,
-        request: &mut crate::HttpRequest,
+        request: &mut HttpRequest,
         credentials: &aws_credential_types::Credentials,
     ) -> Result<()> {
         self.sign_at(request, credentials, Utc::now())
@@ -120,7 +129,7 @@ impl SigV4Signer {
 
     fn sign_at(
         &self,
-        request: &mut crate::HttpRequest,
+        request: &mut HttpRequest,
         credentials: &aws_credential_types::Credentials,
         now: DateTime<Utc>,
     ) -> Result<()> {
@@ -185,11 +194,11 @@ impl SigV4Signer {
 
 /// The body to sign. Java branches on `encodedBody() == null`, so an absent
 /// body and an empty one hash differently.
-fn signable_body(request: &crate::HttpRequest) -> Result<Option<Vec<u8>>> {
+fn signable_body(request: &HttpRequest) -> Result<Option<Vec<u8>>> {
     match request.body() {
-        crate::HttpRequestBody::Empty => Ok(None),
-        crate::HttpRequestBody::Buffered(bytes) => Ok(Some(bytes.to_vec())),
-        crate::HttpRequestBody::Streaming => Err(Error::new(
+        HttpRequestBody::Empty => Ok(None),
+        HttpRequestBody::Buffered(bytes) => Ok(Some(bytes.to_vec())),
+        HttpRequestBody::Streaming => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             "cannot sign a streaming request body",
         )),
@@ -198,7 +207,7 @@ fn signable_body(request: &crate::HttpRequest) -> Result<Option<Vec<u8>>> {
 
 /// The headers to sign. Skipping a non-UTF-8 one would leave it unsigned but
 /// still on the wire, which AWS rejects for `x-amz-*` and is hard to diagnose.
-fn signable_headers(request: &crate::HttpRequest) -> Result<Vec<(&str, &str)>> {
+fn signable_headers(request: &HttpRequest) -> Result<Vec<(&str, &str)>> {
     request
         .headers()
         .iter()
@@ -218,7 +227,7 @@ fn signable_headers(request: &crate::HttpRequest) -> Result<Vec<(&str, &str)>> {
 /// Drops userinfo, which the wire `Host` never carries, and rewrites `+` in the
 /// query. Both AWS and Java read `+` as a space, so the signature is unchanged;
 /// this makes the sent URL agree with an RFC 3986 verifier too.
-fn rewrite_url_for_signing(request: &mut crate::HttpRequest) {
+fn rewrite_url_for_signing(request: &mut HttpRequest) {
     if !request.url().username().is_empty() || request.url().password().is_some() {
         let url = request.url_mut();
         let _ = url.set_username("");
@@ -255,7 +264,7 @@ fn signing_settings() -> aws_sigv4::http_request::SigningSettings {
 
 /// Java's `convertHeaders`: renames `Authorization` so SigV4 can take the
 /// name. Runs before signing, so the relocated copy is signed too.
-fn convert_headers(request: &mut crate::HttpRequest) {
+fn convert_headers(request: &mut HttpRequest) {
     let displaced: Vec<_> = request
         .headers()
         .get_all(reqwest::header::AUTHORIZATION)
@@ -275,7 +284,7 @@ fn convert_headers(request: &mut crate::HttpRequest) {
 /// Java's `updateRequestHeaders`: installs the signed headers, moving a
 /// conflicting caller value aside rather than dropping it.
 fn update_request_headers(
-    request: &mut crate::HttpRequest,
+    request: &mut HttpRequest,
     instructions: aws_sigv4::http_request::SigningInstructions,
     displaced_content_hash: Vec<reqwest::header::HeaderValue>,
 ) -> Result<()> {
@@ -361,8 +370,196 @@ impl std::fmt::Debug for SigV4Signer {
     }
 }
 
+/// Property naming Iceberg Java's `AwsProperties` uses for REST SigV4.
+pub const REST_CATALOG_PROP_SIGNING_REGION: &str = "rest.signing-region";
+/// SigV4 signing name; defaults to [`SIGNING_NAME_DEFAULT`].
+pub const REST_CATALOG_PROP_SIGNING_NAME: &str = "rest.signing-name";
+/// Static SigV4 access key id. When absent, credentials come from the AWS
+/// default provider chain.
+pub const REST_CATALOG_PROP_ACCESS_KEY_ID: &str = "rest.access-key-id";
+/// Static SigV4 secret access key (see [`REST_CATALOG_PROP_ACCESS_KEY_ID`]).
+pub const REST_CATALOG_PROP_SECRET_ACCESS_KEY: &str = "rest.secret-access-key";
+/// Static SigV4 session token (see [`REST_CATALOG_PROP_ACCESS_KEY_ID`]).
+pub const REST_CATALOG_PROP_SESSION_TOKEN: &str = "rest.session-token";
+
+/// Java's `REST_CATALOG_PROP_SIGNING_NAME_DEFAULT`: API Gateway and Lambda.
+pub const SIGNING_NAME_DEFAULT: &str = "execute-api";
+
+/// Trims a property, treating blank as absent.
+fn non_blank(props: &HashMap<String, String>, key: &str) -> Option<String> {
+    props
+        .get(key)
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
+/// Builds a signer and credentials from catalog properties, using the names
+/// Java's `AwsProperties` does. Only static credentials come from properties;
+/// for anything else pass a provider to [`SigV4AuthManager::new`].
+async fn from_props(
+    props: &HashMap<String, String>,
+) -> Result<(SigV4Signer, SharedCredentialsProvider)> {
+    let region = non_blank(props, REST_CATALOG_PROP_SIGNING_REGION).ok_or_else(|| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("'{REST_CATALOG_PROP_SIGNING_REGION}' is required for SigV4 signing"),
+        )
+    })?;
+    let name = non_blank(props, REST_CATALOG_PROP_SIGNING_NAME)
+        .unwrap_or_else(|| SIGNING_NAME_DEFAULT.into());
+
+    let credentials = credentials_from_props(props).await?;
+    Ok((
+        SigV4Signer::new(region, name, PayloadHashMode::IcebergRest),
+        credentials,
+    ))
+}
+
+/// Java branches on the access key id alone, so a lone secret is a
+/// misconfiguration rather than a silent fall through to the default chain.
+async fn credentials_from_props(
+    props: &HashMap<String, String>,
+) -> Result<SharedCredentialsProvider> {
+    let Some(access_key_id) = non_blank(props, REST_CATALOG_PROP_ACCESS_KEY_ID) else {
+        if non_blank(props, REST_CATALOG_PROP_SECRET_ACCESS_KEY).is_some() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "'{REST_CATALOG_PROP_SECRET_ACCESS_KEY}' is set without '{REST_CATALOG_PROP_ACCESS_KEY_ID}'"
+                ),
+            ));
+        }
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "no SigV4 credentials: set '{REST_CATALOG_PROP_ACCESS_KEY_ID}' and \
+                 '{REST_CATALOG_PROP_SECRET_ACCESS_KEY}', or build the catalog with a \
+                 `SigV4AuthManager` carrying your own credentials provider"
+            ),
+        ));
+    };
+    let secret_access_key = non_blank(props, REST_CATALOG_PROP_SECRET_ACCESS_KEY).ok_or_else(|| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("'{REST_CATALOG_PROP_ACCESS_KEY_ID}' is set without '{REST_CATALOG_PROP_SECRET_ACCESS_KEY}'"),
+        )
+    })?;
+    Ok(SharedCredentialsProvider::new(
+        aws_credential_types::Credentials::new(
+            access_key_id,
+            secret_access_key,
+            non_blank(props, REST_CATALOG_PROP_SESSION_TOKEN),
+            None,
+            "iceberg-rest-properties",
+        ),
+    ))
+}
+
+/// [`AuthManager`] that SigV4-signs every request on top of a delegate whose
+/// own `Authorization` is relocated and signed over.
+///
+/// Mirrors Java's `RESTSigV4AuthManager`, which holds one signer for every
+/// session and leaves credentials to the session.
+#[derive(Debug)]
+pub struct SigV4AuthManager {
+    delegate: Arc<dyn AuthManager>,
+    signer: SigV4Signer,
+    credentials: SharedCredentialsProvider,
+    /// Set when both came from catalog properties, so
+    /// [`AuthManager::catalog_session`] rebuilds them from the merged ones.
+    from_config: bool,
+}
+
+impl SigV4AuthManager {
+    /// Signs with `signer`, taking credentials from `credentials` before each
+    /// request. Both are kept as-is, whatever the catalog properties say.
+    pub fn new(
+        delegate: Arc<dyn AuthManager>,
+        signer: SigV4Signer,
+        credentials: SharedCredentialsProvider,
+    ) -> Self {
+        Self {
+            delegate,
+            signer,
+            credentials,
+            from_config: false,
+        }
+    }
+
+    /// Signs as the catalog properties describe, with the static credentials
+    /// they carry. The merged `/v1/config` properties rebuild both, as Java's
+    /// `catalogSession` does.
+    pub async fn from_properties(
+        delegate: Arc<dyn AuthManager>,
+        props: &HashMap<String, String>,
+    ) -> Result<Self> {
+        let (signer, credentials) = from_props(props).await?;
+        Ok(Self {
+            delegate,
+            signer,
+            credentials,
+            from_config: true,
+        })
+    }
+}
+
+#[async_trait]
+impl AuthManager for SigV4AuthManager {
+    async fn init_session(
+        &self,
+        client: &HttpClient,
+        props: &HashMap<String, String>,
+    ) -> Result<Box<dyn AuthSession>> {
+        Ok(Box::new(SigV4Session {
+            delegate: Arc::from(self.delegate.init_session(client, props).await?),
+            signer: self.signer.clone(),
+            credentials: self.credentials.clone(),
+        }))
+    }
+
+    async fn catalog_session(
+        &self,
+        client: &HttpClient,
+        props: &HashMap<String, String>,
+    ) -> Result<Arc<dyn AuthSession>> {
+        let (signer, credentials) = if self.from_config {
+            from_props(props).await?
+        } else {
+            (self.signer.clone(), self.credentials.clone())
+        };
+        Ok(Arc::new(SigV4Session {
+            delegate: self.delegate.catalog_session(client, props).await?,
+            signer,
+            credentials,
+        }))
+    }
+}
+
+/// [`AuthSession`] applying the delegate's auth, then SigV4-signing.
+#[derive(Debug)]
+struct SigV4Session {
+    delegate: Arc<dyn AuthSession>,
+    signer: SigV4Signer,
+    credentials: SharedCredentialsProvider,
+}
+
+#[async_trait]
+impl AuthSession for SigV4Session {
+    async fn authenticate(&self, request: &mut HttpRequest) -> Result<()> {
+        self.delegate.authenticate(request).await?;
+        // Java resolves per request too, leaving any caching to the provider.
+        let credentials = self.credentials.provide_credentials().await.map_err(|e| {
+            Error::new(ErrorKind::Unexpected, "failed to resolve AWS credentials").with_source(e)
+        })?;
+        self.signer.sign(request, &credentials)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
     use crate::HttpRequest;
 
@@ -482,7 +679,7 @@ mod tests {
 
     /// Collects every event field a subscriber would have been handed.
     #[derive(Clone, Default)]
-    struct CapturedLog(std::sync::Arc<std::sync::Mutex<String>>);
+    struct CapturedLog(Arc<Mutex<String>>);
 
     impl tracing::field::Visit for CapturedLog {
         fn record_debug(&mut self, _: &tracing::field::Field, value: &dyn std::fmt::Debug) {
@@ -1187,5 +1384,243 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
             req.headers().get("x-amz-content-sha256").unwrap(),
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         );
+    }
+
+    fn test_credentials_provider() -> SharedCredentialsProvider {
+        SharedCredentialsProvider::new(test_credentials())
+    }
+
+    fn test_session(session_token: Option<&str>) -> SigV4Session {
+        SigV4Session {
+            delegate: Arc::new(crate::auth::NoopSession),
+            signer: test_signer(PayloadHashMode::IcebergRest),
+            credentials: SharedCredentialsProvider::new(aws_credential_types::Credentials::new(
+                "AKIDEXAMPLE",
+                "secret",
+                session_token.map(str::to_string),
+                None,
+                "test",
+            )),
+        }
+    }
+
+    fn request_with(headers: &[(&'static str, &str)]) -> HttpRequest {
+        let mut builder = reqwest::Client::new().get("https://rest.example.com/v1/config");
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        HttpRequest::new(builder.build().unwrap())
+    }
+
+    #[tokio::test]
+    async fn relocation_keeps_an_existing_original_authorization() {
+        // Java collects both values under `Original-Authorization` instead of
+        // replacing one with the other.
+        let mut request = request_with(&[
+            ("original-authorization", "credential-A"),
+            ("authorization", "credential-B"),
+        ]);
+
+        test_session(None).authenticate(&mut request).await.unwrap();
+
+        let relocated: Vec<_> = request
+            .headers()
+            .get_all("original-authorization")
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(relocated, ["credential-A", "credential-B"]);
+        assert!(
+            request
+                .headers()
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("AWS4-HMAC-SHA256 ")
+        );
+    }
+
+    #[tokio::test]
+    async fn conflicting_signer_headers_are_relocated_not_dropped() {
+        let mut request = request_with(&[
+            ("x-amz-date", "19700101T000000Z"),
+            ("x-amz-security-token", "caller-token"),
+        ]);
+
+        test_session(Some("signer-token"))
+            .authenticate(&mut request)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            request.headers().get("original-x-amz-date").unwrap(),
+            "19700101T000000Z"
+        );
+        let token = request
+            .headers()
+            .get("original-x-amz-security-token")
+            .unwrap();
+        assert_eq!(token, "caller-token");
+        assert!(token.is_sensitive());
+        assert_eq!(
+            request.headers().get("x-amz-security-token").unwrap(),
+            "signer-token"
+        );
+    }
+
+    /// Java calls `resolveCredentials()` inside `sign`, so a refreshing
+    /// provider is consulted again for every request rather than once.
+    #[tokio::test]
+    async fn credentials_are_resolved_once_per_request() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = {
+            let calls = calls.clone();
+            aws_credential_types::credential_fn::provide_credentials_fn(move || {
+                let calls = calls.clone();
+                async move {
+                    let n = calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(aws_credential_types::Credentials::new(
+                        format!("AKID{n}"),
+                        "secret",
+                        None::<String>,
+                        None,
+                        "test",
+                    ))
+                }
+            })
+        };
+        let session = SigV4Session {
+            delegate: Arc::new(crate::auth::NoopSession),
+            signer: test_signer(PayloadHashMode::IcebergRest),
+            credentials: SharedCredentialsProvider::new(counted),
+        };
+
+        let mut first = request_with(&[]);
+        session.authenticate(&mut first).await.unwrap();
+        let mut second = request_with(&[]);
+        session.authenticate(&mut second).await.unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let auth = |r: &HttpRequest| {
+            r.headers()
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string()
+        };
+        // Each request signed with the credentials resolved for it.
+        assert!(auth(&first).contains("AKID0/"), "{}", auth(&first));
+        assert!(auth(&second).contains("AKID1/"), "{}", auth(&second));
+    }
+
+    #[tokio::test]
+    async fn the_delegate_authenticates_before_signing() {
+        // The delegate's bearer token must be relocated and signed over, which
+        // can only happen if it was applied first.
+        #[derive(Debug)]
+        struct Bearer;
+        #[async_trait]
+        impl AuthSession for Bearer {
+            async fn authenticate(&self, request: &mut HttpRequest) -> Result<()> {
+                request
+                    .headers_mut()
+                    .insert("authorization", "Bearer delegate".parse().unwrap());
+                Ok(())
+            }
+        }
+
+        let session = SigV4Session {
+            delegate: Arc::new(Bearer),
+            signer: test_signer(PayloadHashMode::IcebergRest),
+            credentials: test_credentials_provider(),
+        };
+        let mut request = request_with(&[]);
+        session.authenticate(&mut request).await.unwrap();
+
+        assert_eq!(
+            request.headers().get("original-authorization").unwrap(),
+            "Bearer delegate"
+        );
+        let auth = request.headers().get("authorization").unwrap();
+        assert!(auth.to_str().unwrap().contains("original-authorization"));
+    }
+
+    fn props(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn static_credentials_come_from_properties() {
+        let (signer, credentials) = from_props(&props(&[
+            (REST_CATALOG_PROP_SIGNING_REGION, "cn-hangzhou"),
+            (REST_CATALOG_PROP_ACCESS_KEY_ID, "AKID"),
+            (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "secret"),
+            (REST_CATALOG_PROP_SESSION_TOKEN, "token"),
+        ]))
+        .await
+        .unwrap();
+
+        assert_eq!(signer.region, "cn-hangzhou");
+        // Java's REST_CATALOG_PROP_SIGNING_NAME_DEFAULT.
+        assert_eq!(signer.service, SIGNING_NAME_DEFAULT);
+        let resolved = credentials.provide_credentials().await.unwrap();
+        assert_eq!(resolved.access_key_id(), "AKID");
+        assert_eq!(resolved.session_token(), Some("token"));
+    }
+
+    #[tokio::test]
+    async fn a_blank_property_counts_as_absent() {
+        let err = from_props(&props(&[(REST_CATALOG_PROP_SIGNING_REGION, "   ")]))
+            .await
+            .unwrap_err();
+        assert!(
+            err.message().contains(REST_CATALOG_PROP_SIGNING_REGION),
+            "{err}"
+        );
+    }
+
+    /// Half a pair is a typo, not a request for the default chain, so each
+    /// direction has to name the property that is missing rather than fall
+    /// through to the generic "no credentials" error.
+    #[tokio::test]
+    async fn half_a_credential_pair_is_rejected_either_way() {
+        for (present, missing) in [
+            (
+                REST_CATALOG_PROP_ACCESS_KEY_ID,
+                REST_CATALOG_PROP_SECRET_ACCESS_KEY,
+            ),
+            (
+                REST_CATALOG_PROP_SECRET_ACCESS_KEY,
+                REST_CATALOG_PROP_ACCESS_KEY_ID,
+            ),
+        ] {
+            let err = from_props(&props(&[
+                (REST_CATALOG_PROP_SIGNING_REGION, "us-east-1"),
+                (present, "value"),
+            ]))
+            .await
+            .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid, "{err}");
+            let message = err.message();
+            assert!(message.contains(present), "{err}");
+            assert!(message.contains(missing), "{err}");
+            // Not the "bring your own provider" error: this is a typo.
+            assert!(!message.contains("credentials provider"), "{err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn without_credentials_the_error_points_at_the_provider() {
+        let err = from_props(&props(&[(REST_CATALOG_PROP_SIGNING_REGION, "us-east-1")]))
+            .await
+            .unwrap_err();
+        assert!(err.message().contains("credentials provider"), "{err}");
     }
 }

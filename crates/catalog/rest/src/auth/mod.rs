@@ -30,7 +30,11 @@ use async_trait::async_trait;
 use iceberg::Result;
 pub use oauth2::OAuth2Manager;
 #[cfg(feature = "sigv4")]
-pub use sigv4::{PayloadHashMode, SigV4Signer};
+pub use sigv4::{
+    PayloadHashMode, REST_CATALOG_PROP_ACCESS_KEY_ID, REST_CATALOG_PROP_SECRET_ACCESS_KEY,
+    REST_CATALOG_PROP_SESSION_TOKEN, REST_CATALOG_PROP_SIGNING_NAME,
+    REST_CATALOG_PROP_SIGNING_REGION, SIGNING_NAME_DEFAULT, SigV4AuthManager, SigV4Signer,
+};
 
 use crate::client::HttpClient;
 use crate::request::HttpRequest;
