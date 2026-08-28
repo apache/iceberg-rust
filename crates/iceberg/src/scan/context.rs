@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use futures::channel::mpsc::Sender;
-use futures::{SinkExt, TryFutureExt};
+use futures::{SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
@@ -28,14 +29,38 @@ use crate::scan::{
     PartitionFilterCache,
 };
 use crate::spec::{
-    ManifestContentType, ManifestEntryRef, ManifestFile, NameMapping, PartitionSpecRef, SchemaRef,
-    SnapshotRef, StructType, TableMetadataRef,
+    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
+    PartitionSpecRef, SchemaRef, SnapshotRef, StructType, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
+
+/// Filter applied to each manifest file before it is loaded.
+/// Returns `true` to include the manifest, `false` to skip it.
+pub(crate) type ManifestFileFilter = Arc<dyn Fn(&ManifestFile) -> bool + Send + Sync>;
 
 /// Filter applied to each manifest entry after loading a manifest.
 /// Returns `true` to include the entry, `false` to skip it.
 pub(crate) type ManifestEntryFilter = Arc<dyn Fn(&ManifestEntryRef) -> bool + Send + Sync>;
+
+/// Declares the metadata a scan reads: the snapshots whose manifest lists the
+/// manifests are drawn from, plus the filters that narrow those manifests and
+/// their entries.
+pub(crate) struct ManifestSelection {
+    pub snapshots: Vec<SnapshotRef>,
+    pub manifest_filter: Option<ManifestFileFilter>,
+    pub entry_filter: Option<ManifestEntryFilter>,
+}
+
+impl ManifestSelection {
+    /// Every manifest listed by a single snapshot.
+    pub(crate) fn from_snapshot(snapshot: SnapshotRef) -> Self {
+        Self {
+            snapshots: vec![snapshot],
+            manifest_filter: None,
+            entry_filter: None,
+        }
+    }
+}
 
 /// Wraps a [`ManifestFile`] alongside the objects that are needed
 /// to process it in a thread-safe manner
@@ -166,24 +191,11 @@ impl ManifestEntryContext {
     }
 }
 
+/// PlanContext holds everything needed to plan a scan's files: how to project,
+/// filter and evaluate them. Which manifests to read is a [`ManifestSelection`],
+/// so the same context serves a single-snapshot scan and a snapshot range alike.
 #[derive(Debug)]
 pub(crate) struct PlanContext {
-    pub snapshot: SnapshotRef,
-    pub scan_context: ScanPlanningContext,
-}
-
-impl PlanContext {
-    pub(crate) async fn manifest_files(&self) -> Result<Vec<ManifestFile>> {
-        self.scan_context
-            .object_cache
-            .get_manifest_list(&self.snapshot, &self.scan_context.table_metadata)
-            .await
-            .map(|manifest_list| manifest_list.entries().to_vec())
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct ScanPlanningContext {
     pub table_metadata: TableMetadataRef,
     pub scan_schema: SchemaRef,
     pub case_sensitive: bool,
@@ -200,7 +212,39 @@ pub(crate) struct ScanPlanningContext {
     pub unified_partition_type: Option<Arc<StructType>>,
 }
 
-impl ScanPlanningContext {
+impl PlanContext {
+    /// Reads the selected snapshots' manifest lists and returns the manifests to
+    /// scan, deduplicated by path: snapshots in a range often list the same manifest.
+    async fn manifest_files(
+        &self,
+        selection: &ManifestSelection,
+        concurrency_limit: usize,
+    ) -> Result<Vec<ManifestFile>> {
+        let manifest_lists: Vec<Arc<ManifestList>> = futures::stream::iter(&selection.snapshots)
+            .map(|snapshot| {
+                self.object_cache
+                    .get_manifest_list(snapshot, &self.table_metadata)
+            })
+            .buffered(concurrency_limit.max(1))
+            .try_collect()
+            .await?;
+
+        let mut seen = HashSet::new();
+
+        Ok(manifest_lists
+            .iter()
+            .flat_map(|manifest_list| manifest_list.entries())
+            .filter(|manifest_file| {
+                selection
+                    .manifest_filter
+                    .as_ref()
+                    .is_none_or(|filter| filter(manifest_file))
+            })
+            .filter(|manifest_file| seen.insert(manifest_file.manifest_path.clone()))
+            .cloned()
+            .collect())
+    }
+
     /// Returns the partition filter for a manifest. See [`PartitionFilterCache::get`] for the
     /// always-true fallback when the manifest's spec cannot be resolved against the scan schema.
     fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
@@ -224,14 +268,18 @@ impl ScanPlanningContext {
         Ok(partition_filter)
     }
 
-    pub(crate) fn build_manifest_file_contexts(
+    pub(crate) async fn build_manifest_file_contexts(
         &self,
-        mut manifest_files: Vec<ManifestFile>,
-        manifest_entry_filter: Option<ManifestEntryFilter>,
+        selection: ManifestSelection,
+        concurrency_limit_manifest_files: usize,
         tx_data: Sender<ManifestEntryContext>,
         delete_file_idx: DeleteFileIndex,
         delete_file_tx: Sender<ManifestEntryContext>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
+        let mut manifest_files = self
+            .manifest_files(&selection, concurrency_limit_manifest_files)
+            .await?;
+
         // Sort manifest files to process delete manifests first.
         // This avoids a deadlock where the producer blocks on sending data manifest entries
         // (because the data channel is full) while the delete manifest consumer is waiting
@@ -278,7 +326,7 @@ impl ScanPlanningContext {
                 partition_bound_predicate,
                 tx,
                 delete_file_idx.clone(),
-                manifest_entry_filter.clone(),
+                selection.entry_filter.clone(),
             );
 
             filtered_mfcs.push(Ok(mfc));

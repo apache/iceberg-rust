@@ -47,8 +47,8 @@ use crate::metadata_columns::{
 use crate::partitioning::compute_unified_partition_type;
 use crate::runtime::Runtime;
 use crate::spec::{
-    DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, ManifestFile, NameMapping, Schema, SchemaRef,
-    SnapshotRef, StructType,
+    DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, Schema, SchemaRef, SnapshotRef,
+    StructType,
 };
 use crate::table::Table;
 use crate::util::available_parallelism;
@@ -323,6 +323,7 @@ impl<'a> TableScanBuilder<'a> {
                         batch_size: self.batch_size,
                         column_names: self.column_names,
                         file_io: self.table.file_io().clone(),
+                        snapshot: None,
                         plan_context: None,
                         concurrency_limit_data_files: self.concurrency_limit_data_files,
                         concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
@@ -344,7 +345,7 @@ impl<'a> TableScanBuilder<'a> {
         let name_mapping = table_name_mapping(self.table)?;
         let unified_partition_type = projected_partition_type(self.table, &schema, &field_ids)?;
 
-        let scan_context = ScanPlanningContext {
+        let plan_context = PlanContext {
             table_metadata: self.table.metadata_ref(),
             scan_schema: schema,
             case_sensitive: self.case_sensitive,
@@ -358,15 +359,12 @@ impl<'a> TableScanBuilder<'a> {
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
             unified_partition_type,
         };
-        let plan_context = PlanContext {
-            snapshot,
-            scan_context,
-        };
 
         Ok(TableScan {
             batch_size: self.batch_size,
             column_names: self.column_names,
             file_io: self.table.file_io().clone(),
+            snapshot: Some(snapshot),
             plan_context: Some(plan_context),
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
@@ -381,6 +379,7 @@ impl<'a> TableScanBuilder<'a> {
 /// Table scan.
 #[derive(Debug)]
 pub struct TableScan {
+    snapshot: Option<SnapshotRef>,
     plan_context: Option<PlanContext>,
     batch_size: Option<usize>,
     file_io: FileIO,
@@ -404,9 +403,8 @@ pub struct TableScan {
 }
 
 pub(crate) async fn plan_scan_files(
-    scan_context: &ScanPlanningContext,
-    manifest_files: Vec<ManifestFile>,
-    manifest_entry_filter: Option<ManifestEntryFilter>,
+    plan_context: &PlanContext,
+    selection: ManifestSelection,
     runtime: &Runtime,
     concurrency_limit_manifest_files: usize,
     concurrency_limit_manifest_entries: usize,
@@ -419,13 +417,15 @@ pub(crate) async fn plan_scan_files(
 
     let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new(runtime.clone());
 
-    let manifest_file_contexts = scan_context.build_manifest_file_contexts(
-        manifest_files,
-        manifest_entry_filter,
-        manifest_entry_data_ctx_tx,
-        delete_file_idx.clone(),
-        manifest_entry_delete_ctx_tx,
-    )?;
+    let manifest_file_contexts = plan_context
+        .build_manifest_file_contexts(
+            selection,
+            concurrency_limit_manifest_files,
+            manifest_entry_data_ctx_tx,
+            delete_file_idx.clone(),
+            manifest_entry_delete_ctx_tx,
+        )
+        .await?;
 
     let mut channel_for_manifest_error = file_scan_task_tx.clone();
     let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
@@ -508,15 +508,14 @@ pub(crate) async fn plan_scan_files(
 impl TableScan {
     /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
-        let Some(plan_context) = self.plan_context.as_ref() else {
+        let (Some(plan_context), Some(snapshot)) =
+            (self.plan_context.as_ref(), self.snapshot.as_ref())
+        else {
             return Ok(Box::pin(futures::stream::empty()));
         };
-        let manifest_files = plan_context.manifest_files().await?;
-
         plan_scan_files(
-            &plan_context.scan_context,
-            manifest_files,
-            None,
+            plan_context,
+            ManifestSelection::from_snapshot(snapshot.clone()),
             &self.runtime,
             self.concurrency_limit_manifest_files,
             self.concurrency_limit_manifest_entries,
@@ -549,7 +548,7 @@ impl TableScan {
 
     /// Returns a reference to the snapshot of the table scan.
     pub fn snapshot(&self) -> Option<&SnapshotRef> {
-        self.plan_context.as_ref().map(|context| &context.snapshot)
+        self.snapshot.as_ref()
     }
 }
 
@@ -869,7 +868,6 @@ mod tests {
                 .plan_context
                 .as_ref()
                 .unwrap()
-                .scan_context
                 .name_mapping
                 .is_none()
         );
@@ -885,7 +883,6 @@ mod tests {
             .plan_context
             .as_ref()
             .unwrap()
-            .scan_context
             .name_mapping
             .as_ref()
             .expect("name_mapping should be parsed from the table property");
@@ -2081,13 +2078,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("scan of data column `{column_name}` failed: {e}"));
 
             assert_eq!(
-                table_scan
-                    .plan_context
-                    .as_ref()
-                    .unwrap()
-                    .scan_context
-                    .field_ids
-                    .as_ref(),
+                table_scan.plan_context.as_ref().unwrap().field_ids.as_ref(),
                 &[2]
             );
 
@@ -2099,7 +2090,6 @@ mod tests {
                     .plan_context
                     .as_ref()
                     .unwrap()
-                    .scan_context
                     .field_ids
                     .as_ref(),
                 &[1, 2]
