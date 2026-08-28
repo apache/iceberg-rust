@@ -548,7 +548,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_file_io_serialization_roundtrip_issue_3088() {
+    async fn test_file_io_serialization_roundtrip() {
         let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
             .with_prop("key", "value")
             .build();
