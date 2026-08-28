@@ -17,14 +17,16 @@
   under the License.
 -->
 
-# Iceberg property derive macro
+# Iceberg property macros
 
-`Properties` parses a typed struct from a flat `HashMap<String, String>` and
-can generate opt-in read-only getters. It deliberately does not generate
-property-map serialization or implement `Default`, `Serialize`, `Deserialize`,
-or any other trait.
+## `Properties` derive macro
 
-## Generated API
+`#[derive(Properties)]` parses an owned typed struct from a flat
+`HashMap<String, String>` and can generate opt-in read-only getters. It
+deliberately does not generate property-map serialization or implement
+`Default`, `Serialize`, `Deserialize`, or any other trait.
+
+### Generated API
 
 For every annotated struct, `#[derive(Properties)]` generates this inherent
 constructor:
@@ -54,7 +56,7 @@ map.
 corresponding types from `std`. The macro recognizes those field shapes
 syntactically and generates code using the standard-library variants.
 
-## Complete example
+### Complete example
 
 This example covers exact keys and defaults, optional values, case-insensitive
 booleans, prefixed maps, nested groups, custom single-value parsing, custom
@@ -211,7 +213,7 @@ fn main() -> iceberg::Result<()> {
 }
 ```
 
-## Using ordinary derives together
+### Using ordinary derives together
 
 `Properties` does not implicitly derive other traits, so `Default`,
 `Serialize`, and `Deserialize` can be selected independently and behave like
@@ -251,6 +253,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Property declarations
+
 All field settings must be grouped under `#[property(...)]`. This keeps `key`,
 `default`, `prefix`, `nested`, parser hooks, additional keys, and getter
 generation in one attribute and avoids collisions with ordinary Rust derives.
@@ -271,3 +275,75 @@ converted into their field type with `Into`.
 `from_properties` and both custom parser hooks use `iceberg::Result`. Generated
 `FromStr` failures use `ErrorKind::DataInvalid`. The macro preserves errors from
 custom parsers and adds the primary property key as error context.
+
+## `properties_view!` function-like macro
+
+`properties_view!` independently defines a lightweight borrowed view over a
+flat property map. Its struct-shaped fields are declarations used to generate
+getters rather than stored fields. Constructing the view does not parse
+anything; each generated getter parses and returns only its declared property.
+Missing properties use their annotated defaults, while invalid configured
+values return an error from the corresponding getter.
+
+```rust
+use std::collections::HashMap;
+
+use iceberg_property_macro::properties_view;
+
+properties_view! {
+    #[derive(Debug)]
+    pub struct WriteProperties {
+        // `getter` makes a generated getter public. Without it, the getter is
+        // private, regardless of the declaration's visibility modifier.
+
+        /// Number of times to retry a commit.
+        #[property(key = "commit.retry.num-retries", default = 4, getter)]
+        commit_num_retries: usize,
+
+        /// Optional configured base directory for metadata files.
+        #[property(key = "write.metadata.path", default = None)]
+        raw_write_metadata_path: Option<String>,
+    }
+}
+
+impl WriteProperties<'_> {
+    /// Returns the configured metadata path or the table's metadata directory.
+    pub fn write_metadata_path(&self, table_path: &str) -> iceberg::Result<String> {
+        Ok(self.raw_write_metadata_path()?.unwrap_or_else(|| {
+            format!("{}/metadata", table_path.trim_end_matches('/'))
+        }))
+    }
+}
+
+fn read(properties: &HashMap<String, String>) -> iceberg::Result<()> {
+    let view = WriteProperties::new(properties);
+    let _retries = view.commit_num_retries()?;
+    let _metadata_path = view.write_metadata_path("s3://bucket/table")?;
+    Ok(())
+}
+```
+
+For this declaration, the macro generates
+`impl<'properties> WriteProperties<'properties>` with a
+`pub fn new(properties: &'properties HashMap<String, String>) -> Self`
+constructor. The constructor has the same visibility as the view declaration:
+`pub` here, `pub(crate)` for a `pub(crate)` view, and private for a private view.
+It only stores the map reference and does not parse any properties.
+
+The generated type has one lifetime parameter and contains only a reference to
+the source `HashMap`; no declared field is stored in the view. Every declaration
+generates a getter, but only the `getter` option makes that method public. Field
+visibility modifiers are ignored, consistent with how `Properties` uses
+`getter` to control generated accessors. Omitting `getter` makes it possible to
+keep a raw generated method private and expose a public method that adds
+application-specific behavior, as shown by `write_metadata_path` above.
+
+Non-`Copy` values are returned by value because the view does not retain parsed
+results, so calling the same getter repeatedly reparses that field.
+
+The view supports exact keys, optional values, case-insensitive booleans,
+prefixed maps, nested views, `parse_with`, and `parse_properties_with` using the
+same property declaration syntax as `Properties`. A nested field's type must be
+another view type, such as `CommitProperties<'_>`. The nested getter returns a
+view tied directly to the source map's lifetime, so it remains usable after the
+parent view is dropped.
