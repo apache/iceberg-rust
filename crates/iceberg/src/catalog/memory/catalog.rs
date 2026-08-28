@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::lock::{Mutex, MutexGuard};
+use iceberg_property_macro::Properties;
 use itertools::Itertools;
 
 use super::namespace_state::NamespaceState;
@@ -91,20 +92,12 @@ impl CatalogBuilder for MemoryCatalogBuilder {
     ) -> impl Future<Output = Result<Self::C>> + Send {
         self.config.name = Some(name.into());
 
-        if props.contains_key(MEMORY_CATALOG_WAREHOUSE) {
-            self.config.warehouse = props
-                .get(MEMORY_CATALOG_WAREHOUSE)
-                .cloned()
-                .unwrap_or_default()
-        }
-
-        // Collect other remaining properties
-        self.config.props = props
-            .into_iter()
-            .filter(|(k, _)| k != MEMORY_CATALOG_WAREHOUSE)
-            .collect();
-
         async move {
+            let mut catalog_properties = MemoryCatalogProperties::from_properties(&props)?;
+            catalog_properties.props.remove(MEMORY_CATALOG_WAREHOUSE);
+            self.config.warehouse = catalog_properties.warehouse;
+            self.config.props = catalog_properties.props;
+
             if self.config.name.is_none() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
@@ -125,6 +118,14 @@ impl CatalogBuilder for MemoryCatalogBuilder {
             }
         }
     }
+}
+
+#[derive(Properties)]
+struct MemoryCatalogProperties {
+    #[property(key = MEMORY_CATALOG_WAREHOUSE, default = "")]
+    warehouse: String,
+    #[property(prefix = "")]
+    props: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug)]
@@ -456,6 +457,25 @@ pub(crate) mod tests {
     fn temp_path() -> String {
         let temp_dir = TempDir::new().unwrap();
         temp_dir.path().to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn test_catalog_properties() {
+        let properties = MemoryCatalogProperties::from_properties(&HashMap::from([
+            (
+                MEMORY_CATALOG_WAREHOUSE.to_string(),
+                "memory:///warehouse".to_string(),
+            ),
+            ("custom.property".to_string(), "value".to_string()),
+        ]))
+        .unwrap();
+
+        assert_eq!(properties.warehouse, "memory:///warehouse");
+        assert_eq!(
+            properties.props[MEMORY_CATALOG_WAREHOUSE],
+            "memory:///warehouse"
+        );
+        assert_eq!(properties.props["custom.property"], "value");
     }
 
     pub(crate) async fn new_memory_catalog() -> impl Catalog {
