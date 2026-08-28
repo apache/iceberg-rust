@@ -34,6 +34,7 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     Runtime, TableCommit, TableCreation, TableIdent,
 };
+use iceberg_property_macro::Properties;
 use volo_thrift::MaybeException;
 
 use super::utils::*;
@@ -55,22 +56,15 @@ pub const HMS_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 /// Builder for [`HmsCatalog`].
 #[derive(Debug)]
 pub struct HmsCatalogBuilder {
-    config: HmsCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
     kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for HmsCatalogBuilder {
     fn default() -> Self {
         Self {
-            config: HmsCatalogConfig {
-                name: None,
-                address: "".to_string(),
-                thrift_transport: HmsThriftTransport::default(),
-                warehouse: "".to_string(),
-                props: HashMap::new(),
-            },
             storage_factory: None,
             kms_client_factory: None,
             runtime: None,
@@ -97,59 +91,21 @@ impl CatalogBuilder for HmsCatalogBuilder {
     }
 
     fn load(
-        mut self,
+        self,
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.config.name = Some(name.into());
-
-        if props.contains_key(HMS_CATALOG_PROP_URI) {
-            self.config.address = props.get(HMS_CATALOG_PROP_URI).cloned().unwrap_or_default();
-        }
-
-        if let Some(tt) = props.get(HMS_CATALOG_PROP_THRIFT_TRANSPORT) {
-            self.config.thrift_transport = match tt.to_lowercase().as_str() {
-                THRIFT_TRANSPORT_FRAMED => HmsThriftTransport::Framed,
-                THRIFT_TRANSPORT_BUFFERED => HmsThriftTransport::Buffered,
-                _ => HmsThriftTransport::default(),
-            };
-        }
-
-        if props.contains_key(HMS_CATALOG_PROP_WAREHOUSE) {
-            self.config.warehouse = props
-                .get(HMS_CATALOG_PROP_WAREHOUSE)
-                .cloned()
-                .unwrap_or_default();
-        }
-
-        self.config.props = props
-            .into_iter()
-            .filter(|(k, _)| {
-                k != HMS_CATALOG_PROP_URI
-                    && k != HMS_CATALOG_PROP_THRIFT_TRANSPORT
-                    && k != HMS_CATALOG_PROP_WAREHOUSE
-            })
-            .collect();
+        let name = name.into();
 
         async move {
-            let kms_client = match self.kms_client_factory {
-                Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
-                None => None,
-            };
-
-            if self.config.name.is_none() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog name is required",
-                ));
-            }
-            if self.config.address.is_empty() {
+            let catalog_properties = HmsCatalogProperties::from_properties(&props)?;
+            if catalog_properties.address.is_empty() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog address is required",
                 ));
             }
-            if self.config.warehouse.is_empty() {
+            if catalog_properties.warehouse.is_empty() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog warehouse is required",
@@ -159,9 +115,42 @@ impl CatalogBuilder for HmsCatalogBuilder {
                 Some(rt) => rt,
                 None => Runtime::try_current()?,
             };
-            HmsCatalog::new(self.config, self.storage_factory, runtime, kms_client)
+            let kms_client = match self.kms_client_factory {
+                Some(factory) => Some(factory.create_kms_client(&props).await?),
+                None => None,
+            };
+            HmsCatalog::new(
+                name,
+                catalog_properties,
+                props,
+                self.storage_factory,
+                runtime,
+                kms_client,
+            )
         }
     }
+}
+
+fn parse_thrift_transport(value: &str) -> Result<HmsThriftTransport> {
+    Ok(match value.to_lowercase().as_str() {
+        THRIFT_TRANSPORT_FRAMED => HmsThriftTransport::Framed,
+        THRIFT_TRANSPORT_BUFFERED => HmsThriftTransport::Buffered,
+        _ => HmsThriftTransport::default(),
+    })
+}
+
+#[derive(Debug, Properties)]
+pub(crate) struct HmsCatalogProperties {
+    #[property(key = HMS_CATALOG_PROP_URI, default = "")]
+    address: String,
+    #[property(
+        key = HMS_CATALOG_PROP_THRIFT_TRANSPORT,
+        default = HmsThriftTransport::default(),
+        parse_with = parse_thrift_transport
+    )]
+    thrift_transport: HmsThriftTransport,
+    #[property(key = HMS_CATALOG_PROP_WAREHOUSE, default = "")]
+    warehouse: String,
 }
 
 /// Which variant of the thrift transport to communicate with HMS
@@ -175,21 +164,12 @@ pub enum HmsThriftTransport {
     Buffered,
 }
 
-/// Hive metastore Catalog configuration.
-#[derive(Debug)]
-pub(crate) struct HmsCatalogConfig {
-    name: Option<String>,
-    address: String,
-    thrift_transport: HmsThriftTransport,
-    warehouse: String,
-    props: HashMap<String, String>,
-}
-
 struct HmsClient(ThriftHiveMetastoreClient);
 
 /// Hive metastore Catalog.
 pub struct HmsCatalog {
-    config: HmsCatalogConfig,
+    name: String,
+    properties: HmsCatalogProperties,
     client: HmsClient,
     file_io: FileIO,
     runtime: Runtime,
@@ -199,7 +179,8 @@ pub struct HmsCatalog {
 impl Debug for HmsCatalog {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HmsCatalog")
-            .field("config", &self.config)
+            .field("name", &self.name)
+            .field("properties", &self.properties)
             .finish_non_exhaustive()
     }
 }
@@ -207,12 +188,14 @@ impl Debug for HmsCatalog {
 impl HmsCatalog {
     /// Create a new hms catalog.
     fn new(
-        config: HmsCatalogConfig,
+        name: String,
+        properties: HmsCatalogProperties,
+        props: HashMap<String, String>,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
         kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
-        let address = config
+        let address = properties
             .address
             .as_str()
             .to_socket_addrs()
@@ -221,13 +204,13 @@ impl HmsCatalog {
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::Unexpected,
-                    format!("invalid address: {}", config.address),
+                    format!("invalid address: {}", properties.address),
                 )
             })?;
 
         let builder = ThriftHiveMetastoreClientBuilder::new("hms").address(address);
 
-        let client = match &config.thrift_transport {
+        let client = match &properties.thrift_transport {
             HmsThriftTransport::Framed => builder
                 .make_codec(volo_thrift::codec::default::DefaultMakeCodec::framed())
                 .build(),
@@ -242,12 +225,11 @@ impl HmsCatalog {
                 "StorageFactory must be provided for HmsCatalog. Use `with_storage_factory` to configure it.",
             )
         })?;
-        let file_io = FileIOBuilder::new(factory)
-            .with_props(&config.props)
-            .build();
+        let file_io = FileIOBuilder::new(factory).with_props(props).build();
 
         Ok(Self {
-            config,
+            name,
+            properties,
             client: HmsClient(client),
             file_io,
             runtime,
@@ -524,7 +506,8 @@ impl Catalog for HmsCatalog {
             Some(location) => location.clone(),
             None => {
                 let ns = self.get_namespace(namespace).await?;
-                let location = get_default_table_location(&ns, &table_name, &self.config.warehouse);
+                let location =
+                    get_default_table_location(&ns, &table_name, &self.properties.warehouse);
                 creation.location = Some(location.clone());
                 location
             }
@@ -731,5 +714,130 @@ impl Catalog for HmsCatalog {
             ErrorKind::FeatureUnsupported,
             "Updating a table is not supported yet",
         ))
+    }
+}
+
+#[cfg(test)]
+mod catalog_properties_tests {
+    use iceberg::io::MemoryStorageFactory;
+
+    use super::*;
+
+    #[test]
+    fn test_catalog_properties() {
+        let properties = HmsCatalogProperties::from_properties(&HashMap::from([
+            (
+                HMS_CATALOG_PROP_URI.to_string(),
+                "localhost:9083".to_string(),
+            ),
+            (
+                HMS_CATALOG_PROP_THRIFT_TRANSPORT.to_string(),
+                "FRAMED".to_string(),
+            ),
+            (
+                HMS_CATALOG_PROP_WAREHOUSE.to_string(),
+                "s3://warehouse".to_string(),
+            ),
+        ]))
+        .unwrap();
+
+        assert_eq!(properties.address, "localhost:9083");
+        assert!(matches!(
+            properties.thrift_transport,
+            HmsThriftTransport::Framed
+        ));
+        assert_eq!(properties.warehouse, "s3://warehouse");
+    }
+
+    #[test]
+    fn test_catalog_properties_defaults() {
+        let properties = HmsCatalogProperties::from_properties(&HashMap::new()).unwrap();
+
+        assert_eq!(properties.address, "");
+        assert!(matches!(
+            properties.thrift_transport,
+            HmsThriftTransport::Buffered
+        ));
+        assert_eq!(properties.warehouse, "");
+    }
+
+    #[test]
+    fn test_invalid_thrift_transport_uses_default() {
+        let properties = HmsCatalogProperties::from_properties(&HashMap::from([(
+            HMS_CATALOG_PROP_THRIFT_TRANSPORT.to_string(),
+            "unknown".to_string(),
+        )]))
+        .unwrap();
+
+        assert!(matches!(
+            properties.thrift_transport,
+            HmsThriftTransport::Buffered
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_load_rejects_missing_address() {
+        let error = HmsCatalogBuilder::default()
+            .load(
+                "hms",
+                HashMap::from([(
+                    HMS_CATALOG_PROP_WAREHOUSE.to_string(),
+                    "memory:///warehouse".to_string(),
+                )]),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert_eq!(error.message(), "Catalog address is required");
+    }
+
+    #[tokio::test]
+    async fn test_load_rejects_missing_warehouse() {
+        let error = HmsCatalogBuilder::default()
+            .load(
+                "hms",
+                HashMap::from([(
+                    HMS_CATALOG_PROP_URI.to_string(),
+                    "localhost:9083".to_string(),
+                )]),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert_eq!(error.message(), "Catalog warehouse is required");
+    }
+
+    #[tokio::test]
+    async fn test_catalog_forwards_properties_to_file_io() {
+        let catalog = HmsCatalogBuilder::default()
+            .with_storage_factory(Arc::new(MemoryStorageFactory))
+            .load(
+                "hms",
+                HashMap::from([
+                    (
+                        HMS_CATALOG_PROP_URI.to_string(),
+                        "localhost:9083".to_string(),
+                    ),
+                    (
+                        HMS_CATALOG_PROP_WAREHOUSE.to_string(),
+                        "memory:///warehouse".to_string(),
+                    ),
+                    ("custom.property".to_string(), "value".to_string()),
+                ]),
+            )
+            .await
+            .unwrap();
+        let file_io_props = catalog.file_io.config().props();
+
+        assert_eq!(
+            file_io_props.get("custom.property"),
+            Some(&"value".to_string())
+        );
+        assert_eq!(
+            file_io_props.get(HMS_CATALOG_PROP_WAREHOUSE),
+            Some(&"memory:///warehouse".to_string())
+        );
     }
 }

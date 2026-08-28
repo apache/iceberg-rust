@@ -3791,6 +3791,7 @@ dependencies = [
  "faststr",
  "hive_metastore",
  "iceberg",
+ "iceberg-property-macro",
  "iceberg-storage-opendal",
  "iceberg_test_utils",
  "linkedbytes",
