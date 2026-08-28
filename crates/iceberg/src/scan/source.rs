@@ -45,6 +45,20 @@ pub(crate) trait ManifestSource: Debug + Send + Sync {
     ) -> BoxFuture<'a, Result<Vec<ManifestFile>>>;
 }
 
+/// No manifests at all, for a table that has no snapshots yet.
+#[derive(Debug)]
+pub(crate) struct EmptySource;
+
+impl ManifestSource for EmptySource {
+    fn manifest_files<'a>(
+        &'a self,
+        _object_cache: &'a ObjectCache,
+        _table_metadata: &'a TableMetadataRef,
+    ) -> BoxFuture<'a, Result<Vec<ManifestFile>>> {
+        Box::pin(async { Ok(vec![]) })
+    }
+}
+
 /// Every manifest listed by a single snapshot.
 #[derive(Debug)]
 pub(crate) struct SnapshotSource {
