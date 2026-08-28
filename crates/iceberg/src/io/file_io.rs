@@ -20,6 +20,7 @@ use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
+use serde::{Deserialize, Serialize};
 
 use super::storage::{
     LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageFactory,
@@ -59,13 +60,14 @@ use crate::Result;
 ///     .with_prop("key", "value")
 ///     .build();
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FileIO {
     /// Storage configuration containing properties
     config: StorageConfig,
     /// Factory for creating storage instances
     factory: Arc<dyn StorageFactory>,
     /// Cached storage instance (lazily initialized)
+    #[serde(skip, default)]
     storage: Arc<OnceLock<Arc<dyn Storage>>>,
 }
 
@@ -543,5 +545,43 @@ mod tests {
 
         assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
         assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_file_io_serialization_roundtrip_issue_3088() {
+        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+            .with_prop("key", "value")
+            .build();
+
+        // Initialize the storage cache before serializing. The cache is process-local and should
+        // be rebuilt from the factory and configuration after deserialization.
+        file_io
+            .new_output("memory://test/file.txt")
+            .unwrap()
+            .write("test".into())
+            .await
+            .unwrap();
+
+        let serialized = serde_json::to_string(&file_io).unwrap();
+        let deserialized: FileIO = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.config().get("key"), Some(&"value".to_string()));
+        assert!(!deserialized.exists("memory://test/file.txt").await.unwrap());
+
+        deserialized
+            .new_output("memory://test/roundtrip.txt")
+            .unwrap()
+            .write("roundtrip".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            deserialized
+                .new_input("memory://test/roundtrip.txt")
+                .unwrap()
+                .read()
+                .await
+                .unwrap(),
+            Bytes::from("roundtrip")
+        );
     }
 }
