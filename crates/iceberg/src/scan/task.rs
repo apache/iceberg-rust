@@ -18,35 +18,148 @@
 use std::sync::Arc;
 
 use futures::stream::BoxStream;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use crate::Result;
 use crate::expr::BoundPredicate;
 use crate::spec::{
-    DataContentType, DataFileFormat, ManifestEntryRef, NameMapping, PartitionSpec, Schema,
-    SchemaRef, Struct, StructType,
+    DataContentType, DataFileFormat, Literal, ManifestEntryRef, NameMapping, PartitionSpec,
+    PrimitiveLiteral, Schema, SchemaRef, Struct, StructType,
 };
 
 /// A stream of [`FileScanTask`].
 pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;
 
-/// Serialization helper that always returns NotImplementedError.
-/// Used for fields that should not be serialized but we want to be explicit about it.
-fn serialize_not_implemented<S, T>(_: &T, _: S) -> std::result::Result<S::Ok, S::Error>
-where S: Serializer {
-    Err(serde::ser::Error::custom(
-        "Serialization not implemented for this field",
-    ))
-}
+mod partition_serde {
+    use std::result::Result as StdResult;
 
-/// Deserialization helper that always returns NotImplementedError.
-/// Used for fields that should not be deserialized but we want to be explicit about it.
-fn deserialize_not_implemented<'de, D, T>(_: D) -> std::result::Result<T, D::Error>
-where D: serde::Deserializer<'de> {
-    Err(serde::de::Error::custom(
-        "Deserialization not implemented for this field",
-    ))
+    use serde::ser::Error as _;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::{Literal, PrimitiveLiteral, Struct};
+
+    /// A self-describing representation for the physical values in a partition struct.
+    ///
+    /// The logical types are carried separately by the task's schema and partition spec. Keeping
+    /// this representation physical avoids duplicating that context while still distinguishing
+    /// values such as `Int` and `Long`. Floats and 128-bit integers use byte representations so
+    /// that every value can round-trip through JSON, including NaNs and infinities.
+    #[derive(Serialize, Deserialize)]
+    #[serde(tag = "type", content = "value", rename_all = "kebab-case")]
+    enum SerializablePrimitiveLiteral {
+        Boolean(bool),
+        Int(i32),
+        Long(i64),
+        Float([u8; 4]),
+        Double([u8; 8]),
+        String(String),
+        Binary(Vec<u8>),
+        Int128([u8; 16]),
+        UInt128([u8; 16]),
+        AboveMax,
+        BelowMin,
+    }
+
+    impl TryFrom<&Literal> for SerializablePrimitiveLiteral {
+        type Error = &'static str;
+
+        fn try_from(value: &Literal) -> StdResult<Self, Self::Error> {
+            match value {
+                Literal::Primitive(PrimitiveLiteral::Boolean(value)) => Ok(Self::Boolean(*value)),
+                Literal::Primitive(PrimitiveLiteral::Int(value)) => Ok(Self::Int(*value)),
+                Literal::Primitive(PrimitiveLiteral::Long(value)) => Ok(Self::Long(*value)),
+                Literal::Primitive(PrimitiveLiteral::Float(value)) => {
+                    Ok(Self::Float(value.to_bits().to_be_bytes()))
+                }
+                Literal::Primitive(PrimitiveLiteral::Double(value)) => {
+                    Ok(Self::Double(value.to_bits().to_be_bytes()))
+                }
+                Literal::Primitive(PrimitiveLiteral::String(value)) => {
+                    Ok(Self::String(value.clone()))
+                }
+                Literal::Primitive(PrimitiveLiteral::Binary(value)) => {
+                    Ok(Self::Binary(value.clone()))
+                }
+                Literal::Primitive(PrimitiveLiteral::Int128(value)) => {
+                    Ok(Self::Int128(value.to_be_bytes()))
+                }
+                Literal::Primitive(PrimitiveLiteral::UInt128(value)) => {
+                    Ok(Self::UInt128(value.to_be_bytes()))
+                }
+                Literal::Primitive(PrimitiveLiteral::AboveMax) => Ok(Self::AboveMax),
+                Literal::Primitive(PrimitiveLiteral::BelowMin) => Ok(Self::BelowMin),
+                Literal::Struct(_) | Literal::List(_) | Literal::Map(_) => {
+                    Err("partition structs can contain only primitive literal values")
+                }
+            }
+        }
+    }
+
+    impl From<SerializablePrimitiveLiteral> for Literal {
+        fn from(value: SerializablePrimitiveLiteral) -> Self {
+            let value = match value {
+                SerializablePrimitiveLiteral::Boolean(value) => PrimitiveLiteral::Boolean(value),
+                SerializablePrimitiveLiteral::Int(value) => PrimitiveLiteral::Int(value),
+                SerializablePrimitiveLiteral::Long(value) => PrimitiveLiteral::Long(value),
+                SerializablePrimitiveLiteral::Float(value) => {
+                    PrimitiveLiteral::Float(f32::from_bits(u32::from_be_bytes(value)).into())
+                }
+                SerializablePrimitiveLiteral::Double(value) => {
+                    PrimitiveLiteral::Double(f64::from_bits(u64::from_be_bytes(value)).into())
+                }
+                SerializablePrimitiveLiteral::String(value) => PrimitiveLiteral::String(value),
+                SerializablePrimitiveLiteral::Binary(value) => PrimitiveLiteral::Binary(value),
+                SerializablePrimitiveLiteral::Int128(value) => {
+                    PrimitiveLiteral::Int128(i128::from_be_bytes(value))
+                }
+                SerializablePrimitiveLiteral::UInt128(value) => {
+                    PrimitiveLiteral::UInt128(u128::from_be_bytes(value))
+                }
+                SerializablePrimitiveLiteral::AboveMax => PrimitiveLiteral::AboveMax,
+                SerializablePrimitiveLiteral::BelowMin => PrimitiveLiteral::BelowMin,
+            };
+            Literal::Primitive(value)
+        }
+    }
+
+    pub(super) fn serialize<S>(
+        partition: &Option<Struct>,
+        serializer: S,
+    ) -> StdResult<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let partition = partition
+            .as_ref()
+            .map(|partition| {
+                partition
+                    .iter()
+                    .map(|value| {
+                        value
+                            .map(SerializablePrimitiveLiteral::try_from)
+                            .transpose()
+                    })
+                    .collect::<StdResult<Vec<_>, _>>()
+            })
+            .transpose()
+            .map_err(S::Error::custom)?;
+
+        partition.serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> StdResult<Option<Struct>, D::Error>
+    where D: Deserializer<'de> {
+        let partition =
+            Option::<Vec<Option<SerializablePrimitiveLiteral>>>::deserialize(deserializer)?;
+
+        Ok(partition.map(|partition| {
+            partition
+                .into_iter()
+                .map(|value| value.map(Literal::from))
+                .collect()
+        }))
+    }
 }
 
 /// A task to scan part of file.
@@ -109,8 +222,7 @@ pub struct FileScanTask {
     /// Per the Iceberg spec, only identity-transformed partition fields should use constants.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(serialize_with = "serialize_not_implemented")]
-    #[serde(deserialize_with = "deserialize_not_implemented")]
+    #[serde(with = "partition_serde")]
     #[builder(default)]
     pub partition: Option<Struct>,
 
@@ -119,8 +231,6 @@ pub struct FileScanTask {
     /// bucket/truncate (which must read source columns from the data file).
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(serialize_with = "serialize_not_implemented")]
-    #[serde(deserialize_with = "deserialize_not_implemented")]
     #[builder(default)]
     pub partition_spec: Option<Arc<PartitionSpec>>,
 
@@ -129,8 +239,6 @@ pub struct FileScanTask {
     /// or have field ID conflicts.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(serialize_with = "serialize_not_implemented")]
-    #[serde(deserialize_with = "deserialize_not_implemented")]
     #[builder(default)]
     pub name_mapping: Option<Arc<NameMapping>>,
 
@@ -142,11 +250,8 @@ pub struct FileScanTask {
     /// This is a table-level value (same for all tasks in a scan), stored per-task
     /// so that readers are self-contained without needing back-pointers to table
     /// metadata. The cost is one Arc clone per task.
-    /// Serde: not yet implemented (same pattern as partition, partition_spec, name_mapping).
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(serialize_with = "serialize_not_implemented")]
-    #[serde(deserialize_with = "deserialize_not_implemented")]
     #[builder(default)]
     pub unified_partition_type: Option<Arc<StructType>>,
 
@@ -281,4 +386,51 @@ pub struct FileScanTaskDeleteFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[builder(default)]
     pub key_metadata: Option<Box<[u8]>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct PartitionWrapper {
+        #[serde(with = "partition_serde")]
+        partition: Option<Struct>,
+    }
+
+    #[test]
+    fn test_partition_serde_round_trip_all_primitive_literals() {
+        let partition = Struct::from_iter([
+            Some(Literal::Primitive(PrimitiveLiteral::Boolean(true))),
+            Some(Literal::Primitive(PrimitiveLiteral::Int(i32::MIN))),
+            Some(Literal::Primitive(PrimitiveLiteral::Long(i64::MAX))),
+            Some(Literal::Primitive(PrimitiveLiteral::Float(
+                f32::INFINITY.into(),
+            ))),
+            Some(Literal::Primitive(PrimitiveLiteral::Double(
+                f64::NEG_INFINITY.into(),
+            ))),
+            Some(Literal::Primitive(PrimitiveLiteral::String(
+                "partition".to_string(),
+            ))),
+            Some(Literal::Primitive(PrimitiveLiteral::Binary(vec![
+                0, 1, 255,
+            ]))),
+            Some(Literal::Primitive(PrimitiveLiteral::Int128(i128::MIN))),
+            Some(Literal::Primitive(PrimitiveLiteral::UInt128(u128::MAX))),
+            Some(Literal::Primitive(PrimitiveLiteral::AboveMax)),
+            Some(Literal::Primitive(PrimitiveLiteral::BelowMin)),
+            None,
+        ]);
+        let expected = PartitionWrapper {
+            partition: Some(partition),
+        };
+
+        let serialized = serde_json::to_string(&expected).unwrap();
+        let actual = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(expected, actual);
+    }
 }
