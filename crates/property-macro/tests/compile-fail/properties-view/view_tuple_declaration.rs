@@ -15,12 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[test]
-fn reports_invalid_properties_derive_declarations() {
-    trybuild::TestCases::new().compile_fail("tests/compile-fail/derive-properties/*.rs");
+use iceberg_property_macro::properties_view;
+
+properties_view! {
+    struct TupleView(#[property(key = "value", default = 1)] u64);
 }
 
-#[test]
-fn reports_invalid_property_view_declarations() {
-    trybuild::TestCases::new().compile_fail("tests/compile-fail/properties-view/*.rs");
-}
+fn main() {}

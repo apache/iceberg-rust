@@ -113,8 +113,9 @@ impl EncryptionManager {
             return Ok(None);
         }
 
-        let table_properties = metadata.table_properties()?;
-        let Some(table_key_id) = table_properties.encryption_key_id().as_deref() else {
+        let table_properties = metadata.table_properties();
+        let encryption_key_id = table_properties.encryption_key_id()?;
+        let Some(table_key_id) = encryption_key_id.as_deref() else {
             if kms_client.is_some() {
                 tracing::warn!(
                     "KeyManagementClient provided but table does not have encryption.key-id set"

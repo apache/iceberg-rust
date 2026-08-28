@@ -35,7 +35,7 @@ pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataB
 use super::{
     DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, Schema, SchemaId,
     SchemaRef, SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
-    TableProperties, parse_metadata_file_compression,
+    TableProperties,
 };
 use crate::catalog::{METADATA_FOLDER_NAME, MetadataLocation};
 use crate::compression::CompressionCodec;
@@ -384,9 +384,8 @@ impl TableMetadata {
     /// to the `metadata` subdirectory under the table location.
     pub fn metadata_location(&self) -> Result<String> {
         Ok(self
-            .table_properties()?
-            .write_metadata_path()
-            .clone()
+            .table_properties()
+            .write_metadata_path()?
             .unwrap_or_else(|| format!("{}/{}", self.location(), METADATA_FOLDER_NAME)))
     }
 
@@ -399,14 +398,13 @@ impl TableMetadata {
     ///
     /// Returns an error if the compression codec property has an invalid value.
     pub fn metadata_compression_codec(&self) -> Result<CompressionCodec> {
-        parse_metadata_file_compression(&self.properties)
+        self.table_properties().metadata_compression_codec()
     }
 
-    /// Returns typed table properties parsed from the raw properties map with defaults.
-    pub fn table_properties(&self) -> Result<TableProperties> {
-        TableProperties::try_from(&self.properties).map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(e)
-        })
+    /// Returns a typed view that parses each table property when its getter is called.
+    #[inline]
+    pub fn table_properties(&self) -> TableProperties<'_> {
+        TableProperties::new(&self.properties)
     }
 
     /// Return location of statistics files.
@@ -513,7 +511,7 @@ impl TableMetadata {
         let json_data = serde_json::to_vec(self)?;
 
         // Check if compression codec from properties matches the one in metadata_location
-        let codec = parse_metadata_file_compression(&self.properties)?;
+        let codec = self.table_properties().metadata_compression_codec()?;
 
         if codec != metadata_location.compression_codec() {
             return Err(Error::new(
@@ -4055,14 +4053,14 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let props = metadata.table_properties().unwrap();
+        let props = metadata.table_properties();
 
         assert_eq!(
-            props.commit_num_retries(),
+            props.commit_num_retries().unwrap(),
             TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
         );
         assert_eq!(
-            props.write_target_file_size_bytes(),
+            props.write_target_file_size_bytes().unwrap(),
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
     }
@@ -4102,10 +4100,67 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let props = metadata.table_properties().unwrap();
+        let props = metadata.table_properties();
 
-        assert_eq!(props.commit_num_retries(), 10);
-        assert_eq!(props.write_target_file_size_bytes(), 1024);
+        assert_eq!(props.commit_num_retries().unwrap(), 10);
+        assert_eq!(props.write_target_file_size_bytes().unwrap(), 1024);
+    }
+
+    #[test]
+    fn test_deserialize_metadata_defers_invalid_table_property_errors() {
+        let invalid_retries = "not_a_number";
+        let invalid_codec = "unknown";
+        let target_file_size = "1024";
+
+        for file_name in [
+            "TableMetadataV1Valid.json",
+            "TableMetadataV2ValidMinimal.json",
+            "TableMetadataV3ValidMinimal.json",
+        ] {
+            let path = format!("testdata/table_metadata/{file_name}");
+            let mut json: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+            json["properties"] = serde_json::json!({
+                (TableProperties::PROPERTY_COMMIT_NUM_RETRIES): invalid_retries,
+                (TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC): invalid_codec,
+                (TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES): target_file_size,
+            });
+
+            let metadata: TableMetadata = serde_json::from_value(json).unwrap();
+            assert_eq!(
+                metadata
+                    .properties()
+                    .get(TableProperties::PROPERTY_COMMIT_NUM_RETRIES)
+                    .map(String::as_str),
+                Some(invalid_retries)
+            );
+
+            let table_properties = metadata.table_properties();
+            let error = table_properties.commit_num_retries().unwrap_err();
+            assert!(
+                error
+                    .message()
+                    .contains(TableProperties::PROPERTY_COMMIT_NUM_RETRIES)
+            );
+            assert_eq!(
+                table_properties.write_target_file_size_bytes().unwrap(),
+                1024
+            );
+            let error = table_properties.metadata_compression_codec().unwrap_err();
+            assert!(
+                format!("{error}").contains(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
+            );
+
+            let serialized = serde_json::to_value(metadata).unwrap();
+            assert_eq!(
+                serialized["properties"][TableProperties::PROPERTY_COMMIT_NUM_RETRIES],
+                invalid_retries
+            );
+            assert_eq!(
+                serialized["properties"][TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC],
+                invalid_codec
+            );
+        }
     }
 
     #[test]
@@ -4117,10 +4172,16 @@ mod tests {
             .build()
             .unwrap();
 
-        let properties = HashMap::from([(
-            "commit.retry.num-retries".to_string(),
-            "not_a_number".to_string(),
-        )]);
+        let properties = HashMap::from([
+            (
+                TableProperties::PROPERTY_COMMIT_NUM_RETRIES.to_string(),
+                "not_a_number".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES.to_string(),
+                "1024".to_string(),
+            ),
+        ]);
 
         let metadata = TableMetadataBuilder::new(
             schema,
@@ -4135,9 +4196,17 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let err = metadata.table_properties().unwrap_err();
+        let table_properties = metadata.table_properties();
+        let err = table_properties.commit_num_retries().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("Invalid table properties"));
+        assert!(
+            err.message()
+                .contains(TableProperties::PROPERTY_COMMIT_NUM_RETRIES)
+        );
+        assert_eq!(
+            table_properties.write_target_file_size_bytes().unwrap(),
+            1024
+        );
     }
 
     #[test]

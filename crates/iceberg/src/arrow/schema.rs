@@ -2388,7 +2388,7 @@ mod tests {
             assert_eq!(array.value(0), 42);
         }
         {
-            let datum = Datum::float(42.42);
+            let datum = Datum::float(42.42_f32);
             let arrow_datum = get_arrow_datum(&datum).unwrap();
             let (array, is_scalar) = arrow_datum.get();
             let array = array.as_any().downcast_ref::<Float32Array>().unwrap();

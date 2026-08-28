@@ -1,0 +1,14 @@
+error: Properties fields must declare exactly one of key, prefix, or nested in #[property(...)]
+  --> tests/compile-fail/properties-view/view_multiple_sources.rs:24:9
+   |
+24 | /         #[property(key = "value", prefix = "values.", default = HashMap::new())]
+25 | |         value: HashMap<String, u64>,
+   | |___________________________________^
+
+warning: unused import: `std::collections::HashMap`
+  --> tests/compile-fail/properties-view/view_multiple_sources.rs:18:5
+   |
+18 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
