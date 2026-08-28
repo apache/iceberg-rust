@@ -18,18 +18,30 @@
 <a href=#18 id=18 data-nosnippet>18</a></span><span class="attr">#![doc = <span class="macro">include_str!</span>(<span class="string">"../README.md"</span>)]
 <a href=#19 id=19 data-nosnippet>19</a>
 <a href=#20 id=20 data-nosnippet>20</a></span><span class="kw">use </span>proc_macro::TokenStream;
-<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>syn::{DeriveInput, parse_macro_input};
+<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>syn::{DeriveInput, ItemStruct, parse_macro_input};
 <a href=#22 id=22 data-nosnippet>22</a>
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">mod </span>properties;
-<a href=#24 id=24 data-nosnippet>24</a>
-<a href=#25 id=25 data-nosnippet>25</a><span class="doccomment">/// Derives property-map parsing and opt-in read-only accessors for a struct.
-<a href=#26 id=26 data-nosnippet>26</a></span><span class="attr">#[proc_macro_derive(Properties, attributes(property))]
-<a href=#27 id=27 data-nosnippet>27</a></span><span class="kw">pub fn </span>derive_properties(input: TokenStream) -&gt; TokenStream {
-<a href=#28 id=28 data-nosnippet>28</a>    <span class="kw">let </span>input = <span class="macro">parse_macro_input!</span>(input <span class="kw">as </span>DeriveInput);
-<a href=#29 id=29 data-nosnippet>29</a>
-<a href=#30 id=30 data-nosnippet>30</a>    <span class="kw">match </span>properties::expand_properties(input) {
-<a href=#31 id=31 data-nosnippet>31</a>        <span class="prelude-val">Ok</span>(tokens) =&gt; tokens.into(),
-<a href=#32 id=32 data-nosnippet>32</a>        <span class="prelude-val">Err</span>(error) =&gt; error.into_compile_error().into(),
-<a href=#33 id=33 data-nosnippet>33</a>    }
-<a href=#34 id=34 data-nosnippet>34</a>}
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">mod </span>properties_view;
+<a href=#25 id=25 data-nosnippet>25</a>
+<a href=#26 id=26 data-nosnippet>26</a><span class="doccomment">/// Derives property-map parsing and opt-in read-only accessors for a struct.
+<a href=#27 id=27 data-nosnippet>27</a></span><span class="attr">#[proc_macro_derive(Properties, attributes(property))]
+<a href=#28 id=28 data-nosnippet>28</a></span><span class="kw">pub fn </span>derive_properties(input: TokenStream) -&gt; TokenStream {
+<a href=#29 id=29 data-nosnippet>29</a>    <span class="kw">let </span>input = <span class="macro">parse_macro_input!</span>(input <span class="kw">as </span>DeriveInput);
+<a href=#30 id=30 data-nosnippet>30</a>
+<a href=#31 id=31 data-nosnippet>31</a>    <span class="kw">match </span>properties::expand_properties(input) {
+<a href=#32 id=32 data-nosnippet>32</a>        <span class="prelude-val">Ok</span>(tokens) =&gt; tokens.into(),
+<a href=#33 id=33 data-nosnippet>33</a>        <span class="prelude-val">Err</span>(error) =&gt; error.into_compile_error().into(),
+<a href=#34 id=34 data-nosnippet>34</a>    }
+<a href=#35 id=35 data-nosnippet>35</a>}
+<a href=#36 id=36 data-nosnippet>36</a>
+<a href=#37 id=37 data-nosnippet>37</a><span class="doccomment">/// Defines a borrowed view that parses properties independently through generated getters.
+<a href=#38 id=38 data-nosnippet>38</a></span><span class="attr">#[proc_macro]
+<a href=#39 id=39 data-nosnippet>39</a></span><span class="kw">pub fn </span>properties_view(input: TokenStream) -&gt; TokenStream {
+<a href=#40 id=40 data-nosnippet>40</a>    <span class="kw">let </span>input = <span class="macro">parse_macro_input!</span>(input <span class="kw">as </span>ItemStruct);
+<a href=#41 id=41 data-nosnippet>41</a>
+<a href=#42 id=42 data-nosnippet>42</a>    <span class="kw">match </span>properties_view::expand_properties_view(input) {
+<a href=#43 id=43 data-nosnippet>43</a>        <span class="prelude-val">Ok</span>(tokens) =&gt; tokens.into(),
+<a href=#44 id=44 data-nosnippet>44</a>        <span class="prelude-val">Err</span>(error) =&gt; error.into_compile_error().into(),
+<a href=#45 id=45 data-nosnippet>45</a>    }
+<a href=#46 id=46 data-nosnippet>46</a>}
 </code></pre></div></section></main></body></html>

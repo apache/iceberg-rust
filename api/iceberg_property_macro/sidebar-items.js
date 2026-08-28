@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"derive":["Properties"]};
+window.SIDEBAR_ITEMS = {"derive":["Properties"],"macro":["properties_view"]};
