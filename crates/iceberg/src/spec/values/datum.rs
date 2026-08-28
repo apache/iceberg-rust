@@ -456,7 +456,7 @@ impl Datum {
                         ErrorKind::DataInvalid,
                         format!(
                             "PrimitiveLiteral Int128 must be PrimitiveType Decimal but got {}",
-                            &self.r#type
+                            self.r#type
                         ),
                     ));
                 };
@@ -822,7 +822,7 @@ impl Datum {
         Self::timestamp_micros(dt.and_utc().timestamp_micros())
     }
 
-    /// Parse a timestamp in [`%Y-%m-%dT%H:%M:%S%.f`] format.
+    /// Parse a timestamp in `%Y-%m-%dT%H:%M:%S%.f` format.
     ///
     /// See [`NaiveDateTime::from_str`].
     ///
@@ -1240,7 +1240,7 @@ impl Datum {
     /// Returns a human-readable string representation of this literal.
     ///
     /// For string literals, this returns the raw string value without quotes.
-    /// For all other literals, it falls back to [`to_string()`].
+    /// For all other literals, it falls back to [`to_string()`](ToString::to_string).
     pub fn to_human_string(&self) -> String {
         match self.literal() {
             PrimitiveLiteral::String(s) => s.to_string(),

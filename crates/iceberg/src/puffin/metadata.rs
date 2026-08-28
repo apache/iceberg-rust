@@ -29,7 +29,7 @@ use crate::{Error, ErrorKind, Result};
 pub const CREATED_BY_PROPERTY: &str = "created-by";
 
 /// Metadata about a blob.
-/// For more information, see: https://iceberg.apache.org/puffin-spec/#blobmetadata
+/// For more information, see: <https://iceberg.apache.org/puffin-spec/#blobmetadata>
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "kebab-case")]
 pub struct BlobMetadata {
@@ -49,7 +49,7 @@ pub struct BlobMetadata {
 
 impl BlobMetadata {
     #[inline]
-    /// See blob types: https://iceberg.apache.org/puffin-spec/#blob-types
+    /// See blob types: <https://iceberg.apache.org/puffin-spec/#blob-types>
     pub fn blob_type(&self) -> &str {
         &self.r#type
     }
@@ -129,7 +129,7 @@ impl Flag {
 
 /// Metadata about a puffin file.
 ///
-/// For more information, see: https://iceberg.apache.org/puffin-spec/#filemetadata
+/// For more information, see: <https://iceberg.apache.org/puffin-spec/#filemetadata>
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct FileMetadata {
     pub(crate) blobs: Vec<BlobMetadata>,
