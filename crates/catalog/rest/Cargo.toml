@@ -33,13 +33,13 @@ repository = { workspace = true }
 default = []
 # SigV4 request signing, for catalogs that authenticate the AWS way. Off by
 # default so the AWS crates are not pulled in unless they are used.
-sigv4 = ["dep:aws-credential-types", "dep:aws-sigv4", "dep:sha2"]
+sigv4 = ["dep:aws-credential-types", "dep:aws-sigv4", "dep:base64", "dep:sha2"]
 
 [dependencies]
 async-trait = { workspace = true }
 aws-credential-types = { workspace = true, optional = true }
 aws-sigv4 = { workspace = true, optional = true }
-base64 = { workspace = true }
+base64 = { workspace = true, optional = true }
 chrono = { workspace = true }
 http = { workspace = true }
 iceberg = { workspace = true }
