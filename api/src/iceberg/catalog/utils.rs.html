@@ -61,7 +61,7 @@
 <a href=#61 id=61 data-nosnippet>61</a>    }
 <a href=#62 id=62 data-nosnippet>62</a>
 <a href=#63 id=63 data-nosnippet>63</a>    <span class="comment">// Delete data files only if gc.enabled is true, to avoid corrupting shared tables
-<a href=#64 id=64 data-nosnippet>64</a>    </span><span class="kw">if </span>metadata.table_properties()<span class="question-mark">?</span>.gc_enabled() {
+<a href=#64 id=64 data-nosnippet>64</a>    </span><span class="kw">if </span>metadata.table_properties().gc_enabled()<span class="question-mark">? </span>{
 <a href=#65 id=65 data-nosnippet>65</a>        delete_data_files(io, <span class="kw-2">&amp;</span>manifests_to_delete).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#66 id=66 data-nosnippet>66</a>    }
 <a href=#67 id=67 data-nosnippet>67</a>
