@@ -74,7 +74,7 @@ impl PartitionFilterCache {
         // partition type, so it falls back to an always-true filter: files under the spec
         // are not partition-pruned but still receive the row filter. Any other resolution
         // failure is unexpected and propagates. The fallback is cached by spec id like any
-        // other filter; this is safe only because the cache lives per-scan in `ScanPlanningContext`
+        // other filter; this is safe only because the cache lives per-scan in `PlanContext`
         // with a fixed schema and predicate. Hoisting it to table or catalog scope would
         // pin a spec to always-true even for a later scan whose schema could resolve it.
         // TODO(https://github.com/apache/iceberg-rust/issues/2844): derive partition types from
