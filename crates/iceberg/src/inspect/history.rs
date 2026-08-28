@@ -126,7 +126,7 @@ mod tests {
 
     use crate::TableIdent;
     use crate::io::FileIO;
-    use crate::scan::tests::TableTestFixture;
+    use crate::scan::test_utils::TableTestFixture;
     use crate::spec::TableMetadata;
     use crate::table::Table;
     use crate::test_utils::{check_record_batches, test_runtime};

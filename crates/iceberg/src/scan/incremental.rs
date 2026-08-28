@@ -454,7 +454,7 @@ mod tests {
     use futures::TryStreamExt;
 
     use super::{AppendRange, IncrementalAppendScan};
-    use crate::scan::tests::TableTestFixture;
+    use crate::scan::test_utils::TableTestFixture;
 
     /// Sorted base names of the data files `scan` yields. Duplicates are kept so
     /// double-counting is visible.
