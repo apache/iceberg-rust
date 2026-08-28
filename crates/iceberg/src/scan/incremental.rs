@@ -29,8 +29,8 @@ use crate::runtime::Runtime;
 use crate::scan::context::ManifestEntryFilter;
 use crate::scan::{
     ArrowRecordBatchStream, ExpressionEvaluatorCache, FileScanTaskStream, ManifestEvaluatorCache,
-    PartitionFilterCache, PlanContext, bind_scan_predicate, plan_scan_files, projected_field_ids,
-    projected_partition_type, table_name_mapping,
+    PartitionFilterCache, ScanPlanningContext, bind_scan_predicate, plan_scan_files,
+    projected_field_ids, projected_partition_type, table_name_mapping,
 };
 use crate::spec::{
     ManifestContentType, ManifestFile, ManifestList, ManifestStatus, Operation, SnapshotRef,
@@ -171,11 +171,43 @@ impl AppendRange {
     }
 }
 
+#[derive(Debug)]
+struct IncrementalAppendPlanContext {
+    append_range: AppendRange,
+    scan_context: ScanPlanningContext,
+}
+
+impl IncrementalAppendPlanContext {
+    async fn manifest_files(&self, concurrency_limit: usize) -> Result<Vec<ManifestFile>> {
+        let object_cache = self.scan_context.object_cache.clone();
+        let table_metadata = self.scan_context.table_metadata.clone();
+        let manifest_lists: Vec<Arc<ManifestList>> =
+            futures::stream::iter(self.append_range.snapshots().iter().cloned())
+                .map(move |snapshot| {
+                    let object_cache = object_cache.clone();
+                    let table_metadata = table_metadata.clone();
+                    async move {
+                        object_cache
+                            .get_manifest_list(&snapshot, &table_metadata)
+                            .await
+                    }
+                })
+                .buffered(concurrency_limit.max(1))
+                .try_collect()
+                .await?;
+
+        Ok(self.append_range.manifest_files(&manifest_lists))
+    }
+
+    fn manifest_entry_filter(&self) -> ManifestEntryFilter {
+        self.append_range.manifest_entry_filter()
+    }
+}
+
 /// An incremental scan of data appended between two snapshots.
 #[derive(Debug)]
 pub struct IncrementalAppendScan {
-    plan_context: PlanContext,
-    append_range: AppendRange,
+    plan_context: IncrementalAppendPlanContext,
     batch_size: Option<usize>,
     file_io: FileIO,
     column_names: Option<Vec<String>>,
@@ -190,28 +222,15 @@ pub struct IncrementalAppendScan {
 impl IncrementalAppendScan {
     /// Returns a stream of files appended in the scan's snapshot range.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
-        let object_cache = self.plan_context.object_cache.clone();
-        let table_metadata = self.plan_context.table_metadata.clone();
-        let manifest_lists: Vec<Arc<ManifestList>> =
-            futures::stream::iter(self.append_range.snapshots().iter().cloned())
-                .map(move |snapshot| {
-                    let object_cache = object_cache.clone();
-                    let table_metadata = table_metadata.clone();
-                    async move {
-                        object_cache
-                            .get_manifest_list(&snapshot, &table_metadata)
-                            .await
-                    }
-                })
-                .buffered(self.concurrency_limit_manifest_files.max(1))
-                .try_collect()
-                .await?;
-        let manifest_files = self.append_range.manifest_files(&manifest_lists);
+        let manifest_files = self
+            .plan_context
+            .manifest_files(self.concurrency_limit_manifest_files)
+            .await?;
 
         plan_scan_files(
-            &self.plan_context,
+            &self.plan_context.scan_context,
             manifest_files,
-            Some(self.append_range.manifest_entry_filter()),
+            Some(self.plan_context.manifest_entry_filter()),
             &self.runtime,
             self.concurrency_limit_manifest_files,
             self.concurrency_limit_manifest_entries,
@@ -379,7 +398,7 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
 
     /// Build the incremental append scan.
     pub fn build(self) -> Result<IncrementalAppendScan> {
-        let to_snapshot = match self.to_snapshot_id {
+        let to_snapshot_id = match self.to_snapshot_id {
             Some(snapshot_id) => self
                 .table
                 .metadata()
@@ -390,7 +409,7 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
                         format!("to_snapshot with id {snapshot_id} not found"),
                     )
                 })?
-                .clone(),
+                .snapshot_id(),
             None => {
                 let Some(current_snapshot) = self.table.metadata().current_snapshot() else {
                     return Err(Error::new(
@@ -398,32 +417,31 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
                         "Cannot perform incremental scan: table has no snapshots",
                     ));
                 };
-                current_snapshot.clone()
+                current_snapshot.snapshot_id()
             }
         };
 
         let append_range = AppendRange::build(
             &self.table.metadata_ref(),
             self.from_snapshot_id,
-            to_snapshot.snapshot_id(),
+            to_snapshot_id,
             self.from_inclusive,
         )?;
 
         let schema = self.table.metadata().current_schema().clone();
         let field_ids =
             projected_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
-        let snapshot_bound_predicate =
+        let scan_bound_predicate =
             bind_scan_predicate(&schema, self.filter.as_ref(), self.case_sensitive)?;
         let name_mapping = table_name_mapping(self.table)?;
         let unified_partition_type = projected_partition_type(self.table, &schema, &field_ids)?;
 
-        let plan_context = PlanContext {
-            snapshot: to_snapshot,
+        let scan_context = ScanPlanningContext {
             table_metadata: self.table.metadata_ref(),
-            snapshot_schema: schema,
+            scan_schema: schema,
             case_sensitive: self.case_sensitive,
             predicate: self.filter.map(Arc::new),
-            snapshot_bound_predicate,
+            scan_bound_predicate,
             object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
             name_mapping,
@@ -432,10 +450,13 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
             unified_partition_type,
         };
+        let plan_context = IncrementalAppendPlanContext {
+            append_range,
+            scan_context,
+        };
 
         Ok(IncrementalAppendScan {
             plan_context,
-            append_range,
             batch_size: self.batch_size,
             file_io: self.table.file_io().clone(),
             column_names: self.column_names,
@@ -574,7 +595,7 @@ mod tests {
         );
 
         let scan = result.unwrap();
-        assert_eq!(scan.append_range.snapshots().len(), 1);
+        assert_eq!(scan.plan_context.append_range.snapshots().len(), 1);
     }
 
     #[test]
@@ -1053,18 +1074,18 @@ mod tests {
             .build()
             .unwrap();
 
-        let plan_context = &scan.plan_context;
+        let scan_context = &scan.plan_context.scan_context;
 
         // The scan must use the current schema (3 columns), not the
         // to-snapshot's schema (1 column).
         let current_schema = table.metadata().current_schema();
         assert_eq!(
-            plan_context.snapshot_schema.schema_id(),
+            scan_context.scan_schema.schema_id(),
             current_schema.schema_id(),
             "incremental scan should project onto the current schema"
         );
         assert_eq!(
-            plan_context.snapshot_schema.as_struct().fields().len(),
+            scan_context.scan_schema.as_struct().fields().len(),
             3,
             "current schema has three columns (x, y, z)"
         );

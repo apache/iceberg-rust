@@ -339,18 +339,17 @@ impl<'a> TableScanBuilder<'a> {
         let schema = snapshot.schema(self.table.metadata())?;
         let field_ids =
             projected_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
-        let snapshot_bound_predicate =
+        let scan_bound_predicate =
             bind_scan_predicate(&schema, self.filter.as_ref(), self.case_sensitive)?;
         let name_mapping = table_name_mapping(self.table)?;
         let unified_partition_type = projected_partition_type(self.table, &schema, &field_ids)?;
 
-        let plan_context = PlanContext {
-            snapshot,
+        let scan_context = ScanPlanningContext {
             table_metadata: self.table.metadata_ref(),
-            snapshot_schema: schema,
+            scan_schema: schema,
             case_sensitive: self.case_sensitive,
             predicate: self.filter.map(Arc::new),
-            snapshot_bound_predicate,
+            scan_bound_predicate,
             object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
             name_mapping,
@@ -358,6 +357,10 @@ impl<'a> TableScanBuilder<'a> {
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
             unified_partition_type,
+        };
+        let plan_context = PlanContext {
+            snapshot,
+            scan_context,
         };
 
         Ok(TableScan {
@@ -378,9 +381,6 @@ impl<'a> TableScanBuilder<'a> {
 /// Table scan.
 #[derive(Debug)]
 pub struct TableScan {
-    /// A [PlanContext], if this table has at least one snapshot, otherwise None.
-    ///
-    /// If this is None, then the scan contains no rows.
     plan_context: Option<PlanContext>,
     batch_size: Option<usize>,
     file_io: FileIO,
@@ -404,7 +404,7 @@ pub struct TableScan {
 }
 
 pub(crate) async fn plan_scan_files(
-    plan_context: &PlanContext,
+    scan_context: &ScanPlanningContext,
     manifest_files: Vec<ManifestFile>,
     manifest_entry_filter: Option<ManifestEntryFilter>,
     runtime: &Runtime,
@@ -419,7 +419,7 @@ pub(crate) async fn plan_scan_files(
 
     let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new(runtime.clone());
 
-    let manifest_file_contexts = plan_context.build_manifest_file_contexts(
+    let manifest_file_contexts = scan_context.build_manifest_file_contexts(
         manifest_files,
         manifest_entry_filter,
         manifest_entry_data_ctx_tx,
@@ -511,12 +511,11 @@ impl TableScan {
         let Some(plan_context) = self.plan_context.as_ref() else {
             return Ok(Box::pin(futures::stream::empty()));
         };
-
-        let manifest_list = plan_context.get_manifest_list().await?;
+        let manifest_files = plan_context.manifest_files().await?;
 
         plan_scan_files(
-            plan_context,
-            manifest_list.entries().to_vec(),
+            &plan_context.scan_context,
+            manifest_files,
             None,
             &self.runtime,
             self.concurrency_limit_manifest_files,
@@ -550,7 +549,7 @@ impl TableScan {
 
     /// Returns a reference to the snapshot of the table scan.
     pub fn snapshot(&self) -> Option<&SnapshotRef> {
-        self.plan_context.as_ref().map(|x| &x.snapshot)
+        self.plan_context.as_ref().map(|context| &context.snapshot)
     }
 }
 
@@ -573,7 +572,7 @@ async fn process_data_manifest_entry(
 
     if let Some(ref bound_predicates) = manifest_entry_context.bound_predicates {
         let BoundPredicates {
-            snapshot_bound_predicate,
+            scan_bound_predicate,
             partition_bound_predicate,
         } = bound_predicates.as_ref();
 
@@ -592,7 +591,7 @@ async fn process_data_manifest_entry(
 
         // skip any data file whose metrics don't match this scan's filter
         if !InclusiveMetricsEvaluator::eval(
-            snapshot_bound_predicate,
+            scan_bound_predicate,
             manifest_entry_context.manifest_entry.data_file(),
             false,
         )? {
@@ -654,7 +653,7 @@ async fn process_delete_manifest_entry(
 
 pub(crate) struct BoundPredicates {
     partition_bound_predicate: BoundPredicate,
-    snapshot_bound_predicate: BoundPredicate,
+    scan_bound_predicate: BoundPredicate,
 }
 
 #[cfg(test)]
@@ -870,6 +869,7 @@ mod tests {
                 .plan_context
                 .as_ref()
                 .unwrap()
+                .scan_context
                 .name_mapping
                 .is_none()
         );
@@ -885,6 +885,7 @@ mod tests {
             .plan_context
             .as_ref()
             .unwrap()
+            .scan_context
             .name_mapping
             .as_ref()
             .expect("name_mapping should be parsed from the table property");
@@ -2080,7 +2081,13 @@ mod tests {
                 .unwrap_or_else(|e| panic!("scan of data column `{column_name}` failed: {e}"));
 
             assert_eq!(
-                table_scan.plan_context.as_ref().unwrap().field_ids.as_ref(),
+                table_scan
+                    .plan_context
+                    .as_ref()
+                    .unwrap()
+                    .scan_context
+                    .field_ids
+                    .as_ref(),
                 &[2]
             );
 
@@ -2092,6 +2099,7 @@ mod tests {
                     .plan_context
                     .as_ref()
                     .unwrap()
+                    .scan_context
                     .field_ids
                     .as_ref(),
                 &[1, 2]
