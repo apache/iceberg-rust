@@ -44,27 +44,11 @@ pub const MEMORY_CATALOG_WAREHOUSE: &str = "warehouse";
 const LOCATION: &str = "location";
 
 /// Builder for [`MemoryCatalog`].
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct MemoryCatalogBuilder {
-    config: MemoryCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
     kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
-}
-
-impl Default for MemoryCatalogBuilder {
-    fn default() -> Self {
-        Self {
-            config: MemoryCatalogConfig {
-                name: None,
-                warehouse: "".to_string(),
-                props: HashMap::new(),
-            },
-            storage_factory: None,
-            kms_client_factory: None,
-            runtime: None,
-        }
-    }
 }
 
 impl CatalogBuilder for MemoryCatalogBuilder {
@@ -86,69 +70,72 @@ impl CatalogBuilder for MemoryCatalogBuilder {
     }
 
     fn load(
-        mut self,
+        self,
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.config.name = Some(name.into());
+        let name = name.into();
 
         async move {
-            let mut catalog_properties = MemoryCatalogProperties::from_properties(&props)?;
-            catalog_properties.props.remove(MEMORY_CATALOG_WAREHOUSE);
-            self.config.warehouse = catalog_properties.warehouse;
-            self.config.props = catalog_properties.props;
-
-            if self.config.name.is_none() {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog name is required",
-                ))
-            } else if self.config.warehouse.is_empty() {
+            let catalog_properties = MemoryCatalogProperties::from_properties(&props)?;
+            if catalog_properties.warehouse.is_empty() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog warehouse is required",
                 ))
             } else {
+                let mut remaining_props = props;
+                remaining_props.remove(MEMORY_CATALOG_WAREHOUSE);
                 let runtime = self.runtime.unwrap_or_else(Runtime::current);
                 let kms_client = match self.kms_client_factory {
-                    Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
+                    Some(factory) => Some(factory.create_kms_client(&remaining_props).await?),
                     None => None,
                 };
-                MemoryCatalog::new(self.config, self.storage_factory, runtime, kms_client)
+                MemoryCatalog::new(
+                    name,
+                    catalog_properties,
+                    remaining_props,
+                    self.storage_factory,
+                    runtime,
+                    kms_client,
+                )
             }
         }
     }
 }
 
-#[derive(Properties)]
-struct MemoryCatalogProperties {
+/// Memory catalog properties parsed from a catalog property map.
+#[derive(Debug, Properties)]
+pub struct MemoryCatalogProperties {
     #[property(key = MEMORY_CATALOG_WAREHOUSE, default = "")]
     warehouse: String,
-    #[property(prefix = "")]
-    props: HashMap<String, String>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct MemoryCatalogConfig {
-    name: Option<String>,
-    warehouse: String,
-    props: HashMap<String, String>,
 }
 
 /// Memory catalog implementation.
-#[derive(Debug)]
 pub struct MemoryCatalog {
+    name: String,
+    properties: MemoryCatalogProperties,
     root_namespace_state: Mutex<NamespaceState>,
     file_io: FileIO,
-    warehouse_location: String,
     runtime: Runtime,
     kms_client: Option<Arc<dyn KeyManagementClient>>,
+}
+
+impl std::fmt::Debug for MemoryCatalog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryCatalog")
+            .field("name", &self.name)
+            .field("properties", &self.properties)
+            .finish_non_exhaustive()
+    }
 }
 
 impl MemoryCatalog {
     /// Creates a memory catalog.
     fn new(
-        config: MemoryCatalogConfig,
+        name: String,
+        properties: MemoryCatalogProperties,
+        file_io_props: HashMap<String, String>,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
         kms_client: Option<Arc<dyn KeyManagementClient>>,
@@ -157,9 +144,12 @@ impl MemoryCatalog {
         let factory = storage_factory.unwrap_or_else(|| Arc::new(MemoryStorageFactory));
 
         Ok(Self {
+            name,
+            properties,
             root_namespace_state: Mutex::new(NamespaceState::default()),
-            file_io: FileIOBuilder::new(factory).with_props(config.props).build(),
-            warehouse_location: config.warehouse,
+            file_io: FileIOBuilder::new(factory)
+                .with_props(file_io_props)
+                .build(),
             runtime,
             kms_client,
         })
@@ -309,7 +299,11 @@ impl Catalog for MemoryCatalog {
             let namespace_properties = root_namespace_state.get_properties(namespace_ident)?;
             let location_prefix = match namespace_properties.get(LOCATION) {
                 Some(namespace_location) => namespace_location.clone(),
-                None => format!("{}/{}", self.warehouse_location, namespace_ident.join("/")),
+                None => format!(
+                    "{}/{}",
+                    self.properties.warehouse,
+                    namespace_ident.join("/")
+                ),
             };
 
             let location = format!("{}/{}", location_prefix, table_ident.name());
@@ -471,11 +465,37 @@ pub(crate) mod tests {
         .unwrap();
 
         assert_eq!(properties.warehouse, "memory:///warehouse");
+    }
+
+    #[tokio::test]
+    async fn test_catalog_retains_name_and_properties() {
+        let catalog = MemoryCatalogBuilder::default()
+            .load(
+                "memory",
+                HashMap::from([
+                    (
+                        MEMORY_CATALOG_WAREHOUSE.to_string(),
+                        "memory:///warehouse".to_string(),
+                    ),
+                    ("custom.property".to_string(), "value".to_string()),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(catalog.name, "memory");
+        assert_eq!(catalog.properties.warehouse, "memory:///warehouse");
         assert_eq!(
-            properties.props[MEMORY_CATALOG_WAREHOUSE],
-            "memory:///warehouse"
+            catalog.file_io.config().props().get("custom.property"),
+            Some(&"value".to_string())
         );
-        assert_eq!(properties.props["custom.property"], "value");
+        assert!(
+            !catalog
+                .file_io
+                .config()
+                .props()
+                .contains_key(MEMORY_CATALOG_WAREHOUSE)
+        );
     }
 
     pub(crate) async fn new_memory_catalog() -> impl Catalog {
