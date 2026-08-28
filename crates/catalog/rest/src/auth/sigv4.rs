@@ -374,15 +374,16 @@ impl std::fmt::Debug for SigV4Signer {
 pub const REST_CATALOG_PROP_SIGNING_REGION: &str = "rest.signing-region";
 /// SigV4 signing name; defaults to [`SIGNING_NAME_DEFAULT`].
 pub const REST_CATALOG_PROP_SIGNING_NAME: &str = "rest.signing-name";
-/// Static SigV4 access key id. When absent, credentials come from the AWS
-/// default provider chain.
+/// Static SigV4 access key id. Unlike Iceberg Java, an absent one does not fall
+/// back to the AWS default provider chain; pass a provider to
+/// [`SigV4AuthManager::new`] for anything but static credentials.
 pub const REST_CATALOG_PROP_ACCESS_KEY_ID: &str = "rest.access-key-id";
 /// Static SigV4 secret access key (see [`REST_CATALOG_PROP_ACCESS_KEY_ID`]).
 pub const REST_CATALOG_PROP_SECRET_ACCESS_KEY: &str = "rest.secret-access-key";
 /// Static SigV4 session token (see [`REST_CATALOG_PROP_ACCESS_KEY_ID`]).
 pub const REST_CATALOG_PROP_SESSION_TOKEN: &str = "rest.session-token";
 
-/// Java's `REST_CATALOG_PROP_SIGNING_NAME_DEFAULT`: API Gateway and Lambda.
+/// Java's `REST_SIGNING_NAME_DEFAULT`: API Gateway and Lambda.
 pub const SIGNING_NAME_DEFAULT: &str = "execute-api";
 
 /// Trims a property, treating blank as absent.
@@ -504,6 +505,22 @@ impl SigV4AuthManager {
     }
 }
 
+impl SigV4AuthManager {
+    /// How to sign for `props`. Java rebuilds `AwsProperties` in every session
+    /// method, so a property-built manager follows the properties it is given;
+    /// an injected signer and provider are kept whatever they say.
+    async fn signing_for(
+        &self,
+        props: &HashMap<String, String>,
+    ) -> Result<(SigV4Signer, SharedCredentialsProvider)> {
+        if self.from_config {
+            from_props(props).await
+        } else {
+            Ok((self.signer.clone(), self.credentials.clone()))
+        }
+    }
+}
+
 #[async_trait]
 impl AuthManager for SigV4AuthManager {
     async fn init_session(
@@ -511,10 +528,11 @@ impl AuthManager for SigV4AuthManager {
         client: &HttpClient,
         props: &HashMap<String, String>,
     ) -> Result<Box<dyn AuthSession>> {
+        let (signer, credentials) = self.signing_for(props).await?;
         Ok(Box::new(SigV4Session {
             delegate: Arc::from(self.delegate.init_session(client, props).await?),
-            signer: self.signer.clone(),
-            credentials: self.credentials.clone(),
+            signer,
+            credentials,
         }))
     }
 
@@ -523,11 +541,7 @@ impl AuthManager for SigV4AuthManager {
         client: &HttpClient,
         props: &HashMap<String, String>,
     ) -> Result<Arc<dyn AuthSession>> {
-        let (signer, credentials) = if self.from_config {
-            from_props(props).await?
-        } else {
-            (self.signer.clone(), self.credentials.clone())
-        };
+        let (signer, credentials) = self.signing_for(props).await?;
         Ok(Arc::new(SigV4Session {
             delegate: self.delegate.catalog_session(client, props).await?,
             signer,
@@ -1568,8 +1582,10 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
         .unwrap();
 
         assert_eq!(signer.region, "cn-hangzhou");
-        // Java's REST_CATALOG_PROP_SIGNING_NAME_DEFAULT.
+        // Java's REST_SIGNING_NAME_DEFAULT.
         assert_eq!(signer.service, SIGNING_NAME_DEFAULT);
+        // Properties describe an Iceberg REST catalog, never a raw AWS one.
+        assert_eq!(signer.mode, PayloadHashMode::IcebergRest);
         let resolved = credentials.provide_credentials().await.unwrap();
         assert_eq!(resolved.access_key_id(), "AKID");
         assert_eq!(resolved.session_token(), Some("token"));
@@ -1622,5 +1638,220 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
             .await
             .unwrap_err();
         assert!(err.message().contains("credentials provider"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn the_signing_name_property_overrides_the_default() {
+        let (signer, _) = from_props(&props(&[
+            (REST_CATALOG_PROP_SIGNING_REGION, "us-east-1"),
+            (REST_CATALOG_PROP_SIGNING_NAME, "glue"),
+            (REST_CATALOG_PROP_ACCESS_KEY_ID, "AKID"),
+            (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "secret"),
+        ]))
+        .await
+        .unwrap();
+        assert_eq!(signer.service, "glue");
+        assert_ne!(signer.service, SIGNING_NAME_DEFAULT);
+    }
+
+    /// Whitespace would otherwise land in the credential scope and mismatch.
+    #[tokio::test]
+    async fn a_padded_property_is_trimmed_not_just_accepted() {
+        let (signer, credentials) = from_props(&props(&[
+            (REST_CATALOG_PROP_SIGNING_REGION, "  us-east-1  "),
+            (REST_CATALOG_PROP_ACCESS_KEY_ID, "  AKID  "),
+            (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "secret"),
+        ]))
+        .await
+        .unwrap();
+        assert_eq!(signer.region, "us-east-1");
+        assert_eq!(
+            credentials
+                .provide_credentials()
+                .await
+                .unwrap()
+                .access_key_id(),
+            "AKID"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_delegate_stops_the_request_unsigned() {
+        #[derive(Debug)]
+        struct Failing;
+        #[async_trait]
+        impl AuthSession for Failing {
+            async fn authenticate(&self, _: &mut HttpRequest) -> Result<()> {
+                Err(Error::new(ErrorKind::Unexpected, "token refresh failed"))
+            }
+        }
+
+        let session = SigV4Session {
+            delegate: Arc::new(Failing),
+            signer: test_signer(PayloadHashMode::IcebergRest),
+            credentials: test_credentials_provider(),
+        };
+        let mut request = request_with(&[]);
+        let err = session.authenticate(&mut request).await.unwrap_err();
+
+        // The delegate's own error surfaces, not an opaque signing failure.
+        assert!(err.message().contains("token refresh failed"), "{err}");
+        // Nothing was signed, so it cannot go out half-authenticated.
+        assert!(request.headers().get("authorization").is_none());
+    }
+
+    /// Records which delegate method ran and with which properties.
+    #[derive(Debug, Default)]
+    struct RecordingManager {
+        calls: Mutex<Vec<(&'static str, HashMap<String, String>)>>,
+    }
+
+    #[async_trait]
+    impl AuthManager for RecordingManager {
+        async fn init_session(
+            &self,
+            _: &HttpClient,
+            props: &HashMap<String, String>,
+        ) -> Result<Box<dyn AuthSession>> {
+            self.calls.lock().unwrap().push(("init", props.clone()));
+            Ok(Box::new(crate::auth::NoopSession))
+        }
+
+        async fn catalog_session(
+            &self,
+            _: &HttpClient,
+            props: &HashMap<String, String>,
+        ) -> Result<Arc<dyn AuthSession>> {
+            self.calls.lock().unwrap().push(("catalog", props.clone()));
+            Ok(Arc::new(crate::auth::NoopSession))
+        }
+    }
+
+    fn test_client() -> HttpClient {
+        HttpClient::new(
+            &crate::RestCatalogConfig::builder()
+                .uri("http://localhost".to_string())
+                .build(),
+        )
+        .unwrap()
+    }
+
+    /// Each session method must forward to its own delegate counterpart, with
+    /// the properties it was handed.
+    #[tokio::test]
+    async fn the_manager_forwards_to_the_matching_delegate_method() {
+        let delegate = Arc::new(RecordingManager::default());
+        let manager = SigV4AuthManager::new(
+            delegate.clone(),
+            test_signer(PayloadHashMode::IcebergRest),
+            test_credentials_provider(),
+        );
+        let init_props = props(&[("a", "1")]);
+        let catalog_props = props(&[("b", "2")]);
+
+        manager
+            .init_session(&test_client(), &init_props)
+            .await
+            .unwrap();
+        manager
+            .catalog_session(&test_client(), &catalog_props)
+            .await
+            .unwrap();
+
+        let calls = delegate.calls.lock().unwrap().clone();
+        assert_eq!(calls, vec![
+            ("init", init_props),
+            ("catalog", catalog_props)
+        ]);
+    }
+
+    /// The region and service a session actually signs with, read out of the
+    /// credential scope rather than its private fields.
+    async fn scope_of(session: &dyn AuthSession) -> String {
+        let mut request = request_with(&[]);
+        session.authenticate(&mut request).await.unwrap();
+        let auth = request
+            .headers()
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let scope = auth.split("Credential=").nth(1).unwrap();
+        scope.split(',').next().unwrap().to_string()
+    }
+
+    /// Java rebuilds `AwsProperties` in every session method, so a
+    /// property-built manager follows the merged /v1/config properties — in
+    /// `init_session` as much as in `catalog_session`.
+    #[tokio::test]
+    async fn a_property_built_manager_rebuilds_from_the_merged_properties() {
+        let base = props(&[
+            (REST_CATALOG_PROP_SIGNING_REGION, "us-east-1"),
+            (REST_CATALOG_PROP_ACCESS_KEY_ID, "AKID"),
+            (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "secret"),
+        ]);
+        let manager =
+            SigV4AuthManager::from_properties(Arc::new(RecordingManager::default()), &base)
+                .await
+                .unwrap();
+
+        let mut merged = base.clone();
+        merged.insert(REST_CATALOG_PROP_SIGNING_REGION.into(), "eu-west-1".into());
+        merged.insert(REST_CATALOG_PROP_SIGNING_NAME.into(), "glue".into());
+
+        for session in [
+            scope_of(
+                manager
+                    .catalog_session(&test_client(), &merged)
+                    .await
+                    .unwrap()
+                    .as_ref(),
+            )
+            .await,
+            scope_of(
+                manager
+                    .init_session(&test_client(), &merged)
+                    .await
+                    .unwrap()
+                    .as_ref(),
+            )
+            .await,
+        ] {
+            assert!(session.contains("/eu-west-1/glue/"), "{session}");
+            assert!(!session.contains("us-east-1"), "{session}");
+        }
+    }
+
+    /// An injected signer is the caller's choice, so properties never replace it.
+    #[tokio::test]
+    async fn an_injected_signer_survives_the_catalog_properties() {
+        let manager = SigV4AuthManager::new(
+            Arc::new(RecordingManager::default()),
+            SigV4Signer::new(
+                "ap-south-1".into(),
+                "custom".into(),
+                PayloadHashMode::StandardAws,
+            ),
+            test_credentials_provider(),
+        );
+        let overriding = props(&[
+            (REST_CATALOG_PROP_SIGNING_REGION, "eu-west-1"),
+            (REST_CATALOG_PROP_SIGNING_NAME, "glue"),
+            (REST_CATALOG_PROP_ACCESS_KEY_ID, "OTHER"),
+            (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "other"),
+        ]);
+
+        let scope = scope_of(
+            manager
+                .catalog_session(&test_client(), &overriding)
+                .await
+                .unwrap()
+                .as_ref(),
+        )
+        .await;
+        assert!(scope.starts_with("ak/"), "{scope}");
+        assert!(scope.contains("/ap-south-1/custom/"), "{scope}");
+        assert!(!scope.contains("eu-west-1"), "{scope}");
     }
 }
