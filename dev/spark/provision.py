@@ -150,3 +150,54 @@ FROM (
     SELECT EXPLODE(SEQUENCE(0, 1000)) AS s
 );
 """)
+
+#  Create a table partitioned by every temporal transform, so that a Rust test can
+#  compare the partition paths it renders against the paths Java actually wrote.
+#
+#  Iceberg treats two time transforms on one source column as redundant and
+#  rejects the spec, so each transform needs its own column. All four columns hold
+#  the same instant in a given row, which makes the four renderings of that row
+#  directly comparable.
+#
+#  `timestamp_ntz` avoids any session-timezone conversion, so the ordinals Spark
+#  computes depend only on the literals below.
+spark.sql("""
+CREATE OR REPLACE TABLE rest.default.test_temporal_partition_paths (
+    year_ts  timestamp_ntz,
+    month_ts timestamp_ntz,
+    day_ts   timestamp_ntz,
+    hour_ts  timestamp_ntz,
+    label    string
+)
+USING iceberg
+PARTITIONED BY (years(year_ts), months(month_ts), days(day_ts), hours(hour_ts))
+""")
+
+#  One row per rounding case. The pre-epoch row is the reason this table exists:
+#  the temporal ordinals are negative there, and Java rounds them with
+#  `Math.floorDiv`/`floorMod` rather than truncating division, so it is the case a
+#  hand-computed expectation is most likely to get wrong.
+spark.sql("""
+INSERT INTO rest.default.test_temporal_partition_paths VALUES
+    (
+        CAST('2017-06-15 16:00:00' AS TIMESTAMP_NTZ),
+        CAST('2017-06-15 16:00:00' AS TIMESTAMP_NTZ),
+        CAST('2017-06-15 16:00:00' AS TIMESTAMP_NTZ),
+        CAST('2017-06-15 16:00:00' AS TIMESTAMP_NTZ),
+        'after epoch'
+    ),
+    (
+        CAST('1970-01-01 00:00:00' AS TIMESTAMP_NTZ),
+        CAST('1970-01-01 00:00:00' AS TIMESTAMP_NTZ),
+        CAST('1970-01-01 00:00:00' AS TIMESTAMP_NTZ),
+        CAST('1970-01-01 00:00:00' AS TIMESTAMP_NTZ),
+        'at epoch'
+    ),
+    (
+        CAST('1969-12-31 23:00:00' AS TIMESTAMP_NTZ),
+        CAST('1969-12-31 23:00:00' AS TIMESTAMP_NTZ),
+        CAST('1969-12-31 23:00:00' AS TIMESTAMP_NTZ),
+        CAST('1969-12-31 23:00:00' AS TIMESTAMP_NTZ),
+        'before epoch'
+    );
+""")
