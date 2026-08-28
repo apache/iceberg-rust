@@ -29,6 +29,7 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     Runtime, TableCommit, TableCreation, TableIdent,
 };
+use iceberg_property_macro::Properties;
 use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
 use sqlx::{Any, AnyPool, Column, Executor, Row, Transaction};
 
@@ -102,7 +103,10 @@ where
 /// Builder for [`SqlCatalog`]
 #[derive(Debug)]
 pub struct SqlCatalogBuilder {
-    config: SqlCatalogConfig,
+    uri: String,
+    warehouse_location: String,
+    sql_bind_style: SqlBindStyle,
+    props: HashMap<String, String>,
     storage_factory: Option<Arc<dyn StorageFactory>>,
     kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
@@ -111,14 +115,10 @@ pub struct SqlCatalogBuilder {
 impl Default for SqlCatalogBuilder {
     fn default() -> Self {
         Self {
-            config: SqlCatalogConfig {
-                uri: "".to_string(),
-                name: "".to_string(),
-                warehouse_location: "".to_string(),
-                sql_bind_style: SqlBindStyle::DollarNumeric,
-                schema_version: None,
-                props: HashMap::new(),
-            },
+            uri: String::new(),
+            warehouse_location: String::new(),
+            sql_bind_style: SqlBindStyle::DollarNumeric,
+            props: HashMap::new(),
             storage_factory: None,
             kms_client_factory: None,
             runtime: None,
@@ -132,7 +132,7 @@ impl SqlCatalogBuilder {
     /// If `SQL_CATALOG_PROP_URI` has a value set in `props` during `SqlCatalogBuilder::load`,
     /// that value takes precedence, and the value specified by this method will not be used.
     pub fn uri(mut self, uri: impl Into<String>) -> Self {
-        self.config.uri = uri.into();
+        self.uri = uri.into();
         self
     }
 
@@ -141,7 +141,7 @@ impl SqlCatalogBuilder {
     /// If `SQL_CATALOG_PROP_WAREHOUSE` has a value set in `props` during `SqlCatalogBuilder::load`,
     /// that value takes precedence, and the value specified by this method will not be used.
     pub fn warehouse_location(mut self, location: impl Into<String>) -> Self {
-        self.config.warehouse_location = location.into();
+        self.warehouse_location = location.into();
         self
     }
 
@@ -150,7 +150,7 @@ impl SqlCatalogBuilder {
     /// If `SQL_CATALOG_PROP_BIND_STYLE` has a value set in `props` during `SqlCatalogBuilder::load`,
     /// that value takes precedence, and the value specified by this method will not be used.
     pub fn sql_bind_style(mut self, sql_bind_style: SqlBindStyle) -> Self {
-        self.config.sql_bind_style = sql_bind_style;
+        self.sql_bind_style = sql_bind_style;
         self
     }
 
@@ -160,7 +160,7 @@ impl SqlCatalogBuilder {
     /// those values will take precedence.
     pub fn props(mut self, props: HashMap<String, String>) -> Self {
         for (k, v) in props {
-            self.config.props.insert(k, v);
+            self.props.insert(k, v);
         }
         self
     }
@@ -172,7 +172,7 @@ impl SqlCatalogBuilder {
     /// If the same key has values set in `props` during `SqlCatalogBuilder::load`,
     /// those values will take precedence.
     pub fn prop(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.config.props.insert(key.into(), value.into());
+        self.props.insert(key.into(), value.into());
         self
     }
 }
@@ -196,61 +196,68 @@ impl CatalogBuilder for SqlCatalogBuilder {
     }
 
     fn load(
-        mut self,
+        self,
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        for (k, v) in props {
-            self.config.props.insert(k, v);
-        }
-
-        if let Some(uri) = self.config.props.remove(SQL_CATALOG_PROP_URI) {
-            self.config.uri = uri;
-        }
-        if let Some(warehouse_location) = self.config.props.remove(SQL_CATALOG_PROP_WAREHOUSE) {
-            self.config.warehouse_location = warehouse_location;
-        }
-
         let name = name.into();
 
-        let mut valid_sql_bind_style = true;
-
-        // Accept the preferred `sql.bind-style` key, falling back to the legacy `sql_bind_style`.
-        let sql_bind_style = self
-            .config
-            .props
-            .remove(SQL_CATALOG_PROP_BIND_STYLE)
-            .or_else(|| self.config.props.remove(SQL_CATALOG_PROP_BIND_STYLE_LEGACY));
-
-        // Validate the SQL bind style
-        if let Some(sql_bind_style) = sql_bind_style {
-            if let Ok(sql_bind_style) = SqlBindStyle::from_str(&sql_bind_style) {
-                self.config.sql_bind_style = sql_bind_style;
-            } else {
-                valid_sql_bind_style = false;
-            }
-        }
-
-        // Parse the requested schema version up front so invalid values fail fast rather than
-        // silently falling back to V0.
-        let mut valid_schema_version = true;
-        if let Some(schema_version) = self.config.props.remove(SQL_CATALOG_PROP_SCHEMA_VERSION) {
-            match SchemaVersion::from_str(&schema_version) {
-                Ok(schema_version) => self.config.schema_version = Some(schema_version),
-                Err(_) => valid_schema_version = false,
-            }
-        }
-
-        let valid_name = !name.trim().is_empty();
-
         async move {
-            if !valid_name {
-                Err(Error::new(
+            if name.trim().is_empty() {
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name cannot be empty",
-                ))
-            } else if !valid_sql_bind_style {
-                Err(Error::new(
+                ));
+            }
+
+            let mut merged_props = self.props;
+            merged_props.extend(props);
+            let mut catalog_properties = SqlCatalogProperties::from_properties(&merged_props)?;
+            if !merged_props.contains_key(SQL_CATALOG_PROP_URI) {
+                catalog_properties.uri = self.uri;
+            }
+            if !merged_props.contains_key(SQL_CATALOG_PROP_WAREHOUSE) {
+                catalog_properties.warehouse_location = self.warehouse_location;
+            }
+            if !merged_props.contains_key(SQL_CATALOG_PROP_BIND_STYLE)
+                && !merged_props.contains_key(SQL_CATALOG_PROP_BIND_STYLE_LEGACY)
+            {
+                catalog_properties.sql_bind_style = self.sql_bind_style;
+            }
+
+            let runtime = match self.runtime {
+                Some(rt) => rt,
+                None => Runtime::try_current()?,
+            };
+            let kms_client = match self.kms_client_factory {
+                Some(factory) => Some(factory.create_kms_client(&merged_props).await?),
+                None => None,
+            };
+            SqlCatalog::new(
+                name,
+                catalog_properties,
+                merged_props,
+                self.storage_factory,
+                runtime,
+                kms_client,
+            )
+            .await
+        }
+    }
+}
+
+fn parse_sql_bind_style(
+    properties: &HashMap<String, String>,
+    key: &str,
+    additional_keys: &[&str],
+    default: SqlBindStyle,
+) -> Result<SqlBindStyle> {
+    properties
+        .get(key)
+        .or_else(|| additional_keys.iter().find_map(|key| properties.get(*key)))
+        .map_or(Ok(default), |value| {
+            SqlBindStyle::from_str(value).map_err(|_| {
+                Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "`{}` values are valid only if they're `{}` or `{}`",
@@ -258,49 +265,44 @@ impl CatalogBuilder for SqlCatalogBuilder {
                         SqlBindStyle::DollarNumeric,
                         SqlBindStyle::QMark
                     ),
-                ))
-            } else if !valid_schema_version {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "`{}` values are valid only if they're `{}` or `{}`",
-                        SQL_CATALOG_PROP_SCHEMA_VERSION,
-                        SchemaVersion::V0,
-                        SchemaVersion::V1
-                    ),
-                ))
-            } else {
-                self.config.name = name;
-                let runtime = match self.runtime {
-                    Some(rt) => rt,
-                    None => Runtime::try_current()?,
-                };
-                let kms_client = match self.kms_client_factory {
-                    Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
-                    None => None,
-                };
-                SqlCatalog::new(self.config, self.storage_factory, runtime, kms_client).await
-            }
-        }
-    }
+                )
+            })
+        })
 }
 
-/// A struct representing the SQL catalog configuration.
-///
-/// This struct contains various parameters that are used to configure a SQL catalog,
-/// such as the database URI, warehouse location, and file I/O settings.
-/// You are required to provide a `SqlBindStyle`, which determines how SQL statements will be bound to values in the catalog.
-/// The options available for this parameter include:
-/// - `SqlBindStyle::DollarNumeric`: Binds SQL statements using `$1`, `$2`, etc., as placeholders. This is for PostgreSQL databases.
-/// - `SqlBindStyle::QuestionMark`: Binds SQL statements using `?` as a placeholder. This is for MySQL and SQLite databases.
-#[derive(Debug)]
-struct SqlCatalogConfig {
+fn parse_schema_version(value: &str) -> Result<SchemaVersion> {
+    SchemaVersion::from_str(value).map_err(|_| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "`{}` values are valid only if they're `{}` or `{}`",
+                SQL_CATALOG_PROP_SCHEMA_VERSION,
+                SchemaVersion::V0,
+                SchemaVersion::V1
+            ),
+        )
+    })
+}
+
+#[derive(Debug, Properties)]
+pub(crate) struct SqlCatalogProperties {
+    #[property(key = SQL_CATALOG_PROP_URI, default = "")]
     uri: String,
-    name: String,
+    #[property(key = SQL_CATALOG_PROP_WAREHOUSE, default = "")]
     warehouse_location: String,
+    #[property(
+        key = SQL_CATALOG_PROP_BIND_STYLE,
+        additional_keys = [SQL_CATALOG_PROP_BIND_STYLE_LEGACY],
+        default = SqlBindStyle::DollarNumeric,
+        parse_properties_with = parse_sql_bind_style
+    )]
     sql_bind_style: SqlBindStyle,
+    #[property(
+        key = SQL_CATALOG_PROP_SCHEMA_VERSION,
+        default = None,
+        parse_with = parse_schema_version
+    )]
     schema_version: Option<SchemaVersion>,
-    props: HashMap<String, String>,
 }
 
 #[derive(Debug)]
@@ -310,10 +312,9 @@ struct SqlCatalogConfig {
 /// Catalogs can opt-in to automatic migration by configuring the `sql.schema-version` catalog property.
 pub struct SqlCatalog {
     name: String,
+    properties: SqlCatalogProperties,
     connection: AnyPool,
-    warehouse_location: String,
     fileio: FileIO,
-    sql_bind_style: SqlBindStyle,
     runtime: Runtime,
     kms_client: Option<Arc<dyn KeyManagementClient>>,
     schema_version: SchemaVersion,
@@ -390,7 +391,9 @@ pub enum SqlBindStyle {
 impl SqlCatalog {
     /// Create new sql catalog instance
     async fn new(
-        config: SqlCatalogConfig,
+        name: String,
+        properties: SqlCatalogProperties,
+        props: HashMap<String, String>,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
         kms_client: Option<Arc<dyn KeyManagementClient>>,
@@ -401,27 +404,20 @@ impl SqlCatalog {
                 "StorageFactory must be provided for SqlCatalog. Use `with_storage_factory` to configure it.",
             )
         })?;
-        // Forward catalog props so storage-backend keys reach the FileIO.
-        // Unrecognized keys are ignored by backends.
-        let fileio = FileIOBuilder::new(factory)
-            .with_props(config.props.clone())
-            .build();
-
         install_default_drivers();
-        let max_connections =
-            parse_pool_property(&config.props, "pool.max-connections", MAX_CONNECTIONS)?;
-        let idle_timeout = parse_pool_property(&config.props, "pool.idle-timeout", IDLE_TIMEOUT)?;
-        let test_before_acquire = parse_pool_property(
-            &config.props,
-            "pool.test-before-acquire",
-            TEST_BEFORE_ACQUIRE,
-        )?;
+        let max_connections = parse_pool_property(&props, "pool.max-connections", MAX_CONNECTIONS)?;
+        let idle_timeout = parse_pool_property(&props, "pool.idle-timeout", IDLE_TIMEOUT)?;
+        let test_before_acquire =
+            parse_pool_property(&props, "pool.test-before-acquire", TEST_BEFORE_ACQUIRE)?;
+        // Forward the complete property map so storage-backend keys reach FileIO.
+        // Unrecognized keys are ignored by backends.
+        let fileio = FileIOBuilder::new(factory).with_props(props).build();
 
         let pool = AnyPoolOptions::new()
             .max_connections(max_connections)
             .idle_timeout(Duration::from_secs(idle_timeout))
             .test_before_acquire(test_before_acquire)
-            .connect(&config.uri)
+            .connect(&properties.uri)
             .await
             .map_err(from_sqlx_error)?;
 
@@ -452,7 +448,7 @@ impl SqlCatalog {
         .map_err(from_sqlx_error)?;
 
         let detected_schema_version = SchemaVersion::detect(&pool).await?;
-        let expected_schema_version = config.schema_version;
+        let expected_schema_version = properties.schema_version;
 
         // Detect schema by describing columns. If expected is configured then automigrate, otherwise gracefully support older schemas.
         let schema_version = match (detected_schema_version, expected_schema_version) {
@@ -498,11 +494,10 @@ impl SqlCatalog {
         };
 
         Ok(SqlCatalog {
-            name: config.name.to_owned(),
+            name,
+            properties,
             connection: pool,
-            warehouse_location: config.warehouse_location,
             fileio,
-            sql_bind_style: config.sql_bind_style,
             runtime,
             kms_client,
             schema_version,
@@ -511,7 +506,7 @@ impl SqlCatalog {
 
     /// SQLX Any does not implement PostgresSQL bindings, so we have to do this.
     fn replace_placeholders(&self, query: &str) -> String {
-        match self.sql_bind_style {
+        match self.properties.sql_bind_style {
             SqlBindStyle::DollarNumeric => {
                 let mut count = 1;
                 query
@@ -1047,7 +1042,7 @@ impl Catalog for SqlCatalog {
                 None => {
                     format!(
                         "{}/{}",
-                        self.warehouse_location.clone(),
+                        self.properties.warehouse_location.clone(),
                         namespace.join("/")
                     )
                 }
@@ -1247,6 +1242,7 @@ mod tests {
         CATALOG_FIELD_RECORD_TYPE, CATALOG_TABLE_NAME, NAMESPACE_LOCATION_PROPERTY_KEY,
         NAMESPACE_TABLE_NAME, SQL_CATALOG_PROP_BIND_STYLE, SQL_CATALOG_PROP_BIND_STYLE_LEGACY,
         SQL_CATALOG_PROP_SCHEMA_VERSION, SQL_CATALOG_PROP_URI, SQL_CATALOG_PROP_WAREHOUSE,
+        SqlCatalogProperties,
     };
     use crate::{SchemaVersion, SqlBindStyle, SqlCatalog, SqlCatalogBuilder};
 
@@ -1255,6 +1251,45 @@ mod tests {
     fn temp_path() -> String {
         let temp_dir = TempDir::new().unwrap();
         temp_dir.path().to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn test_catalog_properties() {
+        let properties = SqlCatalogProperties::from_properties(&HashMap::from([
+            (
+                SQL_CATALOG_PROP_URI.to_string(),
+                "sqlite://catalog".to_string(),
+            ),
+            (
+                SQL_CATALOG_PROP_WAREHOUSE.to_string(),
+                "/warehouse".to_string(),
+            ),
+            (
+                SQL_CATALOG_PROP_BIND_STYLE_LEGACY.to_string(),
+                SqlBindStyle::QMark.to_string(),
+            ),
+            (
+                SQL_CATALOG_PROP_SCHEMA_VERSION.to_string(),
+                "V1".to_string(),
+            ),
+            ("pool.max-connections".to_string(), "5".to_string()),
+        ]))
+        .unwrap();
+
+        assert_eq!(properties.uri, "sqlite://catalog");
+        assert_eq!(properties.warehouse_location, "/warehouse");
+        assert_eq!(properties.sql_bind_style, SqlBindStyle::QMark);
+        assert_eq!(properties.schema_version, Some(SchemaVersion::V1));
+    }
+
+    #[test]
+    fn test_catalog_properties_defaults() {
+        let properties = SqlCatalogProperties::from_properties(&HashMap::new()).unwrap();
+
+        assert_eq!(properties.uri, "");
+        assert_eq!(properties.warehouse_location, "");
+        assert_eq!(properties.sql_bind_style, SqlBindStyle::DollarNumeric);
+        assert_eq!(properties.schema_version, None);
     }
 
     fn to_set<T: Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
@@ -1511,8 +1546,8 @@ mod tests {
         assert!(catalog.is_ok());
 
         let catalog = catalog.unwrap();
-        assert!(catalog.warehouse_location == warehouse_location);
-        assert!(catalog.sql_bind_style == SqlBindStyle::QMark);
+        assert!(catalog.properties.warehouse_location == warehouse_location);
+        assert!(catalog.properties.sql_bind_style == SqlBindStyle::QMark);
     }
 
     /// Overwriting an sqlite database with a non-existent path causes
@@ -1589,8 +1624,8 @@ mod tests {
         assert!(catalog.is_ok());
 
         let catalog = catalog.unwrap();
-        assert!(catalog.warehouse_location == warehouse_location);
-        assert!(catalog.sql_bind_style == SqlBindStyle::QMark);
+        assert!(catalog.properties.warehouse_location == warehouse_location);
+        assert!(catalog.properties.sql_bind_style == SqlBindStyle::QMark);
     }
 
     /// values assigned via props take precedence
@@ -1634,8 +1669,8 @@ mod tests {
         assert!(catalog.is_ok());
 
         let catalog = catalog.unwrap();
-        assert!(catalog.warehouse_location == warehouse_location);
-        assert!(catalog.sql_bind_style == SqlBindStyle::QMark);
+        assert!(catalog.properties.warehouse_location == warehouse_location);
+        assert!(catalog.properties.sql_bind_style == SqlBindStyle::QMark);
     }
 
     /// values assigned via props take precedence
@@ -1673,8 +1708,8 @@ mod tests {
         assert!(catalog.is_ok());
 
         let catalog = catalog.unwrap();
-        assert!(catalog.warehouse_location == warehouse_location);
-        assert!(catalog.sql_bind_style == SqlBindStyle::QMark);
+        assert!(catalog.properties.warehouse_location == warehouse_location);
+        assert!(catalog.properties.sql_bind_style == SqlBindStyle::QMark);
     }
 
     /// invalid value for `SqlBindStyle` causes catalog creation to fail
@@ -2883,6 +2918,6 @@ mod tests {
             .await
             .expect("legacy sql_bind_style key should still be accepted");
 
-        assert_eq!(catalog.sql_bind_style, SqlBindStyle::QMark);
+        assert_eq!(catalog.properties.sql_bind_style, SqlBindStyle::QMark);
     }
 }
