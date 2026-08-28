@@ -65,6 +65,42 @@ fn check_avro_bytes_serde(input: Vec<u8>, expected_datum: Datum, expected_type: 
     }
 }
 
+#[test]
+fn test_literal_serde_round_trip() {
+    let expected = Literal::Struct(Struct::from_iter([
+        Some(Literal::Primitive(PrimitiveLiteral::Boolean(true))),
+        Some(Literal::Primitive(PrimitiveLiteral::Int(i32::MIN))),
+        Some(Literal::Primitive(PrimitiveLiteral::Long(i64::MAX))),
+        Some(Literal::Primitive(PrimitiveLiteral::Float(
+            f32::INFINITY.into(),
+        ))),
+        Some(Literal::Primitive(PrimitiveLiteral::Double(
+            f64::NEG_INFINITY.into(),
+        ))),
+        Some(Literal::Primitive(PrimitiveLiteral::String(
+            "literal".to_string(),
+        ))),
+        Some(Literal::Primitive(PrimitiveLiteral::Binary(vec![
+            0, 1, 255,
+        ]))),
+        Some(Literal::Primitive(PrimitiveLiteral::Int128(i128::MIN))),
+        Some(Literal::Primitive(PrimitiveLiteral::UInt128(u128::MAX))),
+        Some(Literal::Primitive(PrimitiveLiteral::AboveMax)),
+        Some(Literal::Primitive(PrimitiveLiteral::BelowMin)),
+        Some(Literal::List(vec![Some(Literal::long(42)), None])),
+        Some(Literal::Map(Map::from([
+            (Literal::string("key"), Some(Literal::int(7))),
+            (Literal::long(8), None),
+        ]))),
+        None,
+    ]));
+
+    let serialized = serde_json::to_string(&expected).unwrap();
+    let actual = serde_json::from_str(&serialized).unwrap();
+
+    assert_eq!(expected, actual);
+}
+
 fn check_convert_with_avro(expected_literal: Literal, expected_type: &Type) {
     let fields = vec![NestedField::required(1, "col", expected_type.clone()).into()];
     let schema = Schema::builder()
