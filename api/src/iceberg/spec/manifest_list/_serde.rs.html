@@ -193,7 +193,7 @@
 <a href=#193 id=193 data-nosnippet>193</a>    <span class="kw">pub </span>deleted_rows_count: i64,
 <a href=#194 id=194 data-nosnippet>194</a>    <span class="kw">pub </span>partitions: <span class="prelude-ty">Option</span>&lt;Vec&lt;FieldSummary&gt;&gt;,
 <a href=#195 id=195 data-nosnippet>195</a>    <span class="kw">pub </span>key_metadata: <span class="prelude-ty">Option</span>&lt;ByteBuf&gt;,
-<a href=#196 id=196 data-nosnippet>196</a>    <span class="kw">pub </span>first_row_id: <span class="prelude-ty">Option</span>&lt;u64&gt;,
+<a href=#196 id=196 data-nosnippet>196</a>    <span class="kw">pub </span>first_row_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
 <a href=#197 id=197 data-nosnippet>197</a>}
 <a href=#198 id=198 data-nosnippet>198</a>
 <a href=#199 id=199 data-nosnippet>199</a><span class="kw">impl </span>ManifestFileV3 {
@@ -215,7 +215,7 @@
 <a href=#215 id=215 data-nosnippet>215</a>            deleted_rows_count: <span class="prelude-val">Some</span>(<span class="self">self</span>.deleted_rows_count.try_into()<span class="question-mark">?</span>),
 <a href=#216 id=216 data-nosnippet>216</a>            partitions: <span class="self">self</span>.partitions,
 <a href=#217 id=217 data-nosnippet>217</a>            key_metadata: <span class="self">self</span>.key_metadata.map(|b| b.into_vec()),
-<a href=#218 id=218 data-nosnippet>218</a>            first_row_id: <span class="self">self</span>.first_row_id,
+<a href=#218 id=218 data-nosnippet>218</a>            first_row_id: <span class="self">self</span>.first_row_id.map(|n| n.try_into()).transpose()<span class="question-mark">?</span>,
 <a href=#219 id=219 data-nosnippet>219</a>        };
 <a href=#220 id=220 data-nosnippet>220</a>
 <a href=#221 id=221 data-nosnippet>221</a>        <span class="prelude-val">Ok</span>(manifest_file)
@@ -372,7 +372,7 @@
 <a href=#372 id=372 data-nosnippet>372</a>                </span>.try_into()<span class="question-mark">?</span>,
 <a href=#373 id=373 data-nosnippet>373</a>            partitions: value.partitions,
 <a href=#374 id=374 data-nosnippet>374</a>            key_metadata,
-<a href=#375 id=375 data-nosnippet>375</a>            first_row_id: value.first_row_id,
+<a href=#375 id=375 data-nosnippet>375</a>            first_row_id: value.first_row_id.map(|n| n.try_into()).transpose()<span class="question-mark">?</span>,
 <a href=#376 id=376 data-nosnippet>376</a>        })
 <a href=#377 id=377 data-nosnippet>377</a>    }
 <a href=#378 id=378 data-nosnippet>378</a>}
