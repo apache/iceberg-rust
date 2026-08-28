@@ -15,12 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[test]
-fn reports_invalid_properties_derive_declarations() {
-    trybuild::TestCases::new().compile_fail("tests/compile-fail/derive-properties/*.rs");
+use std::collections::HashMap;
+
+use iceberg_property_macro::properties_view;
+
+fn parse_all(
+    _properties: &HashMap<String, String>,
+    _key: &str,
+    _additional_keys: &[&str],
+    default: u64,
+) -> iceberg::Result<u64> {
+    Ok(default)
 }
 
-#[test]
-fn reports_invalid_property_view_declarations() {
-    trybuild::TestCases::new().compile_fail("tests/compile-fail/properties-view/*.rs");
+properties_view! {
+    struct ParsePropertiesWithoutAdditionalKeys {
+        #[property(key = "value", default = 1, parse_properties_with = parse_all)]
+        value: u64,
+    }
 }
+
+fn main() {}

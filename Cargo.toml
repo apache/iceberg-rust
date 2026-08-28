@@ -39,7 +39,7 @@ version = "0.10.0"
 license = "Apache-2.0"
 repository = "https://github.com/apache/iceberg-rust"
 # Check the MSRV policy in README.md before changing this
-rust-version = "1.94"
+rust-version = "1.95"
 
 [workspace.lints.rust]
 unused_qualifications = "deny"
