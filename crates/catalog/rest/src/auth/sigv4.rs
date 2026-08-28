@@ -124,24 +124,11 @@ impl SigV4Signer {
         credentials: &aws_credential_types::Credentials,
         now: DateTime<Utc>,
     ) -> Result<()> {
-        use aws_sigv4::http_request::{
-            PayloadChecksumKind, PercentEncodingMode, SignableBody, SignableRequest,
-            SigningSettings, UriPathNormalizationMode, sign,
-        };
+        use aws_sigv4::http_request::{SignableBody, SignableRequest, sign};
         use aws_sigv4::sign::v4;
         use tracing::subscriber::NoSubscriber;
 
-        // Java branches on `encodedBody() == null`, so absent and empty differ.
-        let body: Option<Vec<u8>> = match request.body() {
-            crate::HttpRequestBody::Empty => None,
-            crate::HttpRequestBody::Buffered(bytes) => Some(bytes.to_vec()),
-            crate::HttpRequestBody::Streaming => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    "cannot sign a streaming request body",
-                ));
-            }
-        };
+        let body = signable_body(request)?;
         let content_header = content_sha256_header(body.as_deref(), self.mode);
 
         convert_headers(request);
@@ -158,36 +145,7 @@ impl SigV4Signer {
             .headers_mut()
             .insert(CONTENT_SHA256, content_header.parse().unwrap());
 
-        // The wire Host never carries userinfo, so signing it would mismatch
-        // and feed the password to the HMAC. Only hand-built requests have it.
-        if !request.url().username().is_empty() || request.url().password().is_some() {
-            let url = request.url_mut();
-            let _ = url.set_username("");
-            let _ = url.set_password(None);
-        }
-
-        // Both AWS and Java read `+` as a space, so this leaves the signature
-        // alone; it makes the sent URL agree with an RFC 3986 verifier too.
-        if let Some(query) = request.url().query().filter(|q| q.contains('+')) {
-            let unambiguous = query.replace('+', "%20");
-            request.url_mut().set_query(Some(&unambiguous));
-        }
-
-        let mut settings = SigningSettings::default();
-        // `Aws4Signer` defaults: normalize the path and double-encode it.
-        settings.percent_encoding_mode = PercentEncodingMode::Double;
-        settings.uri_path_normalization_mode = UriPathNormalizationMode::Enabled;
-        // The header is ours to set: IcebergRest puts base64 there, while the
-        // canonical request keeps hex.
-        settings.payload_checksum_kind = PayloadChecksumKind::NoHeader;
-        // In Java's ignore list but not the crate's defaults.
-        let mut excluded = settings.excluded_headers.take().unwrap_or_default();
-        excluded.extend([
-            "expect".into(),
-            "connection".into(),
-            "x-forwarded-for".into(),
-        ]);
-        settings.excluded_headers = Some(excluded);
+        rewrite_url_for_signing(request);
 
         let identity = credentials.clone().into();
         let params = v4::SigningParams::builder()
@@ -195,29 +153,14 @@ impl SigV4Signer {
             .region(&self.region)
             .name(&self.service)
             .time(now.into())
-            .settings(settings)
+            .settings(signing_settings())
             .build()
             .map_err(|e| {
                 Error::new(ErrorKind::Unexpected, "failed to build SigV4 params").with_source(e)
             })?
             .into();
 
-        // Skipping one would leave it unsigned but still on the wire, which
-        // AWS rejects for `x-amz-*` and is hard to diagnose.
-        let headers: Vec<(&str, &str)> = request
-            .headers()
-            .iter()
-            .map(|(n, v)| {
-                let v = v.to_str().map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("cannot sign non-UTF-8 header value for `{n}`"),
-                    )
-                    .with_source(e)
-                })?;
-                Ok((n.as_str(), v))
-            })
-            .collect::<Result<_>>()?;
+        let headers = signable_headers(request)?;
         let signable = SignableRequest::new(
             request.method().as_str(),
             request.url_str(),
@@ -238,6 +181,76 @@ impl SigV4Signer {
 
         update_request_headers(request, instructions, displaced_content_hash)
     }
+}
+
+/// The body to sign. Java branches on `encodedBody() == null`, so an absent
+/// body and an empty one hash differently.
+fn signable_body(request: &crate::HttpRequest) -> Result<Option<Vec<u8>>> {
+    match request.body() {
+        crate::HttpRequestBody::Empty => Ok(None),
+        crate::HttpRequestBody::Buffered(bytes) => Ok(Some(bytes.to_vec())),
+        crate::HttpRequestBody::Streaming => Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "cannot sign a streaming request body",
+        )),
+    }
+}
+
+/// The headers to sign. Skipping a non-UTF-8 one would leave it unsigned but
+/// still on the wire, which AWS rejects for `x-amz-*` and is hard to diagnose.
+fn signable_headers(request: &crate::HttpRequest) -> Result<Vec<(&str, &str)>> {
+    request
+        .headers()
+        .iter()
+        .map(|(n, v)| {
+            let v = v.to_str().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("cannot sign non-UTF-8 header value for `{n}`"),
+                )
+                .with_source(e)
+            })?;
+            Ok((n.as_str(), v))
+        })
+        .collect()
+}
+
+/// Drops userinfo, which the wire `Host` never carries, and rewrites `+` in the
+/// query. Both AWS and Java read `+` as a space, so the signature is unchanged;
+/// this makes the sent URL agree with an RFC 3986 verifier too.
+fn rewrite_url_for_signing(request: &mut crate::HttpRequest) {
+    if !request.url().username().is_empty() || request.url().password().is_some() {
+        let url = request.url_mut();
+        let _ = url.set_username("");
+        let _ = url.set_password(None);
+    }
+    if let Some(query) = request.url().query().filter(|q| q.contains('+')) {
+        let unambiguous = query.replace('+', "%20");
+        request.url_mut().set_query(Some(&unambiguous));
+    }
+}
+
+/// `Aws4Signer`'s settings: normalized double-encoded path, and Java's ignore
+/// list, which the crate's defaults cover only in part.
+fn signing_settings() -> aws_sigv4::http_request::SigningSettings {
+    use aws_sigv4::http_request::{
+        PayloadChecksumKind, PercentEncodingMode, SigningSettings, UriPathNormalizationMode,
+    };
+
+    let mut settings = SigningSettings::default();
+    settings.percent_encoding_mode = PercentEncodingMode::Double;
+    settings.uri_path_normalization_mode = UriPathNormalizationMode::Enabled;
+    // The header is ours to set: IcebergRest puts base64 there, while the
+    // canonical request keeps hex.
+    settings.payload_checksum_kind = PayloadChecksumKind::NoHeader;
+    let mut excluded = settings.excluded_headers.take().unwrap_or_default();
+    excluded.extend([
+        "expect".into(),
+        "connection".into(),
+        "x-forwarded-for".into(),
+    ]);
+    settings.excluded_headers = Some(excluded);
+    settings
 }
 
 /// Java's `convertHeaders`: renames `Authorization` so SigV4 can take the
