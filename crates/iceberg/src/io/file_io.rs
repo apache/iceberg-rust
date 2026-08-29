@@ -42,6 +42,20 @@ use crate::Result;
 /// OSS, Azure, etc.), use the
 /// [`iceberg-storage-opendal`](https://crates.io/crates/iceberg-storage-opendal) crate.
 ///
+/// # Serialization
+///
+/// `FileIO` serializes its storage configuration and factory, but not its cached storage
+/// instance. The storage cache is rebuilt lazily on first use after deserialization.
+///
+/// All storage configuration properties are included in the serialized representation. These
+/// properties may contain credentials or other sensitive values, so serialized `FileIO` data
+/// must be protected in transit and at rest by the application embedding this crate.
+///
+/// Storage factories are serialized through [`typetag`](https://docs.rs/typetag). The receiving
+/// binary must link the concrete factory implementation so it is registered for deserialization.
+/// Third-party factories must use `#[typetag::serde]` on their [`StorageFactory`]
+/// implementation.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -396,6 +410,7 @@ mod tests {
     use bytes::Bytes;
     use futures::AsyncReadExt;
     use futures::io::AllowStdIo;
+    use serde_json::json;
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
@@ -548,25 +563,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_file_io_serialization_roundtrip() {
+    async fn test_memory_file_io_serialization_roundtrip() {
         let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
-            .with_prop("key", "value")
+            .with_prop("test-property", "test-value")
+            .with_prop("s3.session-token", "test-token")
             .build();
 
-        // Initialize the storage cache before serializing. The cache is process-local and should
-        // be rebuilt from the factory and configuration after deserialization.
         file_io
             .new_output("memory://test/file.txt")
             .unwrap()
             .write("test".into())
             .await
             .unwrap();
+        assert!(file_io.storage.get().is_some());
 
-        let serialized = serde_json::to_string(&file_io).unwrap();
-        let deserialized: FileIO = serde_json::from_str(&serialized).unwrap();
+        let serialized = serde_json::to_value(&file_io).unwrap();
+        assert_eq!(
+            serialized,
+            json!({
+                "config": {"props": {
+                    "s3.session-token": "test-token",
+                    "test-property": "test-value"
+                }},
+                "factory": {"type": "MemoryStorageFactory"}
+            })
+        );
 
-        assert_eq!(deserialized.config().get("key"), Some(&"value".to_string()));
-        assert!(!deserialized.exists("memory://test/file.txt").await.unwrap());
+        let deserialized: FileIO = serde_json::from_value(serialized).unwrap();
+        assert!(deserialized.storage.get().is_none());
+        assert_eq!(
+            deserialized.config().get("test-property"),
+            Some(&"test-value".to_string())
+        );
+        assert_eq!(
+            deserialized.config().get("s3.session-token"),
+            Some(&"test-token".to_string())
+        );
 
         deserialized
             .new_output("memory://test/roundtrip.txt")
@@ -583,5 +615,46 @@ mod tests {
                 .unwrap(),
             Bytes::from("roundtrip")
         );
+        assert!(deserialized.storage.get().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_local_fs_file_io_serialization_roundtrip() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("roundtrip.txt");
+        let path = path.to_str().unwrap();
+        let file_io = FileIOBuilder::new(Arc::new(LocalFsStorageFactory))
+            .with_prop("test-property", "test-value")
+            .build();
+
+        file_io
+            .new_output(path)
+            .unwrap()
+            .write("roundtrip".into())
+            .await
+            .unwrap();
+        assert!(file_io.storage.get().is_some());
+
+        let serialized = serde_json::to_value(&file_io).unwrap();
+        assert_eq!(
+            serialized,
+            json!({
+                "config": {"props": {"test-property": "test-value"}},
+                "factory": {"type": "LocalFsStorageFactory"}
+            })
+        );
+
+        let deserialized: FileIO = serde_json::from_value(serialized).unwrap();
+        assert!(deserialized.storage.get().is_none());
+        assert_eq!(
+            deserialized.config().get("test-property"),
+            Some(&"test-value".to_string())
+        );
+        assert!(deserialized.exists(path).await.unwrap());
+        assert_eq!(
+            deserialized.new_input(path).unwrap().read().await.unwrap(),
+            Bytes::from("roundtrip")
+        );
+        assert!(deserialized.storage.get().is_some());
     }
 }

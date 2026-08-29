@@ -104,6 +104,13 @@ pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 ///
 /// Maps scheme to the corresponding OpenDalStorage storage variant.
 /// Use this factory with `FileIOBuilder::new(factory)` to create FileIO instances.
+///
+/// # Serialization
+///
+/// The custom AWS credential loader on the [`OpenDalStorageFactory::S3`] variant is
+/// process-local and is not serialized. After deserialization, S3 storage uses OpenDAL's normal
+/// credential resolution. Applications that require a custom loader must reconstruct the factory
+/// in the receiving process.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum OpenDalStorageFactory {
     /// Memory storage factory.

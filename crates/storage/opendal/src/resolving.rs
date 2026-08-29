@@ -140,6 +140,12 @@ fn build_storage_for_scheme(
 /// delegates operations to the appropriate [`OpenDalStorage`] variant based on
 /// the path scheme.
 ///
+/// # Serialization
+///
+/// The custom S3 credential loader is process-local and is not serialized. After
+/// deserialization, S3 storage uses OpenDAL's normal credential resolution. Applications that
+/// require a custom loader must reconstruct the factory in the receiving process.
+///
 /// # Example
 ///
 /// ```rust,ignore
