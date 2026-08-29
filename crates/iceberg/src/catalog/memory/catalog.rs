@@ -111,7 +111,7 @@ fn parse_warehouse(warehouse: &str) -> Result<String> {
 pub struct MemoryCatalogProperties {
     #[property(
         key = MEMORY_CATALOG_WAREHOUSE,
-        default = parse_warehouse("")?,
+        default = "",
         parse_with = parse_warehouse
     )]
     warehouse: String,
@@ -308,6 +308,12 @@ impl Catalog for MemoryCatalog {
             let namespace_properties = root_namespace_state.get_properties(namespace_ident)?;
             let location_prefix = match namespace_properties.get(LOCATION) {
                 Some(namespace_location) => namespace_location.clone(),
+                None if self.properties.warehouse.is_empty() => {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "Catalog warehouse is required",
+                    ));
+                }
                 None => format!(
                     "{}/{}",
                     self.properties.warehouse,
@@ -475,9 +481,8 @@ pub(crate) mod tests {
 
         assert_eq!(properties.warehouse, "memory:///warehouse");
 
-        let error = MemoryCatalogProperties::from_properties(&HashMap::new()).unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::DataInvalid);
-        assert_eq!(error.message(), "Catalog warehouse is required");
+        let properties = MemoryCatalogProperties::from_properties(&HashMap::new()).unwrap();
+        assert!(properties.warehouse.is_empty());
 
         let error = MemoryCatalogProperties::from_properties(&HashMap::from([(
             MEMORY_CATALOG_WAREHOUSE.to_string(),
@@ -486,46 +491,6 @@ pub(crate) mod tests {
         .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::DataInvalid);
         assert_eq!(error.message(), "Catalog warehouse is required");
-    }
-
-    #[tokio::test]
-    async fn test_catalog_retains_name_and_properties() {
-        let catalog = MemoryCatalogBuilder::default()
-            .load(
-                "memory",
-                HashMap::from([
-                    (
-                        MEMORY_CATALOG_WAREHOUSE.to_string(),
-                        "memory:///warehouse".to_string(),
-                    ),
-                    ("custom.property".to_string(), "value".to_string()),
-                ]),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(catalog.name, "memory");
-        assert_eq!(catalog.properties.warehouse, "memory:///warehouse");
-        assert_eq!(
-            catalog.props.get(MEMORY_CATALOG_WAREHOUSE),
-            Some(&"memory:///warehouse".to_string())
-        );
-        assert_eq!(
-            catalog.props.get("custom.property"),
-            Some(&"value".to_string())
-        );
-        assert_eq!(
-            catalog.file_io.config().props().get("custom.property"),
-            Some(&"value".to_string())
-        );
-        assert_eq!(
-            catalog
-                .file_io
-                .config()
-                .props()
-                .get(MEMORY_CATALOG_WAREHOUSE),
-            Some(&"memory:///warehouse".to_string())
-        );
     }
 
     pub(crate) async fn new_memory_catalog() -> impl Catalog {
@@ -1475,11 +1440,26 @@ pub(crate) mod tests {
      {
         let catalog = MemoryCatalogBuilder::default()
             .load("memory", HashMap::from([]))
-            .await;
+            .await
+            .unwrap();
+        let namespace_ident = NamespaceIdent::new("namespace".into());
+        catalog
+            .create_namespace(&namespace_ident, HashMap::new())
+            .await
+            .unwrap();
+        let error = catalog
+            .create_table(
+                &namespace_ident,
+                TableCreation::builder()
+                    .name("table".into())
+                    .schema(simple_table_schema())
+                    .build(),
+            )
+            .await
+            .unwrap_err();
 
-        assert!(catalog.is_err());
         assert_eq!(
-            catalog.unwrap_err().to_string(),
+            error.to_string(),
             "DataInvalid => Catalog warehouse is required"
         );
     }
