@@ -232,6 +232,16 @@ jobs:
             cargo test --no-fail-fast ${{ matrix.test-suite.args }}
           fi
 
+      # HDFS tests are `#[ignore]`d (docker fixture needs Linux host
+      # networking); opt them in here by test-name filter.
+      - name: Run HDFS integration tests
+        if: matrix.test-suite.name == 'default'
+        shell: bash
+        run: |
+          cargo nextest run ${{ matrix.test-suite.args }} \
+            --run-ignored=only \
+            -E 'test(file_io_hdfs)'
+
       - name: Stop Docker containers
         if: always() && matrix.test-suite.name == 'default'
         run: make docker-down

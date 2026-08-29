@@ -42,6 +42,7 @@ opendal-all = [
 opendal-azdls = ["opendal/services-azdls"]
 opendal-fs = ["opendal/services-fs"]
 opendal-gcs = ["opendal/services-gcs"]
+opendal-hdfs-native = ["opendal/services-hdfs-native"]
 opendal-hf = ["opendal/services-hf"]
 opendal-memory = ["opendal/services-memory"]
 opendal-oss = ["opendal/services-oss"]
