@@ -121,7 +121,6 @@ pub struct MemoryCatalogProperties {
 pub struct MemoryCatalog {
     name: String,
     properties: MemoryCatalogProperties,
-    props: HashMap<String, String>,
     root_namespace_state: Mutex<NamespaceState>,
     file_io: FileIO,
     runtime: Runtime,
@@ -133,7 +132,6 @@ impl std::fmt::Debug for MemoryCatalog {
         f.debug_struct("MemoryCatalog")
             .field("name", &self.name)
             .field("properties", &self.properties)
-            .field("props", &self.props)
             .finish_non_exhaustive()
     }
 }
@@ -154,10 +152,7 @@ impl MemoryCatalog {
         Ok(Self {
             name,
             properties,
-            file_io: FileIOBuilder::new(factory)
-                .with_props(props.clone())
-                .build(),
-            props,
+            file_io: FileIOBuilder::new(factory).with_props(props).build(),
             root_namespace_state: Mutex::new(NamespaceState::default()),
             runtime,
             kms_client,
@@ -481,9 +476,6 @@ pub(crate) mod tests {
 
         assert_eq!(properties.warehouse, "memory:///warehouse");
 
-        let properties = MemoryCatalogProperties::from_properties(&HashMap::new()).unwrap();
-        assert!(properties.warehouse.is_empty());
-
         let error = MemoryCatalogProperties::from_properties(&HashMap::from([(
             MEMORY_CATALOG_WAREHOUSE.to_string(),
             String::new(),
@@ -491,6 +483,13 @@ pub(crate) mod tests {
         .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::DataInvalid);
         assert_eq!(error.message(), "Catalog warehouse is required");
+    }
+
+    #[test]
+    fn test_catalog_properties_with_default_warehouse() {
+        let properties = MemoryCatalogProperties::from_properties(&HashMap::new()).unwrap();
+
+        assert_eq!(properties.warehouse, "");
     }
 
     pub(crate) async fn new_memory_catalog() -> impl Catalog {
