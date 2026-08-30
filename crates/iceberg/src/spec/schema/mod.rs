@@ -74,6 +74,8 @@ pub struct Schema {
     lowercase_name_to_id: HashMap<String, i32>,
     id_to_name: HashMap<i32, String>,
 
+    id_to_parent: HashMap<i32, i32>,
+
     field_id_to_accessor: HashMap<i32, Arc<StructAccessor>>,
 }
 
@@ -137,9 +139,10 @@ impl SchemaBuilder {
 
         let r#struct = StructType::new(self.fields);
         let id_to_field = index_by_id(&r#struct)?;
+        let id_to_parent = index_parents(&r#struct)?;
 
         Self::validate_identifier_ids(
-            &r#struct,
+            &id_to_parent,
             &id_to_field,
             self.identifier_field_ids.iter().copied(),
         )?;
@@ -168,6 +171,8 @@ impl SchemaBuilder {
             name_to_id,
             lowercase_name_to_id,
             id_to_name,
+
+            id_to_parent,
 
             field_id_to_accessor,
         };
@@ -251,11 +256,10 @@ impl SchemaBuilder {
     /// - Identifier fields may be nested in structs but cannot be nested within maps or lists.
     /// - A nested field cannot be used as an identifier field if it is nested in an optional struct, to avoid null values in identifiers.
     fn validate_identifier_ids(
-        r#struct: &StructType,
+        id_to_parent: &HashMap<i32, i32>,
         id_to_field: &HashMap<i32, NestedFieldRef>,
         identifier_field_ids: impl Iterator<Item = i32>,
     ) -> Result<()> {
-        let id_to_parent = index_parents(r#struct)?;
         for identifier_field_id in identifier_field_ids {
             let field = id_to_field.get(&identifier_field_id).ok_or_else(|| {
                 Error::new(
@@ -401,6 +405,24 @@ impl Schema {
     /// Get an accessor for retrieving data in a struct
     pub fn accessor_by_field_id(&self, field_id: i32) -> Option<Arc<StructAccessor>> {
         self.field_id_to_accessor.get(&field_id).cloned()
+    }
+
+    /// Returns true when every ancestor of `field_id` is required, so no null ancestor can make a
+    /// reference to this field evaluate to null. A top-level field has no ancestors and is
+    /// therefore trivially true.
+    ///
+    /// Mirrors Java's `UnboundPredicate.allAncestorFieldsAreRequired`, which is backed by
+    /// `TypeUtil.ancestorFields`. An ancestor that cannot be resolved returns false, so callers
+    /// fold conservatively rather than on an incomplete ancestry.
+    pub(crate) fn all_ancestors_required(&self, field_id: i32) -> bool {
+        let mut current = field_id;
+        while let Some(&parent_id) = self.id_to_parent.get(&current) {
+            match self.field_by_id(parent_id) {
+                Some(parent) if parent.required => current = parent_id,
+                _ => return false,
+            }
+        }
+        true
     }
 
     /// Check if this schema is identical to another schema semantically - excluding schema id.
@@ -1289,6 +1311,71 @@ table {
                 .get(&test_struct)
                 .unwrap(),
             Some(Datum::int(33))
+        );
+    }
+
+    #[test]
+    fn test_all_ancestors_required() {
+        let schema = table_schema_nested();
+
+        // Top-level fields have no ancestors, whatever their own optionality: `foo` (1) is
+        // optional, `bar` (2) is required, `person` (15) is optional.
+        assert!(schema.all_ancestors_required(1));
+        assert!(schema.all_ancestors_required(2));
+        assert!(schema.all_ancestors_required(15));
+
+        // `name` (16) and `age` (17) are nested in `person` (15), which is OPTIONAL -- so both are
+        // null whenever `person` is null. `age` is itself required, which is exactly the shape that
+        // used to fold `person.age IS NULL` to AlwaysFalse and prune matching rows.
+        assert!(!schema.all_ancestors_required(16));
+        assert!(!schema.all_ancestors_required(17));
+
+        // `qux` (4) is a required list of required elements (5).
+        assert!(schema.all_ancestors_required(5));
+
+        // `location` (11) is a required list whose element (12) is a required struct, so its
+        // `latitude` (13) has an all-required ancestry even though it is itself optional.
+        assert!(schema.all_ancestors_required(13));
+
+        // An unknown field id has no ancestry to contradict, matching Java's empty
+        // `ancestorFields` -> `allMatch` == true.
+        assert!(schema.all_ancestors_required(9999));
+    }
+
+    #[test]
+    fn test_all_ancestors_required_with_optional_ancestor() {
+        // outer (1, OPTIONAL struct) > mid (2, required struct) > leaf (3, required int)
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::optional(
+                    1,
+                    "outer",
+                    Struct(StructType::new(vec![
+                        NestedField::required(
+                            2,
+                            "mid",
+                            Struct(StructType::new(vec![
+                                NestedField::required(3, "leaf", Primitive(PrimitiveType::Int))
+                                    .into(),
+                            ])),
+                        )
+                        .into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        // `outer` itself is top-level, so it has no ancestors regardless of its own optionality.
+        assert!(schema.all_ancestors_required(1));
+
+        // Everything below it is reachable only through an optional field.
+        assert!(!schema.all_ancestors_required(2));
+        assert!(
+            !schema.all_ancestors_required(3),
+            "the walk must not stop at the required immediate parent `mid`"
         );
     }
 

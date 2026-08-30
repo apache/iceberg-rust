@@ -383,16 +383,20 @@ impl Bind for Predicate {
                 })
             }
             Predicate::Unary(expr) => {
-                let bound_expr = expr.bind(schema, case_sensitive)?;
+                let bound_expr = expr.bind(schema.clone(), case_sensitive)?;
 
                 match &bound_expr.op {
                     &PredicateOperator::IsNull => {
-                        if bound_expr.term.field().required {
+                        if bound_expr.term.field().required
+                            && schema.all_ancestors_required(bound_expr.term.field().id)
+                        {
                             return Ok(BoundPredicate::AlwaysFalse);
                         }
                     }
                     &PredicateOperator::NotNull => {
-                        if bound_expr.term.field().required {
+                        if bound_expr.term.field().required
+                            && schema.all_ancestors_required(bound_expr.term.field().id)
+                        {
                             return Ok(BoundPredicate::AlwaysTrue);
                         }
                     }
@@ -822,6 +826,7 @@ mod tests {
     use std::ops::Not;
     use std::sync::Arc;
 
+    use crate::ErrorKind;
     use crate::expr::Predicate::{AlwaysFalse, AlwaysTrue};
     use crate::expr::{Bind, BoundPredicate, Reference};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
@@ -1061,6 +1066,165 @@ mod tests {
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "True");
         test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    /// `outer` is an optional struct wrapping `mid`, a required struct wrapping `leaf`, a required
+    /// int. Every field below `outer` is required, so only a null `outer` can make `leaf` null.
+    fn schema_optional_ancestor() -> SchemaRef {
+        use crate::spec::StructType;
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(
+                        1,
+                        "outer",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(
+                                2,
+                                "mid",
+                                Type::Struct(StructType::new(vec![
+                                    NestedField::required(
+                                        3,
+                                        "leaf",
+                                        Type::Primitive(PrimitiveType::Int),
+                                    )
+                                    .into(),
+                                ])),
+                            )
+                            .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// Same shape, but every field is required, so `leaf` cannot be null.
+    fn schema_required_ancestor() -> SchemaRef {
+        use crate::spec::StructType;
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(
+                        1,
+                        "outer",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(
+                                2,
+                                "mid",
+                                Type::Struct(StructType::new(vec![
+                                    NestedField::required(
+                                        3,
+                                        "leaf",
+                                        Type::Primitive(PrimitiveType::Int),
+                                    )
+                                    .into(),
+                                ])),
+                            )
+                            .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// A required leaf under an optional ancestor is null whenever that ancestor is null, so
+    /// `IS NULL` must survive binding rather than fold to `AlwaysFalse` and prune those rows.
+    #[test]
+    fn test_bind_is_null_required_leaf_optional_ancestor_does_not_fold() {
+        let bound_expr = Reference::new("outer.mid.leaf")
+            .is_null()
+            .bind(schema_optional_ancestor(), true)
+            .unwrap();
+        assert_eq!(&format!("{bound_expr}"), "outer.mid.leaf IS NULL");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_is_not_null_required_leaf_optional_ancestor_does_not_fold() {
+        let bound_expr = Reference::new("outer.mid.leaf")
+            .is_not_null()
+            .bind(schema_optional_ancestor(), true)
+            .unwrap();
+        assert_eq!(&format!("{bound_expr}"), "outer.mid.leaf IS NOT NULL");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    /// A struct-typed reference cannot bind at all yet: `build_accessors` registers accessors only
+    /// for primitive leaves, so `Reference::bind` fails before the unary fold is reached. Pins the
+    /// current boundary — the fold above is exercised through primitive leaves only until complex
+    /// columns get accessors.
+    #[test]
+    fn test_bind_is_null_on_struct_reference_is_unsupported() {
+        let err = Reference::new("outer.mid")
+            .is_null()
+            .bind(schema_optional_ancestor(), true)
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message().contains("Accessor for Field outer.mid"),
+            "unexpected message: {err}"
+        );
+    }
+
+    /// With every ancestor required, the fold is sound and must still happen — this is the
+    /// optimization the ancestor check is careful not to give up.
+    #[test]
+    fn test_bind_is_null_required_leaf_required_ancestors_folds() {
+        let schema = schema_required_ancestor();
+        let bound_expr = Reference::new("outer.mid.leaf")
+            .is_null()
+            .bind(schema.clone(), true)
+            .unwrap();
+        assert_eq!(&format!("{bound_expr}"), "False");
+
+        let bound_expr = Reference::new("outer.mid.leaf")
+            .is_not_null()
+            .bind(schema, true)
+            .unwrap();
+        assert_eq!(&format!("{bound_expr}"), "True");
+    }
+
+    /// An optional leaf folds on neither schema, regardless of ancestry.
+    #[test]
+    fn test_bind_is_null_optional_leaf_never_folds() {
+        use crate::spec::StructType;
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(
+                        1,
+                        "outer",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(2, "leaf", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let bound_expr = Reference::new("outer.leaf")
+            .is_null()
+            .bind(schema.clone(), true)
+            .unwrap();
+        assert_eq!(&format!("{bound_expr}"), "outer.leaf IS NULL");
+
+        let bound_expr = Reference::new("outer.leaf")
+            .is_not_null()
+            .bind(schema, true)
+            .unwrap();
+        assert_eq!(&format!("{bound_expr}"), "outer.leaf IS NOT NULL");
     }
 
     #[test]
