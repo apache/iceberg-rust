@@ -65,45 +65,39 @@ fn collect_scan_field_ids(
     column_names: Option<&[String]>,
     case_sensitive: bool,
 ) -> Result<Vec<i32>> {
-    let mut field_ids = vec![];
-    let column_names = column_names.map(<[String]>::to_vec).unwrap_or_else(|| {
-        schema
-            .as_struct()
-            .fields()
-            .iter()
-            .map(|f| f.name.clone())
-            .collect()
-    });
+    let Some(column_names) = column_names else {
+        return Ok(schema.as_struct().fields().iter().map(|f| f.id).collect());
+    };
 
-    for column_name in column_names.iter() {
-        if is_metadata_column_name(column_name) {
-            field_ids.push(get_metadata_field_id(column_name)?);
-            continue;
-        }
+    column_names
+        .iter()
+        .map(|column_name| {
+            if is_metadata_column_name(column_name) {
+                return get_metadata_field_id(column_name);
+            }
 
-        let field_id = resolve_field_id(schema, column_name, case_sensitive).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Column {column_name} not found in table. Schema: {schema}"),
-            )
-        })?;
-
-        schema
-            .as_struct()
-            .field_by_id(field_id)
-            .ok_or_else(|| {
+            let field_id = resolve_field_id(schema, column_name, case_sensitive).ok_or_else(|| {
                 Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!(
-                        "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
-                    ),
+                    ErrorKind::DataInvalid,
+                    format!("Column {column_name} not found in table. Schema: {schema}"),
                 )
             })?;
 
-        field_ids.push(field_id);
-    }
+            schema
+                .as_struct()
+                .field_by_id(field_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::FeatureUnsupported,
+                        format!(
+                            "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
+                        ),
+                    )
+                })?;
 
-    Ok(field_ids)
+            Ok(field_id)
+        })
+        .collect()
 }
 
 fn bind_scan_predicate(
