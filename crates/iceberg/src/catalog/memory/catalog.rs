@@ -78,6 +78,15 @@ impl CatalogBuilder for MemoryCatalogBuilder {
 
         async move {
             let catalog_properties = MemoryCatalogProperties::from_properties(&props)?;
+            if catalog_properties.warehouse.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog warehouse is required",
+                ));
+            }
+
+            let mut props = props;
+            props.remove(MEMORY_CATALOG_WAREHOUSE);
             let runtime = self.runtime.unwrap_or_else(Runtime::current);
             let kms_client = match self.kms_client_factory {
                 Some(factory) => Some(factory.create_kms_client(&props).await?),
@@ -95,25 +104,10 @@ impl CatalogBuilder for MemoryCatalogBuilder {
     }
 }
 
-fn parse_warehouse(warehouse: &str) -> Result<String> {
-    if warehouse.is_empty() {
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Catalog warehouse is required",
-        ))
-    } else {
-        Ok(warehouse.to_string())
-    }
-}
-
 /// Memory catalog properties parsed from a catalog property map.
 #[derive(Debug, Properties)]
-pub struct MemoryCatalogProperties {
-    #[property(
-        key = MEMORY_CATALOG_WAREHOUSE,
-        default = "",
-        parse_with = parse_warehouse
-    )]
+pub(crate) struct MemoryCatalogProperties {
+    #[property(key = MEMORY_CATALOG_WAREHOUSE, default = "")]
     warehouse: String,
 }
 
@@ -303,12 +297,6 @@ impl Catalog for MemoryCatalog {
             let namespace_properties = root_namespace_state.get_properties(namespace_ident)?;
             let location_prefix = match namespace_properties.get(LOCATION) {
                 Some(namespace_location) => namespace_location.clone(),
-                None if self.properties.warehouse.is_empty() => {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "Catalog warehouse is required",
-                    ));
-                }
                 None => format!(
                     "{}/{}",
                     self.properties.warehouse,
@@ -465,31 +453,50 @@ pub(crate) mod tests {
 
     #[test]
     fn test_catalog_properties() {
-        let properties = MemoryCatalogProperties::from_properties(&HashMap::from([
-            (
-                MEMORY_CATALOG_WAREHOUSE.to_string(),
-                "memory:///warehouse".to_string(),
-            ),
-            ("custom.property".to_string(), "value".to_string()),
-        ]))
+        let properties = MemoryCatalogProperties::from_properties(&HashMap::from([(
+            MEMORY_CATALOG_WAREHOUSE.to_string(),
+            "memory:///warehouse".to_string(),
+        )]))
         .unwrap();
 
         assert_eq!(properties.warehouse, "memory:///warehouse");
-
-        let error = MemoryCatalogProperties::from_properties(&HashMap::from([(
-            MEMORY_CATALOG_WAREHOUSE.to_string(),
-            String::new(),
-        )]))
-        .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::DataInvalid);
-        assert_eq!(error.message(), "Catalog warehouse is required");
     }
 
     #[test]
-    fn test_catalog_properties_with_default_warehouse() {
-        let properties = MemoryCatalogProperties::from_properties(&HashMap::new()).unwrap();
+    fn test_catalog_properties_warehouse_defaults_to_empty() {
+        let missing = MemoryCatalogProperties::from_properties(&HashMap::new()).unwrap();
+        let explicitly_empty = MemoryCatalogProperties::from_properties(&HashMap::from([(
+            MEMORY_CATALOG_WAREHOUSE.to_string(),
+            String::new(),
+        )]))
+        .unwrap();
 
-        assert_eq!(properties.warehouse, "");
+        assert_eq!(missing.warehouse, "");
+        assert_eq!(explicitly_empty.warehouse, "");
+    }
+
+    #[tokio::test]
+    async fn test_catalog_forwards_custom_properties_to_file_io() {
+        let catalog = MemoryCatalogBuilder::default()
+            .load(
+                "memory",
+                HashMap::from([
+                    (
+                        MEMORY_CATALOG_WAREHOUSE.to_string(),
+                        "memory:///warehouse".to_string(),
+                    ),
+                    ("custom.property".to_string(), "value".to_string()),
+                ]),
+            )
+            .await
+            .unwrap();
+        let file_io_props = catalog.file_io.config().props();
+
+        assert_eq!(
+            file_io_props.get("custom.property"),
+            Some(&"value".to_string())
+        );
+        assert!(!file_io_props.contains_key(MEMORY_CATALOG_WAREHOUSE));
     }
 
     pub(crate) async fn new_memory_catalog() -> impl Catalog {
@@ -1435,32 +1442,28 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_table_throws_error_if_table_location_and_namespace_location_and_warehouse_location_are_missing()
-     {
-        let catalog = MemoryCatalogBuilder::default()
+    async fn test_load_throws_error_if_warehouse_is_missing() {
+        let error = MemoryCatalogBuilder::default()
             .load("memory", HashMap::from([]))
             .await
-            .unwrap();
-        let namespace_ident = NamespaceIdent::new("namespace".into());
-        catalog
-            .create_namespace(&namespace_ident, HashMap::new())
-            .await
-            .unwrap();
-        let error = catalog
-            .create_table(
-                &namespace_ident,
-                TableCreation::builder()
-                    .name("table".into())
-                    .schema(simple_table_schema())
-                    .build(),
+            .unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert_eq!(error.message(), "Catalog warehouse is required");
+    }
+
+    #[tokio::test]
+    async fn test_load_throws_error_if_warehouse_is_empty() {
+        let error = MemoryCatalogBuilder::default()
+            .load(
+                "memory",
+                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), String::new())]),
             )
             .await
             .unwrap_err();
 
-        assert_eq!(
-            error.to_string(),
-            "DataInvalid => Catalog warehouse is required"
-        );
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert_eq!(error.message(), "Catalog warehouse is required");
     }
 
     #[tokio::test]
