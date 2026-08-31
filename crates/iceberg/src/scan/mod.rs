@@ -2648,43 +2648,47 @@ pub mod tests {
         assert_eq!(string_arr.value(0), "Apache");
     }
 
-    #[test]
-    fn test_file_scan_task_serialize_deserialize() {
-        // Regression test for https://github.com/apache/iceberg-rust/issues/3089.
-        let test_fn = |task: FileScanTask| {
-            let serialized = serde_json::to_string(&task).unwrap();
-            let deserialized: FileScanTask = serde_json::from_str(&serialized).unwrap();
-
-            assert_eq!(task, deserialized);
-        };
-
-        // without predicate
-        let schema = Arc::new(
+    fn file_scan_task_test_schema(primitive_type: PrimitiveType) -> Arc<Schema> {
+        Arc::new(
             Schema::builder()
                 .with_fields(vec![Arc::new(NestedField::required(
                     1,
                     "x",
-                    Type::Primitive(PrimitiveType::Binary),
+                    Type::Primitive(primitive_type),
                 ))])
                 .build()
                 .unwrap(),
-        );
+        )
+    }
+
+    fn assert_file_scan_task_serde_round_trip(task: FileScanTask) {
+        // Regression test for https://github.com/apache/iceberg-rust/issues/3089.
+        let serialized = serde_json::to_string(&task).unwrap();
+        let deserialized: FileScanTask = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(task, deserialized);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_without_predicate() {
         let task = FileScanTask::builder()
             .with_data_file_path("data_file_path".to_string())
             .with_file_size_in_bytes(0)
             .with_start(0)
             .with_length(100)
             .with_project_field_ids(vec![1, 2, 3])
-            .with_schema(schema.clone())
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
             .with_record_count(Some(100))
             .with_first_row_id(Some(1000))
             .with_data_sequence_number(Some(5))
             .with_data_file_format(DataFileFormat::Parquet)
             .with_case_sensitive(false)
             .build();
-        test_fn(task);
+        assert_file_scan_task_serde_round_trip(task);
+    }
 
-        // with predicate
+    #[test]
+    fn test_file_scan_task_serde_with_predicate() {
         let task = FileScanTask::builder()
             .with_data_file_path("data_file_path".to_string())
             .with_file_size_in_bytes(0)
@@ -2692,37 +2696,32 @@ pub mod tests {
             .with_length(100)
             .with_project_field_ids(vec![1, 2, 3])
             .with_predicate(Some(BoundPredicate::AlwaysTrue))
-            .with_schema(schema.clone())
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
             .with_data_file_format(DataFileFormat::Avro)
             .with_case_sensitive(false)
             .build();
-        test_fn(task);
+        assert_file_scan_task_serde_round_trip(task);
+    }
 
-        // unpartitioned data has an empty partition struct and no partition spec
+    #[test]
+    fn test_unpartitioned_file_scan_task_serde() {
         let task = FileScanTask::builder()
             .with_data_file_path("data_file_path".to_string())
             .with_file_size_in_bytes(0)
             .with_start(0)
             .with_length(100)
             .with_project_field_ids(vec![1, 2, 3])
-            .with_schema(schema)
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
             .with_data_file_format(DataFileFormat::Parquet)
             .with_partition(Some(Struct::empty()))
             .with_case_sensitive(false)
             .build();
-        test_fn(task);
+        assert_file_scan_task_serde_round_trip(task);
+    }
 
-        // with every optional scan context field populated
-        let schema = Arc::new(
-            Schema::builder()
-                .with_fields(vec![Arc::new(NestedField::required(
-                    1,
-                    "x",
-                    Type::Primitive(PrimitiveType::Long),
-                ))])
-                .build()
-                .unwrap(),
-        );
+    #[test]
+    fn test_file_scan_task_serde_with_all_optional_fields() {
+        let schema = file_scan_task_test_schema(PrimitiveType::Long);
         let partition_spec = Arc::new(
             PartitionSpec::builder(schema.clone())
                 .add_partition_field("x", "x", Transform::Identity)
@@ -2764,7 +2763,7 @@ pub mod tests {
             .with_case_sensitive(true)
             .with_key_metadata(Some(vec![1, 2, 3].into_boxed_slice()))
             .build();
-        test_fn(task);
+        assert_file_scan_task_serde_round_trip(task);
     }
 
     #[tokio::test]
