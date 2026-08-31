@@ -22,8 +22,6 @@ use cache::*;
 mod context;
 use context::*;
 mod task;
-#[cfg(test)]
-pub(crate) mod test_utils;
 
 use std::sync::Arc;
 
@@ -653,13 +651,13 @@ mod tests {
         RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_POS,
     };
     use crate::scan::FileScanTask;
-    use crate::scan::test_utils::{TableTestFixture, assert_last_updated_seq_all};
     use crate::spec::{
         DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, DataFileFormat, Datum, MAIN_BRANCH,
         NestedField, Operation, PrimitiveType, Schema, Snapshot, Summary, TableMetadataBuilder,
         Type, UnboundPartitionSpec,
     };
     use crate::table::Table;
+    use crate::test_utils::scan::{TableTestFixture, assert_last_updated_seq_all};
     use crate::test_utils::test_runtime;
     use crate::{ErrorKind, TableIdent};
 

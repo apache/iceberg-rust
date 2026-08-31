@@ -289,9 +289,9 @@ mod tests {
     use expect_test::expect;
     use futures::TryStreamExt;
 
-    use crate::scan::test_utils::TableTestFixture;
     use crate::spec::TableMetadata;
     use crate::test_utils::check_record_batches;
+    use crate::test_utils::scan::TableTestFixture;
 
     #[tokio::test]
     async fn test_manifests_table() {
