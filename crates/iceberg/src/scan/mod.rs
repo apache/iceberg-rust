@@ -2692,8 +2692,22 @@ pub mod tests {
             .with_length(100)
             .with_project_field_ids(vec![1, 2, 3])
             .with_predicate(Some(BoundPredicate::AlwaysTrue))
-            .with_schema(schema)
+            .with_schema(schema.clone())
             .with_data_file_format(DataFileFormat::Avro)
+            .with_case_sensitive(false)
+            .build();
+        test_fn(task);
+
+        // unpartitioned data has an empty partition struct and no partition spec
+        let task = FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(0)
+            .with_start(0)
+            .with_length(100)
+            .with_project_field_ids(vec![1, 2, 3])
+            .with_schema(schema)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_partition(Some(Struct::empty()))
             .with_case_sensitive(false)
             .build();
         test_fn(task);

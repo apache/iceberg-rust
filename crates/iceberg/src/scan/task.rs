@@ -310,13 +310,10 @@ mod _serde {
     }
 
     fn partition_type(schema: &Schema, partition_spec: Option<&PartitionSpec>) -> Result<Type> {
-        let partition_spec = partition_spec.ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "FileScanTask partition requires a partition spec",
-            )
-        })?;
-        Ok(Type::Struct(partition_spec.partition_type(schema)?))
+        Ok(Type::Struct(match partition_spec {
+            Some(partition_spec) => partition_spec.partition_type(schema)?,
+            None => StructType::new(vec![]),
+        }))
     }
 
     impl From<FileScanTask> for FileScanTaskSerde {
