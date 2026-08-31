@@ -85,8 +85,6 @@ impl CatalogBuilder for MemoryCatalogBuilder {
                 ));
             }
 
-            let mut props = props;
-            props.remove(MEMORY_CATALOG_WAREHOUSE);
             let runtime = self.runtime.unwrap_or_else(Runtime::current);
             let kms_client = match self.kms_client_factory {
                 Some(factory) => Some(factory.create_kms_client(&props).await?),
@@ -106,7 +104,7 @@ impl CatalogBuilder for MemoryCatalogBuilder {
 
 /// Memory catalog properties parsed from a catalog property map.
 #[derive(Debug, Properties)]
-pub struct MemoryCatalogProperties {
+pub(crate) struct MemoryCatalogProperties {
     #[property(key = MEMORY_CATALOG_WAREHOUSE, default = "")]
     warehouse: String,
 }
@@ -476,7 +474,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_catalog_forwards_custom_properties_to_file_io() {
+    async fn test_catalog_forwards_properties_to_file_io() {
         let catalog = MemoryCatalogBuilder::default()
             .load(
                 "memory",
@@ -496,7 +494,10 @@ pub(crate) mod tests {
             file_io_props.get("custom.property"),
             Some(&"value".to_string())
         );
-        assert!(!file_io_props.contains_key(MEMORY_CATALOG_WAREHOUSE));
+        assert_eq!(
+            file_io_props.get(MEMORY_CATALOG_WAREHOUSE),
+            Some(&"memory:///warehouse".to_string())
+        );
     }
 
     pub(crate) async fn new_memory_catalog() -> impl Catalog {
