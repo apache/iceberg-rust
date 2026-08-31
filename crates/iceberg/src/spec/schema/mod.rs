@@ -1379,6 +1379,318 @@ table {
         );
     }
 
+    /// Schema from Java's `TestTypeUtil.ancestorFieldsInNestedSchema`: nested structs, a map with
+    /// struct key and value, and a list of structs, with field ids preserved.
+    fn schema_with_collections() -> Schema {
+        Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "data", Primitive(PrimitiveType::String)).into(),
+                // preferences: OPTIONAL struct, itself holding an OPTIONAL struct
+                NestedField::optional(
+                    3,
+                    "preferences",
+                    Struct(StructType::new(vec![
+                        NestedField::required(6, "feature1", Primitive(PrimitiveType::Boolean))
+                            .into(),
+                        NestedField::optional(7, "feature2", Primitive(PrimitiveType::Boolean))
+                            .into(),
+                        NestedField::optional(
+                            8,
+                            "inner_preferences",
+                            Struct(StructType::new(vec![
+                                NestedField::required(
+                                    12,
+                                    "feature3",
+                                    Primitive(PrimitiveType::Boolean),
+                                )
+                                .into(),
+                                NestedField::optional(
+                                    13,
+                                    "feature4",
+                                    Primitive(PrimitiveType::Boolean),
+                                )
+                                .into(),
+                            ])),
+                        )
+                        .into(),
+                    ])),
+                )
+                .into(),
+                // locations: REQUIRED map, required key struct and required value struct
+                NestedField::required(
+                    4,
+                    "locations",
+                    Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            9,
+                            Struct(StructType::new(vec![
+                                NestedField::required(
+                                    20,
+                                    "address",
+                                    Primitive(PrimitiveType::String),
+                                )
+                                .into(),
+                                NestedField::required(21, "city", Primitive(PrimitiveType::String))
+                                    .into(),
+                                NestedField::required(
+                                    22,
+                                    "state",
+                                    Primitive(PrimitiveType::String),
+                                )
+                                .into(),
+                                NestedField::required(23, "zip", Primitive(PrimitiveType::Int))
+                                    .into(),
+                            ])),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            10,
+                            Struct(StructType::new(vec![
+                                NestedField::required(14, "lat", Primitive(PrimitiveType::Float))
+                                    .into(),
+                                NestedField::required(15, "long", Primitive(PrimitiveType::Float))
+                                    .into(),
+                            ])),
+                            true,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+                // points: OPTIONAL list of OPTIONAL element structs
+                NestedField::optional(
+                    5,
+                    "points",
+                    List(ListType {
+                        element_field: NestedField::list_element(
+                            11,
+                            Struct(StructType::new(vec![
+                                NestedField::required(16, "x", Primitive(PrimitiveType::Long))
+                                    .into(),
+                                NestedField::required(17, "y", Primitive(PrimitiveType::Long))
+                                    .into(),
+                            ])),
+                            false,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    /// Ancestry runs through map keys, map values and list elements, not just struct fields.
+    ///
+    /// Port of Java's `TestTypeUtil.ancestorFieldsInNestedSchema`, which asserts the exact ancestor
+    /// chain per field id. `all_ancestors_required` collapses a chain to a bool, so each chain is
+    /// translated into its required-ness verdict here;
+    /// `test_all_ancestors_required_isolates_collection_hops` then pins the individual hops, which
+    /// a bool alone could otherwise conflate.
+    #[test]
+    fn test_all_ancestors_required_in_nested_schema() {
+        let schema = schema_with_collections();
+
+        // Top-level fields have no ancestors (Java: `ancestorFields` is empty).
+        assert!(schema.all_ancestors_required(1));
+        assert!(schema.all_ancestors_required(2));
+        assert!(schema.all_ancestors_required(3));
+        assert!(schema.all_ancestors_required(4));
+        assert!(schema.all_ancestors_required(5));
+
+        // Under `preferences` (3, optional). Java chains: 6/7/8 -> [preferences],
+        // 12/13 -> [inner_preferences, preferences]. All contain an optional field.
+        assert!(!schema.all_ancestors_required(6));
+        assert!(!schema.all_ancestors_required(7));
+        assert!(!schema.all_ancestors_required(8));
+        assert!(!schema.all_ancestors_required(12));
+        assert!(!schema.all_ancestors_required(13));
+
+        // Under `locations` (4, required map). Java chains: key 9 -> [locations],
+        // 20..23 -> [key, locations], value 10 -> [locations], 14/15 -> [value, locations].
+        // Map keys are always required, and every field here is required, so all hold.
+        assert!(schema.all_ancestors_required(9), "map key hop");
+        assert!(schema.all_ancestors_required(20));
+        assert!(schema.all_ancestors_required(21));
+        assert!(schema.all_ancestors_required(22));
+        assert!(schema.all_ancestors_required(23));
+        assert!(schema.all_ancestors_required(10), "map value hop");
+        assert!(schema.all_ancestors_required(14));
+        assert!(schema.all_ancestors_required(15));
+
+        // Under `points` (5, optional list) with an optional element. Java chains:
+        // element 11 -> [points], 16/17 -> [element, points].
+        assert!(!schema.all_ancestors_required(11), "list element hop");
+        assert!(!schema.all_ancestors_required(16));
+        assert!(!schema.all_ancestors_required(17));
+    }
+
+    /// Each collection hop must be walked in its own right. A bool result can hide a missing hop
+    /// whenever some *other* ancestor is already optional, so every case here makes exactly one
+    /// field optional and requires the verdict to flip.
+    #[test]
+    fn test_all_ancestors_required_isolates_collection_hops() {
+        // A required list whose ELEMENT is optional: only the element hop can produce `false`.
+        let list_optional_element = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "l",
+                    List(ListType {
+                        element_field: NestedField::list_element(
+                            2,
+                            Struct(StructType::new(vec![
+                                NestedField::required(3, "leaf", Primitive(PrimitiveType::Int))
+                                    .into(),
+                            ])),
+                            false,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        assert!(
+            !list_optional_element.all_ancestors_required(3),
+            "the optional list element must be walked, not skipped over to the required list"
+        );
+
+        // An optional list whose ELEMENT is required: only the list hop can produce `false`.
+        let optional_list_required_element = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::optional(
+                    1,
+                    "l",
+                    List(ListType {
+                        element_field: NestedField::list_element(
+                            2,
+                            Struct(StructType::new(vec![
+                                NestedField::required(3, "leaf", Primitive(PrimitiveType::Int))
+                                    .into(),
+                            ])),
+                            true,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        assert!(
+            !optional_list_required_element.all_ancestors_required(3),
+            "the walk must continue past the required element to the optional list"
+        );
+
+        // Fully required list: the verdict must flip back to true, proving the two cases above
+        // fail for their stated reason and not because collections are blanket-rejected.
+        let required_list_required_element = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "l",
+                    List(ListType {
+                        element_field: NestedField::list_element(
+                            2,
+                            Struct(StructType::new(vec![
+                                NestedField::required(3, "leaf", Primitive(PrimitiveType::Int))
+                                    .into(),
+                            ])),
+                            true,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        assert!(required_list_required_element.all_ancestors_required(3));
+
+        // A required map whose VALUE is optional: only the map-value hop can produce `false`.
+        // (The key hop cannot be exercised this way -- map keys are required by the spec, per
+        // `NestedField::map_key_element`.)
+        let map_optional_value = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "m",
+                    Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            2,
+                            Primitive(PrimitiveType::String),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            3,
+                            Struct(StructType::new(vec![
+                                NestedField::required(4, "leaf", Primitive(PrimitiveType::Int))
+                                    .into(),
+                            ])),
+                            false,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        assert!(
+            !map_optional_value.all_ancestors_required(4),
+            "the optional map value must be walked, not skipped over to the required map"
+        );
+
+        // An optional map with a required value: only the map hop can produce `false`.
+        let optional_map_required_value = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::optional(
+                    1,
+                    "m",
+                    Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            2,
+                            Primitive(PrimitiveType::String),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            3,
+                            Struct(StructType::new(vec![
+                                NestedField::required(4, "leaf", Primitive(PrimitiveType::Int))
+                                    .into(),
+                            ])),
+                            true,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        assert!(
+            !optional_map_required_value.all_ancestors_required(4),
+            "the walk must continue past the required value to the optional map"
+        );
+
+        // A map key nested under an optional map: the key itself is required, so `false` here can
+        // only come from walking through the map.
+        assert!(
+            !optional_map_required_value.all_ancestors_required(2),
+            "a required map key under an optional map still has an optional ancestor"
+        );
+    }
+
     #[test]
     fn test_highest_field_id() {
         let schema = table_schema_nested();
