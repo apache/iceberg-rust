@@ -1150,6 +1150,7 @@ mod tests {
     #[tokio::test]
     async fn test_predicates_with_numeric_promotion() {
         use arrow_array::{Decimal128Array, Float32Array};
+        use parquet::file::properties::EnabledStatistics;
 
         use crate::expr::{Bind, Reference};
         use crate::spec::Datum;
@@ -1193,6 +1194,20 @@ mod tests {
                 Datum::decimal_from_str("1000").unwrap(),
                 Datum::decimal_from_str("1").unwrap(),
             ),
+            (
+                Arc::new(
+                    Decimal128Array::from(vec![None, Some(-999), Some(100), Some(999)])
+                        .with_precision_and_scale(3, 2)
+                        .unwrap(),
+                ),
+                PrimitiveType::Decimal {
+                    precision: 4,
+                    scale: 2,
+                },
+                Datum::decimal_from_str("-10.00").unwrap(),
+                Datum::decimal_from_str("10.00").unwrap(),
+                Datum::decimal_from_str("1.00").unwrap(),
+            ),
         ];
         for (column, promoted_type, below, above, one) in cases {
             let schema = Arc::new(
@@ -1225,10 +1240,25 @@ mod tests {
             .unwrap();
             let dir = TempDir::new().unwrap();
             let path = dir.path().join("old-schema.parquet");
+            let props = WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .set_max_row_group_row_count(Some(3))
+                .set_data_page_row_count_limit(2)
+                .set_write_batch_size(1)
+                .build();
             let mut writer =
-                ArrowWriter::try_new(File::create(&path).unwrap(), batch.schema(), None).unwrap();
+                ArrowWriter::try_new(File::create(&path).unwrap(), batch.schema(), Some(props))
+                    .unwrap();
             writer.write(&batch).unwrap();
-            writer.close().unwrap();
+            let metadata = writer.close().unwrap();
+            assert_eq!(metadata.num_row_groups(), 2);
+            assert!(
+                metadata
+                    .row_group(0)
+                    .column(1)
+                    .column_index_offset()
+                    .is_some()
+            );
 
             let x = || Reference::new("x");
             let mut predicates = vec![
@@ -1260,54 +1290,69 @@ mod tests {
                     (x().not_equal_to(between.clone()), vec![2, 3, 4]),
                     (x().is_in([between.clone(), Datum::double(2.0)]), vec![]),
                     (x().is_not_in([between, Datum::double(2.0)]), vec![2, 3, 4]),
+                    // Rounding up to 1.0 also changes the other two inequalities.
+                    (x().less_than_or_equal_to(Datum::double(0.99999999)), vec![
+                        2,
+                    ]),
+                    (x().greater_than(Datum::double(0.99999999)), vec![3, 4]),
                 ]);
             }
+            // Decimal page-index decoding is not yet supported, even without promotion.
+            let row_selection_options: &[bool] = match promoted_type {
+                PrimitiveType::Decimal { .. } => &[false],
+                _ => &[false, true],
+            };
             for (predicate, expected) in predicates {
                 for row_group_filtering in [false, true] {
-                    for project_field_ids in [vec![1], vec![1, 2]] {
-                        let task = FileScanTask::builder()
-                            .with_file_size_in_bytes(path.metadata().unwrap().len())
-                            .with_start(0)
-                            .with_length(path.metadata().unwrap().len())
-                            .with_data_file_path(path.to_str().unwrap().to_string())
-                            .with_data_file_format(DataFileFormat::Parquet)
-                            .with_schema(schema.clone())
-                            .with_project_field_ids(project_field_ids)
-                            .with_case_sensitive(true)
-                            .with_predicate(Some(
-                                predicate.clone().bind(schema.clone(), true).unwrap(),
-                            ))
-                            .build();
-                        let reader =
-                            ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-                                .with_row_group_filtering_enabled(row_group_filtering)
+                    for &row_selection in row_selection_options {
+                        for project_field_ids in [vec![1], vec![1, 2]] {
+                            let filter_only = project_field_ids.len() == 1;
+                            let task = FileScanTask::builder()
+                                .with_file_size_in_bytes(path.metadata().unwrap().len())
+                                .with_start(0)
+                                .with_length(path.metadata().unwrap().len())
+                                .with_data_file_path(path.to_str().unwrap().to_string())
+                                .with_data_file_format(DataFileFormat::Parquet)
+                                .with_schema(schema.clone())
+                                .with_project_field_ids(project_field_ids)
+                                .with_case_sensitive(true)
+                                .with_predicate(Some(
+                                    predicate.clone().bind(schema.clone(), true).unwrap(),
+                                ))
                                 .build();
-                        let tasks =
-                            Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-                        let batches: Vec<RecordBatch> = reader
-                            .read(tasks)
-                            .unwrap()
-                            .stream()
-                            .try_collect()
-                            .await
-                            .unwrap();
-                        let actual: Vec<i32> = batches
-                            .iter()
-                            .flat_map(|batch| {
-                                batch
-                                    .column(0)
-                                    .as_any()
-                                    .downcast_ref::<Int32Array>()
-                                    .unwrap()
-                                    .values()
-                                    .iter()
-                                    .copied()
-                            })
-                            .collect();
-                        assert_eq!(
-                            actual, expected,
-                            "{promoted_type:?}: {predicate}, row_group_filtering={row_group_filtering}"
-                        );
+                            let reader =
+                                ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                                    .with_row_group_filtering_enabled(row_group_filtering)
+                                    .with_row_selection_enabled(row_selection)
+                                    .with_batch_size(1)
+                                    .build();
+                            let tasks = Box::pin(futures::stream::iter(vec![Ok(task)]))
+                                as FileScanTaskStream;
+                            let batches: Vec<RecordBatch> = reader
+                                .read(tasks)
+                                .unwrap()
+                                .stream()
+                                .try_collect()
+                                .await
+                                .unwrap();
+                            let actual: Vec<i32> = batches
+                                .iter()
+                                .flat_map(|batch| {
+                                    batch
+                                        .column(0)
+                                        .as_any()
+                                        .downcast_ref::<Int32Array>()
+                                        .unwrap()
+                                        .values()
+                                        .iter()
+                                        .copied()
+                                })
+                                .collect();
+                            assert_eq!(
+                                actual, expected,
+                                "{promoted_type:?}: {predicate}, row_group_filtering={row_group_filtering}, row_selection={row_selection}, filter_only={filter_only}"
+                            );
+                        }
                     }
                 }
             }

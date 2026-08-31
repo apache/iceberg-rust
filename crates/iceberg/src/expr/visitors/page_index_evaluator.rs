@@ -273,9 +273,14 @@ impl<'a> PageIndexEvaluator<'a> {
                 .enumerate()
                 .zip(row_counts.iter())
                 .map(|((i, (min, max)), &row_count)| {
+                    // Promote the value, not just the type label, for evolved columns.
+                    let to_datum = |&val| match field_type {
+                        PrimitiveType::Long => Datum::long(val),
+                        _ => Datum::new(field_type.clone(), PrimitiveLiteral::Int(val)),
+                    };
                     predicate(
-                        min.map(|&val| Datum::new(field_type.clone(), PrimitiveLiteral::Int(val))),
-                        max.map(|&val| Datum::new(field_type.clone(), PrimitiveLiteral::Int(val))),
+                        min.map(to_datum),
+                        max.map(to_datum),
                         PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
                     )
                 })
@@ -299,19 +304,16 @@ impl<'a> PageIndexEvaluator<'a> {
                 .enumerate()
                 .zip(row_counts.iter())
                 .map(|((i, (min, max)), &row_count)| {
+                    let to_datum = |&val| match field_type {
+                        PrimitiveType::Double => Datum::double(f64::from(val)),
+                        _ => Datum::new(
+                            field_type.clone(),
+                            PrimitiveLiteral::Float(OrderedFloat::from(val)),
+                        ),
+                    };
                     predicate(
-                        min.map(|&val| {
-                            Datum::new(
-                                field_type.clone(),
-                                PrimitiveLiteral::Float(OrderedFloat::from(val)),
-                            )
-                        }),
-                        max.map(|&val| {
-                            Datum::new(
-                                field_type.clone(),
-                                PrimitiveLiteral::Float(OrderedFloat::from(val)),
-                            )
-                        }),
+                        min.map(to_datum),
+                        max.map(to_datum),
                         PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
                     )
                 })
