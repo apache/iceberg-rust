@@ -413,6 +413,10 @@ impl OpenDalStorage {
         match self {
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { .. } => hf_batch_key(path),
+            // The URL host alone would merge distinct NameNodes that differ
+            // only by port; key by the effective NameNode instead.
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorage::Hdfs { config, .. } => hdfs_batch_key(config, path),
             _ => url::Url::parse(path)
                 .ok()
                 .and_then(|u| u.host_str().map(|s| s.to_string()))

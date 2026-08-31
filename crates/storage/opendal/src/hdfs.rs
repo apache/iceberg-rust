@@ -59,12 +59,14 @@ pub(crate) fn parse_hdfs_path(path: &str) -> Result<(Option<String>, &str)> {
             format!("Invalid hdfs path: {path}: {e}"),
         )
     })?;
-    if url.scheme() != "hdfs" {
+    // Non-special schemes parse even without `//` (e.g. `hdfs:x` is a valid
+    // non-hierarchical URL), so require the literal prefix before slicing.
+    let (Some(after_scheme), "hdfs") = (path.strip_prefix("hdfs://"), url.scheme()) else {
         return Err(Error::new(
             ErrorKind::DataInvalid,
             format!("Invalid hdfs path: {path}, expected scheme `hdfs://`"),
         ));
-    }
+    };
 
     let name_node = url.host_str().filter(|h| !h.is_empty()).map(|host| {
         url.port()
@@ -76,7 +78,6 @@ pub(crate) fn parse_hdfs_path(path: &str) -> Result<(Option<String>, &str)> {
     // lifetime. Slice the path component out of the original input instead;
     // it starts after the first `/` following the `hdfs://` prefix. Opendal
     // paths must not start with `/` (`Deleter::delete` rejects them).
-    let after_scheme = &path["hdfs://".len()..];
     let rel = match after_scheme.find('/') {
         Some(i) => after_scheme[i..].trim_start_matches('/'),
         None => "",
@@ -132,6 +133,21 @@ pub(crate) fn hdfs_create_operator<'a>(
     };
 
     Ok((op, relative_path))
+}
+
+/// Returns the `delete_stream` grouping key for a path: the effective
+/// NameNode, mirroring the operator-cache key so paths that resolve to
+/// different operators never share a deleter.
+pub(crate) fn hdfs_batch_key(config: &HdfsNativeConfig, path: &str) -> String {
+    config
+        .name_node
+        .clone()
+        .or_else(|| {
+            parse_hdfs_path(path)
+                .ok()
+                .and_then(|(name_node, _)| name_node)
+        })
+        .unwrap_or_default()
 }
 
 /// Build a new OpenDAL [`Operator`]: OpenDAL splits `name_node` on commas
@@ -234,6 +250,50 @@ mod tests {
         let err = parse_hdfs_path("not-a-url").unwrap_err();
 
         assert!(err.to_string().contains("Invalid hdfs path"));
+    }
+
+    #[test]
+    fn test_parse_hdfs_path_non_hierarchical_errors() {
+        // `hdfs:x` parses as a valid non-hierarchical URL; it must be
+        // rejected rather than panic on slicing.
+        for path in ["hdfs:x", "hdfs:/x", "hdfs:"] {
+            let err = parse_hdfs_path(path).unwrap_err();
+            assert!(err.to_string().contains("expected scheme `hdfs://`"));
+        }
+    }
+
+    #[test]
+    fn test_hdfs_batch_key_distinguishes_ports() {
+        let config = HdfsNativeConfig::default();
+
+        assert_eq!(
+            hdfs_batch_key(&config, "hdfs://namenode:8020/a"),
+            "hdfs://namenode:8020"
+        );
+        assert_eq!(
+            hdfs_batch_key(&config, "hdfs://namenode:9000/b"),
+            "hdfs://namenode:9000"
+        );
+    }
+
+    #[test]
+    fn test_hdfs_batch_key_configured_name_node_wins() {
+        let config = hdfs_config_parse(HashMap::from([(
+            HDFS_NAME_NODE.to_string(),
+            "hdfs://nn1:8020,hdfs://nn2:8020".to_string(),
+        )]))
+        .unwrap();
+
+        // All paths group under the configured NameNode, matching the
+        // single cached operator they resolve to.
+        assert_eq!(
+            hdfs_batch_key(&config, "hdfs://ns-a/x"),
+            "hdfs://nn1:8020,hdfs://nn2:8020"
+        );
+        assert_eq!(
+            hdfs_batch_key(&config, "hdfs:///y"),
+            "hdfs://nn1:8020,hdfs://nn2:8020"
+        );
     }
 
     #[test]
