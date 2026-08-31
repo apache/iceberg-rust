@@ -54,6 +54,13 @@ pub(crate) fn synthesize_row_id_column(
     let row_id: ArrayRef = match first_row_id {
         None => Arc::new(Int64Array::new_null(batch.num_rows())),
         Some(base) => {
+            if base < 0 {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("first_row_id must be non-negative, got {base}"),
+                ));
+            }
+
             let pos = column_by_field_id(&batch, RESERVED_FIELD_ID_POS).ok_or_else(|| {
                 Error::new(
                     ErrorKind::Unexpected,
@@ -202,6 +209,13 @@ mod tests {
     fn non_zero_start_position() {
         let out = synthesize_row_id_column(batch(vec![10, 11, 12], None), Some(100)).unwrap();
         assert_eq!(row_ids(&out), vec![Some(110), Some(111), Some(112)]);
+    }
+
+    #[test]
+    fn negative_first_row_id_is_rejected() {
+        let err = synthesize_row_id_column(batch(vec![0, 1, 2], None), Some(-1)).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(format!("{err}").contains("first_row_id must be non-negative"));
     }
 
     #[test]

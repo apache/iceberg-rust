@@ -340,7 +340,10 @@ impl FileScanTaskReader {
                 .schema()
                 .fields()
                 .iter()
-                .any(|f| f.name() == RESERVED_COL_NAME_ROW_ID);
+                .any(|f| {
+                    f.name() == RESERVED_COL_NAME_ROW_ID
+                        && f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_none()
+                });
 
         // Read the physical column only when first_row_id is set. A null first_row_id
         // nulls the whole column below (matching Java `ValueReaders.rowIds`).
@@ -2473,6 +2476,91 @@ mod tests {
 
         // Not rejected; `_row_id` is synthesized as first_row_id + pos.
         assert_row_id_column(&batches, &[Some(100), Some(101), Some(102)]);
+    }
+
+    #[tokio::test]
+    async fn test_row_id_name_collision_with_user_field_id() {
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+
+        // A user column may share the reserved metadata column's name. Its non-reserved
+        // field id distinguishes it from a physically-stored metadata column, so preserve
+        // the user values and synthesize the projected metadata column independently.
+        let user_field_id = 2;
+        let user_row_id_field = Field::new(RESERVED_COL_NAME_ROW_ID, DataType::Int64, true)
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                user_field_id.to_string(),
+            )]));
+        let user_values = Arc::new(Int64Array::from(vec![7i64, 8, 9])) as ArrayRef;
+        let file_path = write_plain_parquet(
+            dir,
+            "user_row_id_with_field_id.parquet",
+            vec![user_row_id_field],
+            vec![user_values],
+        );
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        user_field_id,
+                        RESERVED_COL_NAME_ROW_ID,
+                        Type::Primitive(PrimitiveType::Long),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema)
+            .with_project_field_ids(vec![user_field_id, RESERVED_FIELD_ID_ROW_ID])
+            .with_first_row_id(Some(100))
+            .with_case_sensitive(false)
+            .build();
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let batch = &batches[0];
+        let values_by_field_id = |field_id: i32| {
+            let index = batch
+                .schema()
+                .fields()
+                .iter()
+                .position(|field| {
+                    field
+                        .metadata()
+                        .get(PARQUET_FIELD_ID_META_KEY)
+                        .is_some_and(|id| id == &field_id.to_string())
+                })
+                .unwrap();
+            batch
+                .column(index)
+                .as_primitive::<arrow_array::types::Int64Type>()
+                .values()
+                .to_vec()
+        };
+
+        assert_eq!(values_by_field_id(user_field_id), vec![7, 8, 9]);
+        assert_eq!(values_by_field_id(RESERVED_FIELD_ID_ROW_ID), vec![
+            100, 101, 102
+        ]);
     }
 
     #[tokio::test]
