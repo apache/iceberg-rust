@@ -69,9 +69,6 @@ async fn test_temporal_partition_paths_match_java() {
         .unwrap();
 
     let metadata = table.metadata();
-    let schema = metadata.current_schema().clone();
-    let spec = metadata.default_partition_spec().clone();
-
     let snapshot = metadata
         .current_snapshot()
         .unwrap_or_else(|| panic!("`{TABLE}` should have a snapshot; is provisioning complete?"));
@@ -80,6 +77,18 @@ async fn test_temporal_partition_paths_match_java() {
     let mut rendered = HashSet::new();
     for manifest_file in manifest_list.entries() {
         let manifest = table.manifest_reader().read(manifest_file).await.unwrap();
+
+        // Render with the spec and schema the manifest was written against rather
+        // than the current ones, so that evolving the fixture cannot silently start
+        // rendering old files with a spec that never applied to them.
+        let spec = metadata
+            .partition_spec_by_id(manifest_file.partition_spec_id)
+            .expect("manifest should reference a spec the table still holds")
+            .clone();
+        let schema = metadata
+            .schema_by_id(manifest.metadata().schema_id())
+            .expect("manifest should reference a schema the table still holds")
+            .clone();
 
         for entry in manifest.entries().iter().filter(|entry| entry.is_alive()) {
             let data_file = entry.data_file();

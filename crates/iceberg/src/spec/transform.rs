@@ -21,7 +21,7 @@ use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-use chrono::{DateTime, Datelike};
+use chrono::Datelike;
 use fnv::FnvHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -37,6 +37,9 @@ use crate::expr::{
 use crate::spec::Literal;
 use crate::spec::datatypes::{PrimitiveType, Type};
 use crate::transform::{BoxedTransformFunction, create_transform_function};
+
+/// The year the Unix epoch falls in, which every temporal ordinal counts from.
+const UNIX_EPOCH_YEAR: i32 = 1970;
 
 /// Transform is used to transform predicates to partition predicates,
 /// in addition to transforming data values.
@@ -201,61 +204,57 @@ impl Transform {
     /// assert_eq!(Transform::Year.to_human_string(&int, None), "null");
     /// ```
     pub fn to_human_string(&self, field_type: &Type, value: Option<&Literal>) -> String {
-        let Some(value) = value else {
+        let Some(value) = value.and_then(Literal::as_primitive_literal) else {
             return "null".to_string();
         };
 
-        if let Some(value) = value.as_primitive_literal() {
-            let field_type = field_type.as_primitive_type().unwrap();
-            let datum = Datum::new(field_type.clone(), value);
-
-            match (self, datum.literal()) {
-                (Self::Void, _) => "null".to_string(),
-                // The temporal transforms produce an ordinal count since the Unix
-                // epoch, so `Datum::to_human_string` would render the raw count for
-                // `Year`, `Month` and `Hour`, and would leave `Day` dependent on the
-                // field type happening to be `date`. The Java reference
-                // implementation overrides `toHumanString` on each of these
-                // transforms and ignores the declared type, so do the same here.
-                // Any other literal falls through to the datum.
-                (Self::Year, PrimitiveLiteral::Int(ordinal)) => Self::human_year(*ordinal),
-                (Self::Month, PrimitiveLiteral::Int(ordinal)) => Self::human_month(*ordinal),
-                (Self::Day, PrimitiveLiteral::Int(ordinal)) => Self::human_day(*ordinal),
-                (Self::Hour, PrimitiveLiteral::Int(ordinal)) => Self::human_hour(*ordinal),
-                _ => datum.to_human_string(),
+        match (*self, value) {
+            (Self::Void, _) => "null".to_string(),
+            // The temporal transforms store an ordinal count since the Unix epoch,
+            // which the datum arm below cannot render: it would show the raw count
+            // for `Year`, `Month` and `Hour`, and would leave `Day` dependent on the
+            // field type happening to be `date`. Java overrides `toHumanString` on
+            // each of these four transforms and ignores the declared type, so do the
+            // same. Any other literal falls through to the datum.
+            (Self::Year, PrimitiveLiteral::Int(ordinal)) => Self::human_year(ordinal),
+            (Self::Month, PrimitiveLiteral::Int(ordinal)) => Self::human_month(ordinal),
+            (Self::Day, PrimitiveLiteral::Int(ordinal)) => Self::human_day(ordinal),
+            (Self::Hour, PrimitiveLiteral::Int(ordinal)) => Self::human_hour(ordinal),
+            (_, value) => {
+                let field_type = field_type.as_primitive_type().unwrap();
+                Datum::new(field_type.clone(), value).to_human_string()
             }
-        } else {
-            "null".to_string()
         }
     }
 
     /// Formats a year ordinal, the number of years since 1970, as `yyyy`.
     ///
-    /// Mirrors `TransformUtil.humanYear` in the Java reference implementation.
+    /// Mirrors the output of `TransformUtil.humanYear`.
     fn human_year(year_ordinal: i32) -> String {
-        format!("{:04}", DateTime::UNIX_EPOCH.year() + year_ordinal)
+        format!("{:04}", UNIX_EPOCH_YEAR + year_ordinal)
     }
 
     /// Formats a month ordinal, the number of months since 1970-01, as `yyyy-MM`.
     ///
-    /// Mirrors `TransformUtil.humanMonth`, which uses `Math.floorDiv` and
-    /// `Math.floorMod` rather than `/` and `%`. Truncating division rounds toward
-    /// zero, which is the wrong direction before 1970: ordinal -1 is 1969-12, but
-    /// truncating yields 1970-01. `div_euclid` and `rem_euclid` round toward
-    /// negative infinity and so match the Java reference implementation.
+    /// Mirrors the output of `TransformUtil.humanMonth`, which divides with
+    /// `Math.floorDiv` and `Math.floorMod` rather than `/` and `%`. Truncating
+    /// division rounds toward zero, which is the wrong direction before 1970:
+    /// ordinal -1 is 1969-12, but truncating yields 1970-01. `div_euclid` and
+    /// `rem_euclid` round toward negative infinity and so agree with Java.
     fn human_month(month_ordinal: i32) -> String {
         format!(
             "{:04}-{:02}",
-            DateTime::UNIX_EPOCH.year() + month_ordinal.div_euclid(12),
+            UNIX_EPOCH_YEAR + month_ordinal.div_euclid(12),
             1 + month_ordinal.rem_euclid(12)
         )
     }
 
     /// Formats a day ordinal, the number of days since 1970-01-01, as `yyyy-MM-dd`.
     ///
-    /// Mirrors `TransformUtil.humanDay`. Like the Java `Days` transform, whose
-    /// signature is `toHumanString(Type alwaysDate, Integer value)`, this ignores
-    /// the declared field type rather than relying on it being `date`.
+    /// Mirrors the output of `TransformUtil.humanDay`. Like the Java `Days`
+    /// transform, whose signature is `toHumanString(Type alwaysDate, Integer
+    /// value)`, this ignores the declared field type rather than relying on it being
+    /// `date`.
     fn human_day(day_ordinal: i32) -> String {
         let date = date::days_to_date(day_ordinal);
         format!("{:04}-{:02}-{:02}", date.year(), date.month(), date.day())
@@ -264,9 +263,9 @@ impl Transform {
     /// Formats an hour ordinal, the number of hours since 1970-01-01T00:00:00Z,
     /// as `yyyy-MM-dd-HH`.
     ///
-    /// Mirrors `TransformUtil.humanHour`. `div_euclid` and `rem_euclid` split the
-    /// ordinal into whole days and the hour within the day so that hours before
-    /// 1970 round the same way they do in the Java reference implementation.
+    /// Mirrors the output of `TransformUtil.humanHour`. `div_euclid` and `rem_euclid`
+    /// split the ordinal into whole days and the hour within the day so that hours
+    /// before 1970 round the way they do in Java.
     fn human_hour(hour_ordinal: i32) -> String {
         format!(
             "{}-{:02}",
