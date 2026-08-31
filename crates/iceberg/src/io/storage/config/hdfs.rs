@@ -19,11 +19,7 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
-use typed_builder::TypedBuilder;
-
-use super::StorageConfig;
-use crate::Result;
+use iceberg_property_macro::Properties;
 
 /// HDFS NameNode RPC endpoint(s), e.g. `hdfs://namenode:8020`; a
 /// comma-separated list enables HA failover. When unset, the NameNode is
@@ -35,38 +31,17 @@ pub const HDFS_NAME_NODE: &str = "hdfs.name-node";
 pub const HDFS_HADOOP_CONF_PREFIX: &str = "hadoop.";
 
 /// HDFS storage configuration.
-///
-/// This struct contains all the configuration options for connecting to HDFS.
-/// Use the builder pattern via `HdfsConfig::builder()` to construct instances.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
-pub struct HdfsConfig {
+// No in-crate consumer yet: `iceberg-storage-opendal` parses the raw
+// properties itself and only shares the key constants above.
+#[allow(dead_code)]
+#[derive(Debug, Properties)]
+pub(crate) struct HdfsConfig {
     /// NameNode endpoint(s); comma-separated for HA failover.
-    #[builder(default, setter(strip_option, into))]
-    pub name_node: Option<String>,
+    #[property(key = HDFS_NAME_NODE, default = None, getter)]
+    name_node: Option<String>,
     /// Extra HDFS client configuration (the `hadoop.` prefix stripped).
-    #[builder(default)]
-    pub options: HashMap<String, String>,
-}
-
-impl TryFrom<&StorageConfig> for HdfsConfig {
-    type Error = crate::Error;
-
-    fn try_from(config: &StorageConfig) -> Result<Self> {
-        let props = config.props();
-
-        let mut cfg = HdfsConfig::default();
-
-        if let Some(name_node) = props.get(HDFS_NAME_NODE) {
-            cfg.name_node = Some(name_node.clone());
-        }
-        for (key, value) in props {
-            if let Some(stripped) = key.strip_prefix(HDFS_HADOOP_CONF_PREFIX) {
-                cfg.options.insert(stripped.to_string(), value.clone());
-            }
-        }
-
-        Ok(cfg)
-    }
+    #[property(prefix = HDFS_HADOOP_CONF_PREFIX, getter)]
+    options: HashMap<String, String>,
 }
 
 #[cfg(test)]
@@ -74,37 +49,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_hdfs_config_builder() {
-        let cfg = HdfsConfig::builder()
-            .name_node("hdfs://nn1:8020,hdfs://nn2:8020")
-            .build();
-        assert_eq!(
-            cfg.name_node.as_deref(),
-            Some("hdfs://nn1:8020,hdfs://nn2:8020")
-        );
-        assert!(cfg.options.is_empty());
-    }
+    fn test_hdfs_config_from_properties() {
+        let props = HashMap::from([
+            (
+                HDFS_NAME_NODE.to_string(),
+                "hdfs://namenode:8020".to_string(),
+            ),
+            (
+                "hadoop.dfs.client.failover.random.order".to_string(),
+                "true".to_string(),
+            ),
+            ("unrelated.key".to_string(), "ignored".to_string()),
+        ]);
 
-    #[test]
-    fn test_hdfs_config_from_storage_config() {
-        let storage_config = StorageConfig::new()
-            .with_prop(HDFS_NAME_NODE, "hdfs://namenode:8020")
-            .with_prop("hadoop.dfs.client.failover.random.order", "true")
-            .with_prop("unrelated.key", "ignored");
-
-        let cfg = HdfsConfig::try_from(&storage_config).unwrap();
-        assert_eq!(cfg.name_node.as_deref(), Some("hdfs://namenode:8020"));
+        let cfg = HdfsConfig::from_properties(&props).unwrap();
+        assert_eq!(cfg.name_node().as_deref(), Some("hdfs://namenode:8020"));
         assert_eq!(
-            cfg.options.get("dfs.client.failover.random.order"),
+            cfg.options().get("dfs.client.failover.random.order"),
             Some(&"true".to_string())
         );
-        assert!(!cfg.options.contains_key("unrelated.key"));
+        assert!(!cfg.options().contains_key("unrelated.key"));
     }
 
     #[test]
     fn test_hdfs_config_empty() {
-        let cfg = HdfsConfig::try_from(&StorageConfig::new()).unwrap();
-        assert_eq!(cfg.name_node, None);
-        assert!(cfg.options.is_empty());
+        let cfg = HdfsConfig::from_properties(&HashMap::new()).unwrap();
+        assert_eq!(cfg.name_node().as_deref(), None);
+        assert!(cfg.options().is_empty());
     }
 }

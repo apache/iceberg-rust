@@ -18,8 +18,8 @@
 //! Integration tests for HDFS FileIO via OpenDAL `services-hdfs-native`.
 //!
 //! These tests need the `hdfs-namenode`/`hdfs-datanode` services from
-//! `dev/docker-compose.yaml` and are `#[ignore]`d (host networking is
-//! Linux-only); CI opts in via `cargo nextest run --run-ignored=only`.
+//! `dev/docker-compose.yaml` (started by `make docker-up`); the fixture
+//! uses host networking, which needs Linux or a recent Docker runtime.
 
 #[cfg(feature = "opendal-hdfs-native")]
 mod tests {
@@ -45,7 +45,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Linux-only: HDFS docker fixture uses host networking"]
     async fn test_file_io_hdfs_exists() {
         let file_io = get_file_io();
 
@@ -54,7 +53,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Linux-only: HDFS docker fixture uses host networking"]
     async fn test_file_io_hdfs_write_and_read() {
         let file_io = get_file_io();
         let path = test_path("test_file_io_hdfs_write_and_read");
@@ -77,7 +75,6 @@ mod tests {
     /// The HA flow: table locations carry a logical authority while
     /// `hdfs.name-node` carries the (comma-separated) endpoints; it wins.
     #[tokio::test]
-    #[ignore = "Linux-only: HDFS docker fixture uses host networking"]
     async fn test_file_io_hdfs_configured_name_node() {
         set_up();
         let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::Hdfs))
@@ -106,7 +103,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Linux-only: HDFS docker fixture uses host networking"]
     async fn test_file_io_hdfs_overwrite() {
         let file_io = get_file_io();
         let path = test_path("test_file_io_hdfs_overwrite");
@@ -128,7 +124,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Linux-only: HDFS docker fixture uses host networking"]
     async fn test_file_io_hdfs_delete_stream() {
         let file_io = get_file_io();
 
@@ -155,7 +150,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Linux-only: HDFS docker fixture uses host networking"]
     async fn test_file_io_hdfs_delete_stream_empty() {
         let file_io = get_file_io();
         let stream = futures::stream::empty().boxed();
@@ -163,7 +157,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Linux-only: HDFS docker fixture uses host networking"]
     async fn test_file_io_hdfs_resolving_storage() {
         set_up();
         let file_io = FileIOBuilder::new(Arc::new(OpenDalResolvingStorageFactory::new())).build();
@@ -186,7 +179,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Linux-only: HDFS docker fixture uses host networking"]
     async fn test_file_io_hdfs_metadata() {
         let file_io = get_file_io();
         let path = test_path("test_file_io_hdfs_metadata");
@@ -205,7 +197,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Linux-only: HDFS docker fixture uses host networking"]
     async fn test_file_io_hdfs_delete() {
         let file_io = get_file_io();
         let path = test_path("test_file_io_hdfs_delete");
@@ -223,7 +214,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Linux-only: HDFS docker fixture uses host networking"]
     async fn test_file_io_hdfs_delete_prefix() {
         let file_io = get_file_io();
         let dir = test_path("test_file_io_hdfs_delete_prefix");
@@ -248,7 +238,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Linux-only: HDFS docker fixture uses host networking"]
     async fn test_file_io_hdfs_reader_range() {
         let file_io = get_file_io();
         let path = test_path("test_file_io_hdfs_reader_range");
@@ -274,7 +263,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Linux-only: HDFS docker fixture uses host networking"]
     async fn test_file_io_hdfs_streaming_writer() {
         let file_io = get_file_io();
         let path = test_path("test_file_io_hdfs_streaming_writer");

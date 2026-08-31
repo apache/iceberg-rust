@@ -780,28 +780,6 @@ impl serde_core::ser::Serialize for iceberg::io::GcsConfig
 pub fn iceberg::io::GcsConfig::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::io::GcsConfig
 pub fn iceberg::io::GcsConfig::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
-pub struct iceberg::io::HdfsConfig
-pub iceberg::io::HdfsConfig::name_node: core::option::Option<alloc::string::String>
-pub iceberg::io::HdfsConfig::options: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
-impl core::clone::Clone for iceberg::io::HdfsConfig
-pub fn iceberg::io::HdfsConfig::clone(&self) -> iceberg::io::HdfsConfig
-impl core::cmp::Eq for iceberg::io::HdfsConfig
-impl core::cmp::PartialEq for iceberg::io::HdfsConfig
-pub fn iceberg::io::HdfsConfig::eq(&self, other: &iceberg::io::HdfsConfig) -> bool
-impl core::convert::TryFrom<&iceberg::io::StorageConfig> for iceberg::io::HdfsConfig
-pub type iceberg::io::HdfsConfig::Error = iceberg::Error
-pub fn iceberg::io::HdfsConfig::try_from(config: &iceberg::io::StorageConfig) -> iceberg::Result<Self>
-impl core::default::Default for iceberg::io::HdfsConfig
-pub fn iceberg::io::HdfsConfig::default() -> iceberg::io::HdfsConfig
-impl core::fmt::Debug for iceberg::io::HdfsConfig
-pub fn iceberg::io::HdfsConfig::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for iceberg::io::HdfsConfig
-impl iceberg::io::HdfsConfig
-pub fn iceberg::io::HdfsConfig::builder() -> HdfsConfigBuilder<((), ())>
-impl serde_core::ser::Serialize for iceberg::io::HdfsConfig
-pub fn iceberg::io::HdfsConfig::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
-impl<'de> serde_core::de::Deserialize<'de> for iceberg::io::HdfsConfig
-pub fn iceberg::io::HdfsConfig::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::io::HfConfig
 pub iceberg::io::HfConfig::endpoint: core::option::Option<alloc::string::String>
 pub iceberg::io::HfConfig::revision: core::option::Option<alloc::string::String>
@@ -1001,9 +979,6 @@ pub fn iceberg::io::AzdlsConfig::try_from(config: &iceberg::io::StorageConfig) -
 impl core::convert::TryFrom<&iceberg::io::StorageConfig> for iceberg::io::GcsConfig
 pub type iceberg::io::GcsConfig::Error = iceberg::Error
 pub fn iceberg::io::GcsConfig::try_from(config: &iceberg::io::StorageConfig) -> iceberg::Result<Self>
-impl core::convert::TryFrom<&iceberg::io::StorageConfig> for iceberg::io::HdfsConfig
-pub type iceberg::io::HdfsConfig::Error = iceberg::Error
-pub fn iceberg::io::HdfsConfig::try_from(config: &iceberg::io::StorageConfig) -> iceberg::Result<Self>
 impl core::convert::TryFrom<&iceberg::io::StorageConfig> for iceberg::io::HfConfig
 pub type iceberg::io::HfConfig::Error = iceberg::Error
 pub fn iceberg::io::HfConfig::try_from(config: &iceberg::io::StorageConfig) -> iceberg::Result<Self>
