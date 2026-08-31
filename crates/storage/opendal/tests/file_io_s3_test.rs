@@ -23,6 +23,7 @@
 mod tests {
     use std::sync::Arc;
 
+    use bytes::Bytes;
     use futures::StreamExt;
     use iceberg::io::{
         FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION,
@@ -50,6 +51,34 @@ mod tests {
             (S3_PATH_STYLE_ACCESS, "true".to_string()),
         ])
         .build()
+    }
+
+    fn roundtrip_file_io(file_io: &FileIO) -> FileIO {
+        let serialized = serde_json::to_vec(file_io).unwrap();
+        serde_json::from_slice(&serialized).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_file_io_s3_serialization_roundtrip() {
+        let file_io = roundtrip_file_io(&get_file_io().await);
+        let path = format!(
+            "s3://bucket1/{}",
+            normalize_test_name_with_parts!("test_file_io_s3_serialization_roundtrip")
+        );
+
+        let _ = file_io.delete(&path).await;
+        file_io
+            .new_output(&path)
+            .unwrap()
+            .write(Bytes::from_static(b"roundtrip"))
+            .await
+            .unwrap();
+        assert_eq!(
+            file_io.new_input(&path).unwrap().read().await.unwrap(),
+            Bytes::from_static(b"roundtrip")
+        );
+        file_io.delete(&path).await.unwrap();
+        assert!(!file_io.exists(&path).await.unwrap());
     }
 
     #[tokio::test]

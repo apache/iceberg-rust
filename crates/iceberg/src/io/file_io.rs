@@ -47,6 +47,10 @@ use crate::Result;
 /// `FileIO` serializes its storage configuration and factory, but not its cached storage
 /// instance. The storage cache is rebuilt lazily on first use after deserialization.
 ///
+/// The serialized representation is not a stable format and may change between crate versions.
+/// Applications should not rely on it for long-term storage or exchange it between incompatible
+/// versions of this crate.
+///
 /// All storage configuration properties are included in the serialized representation. These
 /// properties may contain credentials or other sensitive values, so serialized `FileIO` data
 /// must be protected in transit and at rest by the application embedding this crate.
@@ -410,7 +414,6 @@ mod tests {
     use bytes::Bytes;
     use futures::AsyncReadExt;
     use futures::io::AllowStdIo;
-    use serde_json::json;
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
@@ -577,19 +580,8 @@ mod tests {
             .unwrap();
         assert!(file_io.storage.get().is_some());
 
-        let serialized = serde_json::to_value(&file_io).unwrap();
-        assert_eq!(
-            serialized,
-            json!({
-                "config": {"props": {
-                    "s3.session-token": "test-token",
-                    "test-property": "test-value"
-                }},
-                "factory": {"type": "MemoryStorageFactory"}
-            })
-        );
-
-        let deserialized: FileIO = serde_json::from_value(serialized).unwrap();
+        let serialized = serde_json::to_vec(&file_io).unwrap();
+        let deserialized: FileIO = serde_json::from_slice(&serialized).unwrap();
         assert!(deserialized.storage.get().is_none());
         assert_eq!(
             deserialized.config().get("test-property"),
@@ -635,16 +627,8 @@ mod tests {
             .unwrap();
         assert!(file_io.storage.get().is_some());
 
-        let serialized = serde_json::to_value(&file_io).unwrap();
-        assert_eq!(
-            serialized,
-            json!({
-                "config": {"props": {"test-property": "test-value"}},
-                "factory": {"type": "LocalFsStorageFactory"}
-            })
-        );
-
-        let deserialized: FileIO = serde_json::from_value(serialized).unwrap();
+        let serialized = serde_json::to_vec(&file_io).unwrap();
+        let deserialized: FileIO = serde_json::from_slice(&serialized).unwrap();
         assert!(deserialized.storage.get().is_none());
         assert_eq!(
             deserialized.config().get("test-property"),

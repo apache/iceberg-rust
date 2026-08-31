@@ -68,13 +68,18 @@ mod tests {
             .build()
     }
 
+    fn roundtrip_file_io(file_io: &FileIO) -> FileIO {
+        let serialized = serde_json::to_vec(file_io).unwrap();
+        serde_json::from_slice(&serialized).unwrap()
+    }
+
     // --- bucket tests ---
 
     #[tokio::test]
     async fn test_hf_bucket_write_read_delete() {
         let token = require_env!(ENV_HF_TOKEN);
         let bucket = require_env!(ENV_HF_BUCKET);
-        let file_io = get_file_io(&token);
+        let file_io = roundtrip_file_io(&get_file_io(&token));
         let path = format!(
             "hf://buckets/{}/{}",
             bucket,
@@ -324,7 +329,7 @@ mod tests {
     #[tokio::test]
     async fn test_hf_resolving_storage() {
         let token = require_env!(ENV_HF_TOKEN);
-        let file_io = get_resolving_file_io(&token);
+        let file_io = roundtrip_file_io(&get_resolving_file_io(&token));
 
         let bucket = require_env!(ENV_HF_BUCKET);
         let path = format!(
