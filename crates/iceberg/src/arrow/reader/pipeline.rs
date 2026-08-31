@@ -102,6 +102,18 @@ impl ArrowReader {
     }
 }
 
+// Metadata columns synthesized without reading any data column, so a projection of only
+// these can be pruned to zero data columns. Narrower than `is_metadata_field`, which also
+// matches `_deleted` -- excluded here because it has no synthesis handler.
+const PRUNABLE_METADATA_FIELDS: &[i32] = &[
+    RESERVED_FIELD_ID_FILE,
+    RESERVED_FIELD_ID_SPEC_ID,
+    RESERVED_FIELD_ID_PARTITION,
+    RESERVED_FIELD_ID_POS,
+    RESERVED_FIELD_ID_ROW_ID,
+    RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+];
+
 /// Per-scan state for processing [`FileScanTask`]s. Created once per
 /// [`ArrowReader::read`] call and cloned per task.
 #[derive(Clone)]
@@ -231,8 +243,10 @@ impl FileScanTaskReader {
         let need_row_number = project_pos || (project_row_id && task.first_row_id.is_some());
 
         let field_ids = task.project_field_ids();
-        let metadata_only_projection =
-            !field_ids.is_empty() && field_ids.iter().all(|&id| is_metadata_field(id));
+        let metadata_only_projection = !field_ids.is_empty()
+            && field_ids
+                .iter()
+                .all(|id| PRUNABLE_METADATA_FIELDS.contains(id));
 
         let install_row_number = need_row_number || metadata_only_projection;
 
@@ -3392,7 +3406,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_seq_only_projection_null_first_row_id_preserves_row_count() {
+    async fn test_seq_only_null_first_row_id_reads_no_data_columns() {
         use crate::metadata_columns::{
             RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
             RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
@@ -3400,30 +3414,37 @@ mod tests {
 
         // Seq-only projection with a null first_row_id: the column is nulled and the
         // physical leaf is NOT read (the gated `coalesce_last_updated_seq_leaf` is None).
-        // This is a metadata-only projection, so RowNumber is installed as the row-count
-        // source and the data columns are pruned; the row count must still be 3.
+        // This is a metadata-only projection, so RowNumber supplies the row count and the
+        // data columns are pruned; the row count is still 3 and the values all null.
         let tmp_dir = TempDir::new().unwrap();
         let dir = tmp_dir.path().to_str().unwrap();
-        let file_path = write_parquet_with_wide_column(
-            dir,
-            "seq_only_null_first.parquet",
-            vec![physical_last_updated_seq_field()],
-            vec![Arc::new(Int64Array::from(vec![Some(5), Some(6), Some(7)])) as ArrayRef],
-        );
-        let task = FileScanTask::builder()
-            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
-            .with_start(0)
-            .with_length(0)
-            .with_data_file_path(file_path)
-            .with_data_file_format(DataFileFormat::Parquet)
-            .with_schema(id_and_wide_schema())
-            .with_project_field_ids(vec![RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER])
-            .with_first_row_id(None)
-            .with_data_sequence_number(Some(9))
-            .with_case_sensitive(false)
-            .build();
-        let (batches, _) = scan_task(task).await;
+        let seq_task = |name: &str, ids: Vec<i32>| {
+            let file_path = write_parquet_with_wide_column(
+                dir,
+                name,
+                vec![physical_last_updated_seq_field()],
+                vec![Arc::new(Int64Array::from(vec![Some(5), Some(6), Some(7)])) as ArrayRef],
+            );
+            FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path)
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(id_and_wide_schema())
+                .with_project_field_ids(ids)
+                .with_first_row_id(None)
+                .with_data_sequence_number(Some(9))
+                .with_case_sensitive(false)
+                .build()
+        };
 
+        let meta_only = seq_task("seq_only_null_first.parquet", vec![
+            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+        ]);
+        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+
+        assert_eq!(batches[0].num_columns(), 1);
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 3);
         let seq_col = batches[0]
@@ -3432,30 +3453,37 @@ mod tests {
         let seq_col = cast(seq_col, &DataType::Int64).unwrap();
         let seq_col = seq_col.as_any().downcast_ref::<Int64Array>().unwrap();
         assert!((0..3).all(|i| seq_col.is_null(i)));
+
+        let with_data = seq_task("seq_only_null_first_ref.parquet", vec![
+            2,
+            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+        ]);
+        let (_, with_data_bytes) = scan_task(with_data).await;
+
+        assert!(
+            meta_only_bytes < with_data_bytes,
+            "seq-only scan with a null first_row_id should read fewer bytes than a scan of \
+             the wide column: {meta_only_bytes} vs {with_data_bytes}"
+        );
     }
 
     #[tokio::test]
-    async fn test_file_only_projection_preserves_row_count() {
+    async fn test_file_only_reads_no_data_columns() {
         use crate::metadata_columns::RESERVED_COL_NAME_FILE;
 
+        // `SELECT _file` materializes a per-file string constant with no physical column to
+        // read. The metadata-only RowNumber counter sizes it, so the scan prunes the data
+        // columns rather than reading them all just to recover the row count.
         let tmp_dir = TempDir::new().unwrap();
         let dir = tmp_dir.path().to_str().unwrap();
-        let file_path = write_plain_parquet(dir, "file_only.parquet", vec![], vec![]);
-        let schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-        let task =
-            metadata_projection_task(file_path.clone(), schema, vec![RESERVED_FIELD_ID_FILE]);
-        let (batches, _) = scan_task(task).await;
 
-        // A metadata-only constant projection is pruned to zero data columns; RowNumber
-        // supplies the row count and the `_file` constant is sized from it (3 rows).
+        let file_path = write_parquet_with_wide_column(dir, "file_only.parquet", vec![], vec![]);
+        let meta_only = metadata_projection_task(file_path.clone(), id_and_wide_schema(), vec![
+            RESERVED_FIELD_ID_FILE,
+        ]);
+        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+
+        assert_eq!(batches[0].num_columns(), 1);
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 3);
         let file_col = batches[0]
@@ -3464,6 +3492,82 @@ mod tests {
         let file_col = cast(file_col, &DataType::Utf8).unwrap();
         let file_col = file_col.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(file_col.value(0), file_path);
+
+        let with_data = metadata_projection_task(
+            write_parquet_with_wide_column(dir, "file_only_ref.parquet", vec![], vec![]),
+            id_and_wide_schema(),
+            vec![2, RESERVED_FIELD_ID_FILE],
+        );
+        let (_, with_data_bytes) = scan_task(with_data).await;
+
+        assert!(
+            meta_only_bytes < with_data_bytes,
+            "_file-only scan should read fewer bytes than a scan of the wide column: \
+             {meta_only_bytes} vs {with_data_bytes}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spec_id_only_reads_no_data_columns() {
+        use crate::metadata_columns::{RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_SPEC_ID};
+        use crate::spec::{PartitionSpec, Transform};
+
+        // `SELECT _spec_id` materializes an int constant from the task's partition spec id,
+        // with no physical column to read. The RowNumber counter sizes it, so the scan
+        // prunes the data columns rather than reading them all to recover the row count.
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+        let schema = id_and_wide_schema();
+        let spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .with_spec_id(7)
+                .add_partition_field("id", "id", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        let spec_id_task = |file_path: String, project_field_ids: Vec<i32>| {
+            FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path)
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(project_field_ids)
+                .with_partition_spec(Some(spec.clone()))
+                .with_case_sensitive(false)
+                .build()
+        };
+
+        let meta_only = spec_id_task(
+            write_parquet_with_wide_column(dir, "spec_id_only.parquet", vec![], vec![]),
+            vec![RESERVED_FIELD_ID_SPEC_ID],
+        );
+        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+
+        assert_eq!(batches[0].num_columns(), 1);
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3);
+        let spec_id_col = batches[0]
+            .column_by_name(RESERVED_COL_NAME_SPEC_ID)
+            .expect("_spec_id column should be present");
+        let spec_id_col = cast(spec_id_col, &DataType::Int32).unwrap();
+        let spec_id_col = spec_id_col.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(spec_id_col.values(), &[7, 7, 7]);
+
+        let with_data = spec_id_task(
+            write_parquet_with_wide_column(dir, "spec_id_only_ref.parquet", vec![], vec![]),
+            vec![2, RESERVED_FIELD_ID_SPEC_ID],
+        );
+        let (_, with_data_bytes) = scan_task(with_data).await;
+
+        assert!(
+            meta_only_bytes < with_data_bytes,
+            "_spec_id-only scan should read fewer bytes than a scan of the wide column: \
+             {meta_only_bytes} vs {with_data_bytes}"
+        );
     }
 
     #[tokio::test]
