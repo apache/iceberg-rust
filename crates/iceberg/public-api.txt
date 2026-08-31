@@ -1121,6 +1121,11 @@ pub fn iceberg::memory::MemoryCatalogBuilder::load(self, name: impl core::conver
 pub fn iceberg::memory::MemoryCatalogBuilder::with_kms_client_factory(self, kms_client_factory: alloc::sync::Arc<dyn iceberg::encryption::kms::KmsClientFactory>) -> Self
 pub fn iceberg::memory::MemoryCatalogBuilder::with_runtime(self, runtime: iceberg::Runtime) -> Self
 pub fn iceberg::memory::MemoryCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::StorageFactory>) -> Self
+pub struct iceberg::memory::MemoryCatalogProperties
+impl iceberg::memory::MemoryCatalogProperties
+pub fn iceberg::memory::MemoryCatalogProperties::from_properties(properties: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<Self>
+impl core::fmt::Debug for iceberg::memory::MemoryCatalogProperties
+pub fn iceberg::memory::MemoryCatalogProperties::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const iceberg::memory::MEMORY_CATALOG_WAREHOUSE: &str
 pub mod iceberg::metadata_columns
 pub const iceberg::metadata_columns::RESERVED_COL_NAME_CHANGE_ORDINAL: &str

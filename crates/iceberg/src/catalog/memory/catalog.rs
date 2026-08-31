@@ -106,7 +106,7 @@ impl CatalogBuilder for MemoryCatalogBuilder {
 
 /// Memory catalog properties parsed from a catalog property map.
 #[derive(Debug, Properties)]
-pub(crate) struct MemoryCatalogProperties {
+pub struct MemoryCatalogProperties {
     #[property(key = MEMORY_CATALOG_WAREHOUSE, default = "")]
     warehouse: String,
 }
