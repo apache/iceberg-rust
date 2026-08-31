@@ -19,6 +19,9 @@
 //! This module is pub just for internal testing.
 //! It is subject to change and is not intended to be used by external users.
 
+#[cfg(test)]
+pub(crate) mod scan;
+
 use std::sync::{Arc, OnceLock};
 
 use arrow_array::RecordBatch;
