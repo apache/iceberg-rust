@@ -32,11 +32,8 @@ use crate::spec::{
 pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;
 
 /// A task to scan part of file.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TypedBuilder)]
-#[serde(
-    into = "crate::scan::task::_serde::FileScanTaskSerde",
-    try_from = "crate::scan::task::_serde::FileScanTaskSerde"
-)]
+#[derive(Debug, Clone, Deserialize, PartialEq, TypedBuilder)]
+#[serde(try_from = "crate::scan::task::_serde::FileScanTaskSerde")]
 #[builder(field_defaults(setter(prefix = "with_")))]
 pub struct FileScanTask {
     /// The total size of the data file in bytes, from the manifest entry.
@@ -253,27 +250,6 @@ mod _serde {
     use super::*;
     use crate::{Error, ErrorKind};
 
-    // Container-level `into` conversion is infallible. Keep a failed typed conversion here so
-    // serialization can return that error instead of panicking or changing the wire format.
-    struct PartitionSerde(Result<RawLiteral>);
-
-    impl Serialize for PartitionSerde {
-        fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-        where S: serde::Serializer {
-            self.0
-                .as_ref()
-                .map_err(serde::ser::Error::custom)?
-                .serialize(serializer)
-        }
-    }
-
-    impl<'de> Deserialize<'de> for PartitionSerde {
-        fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-        where D: serde::Deserializer<'de> {
-            Ok(Self(Ok(RawLiteral::deserialize(deserializer)?)))
-        }
-    }
-
     #[derive(SerializeDerive, DeserializeDerive)]
     pub(super) struct FileScanTaskSerde {
         file_size_in_bytes: u64,
@@ -293,7 +269,7 @@ mod _serde {
         deletes: Vec<FileScanTaskDeleteFile>,
         #[serde(default)]
         #[serde(skip_serializing_if = "Option::is_none")]
-        partition: Option<PartitionSerde>,
+        partition: Option<RawLiteral>,
         #[serde(default)]
         #[serde(skip_serializing_if = "Option::is_none")]
         partition_spec: Option<Arc<PartitionSpec>>,
@@ -309,23 +285,24 @@ mod _serde {
         key_metadata: Option<Box<[u8]>>,
     }
 
-    fn partition_type(schema: &Schema, partition_spec: Option<&PartitionSpec>) -> Result<Type> {
-        Ok(Type::Struct(match partition_spec {
-            Some(partition_spec) => partition_spec.partition_type(schema)?,
-            None => StructType::new(vec![]),
-        }))
-    }
+    impl TryFrom<FileScanTask> for FileScanTaskSerde {
+        type Error = Error;
 
-    impl From<FileScanTask> for FileScanTaskSerde {
-        fn from(value: FileScanTask) -> Self {
-            let partition = value.partition.map(|partition| {
-                PartitionSerde(
-                    partition_type(&value.schema, value.partition_spec.as_deref())
-                        .and_then(|ty| RawLiteral::try_from(Literal::Struct(partition), &ty)),
-                )
-            });
+        fn try_from(value: FileScanTask) -> Result<Self> {
+            let partition = value
+                .partition
+                .map(|partition| {
+                    let partition_spec = value
+                        .partition_spec
+                        .clone()
+                        .unwrap_or_else(|| Arc::new(PartitionSpec::unpartition_spec()));
+                    let partition_type =
+                        Type::Struct(partition_spec.partition_type(&value.schema)?);
+                    RawLiteral::try_from(Literal::Struct(partition), &partition_type)
+                })
+                .transpose()?;
 
-            Self {
+            Ok(Self {
                 file_size_in_bytes: value.file_size_in_bytes,
                 start: value.start,
                 length: value.length,
@@ -344,7 +321,16 @@ mod _serde {
                 unified_partition_type: value.unified_partition_type,
                 case_sensitive: value.case_sensitive,
                 key_metadata: value.key_metadata,
-            }
+            })
+        }
+    }
+
+    impl Serialize for FileScanTask {
+        fn serialize<__S>(&self, __serializer: __S) -> std::result::Result<__S::Ok, __S::Error>
+        where __S: serde::Serializer {
+            FileScanTaskSerde::try_from(self.clone())
+                .map_err(serde::ser::Error::custom)?
+                .serialize(__serializer)
         }
     }
 
@@ -355,9 +341,13 @@ mod _serde {
             let partition = value
                 .partition
                 .map(|partition| {
+                    let partition_spec = value
+                        .partition_spec
+                        .clone()
+                        .unwrap_or_else(|| Arc::new(PartitionSpec::unpartition_spec()));
                     let partition_type =
-                        partition_type(&value.schema, value.partition_spec.as_deref())?;
-                    match partition.0?.try_into(&partition_type)? {
+                        Type::Struct(partition_spec.partition_type(&value.schema)?);
+                    match partition.try_into(&partition_type)? {
                         Some(Literal::Struct(partition)) => Ok(partition),
                         _ => Err(Error::new(
                             ErrorKind::DataInvalid,
