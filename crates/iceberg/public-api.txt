@@ -2270,6 +2270,9 @@ pub fn iceberg::spec::NameMapping::eq(&self, other: &iceberg::spec::NameMapping)
 impl core::fmt::Debug for iceberg::spec::NameMapping
 pub fn iceberg::spec::NameMapping::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::spec::NameMapping
+impl core::str::traits::FromStr for iceberg::spec::NameMapping
+pub type iceberg::spec::NameMapping::Err = iceberg::Error
+pub fn iceberg::spec::NameMapping::from_str(value: &str) -> iceberg::Result<Self>
 impl serde_core::ser::Serialize for iceberg::spec::NameMapping
 pub fn iceberg::spec::NameMapping::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::NameMapping
@@ -2877,7 +2880,7 @@ pub fn iceberg::spec::TableProperties<'properties>::commit_max_retry_wait_ms(&se
 pub fn iceberg::spec::TableProperties<'properties>::commit_min_retry_wait_ms(&self) -> iceberg::Result<u64>
 pub fn iceberg::spec::TableProperties<'properties>::commit_num_retries(&self) -> iceberg::Result<usize>
 pub fn iceberg::spec::TableProperties<'properties>::commit_total_retry_timeout_ms(&self) -> iceberg::Result<u64>
-pub fn iceberg::spec::TableProperties<'properties>::default_name_mapping(&self) -> iceberg::Result<core::option::Option<alloc::sync::Arc<iceberg::spec::NameMapping>>>
+pub fn iceberg::spec::TableProperties<'properties>::default_name_mapping(&self) -> iceberg::Result<core::option::Option<iceberg::spec::NameMapping>>
 pub fn iceberg::spec::TableProperties<'properties>::encryption_data_key_length(&self) -> iceberg::Result<usize>
 pub fn iceberg::spec::TableProperties<'properties>::encryption_key_id(&self) -> iceberg::Result<core::option::Option<alloc::string::String>>
 pub fn iceberg::spec::TableProperties<'properties>::gc_enabled(&self) -> iceberg::Result<bool>

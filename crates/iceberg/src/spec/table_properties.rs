@@ -16,7 +16,6 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use iceberg_property_macro::properties_view;
 
@@ -32,18 +31,6 @@ fn parse_location_property(path: &str) -> Result<String> {
     }
 
     Ok(strip_trailing_slash(path).to_string())
-}
-
-fn parse_name_mapping(value: &str) -> Result<Arc<NameMapping>> {
-    serde_json::from_str::<NameMapping>(value)
-        .map(Arc::new)
-        .map_err(|error| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Failed to parse table property as a NameMapping",
-            )
-            .with_source(error)
-        })
 }
 
 fn parse_metadata_compression(value: &str) -> Result<CompressionCodec> {
@@ -355,10 +342,9 @@ pub struct TableProperties {
     #[property(
         key = Self::PROPERTY_DEFAULT_NAME_MAPPING,
         default = None,
-        parse_with = parse_name_mapping,
         getter
     )]
-    default_name_mapping: Option<Arc<NameMapping>>,
+    default_name_mapping: Option<NameMapping>,
 }
 }
 

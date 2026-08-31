@@ -17,10 +17,13 @@
 
 //! Iceberg name mapping.
 
+use std::str::FromStr;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_with::{DefaultOnNull, serde_as};
+
+use crate::{Error, ErrorKind, Result};
 
 /// Iceberg fallback field name to ID mapping.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -38,6 +41,21 @@ impl NameMapping {
     /// Get a reference to fields which are to be mapped from name to field ID.
     pub fn fields(&self) -> &[MappedField] {
         &self.root
+    }
+}
+
+impl FromStr for NameMapping {
+    type Err = Error;
+
+    /// Parses a [`NameMapping`] from its JSON representation.
+    fn from_str(value: &str) -> Result<Self> {
+        serde_json::from_str(value).map_err(|error| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Failed to parse value as a NameMapping",
+            )
+            .with_source(error)
+        })
     }
 }
 

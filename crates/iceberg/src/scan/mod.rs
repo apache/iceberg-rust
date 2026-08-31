@@ -313,7 +313,8 @@ impl<'a> TableScanBuilder<'a> {
             .table
             .metadata()
             .table_properties()
-            .default_name_mapping()?;
+            .default_name_mapping()?
+            .map(Arc::new);
         let unified_partition_type = projected_partition_type(self.table, &schema, &field_ids)?;
 
         let plan_context = PlanContext {
