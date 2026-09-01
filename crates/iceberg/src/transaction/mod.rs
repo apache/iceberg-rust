@@ -697,15 +697,6 @@ mod test_row_lineage {
 
 #[cfg(test)]
 mod test_commit_against_memory_catalog {
-    //! End-to-end tests for transaction APIs against an in-process `MemoryCatalog`.
-    //!
-    //! Each test constructs a table inside a fresh memory catalog, builds a
-    //! transaction, commits it, and then asserts that the catalog's view of the
-    //! table reflects the action's intended metadata change. This complements
-    //! the action-level unit tests in the per-action modules (which only inspect
-    //! the produced `ActionCommit`) and the mock-catalog tests in this file
-    //! (which exercise the retry loop).
-
     use crate::memory::tests::new_memory_catalog;
     use crate::transaction::tests::make_v3_minimal_table_in_catalog;
     use crate::transaction::{ApplyTransactionAction, Transaction};
@@ -716,7 +707,6 @@ mod test_commit_against_memory_catalog {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
 
-        // Sanity: the keys we are about to set are not already present.
         assert!(!table.metadata().properties().contains_key("owner"));
         assert!(!table.metadata().properties().contains_key("team"));
 
@@ -730,7 +720,6 @@ mod test_commit_against_memory_catalog {
 
         let committed = tx.commit(&catalog).await.unwrap();
 
-        // The table returned from commit reflects the new properties.
         assert_eq!(
             committed
                 .metadata()
@@ -748,8 +737,7 @@ mod test_commit_against_memory_catalog {
             Some("storage")
         );
 
-        // A fresh load from the catalog also sees the properties, confirming the
-        // commit was persisted rather than only mutated in the returned table.
+        // A fresh load proves the commit was persisted, not just applied in-memory.
         let reloaded = catalog.load_table(committed.identifier()).await.unwrap();
         assert_eq!(
             reloaded
@@ -768,7 +756,6 @@ mod test_commit_against_memory_catalog {
             Some("storage")
         );
 
-        // The metadata pointer must have advanced.
         assert_ne!(
             committed.metadata_location(),
             table.metadata_location(),
@@ -798,8 +785,6 @@ mod test_commit_against_memory_catalog {
 
     #[tokio::test]
     async fn test_chained_actions_commit_atomically() {
-        // A transaction can carry multiple actions. Committing once should apply
-        // all of them together and produce a single new metadata version.
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
         let initial_metadata_log_len = table.metadata().metadata_log().len();
@@ -838,8 +823,6 @@ mod test_commit_against_memory_catalog {
 
     #[tokio::test]
     async fn test_failing_chained_actions_do_not_commit() {
-        // If any action in the transaction fails to apply, the whole commit must
-        // be rejected and the catalog must be left untouched.
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
         let initial_location = table.metadata().location().to_string();
@@ -858,8 +841,7 @@ mod test_commit_against_memory_catalog {
             .set_location(new_location)
             .apply(tx)
             .unwrap();
-        // Deleting a column that does not exist makes the schema update fail when
-        // the transaction is applied at commit time, aborting the whole commit.
+        // Deleting a non-existent column makes the schema action fail at commit time.
         let tx = tx
             .update_schema()
             .delete_column("nonexistent")
