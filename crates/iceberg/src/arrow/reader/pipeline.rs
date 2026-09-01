@@ -3544,7 +3544,7 @@ mod tests {
     #[tokio::test]
     async fn test_spec_id_only_reads_no_data_columns() {
         use crate::metadata_columns::{RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_SPEC_ID};
-        use crate::spec::{PartitionSpec, Transform};
+        use crate::spec::{Literal, PartitionSpec, Struct, Transform};
 
         // `SELECT _spec_id` materializes an int constant from the task's partition spec id,
         // with no physical column to read. The RowNumber counter sizes it, so the scan
@@ -3570,6 +3570,7 @@ mod tests {
                 .with_data_file_format(DataFileFormat::Parquet)
                 .with_schema(schema.clone())
                 .with_project_field_ids(project_field_ids)
+                .with_partition(Some(Struct::from_iter([Some(Literal::int(42))])))
                 .with_partition_spec(Some(spec.clone()))
                 .with_case_sensitive(false)
                 .build()
