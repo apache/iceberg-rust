@@ -1960,8 +1960,7 @@ pub mod tests {
         assert!(!tasks.is_empty(), "expected at least one FileScanTask");
         for task in &tasks {
             let mapping = task
-                .name_mapping
-                .as_ref()
+                .name_mapping()
                 .expect("name_mapping should reach the FileScanTask");
             assert_eq!(mapping.fields().len(), 1);
             assert_eq!(mapping.fields()[0].field_id(), Some(1));
@@ -2002,17 +2001,17 @@ pub mod tests {
 
         assert_eq!(tasks.len(), 2);
 
-        tasks.sort_by_key(|t| t.data_file_path.to_string());
+        tasks.sort_by_key(|t| t.data_file_path().to_string());
 
         // Check first task is added data file
         assert_eq!(
-            tasks[0].data_file_path,
+            tasks[0].data_file_path(),
             format!("{}/1.parquet", &fixture.table_location)
         );
 
         // Check second task is existing data file
         assert_eq!(
-            tasks[1].data_file_path,
+            tasks[1].data_file_path(),
             format!("{}/3.parquet", &fixture.table_location)
         );
     }
@@ -2035,23 +2034,23 @@ pub mod tests {
             .unwrap();
 
         assert_eq!(tasks.len(), 2);
-        tasks.sort_by_key(|task| task.data_file_path.to_string());
+        tasks.sort_by_key(|task| task.data_file_path().to_string());
 
         // The added file inherits the current snapshot's data sequence number,
         // the existing file keeps the one it was written with.
         assert_eq!(
-            tasks[0].data_file_path,
+            tasks[0].data_file_path(),
             format!("{}/1.parquet", &fixture.table_location)
         );
-        assert_eq!(tasks[0].data_sequence_number, Some(1));
+        assert_eq!(tasks[0].data_sequence_number(), Some(1));
         assert_eq!(
-            tasks[1].data_file_path,
+            tasks[1].data_file_path(),
             format!("{}/3.parquet", &fixture.table_location)
         );
-        assert_eq!(tasks[1].data_sequence_number, Some(0));
+        assert_eq!(tasks[1].data_sequence_number(), Some(0));
 
         // first_row_id is a v3 concept; a v2 manifest carries none.
-        assert!(tasks.iter().all(|task| task.first_row_id.is_none()));
+        assert!(tasks.iter().all(|task| task.first_row_id().is_none()));
     }
 
     #[tokio::test]
@@ -2076,9 +2075,9 @@ pub mod tests {
 
         // The manifest-level first_row_id (42) is inherited onto the entry on
         // read, then carried onto the task.
-        assert_eq!(task.first_row_id, Some(42));
+        assert_eq!(task.first_row_id(), Some(42));
         // The data sequence number is threaded through the same v3 read path.
-        assert_eq!(task.data_sequence_number, Some(1));
+        assert_eq!(task.data_sequence_number(), Some(1));
     }
 
     #[tokio::test]
@@ -2654,14 +2653,7 @@ pub mod tests {
             let serialized = serde_json::to_string(&task).unwrap();
             let deserialized: FileScanTask = serde_json::from_str(&serialized).unwrap();
 
-            assert_eq!(task.data_file_path, deserialized.data_file_path);
-            assert_eq!(task.start, deserialized.start);
-            assert_eq!(task.length, deserialized.length);
-            assert_eq!(task.project_field_ids, deserialized.project_field_ids);
-            assert_eq!(task.predicate, deserialized.predicate);
-            assert_eq!(task.schema, deserialized.schema);
-            assert_eq!(task.first_row_id, deserialized.first_row_id);
-            assert_eq!(task.data_sequence_number, deserialized.data_sequence_number);
+            assert_eq!(task, deserialized);
         };
 
         // without predicate
@@ -2687,7 +2679,8 @@ pub mod tests {
             .with_data_sequence_number(Some(5))
             .with_data_file_format(DataFileFormat::Parquet)
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
         test_fn(task);
 
         // with predicate
@@ -2701,7 +2694,8 @@ pub mod tests {
             .with_schema(schema)
             .with_data_file_format(DataFileFormat::Avro)
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
         test_fn(task);
     }
 
@@ -3560,12 +3554,12 @@ pub mod tests {
         assert_eq!(tasks.len(), 1, "expected a single FileScanTask");
         let task = &tasks[0];
         assert!(
-            task.project_field_ids.contains(&RESERVED_FIELD_ID_POS),
+            task.project_field_ids().contains(&RESERVED_FIELD_ID_POS),
             "_pos field id must be projected into the FileScanTask"
         );
-        assert_eq!(task.start, 0, "TableScan should plan whole-file tasks");
-        assert_eq!(task.length, task.file_size_in_bytes);
-        assert!(task.deletes.is_empty());
+        assert_eq!(task.start(), 0, "TableScan should plan whole-file tasks");
+        assert_eq!(task.length(), task.file_size_in_bytes());
+        assert!(task.deletes().is_empty());
 
         // Reading that task yields absolute _pos 0..300 in order.
         let batches: Vec<_> = fixture
@@ -3632,12 +3626,12 @@ pub mod tests {
             .unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(
-            tasks[0].deletes.len(),
+            tasks[0].deletes().len(),
             1,
             "positional delete file should be planned into the task"
         );
         assert_eq!(
-            tasks[0].deletes[0].file_type,
+            tasks[0].deletes()[0].file_type,
             DataContentType::PositionDeletes
         );
 

@@ -128,7 +128,7 @@ impl ManifestEntryContext {
             )
             .await;
 
-        Ok(FileScanTask::builder()
+        FileScanTask::builder()
             .with_file_size_in_bytes(self.manifest_entry.file_size_in_bytes())
             .with_start(0)
             .with_length(self.manifest_entry.file_size_in_bytes())
@@ -150,7 +150,7 @@ impl ManifestEntryContext {
             .with_unified_partition_type(self.unified_partition_type.clone())
             .with_case_sensitive(self.case_sensitive)
             .with_key_metadata(self.manifest_entry.data_file.key_metadata().map(Box::from))
-            .build())
+            .build()
     }
 }
 

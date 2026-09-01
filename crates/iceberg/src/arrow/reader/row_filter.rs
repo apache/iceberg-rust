@@ -259,7 +259,8 @@ mod tests {
                 .with_project_field_ids(vec![1])
                 .with_predicate(Some(predicate.bind(schema, true).unwrap()))
                 .with_case_sensitive(false)
-                .build();
+                .build()
+                .unwrap();
             Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream
         };
 
@@ -551,7 +552,8 @@ mod tests {
             .with_project_field_ids(vec![1])
             .with_record_count(Some(100))
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         // Task 2: read the second and third row groups
         let task2 = FileScanTask::builder()
@@ -564,7 +566,8 @@ mod tests {
             .with_project_field_ids(vec![1])
             .with_record_count(Some(200))
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         let tasks1 = Box::pin(futures::stream::iter(vec![Ok(task1)])) as FileScanTaskStream;
         let result1 = reader
@@ -699,7 +702,8 @@ mod tests {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1])
                 .with_case_sensitive(false)
-                .build();
+                .build()
+                .unwrap();
 
             let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
             let batches = reader
@@ -806,7 +810,8 @@ mod tests {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1])
                 .with_case_sensitive(false)
-                .build();
+                .build()
+                .unwrap();
 
             let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
             let batches = reader
@@ -1133,26 +1138,18 @@ mod tests {
             .build();
 
         let file_size = std::fs::metadata(&file_path).unwrap().len();
-        let task = FileScanTask {
-            file_size_in_bytes: file_size,
-            start: 0,
-            length: 0,
-            record_count: None,
-            first_row_id: None,
-            data_sequence_number: None,
-            data_file_path: file_path.clone(),
-            data_file_format: DataFileFormat::Parquet,
-            schema: iceberg_schema.clone(),
-            project_field_ids: vec![1, 2],
-            predicate: Some(predicate),
-            deletes: vec![],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            unified_partition_type: None,
-            case_sensitive: false,
-            key_metadata: None,
-        };
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(file_size)
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(iceberg_schema.clone())
+            .with_project_field_ids(vec![1, 2])
+            .with_predicate(Some(predicate))
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
 
         let stream = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let batches: Vec<RecordBatch> = reader
@@ -1228,19 +1225,16 @@ mod tests {
             .with_row_selection_enabled(true)
             .build();
 
-        let task_sub2 = FileScanTask {
-            file_size_in_bytes: file_size,
-            start: 0,
-            length: 0,
-            record_count: None,
-            first_row_id: None,
-            data_sequence_number: None,
-            data_file_path: file_path.clone(),
-            data_file_format: DataFileFormat::Parquet,
-            schema: iceberg_schema.clone(),
-            project_field_ids: vec![1, 2],
-            predicate: Some(predicate_sub2),
-            deletes: vec![FileScanTaskDeleteFile {
+        let task_sub2 = FileScanTask::builder()
+            .with_file_size_in_bytes(file_size)
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(iceberg_schema.clone())
+            .with_project_field_ids(vec![1, 2])
+            .with_predicate(Some(predicate_sub2))
+            .with_deletes(vec![FileScanTaskDeleteFile {
                 file_path: pos_del_path.clone(),
                 file_type: DataContentType::PositionDeletes,
                 partition_spec_id: 0,
@@ -1251,14 +1245,10 @@ mod tests {
                 content_size_in_bytes: None,
                 record_count: None,
                 key_metadata: None,
-            }],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            unified_partition_type: None,
-            case_sensitive: false,
-            key_metadata: None,
-        };
+            }])
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
 
         let stream_sub2 =
             Box::pin(futures::stream::iter(vec![Ok(task_sub2)])) as FileScanTaskStream;

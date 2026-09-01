@@ -453,7 +453,8 @@ mod tests {
                     .build(),
             ])
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result = reader
@@ -671,7 +672,8 @@ mod tests {
                     .build(),
             ])
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result = reader
@@ -883,7 +885,8 @@ mod tests {
                     .build(),
             ])
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result = reader

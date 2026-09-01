@@ -162,7 +162,7 @@ mod tests {
 
         let result = delete_file_loader
             .read_delete_file(
-                &file_scan_tasks[0].deletes[0],
+                &file_scan_tasks[0].deletes()[0],
                 file_scan_tasks[0].schema_ref(),
             )
             .await

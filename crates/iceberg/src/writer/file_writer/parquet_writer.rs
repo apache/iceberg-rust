@@ -1096,7 +1096,8 @@ mod tests {
             .with_project_field_ids(vec![1])
             .with_case_sensitive(false)
             .with_key_metadata(data_file.key_metadata().map(Box::from))
-            .build();
+            .build()
+            .unwrap();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let batches: Vec<RecordBatch> = reader
             .read(tasks)
