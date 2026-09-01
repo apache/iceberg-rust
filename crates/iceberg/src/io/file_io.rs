@@ -42,24 +42,6 @@ use crate::Result;
 /// OSS, Azure, etc.), use the
 /// [`iceberg-storage-opendal`](https://crates.io/crates/iceberg-storage-opendal) crate.
 ///
-/// # Serialization
-///
-/// `FileIO` serializes its storage configuration and factory, but not its cached storage
-/// instance. The storage cache is rebuilt lazily on first use after deserialization.
-///
-/// The serialized representation is not a stable format and may change between crate versions.
-/// Applications should not rely on it for long-term storage or exchange it between incompatible
-/// versions of this crate.
-///
-/// All storage configuration properties are included in the serialized representation. These
-/// properties may contain credentials or other sensitive values, so serialized `FileIO` data
-/// must be protected in transit and at rest by the application embedding this crate.
-///
-/// Storage factories are serialized through [`typetag`](https://docs.rs/typetag). The receiving
-/// binary must link the concrete factory implementation so it is registered for deserialization.
-/// Third-party factories must use `#[typetag::serde]` on their [`StorageFactory`]
-/// implementation.
-///
 /// # Example
 ///
 /// ```rust,ignore
@@ -78,15 +60,26 @@ use crate::Result;
 ///     .with_prop("key", "value")
 ///     .build();
 /// ```
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct FileIO {
     /// Storage configuration containing properties
     config: StorageConfig,
     /// Factory for creating storage instances
     factory: Arc<dyn StorageFactory>,
     /// Cached storage instance (lazily initialized)
-    #[serde(skip, default)]
     storage: Arc<OnceLock<Arc<dyn Storage>>>,
+}
+
+#[derive(Serialize)]
+struct SerializableFileIO<'a> {
+    config: &'a StorageConfig,
+    factory: &'a Arc<dyn StorageFactory>,
+}
+
+#[derive(Deserialize)]
+struct DeserializedFileIO {
+    config: StorageConfig,
+    factory: Arc<dyn StorageFactory>,
 }
 
 impl FileIO {
@@ -110,6 +103,42 @@ impl FileIO {
             factory: Arc::new(LocalFsStorageFactory),
             storage: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Serializes all portable state of this `FileIO` into a byte vector.
+    ///
+    /// This includes the storage configuration and factory, but not the cached storage instance.
+    /// The storage cache is rebuilt lazily on first use after calling [`FileIO::deserialize_all`].
+    ///
+    /// The serialized representation is not a stable format and may change between crate versions.
+    /// Applications should not rely on it for long-term storage or exchange it between incompatible
+    /// versions of this crate.
+    ///
+    /// All storage configuration properties are included in the serialized representation. These
+    /// properties may contain credentials or other sensitive values, so the returned bytes must be
+    /// protected in transit and at rest by the application embedding this crate.
+    ///
+    /// Storage factories are serialized through [`typetag`](https://docs.rs/typetag). Third-party
+    /// factories must use `#[typetag::serde]` on their [`StorageFactory`] implementation.
+    pub fn serialize_all(&self) -> Result<Vec<u8>> {
+        Ok(serde_json::to_vec(&SerializableFileIO {
+            config: &self.config,
+            factory: &self.factory,
+        })?)
+    }
+
+    /// Deserializes a `FileIO` previously produced by [`FileIO::serialize_all`].
+    ///
+    /// The receiving binary must use a compatible crate version and link the concrete factory
+    /// implementation so it is registered with `typetag`. Backend-specific requirements are
+    /// documented by each storage factory implementation.
+    pub fn deserialize_all(bytes: &[u8]) -> Result<Self> {
+        let DeserializedFileIO { config, factory } = serde_json::from_slice(bytes)?;
+        Ok(Self {
+            config,
+            factory,
+            storage: Arc::new(OnceLock::new()),
+        })
     }
 
     /// Get the storage configuration.
@@ -580,8 +609,8 @@ mod tests {
             .unwrap();
         assert!(file_io.storage.get().is_some());
 
-        let serialized = serde_json::to_vec(&file_io).unwrap();
-        let deserialized: FileIO = serde_json::from_slice(&serialized).unwrap();
+        let serialized = file_io.serialize_all().unwrap();
+        let deserialized = FileIO::deserialize_all(&serialized).unwrap();
         assert!(deserialized.storage.get().is_none());
         assert_eq!(
             deserialized.config().get("test-property"),
@@ -627,8 +656,8 @@ mod tests {
             .unwrap();
         assert!(file_io.storage.get().is_some());
 
-        let serialized = serde_json::to_vec(&file_io).unwrap();
-        let deserialized: FileIO = serde_json::from_slice(&serialized).unwrap();
+        let serialized = file_io.serialize_all().unwrap();
+        let deserialized = FileIO::deserialize_all(&serialized).unwrap();
         assert!(deserialized.storage.get().is_none());
         assert_eq!(
             deserialized.config().get("test-property"),

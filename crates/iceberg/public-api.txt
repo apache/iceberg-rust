@@ -730,19 +730,17 @@ pub fn iceberg::io::FileIO::config(&self) -> &iceberg::io::StorageConfig
 pub async fn iceberg::io::FileIO::delete(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<()>
 pub async fn iceberg::io::FileIO::delete_prefix(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<()>
 pub async fn iceberg::io::FileIO::delete_stream(&self, paths: impl futures_core::stream::Stream<Item = alloc::string::String> + core::marker::Send + 'static) -> iceberg::Result<()>
+pub fn iceberg::io::FileIO::deserialize_all(bytes: &[u8]) -> iceberg::Result<Self>
 pub async fn iceberg::io::FileIO::exists(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<bool>
 pub fn iceberg::io::FileIO::new_input(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<iceberg::io::InputFile>
 pub fn iceberg::io::FileIO::new_output(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<iceberg::io::OutputFile>
 pub fn iceberg::io::FileIO::new_with_fs() -> Self
 pub fn iceberg::io::FileIO::new_with_memory() -> Self
+pub fn iceberg::io::FileIO::serialize_all(&self) -> iceberg::Result<alloc::vec::Vec<u8>>
 impl core::clone::Clone for iceberg::io::FileIO
 pub fn iceberg::io::FileIO::clone(&self) -> iceberg::io::FileIO
 impl core::fmt::Debug for iceberg::io::FileIO
 pub fn iceberg::io::FileIO::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl serde_core::ser::Serialize for iceberg::io::FileIO
-pub fn iceberg::io::FileIO::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
-impl<'de> serde_core::de::Deserialize<'de> for iceberg::io::FileIO
-pub fn iceberg::io::FileIO::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::io::FileIOBuilder
 impl iceberg::io::FileIOBuilder
 pub fn iceberg::io::FileIOBuilder::build(self) -> iceberg::io::FileIO

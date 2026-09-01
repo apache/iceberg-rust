@@ -48,8 +48,8 @@ mod tests {
     }
 
     fn roundtrip_file_io(file_io: &FileIO) -> FileIO {
-        let serialized = serde_json::to_vec(file_io).unwrap();
-        serde_json::from_slice(&serialized).unwrap()
+        let serialized = file_io.serialize_all().unwrap();
+        FileIO::deserialize_all(&serialized).unwrap()
     }
 
     #[tokio::test]

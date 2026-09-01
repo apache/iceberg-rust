@@ -107,7 +107,10 @@ pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 ///
 /// # Serialization
 ///
-/// Serialization fails when the [`OpenDalStorageFactory::S3`] variant contains a custom AWS
+/// The receiving binary must enable the feature corresponding to the serialized backend variant.
+/// For example, deserializing `OpenDalStorageFactory::S3` requires the `opendal-s3` feature.
+///
+/// Serialization fails when the `OpenDalStorageFactory::S3` variant contains a custom AWS
 /// credential loader because the loader holds process-local state that cannot be reconstructed in
 /// another process. Construct the factory without a custom loader before serializing it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -145,18 +148,15 @@ pub enum OpenDalStorageFactory {
 
 #[cfg(feature = "opendal-s3")]
 pub(crate) fn serialize_custom_credential_loader<S>(
-    loader: &Option<CustomAwsCredentialLoader>,
-    serializer: S,
+    _loader: &Option<CustomAwsCredentialLoader>,
+    _serializer: S,
 ) -> std::result::Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    match loader {
-        Some(_) => Err(serde::ser::Error::custom(
-            "custom AWS credential loaders cannot be serialized",
-        )),
-        None => serializer.serialize_none(),
-    }
+    Err(serde::ser::Error::custom(
+        "custom AWS credential loaders cannot be serialized",
+    ))
 }
 
 #[typetag::serde(name = "OpenDalStorageFactory")]
@@ -681,7 +681,7 @@ mod tests {
         }))
         .build();
 
-        let err = serde_json::to_value(file_io).unwrap_err();
+        let err = file_io.serialize_all().unwrap_err();
         assert!(
             err.to_string()
                 .contains("custom AWS credential loaders cannot be serialized")

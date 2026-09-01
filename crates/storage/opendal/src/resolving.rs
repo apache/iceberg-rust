@@ -359,7 +359,7 @@ mod tests {
             .with_s3_credential_loader(CustomAwsCredentialLoader::new(EmptyCredentialLoader));
         let file_io = iceberg::io::FileIOBuilder::new(Arc::new(factory)).build();
 
-        let err = serde_json::to_value(file_io).unwrap_err();
+        let err = file_io.serialize_all().unwrap_err();
         assert!(
             err.to_string()
                 .contains("custom AWS credential loaders cannot be serialized")

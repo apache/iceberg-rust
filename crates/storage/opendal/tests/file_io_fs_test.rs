@@ -32,8 +32,8 @@ mod tests {
         let path = temp_dir.path().join("serialization-roundtrip");
         let path = format!("file:/{}", path.display());
         let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::Fs)).build();
-        let serialized = serde_json::to_vec(&file_io).unwrap();
-        let file_io: FileIO = serde_json::from_slice(&serialized).unwrap();
+        let serialized = file_io.serialize_all().unwrap();
+        let file_io = FileIO::deserialize_all(&serialized).unwrap();
 
         file_io
             .new_output(&path)

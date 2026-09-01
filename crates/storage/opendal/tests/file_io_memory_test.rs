@@ -28,8 +28,8 @@ mod tests {
     #[tokio::test]
     async fn test_file_io_memory_serialization_roundtrip() {
         let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::Memory)).build();
-        let serialized = serde_json::to_vec(&file_io).unwrap();
-        let file_io: FileIO = serde_json::from_slice(&serialized).unwrap();
+        let serialized = file_io.serialize_all().unwrap();
+        let file_io = FileIO::deserialize_all(&serialized).unwrap();
         let path = "memory://serialization-roundtrip";
 
         file_io
