@@ -23,8 +23,8 @@ use typed_builder::TypedBuilder;
 
 use crate::expr::BoundPredicate;
 use crate::spec::{
-    DataContentType, DataFileFormat, ManifestEntryRef, NameMapping, PartitionSpec, Schema,
-    SchemaRef, Struct, StructType,
+    DataContentType, DataFileFormat, ManifestEntryRef, NameMapping, PartitionSpec,
+    PrimitiveLiteral, PrimitiveType, Schema, SchemaRef, Struct, StructType,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -267,16 +267,70 @@ impl FileScanTask {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.partition_spec.is_none()
-            && self
-                .partition
-                .as_ref()
-                .is_some_and(|partition| !partition.fields().is_empty())
-        {
+        let Some(partition) = self.partition.as_ref() else {
+            return Ok(());
+        };
+        let Some(partition_spec) = self.partition_spec.as_deref() else {
+            return if partition.fields().is_empty() {
+                Ok(())
+            } else {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Non-empty FileScanTask partition requires a partition spec",
+                ))
+            };
+        };
+
+        if partition.fields().len() != partition_spec.fields().len() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                "Non-empty FileScanTask partition requires a partition spec",
+                format!(
+                    "FileScanTask partition has {} fields but partition spec has {} fields",
+                    partition.fields().len(),
+                    partition_spec.fields().len()
+                ),
             ));
+        }
+
+        if partition_spec
+            .fields()
+            .iter()
+            .any(|field| self.schema.field_by_id(field.source_id).is_none())
+        {
+            // A historical partition spec may legally reference a source column that has
+            // since been dropped. Without its type information, the partition values cannot
+            // be validated, but they are still valid advisory metadata for the scan task.
+            return Ok(());
+        }
+
+        for (partition_value, partition_field) in
+            partition.fields().iter().zip(partition_spec.fields())
+        {
+            let Some(partition_value) = partition_value else {
+                continue;
+            };
+            let source_field = self.schema.field_by_id(partition_field.source_id).unwrap();
+            let result_type = partition_field
+                .transform
+                .result_type(&source_field.field_type)?;
+            let literal = partition_value.as_primitive_literal();
+            let compatible = match (result_type.as_primitive_type(), literal.as_ref()) {
+                (
+                    Some(PrimitiveType::Fixed(expected_len)),
+                    Some(PrimitiveLiteral::Binary(value)),
+                ) => value.len() == *expected_len as usize,
+                (Some(primitive_type), Some(literal)) => primitive_type.compatible(literal),
+                _ => false,
+            };
+            if !compatible {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "FileScanTask partition field '{}' is incompatible with type {}",
+                        partition_field.name, result_type
+                    ),
+                ));
+            }
         }
 
         Ok(())
@@ -381,29 +435,64 @@ pub struct FileScanTaskDeleteFile {
 
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
+
     use super::*;
     use crate::ErrorKind;
-    use crate::spec::Literal;
+    use crate::spec::{Literal, NestedField, PrimitiveType, Transform, Type};
 
-    fn build_file_scan_task_with_partition(partition: Struct) -> Result<FileScanTask> {
+    fn build_file_scan_task(
+        schema: SchemaRef,
+        partition: Option<Struct>,
+        partition_spec: Option<Arc<PartitionSpec>>,
+    ) -> Result<FileScanTask> {
         FileScanTask::builder()
             .with_file_size_in_bytes(100)
             .with_start(0)
             .with_length(100)
             .with_data_file_path("data_file_path".to_string())
             .with_data_file_format(DataFileFormat::Parquet)
-            .with_schema(Arc::new(Schema::builder().build().unwrap()))
+            .with_schema(schema)
             .with_project_field_ids(vec![])
-            .with_partition(Some(partition))
+            .with_partition(partition)
+            .with_partition_spec(partition_spec)
             .with_case_sensitive(false)
             .build()
+    }
+
+    fn schema_and_spec(
+        primitive_type: PrimitiveType,
+        transform: Transform,
+    ) -> (SchemaRef, Arc<PartitionSpec>) {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::required(
+                    1,
+                    "x",
+                    Type::Primitive(primitive_type),
+                ))])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_partition_field("x", "x_partition", transform)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+        (schema, partition_spec)
     }
 
     #[test]
     fn test_file_scan_task_builder_rejects_non_empty_partition_without_spec() {
         // Regression test for https://github.com/apache/iceberg-rust/issues/3130.
-        let err = build_file_scan_task_with_partition(Struct::from_iter([Some(Literal::long(42))]))
-            .unwrap_err();
+        let err = build_file_scan_task(
+            Arc::new(Schema::builder().build().unwrap()),
+            Some(Struct::from_iter([Some(Literal::long(42))])),
+            None,
+        )
+        .unwrap_err();
 
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert_eq!(
@@ -414,6 +503,118 @@ mod tests {
 
     #[test]
     fn test_file_scan_task_builder_accepts_empty_partition_without_spec() {
-        build_file_scan_task_with_partition(Struct::empty()).unwrap();
+        build_file_scan_task(
+            Arc::new(Schema::builder().build().unwrap()),
+            Some(Struct::empty()),
+            None,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_file_scan_task_builder_accepts_supported_partition_encodings() {
+        let cases = [
+            (
+                PrimitiveType::Date,
+                Transform::Identity,
+                Literal::date(19_000),
+            ),
+            (
+                PrimitiveType::TimestampNs,
+                Transform::Identity,
+                Literal::timestamp_nano(1_510_871_468_123_456_789),
+            ),
+            (
+                PrimitiveType::TimestamptzNs,
+                Transform::Identity,
+                Literal::timestamptz_nano(1_510_871_468_123_456_789),
+            ),
+            (
+                PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                },
+                Transform::Identity,
+                Literal::decimal(12_345),
+            ),
+            (
+                PrimitiveType::Uuid,
+                Transform::Identity,
+                Literal::uuid(Uuid::from_u128(0x12345678_90ab_cdef_1234_567890abcdef)),
+            ),
+            (
+                PrimitiveType::Fixed(4),
+                Transform::Identity,
+                Literal::fixed([1, 2, 3, 4]),
+            ),
+            (PrimitiveType::String, Transform::Bucket(4), Literal::int(2)),
+        ];
+
+        for (primitive_type, transform, partition_value) in cases {
+            let case = format!("{primitive_type} with {transform}");
+            let (schema, partition_spec) = schema_and_spec(primitive_type, transform);
+            build_file_scan_task(
+                schema,
+                Some(Struct::from_iter([Some(partition_value)])),
+                Some(partition_spec),
+            )
+            .unwrap_or_else(|err| panic!("{case}: {err:?}"));
+        }
+    }
+
+    #[test]
+    fn test_file_scan_task_builder_rejects_partition_arity_mismatch() {
+        let (schema, partition_spec) = schema_and_spec(PrimitiveType::Long, Transform::Identity);
+
+        let err =
+            build_file_scan_task(schema, Some(Struct::empty()), Some(partition_spec)).unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("partition has 0 fields"));
+        assert!(err.message().contains("partition spec has 1 fields"));
+    }
+
+    #[test]
+    fn test_file_scan_task_builder_rejects_partition_type_mismatch() {
+        let cases = [
+            (PrimitiveType::Long, Literal::string("not a long")),
+            (PrimitiveType::Fixed(4), Literal::fixed([1, 2])),
+        ];
+
+        for (primitive_type, partition_value) in cases {
+            let (schema, partition_spec) = schema_and_spec(primitive_type, Transform::Identity);
+            let err = build_file_scan_task(
+                schema,
+                Some(Struct::from_iter([Some(partition_value)])),
+                Some(partition_spec),
+            )
+            .unwrap_err();
+
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.message().contains("x_partition"));
+        }
+    }
+
+    #[test]
+    fn test_file_scan_task_builder_accepts_dropped_partition_source_column() {
+        let (_historical_schema, partition_spec) =
+            schema_and_spec(PrimitiveType::Long, Transform::Identity);
+        let current_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::required(
+                    2,
+                    "y",
+                    Type::Primitive(PrimitiveType::String),
+                ))])
+                .build()
+                .unwrap(),
+        );
+
+        build_file_scan_task(
+            current_schema,
+            Some(Struct::from_iter([Some(Literal::long(42))])),
+            Some(partition_spec),
+        )
+        .unwrap();
     }
 }
