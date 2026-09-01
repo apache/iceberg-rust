@@ -28,7 +28,7 @@ use crate::scan::{
     PartitionFilterCache,
 };
 use crate::spec::{
-    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
+    LiveManifestEntry, ManifestContentType, ManifestFile, ManifestList, NameMapping,
     PartitionSpecRef, SchemaRef, SnapshotRef, StructType, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
@@ -52,10 +52,10 @@ pub(crate) struct ManifestFileContext {
     unified_partition_type: Option<Arc<StructType>>,
 }
 
-/// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
+/// Wraps a live manifest entry alongside the objects that are needed
 /// to process it in a thread-safe manner
 pub(crate) struct ManifestEntryContext {
-    pub manifest_entry: ManifestEntryRef,
+    pub manifest_entry: LiveManifestEntry,
 
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     pub field_ids: Arc<Vec<i32>>,
@@ -91,9 +91,14 @@ impl ManifestFileContext {
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
         for manifest_entry in manifest.entries() {
+            let Some(manifest_entry) =
+                LiveManifestEntry::try_new(manifest_entry.clone(), &manifest_file.manifest_path)?
+            else {
+                continue;
+            };
+
             let manifest_entry_context = ManifestEntryContext {
-                // TODO: refactor to avoid the expensive ManifestEntry clone
-                manifest_entry: manifest_entry.clone(),
+                manifest_entry,
                 expression_evaluator_cache: expression_evaluator_cache.clone(),
                 field_ids: field_ids.clone(),
                 partition_spec_id: manifest_file.partition_spec_id,
@@ -124,7 +129,7 @@ impl ManifestEntryContext {
             .delete_file_index
             .get_deletes_for_data_file(
                 self.manifest_entry.data_file(),
-                self.manifest_entry.sequence_number(),
+                self.manifest_entry.data_sequence_number(),
             )
             .await;
 
@@ -134,7 +139,7 @@ impl ManifestEntryContext {
             .with_length(self.manifest_entry.file_size_in_bytes())
             .with_record_count(Some(self.manifest_entry.record_count()))
             .with_first_row_id(self.manifest_entry.data_file().first_row_id())
-            .with_data_sequence_number(self.manifest_entry.sequence_number())
+            .with_data_sequence_number(Some(self.manifest_entry.data_sequence_number()))
             .with_data_file_path(self.manifest_entry.file_path().to_string())
             .with_data_file_format(self.manifest_entry.file_format())
             .with_schema(self.snapshot_schema)
@@ -144,12 +149,17 @@ impl ManifestEntryContext {
                     .map(|x| x.as_ref().snapshot_bound_predicate.clone()),
             )
             .with_deletes(deletes)
-            .with_partition(Some(self.manifest_entry.data_file.partition.clone()))
+            .with_partition(Some(self.manifest_entry.data_file().partition.clone()))
             .with_partition_spec(self.partition_spec.clone())
             .with_name_mapping(self.name_mapping)
             .with_unified_partition_type(self.unified_partition_type.clone())
             .with_case_sensitive(self.case_sensitive)
-            .with_key_metadata(self.manifest_entry.data_file.key_metadata().map(Box::from))
+            .with_key_metadata(
+                self.manifest_entry
+                    .data_file()
+                    .key_metadata()
+                    .map(Box::from),
+            )
             .build())
     }
 }

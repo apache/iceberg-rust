@@ -32,6 +32,64 @@ use crate::{Error, ErrorKind};
 /// Reference to [`ManifestEntry`].
 pub type ManifestEntryRef = Arc<ManifestEntry>;
 
+#[derive(Debug, Clone)]
+pub(crate) struct LiveManifestEntry {
+    entry: ManifestEntryRef,
+    data_sequence_number: i64,
+}
+
+impl LiveManifestEntry {
+    pub(crate) fn try_new(entry: ManifestEntryRef, manifest_path: &str) -> Result<Option<Self>> {
+        if !entry.is_alive() {
+            return Ok(None);
+        }
+
+        let data_sequence_number = entry.sequence_number().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Live manifest entry for file '{}' in manifest '{}' has no data sequence number",
+                    entry.file_path(),
+                    manifest_path
+                ),
+            )
+        })?;
+
+        Ok(Some(Self {
+            entry,
+            data_sequence_number,
+        }))
+    }
+
+    pub(crate) fn data_sequence_number(&self) -> i64 {
+        self.data_sequence_number
+    }
+
+    pub(crate) fn content_type(&self) -> DataContentType {
+        self.entry.content_type()
+    }
+
+    pub(crate) fn file_format(&self) -> DataFileFormat {
+        self.entry.file_format()
+    }
+
+    pub(crate) fn file_path(&self) -> &str {
+        self.entry.file_path()
+    }
+
+    pub(crate) fn record_count(&self) -> u64 {
+        self.entry.record_count()
+    }
+
+    pub(crate) fn file_size_in_bytes(&self) -> u64 {
+        self.entry.file_size_in_bytes()
+    }
+
+    pub(crate) fn data_file(&self) -> &DataFile {
+        self.entry.data_file()
+    }
+}
+
 /// A manifest is an immutable Avro file that lists data files or delete
 /// files, along with each file’s partition data tuple, metrics, and tracking
 /// information.
@@ -642,4 +700,60 @@ pub(super) fn manifest_schema_v1(partition_type: &StructType) -> Result<AvroSche
     ];
     let schema = Schema::builder().with_fields(fields).build()?;
     schema_to_avro_schema("manifest_entry", &schema)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spec::DataFileBuilder;
+
+    #[test]
+    fn test_live_entry_captures_data_sequence_number() {
+        let entry = manifest_entry(ManifestStatus::Added, Some(7));
+
+        let live_entry = LiveManifestEntry::try_new(entry.into(), "manifest.avro")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(live_entry.data_sequence_number(), 7);
+    }
+
+    #[test]
+    fn test_live_entry_without_data_sequence_number_is_invalid() {
+        let entry = manifest_entry(ManifestStatus::Existing, None);
+
+        let err = LiveManifestEntry::try_new(entry.into(), "manifest.avro").unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("data.parquet"));
+        assert!(err.message().contains("manifest.avro"));
+    }
+
+    #[test]
+    fn test_deleted_entry_without_data_sequence_number_is_ignored() {
+        let entry = manifest_entry(ManifestStatus::Deleted, None);
+
+        let live_entry = LiveManifestEntry::try_new(entry.into(), "manifest.avro").unwrap();
+
+        assert!(live_entry.is_none());
+    }
+
+    fn manifest_entry(status: ManifestStatus, sequence_number: Option<i64>) -> ManifestEntry {
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("data.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .build()
+            .unwrap();
+
+        ManifestEntry {
+            status,
+            snapshot_id: None,
+            sequence_number,
+            file_sequence_number: None,
+            data_file,
+        }
+    }
 }
