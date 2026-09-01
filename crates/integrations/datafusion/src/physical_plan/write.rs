@@ -202,15 +202,14 @@ impl ExecutionPlan for IcebergWriteExec {
         let format_version = self.table.metadata().format_version();
 
         // Get typed table properties
-        let table_props = self
-            .table
-            .metadata()
-            .table_properties()
-            .map_err(to_datafusion_error)?;
+        let table_props = self.table.metadata().table_properties();
 
         // Check data file format
-        let file_format = DataFileFormat::from_str(&table_props.write_format_default)
+        let write_format_default = table_props
+            .write_format_default()
             .map_err(to_datafusion_error)?;
+        let file_format =
+            DataFileFormat::from_str(&write_format_default).map_err(to_datafusion_error)?;
         if file_format != DataFileFormat::Parquet {
             return Err(to_datafusion_error(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -231,7 +230,9 @@ impl ExecutionPlan for IcebergWriteExec {
             parquet_file_writer_builder =
                 parquet_file_writer_builder.with_encryption_manager(encryption_manager.clone());
         }
-        let target_file_size = table_props.write_target_file_size_bytes;
+        let target_file_size = table_props
+            .write_target_file_size_bytes()
+            .map_err(to_datafusion_error)?;
 
         let file_io = self.table.file_io().clone();
         // todo location_gen and file_name_gen should be configurable
@@ -250,7 +251,9 @@ impl ExecutionPlan for IcebergWriteExec {
         let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 
         // Create TaskWriter
-        let fanout_enabled = table_props.write_datafusion_fanout_enabled;
+        let fanout_enabled = table_props
+            .write_datafusion_fanout_enabled()
+            .map_err(to_datafusion_error)?;
         let schema = self.table.metadata().current_schema().clone();
         let partition_spec = self.table.metadata().default_partition_spec().clone();
         let task_writer = TaskWriter::try_new(

@@ -172,7 +172,6 @@ impl<'a> SnapshotProducer<'a> {
             .collect();
 
         let runtime = self.table.runtime();
-        let file_io = self.table.file_io();
         let manifest_list = self
             .table
             .manifest_list_reader(current_snapshot)
@@ -184,10 +183,8 @@ impl<'a> SnapshotProducer<'a> {
             .consume_entries()
             .into_iter()
             .map(|entry| {
-                let file_io = file_io.clone();
-                runtime
-                    .io()
-                    .spawn(async move { entry.load_manifest(&file_io).await })
+                let reader = self.table.manifest_reader();
+                runtime.io().spawn(async move { reader.read(&entry).await })
             })
             .collect::<FuturesUnordered<_>>()
             .try_fold(Vec::new(), |mut acc, manifest| async move {

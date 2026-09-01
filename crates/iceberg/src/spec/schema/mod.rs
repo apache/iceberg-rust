@@ -368,25 +368,25 @@ impl Schema {
             .and_then(|id| self.field_by_id(*id))
     }
 
-    /// Returns [`highest_field_id`].
+    /// Returns the highest field ID assigned in this schema.
     #[inline]
     pub fn highest_field_id(&self) -> i32 {
         self.highest_field_id
     }
 
-    /// Returns [`schema_id`].
+    /// Returns the Schema's ID.
     #[inline]
     pub fn schema_id(&self) -> SchemaId {
         self.schema_id
     }
 
-    /// Returns [`r#struct`].
+    /// Returns the type for the struct.
     #[inline]
     pub fn as_struct(&self) -> &StructType {
         &self.r#struct
     }
 
-    /// Returns [`identifier_field_ids`].
+    /// Returns the IDs of the fields.
     #[inline]
     pub fn identifier_field_ids(&self) -> impl ExactSizeIterator<Item = i32> + '_ {
         self.identifier_field_ids.iter().copied()
@@ -1262,8 +1262,8 @@ table {
             )]))),
             Some(Literal::List(vec![Some(Literal::Struct(
                 crate::spec::Struct::from_iter(vec![
-                    Some(Literal::float(52.509_09)),
-                    Some(Literal::float(-1.885_249)),
+                    Some(Literal::float(52.509_09_f32)),
+                    Some(Literal::float(-1.885_249_f32)),
                 ]),
             ))])),
             Some(Literal::Struct(crate::spec::Struct::from_iter(vec![

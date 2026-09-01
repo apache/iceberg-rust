@@ -87,20 +87,27 @@ impl ParquetWriterBuilder {
     /// Build a `ParquetWriterBuilder` from Iceberg table properties and a
     /// schema, translating `write.parquet.*` settings into `WriterProperties`
     /// instead of using parquet-rs defaults.
-    pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Result<Self> {
-        let cdc = table_props.cdc_enabled.then_some(CdcOptions {
-            min_chunk_size: table_props.cdc_min_chunk_size,
-            max_chunk_size: table_props.cdc_max_chunk_size,
-            norm_level: table_props.cdc_norm_level,
-        });
-        let compression = parquet_compression(table_props.parquet_compression_codec)?;
+    pub fn from_table_properties(
+        table_props: &TableProperties<'_>,
+        schema: SchemaRef,
+    ) -> Result<Self> {
+        let cdc = if table_props.cdc_enabled()? {
+            Some(CdcOptions {
+                min_chunk_size: table_props.cdc_min_chunk_size()?,
+                max_chunk_size: table_props.cdc_max_chunk_size()?,
+                norm_level: table_props.cdc_norm_level()?,
+            })
+        } else {
+            None
+        };
+        let compression = parquet_compression(table_props.parquet_compression_codec()?)?;
         let props = WriterProperties::builder()
             .set_content_defined_chunking(cdc)
             .set_compression(compression)
-            .set_max_row_group_bytes(Some(table_props.parquet_row_group_size_bytes))
-            .set_data_page_size_limit(table_props.parquet_page_size_bytes)
-            .set_data_page_row_count_limit(table_props.parquet_page_row_limit)
-            .set_dictionary_page_size_limit(table_props.parquet_dict_size_bytes)
+            .set_max_row_group_bytes(Some(table_props.parquet_row_group_size_bytes()?))
+            .set_data_page_size_limit(table_props.parquet_page_size_bytes()?)
+            .set_data_page_row_count_limit(table_props.parquet_page_row_limit()?)
+            .set_dictionary_page_size_limit(table_props.parquet_dict_size_bytes()?)
             .build();
         Ok(Self::new_with_match_mode(props, schema, FieldMatchMode::Id))
     }
@@ -1046,10 +1053,11 @@ mod tests {
         let output_file = file_io.new_output(
             location_gen.generate_location(None, &file_name_gen.generate_file_name()),
         )?;
-        let table_properties = table_props(HashMap::from([(
+        let raw_properties = HashMap::from([(
             TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
             "test-key".to_string(),
-        )]));
+        )]);
+        let table_properties = TableProperties::new(&raw_properties);
         let mut parquet_writer =
             ParquetWriterBuilder::from_table_properties(&table_properties, iceberg_schema.clone())?
                 .with_encryption_manager(make_encryption_manager("test-key"))
@@ -1489,7 +1497,7 @@ mod tests {
                 (0, Datum::bool(false)),
                 (1, Datum::int(1)),
                 (2, Datum::long(1)),
-                (3, Datum::float(0.5)),
+                (3, Datum::float(0.5_f32)),
                 (4, Datum::double(0.5)),
                 (5, Datum::string("a")),
                 (6, Datum::binary(vec![])),
@@ -1529,7 +1537,7 @@ mod tests {
                 (0, Datum::bool(true)),
                 (1, Datum::int(4)),
                 (2, Datum::long(4)),
-                (3, Datum::float(3.5)),
+                (3, Datum::float(3.5_f32)),
                 (4, Datum::double(3.5)),
                 (5, Datum::string("d")),
                 (6, Datum::binary(vec![122, 122, 122, 122])),
@@ -1938,11 +1946,11 @@ mod tests {
         assert_eq!(*data_file.value_counts(), HashMap::from([(0, 4), (1, 4)]));
         assert_eq!(
             *data_file.lower_bounds(),
-            HashMap::from([(0, Datum::float(1.0)), (1, Datum::double(1.0)),])
+            HashMap::from([(0, Datum::float(1.0_f32)), (1, Datum::double(1.0)),])
         );
         assert_eq!(
             *data_file.upper_bounds(),
-            HashMap::from([(0, Datum::float(2.0)), (1, Datum::double(2.0)),])
+            HashMap::from([(0, Datum::float(2.0_f32)), (1, Datum::double(2.0)),])
         );
         assert_eq!(
             *data_file.null_value_counts(),
@@ -2078,11 +2086,11 @@ mod tests {
         assert_eq!(*data_file.value_counts(), HashMap::from([(4, 4), (7, 4)]));
         assert_eq!(
             *data_file.lower_bounds(),
-            HashMap::from([(4, Datum::float(1.0)), (7, Datum::float(1.0)),])
+            HashMap::from([(4, Datum::float(1.0_f32)), (7, Datum::float(1.0_f32)),])
         );
         assert_eq!(
             *data_file.upper_bounds(),
-            HashMap::from([(4, Datum::float(2.0)), (7, Datum::float(2.0)),])
+            HashMap::from([(4, Datum::float(2.0_f32)), (7, Datum::float(2.0_f32)),])
         );
         assert_eq!(
             *data_file.null_value_counts(),
@@ -2242,11 +2250,11 @@ mod tests {
         assert_eq!(*data_file.value_counts(), HashMap::from([(1, 4), (4, 4)]));
         assert_eq!(
             *data_file.lower_bounds(),
-            HashMap::from([(1, Datum::float(1.0)), (4, Datum::float(1.0))])
+            HashMap::from([(1, Datum::float(1.0_f32)), (4, Datum::float(1.0_f32))])
         );
         assert_eq!(
             *data_file.upper_bounds(),
-            HashMap::from([(1, Datum::float(2.0)), (4, Datum::float(2.0))])
+            HashMap::from([(1, Datum::float(2.0_f32)), (4, Datum::float(2.0_f32))])
         );
         assert_eq!(
             *data_file.null_value_counts(),
@@ -2428,18 +2436,18 @@ mod tests {
             *data_file.lower_bounds(),
             HashMap::from([
                 (1, Datum::int(1)),
-                (2, Datum::float(1.0)),
+                (2, Datum::float(1.0_f32)),
                 (6, Datum::int(1)),
-                (7, Datum::float(1.0))
+                (7, Datum::float(1.0_f32))
             ])
         );
         assert_eq!(
             *data_file.upper_bounds(),
             HashMap::from([
                 (1, Datum::int(4)),
-                (2, Datum::float(2.0)),
+                (2, Datum::float(2.0_f32)),
                 (6, Datum::int(4)),
-                (7, Datum::float(2.0))
+                (7, Datum::float(2.0_f32))
             ])
         );
         assert_eq!(
@@ -2546,20 +2554,18 @@ mod tests {
         )
     }
 
-    fn table_props(entries: HashMap<String, String>) -> TableProperties {
-        TableProperties::try_from(&entries).unwrap()
-    }
-
     #[test]
     fn test_from_table_properties_no_cdc_by_default() {
-        let tp = table_props(HashMap::new());
+        let raw_properties = HashMap::new();
+        let tp = TableProperties::new(&raw_properties);
         let builder = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema()).unwrap();
         assert!(builder.props.content_defined_chunking().is_none());
     }
 
     #[tokio::test]
     async fn test_from_table_properties_without_encryption_writes_plaintext() {
-        let tp = table_props(HashMap::new());
+        let raw_properties = HashMap::new();
+        let tp = TableProperties::new(&raw_properties);
         let tmp = TempDir::new().unwrap();
         let output = FileIO::new_with_fs()
             .new_output(format!("{}/plain.parquet", tmp.path().to_str().unwrap()))
@@ -2589,7 +2595,7 @@ mod tests {
         // written file) keeps this a direct propagation check: every future
         // `write.parquet.*` option just adds an assertion on its corresponding
         // `WriterProperties` getter here.
-        let tp = table_props(HashMap::from([
+        let raw_properties = HashMap::from([
             (
                 TableProperties::PROPERTY_PARQUET_CDC_ENABLED.to_string(),
                 "true".to_string(),
@@ -2606,7 +2612,8 @@ mod tests {
                 TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL.to_string(),
                 "2".to_string(),
             ),
-        ]));
+        ]);
+        let tp = TableProperties::new(&raw_properties);
 
         let tmp = TempDir::new().unwrap();
         let output = FileIO::new_with_fs()
@@ -2632,7 +2639,8 @@ mod tests {
     fn test_from_table_properties_sizing_defaults() {
         // With no properties set, the writer must use Iceberg's defaults (which
         // differ from parquet-rs's own defaults), not parquet-rs's.
-        let tp = table_props(HashMap::new());
+        let raw_properties = HashMap::new();
+        let tp = TableProperties::new(&raw_properties);
         let props = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
             .unwrap()
             .props;
@@ -2662,7 +2670,7 @@ mod tests {
 
     #[test]
     fn test_from_table_properties_sizing_and_compression_overrides() {
-        let tp = table_props(HashMap::from([
+        let raw_properties = HashMap::from([
             (
                 TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES.to_string(),
                 "1048576".to_string(),
@@ -2687,7 +2695,8 @@ mod tests {
                 TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL.to_string(),
                 "9".to_string(),
             ),
-        ]));
+        ]);
+        let tp = TableProperties::new(&raw_properties);
         let props = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
             .unwrap()
             .props;
@@ -2708,7 +2717,11 @@ mod tests {
             TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
             "bogus".to_string(),
         )]);
-        let err = TableProperties::try_from(&entries).unwrap_err();
+        let err = ParquetWriterBuilder::from_table_properties(
+            &TableProperties::new(&entries),
+            cdc_test_schema(),
+        )
+        .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.to_string().contains("bogus"));
     }

@@ -427,6 +427,25 @@ fn json_map() {
 }
 
 #[test]
+fn json_map_rejects_mismatched_key_value_lengths() {
+    let map_type = Type::Map(MapType {
+        key_field: NestedField::map_key_element(0, Primitive(PrimitiveType::String)).into(),
+        value_field: NestedField::map_value_element(1, Primitive(PrimitiveType::Int), true).into(),
+    });
+
+    for record in [
+        r#"{"keys":["a","b"],"values":[1]}"#,
+        r#"{"keys":["a"],"values":[1,2]}"#,
+    ] {
+        let value = serde_json::from_str::<JsonValue>(record).unwrap();
+        let error = Literal::try_from_json(value, &map_type).unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(error.to_string().contains("must have the same length"));
+    }
+}
+
+#[test]
 fn avro_bytes_boolean() {
     let bytes = vec![1u8];
 
@@ -458,7 +477,7 @@ fn avro_bytes_long_from_int() {
 fn avro_bytes_float() {
     let bytes = vec![0u8, 0u8, 128u8, 63u8];
 
-    check_avro_bytes_serde(bytes, Datum::float(1.0), &PrimitiveType::Float);
+    check_avro_bytes_serde(bytes, Datum::float(1.0_f32), &PrimitiveType::Float);
 }
 
 #[test]
@@ -1077,7 +1096,7 @@ fn test_datum_ser_deser() {
     let datum = Datum::long(1);
     test_fn(datum);
 
-    let datum = Datum::float(1.0);
+    let datum = Datum::float(1.0_f32);
     test_fn(datum);
     let datum = Datum::float(0_f32);
     test_fn(datum);
@@ -1200,7 +1219,7 @@ fn test_datum_double_convert_to_float() {
 
     let result = datum.to(&Primitive(PrimitiveType::Float)).unwrap();
 
-    let expected = Datum::float(2.5);
+    let expected = Datum::float(2.5_f32);
 
     assert_eq!(result, expected);
 }
@@ -1229,7 +1248,7 @@ fn test_datum_double_convert_to_float_below_min() {
 
 #[test]
 fn test_datum_float_convert_to_double() {
-    let datum = Datum::float(2.5);
+    let datum = Datum::float(2.5_f32);
 
     let result = datum.to(&Primitive(PrimitiveType::Double)).unwrap();
 
@@ -1358,10 +1377,10 @@ fn test_iceberg_float_order() {
         Datum::float(f32::MIN),
         Datum::float(f32::INFINITY),
         Datum::float(-f32::INFINITY),
-        Datum::float(1.0),
-        Datum::float(-1.0),
-        Datum::float(0.0),
-        Datum::float(-0.0),
+        Datum::float(1.0_f32),
+        Datum::float(-1.0_f32),
+        Datum::float(0.0_f32),
+        Datum::float(-0.0_f32),
     ];
 
     let mut float_sorted = float_values.clone();
@@ -1371,10 +1390,10 @@ fn test_iceberg_float_order() {
         Datum::float(-f32::NAN),
         Datum::float(-f32::INFINITY),
         Datum::float(f32::MIN),
-        Datum::float(-1.0),
-        Datum::float(-0.0),
-        Datum::float(0.0),
-        Datum::float(1.0),
+        Datum::float(-1.0_f32),
+        Datum::float(-0.0_f32),
+        Datum::float(0.0_f32),
+        Datum::float(1.0_f32),
         Datum::float(f32::MAX),
         Datum::float(f32::INFINITY),
         Datum::float(f32::NAN),
@@ -1418,8 +1437,8 @@ fn test_iceberg_float_order() {
 #[test]
 fn test_negative_zero_less_than_positive_zero() {
     {
-        let neg_zero = Datum::float(-0.0);
-        let pos_zero = Datum::float(0.0);
+        let neg_zero = Datum::float(-0.0_f32);
+        let pos_zero = Datum::float(0.0_f32);
 
         assert_eq!(
             neg_zero.partial_cmp(&pos_zero),
