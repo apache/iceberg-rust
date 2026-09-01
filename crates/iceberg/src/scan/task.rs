@@ -53,7 +53,7 @@ where D: serde::Deserializer<'de> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TypedBuilder)]
 #[builder(
     field_defaults(setter(prefix = "with_")),
-    build_method(vis = "", name = build_unchecked)
+    build_method(into = Result<FileScanTask>)
 )]
 pub struct FileScanTask {
     /// The total size of the data file in bytes, from the manifest entry.
@@ -283,43 +283,8 @@ impl FileScanTask {
     }
 }
 
-#[allow(non_camel_case_types)]
-impl<
-    __record_count: typed_builder::Optional<Option<u64>>,
-    __first_row_id: typed_builder::Optional<Option<i64>>,
-    __data_sequence_number: typed_builder::Optional<Option<i64>>,
-    __predicate: typed_builder::Optional<Option<BoundPredicate>>,
-    __deletes: typed_builder::Optional<Vec<FileScanTaskDeleteFile>>,
-    __partition: typed_builder::Optional<Option<Struct>>,
-    __partition_spec: typed_builder::Optional<Option<Arc<PartitionSpec>>>,
-    __name_mapping: typed_builder::Optional<Option<Arc<NameMapping>>>,
-    __unified_partition_type: typed_builder::Optional<Option<Arc<StructType>>>,
-    __key_metadata: typed_builder::Optional<Option<Box<[u8]>>>,
->
-    FileScanTaskBuilder<(
-        (u64,),
-        (u64,),
-        (u64,),
-        __record_count,
-        __first_row_id,
-        __data_sequence_number,
-        (String,),
-        (DataFileFormat,),
-        (SchemaRef,),
-        (Vec<i32>,),
-        __predicate,
-        __deletes,
-        __partition,
-        __partition_spec,
-        __name_mapping,
-        __unified_partition_type,
-        (bool,),
-        __key_metadata,
-    )>
-{
-    /// Validates the configured fields and builds a [`FileScanTask`].
-    pub fn build(self) -> Result<FileScanTask> {
-        let task = self.build_unchecked();
+impl From<FileScanTask> for Result<FileScanTask> {
+    fn from(task: FileScanTask) -> Self {
         task.validate()?;
         Ok(task)
     }

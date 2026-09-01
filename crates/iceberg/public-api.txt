@@ -1296,6 +1296,8 @@ impl core::clone::Clone for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::clone(&self) -> iceberg::scan::FileScanTask
 impl core::cmp::PartialEq for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::eq(&self, other: &iceberg::scan::FileScanTask) -> bool
+impl core::convert::From<iceberg::scan::FileScanTask> for iceberg::Result<iceberg::scan::FileScanTask>
+pub fn iceberg::Result<iceberg::scan::FileScanTask>::from(task: iceberg::scan::FileScanTask) -> Self
 impl core::fmt::Debug for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTask
