@@ -139,7 +139,7 @@ mod tests {
     use expect_test::expect;
     use futures::TryStreamExt;
 
-    use crate::scan::tests::TableTestFixture;
+    use crate::scan::test_utils::TableTestFixture;
     use crate::test_utils::check_record_batches;
 
     #[tokio::test]

@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use futures::channel::mpsc::Sender;
-use futures::{SinkExt, TryFutureExt};
+use futures::{SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
@@ -33,6 +34,34 @@ use crate::spec::{
 };
 use crate::{Error, ErrorKind, Result};
 
+/// Filter applied to each manifest file before it is loaded.
+/// Returns `true` to include the manifest, `false` to skip it.
+pub(crate) type ManifestFileFilter = Arc<dyn Fn(&ManifestFile) -> bool + Send + Sync>;
+
+/// Filter applied to each manifest entry after loading a manifest.
+/// Returns `true` to include the entry, `false` to skip it.
+pub(crate) type ManifestEntryFilter = Arc<dyn Fn(&ManifestEntryRef) -> bool + Send + Sync>;
+
+/// Declares the metadata a scan reads: the snapshots whose manifest lists the
+/// manifests are drawn from, plus the filters that narrow those manifests and
+/// their entries.
+pub(crate) struct ManifestSelection {
+    pub snapshots: Vec<SnapshotRef>,
+    pub manifest_filter: Option<ManifestFileFilter>,
+    pub entry_filter: Option<ManifestEntryFilter>,
+}
+
+impl ManifestSelection {
+    /// Every manifest listed by a single snapshot.
+    pub(crate) fn from_snapshot(snapshot: SnapshotRef) -> Self {
+        Self {
+            snapshots: vec![snapshot],
+            manifest_filter: None,
+            entry_filter: None,
+        }
+    }
+}
+
 /// Wraps a [`ManifestFile`] alongside the objects that are needed
 /// to process it in a thread-safe manner
 pub(crate) struct ManifestFileContext {
@@ -43,11 +72,12 @@ pub(crate) struct ManifestFileContext {
     field_ids: Arc<Vec<i32>>,
     bound_predicates: Option<Arc<BoundPredicates>>,
     object_cache: Arc<ObjectCache>,
-    snapshot_schema: SchemaRef,
+    scan_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     delete_file_index: DeleteFileIndex,
     name_mapping: Option<Arc<NameMapping>>,
     case_sensitive: bool,
+    entry_filter: Option<ManifestEntryFilter>,
     partition_spec: Option<PartitionSpecRef>,
     unified_partition_type: Option<Arc<StructType>>,
 }
@@ -61,7 +91,7 @@ pub(crate) struct ManifestEntryContext {
     pub field_ids: Arc<Vec<i32>>,
     pub bound_predicates: Option<Arc<BoundPredicates>>,
     pub partition_spec_id: i32,
-    pub snapshot_schema: SchemaRef,
+    pub scan_schema: SchemaRef,
     pub delete_file_index: DeleteFileIndex,
     pub name_mapping: Option<Arc<NameMapping>>,
     pub case_sensitive: bool,
@@ -77,13 +107,14 @@ impl ManifestFileContext {
             object_cache,
             manifest_file,
             bound_predicates,
-            snapshot_schema,
+            scan_schema,
             field_ids,
             mut sender,
             expression_evaluator_cache,
             delete_file_index,
             name_mapping,
             case_sensitive,
+            entry_filter,
             partition_spec,
             unified_partition_type,
         } = self;
@@ -91,6 +122,12 @@ impl ManifestFileContext {
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
         for manifest_entry in manifest.entries() {
+            if let Some(ref filter) = entry_filter
+                && !filter(manifest_entry)
+            {
+                continue;
+            }
+
             let manifest_entry_context = ManifestEntryContext {
                 // TODO: refactor to avoid the expensive ManifestEntry clone
                 manifest_entry: manifest_entry.clone(),
@@ -98,7 +135,7 @@ impl ManifestFileContext {
                 field_ids: field_ids.clone(),
                 partition_spec_id: manifest_file.partition_spec_id,
                 bound_predicates: bound_predicates.clone(),
-                snapshot_schema: snapshot_schema.clone(),
+                scan_schema: scan_schema.clone(),
                 delete_file_index: delete_file_index.clone(),
                 name_mapping: name_mapping.clone(),
                 case_sensitive,
@@ -137,11 +174,11 @@ impl ManifestEntryContext {
             .with_data_sequence_number(self.manifest_entry.sequence_number())
             .with_data_file_path(self.manifest_entry.file_path().to_string())
             .with_data_file_format(self.manifest_entry.file_format())
-            .with_schema(self.snapshot_schema)
+            .with_schema(self.scan_schema)
             .with_project_field_ids(self.field_ids.to_vec())
             .with_predicate(
                 self.bound_predicates
-                    .map(|x| x.as_ref().snapshot_bound_predicate.clone()),
+                    .map(|x| x.as_ref().scan_bound_predicate.clone()),
             )
             .with_deletes(deletes)
             .with_partition(Some(self.manifest_entry.data_file.partition.clone()))
@@ -154,17 +191,16 @@ impl ManifestEntryContext {
     }
 }
 
-/// PlanContext wraps a [`SnapshotRef`] alongside all the other
-/// objects that are required to perform a scan file plan.
+/// PlanContext holds everything needed to plan a scan's files: how to project,
+/// filter and evaluate them. Which manifests to read is a [`ManifestSelection`],
+/// so the same context serves a single-snapshot scan and a snapshot range alike.
 #[derive(Debug)]
 pub(crate) struct PlanContext {
-    pub snapshot: SnapshotRef,
-
     pub table_metadata: TableMetadataRef,
-    pub snapshot_schema: SchemaRef,
+    pub scan_schema: SchemaRef,
     pub case_sensitive: bool,
     pub predicate: Option<Arc<Predicate>>,
-    pub snapshot_bound_predicate: Option<Arc<BoundPredicate>>,
+    pub scan_bound_predicate: Option<Arc<BoundPredicate>>,
     pub object_cache: Arc<ObjectCache>,
     pub field_ids: Arc<Vec<i32>>,
     pub name_mapping: Option<Arc<NameMapping>>,
@@ -177,11 +213,36 @@ pub(crate) struct PlanContext {
 }
 
 impl PlanContext {
-    pub(crate) async fn get_manifest_list(&self) -> Result<Arc<ManifestList>> {
-        self.object_cache
-            .as_ref()
-            .get_manifest_list(&self.snapshot, &self.table_metadata)
-            .await
+    /// Reads the selected snapshots' manifest lists and returns the manifests to
+    /// scan, deduplicated by path: snapshots in a range often list the same manifest.
+    async fn manifest_files(
+        &self,
+        selection: &ManifestSelection,
+        concurrency_limit: usize,
+    ) -> Result<Vec<ManifestFile>> {
+        let manifest_lists: Vec<Arc<ManifestList>> = futures::stream::iter(&selection.snapshots)
+            .map(|snapshot| {
+                self.object_cache
+                    .get_manifest_list(snapshot, &self.table_metadata)
+            })
+            .buffered(concurrency_limit.max(1))
+            .try_collect()
+            .await?;
+
+        let mut seen = HashSet::new();
+
+        Ok(manifest_lists
+            .iter()
+            .flat_map(|manifest_list| manifest_list.entries())
+            .filter(|manifest_file| {
+                selection
+                    .manifest_filter
+                    .as_ref()
+                    .is_none_or(|filter| filter(manifest_file))
+            })
+            .filter(|manifest_file| seen.insert(manifest_file.manifest_path.clone()))
+            .cloned()
+            .collect())
     }
 
     /// Returns the partition filter for a manifest. See [`PartitionFilterCache::get`] for the
@@ -192,7 +253,7 @@ impl PlanContext {
         let partition_filter = self.partition_filter_cache.get(
             partition_spec_id,
             &self.table_metadata,
-            &self.snapshot_schema,
+            &self.scan_schema,
             self.case_sensitive,
             self.predicate
                 .as_ref()
@@ -201,20 +262,24 @@ impl PlanContext {
                     "Expected a predicate but none present",
                 ))?
                 .as_ref()
-                .bind(self.snapshot_schema.clone(), self.case_sensitive)?,
+                .bind(self.scan_schema.clone(), self.case_sensitive)?,
         )?;
 
         Ok(partition_filter)
     }
 
-    pub(crate) fn build_manifest_file_contexts(
+    pub(crate) async fn build_manifest_file_contexts(
         &self,
-        manifest_list: Arc<ManifestList>,
+        selection: ManifestSelection,
+        concurrency_limit_manifest_files: usize,
         tx_data: Sender<ManifestEntryContext>,
         delete_file_idx: DeleteFileIndex,
         delete_file_tx: Sender<ManifestEntryContext>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
-        let mut manifest_files = manifest_list.entries().iter().collect::<Vec<_>>();
+        let mut manifest_files = self
+            .manifest_files(&selection, concurrency_limit_manifest_files)
+            .await?;
+
         // Sort manifest files to process delete manifests first.
         // This avoids a deadlock where the producer blocks on sending data manifest entries
         // (because the data channel is full) while the delete manifest consumer is waiting
@@ -228,7 +293,7 @@ impl PlanContext {
 
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
-        for manifest_file in manifest_files {
+        for manifest_file in &manifest_files {
             let tx = if manifest_file.content == ManifestContentType::Deletes {
                 delete_file_tx.clone()
             } else {
@@ -261,6 +326,7 @@ impl PlanContext {
                 partition_bound_predicate,
                 tx,
                 delete_file_idx.clone(),
+                selection.entry_filter.clone(),
             );
 
             filtered_mfcs.push(Ok(mfc));
@@ -275,14 +341,15 @@ impl PlanContext {
         partition_filter: Option<Arc<BoundPredicate>>,
         sender: Sender<ManifestEntryContext>,
         delete_file_index: DeleteFileIndex,
+        entry_filter: Option<ManifestEntryFilter>,
     ) -> ManifestFileContext {
         let bound_predicates =
-            if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =
-                (partition_filter, &self.snapshot_bound_predicate)
+            if let (Some(ref partition_bound_predicate), Some(scan_bound_predicate)) =
+                (partition_filter, &self.scan_bound_predicate)
             {
                 Some(Arc::new(BoundPredicates {
                     partition_bound_predicate: partition_bound_predicate.as_ref().clone(),
-                    snapshot_bound_predicate: snapshot_bound_predicate.as_ref().clone(),
+                    scan_bound_predicate: scan_bound_predicate.as_ref().clone(),
                 }))
             } else {
                 None
@@ -293,12 +360,13 @@ impl PlanContext {
             bound_predicates,
             sender,
             object_cache: self.object_cache.clone(),
-            snapshot_schema: self.snapshot_schema.clone(),
+            scan_schema: self.scan_schema.clone(),
             field_ids: self.field_ids.clone(),
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
             delete_file_index,
             name_mapping: self.name_mapping.clone(),
             case_sensitive: self.case_sensitive,
+            entry_filter,
             partition_spec: self
                 .table_metadata
                 .partition_spec_by_id(manifest_file.partition_spec_id)
