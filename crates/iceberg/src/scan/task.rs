@@ -151,8 +151,10 @@ pub struct FileScanTask {
     pub unified_partition_type: Option<Arc<StructType>>,
 
     /// The sort order that this file's rows are sorted by, resolved from the data file's
-    /// `sort_order_id` against the table's known sort orders. `None` if the file has no
-    /// sort order id, or if the id doesn't resolve against the table's sort orders.
+    /// `sort_order_id` against the table's known sort orders. `Some` only if the id resolves
+    /// to a sort order with at least one field. `None` if the file has no sort order id, the
+    /// id doesn't resolve against the table's sort orders, or it resolves to the reserved
+    /// unsorted order (id 0, per the spec).
     ///
     /// Note: this reflects only the file's own recorded sort order id, not necessarily the
     /// table's current default sort order — see [`crate::spec::DataFile::sort_order_id`].

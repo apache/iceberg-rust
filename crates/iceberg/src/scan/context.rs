@@ -98,6 +98,7 @@ impl ManifestFileContext {
                 .data_file()
                 .sort_order_id()
                 .and_then(|id| table_metadata.sort_order_by_id(id as i64))
+                .filter(|order| !order.is_unsorted())
                 .cloned();
 
             let manifest_entry_context = ManifestEntryContext {

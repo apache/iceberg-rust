@@ -1640,13 +1640,13 @@ pub mod tests {
             manifest_list_write.close().await.unwrap();
         }
 
-        /// Writes a manifest with three live "Added" data-file entries (partitioned on `x`
-        /// = 100, 200, 300), each with the given `sort_order_id` set on its `DataFile`
+        /// Writes a manifest with four live "Added" data-file entries (partitioned on `x`
+        /// = 100, 200, 300, 400), each with the given `sort_order_id` set on its `DataFile`
         /// (`None` leaves the field unset). Used to test how `sort_order_id` resolution
         /// against the table's sort orders flows into each entry's `FileScanTask`.
         pub async fn setup_manifest_files_with_sort_order_ids(
             &mut self,
-            sort_order_ids: [Option<i32>; 3],
+            sort_order_ids: [Option<i32>; 4],
         ) {
             let current_snapshot = self.table.metadata().current_snapshot().unwrap();
             let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
@@ -2050,7 +2050,7 @@ pub mod tests {
             .clone();
 
         fixture
-            .setup_manifest_files_with_sort_order_ids([Some(3), None, Some(99)])
+            .setup_manifest_files_with_sort_order_ids([Some(3), None, Some(99), Some(0)])
             .await;
 
         let tasks: Vec<_> = fixture
@@ -2065,7 +2065,7 @@ pub mod tests {
             .await
             .unwrap();
 
-        assert_eq!(tasks.len(), 3, "expected all three FileScanTasks");
+        assert_eq!(tasks.len(), 4, "expected all four FileScanTasks");
 
         let resolved = tasks
             .iter()
@@ -2093,6 +2093,15 @@ pub mod tests {
         assert!(
             unresolvable.sort_order.is_none(),
             "a file with an unresolvable sort_order_id should carry no sort_order"
+        );
+
+        let unsorted = tasks
+            .iter()
+            .find(|t| t.data_file_path.ends_with("4.parquet"))
+            .unwrap();
+        assert!(
+            unsorted.sort_order.is_none(),
+            "a file with sort_order_id(0), the reserved unsorted order, should carry no sort_order"
         );
     }
 
