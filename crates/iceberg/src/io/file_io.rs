@@ -20,7 +20,6 @@ use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use serde::{Deserialize, Serialize};
 
 use super::storage::{
     LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageFactory,
@@ -70,16 +69,24 @@ pub struct FileIO {
     storage: Arc<OnceLock<Arc<dyn Storage>>>,
 }
 
-#[derive(Serialize)]
-struct SerializableFileIO<'a> {
-    config: &'a StorageConfig,
-    factory: &'a Arc<dyn StorageFactory>,
-}
+mod _serde {
+    use std::sync::Arc;
 
-#[derive(Deserialize)]
-struct DeserializedFileIO {
-    config: StorageConfig,
-    factory: Arc<dyn StorageFactory>,
+    use serde::{Deserialize, Serialize};
+
+    use super::{StorageConfig, StorageFactory};
+
+    #[derive(Serialize)]
+    pub(super) struct SerializableFileIO<'a> {
+        pub(super) config: &'a StorageConfig,
+        pub(super) factory: &'a Arc<dyn StorageFactory>,
+    }
+
+    #[derive(Deserialize)]
+    pub(super) struct DeserializedFileIO {
+        pub(super) config: StorageConfig,
+        pub(super) factory: Arc<dyn StorageFactory>,
+    }
 }
 
 impl FileIO {
@@ -121,7 +128,7 @@ impl FileIO {
     /// Storage factories are serialized through [`typetag`](https://docs.rs/typetag). Third-party
     /// factories must use `#[typetag::serde]` on their [`StorageFactory`] implementation.
     pub fn serialize_all(&self) -> Result<Vec<u8>> {
-        Ok(serde_json::to_vec(&SerializableFileIO {
+        Ok(serde_json::to_vec(&_serde::SerializableFileIO {
             config: &self.config,
             factory: &self.factory,
         })?)
@@ -133,7 +140,7 @@ impl FileIO {
     /// implementation so it is registered with `typetag`. Backend-specific requirements are
     /// documented by each storage factory implementation.
     pub fn deserialize_all(bytes: &[u8]) -> Result<Self> {
-        let DeserializedFileIO { config, factory } = serde_json::from_slice(bytes)?;
+        let _serde::DeserializedFileIO { config, factory } = serde_json::from_slice(bytes)?;
         Ok(Self {
             config,
             factory,
