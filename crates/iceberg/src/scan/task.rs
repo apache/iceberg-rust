@@ -291,7 +291,21 @@ impl FileScanTask {
                     ),
                 ))
             }
-            (Some(_), Some(_)) => Ok(()),
+            (Some(_), Some(partition_spec)) => {
+                if partition_spec
+                    .fields()
+                    .iter()
+                    .any(|field| self.schema.field_by_id(field.source_id).is_none())
+                {
+                    // Historical specs may reference source columns that were later dropped.
+                    // Without those source types, the spec cannot be checked against the
+                    // current schema, but the partition metadata remains valid for the task.
+                    return Ok(());
+                }
+
+                partition_spec.partition_type(&self.schema)?;
+                Ok(())
+            }
         }
     }
 }
@@ -524,5 +538,30 @@ mod tests {
             Some(partition_spec),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_file_scan_task_builder_rejects_partition_spec_incompatible_with_schema() {
+        let (_historical_schema, partition_spec) =
+            schema_and_spec(PrimitiveType::Timestamp, Transform::Day);
+        let current_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::required(
+                    1,
+                    "x",
+                    Type::Primitive(PrimitiveType::String),
+                ))])
+                .build()
+                .unwrap(),
+        );
+
+        let err = build_file_scan_task(
+            current_schema,
+            Some(Struct::from_iter([Some(Literal::date(20_000))])),
+            Some(partition_spec),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 }
