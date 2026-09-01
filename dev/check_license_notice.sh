@@ -163,9 +163,22 @@ for required_file in "${REQUIRED_FILES[@]}"; do
   fi
 done
 
+# Check for non-zero exit code, otherwise store in `PUBLISHABLE_CRATES`
+# Must be checked here rather than piped directly, otherwise the error code is ignored
+if ! PUBLISHABLE_CRATES="$(publishable_crates)"; then
+  report_error "Could not list the publishable crates"
+  exit 1
+fi
+
+# Verify at least one crate was listed
+if [ -z "${PUBLISHABLE_CRATES}" ]; then
+  report_error "No publishable crates found in the workspace, expected at least one"
+  exit 1
+fi
+
 while IFS=$'\t' read -r crate manifest_path; do
   check_crate "${crate}" "$(dirname "${manifest_path}")" || FAILED=1
-done < <(publishable_crates)
+done <<<"${PUBLISHABLE_CRATES}"
 
 if [ "${FAILED}" -ne 0 ]; then
   echo "Every publishable crate must package a top-level LICENSE and NOTICE resolving to the repository root copies." >&2
