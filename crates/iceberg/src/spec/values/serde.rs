@@ -418,6 +418,12 @@ pub(crate) mod _serde {
                     Type::Primitive(PrimitiveType::Timestamptz) => {
                         Ok(Some(Literal::timestamptz(v)))
                     }
+                    Type::Primitive(PrimitiveType::TimestampNs) => {
+                        Ok(Some(Literal::timestamp_nano(v)))
+                    }
+                    Type::Primitive(PrimitiveType::TimestamptzNs) => {
+                        Ok(Some(Literal::timestamptz_nano(v)))
+                    }
                     _ => Err(invalid_err("long")),
                 },
                 RawLiteralEnum::Float(v) => match ty {

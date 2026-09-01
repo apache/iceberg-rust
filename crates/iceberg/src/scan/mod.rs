@@ -2669,6 +2669,33 @@ pub mod tests {
         assert_eq!(task, deserialized);
     }
 
+    fn file_scan_task_with_partition(
+        primitive_type: PrimitiveType,
+        transform: Transform,
+        partition_value: Literal,
+    ) -> FileScanTask {
+        let schema = file_scan_task_test_schema(primitive_type);
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_partition_field("x", "x_partition", transform)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+        FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(123)
+            .with_start(10)
+            .with_length(100)
+            .with_project_field_ids(vec![1])
+            .with_schema(schema)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_partition(Some(Struct::from_iter([Some(partition_value)])))
+            .with_partition_spec(Some(partition_spec))
+            .with_case_sensitive(true)
+            .build()
+    }
+
     #[test]
     fn test_file_scan_task_serde_without_predicate() {
         let task = FileScanTask::builder()
@@ -2700,6 +2727,9 @@ pub mod tests {
             .with_data_file_format(DataFileFormat::Avro)
             .with_case_sensitive(false)
             .build();
+
+        let serialized = serde_json::to_value(&task).unwrap();
+        assert!(serialized.get("record_count").is_none());
         assert_file_scan_task_serde_round_trip(task);
     }
 
@@ -2764,6 +2794,142 @@ pub mod tests {
             .with_key_metadata(Some(vec![1, 2, 3].into_boxed_slice()))
             .build();
         assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_date_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Date,
+            Transform::Identity,
+            Literal::date(19_000),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_timestamp_ns_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::TimestampNs,
+            Transform::Identity,
+            Literal::timestamp_nano(1_510_871_468_123_456_789),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_timestamptz_ns_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::TimestamptzNs,
+            Transform::Identity,
+            Literal::timestamptz_nano(1_510_871_468_123_456_789),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_decimal_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Decimal {
+                precision: 9,
+                scale: 2,
+            },
+            Transform::Identity,
+            Literal::decimal(12_345),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_uuid_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Uuid,
+            Transform::Identity,
+            Literal::uuid(Uuid::from_u128(0x12345678_90ab_cdef_1234_567890abcdef)),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_fixed_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Fixed(4),
+            Transform::Identity,
+            Literal::fixed([1, 2, 3, 4]),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_bucket_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::String,
+            Transform::Bucket(4),
+            Literal::int(2),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_rejects_non_empty_partition_without_spec() {
+        let task = FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(0)
+            .with_start(0)
+            .with_length(100)
+            .with_project_field_ids(vec![1])
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Long))
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_partition(Some(Struct::from_iter([Some(Literal::long(42))])))
+            .with_case_sensitive(false)
+            .build();
+
+        let err = serde_json::to_string(&task).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Non-empty FileScanTask partition requires a partition spec")
+        );
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_omits_partition_with_dropped_source_column() {
+        let historical_schema = file_scan_task_test_schema(PrimitiveType::Long);
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(historical_schema)
+                .add_partition_field("x", "x", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+        let current_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::required(
+                    2,
+                    "y",
+                    Type::Primitive(PrimitiveType::String),
+                ))])
+                .build()
+                .unwrap(),
+        );
+        let task = FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(0)
+            .with_start(0)
+            .with_length(100)
+            .with_project_field_ids(vec![2])
+            .with_schema(current_schema)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_partition(Some(Struct::from_iter([Some(Literal::long(42))])))
+            .with_partition_spec(Some(partition_spec))
+            .with_case_sensitive(false)
+            .build();
+
+        let serialized = serde_json::to_value(&task).unwrap();
+        assert!(serialized.get("partition").is_none());
+
+        let mut expected = task;
+        expected.partition = None;
+        let deserialized: FileScanTask = serde_json::from_value(serialized).unwrap();
+        assert_eq!(deserialized, expected);
     }
 
     #[tokio::test]

@@ -24,8 +24,8 @@ use typed_builder::TypedBuilder;
 use crate::Result;
 use crate::expr::BoundPredicate;
 use crate::spec::{
-    DataContentType, DataFileFormat, Literal, ManifestEntryRef, NameMapping, PartitionSpec,
-    RawLiteral, Schema, SchemaRef, Struct, StructType, Type,
+    DataContentType, DataFileFormat, ManifestEntryRef, NameMapping, PartitionSpec, Schema,
+    SchemaRef, Struct, StructType,
 };
 
 /// A stream of [`FileScanTask`].
@@ -245,16 +245,24 @@ pub struct FileScanTaskDeleteFile {
 }
 
 mod _serde {
-    use serde_derive::{Deserialize as DeserializeDerive, Serialize as SerializeDerive};
+    use std::sync::Arc;
 
-    use super::*;
-    use crate::{Error, ErrorKind};
+    use serde::{Deserialize, Serialize};
 
-    #[derive(SerializeDerive, DeserializeDerive)]
+    use super::{FileScanTask, FileScanTaskDeleteFile};
+    use crate::expr::BoundPredicate;
+    use crate::spec::{
+        DataFileFormat, Literal, NameMapping, PartitionSpec, RawLiteral, Schema, SchemaRef,
+        StructType, Type,
+    };
+    use crate::{Error, ErrorKind, Result};
+
+    #[derive(Serialize, Deserialize)]
     pub(super) struct FileScanTaskSerde {
         file_size_in_bytes: u64,
         start: u64,
         length: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
         record_count: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         first_row_id: Option<i64>,
@@ -285,22 +293,88 @@ mod _serde {
         key_metadata: Option<Box<[u8]>>,
     }
 
-    impl TryFrom<FileScanTask> for FileScanTaskSerde {
+    #[derive(Serialize)]
+    struct FileScanTaskRefSerde<'a> {
+        file_size_in_bytes: u64,
+        start: u64,
+        length: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        record_count: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        first_row_id: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data_sequence_number: Option<i64>,
+        data_file_path: &'a str,
+        data_file_format: DataFileFormat,
+        schema: &'a SchemaRef,
+        project_field_ids: &'a [i32],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        predicate: Option<&'a BoundPredicate>,
+        deletes: &'a [FileScanTaskDeleteFile],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        partition: Option<RawLiteral>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        partition_spec: Option<&'a Arc<PartitionSpec>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name_mapping: Option<&'a Arc<NameMapping>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        unified_partition_type: Option<&'a Arc<StructType>>,
+        case_sensitive: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        key_metadata: Option<&'a [u8]>,
+    }
+
+    fn partition_type(
+        partition_spec: Option<&PartitionSpec>,
+        schema: &Schema,
+    ) -> Result<Option<Type>> {
+        let Some(partition_spec) = partition_spec else {
+            return Ok(Some(Type::Struct(
+                PartitionSpec::unpartition_spec().partition_type(schema)?,
+            )));
+        };
+
+        if partition_spec
+            .fields()
+            .iter()
+            .any(|field| schema.field_by_id(field.source_id).is_none())
+        {
+            // Partition values are advisory for pruning. A historical partition spec may
+            // legally reference a source column that has since been dropped, leaving no
+            // type information with which to encode the values safely.
+            return Ok(None);
+        }
+
+        Ok(Some(Type::Struct(partition_spec.partition_type(schema)?)))
+    }
+
+    impl<'a> TryFrom<&'a FileScanTask> for FileScanTaskRefSerde<'a> {
         type Error = Error;
 
-        fn try_from(value: FileScanTask) -> Result<Self> {
+        fn try_from(value: &'a FileScanTask) -> Result<Self> {
             let partition = value
                 .partition
+                .as_ref()
                 .map(|partition| {
-                    let partition_spec = value
-                        .partition_spec
-                        .clone()
-                        .unwrap_or_else(|| Arc::new(PartitionSpec::unpartition_spec()));
-                    let partition_type =
-                        Type::Struct(partition_spec.partition_type(&value.schema)?);
-                    RawLiteral::try_from(Literal::Struct(partition), &partition_type)
+                    if value.partition_spec.is_none() && !partition.fields().is_empty() {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Non-empty FileScanTask partition requires a partition spec",
+                        ));
+                    }
+
+                    let Some(partition_type) =
+                        partition_type(value.partition_spec.as_deref(), &value.schema)?
+                    else {
+                        return Ok(None);
+                    };
+                    Ok(Some(RawLiteral::try_from(
+                        Literal::Struct(partition.clone()),
+                        &partition_type,
+                    )?))
                 })
-                .transpose()?;
+                .transpose()?
+                .flatten();
 
             Ok(Self {
                 file_size_in_bytes: value.file_size_in_bytes,
@@ -309,28 +383,28 @@ mod _serde {
                 record_count: value.record_count,
                 first_row_id: value.first_row_id,
                 data_sequence_number: value.data_sequence_number,
-                data_file_path: value.data_file_path,
+                data_file_path: &value.data_file_path,
                 data_file_format: value.data_file_format,
-                schema: value.schema,
-                project_field_ids: value.project_field_ids,
-                predicate: value.predicate,
-                deletes: value.deletes,
+                schema: &value.schema,
+                project_field_ids: &value.project_field_ids,
+                predicate: value.predicate.as_ref(),
+                deletes: &value.deletes,
                 partition,
-                partition_spec: value.partition_spec,
-                name_mapping: value.name_mapping,
-                unified_partition_type: value.unified_partition_type,
+                partition_spec: value.partition_spec.as_ref(),
+                name_mapping: value.name_mapping.as_ref(),
+                unified_partition_type: value.unified_partition_type.as_ref(),
                 case_sensitive: value.case_sensitive,
-                key_metadata: value.key_metadata,
+                key_metadata: value.key_metadata.as_deref(),
             })
         }
     }
 
     impl Serialize for FileScanTask {
-        fn serialize<__S>(&self, __serializer: __S) -> std::result::Result<__S::Ok, __S::Error>
-        where __S: serde::Serializer {
-            FileScanTaskSerde::try_from(self.clone())
+        fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+        where S: serde::Serializer {
+            FileScanTaskRefSerde::try_from(self)
                 .map_err(serde::ser::Error::custom)?
-                .serialize(__serializer)
+                .serialize(serializer)
         }
     }
 
@@ -341,21 +415,32 @@ mod _serde {
             let partition = value
                 .partition
                 .map(|partition| {
-                    let partition_spec = value
-                        .partition_spec
-                        .clone()
-                        .unwrap_or_else(|| Arc::new(PartitionSpec::unpartition_spec()));
                     let partition_type =
-                        Type::Struct(partition_spec.partition_type(&value.schema)?);
-                    match partition.try_into(&partition_type)? {
-                        Some(Literal::Struct(partition)) => Ok(partition),
+                        partition_type(value.partition_spec.as_deref(), &value.schema)?;
+                    let Some(partition_type) = partition_type else {
+                        return Ok(None);
+                    };
+                    let partition = partition.try_into(&partition_type).map_err(|err| {
+                        if value.partition_spec.is_none() {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                "Non-empty FileScanTask partition requires a partition spec",
+                            )
+                            .with_source(err)
+                        } else {
+                            err
+                        }
+                    })?;
+                    match partition {
+                        Some(Literal::Struct(partition)) => Ok(Some(partition)),
                         _ => Err(Error::new(
                             ErrorKind::DataInvalid,
                             "FileScanTask partition must be a struct",
                         )),
                     }
                 })
-                .transpose()?;
+                .transpose()?
+                .flatten();
 
             Ok(Self {
                 file_size_in_bytes: value.file_size_in_bytes,
