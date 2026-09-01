@@ -23,6 +23,7 @@ members = [
   "crates/iceberg",
   "crates/integration_tests",
   "crates/integrations/*",
+  "crates/property-macro",
   "crates/sqllogictest",
   "crates/storage/*",
   "crates/test_utils",
@@ -38,7 +39,7 @@ version = "0.10.0"
 license = "Apache-2.0"
 repository = "https://github.com/apache/iceberg-rust"
 # Check the MSRV policy in README.md before changing this
-rust-version = "1.94"
+rust-version = "1.95"
 
 [workspace.lints.rust]
 unused_qualifications = "deny"
@@ -81,11 +82,12 @@ bytes = "1.11"
 cfg-if = "1"
 chrono = "0.4.41"
 clap = { version = "4.5.48", features = ["derive", "cargo"] }
+crc32fast = "1"
 dashmap = "6"
-datafusion = "54.1.0"
-datafusion-cli = "54.1.0"
-datafusion-ffi = "54.1.0"
-datafusion-sqllogictest = "54.1.0"
+datafusion = "54"
+datafusion-cli = "54"
+datafusion-ffi = "54"
+datafusion-sqllogictest = "54"
 derive_builder = "0.20"
 dirs = "6"
 enum-ordinalize = "4.3.0"
@@ -98,6 +100,7 @@ fastnum = { version = "0.7", default-features = false, features = [
 faststr = "0.2.31"
 flate2 = "1.1.5"
 fnv = "1.0.7"
+form_urlencoded = "1.2.2"
 fs-err = "3.1.0"
 futures = "0.3"
 hive_metastore = "0.2.0"
@@ -111,6 +114,7 @@ iceberg-catalog-rest = { version = "0.10.0", path = "./crates/catalog/rest" }
 iceberg-catalog-s3tables = { version = "0.10.0", path = "./crates/catalog/s3tables" }
 iceberg-catalog-sql = { version = "0.10.0", path = "./crates/catalog/sql" }
 iceberg-datafusion = { version = "0.10.0", path = "./crates/integrations/datafusion" }
+iceberg-property-macro = { version = "0.10.0", path = "./crates/property-macro" }
 iceberg-storage-opendal = { version = "0.10.0", path = "./crates/storage/opendal" }
 indicatif = "0.18"
 itertools = "0.13"
@@ -125,12 +129,14 @@ mockito = "1"
 motore-macros = "0.4.3"
 murmur3 = "0.5.2"
 once_cell = "1.20"
-opendal = "0.57"
+opendal = "0.58"
 ordered-float = "4"
 parquet = "58.4"
 pilota = "0.11.10"
 pretty_assertions = "1.4"
+proc-macro2 = "1"
 pyo3 = "0.28"
+quote = "1"
 rand = "0.9.3"
 regex = "1.11.3"
 reqsign-aws-v4 = "3.0.0"
@@ -148,6 +154,7 @@ sqllogictest = "0.29"
 sqlx = { version = "0.8.1", default-features = false }
 stacker = "0.1.20"
 strum = "0.27.2"
+syn = "2"
 tempfile = "3.18"
 thrift = "0.17.0"
 tokio = { version = "1.47", default-features = false, features = [
@@ -157,6 +164,7 @@ tokio = { version = "1.47", default-features = false, features = [
 toml = "0.8"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
+trybuild = "1"
 typed-builder = "0.20"
 typetag = "0.2"
 url = "2.5.7"

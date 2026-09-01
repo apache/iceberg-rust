@@ -23,9 +23,8 @@
 //! Each entry is a `"{method} {path}"` string, for example
 //! `"POST /v1/{prefix}/namespaces/{namespace}/tables"`; parse one through
 //! [`Endpoint`]'s [`FromStr`] implementation.
-//!
-//! Use [`RestCatalog::supports_endpoint`](crate::RestCatalog::supports_endpoint)
-//! to check whether the connected server advertised a given [`Endpoint`].
+//! The REST catalog uses the advertised set internally to select supported
+//! operations and compatibility fallbacks.
 
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};

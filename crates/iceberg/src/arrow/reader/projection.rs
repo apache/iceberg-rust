@@ -312,6 +312,26 @@ pub(super) fn build_field_id_map(
     Ok(Some(column_map))
 }
 
+/// Finds the Parquet leaf column index carrying `field_id` by its embedded id.
+///
+/// Unlike [`build_field_id_map`], a leaf without an embedded id does not abort the
+/// search -- it is simply skipped. This tolerates files that legitimately mix id-bearing
+/// and id-less leaves, e.g. a Variant column whose internal metadata/value leaves are
+/// required by the spec to have no field id, alongside a reserved metadata column that
+/// does carry its id.
+pub(super) fn find_leaf_by_field_id(
+    parquet_schema: &SchemaDescriptor,
+    field_id: i32,
+) -> Option<usize> {
+    parquet_schema.columns().iter().position(|col| {
+        matches!(
+            col.self_type(),
+            ParquetType::PrimitiveType { basic_info, .. }
+                if basic_info.has_id() && basic_info.id() == field_id
+        )
+    })
+}
+
 /// Build a fallback field ID map for Parquet files without embedded field IDs.
 ///
 /// Returns the number of primitive (leaf) columns in a Parquet type, recursing into groups.

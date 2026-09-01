@@ -73,15 +73,15 @@ use crate::error::Result;
 use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
-use crate::transaction::append::FastAppendAction;
-use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
-use crate::transaction::sort_order::ReplaceSortOrderAction;
-use crate::transaction::update_location::UpdateLocationAction;
-use crate::transaction::update_properties::UpdatePropertiesAction;
-use crate::transaction::update_schema::UpdateSchemaAction;
-use crate::transaction::update_statistics::UpdateStatisticsAction;
-use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
-use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
+pub use crate::transaction::append::FastAppendAction;
+pub use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
+pub use crate::transaction::sort_order::ReplaceSortOrderAction;
+pub use crate::transaction::update_location::UpdateLocationAction;
+pub use crate::transaction::update_properties::UpdatePropertiesAction;
+pub use crate::transaction::update_schema::UpdateSchemaAction;
+pub use crate::transaction::update_statistics::UpdateStatisticsAction;
+pub use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
+use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
 #[derive(Clone)]
@@ -178,15 +178,7 @@ impl Transaction {
             return Ok(self.table);
         }
 
-        let table_props = self.table.metadata().table_properties()?;
-
-        // TODO(https://github.com/apache/iceberg-rust/issues/2034): remove once encrypted writes are supported
-        if table_props.encryption_key_id.is_some() {
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Cannot commit to an encrypted table: encrypted writes are not yet supported",
-            ));
-        }
+        let table_props = self.table.metadata().table_properties();
 
         let backoff = Self::build_backoff(table_props)?;
         let tx = self;
@@ -203,14 +195,14 @@ impl Transaction {
         .1
     }
 
-    fn build_backoff(props: TableProperties) -> Result<ExponentialBackoff> {
+    fn build_backoff(props: TableProperties<'_>) -> Result<ExponentialBackoff> {
         Ok(ExponentialBuilder::new()
-            .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms))
-            .with_max_delay(Duration::from_millis(props.commit_max_retry_wait_ms))
+            .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms()?))
+            .with_max_delay(Duration::from_millis(props.commit_max_retry_wait_ms()?))
             .with_total_delay(Some(Duration::from_millis(
-                props.commit_total_retry_timeout_ms,
+                props.commit_total_retry_timeout_ms()?,
             )))
-            .with_max_times(props.commit_num_retries)
+            .with_max_times(props.commit_num_retries()?)
             .with_factor(2.0)
             .build())
     }
@@ -259,15 +251,14 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use crate::catalog::MockCatalog;
-    use crate::encryption::SensitiveBytes;
-    use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
     use crate::io::FileIO;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
+        TableProperties,
     };
     use crate::table::Table;
-    use crate::test_utils::test_runtime;
+    use crate::test_utils::{make_encrypted_table, test_runtime};
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
 
@@ -326,62 +317,6 @@ mod tests {
             .metadata_location("s3://bucket/test/location/metadata/v1.json")
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
             .file_io(FileIO::new_with_memory())
-            .runtime(test_runtime())
-            .build()
-            .unwrap()
-    }
-
-    /// Build a table backed by the V3 encryption fixture and an in-memory KMS,
-    /// so it has an [`EncryptionManager`](crate::encryption::EncryptionManager).
-    ///
-    /// The fixture's snapshot references an encrypted manifest list; its bytes
-    /// (the `manifest-list-v3-encrypted.avro` testdata, an encrypted empty list)
-    /// are seeded into the in-memory `FileIO` at that path so callers can read
-    /// the current snapshot's manifest list.
-    pub(crate) async fn make_encrypted_table() -> Table {
-        let file = File::open(format!(
-            "{}/testdata/table_metadata/{}",
-            env!("CARGO_MANIFEST_DIR"),
-            "TableMetadataV3ValidEncryption.json"
-        ))
-        .unwrap();
-        let reader = BufReader::new(file);
-        let metadata = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
-
-        let kms: Arc<dyn KeyManagementClient> = {
-            let k = MemoryKeyManagementClient::new();
-            k.add_master_key_bytes(
-                "master-1",
-                SensitiveBytes::new([
-                    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
-                    0x0d, 0x0e, 0x0f,
-                ]),
-            )
-            .unwrap();
-            Arc::new(k)
-        };
-
-        let file_io = FileIO::new_with_memory();
-
-        // Seed the encrypted (empty) manifest list at the path the snapshot references.
-        let manifest_list_bytes = std::fs::read(format!(
-            "{}/testdata/manifests_lists/manifest-list-v3-encrypted.avro",
-            env!("CARGO_MANIFEST_DIR"),
-        ))
-        .unwrap();
-        file_io
-            .new_output(metadata.current_snapshot().unwrap().manifest_list())
-            .unwrap()
-            .write(manifest_list_bytes.into())
-            .await
-            .unwrap();
-
-        Table::builder()
-            .metadata(metadata)
-            .metadata_location("memory:///table/metadata/v1.json")
-            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-            .file_io(file_io)
-            .kms_client(kms)
             .runtime(test_runtime())
             .build()
             .unwrap()
@@ -634,8 +569,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_commit_rejects_encrypted_table() {
-        let table = make_encrypted_table().await;
+    async fn test_commit_to_encrypted_table() {
+        let table = make_encrypted_table().await.with_metadata_location(
+            "memory:///table/metadata/00000-9c12d441-03fe-4693-9a96-a0705ddf69c1.metadata.json"
+                .to_string(),
+        );
+        let refreshed_table = table.clone();
+        let update_table = table.clone();
+        let mut mock_catalog = MockCatalog::new();
+        mock_catalog
+            .expect_load_table()
+            .times(1)
+            .returning_st(move |_| {
+                let refreshed_table = refreshed_table.clone();
+                Box::pin(async move { Ok(refreshed_table) })
+            });
+        mock_catalog
+            .expect_update_table()
+            .times(1)
+            .returning_st(move |commit| {
+                let update_table = update_table.clone();
+                Box::pin(async move { commit.apply(update_table) })
+            });
 
         let tx = Transaction::new(&table);
         let tx = tx
@@ -644,18 +599,25 @@ mod tests {
             .apply(tx)
             .unwrap();
 
-        let mock_catalog = MockCatalog::new();
-        let result = tx.commit(&mock_catalog).await;
+        let updated_table = tx.commit(&mock_catalog).await.unwrap();
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
-        assert!(
-            err.message()
-                .contains("encrypted writes are not yet supported"),
-            "unexpected error message: {}",
-            err.message()
+        assert_eq!(
+            updated_table
+                .metadata()
+                .properties()
+                .get(TableProperties::PROPERTY_ENCRYPTION_KEY_ID)
+                .map(String::as_str),
+            Some("master-1")
         );
+        assert_eq!(
+            updated_table
+                .metadata()
+                .properties()
+                .get("test.key")
+                .map(String::as_str),
+            Some("test.value")
+        );
+        assert!(updated_table.encryption_manager().is_some());
     }
 }
 

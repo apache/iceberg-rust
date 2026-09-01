@@ -533,7 +533,7 @@ impl Catalog for GlueCatalog {
         if !resp.table_list().is_empty() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Database with name: {} is not empty", &db_name),
+                format!("Database with name: {} is not empty", db_name),
             ));
         }
 

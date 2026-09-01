@@ -67,6 +67,24 @@ pub struct FileScanTask {
     #[builder(default)]
     pub record_count: Option<u64>,
 
+    /// The first row id assigned to the data file.
+    ///
+    /// Used to derive the `_row_id` metadata column: for a row without an
+    /// explicit `_row_id`, it is this value plus the row's ordinal position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub first_row_id: Option<i64>,
+
+    /// The data sequence number of the file, as opposed to its file sequence
+    /// number: the sequence number preserved when a file is carried forward
+    /// across a rewrite. May be null for an existing entry in a malformed
+    /// manifest that lacks one.
+    ///
+    /// Used to derive the `_last_updated_sequence_number` metadata column.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub data_sequence_number: Option<i64>,
+
     /// The data file path corresponding to the task.
     pub data_file_path: String,
 
@@ -190,6 +208,10 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
             .with_file_type(ctx.manifest_entry.content_type())
             .with_partition_spec_id(ctx.partition_spec_id)
             .with_equality_ids(ctx.manifest_entry.data_file.equality_ids.clone())
+            .with_referenced_data_file(ctx.manifest_entry.data_file.referenced_data_file.clone())
+            .with_content_offset(ctx.manifest_entry.data_file.content_offset)
+            .with_content_size_in_bytes(ctx.manifest_entry.data_file.content_size_in_bytes)
+            .with_record_count(Some(ctx.manifest_entry.record_count()))
             .with_key_metadata(
                 ctx.manifest_entry
                     .data_file
@@ -220,6 +242,34 @@ pub struct FileScanTaskDeleteFile {
     /// equality ids for equality deletes (null for anything other than equality-deletes)
     #[builder(default)]
     pub equality_ids: Option<Vec<i32>>,
+
+    /// For a deletion vector, the location of the data file whose rows it deletes. Required for
+    /// deletion vectors, and may also be set on a position delete file scoped to one data file.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub referenced_data_file: Option<String>,
+
+    /// For a deletion vector, the offset of the blob within its Puffin file. Set only for
+    /// deletion vectors, where it locates the blob for direct access.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub content_offset: Option<i64>,
+
+    /// For a deletion vector, the length in bytes of the blob within its Puffin file.
+    /// Required together with `content_offset`; both are absent for non-DV delete files.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub content_size_in_bytes: Option<i64>,
+
+    /// The number of records in the delete file, from the manifest entry; for a deletion vector,
+    /// the cardinality of its bitmap. `None` only for a task not built from a manifest entry.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub record_count: Option<u64>,
 
     /// Key metadata for encrypted delete files (Parquet Modular Encryption).
     /// When present, the reader uses this to build `FileDecryptionProperties`.
