@@ -113,7 +113,7 @@ impl DeleteFileIndex {
     pub(crate) async fn get_deletes_for_data_file(
         &self,
         data_file: &DataFile,
-        seq_num: Option<i64>,
+        data_sequence_number: i64,
     ) -> Vec<FileScanTaskDeleteFile> {
         // Create the `Notified` while holding the read lock. The read lock ensures that
         // when we go inside it, either the state is already at Populated or it is still
@@ -125,7 +125,7 @@ impl DeleteFileIndex {
             match &*guard {
                 DeleteFileIndexState::Populating(notifier) => notifier.clone().notified_owned(),
                 DeleteFileIndexState::Populated(index) => {
-                    return index.get_deletes_for_data_file(data_file, seq_num);
+                    return index.get_deletes_for_data_file(data_file, data_sequence_number);
                 }
             }
         };
@@ -135,7 +135,7 @@ impl DeleteFileIndex {
         let guard = self.state.read().unwrap();
         match guard.deref() {
             DeleteFileIndexState::Populated(index) => {
-                index.get_deletes_for_data_file(data_file, seq_num)
+                index.get_deletes_for_data_file(data_file, data_sequence_number)
             }
             _ => unreachable!("Cannot be any other state than loaded"),
         }
@@ -206,28 +206,20 @@ impl PopulatedDeleteFileIndex {
     fn get_deletes_for_data_file(
         &self,
         data_file: &DataFile,
-        seq_num: Option<i64>,
+        data_sequence_number: i64,
     ) -> Vec<FileScanTaskDeleteFile> {
         let mut results = vec![];
 
         self.global_equality_deletes
             .iter()
-            // filter that returns true if the provided delete file's sequence number is **greater than** `seq_num`
-            .filter(|&delete| {
-                seq_num
-                    .map(|seq_num| delete.manifest_entry.sequence_number() > Some(seq_num))
-                    .unwrap_or_else(|| true)
-            })
+            .filter(|&delete| delete.manifest_entry.data_sequence_number() > data_sequence_number)
             .for_each(|delete| results.push(delete.as_ref().into()));
 
         if let Some(deletes) = self.eq_deletes_by_partition.get(data_file.partition()) {
             deletes
                 .iter()
-                // filter that returns true if the provided delete file's sequence number is **greater than** `seq_num`
                 .filter(|&delete| {
-                    seq_num
-                        .map(|seq_num| delete.manifest_entry.sequence_number() > Some(seq_num))
-                        .unwrap_or_else(|| true)
+                    delete.manifest_entry.data_sequence_number() > data_sequence_number
                         && data_file.partition_spec_id == delete.partition_spec_id
                 })
                 .for_each(|delete| results.push(delete.as_ref().into()));
@@ -236,11 +228,8 @@ impl PopulatedDeleteFileIndex {
         if let Some(deletes) = self.pos_deletes_by_partition.get(data_file.partition()) {
             deletes
                 .iter()
-                // filter that returns true if the provided delete file's sequence number is **greater than or equal to** `seq_num`
                 .filter(|&delete| {
-                    seq_num
-                        .map(|seq_num| delete.manifest_entry.sequence_number() >= Some(seq_num))
-                        .unwrap_or_else(|| true)
+                    delete.manifest_entry.data_sequence_number() >= data_sequence_number
                         && data_file.partition_spec_id == delete.partition_spec_id
                 })
                 .for_each(|delete| results.push(delete.as_ref().into()));
@@ -252,11 +241,8 @@ impl PopulatedDeleteFileIndex {
         if let Some(deletes) = self.pos_deletes_by_path.get(data_file.file_path()) {
             deletes
                 .iter()
-                // filter that returns true if the provided delete file's sequence number is **greater than or equal to** `seq_num`
                 .filter(|&delete| {
-                    seq_num
-                        .map(|seq_num| delete.manifest_entry.sequence_number() >= Some(seq_num))
-                        .unwrap_or(true)
+                    delete.manifest_entry.data_sequence_number() >= data_sequence_number
                 })
                 .for_each(|delete| results.push(delete.as_ref().into()));
         }
@@ -271,8 +257,8 @@ mod tests {
 
     use super::*;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
-        ManifestStatus, Struct,
+        DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, LiveManifestEntry,
+        ManifestEntry, ManifestStatus, Struct,
     };
 
     #[test]
@@ -292,7 +278,7 @@ mod tests {
         let delete_contexts: Vec<DeleteFileContext> = deletes
             .into_iter()
             .map(|entry| DeleteFileContext {
-                manifest_entry: entry.into(),
+                manifest_entry: live_manifest_entry(entry),
                 partition_spec_id: 0,
             })
             .collect();
@@ -303,17 +289,17 @@ mod tests {
 
         // All deletes apply to sequence 0
         let delete_files_to_apply_for_seq_0 =
-            delete_file_index.get_deletes_for_data_file(&data_file, Some(0));
+            delete_file_index.get_deletes_for_data_file(&data_file, 0);
         assert_eq!(delete_files_to_apply_for_seq_0.len(), 4);
 
         // All deletes apply to sequence 3
         let delete_files_to_apply_for_seq_3 =
-            delete_file_index.get_deletes_for_data_file(&data_file, Some(3));
+            delete_file_index.get_deletes_for_data_file(&data_file, 3);
         assert_eq!(delete_files_to_apply_for_seq_3.len(), 4);
 
         // Last 3 deletes apply to sequence 4
         let delete_files_to_apply_for_seq_4 =
-            delete_file_index.get_deletes_for_data_file(&data_file, Some(4));
+            delete_file_index.get_deletes_for_data_file(&data_file, 4);
         let actual_paths_to_apply_for_seq_4: Vec<String> = delete_files_to_apply_for_seq_4
             .into_iter()
             .map(|file| file.file_path)
@@ -326,7 +312,7 @@ mod tests {
 
         // Last 3 deletes apply to sequence 5
         let delete_files_to_apply_for_seq_5 =
-            delete_file_index.get_deletes_for_data_file(&data_file, Some(5));
+            delete_file_index.get_deletes_for_data_file(&data_file, 5);
         let actual_paths_to_apply_for_seq_5: Vec<String> = delete_files_to_apply_for_seq_5
             .into_iter()
             .map(|file| file.file_path)
@@ -338,7 +324,7 @@ mod tests {
 
         // Only the last position delete applies to sequence 6
         let delete_files_to_apply_for_seq_6 =
-            delete_file_index.get_deletes_for_data_file(&data_file, Some(6));
+            delete_file_index.get_deletes_for_data_file(&data_file, 6);
         let actual_paths_to_apply_for_seq_6: Vec<String> = delete_files_to_apply_for_seq_6
             .into_iter()
             .map(|file| file.file_path)
@@ -353,7 +339,7 @@ mod tests {
             build_partitioned_data_file(&Struct::from_iter([Some(Literal::long(100))]), 1);
 
         let delete_files_to_apply_for_partitioned_file =
-            delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(0));
+            delete_file_index.get_deletes_for_data_file(&partitioned_file, 0);
         let actual_paths_to_apply_for_partitioned_file: Vec<String> =
             delete_files_to_apply_for_partitioned_file
                 .into_iter()
@@ -384,7 +370,7 @@ mod tests {
         let delete_contexts: Vec<DeleteFileContext> = deletes
             .into_iter()
             .map(|entry| DeleteFileContext {
-                manifest_entry: entry.into(),
+                manifest_entry: live_manifest_entry(entry),
                 partition_spec_id: spec_id,
             })
             .collect();
@@ -396,17 +382,17 @@ mod tests {
 
         // All deletes apply to sequence 0
         let delete_files_to_apply_for_seq_0 =
-            delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(0));
+            delete_file_index.get_deletes_for_data_file(&partitioned_file, 0);
         assert_eq!(delete_files_to_apply_for_seq_0.len(), 4);
 
         // All deletes apply to sequence 3
         let delete_files_to_apply_for_seq_3 =
-            delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(3));
+            delete_file_index.get_deletes_for_data_file(&partitioned_file, 3);
         assert_eq!(delete_files_to_apply_for_seq_3.len(), 4);
 
         // Last 3 deletes apply to sequence 4
         let delete_files_to_apply_for_seq_4 =
-            delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(4));
+            delete_file_index.get_deletes_for_data_file(&partitioned_file, 4);
         let actual_paths_to_apply_for_seq_4: Vec<String> = delete_files_to_apply_for_seq_4
             .into_iter()
             .map(|file| file.file_path)
@@ -419,7 +405,7 @@ mod tests {
 
         // Last 3 deletes apply to sequence 5
         let delete_files_to_apply_for_seq_5 =
-            delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(5));
+            delete_file_index.get_deletes_for_data_file(&partitioned_file, 5);
         let actual_paths_to_apply_for_seq_5: Vec<String> = delete_files_to_apply_for_seq_5
             .into_iter()
             .map(|file| file.file_path)
@@ -431,7 +417,7 @@ mod tests {
 
         // Only the last position delete applies to sequence 6
         let delete_files_to_apply_for_seq_6 =
-            delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(6));
+            delete_file_index.get_deletes_for_data_file(&partitioned_file, 6);
         let actual_paths_to_apply_for_seq_6: Vec<String> = delete_files_to_apply_for_seq_6
             .into_iter()
             .map(|file| file.file_path)
@@ -445,7 +431,7 @@ mod tests {
         let partitioned_second_file =
             build_partitioned_data_file(&Struct::from_iter([Some(Literal::long(200))]), 1);
         let delete_files_to_apply_for_different_partition =
-            delete_file_index.get_deletes_for_data_file(&partitioned_second_file, Some(0));
+            delete_file_index.get_deletes_for_data_file(&partitioned_second_file, 0);
         let actual_paths_to_apply_for_different_partition: Vec<String> =
             delete_files_to_apply_for_different_partition
                 .into_iter()
@@ -456,7 +442,7 @@ mod tests {
         // Data file with same tuple but different spec ID does not match any delete files
         let partitioned_different_spec = build_partitioned_data_file(&partition_one, 2);
         let delete_files_to_apply_for_different_spec =
-            delete_file_index.get_deletes_for_data_file(&partitioned_different_spec, Some(0));
+            delete_file_index.get_deletes_for_data_file(&partitioned_different_spec, 0);
         let actual_paths_to_apply_for_different_spec: Vec<String> =
             delete_files_to_apply_for_different_spec
                 .into_iter()
@@ -472,17 +458,17 @@ mod tests {
 
         let pos_delete = build_pos_delete_referencing(data_file_a.file_path());
         let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
-            manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+            manifest_entry: live_manifest_entry(build_added_manifest_entry(5, &pos_delete)),
             partition_spec_id: 0,
         }]);
 
-        let deletes_for_a = index.get_deletes_for_data_file(&data_file_a, Some(0));
+        let deletes_for_a = index.get_deletes_for_data_file(&data_file_a, 0);
         assert_eq!(deletes_for_a.len(), 1);
         assert_eq!(deletes_for_a[0].file_path, pos_delete.file_path());
 
         // The delete references data file A, so it must not apply to data file B
         // even though B shares A's partition.
-        let deletes_for_b = index.get_deletes_for_data_file(&data_file_b, Some(0));
+        let deletes_for_b = index.get_deletes_for_data_file(&data_file_b, 0);
         assert!(deletes_for_b.is_empty());
     }
 
@@ -496,19 +482,12 @@ mod tests {
         let pos_delete =
             build_pos_delete_with_path_bounds(data_file_a.file_path(), data_file_a.file_path());
         let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
-            manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+            manifest_entry: live_manifest_entry(build_added_manifest_entry(5, &pos_delete)),
             partition_spec_id: 0,
         }]);
 
-        assert_eq!(
-            index.get_deletes_for_data_file(&data_file_a, Some(0)).len(),
-            1
-        );
-        assert!(
-            index
-                .get_deletes_for_data_file(&data_file_b, Some(0))
-                .is_empty()
-        );
+        assert_eq!(index.get_deletes_for_data_file(&data_file_a, 0).len(), 1);
+        assert!(index.get_deletes_for_data_file(&data_file_b, 0).is_empty());
     }
 
     #[test]
@@ -521,18 +500,12 @@ mod tests {
         // in the partition.
         let pos_delete = build_pos_delete_with_path_bounds("a-data.parquet", "z-data.parquet");
         let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
-            manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+            manifest_entry: live_manifest_entry(build_added_manifest_entry(5, &pos_delete)),
             partition_spec_id: 0,
         }]);
 
-        assert_eq!(
-            index.get_deletes_for_data_file(&data_file_a, Some(0)).len(),
-            1
-        );
-        assert_eq!(
-            index.get_deletes_for_data_file(&data_file_b, Some(0)).len(),
-            1
-        );
+        assert_eq!(index.get_deletes_for_data_file(&data_file_a, 0).len(), 1);
+        assert_eq!(index.get_deletes_for_data_file(&data_file_b, 0).len(), 1);
     }
 
     #[test]
@@ -544,14 +517,11 @@ mod tests {
         // An exact path match is sufficient proof that the delete applies.
         let pos_delete = build_pos_delete_referencing(data_file.file_path());
         let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
-            manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+            manifest_entry: live_manifest_entry(build_added_manifest_entry(5, &pos_delete)),
             partition_spec_id: 0,
         }]);
 
-        assert_eq!(
-            index.get_deletes_for_data_file(&data_file, Some(0)).len(),
-            1
-        );
+        assert_eq!(index.get_deletes_for_data_file(&data_file, 0).len(), 1);
     }
 
     #[test]
@@ -560,27 +530,15 @@ mod tests {
 
         let pos_delete = build_pos_delete_referencing(data_file.file_path());
         let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
-            manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+            manifest_entry: live_manifest_entry(build_added_manifest_entry(5, &pos_delete)),
             partition_spec_id: 0,
         }]);
 
         // Position deletes apply when the delete's sequence number is greater
         // than or equal to the data file's.
-        assert_eq!(
-            index.get_deletes_for_data_file(&data_file, Some(4)).len(),
-            1
-        );
-        assert_eq!(
-            index.get_deletes_for_data_file(&data_file, Some(5)).len(),
-            1
-        );
-        assert!(
-            index
-                .get_deletes_for_data_file(&data_file, Some(6))
-                .is_empty()
-        );
-        // Without a sequence number, the delete applies unconditionally.
-        assert_eq!(index.get_deletes_for_data_file(&data_file, None).len(), 1);
+        assert_eq!(index.get_deletes_for_data_file(&data_file, 4).len(), 1);
+        assert_eq!(index.get_deletes_for_data_file(&data_file, 5).len(), 1);
+        assert!(index.get_deletes_for_data_file(&data_file, 6).is_empty());
     }
 
     #[test]
@@ -596,21 +554,24 @@ mod tests {
 
         let index = PopulatedDeleteFileIndex::new(vec![
             DeleteFileContext {
-                manifest_entry: build_added_manifest_entry(5, &path_delete).into(),
+                manifest_entry: live_manifest_entry(build_added_manifest_entry(5, &path_delete)),
                 partition_spec_id: 0,
             },
             DeleteFileContext {
-                manifest_entry: build_added_manifest_entry(5, &partition_delete).into(),
+                manifest_entry: live_manifest_entry(build_added_manifest_entry(
+                    5,
+                    &partition_delete,
+                )),
                 partition_spec_id: 0,
             },
             DeleteFileContext {
-                manifest_entry: build_added_manifest_entry(5, &eq_delete).into(),
+                manifest_entry: live_manifest_entry(build_added_manifest_entry(5, &eq_delete)),
                 partition_spec_id: 0,
             },
         ]);
 
         let mut actual_paths: Vec<String> = index
-            .get_deletes_for_data_file(&data_file, Some(0))
+            .get_deletes_for_data_file(&data_file, 0)
             .into_iter()
             .map(|delete| delete.file_path)
             .collect();
@@ -635,17 +596,17 @@ mod tests {
 
         let index = PopulatedDeleteFileIndex::new(vec![
             DeleteFileContext {
-                manifest_entry: build_added_manifest_entry(5, &first_delete).into(),
+                manifest_entry: live_manifest_entry(build_added_manifest_entry(5, &first_delete)),
                 partition_spec_id: 0,
             },
             DeleteFileContext {
-                manifest_entry: build_added_manifest_entry(6, &second_delete).into(),
+                manifest_entry: live_manifest_entry(build_added_manifest_entry(6, &second_delete)),
                 partition_spec_id: 0,
             },
         ]);
 
         let mut actual_paths: Vec<String> = index
-            .get_deletes_for_data_file(&data_file, Some(0))
+            .get_deletes_for_data_file(&data_file, 0)
             .into_iter()
             .map(|delete| delete.file_path)
             .collect();
@@ -677,17 +638,17 @@ mod tests {
         pos_delete.partition_spec_id = 1;
 
         let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
-            manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+            manifest_entry: live_manifest_entry(build_added_manifest_entry(5, &pos_delete)),
             partition_spec_id: 1,
         }]);
 
-        let deletes_for_referenced = index.get_deletes_for_data_file(&data_file, Some(0));
+        let deletes_for_referenced = index.get_deletes_for_data_file(&data_file, 0);
         assert_eq!(deletes_for_referenced.len(), 1);
         assert_eq!(deletes_for_referenced[0].file_path, pos_delete.file_path());
 
         assert!(
             index
-                .get_deletes_for_data_file(&same_partition_neighbor, Some(0))
+                .get_deletes_for_data_file(&same_partition_neighbor, 0)
                 .is_empty()
         );
     }
@@ -704,18 +665,13 @@ mod tests {
         pos_delete.upper_bounds = HashMap::default();
 
         let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
-            manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+            manifest_entry: live_manifest_entry(build_added_manifest_entry(5, &pos_delete)),
             partition_spec_id: 0,
         }]);
 
+        assert_eq!(index.get_deletes_for_data_file(&data_file, 0).len(), 1);
         assert_eq!(
-            index.get_deletes_for_data_file(&data_file, Some(0)).len(),
-            1
-        );
-        assert_eq!(
-            index
-                .get_deletes_for_data_file(&other_data_file, Some(0))
-                .len(),
+            index.get_deletes_for_data_file(&other_data_file, 0).len(),
             1
         );
     }
@@ -776,7 +732,7 @@ mod tests {
             .unwrap();
 
         let ctx = DeleteFileContext {
-            manifest_entry: build_added_manifest_entry(5, &dv).into(),
+            manifest_entry: live_manifest_entry(build_added_manifest_entry(5, &dv)),
             partition_spec_id: 0,
         };
 
@@ -858,5 +814,11 @@ mod tests {
             .sequence_number(data_seq_number)
             .data_file(file.clone())
             .build()
+    }
+
+    fn live_manifest_entry(entry: ManifestEntry) -> LiveManifestEntry {
+        LiveManifestEntry::try_new(entry.into(), "test-manifest.avro")
+            .unwrap()
+            .unwrap()
     }
 }

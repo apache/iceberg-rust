@@ -526,11 +526,6 @@ impl TableScan {
         manifest_entry_context: ManifestEntryContext,
         mut file_scan_task_tx: Sender<Result<FileScanTask>>,
     ) -> Result<()> {
-        // skip processing this manifest entry if it has been marked as deleted
-        if !manifest_entry_context.manifest_entry.is_alive() {
-            return Ok(());
-        }
-
         // abort the plan if we encounter a manifest entry for a delete file
         if manifest_entry_context.manifest_entry.content_type() != DataContentType::Data {
             return Err(Error::new(
@@ -583,11 +578,6 @@ impl TableScan {
         manifest_entry_context: ManifestEntryContext,
         mut delete_file_ctx_tx: Sender<DeleteFileContext>,
     ) -> Result<()> {
-        // skip processing this manifest entry if it has been marked as deleted
-        if !manifest_entry_context.manifest_entry.is_alive() {
-            return Ok(());
-        }
-
         // abort the plan if we encounter a manifest entry that is not for a delete file
         if manifest_entry_context.manifest_entry.content_type() == DataContentType::Data {
             return Err(Error::new(

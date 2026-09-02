@@ -24,7 +24,7 @@ use typed_builder::TypedBuilder;
 use crate::Result;
 use crate::expr::BoundPredicate;
 use crate::spec::{
-    DataContentType, DataFileFormat, ManifestEntryRef, NameMapping, PartitionSpec, Schema,
+    DataContentType, DataFileFormat, LiveManifestEntry, NameMapping, PartitionSpec, Schema,
     SchemaRef, Struct, StructType,
 };
 
@@ -196,7 +196,7 @@ impl FileScanTask {
 
 #[derive(Debug)]
 pub(crate) struct DeleteFileContext {
-    pub(crate) manifest_entry: ManifestEntryRef,
+    pub(crate) manifest_entry: LiveManifestEntry,
     pub(crate) partition_spec_id: i32,
 }
 
@@ -207,14 +207,14 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
             .with_file_size_in_bytes(ctx.manifest_entry.file_size_in_bytes())
             .with_file_type(ctx.manifest_entry.content_type())
             .with_partition_spec_id(ctx.partition_spec_id)
-            .with_equality_ids(ctx.manifest_entry.data_file.equality_ids.clone())
-            .with_referenced_data_file(ctx.manifest_entry.data_file.referenced_data_file.clone())
-            .with_content_offset(ctx.manifest_entry.data_file.content_offset)
-            .with_content_size_in_bytes(ctx.manifest_entry.data_file.content_size_in_bytes)
+            .with_equality_ids(ctx.manifest_entry.data_file().equality_ids.clone())
+            .with_referenced_data_file(ctx.manifest_entry.data_file().referenced_data_file.clone())
+            .with_content_offset(ctx.manifest_entry.data_file().content_offset)
+            .with_content_size_in_bytes(ctx.manifest_entry.data_file().content_size_in_bytes)
             .with_record_count(Some(ctx.manifest_entry.record_count()))
             .with_key_metadata(
                 ctx.manifest_entry
-                    .data_file
+                    .data_file()
                     .key_metadata
                     .as_deref()
                     .map(Box::from),
