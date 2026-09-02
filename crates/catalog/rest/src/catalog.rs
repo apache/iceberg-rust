@@ -1404,8 +1404,15 @@ impl SessionCatalog for RestSessionCatalog {
             "Metadata location missing in `register_table` response!",
         ))?;
 
+        let mut base_config = response.config.clone();
+        base_config.extend(self.user_config.props.clone());
+
         let file_io = self
-            .load_file_io(Some(metadata_location), None, None)
+            .load_file_io(
+                Some(metadata_location),
+                Some(base_config),
+                response.storage_credentials.as_deref(),
+            )
             .await?;
 
         let mut table_builder = Table::builder()
@@ -1484,8 +1491,10 @@ impl SessionCatalog for RestSessionCatalog {
             }
         };
 
-        // The commit response carries no credentials, so build a plain FileIO;
-        // the transaction layer reuses the credentialed one it already holds.
+        // The commit response carries no credentials, so this FileIO has only the
+        // catalog-level config. `Transaction::do_commit` swaps in the credentialed
+        // one from its pre-commit load; only a direct `update_table` caller sees
+        // this plain one.
         let file_io = self
             .load_file_io(Some(&response.metadata_location), None, None)
             .await?;
@@ -4386,6 +4395,56 @@ mod tests {
         assert_eq!(
             "s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json",
             table.metadata_location().unwrap()
+        );
+
+        config_mock.assert_async().await;
+        register_table_mock.assert_async().await;
+    }
+
+    /// The register response is a `LoadTableResult`, so the vended credentials
+    /// it carries have to reach the table's FileIO like `load_table`'s do.
+    #[tokio::test]
+    async fn test_register_table_uses_vended_credentials() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let register_table_mock = server
+            .mock("POST", "/v1/namespaces/ns1/register")
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "load_table_response_with_credentials.json"
+            ))
+            .create_async()
+            .await;
+
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let table_ident = TableIdent::from_strs(["ns1", "test1"]).unwrap();
+        let table = catalog
+            .register_table(
+                &SessionContext::empty(),
+                &table_ident,
+                "s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json".to_string(),
+            )
+            .await
+            .unwrap();
+
+        let vended = table
+            .file_io()
+            .config_for("s3://warehouse/database/table/data/f.parquet");
+        assert_eq!(
+            vended.get("s3.access-key-id").map(String::as_str),
+            Some("vended-key-id")
+        );
+        // Scoped to the prefix the server sent them for.
+        let outside = table
+            .file_io()
+            .config_for("s3://other-bucket/data/f.parquet");
+        assert_eq!(outside.get("s3.access-key-id"), None);
+        // The response's table config reaches the FileIO too, as in load_table.
+        assert_eq!(
+            table.file_io().config().get("region").map(String::as_str),
+            Some("us-west-2")
         );
 
         config_mock.assert_async().await;
