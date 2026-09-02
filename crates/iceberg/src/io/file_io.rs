@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, stream};
 
 use super::storage::{
     LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageFactory,
@@ -67,6 +68,17 @@ pub struct FileIO {
     factory: Arc<dyn StorageFactory>,
     /// Cached storage instance (lazily initialized)
     storage: Arc<OnceLock<Arc<dyn Storage>>>,
+    /// Per-prefix storages (longest prefix first) for tables that vend distinct
+    /// credentials per location prefix. Paths matching none use `storage` above.
+    prefixed: Arc<Vec<PrefixedStorage>>,
+}
+
+/// A storage scoped to a location `prefix`, lazily built from its own config.
+#[derive(Debug)]
+struct PrefixedStorage {
+    prefix: String,
+    config: StorageConfig,
+    storage: OnceLock<Arc<dyn Storage>>,
 }
 
 impl FileIO {
@@ -78,6 +90,7 @@ impl FileIO {
             config: StorageConfig::new(),
             factory: Arc::new(MemoryStorageFactory),
             storage: Arc::new(OnceLock::new()),
+            prefixed: Arc::new(Vec::new()),
         }
     }
 
@@ -89,6 +102,7 @@ impl FileIO {
             config: StorageConfig::new(),
             factory: Arc::new(LocalFsStorageFactory),
             storage: Arc::new(OnceLock::new()),
+            prefixed: Arc::new(Vec::new()),
         }
     }
 
@@ -97,24 +111,49 @@ impl FileIO {
         &self.config
     }
 
-    /// Get or create the storage instance.
+    /// The configuration `path` routes to: the longest-matching prefix's if
+    /// any, else the default. Vended credentials live on the prefix configs,
+    /// so this answers "which credentials apply to this path".
+    pub fn config_for(&self, path: &str) -> &StorageConfig {
+        self.route(path).1
+    }
+
+    /// Get or create the storage for `path`, routing to the longest-matching
+    /// prefix storage if any, else the default. Built once, then cached.
+    fn get_storage(&self, path: &str) -> Result<Arc<dyn Storage>> {
+        let (cell, config) = self.route(path);
+        Self::get_or_build(cell, &self.factory, config)
+    }
+
+    /// The storage cell and configuration serving `path`.
     ///
-    /// The factory is invoked on first access and the result is cached
-    /// for all subsequent operations.
-    fn get_storage(&self) -> Result<Arc<dyn Storage>> {
-        // Check if already initialized
-        if let Some(storage) = self.storage.get() {
+    /// `prefixed` is sorted longest-first, so the first match is the most
+    /// specific one, per the Iceberg REST spec's storage-credentials semantics.
+    ///
+    /// Matching is on the raw string, so `s3://bucket/data` also serves
+    /// `s3://bucket/database/` — as in Java's `S3FileIO.clientForStoragePath`.
+    fn route(&self, path: &str) -> (&OnceLock<Arc<dyn Storage>>, &StorageConfig) {
+        for ps in self.prefixed.iter() {
+            if path.starts_with(&ps.prefix) {
+                return (&ps.storage, &ps.config);
+            }
+        }
+        (&self.storage, &self.config)
+    }
+
+    /// Get a cached storage from `cell`, building it from `config` on first use.
+    fn get_or_build(
+        cell: &OnceLock<Arc<dyn Storage>>,
+        factory: &Arc<dyn StorageFactory>,
+        config: &StorageConfig,
+    ) -> Result<Arc<dyn Storage>> {
+        if let Some(storage) = cell.get() {
             return Ok(storage.clone());
         }
-
-        // Build the storage
-        let storage = self.factory.build(&self.config)?;
-
-        // Try to set it (another thread might have set it first)
-        let _ = self.storage.set(storage.clone());
-
-        // Return whatever is in the cell (either ours or another thread's)
-        Ok(self.storage.get().unwrap().clone())
+        let storage = factory.build(config)?;
+        // Another thread might have set it first; keep whatever ends up in the cell.
+        let _ = cell.set(storage);
+        Ok(cell.get().unwrap().clone())
     }
 
     /// Deletes file.
@@ -123,7 +162,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn delete(&self, path: impl AsRef<str>) -> Result<()> {
-        self.get_storage()?.delete(path.as_ref()).await
+        self.get_storage(path.as_ref())?.delete(path.as_ref()).await
     }
 
     /// Remove the path and all nested dirs and files recursively.
@@ -138,7 +177,9 @@ impl FileIO {
     /// - If the path is a empty directory, this function will remove the directory itself.
     /// - If the path is a non-empty directory, this function will remove the directory and all nested files and directories.
     pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()> {
-        self.get_storage()?.delete_prefix(path.as_ref()).await
+        self.get_storage(path.as_ref())?
+            .delete_prefix(path.as_ref())
+            .await
     }
 
     /// Delete multiple files from a stream of paths.
@@ -150,7 +191,43 @@ impl FileIO {
         &self,
         paths: impl Stream<Item = String> + Send + 'static,
     ) -> Result<()> {
-        self.get_storage()?.delete_stream(paths.boxed()).await
+        // No per-prefix storages: delete the whole batch on the default storage.
+        if self.prefixed.is_empty() {
+            return self.get_storage("")?.delete_stream(paths.boxed()).await;
+        }
+
+        // Route by prefix, flushing bounded batches as we iterate so memory stays
+        // bounded on large streams (like Java's `S3FileIO.deleteFiles`).
+        const DELETE_BATCH_SIZE: usize = 1000;
+        let mut groups: HashMap<String, Vec<String>> = HashMap::new();
+        let mut paths = paths.boxed();
+        while let Some(path) = paths.next().await {
+            let key = self
+                .prefixed
+                .iter()
+                .find(|ps| path.starts_with(&ps.prefix))
+                .map(|ps| ps.prefix.clone())
+                .unwrap_or_default();
+            let buf = groups.entry(key).or_default();
+            buf.push(path);
+            if buf.len() >= DELETE_BATCH_SIZE {
+                let full = std::mem::take(buf);
+                self.get_storage(&full[0])?
+                    .delete_stream(stream::iter(full).boxed())
+                    .await?;
+            }
+        }
+
+        // Flush remainders.
+        for batch in groups.into_values() {
+            if batch.is_empty() {
+                continue;
+            }
+            self.get_storage(&batch[0])?
+                .delete_stream(stream::iter(batch).boxed())
+                .await?;
+        }
+        Ok(())
     }
 
     /// Check file exists.
@@ -159,7 +236,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn exists(&self, path: impl AsRef<str>) -> Result<bool> {
-        self.get_storage()?.exists(path.as_ref()).await
+        self.get_storage(path.as_ref())?.exists(path.as_ref()).await
     }
 
     /// Creates input file.
@@ -168,7 +245,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_input(&self, path: impl AsRef<str>) -> Result<InputFile> {
-        self.get_storage()?.new_input(path.as_ref())
+        self.get_storage(path.as_ref())?.new_input(path.as_ref())
     }
 
     /// Creates output file.
@@ -177,7 +254,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile> {
-        self.get_storage()?.new_output(path.as_ref())
+        self.get_storage(path.as_ref())?.new_output(path.as_ref())
     }
 }
 
@@ -191,6 +268,8 @@ pub struct FileIOBuilder {
     factory: Arc<dyn StorageFactory>,
     /// Storage configuration
     config: StorageConfig,
+    /// Per-location-prefix configs (prefix, config).
+    prefixed: Vec<(String, StorageConfig)>,
 }
 
 impl FileIOBuilder {
@@ -199,6 +278,7 @@ impl FileIOBuilder {
         Self {
             factory,
             config: StorageConfig::new(),
+            prefixed: Vec::new(),
         }
     }
 
@@ -219,6 +299,23 @@ impl FileIOBuilder {
         self
     }
 
+    /// Add a per-prefix storage config. Paths starting with `prefix` (longest
+    /// match wins) use these props instead of the default config.
+    pub fn with_prefixed_props(
+        mut self,
+        prefix: impl Into<String>,
+        props: impl IntoIterator<Item = (impl ToString, impl ToString)>,
+    ) -> Self {
+        let config = StorageConfig::from_props(
+            props
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        );
+        self.prefixed.push((prefix.into(), config));
+        self
+    }
+
     /// Get the storage configuration.
     pub fn config(&self) -> &StorageConfig {
         &self.config
@@ -226,10 +323,22 @@ impl FileIOBuilder {
 
     /// Builds [`FileIO`].
     pub fn build(self) -> FileIO {
+        let mut prefixed: Vec<PrefixedStorage> = self
+            .prefixed
+            .into_iter()
+            .map(|(prefix, config)| PrefixedStorage {
+                prefix,
+                config,
+                storage: OnceLock::new(),
+            })
+            .collect();
+        // Longest prefix first so routing picks the most specific match.
+        prefixed.sort_by_key(|item| std::cmp::Reverse(item.prefix.len()));
         FileIO {
             config: self.config,
             factory: self.factory,
             storage: Arc::new(OnceLock::new()),
+            prefixed: Arc::new(prefixed),
         }
     }
 }
@@ -543,5 +652,165 @@ mod tests {
 
         assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
         assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_routes_a_path_to_its_longest_matching_prefix() {
+        // Overlapping prefixes: the more specific credentials must win, so
+        // sorting alone isn't enough — the lookup has to respect that order.
+        // Each prefix owns a storage cell, so identity tells them apart.
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prefixed_props("memory://bucket/data", [("k", "short")])
+            .with_prefixed_props("memory://bucket/data/warehouse", [("k", "long")])
+            .build();
+
+        let long = file_io
+            .get_storage("memory://bucket/data/warehouse/t/f")
+            .unwrap();
+        let short = file_io.get_storage("memory://bucket/data/other/f").unwrap();
+        let default = file_io.get_storage("memory://elsewhere/f").unwrap();
+
+        // Routing the shortest prefix first would collapse these two.
+        assert!(!Arc::ptr_eq(&long, &short));
+        assert!(!Arc::ptr_eq(&short, &default));
+        assert!(!Arc::ptr_eq(&long, &default));
+        // The same prefix keeps serving the same storage.
+        assert!(Arc::ptr_eq(
+            &long,
+            &file_io
+                .get_storage("memory://bucket/data/warehouse/other")
+                .unwrap()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_prefixed_props_sorted_by_descending_prefix_length() {
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prefixed_props("memory://a/", [("k", "short")])
+            .with_prefixed_props("memory://a/longer/", [("k", "long")])
+            .build();
+
+        // Longest prefix first so the most specific match wins at routing time.
+        let prefixes: Vec<&str> = file_io.prefixed.iter().map(|p| p.prefix.as_str()).collect();
+        assert_eq!(prefixes, vec!["memory://a/longer/", "memory://a/"]);
+    }
+
+    #[tokio::test]
+    async fn test_prefixed_config_carries_credential_values() {
+        // Prefix config gets the vended credentials; default config keeps only base props.
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prop("s3.region", "us-east-1")
+            .with_prefixed_props("s3://bucket/table", [
+                ("s3.region", "us-east-1"),
+                ("s3.access-key-id", "vended-key"),
+                ("s3.secret-access-key", "vended-secret"),
+            ])
+            .build();
+
+        // Default: base props, no credentials.
+        assert_eq!(
+            file_io.config().get("s3.region"),
+            Some(&"us-east-1".to_string())
+        );
+        assert_eq!(file_io.config().get("s3.access-key-id"), None);
+
+        // Prefix: base props + vended credentials.
+        let prefixed = &file_io.prefixed[0].config;
+        assert_eq!(prefixed.get("s3.region"), Some(&"us-east-1".to_string()));
+        assert_eq!(
+            prefixed.get("s3.access-key-id"),
+            Some(&"vended-key".to_string())
+        );
+        assert_eq!(
+            prefixed.get("s3.secret-access-key"),
+            Some(&"vended-secret".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_storage_routes_by_prefix() {
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prop("scope", "default")
+            .with_prefixed_props("memory://creds/", [("scope", "prefixed")])
+            .build();
+
+        let default_a = file_io.get_storage("memory://other/x").unwrap();
+        let default_b = file_io.get_storage("memory://other/y").unwrap();
+        let prefixed_a = file_io.get_storage("memory://creds/x").unwrap();
+        let prefixed_b = file_io.get_storage("memory://creds/y").unwrap();
+
+        // Repeated routing to the same bucket returns the memoized storage...
+        assert!(Arc::ptr_eq(&default_a, &default_b));
+        assert!(Arc::ptr_eq(&prefixed_a, &prefixed_b));
+        // ...and a prefix-matching path resolves to a distinct storage from the default.
+        assert!(!Arc::ptr_eq(&default_a, &prefixed_a));
+    }
+
+    #[tokio::test]
+    async fn test_delete_stream_routes_by_prefix() {
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prefixed_props("memory:/creds/", [("k", "v")])
+            .build();
+
+        // One file under each routing bucket (default vs prefixed storage).
+        let default_path = "memory:/other/a.txt";
+        let prefixed_path = "memory:/creds/b.txt";
+        for path in [default_path, prefixed_path] {
+            file_io
+                .new_output(path)
+                .unwrap()
+                .write("x".into())
+                .await
+                .unwrap();
+            assert!(file_io.exists(path).await.unwrap());
+        }
+
+        // delete_stream must route each path to the storage that holds it.
+        file_io
+            .delete_stream(futures::stream::iter(vec![
+                default_path.to_string(),
+                prefixed_path.to_string(),
+            ]))
+            .await
+            .unwrap();
+
+        assert!(!file_io.exists(default_path).await.unwrap());
+        assert!(!file_io.exists(prefixed_path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_delete_stream_flushes_across_batches() {
+        // More than the flush threshold (1000): exercises mid-stream flush + remainder.
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prefixed_props("memory:/creds/", [("k", "v")])
+            .build();
+
+        let n = 1050;
+        let mut paths = Vec::with_capacity(n);
+        for i in 0..n {
+            let p = format!("memory:/creds/f{i}.txt");
+            file_io
+                .new_output(&p)
+                .unwrap()
+                .write("x".into())
+                .await
+                .unwrap();
+            paths.push(p);
+        }
+
+        file_io
+            .delete_stream(futures::stream::iter(paths.clone()))
+            .await
+            .unwrap();
+
+        for p in &paths {
+            assert!(!file_io.exists(p).await.unwrap());
+        }
     }
 }
