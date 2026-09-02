@@ -949,7 +949,10 @@ mod tests {
         let file_scan_tasks = setup(table_location);
 
         let delete_filter = delete_file_loader
-            .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
+            .load_deletes(
+                file_scan_tasks[0].deletes(),
+                file_scan_tasks[0].schema_ref(),
+            )
             .await
             .unwrap()
             .unwrap();
@@ -1268,13 +1271,14 @@ mod tests {
             .with_project_field_ids(vec![2, 3])
             .with_deletes(vec![pos_del, eq_del])
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         // Load the deletes - should handle both types without error
         let delete_file_loader =
             CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::current());
         let delete_filter = delete_file_loader
-            .load_deletes(&file_scan_task.deletes, file_scan_task.schema_ref())
+            .load_deletes(file_scan_task.deletes(), file_scan_task.schema_ref())
             .await
             .unwrap()
             .unwrap();
@@ -1351,14 +1355,20 @@ mod tests {
 
         // Load deletes for the first time
         let delete_filter_1 = delete_file_loader
-            .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
+            .load_deletes(
+                file_scan_tasks[0].deletes(),
+                file_scan_tasks[0].schema_ref(),
+            )
             .await
             .unwrap()
             .unwrap();
 
         // Load deletes for the second time (same task/files)
         let delete_filter_2 = delete_file_loader
-            .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
+            .load_deletes(
+                file_scan_tasks[0].deletes(),
+                file_scan_tasks[0].schema_ref(),
+            )
             .await
             .unwrap()
             .unwrap();

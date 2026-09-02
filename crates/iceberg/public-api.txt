@@ -1274,34 +1274,32 @@ pub const iceberg::puffin::CREATED_BY_PROPERTY: &str
 pub const iceberg::puffin::DELETION_VECTOR_V1: &str
 pub mod iceberg::scan
 pub struct iceberg::scan::FileScanTask
-pub iceberg::scan::FileScanTask::case_sensitive: bool
-pub iceberg::scan::FileScanTask::data_file_format: iceberg::spec::DataFileFormat
-pub iceberg::scan::FileScanTask::data_file_path: alloc::string::String
-pub iceberg::scan::FileScanTask::data_sequence_number: core::option::Option<i64>
-pub iceberg::scan::FileScanTask::deletes: alloc::vec::Vec<iceberg::scan::FileScanTaskDeleteFile>
-pub iceberg::scan::FileScanTask::file_size_in_bytes: u64
-pub iceberg::scan::FileScanTask::first_row_id: core::option::Option<i64>
-pub iceberg::scan::FileScanTask::key_metadata: core::option::Option<alloc::boxed::Box<[u8]>>
-pub iceberg::scan::FileScanTask::length: u64
-pub iceberg::scan::FileScanTask::name_mapping: core::option::Option<alloc::sync::Arc<iceberg::spec::NameMapping>>
-pub iceberg::scan::FileScanTask::partition: core::option::Option<iceberg::spec::Struct>
-pub iceberg::scan::FileScanTask::partition_spec: core::option::Option<alloc::sync::Arc<iceberg::spec::PartitionSpec>>
-pub iceberg::scan::FileScanTask::predicate: core::option::Option<iceberg::expr::BoundPredicate>
-pub iceberg::scan::FileScanTask::project_field_ids: alloc::vec::Vec<i32>
-pub iceberg::scan::FileScanTask::record_count: core::option::Option<u64>
-pub iceberg::scan::FileScanTask::schema: iceberg::spec::SchemaRef
-pub iceberg::scan::FileScanTask::start: u64
-pub iceberg::scan::FileScanTask::unified_partition_type: core::option::Option<alloc::sync::Arc<iceberg::spec::StructType>>
 impl iceberg::scan::FileScanTask
+pub fn iceberg::scan::FileScanTask::case_sensitive(&self) -> bool
+pub fn iceberg::scan::FileScanTask::data_file_format(&self) -> iceberg::spec::DataFileFormat
 pub fn iceberg::scan::FileScanTask::data_file_path(&self) -> &str
+pub fn iceberg::scan::FileScanTask::data_sequence_number(&self) -> core::option::Option<i64>
+pub fn iceberg::scan::FileScanTask::deletes(&self) -> &[iceberg::scan::FileScanTaskDeleteFile]
+pub fn iceberg::scan::FileScanTask::file_size_in_bytes(&self) -> u64
+pub fn iceberg::scan::FileScanTask::first_row_id(&self) -> core::option::Option<i64>
+pub fn iceberg::scan::FileScanTask::key_metadata(&self) -> core::option::Option<&[u8]>
+pub fn iceberg::scan::FileScanTask::length(&self) -> u64
+pub fn iceberg::scan::FileScanTask::name_mapping(&self) -> core::option::Option<&alloc::sync::Arc<iceberg::spec::NameMapping>>
+pub fn iceberg::scan::FileScanTask::partition(&self) -> core::option::Option<&iceberg::spec::Struct>
+pub fn iceberg::scan::FileScanTask::partition_spec(&self) -> core::option::Option<&alloc::sync::Arc<iceberg::spec::PartitionSpec>>
 pub fn iceberg::scan::FileScanTask::predicate(&self) -> core::option::Option<&iceberg::expr::BoundPredicate>
 pub fn iceberg::scan::FileScanTask::project_field_ids(&self) -> &[i32]
+pub fn iceberg::scan::FileScanTask::record_count(&self) -> core::option::Option<u64>
 pub fn iceberg::scan::FileScanTask::schema(&self) -> &iceberg::spec::Schema
 pub fn iceberg::scan::FileScanTask::schema_ref(&self) -> iceberg::spec::SchemaRef
+pub fn iceberg::scan::FileScanTask::start(&self) -> u64
+pub fn iceberg::scan::FileScanTask::unified_partition_type(&self) -> core::option::Option<&alloc::sync::Arc<iceberg::spec::StructType>>
 impl core::clone::Clone for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::clone(&self) -> iceberg::scan::FileScanTask
 impl core::cmp::PartialEq for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::eq(&self, other: &iceberg::scan::FileScanTask) -> bool
+impl core::convert::From<iceberg::scan::FileScanTask> for iceberg::Result<iceberg::scan::FileScanTask>
+pub fn iceberg::Result<iceberg::scan::FileScanTask>::from(task: iceberg::scan::FileScanTask) -> Self
 impl core::fmt::Debug for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTask
