@@ -22,9 +22,8 @@ use tokio::sync::Notify;
 use tokio::sync::futures::OwnedNotified;
 use tokio::sync::oneshot::Receiver;
 
+use crate::arrow::caching_delete_file_loader::EqDeleteSet;
 use crate::delete_vector::DeleteVector;
-use crate::expr::Predicate::AlwaysTrue;
-use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::runtime::Runtime;
 use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
 use crate::spec::DataContentType;
@@ -33,7 +32,7 @@ use crate::{Error, ErrorKind, Result};
 #[derive(Debug)]
 enum EqDelState {
     Loading(Arc<Notify>),
-    Loaded(Predicate),
+    Loaded(Arc<EqDeleteSet>),
 }
 
 /// State tracking for positional delete files.
@@ -163,17 +162,17 @@ impl DeleteFilter {
         }
     }
 
-    /// Retrieve the equality delete predicate for a given eq delete file path
-    pub(crate) async fn get_equality_delete_predicate_for_delete_file_path(
+    /// Retrieve the equality delete set for a given eq delete file path
+    pub(crate) async fn get_equality_delete_set_for_delete_file_path(
         &self,
         file_path: &str,
-    ) -> Option<Predicate> {
+    ) -> Option<Arc<EqDeleteSet>> {
         let notifier = {
             match self.state.read().unwrap().equality_deletes.get(file_path) {
                 None => return None,
                 Some(EqDelState::Loading(notifier)) => notifier.clone(),
-                Some(EqDelState::Loaded(predicate)) => {
-                    return Some(predicate.clone());
+                Some(EqDelState::Loaded(set)) => {
+                    return Some(set.clone());
                 }
             }
         };
@@ -181,50 +180,69 @@ impl DeleteFilter {
         notifier.notified().await;
 
         match self.state.read().unwrap().equality_deletes.get(file_path) {
-            Some(EqDelState::Loaded(predicate)) => Some(predicate.clone()),
+            Some(EqDelState::Loaded(set)) => Some(set.clone()),
             _ => unreachable!("Cannot be any other state than loaded"),
         }
     }
 
-    /// Builds eq delete predicate for the provided task.
-    pub(crate) async fn build_equality_delete_predicate(
+    /// Builds the equality-delete sets applicable to the given task, one per distinct
+    /// equality-column layout.
+    pub(crate) async fn build_equality_delete_sets(
         &self,
         file_scan_task: &FileScanTask,
-    ) -> Result<Option<BoundPredicate>> {
-        // * Filter the task's deletes into just the Equality deletes
-        // * Retrieve the unbound predicate for each from self.state.equality_deletes
-        // * Logical-AND them all together to get a single combined `Predicate`
-        // * Bind the predicate to the task's schema to get a `BoundPredicate`
-
-        let mut combined_predicate = AlwaysTrue;
+    ) -> Result<Vec<Arc<EqDeleteSet>>> {
+        let mut groups: HashMap<Vec<i32>, Vec<Arc<EqDeleteSet>>> = HashMap::new();
         for delete in &file_scan_task.deletes {
             if !is_equality_delete(delete) {
                 continue;
             }
 
-            let Some(predicate) = self
-                .get_equality_delete_predicate_for_delete_file_path(&delete.file_path)
+            let Some(set) = self
+                .get_equality_delete_set_for_delete_file_path(&delete.file_path)
                 .await
             else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!(
-                        "Missing predicate for equality delete file '{}'",
+                        "Missing equality delete set for delete file '{}'",
                         delete.file_path
                     ),
                 ));
             };
 
-            combined_predicate = combined_predicate.and(predicate);
+            let layout = set.fields.iter().map(|(_, id, _)| *id).collect();
+            groups.entry(layout).or_default().push(set);
         }
 
-        if combined_predicate == AlwaysTrue {
-            return Ok(None);
+        let mut result = Vec::with_capacity(groups.len());
+        for mut sets in groups.into_values() {
+            if sets.len() == 1 {
+                result.push(sets.pop().unwrap());
+            } else {
+                let base = sets
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, set)| set.keys.len())
+                    .map(|(idx, _)| idx)
+                    .expect("group is non-empty");
+                let mut combined = (*sets.swap_remove(base)).clone();
+                for other in &sets {
+                    // The layouts always match here: every set in this group was parsed
+                    // after `BasicDeleteFileLoader::evolve_schema` normalised its batch
+                    // stream against the same `task.schema`, so one field id has one
+                    // recorded type across the scan. `union` re-checks rather than
+                    // trusting that, because the invariant lives in the caller: the
+                    // equality-delete cache is keyed by delete-file path alone, with no
+                    // record of the schema an entry was evolved against, and
+                    // `ArrowReader` is `Clone` with a caller-supplied
+                    // `FileScanTaskStream`. Two tasks with different schemas through one
+                    // reader would reach this point, and an error beats a wrong read.
+                    combined.union(other)?;
+                }
+                result.push(Arc::new(combined));
+            }
         }
-
-        let bound_predicate = combined_predicate
-            .bind(file_scan_task.schema.clone(), file_scan_task.case_sensitive)?;
-        Ok(Some(bound_predicate))
+        Ok(result)
     }
 
     pub(crate) fn upsert_delete_vector(
@@ -247,7 +265,7 @@ impl DeleteFilter {
     pub(crate) fn insert_equality_delete(
         &self,
         delete_file_path: &str,
-        eq_del: Receiver<Predicate>,
+        eq_del: Receiver<Arc<EqDeleteSet>>,
     ) {
         let notify = Arc::new(Notify::new());
         {
@@ -279,6 +297,7 @@ pub(crate) fn is_equality_delete(f: &FileScanTaskDeleteFile) -> bool {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::collections::HashSet;
     use std::fs::File;
     use std::path::Path;
     use std::sync::Arc;
@@ -291,8 +310,9 @@ pub(crate) mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
-    use crate::expr::Reference;
+    use crate::arrow::caching_delete_file_loader::{
+        CachingDeleteFileLoader, EqDeleteKey, EqDeleteSet,
+    };
     use crate::io::FileIO;
     use crate::spec::{DataFileFormat, Datum, NestedField, PrimitiveType, Schema, Type};
 
@@ -517,54 +537,109 @@ pub(crate) mod tests {
         Arc::new(arrow_schema::Schema::new(fields))
     }
 
-    #[tokio::test]
-    async fn test_build_equality_delete_predicate_case_sensitive() {
+    fn eq_delete_file(path: &str) -> FileScanTaskDeleteFile {
+        FileScanTaskDeleteFile::builder()
+            .with_file_path(path.to_string())
+            .with_file_size_in_bytes(1)
+            .with_file_type(DataContentType::EqualityDeletes)
+            .with_partition_spec_id(0)
+            .build()
+    }
+
+    fn task_with_eq_deletes(paths: &[&str]) -> FileScanTask {
         let schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "Id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::required(2, "id2", Type::Primitive(PrimitiveType::Long)).into(),
                 ])
                 .build()
                 .unwrap(),
         );
-
-        // ---------- fake FileScanTask ----------
-        let task = FileScanTask::builder()
+        FileScanTask::builder()
             .with_file_size_in_bytes(0)
             .with_start(0)
             .with_length(0)
             .with_data_file_path("data.parquet".to_string())
             .with_data_file_format(DataFileFormat::Parquet)
-            .with_schema(schema.clone())
+            .with_schema(schema)
             .with_project_field_ids(vec![])
-            .with_deletes(vec![
-                FileScanTaskDeleteFile::builder()
-                    .with_file_path("eq-del.parquet".to_string())
-                    .with_file_size_in_bytes(1) // never read; this test fails before opening the file
-                    .with_file_type(DataContentType::EqualityDeletes)
-                    .with_partition_spec_id(0)
-                    .build(),
-            ])
-            .with_case_sensitive(true)
-            .build();
+            .with_deletes(paths.iter().map(|p| eq_delete_file(p)).collect())
+            .with_case_sensitive(false)
+            .build()
+    }
 
+    fn insert_set(filter: &DeleteFilter, path: &str, set: EqDeleteSet) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        filter.insert_equality_delete(path, rx);
+        tx.send(Arc::new(set)).unwrap();
+    }
+
+    // Delete files that key on different equality columns must not be merged.
+    #[tokio::test]
+    async fn test_build_equality_delete_sets_mixed_ids_not_merged() {
+        let task = task_with_eq_deletes(&["eq-a.parquet", "eq-b.parquet"]);
         let filter = DeleteFilter::new(Runtime::current());
 
-        // ---------- insert equality delete predicate ----------
-        let pred = Reference::new("id").equal_to(Datum::long(10));
+        insert_set(&filter, "eq-a.parquet", EqDeleteSet {
+            keys: HashSet::from([EqDeleteKey(vec![Some(Datum::long(1))])]),
+            fields: vec![("id".to_string(), 1, Type::Primitive(PrimitiveType::Long))],
+        });
+        insert_set(&filter, "eq-b.parquet", EqDeleteSet {
+            keys: HashSet::from([EqDeleteKey(vec![Some(Datum::long(2))])]),
+            fields: vec![("id2".to_string(), 2, Type::Primitive(PrimitiveType::Long))],
+        });
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        filter.insert_equality_delete("eq-del.parquet", rx);
+        let sets = filter.build_equality_delete_sets(&task).await.unwrap();
+        assert_eq!(sets.len(), 2);
+    }
 
-        tx.send(pred).unwrap();
+    // `union` must refuse a mismatch itself rather than trusting the caller to have grouped.
+    #[test]
+    fn test_union_rejects_mismatched_layout() {
+        let mut a = EqDeleteSet {
+            keys: HashSet::from([EqDeleteKey(vec![Some(Datum::long(1))])]),
+            fields: vec![("id".to_string(), 1, Type::Primitive(PrimitiveType::Long))],
+        };
+        let b = EqDeleteSet {
+            keys: HashSet::from([EqDeleteKey(vec![Some(Datum::int(2))])]),
+            fields: vec![("id".to_string(), 1, Type::Primitive(PrimitiveType::Int))],
+        };
+        assert!(!a.layout_matches(&b));
+        let err = a.union(&b).expect_err("differing types must be rejected");
+        assert!(err.to_string().contains("different layouts"), "{err}");
+        assert_eq!(
+            a.keys.len(),
+            1,
+            "a rejected union must not mutate the target"
+        );
+    }
 
-        // ---------- should FAIL ----------
-        let result = filter.build_equality_delete_predicate(&task).await;
+    // Delete files sharing an equality-column layout are unioned into a single set.
+    #[tokio::test]
+    async fn test_build_equality_delete_sets_same_layout_unioned() {
+        let task = task_with_eq_deletes(&["eq-a.parquet", "eq-b.parquet"]);
+        let filter = DeleteFilter::new(Runtime::current());
 
-        assert!(
-            result.is_err(),
-            "case_sensitive=true should fail when column case mismatches"
+        let fields = vec![("id".to_string(), 1, Type::Primitive(PrimitiveType::Long))];
+        insert_set(&filter, "eq-a.parquet", EqDeleteSet {
+            keys: HashSet::from([EqDeleteKey(vec![Some(Datum::long(1))])]),
+            fields: fields.clone(),
+        });
+        insert_set(&filter, "eq-b.parquet", EqDeleteSet {
+            keys: HashSet::from([EqDeleteKey(vec![Some(Datum::long(2))])]),
+            fields,
+        });
+
+        let sets = filter.build_equality_delete_sets(&task).await.unwrap();
+        assert_eq!(sets.len(), 1);
+        assert_eq!(
+            sets[0].keys,
+            HashSet::from([
+                EqDeleteKey(vec![Some(Datum::long(1))]),
+                EqDeleteKey(vec![Some(Datum::long(2))]),
+            ])
         );
     }
 }
