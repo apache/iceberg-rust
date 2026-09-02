@@ -29,7 +29,7 @@ use crate::scan::{
 };
 use crate::spec::{
     ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
-    PartitionSpecRef, SchemaRef, SnapshotRef, StructType, TableMetadataRef,
+    PartitionSpecRef, SchemaRef, SnapshotRef, SortOrderRef, StructType, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -50,6 +50,7 @@ pub(crate) struct ManifestFileContext {
     case_sensitive: bool,
     partition_spec: Option<PartitionSpecRef>,
     unified_partition_type: Option<Arc<StructType>>,
+    table_metadata: TableMetadataRef,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -67,6 +68,7 @@ pub(crate) struct ManifestEntryContext {
     pub case_sensitive: bool,
     pub partition_spec: Option<PartitionSpecRef>,
     pub unified_partition_type: Option<Arc<StructType>>,
+    pub sort_order: Option<SortOrderRef>,
 }
 
 impl ManifestFileContext {
@@ -86,11 +88,19 @@ impl ManifestFileContext {
             case_sensitive,
             partition_spec,
             unified_partition_type,
+            table_metadata,
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
         for manifest_entry in manifest.entries() {
+            let sort_order = manifest_entry
+                .data_file()
+                .sort_order_id()
+                .and_then(|id| table_metadata.sort_order_by_id(id as i64))
+                .filter(|order| !order.is_unsorted())
+                .cloned();
+
             let manifest_entry_context = ManifestEntryContext {
                 // TODO: refactor to avoid the expensive ManifestEntry clone
                 manifest_entry: manifest_entry.clone(),
@@ -104,6 +114,7 @@ impl ManifestFileContext {
                 case_sensitive,
                 partition_spec: partition_spec.clone(),
                 unified_partition_type: unified_partition_type.clone(),
+                sort_order,
             };
 
             sender
@@ -150,6 +161,7 @@ impl ManifestEntryContext {
             .with_unified_partition_type(self.unified_partition_type.clone())
             .with_case_sensitive(self.case_sensitive)
             .with_key_metadata(self.manifest_entry.data_file.key_metadata().map(Box::from))
+            .with_sort_order(self.sort_order)
             .build())
     }
 }
@@ -304,6 +316,7 @@ impl PlanContext {
                 .partition_spec_by_id(manifest_file.partition_spec_id)
                 .cloned(),
             unified_partition_type: self.unified_partition_type.clone(),
+            table_metadata: self.table_metadata.clone(),
         }
     }
 }

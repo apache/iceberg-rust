@@ -1637,6 +1637,76 @@ pub mod tests {
             manifest_list_write.close().await.unwrap();
         }
 
+        /// Writes a manifest with four live "Added" data-file entries (partitioned on `x`
+        /// = 100, 200, 300, 400), each with the given `sort_order_id` set on its `DataFile`
+        /// (`None` leaves the field unset). Used to test how `sort_order_id` resolution
+        /// against the table's sort orders flows into each entry's `FileScanTask`.
+        pub async fn setup_manifest_files_with_sort_order_ids(
+            &mut self,
+            sort_order_ids: [Option<i32>; 4],
+        ) {
+            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+            let current_partition_spec = self.table.metadata().default_partition_spec();
+            let parquet_file_size = self.write_parquet_data_files();
+
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
+            )
+            .build_v2_data();
+
+            for (i, sort_order_id) in sort_order_ids.into_iter().enumerate() {
+                let mut data_file_builder = DataFileBuilder::default();
+                data_file_builder
+                    .partition_spec_id(0)
+                    .content(DataContentType::Data)
+                    .file_path(format!("{}/{}.parquet", &self.table_location, i + 1))
+                    .file_format(DataFileFormat::Parquet)
+                    .file_size_in_bytes(parquet_file_size)
+                    .record_count(1)
+                    .partition(Struct::from_iter([Some(Literal::long(
+                        100 * (i as i64 + 1),
+                    ))]));
+                if let Some(id) = sort_order_id {
+                    data_file_builder.sort_order_id(id);
+                }
+                let data_file = data_file_builder.build().unwrap();
+
+                writer
+                    .add_entry(
+                        ManifestEntry::builder()
+                            .status(ManifestStatus::Added)
+                            .data_file(data_file)
+                            .build(),
+                    )
+                    .unwrap();
+            }
+
+            let data_file_manifest = writer.write_manifest_file().await.unwrap();
+
+            let manifest_list_writer = self
+                .table
+                .file_io()
+                .new_output(current_snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap();
+            let mut manifest_list_write = ManifestListWriter::v2(
+                manifest_list_writer,
+                current_snapshot.snapshot_id(),
+                current_snapshot.parent_snapshot_id(),
+                current_snapshot.sequence_number(),
+            );
+            manifest_list_write
+                .add_manifests(vec![data_file_manifest].into_iter())
+                .unwrap();
+            manifest_list_write.close().await.unwrap();
+        }
+
         /// Writes `mrg.parquet` with three 100-row row groups. Columns `x` (field
         /// id `1`) and `y` (field id `2`) both run 1000..1300, so row position `p`
         /// carries `x = y = 1000 + p`. Returns `(path, file_size_in_bytes)`.
@@ -1967,6 +2037,73 @@ pub mod tests {
             assert_eq!(mapping.fields().len(), 1);
             assert_eq!(mapping.fields()[0].field_id(), Some(1));
         }
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_carries_sort_order_into_file_scan_task() {
+        let mut fixture = TableTestFixture::new();
+
+        let expected_sort_order = fixture
+            .table
+            .metadata()
+            .sort_order_by_id(3)
+            .unwrap()
+            .clone();
+
+        fixture
+            .setup_manifest_files_with_sort_order_ids([Some(3), None, Some(99), Some(0)])
+            .await;
+
+        let tasks: Vec<_> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(tasks.len(), 4, "expected all four FileScanTasks");
+
+        let resolved = tasks
+            .iter()
+            .find(|t| t.data_file_path.ends_with("1.parquet"))
+            .unwrap();
+        assert_eq!(
+            resolved.sort_order,
+            Some(expected_sort_order),
+            "sort_order_id(3) should resolve to the table's sort order at id 3"
+        );
+
+        let missing = tasks
+            .iter()
+            .find(|t| t.data_file_path.ends_with("2.parquet"))
+            .unwrap();
+        assert!(
+            missing.sort_order.is_none(),
+            "a file with no sort_order_id should carry no sort_order"
+        );
+
+        let unresolvable = tasks
+            .iter()
+            .find(|t| t.data_file_path.ends_with("3.parquet"))
+            .unwrap();
+        assert!(
+            unresolvable.sort_order.is_none(),
+            "a file with an unresolvable sort_order_id should carry no sort_order"
+        );
+
+        let unsorted = tasks
+            .iter()
+            .find(|t| t.data_file_path.ends_with("4.parquet"))
+            .unwrap();
+        assert!(
+            unsorted.sort_order.is_none(),
+            "a file with sort_order_id(0), the reserved unsorted order, should carry no sort_order"
+        );
     }
 
     #[tokio::test]

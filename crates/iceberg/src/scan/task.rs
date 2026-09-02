@@ -25,7 +25,7 @@ use crate::Result;
 use crate::expr::BoundPredicate;
 use crate::spec::{
     DataContentType, DataFileFormat, ManifestEntryRef, NameMapping, PartitionSpec, Schema,
-    SchemaRef, Struct, StructType,
+    SchemaRef, SortOrderRef, Struct, StructType,
 };
 
 /// A stream of [`FileScanTask`].
@@ -149,6 +149,22 @@ pub struct FileScanTask {
     #[serde(deserialize_with = "deserialize_not_implemented")]
     #[builder(default)]
     pub unified_partition_type: Option<Arc<StructType>>,
+
+    /// The sort order that this file's rows are sorted by, resolved from the data file's
+    /// `sort_order_id` against the table's known sort orders. `Some` only if the id resolves
+    /// to a sort order with at least one field. `None` if the file has no sort order id, the
+    /// id doesn't resolve against the table's sort orders, or it resolves to the reserved
+    /// unsorted order (id 0, per the spec).
+    ///
+    /// Note: this reflects only the file's own recorded sort order id, not necessarily the
+    /// table's current default sort order — see [`crate::spec::DataFile::sort_order_id`].
+    /// Serde: not yet implemented.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_not_implemented")]
+    #[serde(deserialize_with = "deserialize_not_implemented")]
+    #[builder(default)]
+    pub sort_order: Option<SortOrderRef>,
 
     /// Whether this scan task should treat column names as case-sensitive when binding predicates.
     pub case_sensitive: bool,
