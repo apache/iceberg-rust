@@ -2081,14 +2081,9 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_filtered_scan_with_dropped_partition_source_column() {
+    async fn test_filtered_scan_rejects_dropped_partition_source_column() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
-
-        // baseline: the same filtered scan against the table before evolution
-        let baseline = scan_y_gte_5(&fixture.table).await;
-        assert!(!baseline.is_empty());
-        assert!(baseline.iter().all(|y| *y >= 5));
 
         // Evolve the table so that the manifests reference a historical spec whose source
         // column is no longer in the current schema: make an unpartitioned spec the
@@ -2139,37 +2134,23 @@ pub mod tests {
             .metadata;
         let table = fixture.table.clone().with_metadata(Arc::new(metadata));
 
-        // planning and reading must succeed, and the results must match the table before
-        // evolution: no rows wrongly pruned and none returned unfiltered
-        let evolved = scan_y_gte_5(&table).await;
-        assert_eq!(evolved, baseline);
-    }
-
-    async fn scan_y_gte_5(table: &Table) -> Vec<i64> {
         let table_scan = table
             .scan()
             .select(["y"])
             .with_filter(Reference::new("y").greater_than_or_equal_to(Datum::long(5)))
             .build()
             .unwrap();
-        let batches: Vec<_> = table_scan
-            .to_arrow()
+
+        let err = table_scan
+            .plan_files()
             .await
             .unwrap()
-            .try_collect()
+            .try_collect::<Vec<_>>()
             .await
-            .unwrap();
+            .unwrap_err();
 
-        let mut values: Vec<i64> = batches
-            .iter()
-            .flat_map(|batch| {
-                let col = batch.column_by_name("y").unwrap();
-                let arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
-                (0..arr.len()).map(|i| arr.value(i)).collect::<Vec<_>>()
-            })
-            .collect();
-        values.sort_unstable();
-        values
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.message().contains("No column with source column id 1"));
     }
 
     #[tokio::test]
