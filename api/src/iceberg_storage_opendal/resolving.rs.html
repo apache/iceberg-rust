@@ -140,236 +140,276 @@
 <a href=#140 id=140 data-nosnippet>140</a>/// delegates operations to the appropriate [`OpenDalStorage`] variant based on
 <a href=#141 id=141 data-nosnippet>141</a>/// the path scheme.
 <a href=#142 id=142 data-nosnippet>142</a>///
-<a href=#143 id=143 data-nosnippet>143</a>/// # Example
+<a href=#143 id=143 data-nosnippet>143</a>/// # Serialization
 <a href=#144 id=144 data-nosnippet>144</a>///
-<a href=#145 id=145 data-nosnippet>145</a>/// ```rust,ignore
-<a href=#146 id=146 data-nosnippet>146</a>/// use std::sync::Arc;
-<a href=#147 id=147 data-nosnippet>147</a>/// use iceberg::io::FileIOBuilder;
-<a href=#148 id=148 data-nosnippet>148</a>/// use iceberg_storage_opendal::OpenDalResolvingStorageFactory;
-<a href=#149 id=149 data-nosnippet>149</a>///
-<a href=#150 id=150 data-nosnippet>150</a>/// let factory = OpenDalResolvingStorageFactory::new();
-<a href=#151 id=151 data-nosnippet>151</a>/// let file_io = FileIOBuilder::new(Arc::new(factory))
-<a href=#152 id=152 data-nosnippet>152</a>///     .with_prop("s3.region", "us-east-1")
-<a href=#153 id=153 data-nosnippet>153</a>///     .build();
-<a href=#154 id=154 data-nosnippet>154</a>/// ```
-<a href=#155 id=155 data-nosnippet>155</a></span><span class="attr">#[derive(Clone, Debug, Serialize, Deserialize)]
-<a href=#156 id=156 data-nosnippet>156</a></span><span class="kw">pub struct </span>OpenDalResolvingStorageFactory {
-<a href=#157 id=157 data-nosnippet>157</a>    <span class="doccomment">/// Custom AWS credential loader for S3 storage.
-<a href=#158 id=158 data-nosnippet>158</a>    </span><span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
-<a href=#159 id=159 data-nosnippet>159</a>    #[serde(skip)]
-<a href=#160 id=160 data-nosnippet>160</a>    </span>customized_credential_load: <span class="prelude-ty">Option</span>&lt;CustomAwsCredentialLoader&gt;,
-<a href=#161 id=161 data-nosnippet>161</a>}
-<a href=#162 id=162 data-nosnippet>162</a>
-<a href=#163 id=163 data-nosnippet>163</a><span class="kw">impl </span>Default <span class="kw">for </span>OpenDalResolvingStorageFactory {
-<a href=#164 id=164 data-nosnippet>164</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#165 id=165 data-nosnippet>165</a>        <span class="self">Self</span>::new()
-<a href=#166 id=166 data-nosnippet>166</a>    }
-<a href=#167 id=167 data-nosnippet>167</a>}
-<a href=#168 id=168 data-nosnippet>168</a>
-<a href=#169 id=169 data-nosnippet>169</a><span class="kw">impl </span>OpenDalResolvingStorageFactory {
-<a href=#170 id=170 data-nosnippet>170</a>    <span class="doccomment">/// Create a new resolving storage factory.
-<a href=#171 id=171 data-nosnippet>171</a>    </span><span class="kw">pub fn </span>new() -&gt; <span class="self">Self </span>{
-<a href=#172 id=172 data-nosnippet>172</a>        <span class="self">Self </span>{
-<a href=#173 id=173 data-nosnippet>173</a>            <span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
-<a href=#174 id=174 data-nosnippet>174</a>            </span>customized_credential_load: <span class="prelude-val">None</span>,
-<a href=#175 id=175 data-nosnippet>175</a>        }
+<a href=#145 id=145 data-nosnippet>145</a>/// Serialization fails when a custom S3 credential loader is configured because the loader holds
+<a href=#146 id=146 data-nosnippet>146</a>/// process-local state that cannot be reconstructed in another process. Construct the factory
+<a href=#147 id=147 data-nosnippet>147</a>/// without a custom loader before serializing it.
+<a href=#148 id=148 data-nosnippet>148</a>///
+<a href=#149 id=149 data-nosnippet>149</a>/// # Example
+<a href=#150 id=150 data-nosnippet>150</a>///
+<a href=#151 id=151 data-nosnippet>151</a>/// ```rust,ignore
+<a href=#152 id=152 data-nosnippet>152</a>/// use std::sync::Arc;
+<a href=#153 id=153 data-nosnippet>153</a>/// use iceberg::io::FileIOBuilder;
+<a href=#154 id=154 data-nosnippet>154</a>/// use iceberg_storage_opendal::OpenDalResolvingStorageFactory;
+<a href=#155 id=155 data-nosnippet>155</a>///
+<a href=#156 id=156 data-nosnippet>156</a>/// let factory = OpenDalResolvingStorageFactory::new();
+<a href=#157 id=157 data-nosnippet>157</a>/// let file_io = FileIOBuilder::new(Arc::new(factory))
+<a href=#158 id=158 data-nosnippet>158</a>///     .with_prop("s3.region", "us-east-1")
+<a href=#159 id=159 data-nosnippet>159</a>///     .build();
+<a href=#160 id=160 data-nosnippet>160</a>/// ```
+<a href=#161 id=161 data-nosnippet>161</a></span><span class="attr">#[derive(Clone, Debug, Serialize, Deserialize)]
+<a href=#162 id=162 data-nosnippet>162</a></span><span class="kw">pub struct </span>OpenDalResolvingStorageFactory {
+<a href=#163 id=163 data-nosnippet>163</a>    <span class="doccomment">/// Custom AWS credential loader for S3 storage.
+<a href=#164 id=164 data-nosnippet>164</a>    </span><span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
+<a href=#165 id=165 data-nosnippet>165</a>    #[serde(
+<a href=#166 id=166 data-nosnippet>166</a>        skip_deserializing,
+<a href=#167 id=167 data-nosnippet>167</a>        skip_serializing_if = <span class="string">"Option::is_none"</span>,
+<a href=#168 id=168 data-nosnippet>168</a>        serialize_with = <span class="string">"crate::serialize_custom_credential_loader"
+<a href=#169 id=169 data-nosnippet>169</a>    </span>)]
+<a href=#170 id=170 data-nosnippet>170</a>    </span>customized_credential_load: <span class="prelude-ty">Option</span>&lt;CustomAwsCredentialLoader&gt;,
+<a href=#171 id=171 data-nosnippet>171</a>}
+<a href=#172 id=172 data-nosnippet>172</a>
+<a href=#173 id=173 data-nosnippet>173</a><span class="kw">impl </span>Default <span class="kw">for </span>OpenDalResolvingStorageFactory {
+<a href=#174 id=174 data-nosnippet>174</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#175 id=175 data-nosnippet>175</a>        <span class="self">Self</span>::new()
 <a href=#176 id=176 data-nosnippet>176</a>    }
-<a href=#177 id=177 data-nosnippet>177</a>
-<a href=#178 id=178 data-nosnippet>178</a>    <span class="doccomment">/// Set a custom AWS credential loader for S3 storage.
-<a href=#179 id=179 data-nosnippet>179</a>    </span><span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
-<a href=#180 id=180 data-nosnippet>180</a>    </span><span class="kw">pub fn </span>with_s3_credential_loader(<span class="kw-2">mut </span><span class="self">self</span>, loader: CustomAwsCredentialLoader) -&gt; <span class="self">Self </span>{
-<a href=#181 id=181 data-nosnippet>181</a>        <span class="self">self</span>.customized_credential_load = <span class="prelude-val">Some</span>(loader);
-<a href=#182 id=182 data-nosnippet>182</a>        <span class="self">self
-<a href=#183 id=183 data-nosnippet>183</a>    </span>}
-<a href=#184 id=184 data-nosnippet>184</a>}
-<a href=#185 id=185 data-nosnippet>185</a>
-<a href=#186 id=186 data-nosnippet>186</a><span class="attr">#[typetag::serde]
-<a href=#187 id=187 data-nosnippet>187</a></span><span class="kw">impl </span>StorageFactory <span class="kw">for </span>OpenDalResolvingStorageFactory {
-<a href=#188 id=188 data-nosnippet>188</a>    <span class="kw">fn </span>build(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>StorageConfig) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>Storage&gt;&gt; {
-<a href=#189 id=189 data-nosnippet>189</a>        <span class="prelude-val">Ok</span>(Arc::new(OpenDalResolvingStorage {
-<a href=#190 id=190 data-nosnippet>190</a>            props: config.props().clone(),
-<a href=#191 id=191 data-nosnippet>191</a>            storages: RwLock::new(HashMap::new()),
-<a href=#192 id=192 data-nosnippet>192</a>            <span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
-<a href=#193 id=193 data-nosnippet>193</a>            </span>customized_credential_load: <span class="self">self</span>.customized_credential_load.clone(),
-<a href=#194 id=194 data-nosnippet>194</a>        }))
-<a href=#195 id=195 data-nosnippet>195</a>    }
-<a href=#196 id=196 data-nosnippet>196</a>}
-<a href=#197 id=197 data-nosnippet>197</a>
-<a href=#198 id=198 data-nosnippet>198</a><span class="doccomment">/// A resolving storage that auto-detects the scheme from a path and delegates
-<a href=#199 id=199 data-nosnippet>199</a>/// to the appropriate [`OpenDalStorage`] variant.
-<a href=#200 id=200 data-nosnippet>200</a>///
-<a href=#201 id=201 data-nosnippet>201</a>/// Sub-storages are lazily created on first use for each scheme and cached
-<a href=#202 id=202 data-nosnippet>202</a>/// for subsequent operations. Scheme aliases like `s3`/`s3a`/`s3n` map to
-<a href=#203 id=203 data-nosnippet>203</a>/// the same canonical scheme, so they share a storage instance.
-<a href=#204 id=204 data-nosnippet>204</a></span><span class="attr">#[derive(Debug, Serialize, Deserialize)]
-<a href=#205 id=205 data-nosnippet>205</a></span><span class="kw">pub struct </span>OpenDalResolvingStorage {
-<a href=#206 id=206 data-nosnippet>206</a>    <span class="doccomment">/// Configuration properties shared across all backends.
-<a href=#207 id=207 data-nosnippet>207</a>    </span>props: HashMap&lt;String, String&gt;,
-<a href=#208 id=208 data-nosnippet>208</a>    <span class="doccomment">/// Cache of canonical scheme to storage mappings.
-<a href=#209 id=209 data-nosnippet>209</a>    </span><span class="attr">#[serde(skip, default)]
-<a href=#210 id=210 data-nosnippet>210</a>    </span>storages: RwLock&lt;HashMap&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str, Arc&lt;OpenDalStorage&gt;&gt;&gt;,
-<a href=#211 id=211 data-nosnippet>211</a>    <span class="doccomment">/// Custom AWS credential loader for S3 storage.
-<a href=#212 id=212 data-nosnippet>212</a>    </span><span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
-<a href=#213 id=213 data-nosnippet>213</a>    #[serde(skip)]
-<a href=#214 id=214 data-nosnippet>214</a>    </span>customized_credential_load: <span class="prelude-ty">Option</span>&lt;CustomAwsCredentialLoader&gt;,
-<a href=#215 id=215 data-nosnippet>215</a>}
-<a href=#216 id=216 data-nosnippet>216</a>
-<a href=#217 id=217 data-nosnippet>217</a><span class="kw">impl </span>OpenDalResolvingStorage {
-<a href=#218 id=218 data-nosnippet>218</a>    <span class="doccomment">/// Resolve the storage for the given path by extracting the canonical scheme and
-<a href=#219 id=219 data-nosnippet>219</a>    /// returning the cached or newly-created [`OpenDalStorage`].
-<a href=#220 id=220 data-nosnippet>220</a>    </span><span class="kw">fn </span>resolve(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;OpenDalStorage&gt;&gt; {
-<a href=#221 id=221 data-nosnippet>221</a>        <span class="kw">let </span>scheme = extract_scheme(path)<span class="question-mark">?</span>;
-<a href=#222 id=222 data-nosnippet>222</a>
-<a href=#223 id=223 data-nosnippet>223</a>        <span class="comment">// Fast path: check read lock first.
-<a href=#224 id=224 data-nosnippet>224</a>        </span>{
-<a href=#225 id=225 data-nosnippet>225</a>            <span class="kw">let </span>cache = <span class="self">self
-<a href=#226 id=226 data-nosnippet>226</a>                </span>.storages
-<a href=#227 id=227 data-nosnippet>227</a>                .read()
-<a href=#228 id=228 data-nosnippet>228</a>                .map_err(|<span class="kw">_</span>| Error::new(ErrorKind::Unexpected, <span class="string">"Storage cache lock poisoned"</span>))<span class="question-mark">?</span>;
-<a href=#229 id=229 data-nosnippet>229</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(storage) = cache.get(<span class="kw-2">&amp;</span>scheme) {
-<a href=#230 id=230 data-nosnippet>230</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(storage.clone());
-<a href=#231 id=231 data-nosnippet>231</a>            }
-<a href=#232 id=232 data-nosnippet>232</a>        }
-<a href=#233 id=233 data-nosnippet>233</a>
-<a href=#234 id=234 data-nosnippet>234</a>        <span class="comment">// Slow path: build and insert under write lock.
-<a href=#235 id=235 data-nosnippet>235</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self
-<a href=#236 id=236 data-nosnippet>236</a>            </span>.storages
-<a href=#237 id=237 data-nosnippet>237</a>            .write()
-<a href=#238 id=238 data-nosnippet>238</a>            .map_err(|<span class="kw">_</span>| Error::new(ErrorKind::Unexpected, <span class="string">"Storage cache lock poisoned"</span>))<span class="question-mark">?</span>;
-<a href=#239 id=239 data-nosnippet>239</a>
-<a href=#240 id=240 data-nosnippet>240</a>        <span class="comment">// Double-check after acquiring write lock.
-<a href=#241 id=241 data-nosnippet>241</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(storage) = cache.get(<span class="kw-2">&amp;</span>scheme) {
-<a href=#242 id=242 data-nosnippet>242</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(storage.clone());
-<a href=#243 id=243 data-nosnippet>243</a>        }
-<a href=#244 id=244 data-nosnippet>244</a>
-<a href=#245 id=245 data-nosnippet>245</a>        <span class="kw">let </span>storage = build_storage_for_scheme(
-<a href=#246 id=246 data-nosnippet>246</a>            scheme,
-<a href=#247 id=247 data-nosnippet>247</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.props,
-<a href=#248 id=248 data-nosnippet>248</a>            <span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
-<a href=#249 id=249 data-nosnippet>249</a>            </span><span class="kw-2">&amp;</span><span class="self">self</span>.customized_credential_load,
-<a href=#250 id=250 data-nosnippet>250</a>        )<span class="question-mark">?</span>;
-<a href=#251 id=251 data-nosnippet>251</a>        <span class="kw">let </span>storage = Arc::new(storage);
-<a href=#252 id=252 data-nosnippet>252</a>        cache.insert(scheme, storage.clone());
-<a href=#253 id=253 data-nosnippet>253</a>        <span class="prelude-val">Ok</span>(storage)
-<a href=#254 id=254 data-nosnippet>254</a>    }
-<a href=#255 id=255 data-nosnippet>255</a>}
-<a href=#256 id=256 data-nosnippet>256</a>
-<a href=#257 id=257 data-nosnippet>257</a><span class="attr">#[async_trait]
-<a href=#258 id=258 data-nosnippet>258</a>#[typetag::serde]
-<a href=#259 id=259 data-nosnippet>259</a></span><span class="kw">impl </span>Storage <span class="kw">for </span>OpenDalResolvingStorage {
-<a href=#260 id=260 data-nosnippet>260</a>    <span class="kw">async fn </span>exists(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
-<a href=#261 id=261 data-nosnippet>261</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.exists(path).<span class="kw">await
-<a href=#262 id=262 data-nosnippet>262</a>    </span>}
-<a href=#263 id=263 data-nosnippet>263</a>
-<a href=#264 id=264 data-nosnippet>264</a>    <span class="kw">async fn </span>metadata(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;FileMetadata&gt; {
-<a href=#265 id=265 data-nosnippet>265</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.metadata(path).<span class="kw">await
-<a href=#266 id=266 data-nosnippet>266</a>    </span>}
-<a href=#267 id=267 data-nosnippet>267</a>
-<a href=#268 id=268 data-nosnippet>268</a>    <span class="kw">async fn </span>read(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Bytes&gt; {
-<a href=#269 id=269 data-nosnippet>269</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.read(path).<span class="kw">await
-<a href=#270 id=270 data-nosnippet>270</a>    </span>}
-<a href=#271 id=271 data-nosnippet>271</a>
-<a href=#272 id=272 data-nosnippet>272</a>    <span class="kw">async fn </span>reader(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>FileRead&gt;&gt; {
-<a href=#273 id=273 data-nosnippet>273</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.reader(path).<span class="kw">await
-<a href=#274 id=274 data-nosnippet>274</a>    </span>}
-<a href=#275 id=275 data-nosnippet>275</a>
-<a href=#276 id=276 data-nosnippet>276</a>    <span class="kw">async fn </span>write(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str, bs: Bytes) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#277 id=277 data-nosnippet>277</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.write(path, bs).<span class="kw">await
-<a href=#278 id=278 data-nosnippet>278</a>    </span>}
-<a href=#279 id=279 data-nosnippet>279</a>
-<a href=#280 id=280 data-nosnippet>280</a>    <span class="kw">async fn </span>writer(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>FileWrite&gt;&gt; {
-<a href=#281 id=281 data-nosnippet>281</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.writer(path).<span class="kw">await
-<a href=#282 id=282 data-nosnippet>282</a>    </span>}
-<a href=#283 id=283 data-nosnippet>283</a>
-<a href=#284 id=284 data-nosnippet>284</a>    <span class="kw">async fn </span>delete(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#285 id=285 data-nosnippet>285</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.delete(path).<span class="kw">await
-<a href=#286 id=286 data-nosnippet>286</a>    </span>}
-<a href=#287 id=287 data-nosnippet>287</a>
-<a href=#288 id=288 data-nosnippet>288</a>    <span class="kw">async fn </span>delete_prefix(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#289 id=289 data-nosnippet>289</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.delete_prefix(path).<span class="kw">await
-<a href=#290 id=290 data-nosnippet>290</a>    </span>}
-<a href=#291 id=291 data-nosnippet>291</a>
-<a href=#292 id=292 data-nosnippet>292</a>    <span class="kw">async fn </span>delete_stream(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>paths: BoxStream&lt;<span class="lifetime">'static</span>, String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#293 id=293 data-nosnippet>293</a>        <span class="comment">// Group paths by canonical scheme so each resolved storage receives a batch,
-<a href=#294 id=294 data-nosnippet>294</a>        // avoiding repeated operator creation per path.
-<a href=#295 id=295 data-nosnippet>295</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>grouped: HashMap&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str, Vec&lt;String&gt;&gt; = HashMap::new();
-<a href=#296 id=296 data-nosnippet>296</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>(path) = paths.next().<span class="kw">await </span>{
-<a href=#297 id=297 data-nosnippet>297</a>            <span class="kw">let </span>scheme = extract_scheme(<span class="kw-2">&amp;</span>path)<span class="question-mark">?</span>;
-<a href=#298 id=298 data-nosnippet>298</a>            grouped.entry(scheme).or_default().push(path);
-<a href=#299 id=299 data-nosnippet>299</a>        }
-<a href=#300 id=300 data-nosnippet>300</a>
-<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">for </span>(<span class="kw">_</span>, paths) <span class="kw">in </span>grouped {
-<a href=#302 id=302 data-nosnippet>302</a>            <span class="kw">let </span>storage = <span class="self">self</span>.resolve(<span class="kw-2">&amp;</span>paths[<span class="number">0</span>])<span class="question-mark">?</span>;
-<a href=#303 id=303 data-nosnippet>303</a>            storage
-<a href=#304 id=304 data-nosnippet>304</a>                .delete_stream(futures::stream::iter(paths).boxed())
-<a href=#305 id=305 data-nosnippet>305</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#306 id=306 data-nosnippet>306</a>        }
-<a href=#307 id=307 data-nosnippet>307</a>        <span class="prelude-val">Ok</span>(())
-<a href=#308 id=308 data-nosnippet>308</a>    }
-<a href=#309 id=309 data-nosnippet>309</a>
-<a href=#310 id=310 data-nosnippet>310</a>    <span class="kw">fn </span>new_input(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;InputFile&gt; {
-<a href=#311 id=311 data-nosnippet>311</a>        <span class="prelude-val">Ok</span>(InputFile::new(
-<a href=#312 id=312 data-nosnippet>312</a>            Arc::new(<span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.as_ref().clone()),
-<a href=#313 id=313 data-nosnippet>313</a>            path.to_string(),
-<a href=#314 id=314 data-nosnippet>314</a>        ))
-<a href=#315 id=315 data-nosnippet>315</a>    }
-<a href=#316 id=316 data-nosnippet>316</a>
-<a href=#317 id=317 data-nosnippet>317</a>    <span class="kw">fn </span>new_output(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;OutputFile&gt; {
-<a href=#318 id=318 data-nosnippet>318</a>        <span class="prelude-val">Ok</span>(OutputFile::new(
-<a href=#319 id=319 data-nosnippet>319</a>            Arc::new(<span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.as_ref().clone()),
-<a href=#320 id=320 data-nosnippet>320</a>            path.to_string(),
-<a href=#321 id=321 data-nosnippet>321</a>        ))
-<a href=#322 id=322 data-nosnippet>322</a>    }
-<a href=#323 id=323 data-nosnippet>323</a>}
-<a href=#324 id=324 data-nosnippet>324</a>
-<a href=#325 id=325 data-nosnippet>325</a><span class="attr">#[cfg(test)]
-<a href=#326 id=326 data-nosnippet>326</a></span><span class="kw">mod </span>tests {
-<a href=#327 id=327 data-nosnippet>327</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
-<a href=#328 id=328 data-nosnippet>328</a>
-<a href=#329 id=329 data-nosnippet>329</a>    <span class="doccomment">/// Builds a resolving storage with empty props, suitable for `resolve()`
-<a href=#330 id=330 data-nosnippet>330</a>    /// calls that don't actually hit any backend.
-<a href=#331 id=331 data-nosnippet>331</a>    </span><span class="kw">fn </span>empty_resolving_storage() -&gt; OpenDalResolvingStorage {
-<a href=#332 id=332 data-nosnippet>332</a>        OpenDalResolvingStorage {
-<a href=#333 id=333 data-nosnippet>333</a>            props: HashMap::new(),
-<a href=#334 id=334 data-nosnippet>334</a>            storages: RwLock::new(HashMap::new()),
-<a href=#335 id=335 data-nosnippet>335</a>            <span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
-<a href=#336 id=336 data-nosnippet>336</a>            </span>customized_credential_load: <span class="prelude-val">None</span>,
-<a href=#337 id=337 data-nosnippet>337</a>        }
-<a href=#338 id=338 data-nosnippet>338</a>    }
-<a href=#339 id=339 data-nosnippet>339</a>
-<a href=#340 id=340 data-nosnippet>340</a>    <span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
-<a href=#341 id=341 data-nosnippet>341</a>    #[test]
-<a href=#342 id=342 data-nosnippet>342</a>    </span><span class="kw">fn </span>test_resolve_s3_aliases_share_instance() {
-<a href=#343 id=343 data-nosnippet>343</a>        <span class="kw">let </span>storage = empty_resolving_storage();
-<a href=#344 id=344 data-nosnippet>344</a>
-<a href=#345 id=345 data-nosnippet>345</a>        <span class="comment">// All three S3-family schemes must collapse to a single cached
-<a href=#346 id=346 data-nosnippet>346</a>        // `Arc&lt;OpenDalStorage&gt;` so that catalogs handing the resolver a mix
-<a href=#347 id=347 data-nosnippet>347</a>        // of `s3://`, `s3a://`, `s3n://` paths don't rebuild operators.
-<a href=#348 id=348 data-nosnippet>348</a>        </span><span class="kw">let </span>a = storage.resolve(<span class="string">"s3://bucket/key"</span>).unwrap();
-<a href=#349 id=349 data-nosnippet>349</a>        <span class="kw">let </span>b = storage.resolve(<span class="string">"s3a://bucket/key"</span>).unwrap();
-<a href=#350 id=350 data-nosnippet>350</a>        <span class="kw">let </span>c = storage.resolve(<span class="string">"s3n://bucket/key"</span>).unwrap();
-<a href=#351 id=351 data-nosnippet>351</a>
-<a href=#352 id=352 data-nosnippet>352</a>        <span class="macro">assert!</span>(Arc::ptr_eq(<span class="kw-2">&amp;</span>a, <span class="kw-2">&amp;</span>b), <span class="string">"s3 and s3a should share one instance"</span>);
-<a href=#353 id=353 data-nosnippet>353</a>        <span class="macro">assert!</span>(Arc::ptr_eq(<span class="kw-2">&amp;</span>a, <span class="kw-2">&amp;</span>c), <span class="string">"s3 and s3n should share one instance"</span>);
-<a href=#354 id=354 data-nosnippet>354</a>    }
-<a href=#355 id=355 data-nosnippet>355</a>
-<a href=#356 id=356 data-nosnippet>356</a>    <span class="attr">#[cfg(feature = <span class="string">"opendal-azdls"</span>)]
-<a href=#357 id=357 data-nosnippet>357</a>    #[test]
-<a href=#358 id=358 data-nosnippet>358</a>    </span><span class="kw">fn </span>test_resolve_azdls_aliases_share_instance() {
-<a href=#359 id=359 data-nosnippet>359</a>        <span class="kw">let </span>storage = empty_resolving_storage();
-<a href=#360 id=360 data-nosnippet>360</a>
-<a href=#361 id=361 data-nosnippet>361</a>        <span class="kw">let </span>path_for = |scheme: <span class="kw-2">&amp;</span>str| {
-<a href=#362 id=362 data-nosnippet>362</a>            <span class="macro">format!</span>(<span class="string">"{scheme}://myfs@myaccount.dfs.core.windows.net/path/to/file.parquet"</span>)
-<a href=#363 id=363 data-nosnippet>363</a>        };
-<a href=#364 id=364 data-nosnippet>364</a>
-<a href=#365 id=365 data-nosnippet>365</a>        <span class="comment">// All Azure schemes collapse onto one cached instance.
-<a href=#366 id=366 data-nosnippet>366</a>        </span><span class="kw">let </span>abfss = storage.resolve(<span class="kw-2">&amp;</span>path_for(<span class="string">"abfss"</span>)).unwrap();
-<a href=#367 id=367 data-nosnippet>367</a>        <span class="kw">let </span>abfs = storage.resolve(<span class="kw-2">&amp;</span>path_for(<span class="string">"abfs"</span>)).unwrap();
+<a href=#177 id=177 data-nosnippet>177</a>}
+<a href=#178 id=178 data-nosnippet>178</a>
+<a href=#179 id=179 data-nosnippet>179</a><span class="kw">impl </span>OpenDalResolvingStorageFactory {
+<a href=#180 id=180 data-nosnippet>180</a>    <span class="doccomment">/// Create a new resolving storage factory.
+<a href=#181 id=181 data-nosnippet>181</a>    </span><span class="kw">pub fn </span>new() -&gt; <span class="self">Self </span>{
+<a href=#182 id=182 data-nosnippet>182</a>        <span class="self">Self </span>{
+<a href=#183 id=183 data-nosnippet>183</a>            <span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
+<a href=#184 id=184 data-nosnippet>184</a>            </span>customized_credential_load: <span class="prelude-val">None</span>,
+<a href=#185 id=185 data-nosnippet>185</a>        }
+<a href=#186 id=186 data-nosnippet>186</a>    }
+<a href=#187 id=187 data-nosnippet>187</a>
+<a href=#188 id=188 data-nosnippet>188</a>    <span class="doccomment">/// Set a custom AWS credential loader for S3 storage.
+<a href=#189 id=189 data-nosnippet>189</a>    </span><span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
+<a href=#190 id=190 data-nosnippet>190</a>    </span><span class="kw">pub fn </span>with_s3_credential_loader(<span class="kw-2">mut </span><span class="self">self</span>, loader: CustomAwsCredentialLoader) -&gt; <span class="self">Self </span>{
+<a href=#191 id=191 data-nosnippet>191</a>        <span class="self">self</span>.customized_credential_load = <span class="prelude-val">Some</span>(loader);
+<a href=#192 id=192 data-nosnippet>192</a>        <span class="self">self
+<a href=#193 id=193 data-nosnippet>193</a>    </span>}
+<a href=#194 id=194 data-nosnippet>194</a>}
+<a href=#195 id=195 data-nosnippet>195</a>
+<a href=#196 id=196 data-nosnippet>196</a><span class="attr">#[typetag::serde]
+<a href=#197 id=197 data-nosnippet>197</a></span><span class="kw">impl </span>StorageFactory <span class="kw">for </span>OpenDalResolvingStorageFactory {
+<a href=#198 id=198 data-nosnippet>198</a>    <span class="kw">fn </span>build(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>StorageConfig) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>Storage&gt;&gt; {
+<a href=#199 id=199 data-nosnippet>199</a>        <span class="prelude-val">Ok</span>(Arc::new(OpenDalResolvingStorage {
+<a href=#200 id=200 data-nosnippet>200</a>            props: config.props().clone(),
+<a href=#201 id=201 data-nosnippet>201</a>            storages: RwLock::new(HashMap::new()),
+<a href=#202 id=202 data-nosnippet>202</a>            <span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
+<a href=#203 id=203 data-nosnippet>203</a>            </span>customized_credential_load: <span class="self">self</span>.customized_credential_load.clone(),
+<a href=#204 id=204 data-nosnippet>204</a>        }))
+<a href=#205 id=205 data-nosnippet>205</a>    }
+<a href=#206 id=206 data-nosnippet>206</a>}
+<a href=#207 id=207 data-nosnippet>207</a>
+<a href=#208 id=208 data-nosnippet>208</a><span class="doccomment">/// A resolving storage that auto-detects the scheme from a path and delegates
+<a href=#209 id=209 data-nosnippet>209</a>/// to the appropriate [`OpenDalStorage`] variant.
+<a href=#210 id=210 data-nosnippet>210</a>///
+<a href=#211 id=211 data-nosnippet>211</a>/// Sub-storages are lazily created on first use for each scheme and cached
+<a href=#212 id=212 data-nosnippet>212</a>/// for subsequent operations. Scheme aliases like `s3`/`s3a`/`s3n` map to
+<a href=#213 id=213 data-nosnippet>213</a>/// the same canonical scheme, so they share a storage instance.
+<a href=#214 id=214 data-nosnippet>214</a></span><span class="attr">#[derive(Debug, Serialize, Deserialize)]
+<a href=#215 id=215 data-nosnippet>215</a></span><span class="kw">pub struct </span>OpenDalResolvingStorage {
+<a href=#216 id=216 data-nosnippet>216</a>    <span class="doccomment">/// Configuration properties shared across all backends.
+<a href=#217 id=217 data-nosnippet>217</a>    </span>props: HashMap&lt;String, String&gt;,
+<a href=#218 id=218 data-nosnippet>218</a>    <span class="doccomment">/// Cache of canonical scheme to storage mappings.
+<a href=#219 id=219 data-nosnippet>219</a>    </span><span class="attr">#[serde(skip, default)]
+<a href=#220 id=220 data-nosnippet>220</a>    </span>storages: RwLock&lt;HashMap&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str, Arc&lt;OpenDalStorage&gt;&gt;&gt;,
+<a href=#221 id=221 data-nosnippet>221</a>    <span class="doccomment">/// Custom AWS credential loader for S3 storage.
+<a href=#222 id=222 data-nosnippet>222</a>    </span><span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
+<a href=#223 id=223 data-nosnippet>223</a>    #[serde(skip)]
+<a href=#224 id=224 data-nosnippet>224</a>    </span>customized_credential_load: <span class="prelude-ty">Option</span>&lt;CustomAwsCredentialLoader&gt;,
+<a href=#225 id=225 data-nosnippet>225</a>}
+<a href=#226 id=226 data-nosnippet>226</a>
+<a href=#227 id=227 data-nosnippet>227</a><span class="kw">impl </span>OpenDalResolvingStorage {
+<a href=#228 id=228 data-nosnippet>228</a>    <span class="doccomment">/// Resolve the storage for the given path by extracting the canonical scheme and
+<a href=#229 id=229 data-nosnippet>229</a>    /// returning the cached or newly-created [`OpenDalStorage`].
+<a href=#230 id=230 data-nosnippet>230</a>    </span><span class="kw">fn </span>resolve(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;OpenDalStorage&gt;&gt; {
+<a href=#231 id=231 data-nosnippet>231</a>        <span class="kw">let </span>scheme = extract_scheme(path)<span class="question-mark">?</span>;
+<a href=#232 id=232 data-nosnippet>232</a>
+<a href=#233 id=233 data-nosnippet>233</a>        <span class="comment">// Fast path: check read lock first.
+<a href=#234 id=234 data-nosnippet>234</a>        </span>{
+<a href=#235 id=235 data-nosnippet>235</a>            <span class="kw">let </span>cache = <span class="self">self
+<a href=#236 id=236 data-nosnippet>236</a>                </span>.storages
+<a href=#237 id=237 data-nosnippet>237</a>                .read()
+<a href=#238 id=238 data-nosnippet>238</a>                .map_err(|<span class="kw">_</span>| Error::new(ErrorKind::Unexpected, <span class="string">"Storage cache lock poisoned"</span>))<span class="question-mark">?</span>;
+<a href=#239 id=239 data-nosnippet>239</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(storage) = cache.get(<span class="kw-2">&amp;</span>scheme) {
+<a href=#240 id=240 data-nosnippet>240</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(storage.clone());
+<a href=#241 id=241 data-nosnippet>241</a>            }
+<a href=#242 id=242 data-nosnippet>242</a>        }
+<a href=#243 id=243 data-nosnippet>243</a>
+<a href=#244 id=244 data-nosnippet>244</a>        <span class="comment">// Slow path: build and insert under write lock.
+<a href=#245 id=245 data-nosnippet>245</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self
+<a href=#246 id=246 data-nosnippet>246</a>            </span>.storages
+<a href=#247 id=247 data-nosnippet>247</a>            .write()
+<a href=#248 id=248 data-nosnippet>248</a>            .map_err(|<span class="kw">_</span>| Error::new(ErrorKind::Unexpected, <span class="string">"Storage cache lock poisoned"</span>))<span class="question-mark">?</span>;
+<a href=#249 id=249 data-nosnippet>249</a>
+<a href=#250 id=250 data-nosnippet>250</a>        <span class="comment">// Double-check after acquiring write lock.
+<a href=#251 id=251 data-nosnippet>251</a>        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(storage) = cache.get(<span class="kw-2">&amp;</span>scheme) {
+<a href=#252 id=252 data-nosnippet>252</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(storage.clone());
+<a href=#253 id=253 data-nosnippet>253</a>        }
+<a href=#254 id=254 data-nosnippet>254</a>
+<a href=#255 id=255 data-nosnippet>255</a>        <span class="kw">let </span>storage = build_storage_for_scheme(
+<a href=#256 id=256 data-nosnippet>256</a>            scheme,
+<a href=#257 id=257 data-nosnippet>257</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.props,
+<a href=#258 id=258 data-nosnippet>258</a>            <span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
+<a href=#259 id=259 data-nosnippet>259</a>            </span><span class="kw-2">&amp;</span><span class="self">self</span>.customized_credential_load,
+<a href=#260 id=260 data-nosnippet>260</a>        )<span class="question-mark">?</span>;
+<a href=#261 id=261 data-nosnippet>261</a>        <span class="kw">let </span>storage = Arc::new(storage);
+<a href=#262 id=262 data-nosnippet>262</a>        cache.insert(scheme, storage.clone());
+<a href=#263 id=263 data-nosnippet>263</a>        <span class="prelude-val">Ok</span>(storage)
+<a href=#264 id=264 data-nosnippet>264</a>    }
+<a href=#265 id=265 data-nosnippet>265</a>}
+<a href=#266 id=266 data-nosnippet>266</a>
+<a href=#267 id=267 data-nosnippet>267</a><span class="attr">#[async_trait]
+<a href=#268 id=268 data-nosnippet>268</a>#[typetag::serde]
+<a href=#269 id=269 data-nosnippet>269</a></span><span class="kw">impl </span>Storage <span class="kw">for </span>OpenDalResolvingStorage {
+<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">async fn </span>exists(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
+<a href=#271 id=271 data-nosnippet>271</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.exists(path).<span class="kw">await
+<a href=#272 id=272 data-nosnippet>272</a>    </span>}
+<a href=#273 id=273 data-nosnippet>273</a>
+<a href=#274 id=274 data-nosnippet>274</a>    <span class="kw">async fn </span>metadata(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;FileMetadata&gt; {
+<a href=#275 id=275 data-nosnippet>275</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.metadata(path).<span class="kw">await
+<a href=#276 id=276 data-nosnippet>276</a>    </span>}
+<a href=#277 id=277 data-nosnippet>277</a>
+<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">async fn </span>read(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Bytes&gt; {
+<a href=#279 id=279 data-nosnippet>279</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.read(path).<span class="kw">await
+<a href=#280 id=280 data-nosnippet>280</a>    </span>}
+<a href=#281 id=281 data-nosnippet>281</a>
+<a href=#282 id=282 data-nosnippet>282</a>    <span class="kw">async fn </span>reader(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>FileRead&gt;&gt; {
+<a href=#283 id=283 data-nosnippet>283</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.reader(path).<span class="kw">await
+<a href=#284 id=284 data-nosnippet>284</a>    </span>}
+<a href=#285 id=285 data-nosnippet>285</a>
+<a href=#286 id=286 data-nosnippet>286</a>    <span class="kw">async fn </span>write(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str, bs: Bytes) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#287 id=287 data-nosnippet>287</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.write(path, bs).<span class="kw">await
+<a href=#288 id=288 data-nosnippet>288</a>    </span>}
+<a href=#289 id=289 data-nosnippet>289</a>
+<a href=#290 id=290 data-nosnippet>290</a>    <span class="kw">async fn </span>writer(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>FileWrite&gt;&gt; {
+<a href=#291 id=291 data-nosnippet>291</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.writer(path).<span class="kw">await
+<a href=#292 id=292 data-nosnippet>292</a>    </span>}
+<a href=#293 id=293 data-nosnippet>293</a>
+<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">async fn </span>delete(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#295 id=295 data-nosnippet>295</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.delete(path).<span class="kw">await
+<a href=#296 id=296 data-nosnippet>296</a>    </span>}
+<a href=#297 id=297 data-nosnippet>297</a>
+<a href=#298 id=298 data-nosnippet>298</a>    <span class="kw">async fn </span>delete_prefix(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#299 id=299 data-nosnippet>299</a>        <span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.delete_prefix(path).<span class="kw">await
+<a href=#300 id=300 data-nosnippet>300</a>    </span>}
+<a href=#301 id=301 data-nosnippet>301</a>
+<a href=#302 id=302 data-nosnippet>302</a>    <span class="kw">async fn </span>delete_stream(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>paths: BoxStream&lt;<span class="lifetime">'static</span>, String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#303 id=303 data-nosnippet>303</a>        <span class="comment">// Group paths by canonical scheme so each resolved storage receives a batch,
+<a href=#304 id=304 data-nosnippet>304</a>        // avoiding repeated operator creation per path.
+<a href=#305 id=305 data-nosnippet>305</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>grouped: HashMap&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str, Vec&lt;String&gt;&gt; = HashMap::new();
+<a href=#306 id=306 data-nosnippet>306</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>(path) = paths.next().<span class="kw">await </span>{
+<a href=#307 id=307 data-nosnippet>307</a>            <span class="kw">let </span>scheme = extract_scheme(<span class="kw-2">&amp;</span>path)<span class="question-mark">?</span>;
+<a href=#308 id=308 data-nosnippet>308</a>            grouped.entry(scheme).or_default().push(path);
+<a href=#309 id=309 data-nosnippet>309</a>        }
+<a href=#310 id=310 data-nosnippet>310</a>
+<a href=#311 id=311 data-nosnippet>311</a>        <span class="kw">for </span>(<span class="kw">_</span>, paths) <span class="kw">in </span>grouped {
+<a href=#312 id=312 data-nosnippet>312</a>            <span class="kw">let </span>storage = <span class="self">self</span>.resolve(<span class="kw-2">&amp;</span>paths[<span class="number">0</span>])<span class="question-mark">?</span>;
+<a href=#313 id=313 data-nosnippet>313</a>            storage
+<a href=#314 id=314 data-nosnippet>314</a>                .delete_stream(futures::stream::iter(paths).boxed())
+<a href=#315 id=315 data-nosnippet>315</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#316 id=316 data-nosnippet>316</a>        }
+<a href=#317 id=317 data-nosnippet>317</a>        <span class="prelude-val">Ok</span>(())
+<a href=#318 id=318 data-nosnippet>318</a>    }
+<a href=#319 id=319 data-nosnippet>319</a>
+<a href=#320 id=320 data-nosnippet>320</a>    <span class="kw">fn </span>new_input(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;InputFile&gt; {
+<a href=#321 id=321 data-nosnippet>321</a>        <span class="prelude-val">Ok</span>(InputFile::new(
+<a href=#322 id=322 data-nosnippet>322</a>            Arc::new(<span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.as_ref().clone()),
+<a href=#323 id=323 data-nosnippet>323</a>            path.to_string(),
+<a href=#324 id=324 data-nosnippet>324</a>        ))
+<a href=#325 id=325 data-nosnippet>325</a>    }
+<a href=#326 id=326 data-nosnippet>326</a>
+<a href=#327 id=327 data-nosnippet>327</a>    <span class="kw">fn </span>new_output(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;OutputFile&gt; {
+<a href=#328 id=328 data-nosnippet>328</a>        <span class="prelude-val">Ok</span>(OutputFile::new(
+<a href=#329 id=329 data-nosnippet>329</a>            Arc::new(<span class="self">self</span>.resolve(path)<span class="question-mark">?</span>.as_ref().clone()),
+<a href=#330 id=330 data-nosnippet>330</a>            path.to_string(),
+<a href=#331 id=331 data-nosnippet>331</a>        ))
+<a href=#332 id=332 data-nosnippet>332</a>    }
+<a href=#333 id=333 data-nosnippet>333</a>}
+<a href=#334 id=334 data-nosnippet>334</a>
+<a href=#335 id=335 data-nosnippet>335</a><span class="attr">#[cfg(test)]
+<a href=#336 id=336 data-nosnippet>336</a></span><span class="kw">mod </span>tests {
+<a href=#337 id=337 data-nosnippet>337</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
+<a href=#338 id=338 data-nosnippet>338</a>
+<a href=#339 id=339 data-nosnippet>339</a>    <span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
+<a href=#340 id=340 data-nosnippet>340</a>    #[derive(Debug)]
+<a href=#341 id=341 data-nosnippet>341</a>    </span><span class="kw">struct </span>EmptyCredentialLoader;
+<a href=#342 id=342 data-nosnippet>342</a>
+<a href=#343 id=343 data-nosnippet>343</a>    <span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
+<a href=#344 id=344 data-nosnippet>344</a>    </span><span class="kw">impl </span><span class="kw">crate</span>::s3::ProvideCredential <span class="kw">for </span>EmptyCredentialLoader {
+<a href=#345 id=345 data-nosnippet>345</a>        <span class="kw">type </span>Credential = <span class="kw">crate</span>::s3::AwsCredential;
+<a href=#346 id=346 data-nosnippet>346</a>
+<a href=#347 id=347 data-nosnippet>347</a>        <span class="kw">async fn </span>provide_credential(
+<a href=#348 id=348 data-nosnippet>348</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#349 id=349 data-nosnippet>349</a>            _ctx: <span class="kw-2">&amp;</span>reqsign_core::Context,
+<a href=#350 id=350 data-nosnippet>350</a>        ) -&gt; reqsign_core::Result&lt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Credential&gt;&gt; {
+<a href=#351 id=351 data-nosnippet>351</a>            <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>)
+<a href=#352 id=352 data-nosnippet>352</a>        }
+<a href=#353 id=353 data-nosnippet>353</a>    }
+<a href=#354 id=354 data-nosnippet>354</a>
+<a href=#355 id=355 data-nosnippet>355</a>    <span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
+<a href=#356 id=356 data-nosnippet>356</a>    #[test]
+<a href=#357 id=357 data-nosnippet>357</a>    </span><span class="kw">fn </span>test_custom_credential_loader_serialization_fails() {
+<a href=#358 id=358 data-nosnippet>358</a>        <span class="kw">let </span>factory = OpenDalResolvingStorageFactory::new()
+<a href=#359 id=359 data-nosnippet>359</a>            .with_s3_credential_loader(CustomAwsCredentialLoader::new(EmptyCredentialLoader));
+<a href=#360 id=360 data-nosnippet>360</a>        <span class="kw">let </span>file_io = iceberg::io::FileIOBuilder::new(Arc::new(factory)).build();
+<a href=#361 id=361 data-nosnippet>361</a>
+<a href=#362 id=362 data-nosnippet>362</a>        <span class="kw">let </span>err = file_io.serialize_all().unwrap_err();
+<a href=#363 id=363 data-nosnippet>363</a>        <span class="macro">assert!</span>(
+<a href=#364 id=364 data-nosnippet>364</a>            err.to_string()
+<a href=#365 id=365 data-nosnippet>365</a>                .contains(<span class="string">"custom AWS credential loaders cannot be serialized"</span>)
+<a href=#366 id=366 data-nosnippet>366</a>        );
+<a href=#367 id=367 data-nosnippet>367</a>    }
 <a href=#368 id=368 data-nosnippet>368</a>
-<a href=#369 id=369 data-nosnippet>369</a>        <span class="macro">assert!</span>(
-<a href=#370 id=370 data-nosnippet>370</a>            Arc::ptr_eq(<span class="kw-2">&amp;</span>abfss, <span class="kw-2">&amp;</span>abfs),
-<a href=#371 id=371 data-nosnippet>371</a>            <span class="string">"abfss and abfs should share one instance"
-<a href=#372 id=372 data-nosnippet>372</a>        </span>);
-<a href=#373 id=373 data-nosnippet>373</a>    }
-<a href=#374 id=374 data-nosnippet>374</a>}
+<a href=#369 id=369 data-nosnippet>369</a>    <span class="doccomment">/// Builds a resolving storage with empty props, suitable for `resolve()`
+<a href=#370 id=370 data-nosnippet>370</a>    /// calls that don't actually hit any backend.
+<a href=#371 id=371 data-nosnippet>371</a>    </span><span class="kw">fn </span>empty_resolving_storage() -&gt; OpenDalResolvingStorage {
+<a href=#372 id=372 data-nosnippet>372</a>        OpenDalResolvingStorage {
+<a href=#373 id=373 data-nosnippet>373</a>            props: HashMap::new(),
+<a href=#374 id=374 data-nosnippet>374</a>            storages: RwLock::new(HashMap::new()),
+<a href=#375 id=375 data-nosnippet>375</a>            <span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
+<a href=#376 id=376 data-nosnippet>376</a>            </span>customized_credential_load: <span class="prelude-val">None</span>,
+<a href=#377 id=377 data-nosnippet>377</a>        }
+<a href=#378 id=378 data-nosnippet>378</a>    }
+<a href=#379 id=379 data-nosnippet>379</a>
+<a href=#380 id=380 data-nosnippet>380</a>    <span class="attr">#[cfg(feature = <span class="string">"opendal-s3"</span>)]
+<a href=#381 id=381 data-nosnippet>381</a>    #[test]
+<a href=#382 id=382 data-nosnippet>382</a>    </span><span class="kw">fn </span>test_resolve_s3_aliases_share_instance() {
+<a href=#383 id=383 data-nosnippet>383</a>        <span class="kw">let </span>storage = empty_resolving_storage();
+<a href=#384 id=384 data-nosnippet>384</a>
+<a href=#385 id=385 data-nosnippet>385</a>        <span class="comment">// All three S3-family schemes must collapse to a single cached
+<a href=#386 id=386 data-nosnippet>386</a>        // `Arc&lt;OpenDalStorage&gt;` so that catalogs handing the resolver a mix
+<a href=#387 id=387 data-nosnippet>387</a>        // of `s3://`, `s3a://`, `s3n://` paths don't rebuild operators.
+<a href=#388 id=388 data-nosnippet>388</a>        </span><span class="kw">let </span>a = storage.resolve(<span class="string">"s3://bucket/key"</span>).unwrap();
+<a href=#389 id=389 data-nosnippet>389</a>        <span class="kw">let </span>b = storage.resolve(<span class="string">"s3a://bucket/key"</span>).unwrap();
+<a href=#390 id=390 data-nosnippet>390</a>        <span class="kw">let </span>c = storage.resolve(<span class="string">"s3n://bucket/key"</span>).unwrap();
+<a href=#391 id=391 data-nosnippet>391</a>
+<a href=#392 id=392 data-nosnippet>392</a>        <span class="macro">assert!</span>(Arc::ptr_eq(<span class="kw-2">&amp;</span>a, <span class="kw-2">&amp;</span>b), <span class="string">"s3 and s3a should share one instance"</span>);
+<a href=#393 id=393 data-nosnippet>393</a>        <span class="macro">assert!</span>(Arc::ptr_eq(<span class="kw-2">&amp;</span>a, <span class="kw-2">&amp;</span>c), <span class="string">"s3 and s3n should share one instance"</span>);
+<a href=#394 id=394 data-nosnippet>394</a>    }
+<a href=#395 id=395 data-nosnippet>395</a>
+<a href=#396 id=396 data-nosnippet>396</a>    <span class="attr">#[cfg(feature = <span class="string">"opendal-azdls"</span>)]
+<a href=#397 id=397 data-nosnippet>397</a>    #[test]
+<a href=#398 id=398 data-nosnippet>398</a>    </span><span class="kw">fn </span>test_resolve_azdls_aliases_share_instance() {
+<a href=#399 id=399 data-nosnippet>399</a>        <span class="kw">let </span>storage = empty_resolving_storage();
+<a href=#400 id=400 data-nosnippet>400</a>
+<a href=#401 id=401 data-nosnippet>401</a>        <span class="kw">let </span>path_for = |scheme: <span class="kw-2">&amp;</span>str| {
+<a href=#402 id=402 data-nosnippet>402</a>            <span class="macro">format!</span>(<span class="string">"{scheme}://myfs@myaccount.dfs.core.windows.net/path/to/file.parquet"</span>)
+<a href=#403 id=403 data-nosnippet>403</a>        };
+<a href=#404 id=404 data-nosnippet>404</a>
+<a href=#405 id=405 data-nosnippet>405</a>        <span class="comment">// All Azure schemes collapse onto one cached instance.
+<a href=#406 id=406 data-nosnippet>406</a>        </span><span class="kw">let </span>abfss = storage.resolve(<span class="kw-2">&amp;</span>path_for(<span class="string">"abfss"</span>)).unwrap();
+<a href=#407 id=407 data-nosnippet>407</a>        <span class="kw">let </span>abfs = storage.resolve(<span class="kw-2">&amp;</span>path_for(<span class="string">"abfs"</span>)).unwrap();
+<a href=#408 id=408 data-nosnippet>408</a>
+<a href=#409 id=409 data-nosnippet>409</a>        <span class="macro">assert!</span>(
+<a href=#410 id=410 data-nosnippet>410</a>            Arc::ptr_eq(<span class="kw-2">&amp;</span>abfss, <span class="kw-2">&amp;</span>abfs),
+<a href=#411 id=411 data-nosnippet>411</a>            <span class="string">"abfss and abfs should share one instance"
+<a href=#412 id=412 data-nosnippet>412</a>        </span>);
+<a href=#413 id=413 data-nosnippet>413</a>    }
+<a href=#414 id=414 data-nosnippet>414</a>}
 </code></pre></div></section></main></body></html>
