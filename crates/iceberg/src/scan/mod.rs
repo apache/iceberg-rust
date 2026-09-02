@@ -40,9 +40,8 @@ use crate::io::FileIO;
 use crate::metadata_columns::{
     RESERVED_FIELD_ID_PARTITION, get_metadata_field_id, is_metadata_column_name,
 };
-use crate::partitioning::compute_unified_partition_type;
 use crate::runtime::Runtime;
-use crate::spec::{DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, Schema, SnapshotRef};
+use crate::spec::{DataContentType, Schema, SchemaRef, SnapshotRef, StructType};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::{Error, ErrorKind, Result};
@@ -59,6 +58,73 @@ fn resolve_field_id(schema: &Schema, column_name: &str, case_sensitive: bool) ->
             .field_by_name_case_insensitive(column_name)
             .map(|field| field.id)
     }
+}
+
+fn collect_scan_field_ids(
+    schema: &Schema,
+    column_names: Option<&[String]>,
+    case_sensitive: bool,
+) -> Result<Vec<i32>> {
+    let Some(column_names) = column_names else {
+        return Ok(schema.as_struct().fields().iter().map(|f| f.id).collect());
+    };
+
+    column_names
+        .iter()
+        .map(|column_name| {
+            if is_metadata_column_name(column_name) {
+                return get_metadata_field_id(column_name);
+            }
+
+            let field_id = resolve_field_id(schema, column_name, case_sensitive).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Column {column_name} not found in table. Schema: {schema}"),
+                )
+            })?;
+
+            schema
+                .as_struct()
+                .field_by_id(field_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::FeatureUnsupported,
+                        format!(
+                            "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
+                        ),
+                    )
+                })?;
+
+            Ok(field_id)
+        })
+        .collect()
+}
+
+fn bind_scan_predicate(
+    schema: &SchemaRef,
+    predicate: Option<&Predicate>,
+    case_sensitive: bool,
+) -> Result<Option<Arc<BoundPredicate>>> {
+    predicate
+        .map(|predicate| predicate.bind(schema.clone(), case_sensitive))
+        .transpose()
+        .map(|predicate| predicate.map(Arc::new))
+}
+
+fn projected_partition_type(
+    table: &Table,
+    schema: &Schema,
+    field_ids: &[i32],
+) -> Result<Option<Arc<StructType>>> {
+    if !field_ids.contains(&RESERVED_FIELD_ID_PARTITION) {
+        return Ok(None);
+    }
+
+    table
+        .metadata()
+        .unified_partition_type(schema)
+        .map(Arc::new)
+        .map(Some)
 }
 
 /// Builder to create table scan.
@@ -233,85 +299,17 @@ impl<'a> TableScanBuilder<'a> {
         };
 
         let schema = snapshot.schema(self.table.metadata())?;
-
-        let mut field_ids = vec![];
-        let column_names = self.column_names.clone().unwrap_or_else(|| {
-            schema
-                .as_struct()
-                .fields()
-                .iter()
-                .map(|f| f.name.clone())
-                .collect()
-        });
-
-        for column_name in column_names.iter() {
-            // Handle metadata columns (like "_file")
-            if is_metadata_column_name(column_name) {
-                field_ids.push(get_metadata_field_id(column_name)?);
-                continue;
-            }
-
-            let field_id =
-                resolve_field_id(&schema, column_name, self.case_sensitive).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Column {column_name} not found in table. Schema: {schema}"),
-                    )
-                })?;
-
-            schema
-                .as_struct()
-                .field_by_id(field_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::FeatureUnsupported,
-                        format!(
-                        "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
-                    ),
-                )
-            })?;
-
-            field_ids.push(field_id);
-        }
-
-        let snapshot_bound_predicate = if let Some(ref predicates) = self.filter {
-            Some(predicates.bind(schema.clone(), self.case_sensitive)?)
-        } else {
-            None
-        };
-
+        let field_ids =
+            collect_scan_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
+        let snapshot_bound_predicate =
+            bind_scan_predicate(&schema, self.filter.as_ref(), self.case_sensitive)?;
         let name_mapping = self
             .table
             .metadata()
-            .properties()
-            .get(DEFAULT_SCHEMA_NAME_MAPPING)
-            .map(|raw| {
-                serde_json::from_str::<NameMapping>(raw).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Failed to parse table property {DEFAULT_SCHEMA_NAME_MAPPING} as a NameMapping"
-                        ),
-                    )
-                    .with_source(e)
-                })
-            })
-            .transpose()?
+            .table_properties()
+            .default_name_mapping()?
             .map(Arc::new);
-
-        // Compute unified partition type if _partition is projected
-        let unified_partition_type = if field_ids.contains(&RESERVED_FIELD_ID_PARTITION) {
-            let partition_type = compute_unified_partition_type(
-                self.table
-                    .metadata()
-                    .partition_specs_iter()
-                    .map(|s| s.as_ref()),
-                &schema,
-            )?;
-            Some(Arc::new(partition_type))
-        } else {
-            None
-        };
+        let unified_partition_type = projected_partition_type(self.table, &schema, &field_ids)?;
 
         let plan_context = PlanContext {
             snapshot,
@@ -319,7 +317,7 @@ impl<'a> TableScanBuilder<'a> {
             snapshot_schema: schema,
             case_sensitive: self.case_sensitive,
             predicate: self.filter.map(Arc::new),
-            snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
+            snapshot_bound_predicate,
             object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
             name_mapping,
@@ -664,11 +662,10 @@ pub mod tests {
     };
     use crate::scan::FileScanTask;
     use crate::spec::{
-        DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, DataFileBuilder, DataFileFormat, Datum,
-        FormatVersion, Literal, MAIN_BRANCH, ManifestEntry, ManifestListWriter, ManifestStatus,
-        ManifestWriterBuilder, NestedField, Operation, PartitionSpec, PrimitiveType, Schema,
-        Snapshot, Struct, StructType, Summary, TableMetadata, TableMetadataBuilder, Type,
-        UnboundPartitionSpec,
+        DataContentType, DataFileBuilder, DataFileFormat, Datum, FormatVersion, Literal,
+        MAIN_BRANCH, ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
+        NestedField, Operation, PartitionSpec, PrimitiveType, Schema, Snapshot, Struct, StructType,
+        Summary, TableMetadata, TableMetadataBuilder, TableProperties, Type, UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -1896,7 +1893,8 @@ pub mod tests {
     #[test]
     fn test_table_scan_with_name_mapping_property() {
         let mapping_json = r#"[{"field-id":1,"names":["id","record_id"]}]"#;
-        let table = table_with_property(DEFAULT_SCHEMA_NAME_MAPPING, mapping_json);
+        let table =
+            table_with_property(TableProperties::PROPERTY_DEFAULT_NAME_MAPPING, mapping_json);
 
         let table_scan = table.scan().build().unwrap();
         let mapping = table_scan
@@ -1917,7 +1915,10 @@ pub mod tests {
 
     #[test]
     fn test_table_scan_with_malformed_name_mapping_property() {
-        let table = table_with_property(DEFAULT_SCHEMA_NAME_MAPPING, "{ not valid json");
+        let table = table_with_property(
+            TableProperties::PROPERTY_DEFAULT_NAME_MAPPING,
+            "{ not valid json",
+        );
 
         let err = table
             .scan()
@@ -1934,7 +1935,7 @@ pub mod tests {
         let mapping_json = r#"[{"field-id":1,"names":["id","record_id"]}]"#;
         let mut metadata = fixture.table.metadata().clone();
         metadata.properties.insert(
-            DEFAULT_SCHEMA_NAME_MAPPING.to_string(),
+            TableProperties::PROPERTY_DEFAULT_NAME_MAPPING.to_string(),
             mapping_json.to_string(),
         );
         let table = Table::builder()

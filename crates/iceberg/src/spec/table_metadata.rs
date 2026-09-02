@@ -33,14 +33,15 @@ use uuid::Uuid;
 use super::snapshot::SnapshotReference;
 pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 use super::{
-    DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
-    SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
+    DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, Schema, SchemaId,
+    SchemaRef, SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
     TableProperties,
 };
 use crate::catalog::{METADATA_FOLDER_NAME, MetadataLocation};
 use crate::compression::CompressionCodec;
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
+use crate::partitioning::compute_unified_partition_type;
 use crate::spec::EncryptedKey;
 use crate::{Error, ErrorKind};
 
@@ -275,6 +276,19 @@ impl TableMetadata {
     #[inline]
     pub fn default_partition_type(&self) -> &StructType {
         &self.default_partition_type
+    }
+
+    /// Returns the unified partition type across every partition spec in the table, resolved
+    /// against `schema`.
+    ///
+    /// Unlike [`Self::default_partition_type`], the result contains all partition fields ever
+    /// used by the table, so partition values stay readable across partition spec evolution.
+    /// See [`compute_unified_partition_type`] for the exact merge rules.
+    pub fn unified_partition_type(&self, schema: &Schema) -> Result<StructType> {
+        compute_unified_partition_type(
+            self.partition_specs_iter().map(|spec| spec.as_ref()),
+            schema,
+        )
     }
 
     #[inline]
@@ -1637,7 +1651,7 @@ mod tests {
         BlobMetadata, EncryptedKey, INITIAL_ROW_ID, Literal, NestedField, NullOrder, Operation,
         PartitionSpec, PartitionStatisticsFile, PrimitiveLiteral, PrimitiveType, Schema, Snapshot,
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile,
-        Summary, TableProperties, Transform, Type, UnboundPartitionField,
+        Summary, TableProperties, Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
     };
     use crate::{ErrorKind, TableCreation};
 
@@ -4432,5 +4446,56 @@ mod tests {
             metadata.metadata_location().unwrap(),
             "s3://other-bucket/custom-meta"
         );
+    }
+
+    #[test]
+    fn test_unified_partition_type_spans_all_specs() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let metadata = TableMetadataBuilder::new(
+            schema.clone(),
+            UnboundPartitionSpec::builder()
+                .with_spec_id(0)
+                .add_partition_field(2, "y", Transform::Identity)
+                .unwrap()
+                .build(),
+            SortOrder::unsorted_order(),
+            "s3://bucket/table".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata
+        .into_builder(None)
+        .add_partition_spec(
+            UnboundPartitionSpec::builder()
+                .add_partition_field(3, "z", Transform::Identity)
+                .unwrap()
+                .build(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        // The default spec only knows about `y`, but `_partition` must expose both.
+        assert_eq!(metadata.default_partition_type().fields().len(), 1);
+
+        let unified = metadata.unified_partition_type(&schema).unwrap();
+        let names: Vec<&str> = unified
+            .fields()
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["y", "z"]);
     }
 }

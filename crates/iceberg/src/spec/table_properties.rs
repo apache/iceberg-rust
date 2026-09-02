@@ -22,6 +22,7 @@ use iceberg_property_macro::properties_view;
 use crate::compression::CompressionCodec;
 use crate::encryption::AesKeySize;
 use crate::error::{Error, ErrorKind, Result};
+use crate::spec::NameMapping;
 use crate::util::location::strip_trailing_slash;
 
 fn parse_location_property(path: &str) -> Result<String> {
@@ -336,6 +337,14 @@ pub struct TableProperties {
         getter
     )]
     write_object_storage_partitioned_paths: bool,
+    /// The table's default name mapping, used to assign field ids when reading data files
+    /// that carry no field id metadata. `None` if `schema.name-mapping.default` is not set.
+    #[property(
+        key = Self::PROPERTY_DEFAULT_NAME_MAPPING,
+        default = None,
+        getter
+    )]
+    default_name_mapping: Option<NameMapping>,
 }
 }
 
@@ -431,6 +440,10 @@ impl TableProperties<'_> {
     /// When unset, metadata files default to the `metadata` directory under the table
     /// location.
     pub const PROPERTY_WRITE_METADATA_PATH: &'static str = "write.metadata.path";
+
+    /// Property key for the table's default name mapping, stored as a JSON
+    /// [`NameMapping`] document.
+    pub const PROPERTY_DEFAULT_NAME_MAPPING: &'static str = "schema.name-mapping.default";
 
     /// Compression codec for metadata files (JSON)
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &'static str =
@@ -1161,5 +1174,50 @@ mod tests {
             let tp = TableProperties::new(&props);
             assert!(tp.write_object_storage_partitioned_paths().unwrap());
         }
+    }
+
+    #[test]
+    fn test_table_properties_default_name_mapping() {
+        // Test unset.
+        let properties = HashMap::new();
+        assert!(
+            TableProperties::new(&properties)
+                .default_name_mapping()
+                .unwrap()
+                .is_none()
+        );
+
+        let properties = HashMap::from([(
+            TableProperties::PROPERTY_DEFAULT_NAME_MAPPING.to_string(),
+            r#"[{"field-id":1,"names":["id","record_id"]}]"#.to_string(),
+        )]);
+        let mapping = TableProperties::new(&properties)
+            .default_name_mapping()
+            .unwrap()
+            .unwrap();
+        assert_eq!(mapping.fields().len(), 1);
+        assert_eq!(mapping.fields()[0].field_id(), Some(1));
+        assert_eq!(mapping.fields()[0].names(), &[
+            "id".to_string(),
+            "record_id".to_string()
+        ]);
+    }
+
+    #[test]
+    fn test_table_properties_malformed_name_mapping() {
+        let properties = HashMap::from([(
+            TableProperties::PROPERTY_DEFAULT_NAME_MAPPING.to_string(),
+            "{ not valid json".to_string(),
+        )]);
+        let error = TableProperties::new(&properties)
+            .default_name_mapping()
+            .unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        // The property key must survive as error context.
+        assert!(
+            format!("{error}").contains(TableProperties::PROPERTY_DEFAULT_NAME_MAPPING),
+            "{error}"
+        );
     }
 }
