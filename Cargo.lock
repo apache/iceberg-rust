@@ -4064,6 +4064,7 @@ dependencies = [
  "reqsign-core",
  "reqwest 0.12.28",
  "serde",
+ "tempfile",
  "tokio",
  "typetag",
  "url",

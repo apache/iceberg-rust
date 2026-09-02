@@ -730,11 +730,13 @@ pub fn iceberg::io::FileIO::config(&self) -> &iceberg::io::StorageConfig
 pub async fn iceberg::io::FileIO::delete(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<()>
 pub async fn iceberg::io::FileIO::delete_prefix(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<()>
 pub async fn iceberg::io::FileIO::delete_stream(&self, paths: impl futures_core::stream::Stream<Item = alloc::string::String> + core::marker::Send + 'static) -> iceberg::Result<()>
+pub fn iceberg::io::FileIO::deserialize_all(bytes: &[u8]) -> iceberg::Result<Self>
 pub async fn iceberg::io::FileIO::exists(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<bool>
 pub fn iceberg::io::FileIO::new_input(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<iceberg::io::InputFile>
 pub fn iceberg::io::FileIO::new_output(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<iceberg::io::OutputFile>
 pub fn iceberg::io::FileIO::new_with_fs() -> Self
 pub fn iceberg::io::FileIO::new_with_memory() -> Self
+pub fn iceberg::io::FileIO::serialize_all(&self) -> iceberg::Result<alloc::vec::Vec<u8>>
 impl core::clone::Clone for iceberg::io::FileIO
 pub fn iceberg::io::FileIO::clone(&self) -> iceberg::io::FileIO
 impl core::fmt::Debug for iceberg::io::FileIO
