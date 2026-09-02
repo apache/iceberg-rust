@@ -1112,7 +1112,7 @@ pub fn iceberg::memory::MemoryCatalog::update_namespace<'life0, 'life1, 'async_t
 pub fn iceberg::memory::MemoryCatalog::update_table<'life0, 'async_trait>(&'life0 self, commit: iceberg::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct iceberg::memory::MemoryCatalogBuilder
 impl core::default::Default for iceberg::memory::MemoryCatalogBuilder
-pub fn iceberg::memory::MemoryCatalogBuilder::default() -> Self
+pub fn iceberg::memory::MemoryCatalogBuilder::default() -> iceberg::memory::MemoryCatalogBuilder
 impl core::fmt::Debug for iceberg::memory::MemoryCatalogBuilder
 pub fn iceberg::memory::MemoryCatalogBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::CatalogBuilder for iceberg::memory::MemoryCatalogBuilder
