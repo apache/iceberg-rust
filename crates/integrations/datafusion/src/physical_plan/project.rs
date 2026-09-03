@@ -30,7 +30,7 @@ use iceberg::arrow::{
     PROJECTED_PARTITION_VALUE_COLUMN, PartitionValueCalculator, schema_to_arrow_schema,
     strip_metadata_from_schema,
 };
-use iceberg::spec::PartitionSpec;
+use iceberg::spec::{PartitionSpec, SchemaRef};
 use iceberg::table::Table;
 
 use crate::to_datafusion_error;
@@ -79,10 +79,6 @@ pub fn project_with_partition(
         )));
     }
 
-    let calculator =
-        PartitionValueCalculator::try_new(partition_spec.as_ref(), table_schema.as_ref())
-            .map_err(to_datafusion_error)?;
-
     let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
         Vec::with_capacity(input_schema.fields().len() + 1);
 
@@ -91,7 +87,10 @@ pub fn project_with_partition(
         projection_exprs.push((column_expr, field.name().clone()));
     }
 
-    let partition_expr = Arc::new(PartitionExpr::new(calculator, partition_spec.clone()));
+    let partition_expr = Arc::new(PartitionExpr::try_new(
+        partition_spec.clone(),
+        table_schema.clone(),
+    )?);
     projection_exprs.push((partition_expr, PROJECTED_PARTITION_VALUE_COLUMN.to_string()));
 
     let projection = ProjectionExec::try_new(projection_exprs, input)?;
@@ -99,18 +98,34 @@ pub fn project_with_partition(
 }
 
 /// PhysicalExpr implementation for partition value calculation
+///
+/// The [`PartitionValueCalculator`] cannot be serialized, so the spec and schema
+/// it was built from are retained: [`Self::try_new`] rebuilds from those.
 #[derive(Debug, Clone)]
-struct PartitionExpr {
+pub struct PartitionExpr {
     calculator: Arc<PartitionValueCalculator>,
     partition_spec: Arc<PartitionSpec>,
+    table_schema: SchemaRef,
 }
 
 impl PartitionExpr {
-    fn new(calculator: PartitionValueCalculator, partition_spec: Arc<PartitionSpec>) -> Self {
-        Self {
+    pub fn try_new(partition_spec: Arc<PartitionSpec>, table_schema: SchemaRef) -> DFResult<Self> {
+        let calculator =
+            PartitionValueCalculator::try_new(partition_spec.as_ref(), table_schema.as_ref())
+                .map_err(to_datafusion_error)?;
+        Ok(Self {
             calculator: Arc::new(calculator),
             partition_spec,
-        }
+            table_schema,
+        })
+    }
+
+    pub fn partition_spec(&self) -> &Arc<PartitionSpec> {
+        &self.partition_spec
+    }
+
+    pub fn table_schema(&self) -> &SchemaRef {
+        &self.table_schema
     }
 }
 
@@ -244,8 +259,6 @@ mod tests {
 
         let input = Arc::new(EmptyExec::new(arrow_schema.clone()));
 
-        let calculator = PartitionValueCalculator::try_new(&partition_spec, &table_schema).unwrap();
-
         let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
             Vec::with_capacity(arrow_schema.fields().len() + 1);
         for (i, field) in arrow_schema.fields().iter().enumerate() {
@@ -253,7 +266,9 @@ mod tests {
             projection_exprs.push((column_expr, field.name().clone()));
         }
 
-        let partition_expr = Arc::new(PartitionExpr::new(calculator, partition_spec));
+        let partition_expr = Arc::new(
+            PartitionExpr::try_new(partition_spec, Arc::new(table_schema.clone())).unwrap(),
+        );
         projection_exprs.push((partition_expr, PROJECTED_PARTITION_VALUE_COLUMN.to_string()));
 
         let projection = ProjectionExec::try_new(projection_exprs, input).unwrap();
@@ -298,7 +313,7 @@ mod tests {
         let partition_spec = Arc::new(partition_spec);
         let calculator = PartitionValueCalculator::try_new(&partition_spec, &table_schema).unwrap();
         let partition_type = calculator.partition_arrow_type().clone();
-        let expr = PartitionExpr::new(calculator, partition_spec);
+        let expr = PartitionExpr::try_new(partition_spec, Arc::new(table_schema.clone())).unwrap();
 
         assert_eq!(expr.data_type(&arrow_schema).unwrap(), partition_type);
         assert!(!expr.nullable(&arrow_schema).unwrap());
@@ -319,6 +334,48 @@ mod tests {
             }
             _ => panic!("Expected array result"),
         }
+    }
+
+    #[test]
+    fn test_partition_expr_rebuilds_from_its_retained_parts() {
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(table_schema.clone())
+                .add_partition_field("id", "id_partition", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(arrow_schema, vec![Arc::new(Int32Array::from(vec![
+            10, 20, 30,
+        ]))])
+        .unwrap();
+
+        let expr = PartitionExpr::try_new(partition_spec, table_schema).unwrap();
+
+        // What a serializer reads off the expression must rebuild an equivalent one.
+        let rebuilt =
+            PartitionExpr::try_new(expr.partition_spec().clone(), expr.table_schema().clone())
+                .unwrap();
+
+        let eval = |e: &PartitionExpr| match e.evaluate(&batch).unwrap() {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array result"),
+        };
+        assert_eq!(&eval(&rebuilt), &eval(&expr));
     }
 
     #[test]
