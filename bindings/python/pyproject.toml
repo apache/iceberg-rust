@@ -73,8 +73,8 @@ dev = [
   "pytest>=8.3.2",
   # Set a PyIceberg lower bound; otherwise the resolver may select the
   # unrelated 0.0.2 stub.
-  # Keep PyArrow direct because the tests import it; using pyiceberg[pyarrow]
-  # would also install the released pyiceberg-core alongside this local project.
+  # Install PyArrow directly instead of using pyiceberg[pyarrow]: that extra
+  # depends on the published pyiceberg-core, which conflicts with this local build.
   "pyiceberg>=0.11",
   "pyarrow>=17",
   "fastavro>=1.11.1",
