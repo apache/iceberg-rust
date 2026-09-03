@@ -16,7 +16,7 @@
 <a href=#16 id=16 data-nosnippet>16</a>// under the License.
 <a href=#17 id=17 data-nosnippet>17</a>
 <a href=#18 id=18 data-nosnippet>18</a></span><span class="kw">use </span>std::collections::HashMap;
-<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>std::ffi::{CStr, CString};
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>std::ffi::CStr;
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>std::sync::Arc;
 <a href=#21 id=21 data-nosnippet>21</a>
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
@@ -32,7 +32,7 @@
 <a href=#32 id=32 data-nosnippet>32</a>
 <a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span><span class="kw">crate</span>::runtime::runtime;
 <a href=#34 id=34 data-nosnippet>34</a>
-<a href=#35 id=35 data-nosnippet>35</a><span class="comment">// pyo3 0.28's CapsuleName only exposes `unsafe fn as_cstr() -&gt; &amp;CStr`,
+<a href=#35 id=35 data-nosnippet>35</a><span class="comment">// CapsuleName only exposes `unsafe fn as_cstr() -&gt; &amp;CStr`,
 <a href=#36 id=36 data-nosnippet>36</a>// so we accept &amp;CStr to allow direct comparison without UTF-8 validation.
 <a href=#37 id=37 data-nosnippet>37</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>validate_pycapsule(capsule: <span class="kw-2">&amp;</span>Bound&lt;PyCapsule&gt;, name: <span class="kw-2">&amp;</span>CStr) -&gt; PyResult&lt;()&gt; {
 <a href=#38 id=38 data-nosnippet>38</a>    <span class="kw">let </span>capsule_name = capsule.name()<span class="question-mark">?</span>;
@@ -121,7 +121,7 @@
 <a href=#121 id=121 data-nosnippet>121</a>        py: Python&lt;<span class="lifetime">'py</span>&gt;,
 <a href=#122 id=122 data-nosnippet>122</a>        session: Bound&lt;<span class="lifetime">'py</span>, PyAny&gt;,
 <a href=#123 id=123 data-nosnippet>123</a>    ) -&gt; PyResult&lt;Bound&lt;<span class="lifetime">'py</span>, PyCapsule&gt;&gt; {
-<a href=#124 id=124 data-nosnippet>124</a>        <span class="kw">let </span>capsule_name = CString::new(<span class="string">"datafusion_table_provider"</span>).unwrap();
+<a href=#124 id=124 data-nosnippet>124</a>        <span class="kw">let </span>capsule_name = <span class="string">c"datafusion_table_provider"</span>;
 <a href=#125 id=125 data-nosnippet>125</a>
 <a href=#126 id=126 data-nosnippet>126</a>        <span class="kw">let </span>logical_codec = ffi_logical_codec_from_pycapsule(session)<span class="question-mark">?</span>;
 <a href=#127 id=127 data-nosnippet>127</a>
@@ -132,7 +132,7 @@
 <a href=#132 id=132 data-nosnippet>132</a>            logical_codec,
 <a href=#133 id=133 data-nosnippet>133</a>        );
 <a href=#134 id=134 data-nosnippet>134</a>
-<a href=#135 id=135 data-nosnippet>135</a>        PyCapsule::new(py, ffi_provider, <span class="prelude-val">Some</span>(capsule_name))
+<a href=#135 id=135 data-nosnippet>135</a>        PyCapsule::new_with_value(py, ffi_provider, capsule_name)
 <a href=#136 id=136 data-nosnippet>136</a>    }
 <a href=#137 id=137 data-nosnippet>137</a>}
 <a href=#138 id=138 data-nosnippet>138</a>
