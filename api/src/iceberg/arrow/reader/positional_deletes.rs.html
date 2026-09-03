@@ -1010,7 +1010,7 @@
 <a href=#1010 id=1010 data-nosnippet>1010</a>            .with_case_sensitive(<span class="bool-val">false</span>)
 <a href=#1011 id=1011 data-nosnippet>1011</a>            .build();
 <a href=#1012 id=1012 data-nosnippet>1012</a>
-<a href=#1013 id=1013 data-nosnippet>1013</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(<span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(task)])) <span class="kw">as </span>FileScanTaskStream;
+<a href=#1013 id=1013 data-nosnippet>1013</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(<span class="macro">vec!</span>[task])) <span class="kw">as </span>FileScanTaskStream;
 <a href=#1014 id=1014 data-nosnippet>1014</a>        <span class="kw">let </span>result = reader
 <a href=#1015 id=1015 data-nosnippet>1015</a>            .read(tasks)
 <a href=#1016 id=1016 data-nosnippet>1016</a>            .unwrap()
@@ -1107,7 +1107,7 @@
 <a href=#1107 id=1107 data-nosnippet>1107</a>            .with_case_sensitive(<span class="bool-val">false</span>)
 <a href=#1108 id=1108 data-nosnippet>1108</a>            .build();
 <a href=#1109 id=1109 data-nosnippet>1109</a>
-<a href=#1110 id=1110 data-nosnippet>1110</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(<span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(task)])) <span class="kw">as </span>FileScanTaskStream;
+<a href=#1110 id=1110 data-nosnippet>1110</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(<span class="macro">vec!</span>[task])) <span class="kw">as </span>FileScanTaskStream;
 <a href=#1111 id=1111 data-nosnippet>1111</a>        <span class="kw">let </span>result: <span class="prelude-ty">Result</span>&lt;Vec&lt;RecordBatch&gt;, <span class="kw">_</span>&gt; =
 <a href=#1112 id=1112 data-nosnippet>1112</a>            reader.read(tasks).unwrap().stream().try_collect().<span class="kw">await</span>;
 <a href=#1113 id=1113 data-nosnippet>1113</a>
