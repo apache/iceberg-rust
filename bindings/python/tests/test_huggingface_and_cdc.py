@@ -34,9 +34,10 @@ from packaging.version import Version
 from pyiceberg.catalog import load_catalog
 from pyiceberg_core.datafusion import IcebergDataFusionTable
 
-requires_datafusion_53 = pytest.mark.skipif(
-    Version(datafusion.__version__) < Version("53.0.0"),
-    reason="IcebergDataFusionTable requires datafusion>=53 for FFI compatibility",
+requires_datafusion_55 = pytest.mark.skipif(
+    Version(datafusion.__version__) < Version("55.0.0"),
+    reason="IcebergDataFusionTable requires datafusion>=55 for FFI compatibility "
+    "with datafusion-ffi 55.0.0",
 )
 
 
@@ -107,7 +108,7 @@ def test_cdc_write_via_pyiceberg(local_catalog, sample_table):
     assert len(result) == len(sample_table)
 
 
-@requires_datafusion_53
+@requires_datafusion_55
 def test_cdc_write_and_read_via_datafusion(local_catalog, sample_table):
     """A table with CDC properties can be written and read back via DataFusion."""
     local_catalog.create_namespace_if_not_exists("cdc_ns")
@@ -182,7 +183,7 @@ def test_hf_cdc_write_and_read_via_pyarrow(hf_cdc_table, sample_table):
 
 
 @requires_hf
-@requires_datafusion_53
+@requires_datafusion_55
 def test_hf_cdc_write_and_read_via_datafusion(hf_cdc_table, sample_table):
     """PyIceberg writes CDC parquet to HF Hub; IcebergDataFusionTable reads it back via opendal-hf."""
     tbl, token = hf_cdc_table
