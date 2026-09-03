@@ -18,11 +18,15 @@
 //\! Serialization and deserialization support for Iceberg values
 
 pub(crate) mod _serde {
+    use std::str::FromStr;
+
     use serde::de::Visitor;
     use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
     use serde::{Deserialize, Serialize};
     use serde_bytes::ByteBuf;
     use serde_derive::{Deserialize as DeserializeDerive, Serialize as SerializeDerive};
+    use uuid::Uuid;
+    use uuid::fmt::Hyphenated;
 
     use crate::spec::values::{Literal, Map, PrimitiveLiteral, Struct};
     use crate::spec::{MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, PrimitiveType, Type};
@@ -444,6 +448,11 @@ pub(crate) mod _serde {
                 },
                 RawLiteralEnum::String(v) => match ty {
                     Type::Primitive(PrimitiveType::String) => Ok(Some(Literal::string(v))),
+                    Type::Primitive(PrimitiveType::Uuid) => Hyphenated::from_str(&v)
+                        .map(|hyphenated_uuid| Some(Literal::uuid(hyphenated_uuid.into_uuid())))
+                        .map_err(|_| {
+                            invalid_err_with_reason("string", "UUID must be a valid UUID string")
+                        }),
                     _ => Err(invalid_err("string")),
                 },
                 RawLiteralEnum::Bytes(v) => match ty {
@@ -467,7 +476,7 @@ pub(crate) mod _serde {
                             let bytes: [u8; 16] = v.as_slice().try_into().map_err(|_| {
                                 invalid_err_with_reason("bytes", "UUID must be exactly 16 bytes")
                             })?;
-                            Ok(Some(Literal::uuid(uuid::Uuid::from_bytes(bytes))))
+                            Ok(Some(Literal::uuid(Uuid::from_bytes(bytes))))
                         } else {
                             Err(invalid_err_with_reason(
                                 "bytes",
@@ -601,7 +610,7 @@ pub(crate) mod _serde {
                                 ));
                             }
                         }
-                        Ok(Some(Literal::uuid(uuid::Uuid::from_bytes(bytes))))
+                        Ok(Some(Literal::uuid(Uuid::from_bytes(bytes))))
                     }
                     Type::Primitive(PrimitiveType::Decimal {
                         precision: _,
