@@ -33,14 +33,15 @@ use uuid::Uuid;
 use super::snapshot::SnapshotReference;
 pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 use super::{
-    DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
-    SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
-    TableProperties, parse_metadata_file_compression,
+    DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, Schema, SchemaId,
+    SchemaRef, SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
+    TableProperties,
 };
 use crate::catalog::{METADATA_FOLDER_NAME, MetadataLocation};
 use crate::compression::CompressionCodec;
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
+use crate::partitioning::compute_unified_partition_type;
 use crate::spec::EncryptedKey;
 use crate::{Error, ErrorKind};
 
@@ -277,6 +278,19 @@ impl TableMetadata {
         &self.default_partition_type
     }
 
+    /// Returns the unified partition type across every partition spec in the table, resolved
+    /// against `schema`.
+    ///
+    /// Unlike [`Self::default_partition_type`], the result contains all partition fields ever
+    /// used by the table, so partition values stay readable across partition spec evolution.
+    /// See [`compute_unified_partition_type`] for the exact merge rules.
+    pub fn unified_partition_type(&self, schema: &Schema) -> Result<StructType> {
+        compute_unified_partition_type(
+            self.partition_specs_iter().map(|spec| spec.as_ref()),
+            schema,
+        )
+    }
+
     #[inline]
     /// Returns spec id of the "current" partition spec.
     pub fn default_partition_spec_id(&self) -> i32 {
@@ -370,8 +384,8 @@ impl TableMetadata {
     /// to the `metadata` subdirectory under the table location.
     pub fn metadata_location(&self) -> Result<String> {
         Ok(self
-            .table_properties()?
-            .write_metadata_path
+            .table_properties()
+            .write_metadata_path()?
             .unwrap_or_else(|| format!("{}/{}", self.location(), METADATA_FOLDER_NAME)))
     }
 
@@ -384,14 +398,13 @@ impl TableMetadata {
     ///
     /// Returns an error if the compression codec property has an invalid value.
     pub fn metadata_compression_codec(&self) -> Result<CompressionCodec> {
-        parse_metadata_file_compression(&self.properties)
+        self.table_properties().metadata_compression_codec()
     }
 
-    /// Returns typed table properties parsed from the raw properties map with defaults.
-    pub fn table_properties(&self) -> Result<TableProperties> {
-        TableProperties::try_from(&self.properties).map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(e)
-        })
+    /// Returns a typed view that parses each table property when its getter is called.
+    #[inline]
+    pub fn table_properties(&self) -> TableProperties<'_> {
+        TableProperties::new(&self.properties)
     }
 
     /// Return location of statistics files.
@@ -498,7 +511,7 @@ impl TableMetadata {
         let json_data = serde_json::to_vec(self)?;
 
         // Check if compression codec from properties matches the one in metadata_location
-        let codec = parse_metadata_file_compression(&self.properties)?;
+        let codec = self.table_properties().metadata_compression_codec()?;
 
         if codec != metadata_location.compression_codec() {
             return Err(Error::new(
@@ -1605,7 +1618,7 @@ pub struct SnapshotLog {
 }
 
 impl SnapshotLog {
-    /// Returns the last updated timestamp as a DateTime<Utc> with millisecond precision
+    /// Returns the last updated timestamp as a [`DateTime<Utc>`] with millisecond precision
     pub fn timestamp(self) -> Result<DateTime<Utc>> {
         timestamp_ms_to_utc(self.timestamp_ms)
     }
@@ -1638,7 +1651,7 @@ mod tests {
         BlobMetadata, EncryptedKey, INITIAL_ROW_ID, Literal, NestedField, NullOrder, Operation,
         PartitionSpec, PartitionStatisticsFile, PrimitiveLiteral, PrimitiveType, Schema, Snapshot,
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile,
-        Summary, TableProperties, Transform, Type, UnboundPartitionField,
+        Summary, TableProperties, Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
     };
     use crate::{ErrorKind, TableCreation};
 
@@ -4040,14 +4053,14 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let props = metadata.table_properties().unwrap();
+        let props = metadata.table_properties();
 
         assert_eq!(
-            props.commit_num_retries,
+            props.commit_num_retries().unwrap(),
             TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
         );
         assert_eq!(
-            props.write_target_file_size_bytes,
+            props.write_target_file_size_bytes().unwrap(),
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
     }
@@ -4087,10 +4100,67 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let props = metadata.table_properties().unwrap();
+        let props = metadata.table_properties();
 
-        assert_eq!(props.commit_num_retries, 10);
-        assert_eq!(props.write_target_file_size_bytes, 1024);
+        assert_eq!(props.commit_num_retries().unwrap(), 10);
+        assert_eq!(props.write_target_file_size_bytes().unwrap(), 1024);
+    }
+
+    #[test]
+    fn test_deserialize_metadata_defers_invalid_table_property_errors() {
+        let invalid_retries = "not_a_number";
+        let invalid_codec = "unknown";
+        let target_file_size = "1024";
+
+        for file_name in [
+            "TableMetadataV1Valid.json",
+            "TableMetadataV2ValidMinimal.json",
+            "TableMetadataV3ValidMinimal.json",
+        ] {
+            let path = format!("testdata/table_metadata/{file_name}");
+            let mut json: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+            json["properties"] = serde_json::json!({
+                (TableProperties::PROPERTY_COMMIT_NUM_RETRIES): invalid_retries,
+                (TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC): invalid_codec,
+                (TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES): target_file_size,
+            });
+
+            let metadata: TableMetadata = serde_json::from_value(json).unwrap();
+            assert_eq!(
+                metadata
+                    .properties()
+                    .get(TableProperties::PROPERTY_COMMIT_NUM_RETRIES)
+                    .map(String::as_str),
+                Some(invalid_retries)
+            );
+
+            let table_properties = metadata.table_properties();
+            let error = table_properties.commit_num_retries().unwrap_err();
+            assert!(
+                error
+                    .message()
+                    .contains(TableProperties::PROPERTY_COMMIT_NUM_RETRIES)
+            );
+            assert_eq!(
+                table_properties.write_target_file_size_bytes().unwrap(),
+                1024
+            );
+            let error = table_properties.metadata_compression_codec().unwrap_err();
+            assert!(
+                format!("{error}").contains(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
+            );
+
+            let serialized = serde_json::to_value(metadata).unwrap();
+            assert_eq!(
+                serialized["properties"][TableProperties::PROPERTY_COMMIT_NUM_RETRIES],
+                invalid_retries
+            );
+            assert_eq!(
+                serialized["properties"][TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC],
+                invalid_codec
+            );
+        }
     }
 
     #[test]
@@ -4102,10 +4172,16 @@ mod tests {
             .build()
             .unwrap();
 
-        let properties = HashMap::from([(
-            "commit.retry.num-retries".to_string(),
-            "not_a_number".to_string(),
-        )]);
+        let properties = HashMap::from([
+            (
+                TableProperties::PROPERTY_COMMIT_NUM_RETRIES.to_string(),
+                "not_a_number".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES.to_string(),
+                "1024".to_string(),
+            ),
+        ]);
 
         let metadata = TableMetadataBuilder::new(
             schema,
@@ -4120,9 +4196,17 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let err = metadata.table_properties().unwrap_err();
+        let table_properties = metadata.table_properties();
+        let err = table_properties.commit_num_retries().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("Invalid table properties"));
+        assert!(
+            err.message()
+                .contains(TableProperties::PROPERTY_COMMIT_NUM_RETRIES)
+        );
+        assert_eq!(
+            table_properties.write_target_file_size_bytes().unwrap(),
+            1024
+        );
     }
 
     #[test]
@@ -4362,5 +4446,56 @@ mod tests {
             metadata.metadata_location().unwrap(),
             "s3://other-bucket/custom-meta"
         );
+    }
+
+    #[test]
+    fn test_unified_partition_type_spans_all_specs() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let metadata = TableMetadataBuilder::new(
+            schema.clone(),
+            UnboundPartitionSpec::builder()
+                .with_spec_id(0)
+                .add_partition_field(2, "y", Transform::Identity)
+                .unwrap()
+                .build(),
+            SortOrder::unsorted_order(),
+            "s3://bucket/table".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata
+        .into_builder(None)
+        .add_partition_spec(
+            UnboundPartitionSpec::builder()
+                .add_partition_field(3, "z", Transform::Identity)
+                .unwrap()
+                .build(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        // The default spec only knows about `y`, but `_partition` must expose both.
+        assert_eq!(metadata.default_partition_type().fields().len(), 1);
+
+        let unified = metadata.unified_partition_type(&schema).unwrap();
+        let names: Vec<&str> = unified
+            .fields()
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["y", "z"]);
     }
 }

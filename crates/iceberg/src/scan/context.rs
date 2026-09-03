@@ -126,13 +126,15 @@ impl ManifestEntryContext {
                 self.manifest_entry.data_file(),
                 self.manifest_entry.sequence_number(),
             )
-            .await;
+            .await?;
 
-        Ok(FileScanTask::builder()
+        FileScanTask::builder()
             .with_file_size_in_bytes(self.manifest_entry.file_size_in_bytes())
             .with_start(0)
             .with_length(self.manifest_entry.file_size_in_bytes())
             .with_record_count(Some(self.manifest_entry.record_count()))
+            .with_first_row_id(self.manifest_entry.data_file().first_row_id())
+            .with_data_sequence_number(self.manifest_entry.sequence_number())
             .with_data_file_path(self.manifest_entry.file_path().to_string())
             .with_data_file_format(self.manifest_entry.file_format())
             .with_schema(self.snapshot_schema)
@@ -148,7 +150,7 @@ impl ManifestEntryContext {
             .with_unified_partition_type(self.unified_partition_type.clone())
             .with_case_sensitive(self.case_sensitive)
             .with_key_metadata(self.manifest_entry.data_file.key_metadata().map(Box::from))
-            .build())
+            .build()
     }
 }
 

@@ -58,7 +58,6 @@ use crate::{Error, ErrorKind, Result};
 /// deserialized, it creates a new empty instance. This is intentional
 /// because in-memory data cannot be meaningfully serialized across
 /// process boundaries.
-/// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MemoryStorage {
     #[serde(skip, default = "default_memory_data")]

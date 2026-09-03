@@ -20,10 +20,7 @@ use std::str::FromStr;
 use serde_derive::{Deserialize, Serialize};
 
 use super::ByteBuf;
-use crate::encryption::{EncryptedInputFile, StandardKeyMetadata};
 use crate::error::Result;
-use crate::io::FileIO;
-use crate::spec::Manifest;
 use crate::{Error, ErrorKind};
 
 /// Entry in a manifest list.
@@ -174,31 +171,6 @@ impl TryFrom<i32> for ManifestContentType {
     }
 }
 
-impl ManifestFile {
-    /// Load [`Manifest`].
-    ///
-    /// This method will also initialize inherited values of [`ManifestEntry`](crate::spec::ManifestEntry), such as `sequence_number`.
-    pub async fn load_manifest(&self, file_io: &FileIO) -> Result<Manifest> {
-        let input = file_io.new_input(&self.manifest_path)?;
-        let avro = match &self.key_metadata {
-            Some(key_metadata_bytes) => {
-                let key_metadata = StandardKeyMetadata::decode(key_metadata_bytes)?;
-                EncryptedInputFile::new(input, key_metadata).read().await?
-            }
-            None => input.read().await?,
-        };
-
-        let (metadata, mut entries) = Manifest::try_from_avro_bytes(&avro)?;
-
-        // Let entries inherit values from the manifest list entry.
-        for entry in &mut entries {
-            entry.inherit_data(self);
-        }
-
-        Ok(Manifest::new(metadata, entries))
-    }
-}
-
 /// Field summary for partition field in the spec.
 ///
 /// Each field in the list corresponds to a field in the manifest file’s partition spec.
@@ -225,7 +197,6 @@ pub struct FieldSummary {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::{ManifestContentType, ManifestFile};
@@ -233,8 +204,9 @@ mod test {
     use crate::encryption::{EncryptedOutputFile, StandardKeyMetadata};
     use crate::io::FileIO;
     use crate::spec::{
-        DataContentType, DataFile, DataFileFormat, ManifestEntry, ManifestStatus,
-        ManifestWriterBuilder, NestedField, PartitionSpec, PrimitiveType, Schema, Struct, Type,
+        DataContentType, DataFileBuilder, DataFileFormat, ManifestEntry, ManifestReader,
+        ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec, PrimitiveType, Schema,
+        SchemaRef, Type,
     };
 
     #[test]
@@ -247,15 +219,9 @@ mod test {
         assert_eq!(ManifestContentType::default() as i32, 0);
     }
 
-    /// Writes a single-entry manifest, encrypting it with `key_metadata`, and
-    /// returns the resulting [`ManifestFile`]. The manifest is stored in `io`
-    /// at `path`.
-    async fn write_encrypted_manifest(
-        io: &FileIO,
-        path: &str,
-        key_metadata: StandardKeyMetadata,
-    ) -> ManifestFile {
-        let schema = Arc::new(
+    /// A single-field schema used by the manifest-writing test helpers.
+    fn test_schema() -> SchemaRef {
+        Arc::new(
             Schema::builder()
                 .with_fields(vec![Arc::new(NestedField::optional(
                     1,
@@ -264,8 +230,37 @@ mod test {
                 ))])
                 .build()
                 .unwrap(),
-        );
+        )
+    }
 
+    /// Writes a single-entry v3 data manifest to `io` at `path`, without
+    /// encryption, and returns the resulting [`ManifestFile`].
+    async fn write_manifest(io: &FileIO, path: &str) -> ManifestFile {
+        let schema = test_schema();
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        let output_file = io.new_output(path).unwrap();
+        let mut writer = ManifestWriterBuilder::new(output_file, Some(1), schema, partition_spec)
+            .build_v3_data();
+
+        writer
+            .add_entry(data_entry(ManifestStatus::Added, 100, None))
+            .unwrap();
+
+        writer.write_manifest_file().await.unwrap()
+    }
+
+    /// Writes a single-entry v3 data manifest to `io` at `path`, encrypting it
+    /// with `key_metadata`, and returns the resulting [`ManifestFile`].
+    async fn write_encrypted_manifest(
+        io: &FileIO,
+        path: &str,
+        key_metadata: StandardKeyMetadata,
+    ) -> ManifestFile {
+        let schema = test_schema();
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
             .build()
@@ -277,42 +272,14 @@ mod test {
         let mut writer = ManifestWriterBuilder::new_from_encrypted(
             encrypted_output,
             Some(1),
-            schema.clone(),
-            partition_spec.clone(),
+            schema,
+            partition_spec,
         )
         .expect("Expected a valid writer")
         .build_v3_data();
 
         writer
-            .add_entry(ManifestEntry {
-                status: ManifestStatus::Added,
-                snapshot_id: None,
-                sequence_number: None,
-                file_sequence_number: None,
-                data_file: DataFile {
-                    content: DataContentType::Data,
-                    file_path: "s3://bucket/table/data/00000.parquet".to_string(),
-                    file_format: DataFileFormat::Parquet,
-                    partition: Struct::empty(),
-                    record_count: 100,
-                    file_size_in_bytes: 4096,
-                    column_sizes: HashMap::new(),
-                    value_counts: HashMap::new(),
-                    null_value_counts: HashMap::new(),
-                    nan_value_counts: HashMap::new(),
-                    lower_bounds: HashMap::new(),
-                    upper_bounds: HashMap::new(),
-                    key_metadata: None,
-                    split_offsets: None,
-                    equality_ids: None,
-                    sort_order_id: None,
-                    partition_spec_id: 0,
-                    first_row_id: None,
-                    referenced_data_file: None,
-                    content_offset: None,
-                    content_size_in_bytes: None,
-                },
-            })
+            .add_entry(data_entry(ManifestStatus::Added, 100, None))
             .unwrap();
 
         writer.write_manifest_file().await.unwrap()
@@ -330,7 +297,7 @@ mod test {
         let manifest_file = write_encrypted_manifest(&io, path, key_metadata).await;
         assert_eq!(manifest_file.key_metadata, Some(encoded_key_metadata));
 
-        let manifest = manifest_file.load_manifest(&io).await.unwrap();
+        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
         assert_eq!(manifest.entries().len(), 1);
         assert_eq!(
             manifest.entries()[0].file_path(),
@@ -358,10 +325,10 @@ mod test {
             .with_aad_prefix(b"test-aad-prefix!");
         manifest_file.key_metadata = Some(wrong_key_metadata.encode().unwrap().to_vec());
 
-        let err = manifest_file
-            .load_manifest(&io)
+        let err = ManifestReader::new(io)
+            .read(&manifest_file)
             .await
-            .expect_err("load_manifest must fail when decrypting with the wrong key");
+            .expect_err("read must fail when decrypting with the wrong key");
         assert_eq!(err.kind(), ErrorKind::Unexpected);
     }
 
@@ -383,10 +350,67 @@ mod test {
             .with_aad_prefix(b"wrong-aad-prefix");
         manifest_file.key_metadata = Some(wrong_aad_metadata.encode().unwrap().to_vec());
 
-        let err = manifest_file
-            .load_manifest(&io)
+        let err = ManifestReader::new(io)
+            .read(&manifest_file)
             .await
-            .expect_err("load_manifest must fail when decrypting with the wrong AAD prefix");
+            .expect_err("read must fail when decrypting with the wrong AAD prefix");
         assert_eq!(err.kind(), ErrorKind::Unexpected);
+    }
+
+    /// Builds a data-file manifest entry with the given status, record count,
+    /// and pre-existing `first_row_id`.
+    fn data_entry(
+        status: ManifestStatus,
+        record_count: u64,
+        first_row_id: Option<i64>,
+    ) -> ManifestEntry {
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("s3://bucket/table/data/00000.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(4096)
+            .record_count(record_count)
+            .first_row_id(first_row_id)
+            .build()
+            .unwrap();
+
+        ManifestEntry::builder()
+            .status(status)
+            .data_file(data_file)
+            .build()
+    }
+
+    #[tokio::test]
+    async fn test_load_manifest_reads_written_entries() {
+        let io = FileIO::new_with_memory();
+        let path = "memory:///test/plaintext_manifest.avro";
+        let manifest_file = write_manifest(&io, path).await;
+        assert_eq!(manifest_file.key_metadata, None);
+
+        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        assert_eq!(manifest.entries().len(), 1);
+        assert_eq!(
+            manifest.entries()[0].file_path(),
+            "s3://bucket/table/data/00000.parquet"
+        );
+        assert_eq!(manifest.entries()[0].data_file.record_count, 100);
+    }
+
+    /// End-to-end: writing a v3 data manifest, stamping a manifest-level
+    /// `first_row_id`, and loading it must assign inherited `first_row_id`s to
+    /// the entries. This exercises the wiring in [`ManifestReader`] and the
+    /// write/read round-trip that leaves per-file `first_row_id` as `None`.
+    #[tokio::test]
+    async fn test_load_manifest_assigns_first_row_ids() {
+        let io = FileIO::new_with_memory();
+        let path = "memory:///test/first_row_id_manifest.avro";
+        let mut manifest_file = write_manifest(&io, path).await;
+
+        // Stamp a manifest-level first_row_id, as the manifest-list writer would.
+        manifest_file.first_row_id = Some(1000);
+
+        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        assert_eq!(manifest.entries().len(), 1);
+        assert_eq!(manifest.entries()[0].data_file().first_row_id(), Some(1000));
     }
 }

@@ -64,7 +64,6 @@ fn walk_dir(dir: &std::path::Path, out: &mut Vec<(PathBuf, fs::Metadata)>) -> st
 /// - `file:///path/to/file` -> `/path/to/file`
 /// - `file:/path/to/file` -> `/path/to/file`
 /// - `/path/to/file` -> `/path/to/file`
-/// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LocalFsStorage;
 

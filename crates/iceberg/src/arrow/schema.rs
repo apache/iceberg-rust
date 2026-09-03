@@ -102,7 +102,7 @@ impl ExtensionType for VariantExtensionType {
 
 /// A post order arrow schema visitor.
 ///
-/// For order of methods called, please refer to [`visit_schema`].
+/// For order of methods called, please refer to the internal `visit_schema` function.
 pub trait ArrowSchemaVisitor {
     /// Return type of this visitor on arrow field.
     type T;
@@ -1192,6 +1192,13 @@ impl TryFrom<&Schema> for ArrowSchema {
 /// // Returns: RunEndEncoded(Int32, Utf8)
 /// ```
 pub fn datum_to_arrow_type_with_ree(datum: &Datum) -> DataType {
+    primitive_type_to_arrow_type_with_ree(datum.data_type())
+}
+
+/// Returns the run-end-encoded Arrow type used to materialize a per-file constant
+/// column of the given Iceberg primitive type. Shared by both the value and the
+/// all-null constant paths so a column keeps one Arrow type across files.
+pub(crate) fn primitive_type_to_arrow_type_with_ree(primitive_type: &PrimitiveType) -> DataType {
     // Helper to create REE type with the given values type.
     // Note: values field is nullable as Arrow expects this when building the
     // final Arrow schema with `RunArray::try_new`.
@@ -1201,8 +1208,7 @@ pub fn datum_to_arrow_type_with_ree(datum: &Datum) -> DataType {
         DataType::RunEndEncoded(run_ends_field, values_field)
     };
 
-    // Match on the PrimitiveType from the Datum to determine the Arrow type
-    match datum.data_type() {
+    match primitive_type {
         PrimitiveType::Boolean => make_ree(DataType::Boolean),
         PrimitiveType::Int => make_ree(DataType::Int32),
         PrimitiveType::Long => make_ree(DataType::Int64),
@@ -2382,7 +2388,7 @@ mod tests {
             assert_eq!(array.value(0), 42);
         }
         {
-            let datum = Datum::float(42.42);
+            let datum = Datum::float(42.42_f32);
             let arrow_datum = get_arrow_datum(&datum).unwrap();
             let (array, is_scalar) = arrow_datum.get();
             let array = array.as_any().downcast_ref::<Float32Array>().unwrap();

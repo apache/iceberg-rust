@@ -52,6 +52,7 @@ base64 = { workspace = true }
 bimap = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
+crc32fast = { workspace = true }
 derive_builder = { workspace = true }
 expect-test = { workspace = true }
 fastnum = { workspace = true }
@@ -59,6 +60,7 @@ flate2 = { workspace = true }
 fnv = { workspace = true }
 form_urlencoded = { workspace = true }
 futures = { workspace = true }
+iceberg-property-macro = { workspace = true }
 itertools = { workspace = true }
 moka = { version = "0.12.10", features = ["future"] }
 murmur3 = { workspace = true }
