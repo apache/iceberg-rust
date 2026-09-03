@@ -121,3 +121,12 @@ dependency versions without always upgrading to the latest.
 ## Code of Conduct
 
 We expect all community members to follow our [Code of Conduct](https://www.apache.org/foundation/policies/conduct.html).
+
+## RFC Process
+
+For significant changes, new features, or substantial changes to public APIs, consider opening an RFC PR first:
+
+1. Create a markdown file in [docs/rfcs/](docs/rfcs/) using the next sequential number (e.g., `0003_your_feature.md`). Explain the scope, use case, and proposed design in prose.
+2. After the approach is reviewed and accepted, open a follow-up PR with the initial implementation.
+
+Please reference the [Iceberg Proposals](https://iceberg.apache.org/contribute/?h=contri#apache-iceberg-improvement-proposals) section of the contributing guide for additional details.
