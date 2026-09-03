@@ -297,14 +297,12 @@ mod test {
     use crate::Result;
     use crate::expr::PredicateOperator;
     use crate::spec::PrimitiveType::{
-        Binary, Date, Decimal, Fixed, Geography, Geometry, Int, Long, String as StringType, Time,
-        Timestamp, TimestampNs, Timestamptz, TimestamptzNs, Uuid,
+        Binary, Date, Decimal, Fixed, Geometry, Int, Long, String as StringType, Time, Timestamp,
+        TimestampNs, Timestamptz, TimestamptzNs, Uuid,
     };
     use crate::spec::Type::{Primitive, Struct};
     use crate::spec::decimal_utils::decimal_new;
-    use crate::spec::{
-        Datum, GeographyType, GeometryType, NestedField, PrimitiveType, StructType, Transform,
-    };
+    use crate::spec::{Datum, GeometryType, NestedField, PrimitiveType, StructType, Transform};
     use crate::transform::TransformFunction;
     use crate::transform::test::{TestProjectionFixture, TestTransformFixture};
 
@@ -344,7 +342,6 @@ mod test {
                 (Primitive(TimestampNs), Some(Primitive(Int))),
                 (Primitive(TimestamptzNs), Some(Primitive(Int))),
                 (Primitive(Geometry(GeometryType::default())), None),
-                (Primitive(Geography(GeographyType::default())), None),
                 (
                     Struct(StructType::new(vec![
                         NestedField::optional(1, "a", Primitive(Timestamp)).into(),

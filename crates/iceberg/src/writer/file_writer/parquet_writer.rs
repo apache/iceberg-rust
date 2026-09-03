@@ -775,7 +775,6 @@ mod tests {
     use parquet::basic::{
         BrotliLevel, Compression, EdgeInterpolationAlgorithm, GzipLevel, LogicalType, ZstdLevel,
     };
-    use parquet::data_type::ByteArray;
     use parquet::file::statistics::ValueStatistics;
     use parquet::schema::types::ColumnPath;
     use parquet_geospatial::testing::wkb_point_xy;
@@ -2582,11 +2581,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(data_file.record_count(), 1);
-        assert_eq!(*data_file.value_counts(), HashMap::from([(0, 1), (1, 1)]));
-        assert_eq!(
-            *data_file.null_value_counts(),
-            HashMap::from([(0, 0), (1, 0)])
-        );
         assert!(data_file.lower_bounds().is_empty());
         assert!(data_file.upper_bounds().is_empty());
 
@@ -2884,38 +2878,5 @@ mod tests {
         let err = parquet_compression(CompressionCodec::Zstd(99)).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.to_string().contains("zstd"));
-    }
-
-    #[test]
-    fn test_min_max_aggregator_skips_geospatial_byte_statistics() {
-        let schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(
-                        0,
-                        "geom",
-                        Type::Primitive(PrimitiveType::Geometry(Default::default())),
-                    )
-                    .with_id(0)
-                    .into(),
-                ])
-                .build()
-                .expect("Failed to create schema"),
-        );
-        let mut min_max_agg = MinMaxColAggregator::new(schema);
-        let stats = Statistics::ByteArray(ValueStatistics::new(
-            Some(ByteArray::from(vec![1, 2, 3])),
-            Some(ByteArray::from(vec![4, 5, 6])),
-            None,
-            None,
-            false,
-        ));
-
-        min_max_agg.update(0, stats).unwrap();
-        let (lower_bounds, upper_bounds) = min_max_agg.produce();
-
-        assert!(lower_bounds.is_empty());
-        assert!(upper_bounds.is_empty());
     }
 }

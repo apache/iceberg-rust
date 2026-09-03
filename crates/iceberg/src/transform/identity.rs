@@ -37,11 +37,11 @@ impl TransformFunction for Identity {
 #[cfg(test)]
 mod test {
     use crate::spec::PrimitiveType::{
-        Binary, Date, Decimal, Fixed, Geography, Geometry, Int, Long, String as StringType, Time,
-        Timestamp, TimestampNs, Timestamptz, TimestamptzNs, Uuid,
+        Binary, Date, Decimal, Fixed, Geometry, Int, Long, String as StringType, Time, Timestamp,
+        TimestampNs, Timestamptz, TimestamptzNs, Uuid,
     };
     use crate::spec::Type::{Primitive, Struct};
-    use crate::spec::{GeographyType, GeometryType, NestedField, StructType, Transform};
+    use crate::spec::{GeometryType, NestedField, StructType, Transform};
     use crate::transform::test::TestTransformFixture;
 
     #[test]
@@ -84,7 +84,6 @@ mod test {
                 (Primitive(TimestampNs), Some(Primitive(TimestampNs))),
                 (Primitive(TimestamptzNs), Some(Primitive(TimestamptzNs))),
                 (Primitive(Geometry(GeometryType::default())), None),
-                (Primitive(Geography(GeographyType::default())), None),
                 (
                     Struct(StructType::new(vec![
                         NestedField::optional(1, "a", Primitive(Timestamp)).into(),

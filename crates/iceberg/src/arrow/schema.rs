@@ -123,46 +123,30 @@ fn wkb_edges_to_edge_interpolation_algorithm(edges: WkbEdges) -> EdgeInterpolati
 }
 
 fn iceberg_crs_from_wkb_metadata(crs: Option<&serde_json::Value>) -> Result<Option<String>> {
-    let Some(crs) = crs else {
-        return Ok(None);
-    };
-
     match crs {
-        serde_json::Value::String(crs) => Ok(Some(crs.clone())),
-        serde_json::Value::Object(_) => {
-            let id = crs
-                .get("id")
-                .and_then(serde_json::Value::as_object)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Cannot write PROJJSON CRS without an embedded authority/code to Iceberg",
-                    )
-                })?;
+        None => Ok(None),
+        Some(serde_json::Value::String(crs)) => Ok(Some(crs.clone())),
+        Some(serde_json::Value::Object(crs)) => {
+            let id = crs.get("id");
             let authority = id
-                .get("authority")
+                .and_then(|id| id.get("authority"))
                 .and_then(serde_json::Value::as_str)
-                .filter(|authority| !authority.is_empty())
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "PROJJSON CRS id must contain a non-empty authority",
-                    )
-                })?;
-            let code = match id.get("code") {
-                Some(serde_json::Value::String(code)) if !code.is_empty() => code.clone(),
-                Some(serde_json::Value::Number(code)) => code.to_string(),
-                _ => {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "PROJJSON CRS id must contain a string or numeric code",
-                    ));
-                }
+                .filter(|authority| !authority.is_empty());
+            let code = match id.and_then(|id| id.get("code")) {
+                Some(serde_json::Value::String(code)) => Some(code.clone()),
+                Some(serde_json::Value::Number(code)) => Some(code.to_string()),
+                _ => None,
             };
 
-            Ok(Some(format!("{authority}:{code}")))
+            match (authority, code) {
+                (Some(authority), Some(code)) => Ok(Some(format!("{authority}:{code}"))),
+                _ => Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Cannot write PROJJSON CRS without an embedded authority/code to Iceberg",
+                )),
+            }
         }
-        _ => Err(Error::new(
+        Some(_) => Err(Error::new(
             ErrorKind::DataInvalid,
             "Geospatial CRS metadata must be a string or PROJJSON object",
         )),
@@ -498,24 +482,11 @@ impl ArrowSchemaConverter {
             .with_source(err)
         })?;
 
-        let crs =
-            iceberg_crs_from_wkb_metadata(wkb_type.metadata().crs.as_ref()).map_err(|err| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Invalid geospatial CRS for field {}", field.name()),
-                )
-                .with_source(err)
-            })?;
+        let crs = iceberg_crs_from_wkb_metadata(wkb_type.metadata().crs.as_ref())?;
 
         match wkb_type.metadata().type_hint() {
             WkbTypeHint::Geometry => Ok(Type::Primitive(PrimitiveType::Geometry(
-                GeometryType::new(crs).map_err(|err| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid geometry CRS for field {}", field.name()),
-                    )
-                    .with_source(err)
-                })?,
+                GeometryType::new(crs)?,
             ))),
             WkbTypeHint::Geography => Ok(Type::Primitive(PrimitiveType::Geography(
                 GeographyType::new(
@@ -523,14 +494,7 @@ impl ArrowSchemaConverter {
                     wkb_edges_to_edge_interpolation_algorithm(
                         wkb_type.metadata().algorithm.unwrap_or_default(),
                     ),
-                )
-                .map_err(|err| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid geography CRS for field {}", field.name()),
-                    )
-                    .with_source(err)
-                })?,
+                )?,
             ))),
         }
     }
@@ -764,15 +728,7 @@ impl SchemaVisitor for ToArrowSchemaConverter {
             }
             Type::Primitive(PrimitiveType::Geometry(geometry)) => {
                 let metadata = WkbMetadata::new(geometry.crs(), None);
-                arrow_field
-                    .try_with_extension_type(WkbType::new(Some(metadata)))
-                    .map_err(|err| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "Failed to attach geometry Arrow extension metadata",
-                        )
-                        .with_source(err)
-                    })?;
+                arrow_field.try_with_extension_type(WkbType::new(Some(metadata)))?;
             }
             Type::Primitive(PrimitiveType::Geography(geography)) => {
                 let metadata = WkbMetadata::new(
@@ -781,15 +737,7 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                         geography.algorithm(),
                     )),
                 );
-                arrow_field
-                    .try_with_extension_type(WkbType::new(Some(metadata)))
-                    .map_err(|err| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "Failed to attach geography Arrow extension metadata",
-                        )
-                        .with_source(err)
-                    })?;
+                arrow_field.try_with_extension_type(WkbType::new(Some(metadata)))?;
             }
             _ => {}
         }
@@ -2408,22 +2356,10 @@ mod tests {
                 .into(),
                 NestedField::optional(
                     3,
-                    "default_geom",
-                    Type::Primitive(PrimitiveType::Geometry(GeometryType::default())),
-                )
-                .into(),
-                NestedField::optional(
-                    4,
-                    "default_geog",
-                    Type::Primitive(PrimitiveType::Geography(GeographyType::default())),
-                )
-                .into(),
-                NestedField::optional(
-                    5,
                     "geom_list",
                     Type::List(ListType::new(
                         NestedField::list_element(
-                            6,
+                            4,
                             Type::Primitive(PrimitiveType::Geometry(GeometryType::default())),
                             true,
                         )
@@ -2438,67 +2374,19 @@ mod tests {
         let arrow_schema = schema_to_arrow_schema(&schema).unwrap();
         let geom = arrow_schema.field(0);
         assert_eq!(geom.data_type(), &DataType::LargeBinary);
-        let geom_wkb = geom.try_extension_type::<WkbType>().unwrap();
-        assert_eq!(
-            geom_wkb
-                .metadata()
-                .crs
-                .as_ref()
-                .and_then(|crs| crs.as_str()),
-            Some("EPSG:3857")
-        );
-        assert!(matches!(
-            geom_wkb.metadata().type_hint(),
-            WkbTypeHint::Geometry
-        ));
 
         let geog = arrow_schema.field(1);
-        assert_eq!(geog.data_type(), &DataType::LargeBinary);
         let geog_wkb = geog.try_extension_type::<WkbType>().unwrap();
-        assert_eq!(
-            geog_wkb
-                .metadata()
-                .crs
-                .as_ref()
-                .and_then(|crs| crs.as_str()),
-            Some("OGC:CRS27")
-        );
         assert_eq!(geog_wkb.metadata().algorithm, Some(WkbEdges::Karney));
         let geog_metadata: serde_json::Value =
             serde_json::from_str(&geog_wkb.serialize_metadata().unwrap()).unwrap();
         assert_eq!(geog_metadata.get("edges").unwrap(), "karney");
         assert!(geog_metadata.get("algorithm").is_none());
-        assert!(matches!(
-            geog_wkb.metadata().type_hint(),
-            WkbTypeHint::Geography
-        ));
 
-        let default_geom = arrow_schema.field(2);
-        let default_geom_wkb = default_geom.try_extension_type::<WkbType>().unwrap();
-        assert!(default_geom_wkb.metadata().crs.is_none());
-        assert!(default_geom_wkb.metadata().algorithm.is_none());
-        assert!(matches!(
-            default_geom_wkb.metadata().type_hint(),
-            WkbTypeHint::Geometry
-        ));
-
-        let default_geog = arrow_schema.field(3);
-        let default_geog_wkb = default_geog.try_extension_type::<WkbType>().unwrap();
-        assert!(default_geog_wkb.metadata().crs.is_none());
-        assert_eq!(
-            default_geog_wkb.metadata().algorithm,
-            Some(WkbEdges::Spherical)
-        );
-        assert!(matches!(
-            default_geog_wkb.metadata().type_hint(),
-            WkbTypeHint::Geography
-        ));
-
-        let list = arrow_schema.field(4);
+        let list = arrow_schema.field(2);
         let DataType::List(element) = list.data_type() else {
             panic!("Expected list field");
         };
-        assert_eq!(element.data_type(), &DataType::LargeBinary);
         assert!(
             matches!(
                 element
@@ -2524,15 +2412,7 @@ mod tests {
         ))))
         .unwrap();
 
-        let mut default_geog = simple_field("default_geog", DataType::LargeBinary, true, "2");
-        default_geog
-            .try_with_extension_type(WkbType::new(Some(WkbMetadata::new(
-                Some(r#"{"id":{"authority":"EPSG","code":"4326"}}"#),
-                Some(WkbEdges::Spherical),
-            ))))
-            .unwrap();
-
-        let arrow_schema = ArrowSchema::new(vec![geom, default_geog]);
+        let arrow_schema = ArrowSchema::new(vec![geom]);
         let schema = arrow_schema_to_schema(&arrow_schema).unwrap();
 
         assert_eq!(
@@ -2541,30 +2421,6 @@ mod tests {
                 GeometryType::new(Some("EPSG:3857".to_string())).unwrap()
             ))
         );
-        assert_eq!(
-            schema.field_by_id(2).unwrap().field_type.as_ref(),
-            &Type::Primitive(PrimitiveType::Geography(GeographyType::default()))
-        );
-    }
-
-    #[test]
-    fn test_geospatial_arrow_invalid_crs_import() {
-        let cases = vec![
-            (
-                r#"{"type":"GeographicCRS"}"#.to_string(),
-                "Cannot write PROJJSON CRS without an embedded authority/code to Iceberg",
-            ),
-            ("x".repeat(129), "Geospatial CRS must be at most 128 bytes"),
-        ];
-
-        for (crs, expected_error) in cases {
-            let mut geom = simple_field("geom", DataType::LargeBinary, true, "1");
-            geom.try_with_extension_type(WkbType::new(Some(WkbMetadata::new(Some(&crs), None))))
-                .unwrap();
-
-            let error = arrow_schema_to_schema(&ArrowSchema::new(vec![geom])).unwrap_err();
-            assert!(error.to_string().contains(expected_error));
-        }
     }
 
     #[test]

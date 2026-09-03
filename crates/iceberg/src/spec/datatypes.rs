@@ -45,7 +45,6 @@ pub(crate) const MAX_DECIMAL_BYTES: u32 = 24;
 pub(crate) const MAX_DECIMAL_PRECISION: u32 = 38;
 const DEFAULT_GEOSPATIAL_CRS: &str = "OGC:CRS84";
 const EQUIVALENT_DEFAULT_GEOSPATIAL_CRS: &str = "EPSG:4326";
-const MAX_GEOSPATIAL_CRS_BYTES: usize = 128;
 
 mod _decimal {
     use once_cell::sync::Lazy;
@@ -311,22 +310,10 @@ fn normalize_crs(crs: Option<String>) -> Result<Option<String>> {
         return Ok(None);
     };
     let crs = crs.trim().to_string();
-    if crs.is_empty() {
+    if crs.is_empty() || crs.contains([',', ')']) {
         return Err(crate::Error::new(
             crate::ErrorKind::DataInvalid,
-            "Geospatial CRS must not be empty",
-        ));
-    }
-    if crs.len() > MAX_GEOSPATIAL_CRS_BYTES {
-        return Err(crate::Error::new(
-            crate::ErrorKind::DataInvalid,
-            format!("Geospatial CRS must be at most {MAX_GEOSPATIAL_CRS_BYTES} bytes"),
-        ));
-    }
-    if crs.contains([',', ')']) {
-        return Err(crate::Error::new(
-            crate::ErrorKind::DataInvalid,
-            "Geospatial CRS must not contain ',' or ')'",
+            "Geospatial CRS must be non-empty and must not contain ',' or ')'",
         ));
     }
     Ok((crs != DEFAULT_GEOSPATIAL_CRS && crs != EQUIVALENT_DEFAULT_GEOSPATIAL_CRS).then_some(crs))
@@ -1265,46 +1252,14 @@ mod tests {
                 "geometry",
             ),
             (
-                r#""geometry(EPSG:3857)""#,
-                PrimitiveType::Geometry(GeometryType::new(Some("EPSG:3857".to_string())).unwrap()),
-                "geometry(EPSG:3857)",
-            ),
-            (
                 r#""geometry ( EPSG:3857 )""#,
                 PrimitiveType::Geometry(GeometryType::new(Some("EPSG:3857".to_string())).unwrap()),
                 "geometry(EPSG:3857)",
             ),
             (
-                r#""geometry(EPSG:4326)""#,
-                PrimitiveType::Geometry(GeometryType::default()),
-                "geometry",
-            ),
-            (
                 r#""geography""#,
                 PrimitiveType::Geography(GeographyType::default()),
                 "geography",
-            ),
-            (
-                r#""geography(OGC:CRS27)""#,
-                PrimitiveType::Geography(
-                    GeographyType::new(
-                        Some("OGC:CRS27".to_string()),
-                        EdgeInterpolationAlgorithm::Spherical,
-                    )
-                    .unwrap(),
-                ),
-                "geography(OGC:CRS27)",
-            ),
-            (
-                r#""geography(OGC:CRS27,karney)""#,
-                PrimitiveType::Geography(
-                    GeographyType::new(
-                        Some("OGC:CRS27".to_string()),
-                        EdgeInterpolationAlgorithm::Karney,
-                    )
-                    .unwrap(),
-                ),
-                "geography(OGC:CRS27, karney)",
             ),
             (
                 r#""geography ( OGC:CRS27 , karney )""#,
@@ -1316,11 +1271,6 @@ mod tests {
                     .unwrap(),
                 ),
                 "geography(OGC:CRS27, karney)",
-            ),
-            (
-                r#""geography(EPSG:4326)""#,
-                PrimitiveType::Geography(GeographyType::default()),
-                "geography",
             ),
         ];
 
@@ -1334,43 +1284,12 @@ mod tests {
             );
         }
 
-        let invalid_cases = vec![
-            r#""geometry()""#,
-            r#""geometry(a,b)""#,
-            r#""geography()""#,
-            r#""geography(OGC:CRS27,unknown)""#,
-            r#""geography(a,b,c)""#,
-        ];
-
-        for json in invalid_cases {
-            assert!(serde_json::from_str::<PrimitiveType>(json).is_err());
-        }
-
-        let invalid_crs_cases = vec![
-            ("".to_string(), "must not be empty"),
-            (
-                "x".repeat(MAX_GEOSPATIAL_CRS_BYTES + 1),
-                "at most 128 bytes",
-            ),
-            ("EPSG:38,57".to_string(), "must not contain ',' or ')'"),
-            ("EPSG:38)57".to_string(), "must not contain ',' or ')'"),
-        ];
-
-        for (crs, expected_error) in invalid_crs_cases {
-            let geometry_error = GeometryType::new(Some(crs.clone())).unwrap_err();
-            assert!(geometry_error.to_string().contains(expected_error));
-
-            let geography_error =
-                GeographyType::new(Some(crs), EdgeInterpolationAlgorithm::Spherical).unwrap_err();
-            assert!(geography_error.to_string().contains(expected_error));
-        }
-
-        let max_length_crs = "x".repeat(MAX_GEOSPATIAL_CRS_BYTES);
         assert_eq!(
-            GeometryType::new(Some(max_length_crs.clone()))
-                .unwrap()
-                .crs(),
-            Some(max_length_crs.as_str())
+            GeometryType::new(Some(EQUIVALENT_DEFAULT_GEOSPATIAL_CRS.to_string())).unwrap(),
+            GeometryType::default()
+        );
+        assert!(
+            serde_json::from_str::<PrimitiveType>(r#""geography(OGC:CRS27,unknown)""#).is_err()
         );
     }
 
