@@ -4015,7 +4015,7 @@ mod tests {
             .with_body_from_file(format!(
                 "{}/testdata/{}",
                 env!("CARGO_MANIFEST_DIR"),
-                "load_table_response.json"
+                "create_table_response.json"
             ))
             .create_async()
             .await;
@@ -4157,7 +4157,7 @@ mod tests {
             .with_body_from_file(format!(
                 "{}/testdata/{}",
                 env!("CARGO_MANIFEST_DIR"),
-                "load_table_response.json"
+                "create_table_response.json"
             ))
             .create_async()
             .await;
