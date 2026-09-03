@@ -460,11 +460,9 @@ impl Literal {
                         "Failed to convert json number to double",
                     ))?)),
                 ))),
-                (PrimitiveType::Date, JsonValue::String(s)) => {
-                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Int(
-                        date::date_to_days(&NaiveDate::parse_from_str(&s, "%Y-%m-%d")?),
-                    ))))
-                }
+                (PrimitiveType::Date, JsonValue::String(s)) => Ok(Some(Literal::Primitive(
+                    PrimitiveLiteral::Int(date::iso_date_to_days(&s)?),
+                ))),
                 (PrimitiveType::Date, JsonValue::Number(number)) => {
                     Ok(Some(Literal::Primitive(PrimitiveLiteral::Int(
                         number
@@ -482,17 +480,11 @@ impl Literal {
                     ))))
                 }
                 (PrimitiveType::Timestamp, JsonValue::String(s)) => Ok(Some(Literal::Primitive(
-                    PrimitiveLiteral::Long(timestamp::datetime_to_microseconds(
-                        &NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f")?,
-                    )),
+                    PrimitiveLiteral::Long(timestamp::iso_datetime_to_microseconds(&s)?),
                 ))),
-                (PrimitiveType::Timestamptz, JsonValue::String(s)) => {
-                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Long(
-                        timestamptz::datetimetz_to_microseconds(&Utc.from_utc_datetime(
-                            &NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f+00:00")?,
-                        )),
-                    ))))
-                }
+                (PrimitiveType::Timestamptz, JsonValue::String(s)) => Ok(Some(Literal::Primitive(
+                    PrimitiveLiteral::Long(timestamptz::iso_datetime_to_microseconds(&s)?),
+                ))),
                 (PrimitiveType::TimestampNs, JsonValue::String(s)) => {
                     let ndt = NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f")?;
                     let nanos = timestamp::datetime_to_nanoseconds(&ndt).ok_or_else(|| {
@@ -674,20 +666,16 @@ impl Literal {
                     }
                 }
                 (PrimitiveType::Date, PrimitiveLiteral::Int(val)) => {
-                    Ok(JsonValue::String(date::days_to_date(val).to_string()))
+                    Ok(JsonValue::String(date::days_to_iso_date(val)))
                 }
                 (PrimitiveType::Time, PrimitiveLiteral::Long(val)) => Ok(JsonValue::String(
                     time::microseconds_to_time(val).to_string(),
                 )),
                 (PrimitiveType::Timestamp, PrimitiveLiteral::Long(val)) => Ok(JsonValue::String(
-                    timestamp::microseconds_to_datetime(val)
-                        .format("%Y-%m-%dT%H:%M:%S%.f")
-                        .to_string(),
+                    timestamp::microseconds_to_iso_datetime(val),
                 )),
                 (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(val)) => Ok(JsonValue::String(
-                    timestamptz::microseconds_to_datetimetz(val)
-                        .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
-                        .to_string(),
+                    timestamptz::microseconds_to_iso_datetime(val),
                 )),
                 (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(val)) => Ok(JsonValue::String(
                     timestamp::nanoseconds_to_datetime(val)
