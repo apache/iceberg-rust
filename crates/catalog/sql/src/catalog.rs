@@ -30,7 +30,7 @@ use iceberg::{
     Runtime, TableCommit, TableCreation, TableIdent,
 };
 use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
-use sqlx::{Any, AnyPool, Column, Executor, Row, Transaction};
+use sqlx::{Any, AnyPool, Executor, Row, Transaction};
 
 use crate::error::{
     from_sqlx_error, no_such_namespace_err, no_such_table_err, table_already_exists_err,
@@ -332,22 +332,19 @@ pub enum SchemaVersion {
 impl SchemaVersion {
     /// Detect the schema version of an existing catalog table by introspecting its columns.
     async fn detect(pool: &AnyPool) -> Result<Self> {
-        let catalog_table_description = pool
+        let mut connection = pool.acquire().await.map_err(from_sqlx_error)?;
+        let v1_probe =
+            format!("SELECT {CATALOG_FIELD_RECORD_TYPE} FROM {CATALOG_TABLE_NAME} WHERE 1 = 0");
+        if connection.describe(&v1_probe).await.is_ok() {
+            return Ok(SchemaVersion::V1);
+        }
+
+        // Distinguish a V0 schema from a missing or inaccessible catalog table.
+        connection
             .describe(&format!("SELECT * FROM {CATALOG_TABLE_NAME}"))
             .await
             .map_err(from_sqlx_error)?;
-
-        let has_type_column = catalog_table_description.columns().iter().any(|column| {
-            column
-                .name()
-                .eq_ignore_ascii_case(CATALOG_FIELD_RECORD_TYPE)
-        });
-
-        Ok(if has_type_column {
-            SchemaVersion::V1
-        } else {
-            SchemaVersion::V0
-        })
+        Ok(SchemaVersion::V0)
     }
 
     /// The trailing SQL `AND` clause used to exclude view rows when querying for tables.
@@ -374,6 +371,35 @@ impl SchemaVersion {
                 "ALTER TABLE {CATALOG_TABLE_NAME} ADD COLUMN {CATALOG_FIELD_RECORD_TYPE} VARCHAR(5)"
             )),
             SchemaVersion::V0 => None,
+        }
+    }
+
+    /// Migrates the catalog table to this schema version.
+    ///
+    /// Another catalog instance may complete the same migration after version detection but
+    /// before this statement runs. In that case, accept the statement error once re-detection
+    /// confirms that the requested version is already installed.
+    async fn migrate(self, pool: &AnyPool) -> Result<()> {
+        let Some(migration_sql) = self.migration_sql() else {
+            return Ok(());
+        };
+
+        match sqlx::query(&migration_sql).execute(pool).await {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                // A competing DDL statement may still be committing when this statement fails.
+                // Re-acquiring a connection for each probe lets schema-lock and duplicate-column
+                // races converge on the installed version instead of failing initialization.
+                for _ in 0..3 {
+                    if matches!(Self::detect(pool).await, Ok(detected) if detected == self) {
+                        tracing::debug!(
+                            "catalog schema migration to {self} was completed concurrently"
+                        );
+                        return Ok(());
+                    }
+                }
+                Err(from_sqlx_error(error))
+            }
         }
     }
 }
@@ -469,12 +495,7 @@ impl SqlCatalog {
                     detected_schema_version,
                     expected_schema_version,
                 );
-                if let Some(migration_sql) = SchemaVersion::V1.migration_sql() {
-                    sqlx::query(&migration_sql)
-                        .execute(&pool)
-                        .await
-                        .map_err(from_sqlx_error)?;
-                }
+                SchemaVersion::V1.migrate(&pool).await?;
                 SchemaVersion::V1
             }
             (SchemaVersion::V0, Some(SchemaVersion::V0) | None) => {
@@ -2588,6 +2609,44 @@ mod tests {
             record_type_column_exists(&uri).await,
             "iceberg_type column should exist when sql.schema-version=V1 was set",
         );
+    }
+
+    #[tokio::test]
+    async fn test_v0_schema_migration_is_concurrent_safe() {
+        install_default_drivers();
+
+        let (uri, _temp_dir) = create_v0_sqlite_db().await;
+        let pool1 = sqlx::AnyPool::connect(&uri).await.unwrap();
+        let pool2 = sqlx::AnyPool::connect(&uri).await.unwrap();
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+        let migrate1 = async {
+            assert_eq!(
+                SchemaVersion::detect(&pool1).await.unwrap(),
+                SchemaVersion::V0
+            );
+            barrier.wait().await;
+            SchemaVersion::V1.migrate(&pool1).await
+        };
+        let migrate2 = async {
+            assert_eq!(
+                SchemaVersion::detect(&pool2).await.unwrap(),
+                SchemaVersion::V0
+            );
+            barrier.wait().await;
+            SchemaVersion::V1.migrate(&pool2).await
+        };
+
+        let (result1, result2) = tokio::join!(migrate1, migrate2);
+        assert!(result1.is_ok(), "first migration failed: {result1:?}");
+        assert!(result2.is_ok(), "second migration failed: {result2:?}");
+        assert_eq!(
+            SchemaVersion::detect(&pool1).await.unwrap(),
+            SchemaVersion::V1
+        );
+
+        pool1.close().await;
+        pool2.close().await;
     }
 
     #[tokio::test]
