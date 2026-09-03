@@ -2776,6 +2776,7 @@ pub fn iceberg::spec::TableMetadataBuilder::add_snapshot(self, snapshot: iceberg
 pub fn iceberg::spec::TableMetadataBuilder::add_sort_order(self, sort_order: iceberg::spec::SortOrder) -> iceberg::Result<Self>
 pub fn iceberg::spec::TableMetadataBuilder::assign_uuid(self, uuid: uuid::Uuid) -> Self
 pub fn iceberg::spec::TableMetadataBuilder::build(self) -> iceberg::Result<iceberg::spec::TableMetadataBuildResult>
+pub fn iceberg::spec::TableMetadataBuilder::build_replacement(self, schema: iceberg::spec::Schema, spec: impl core::convert::Into<iceberg::spec::UnboundPartitionSpec>, sort_order: iceberg::spec::SortOrder, location: core::option::Option<alloc::string::String>, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<Self>
 pub fn iceberg::spec::TableMetadataBuilder::from_table_creation(table_creation: iceberg::TableCreation) -> iceberg::Result<Self>
 pub fn iceberg::spec::TableMetadataBuilder::new(schema: iceberg::spec::Schema, spec: impl core::convert::Into<iceberg::spec::UnboundPartitionSpec>, sort_order: iceberg::spec::SortOrder, location: alloc::string::String, format_version: iceberg::spec::FormatVersion, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<Self>
 pub fn iceberg::spec::TableMetadataBuilder::new_from_metadata(previous: iceberg::spec::TableMetadata, current_file_location: core::option::Option<alloc::string::String>) -> Self
