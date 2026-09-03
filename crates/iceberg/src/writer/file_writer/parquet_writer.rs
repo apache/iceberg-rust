@@ -2599,14 +2599,14 @@ mod tests {
 
         assert_eq!(
             schema_descr.column(0).logical_type_ref(),
-            Some(&LogicalType::Geometry { crs: None })
+            Some(&LogicalType::geometry(Some("srid:0".to_string())))
         );
         assert_eq!(
             schema_descr.column(1).logical_type_ref(),
-            Some(&LogicalType::Geography {
-                crs: None,
-                algorithm: Some(EdgeInterpolationAlgorithm::KARNEY),
-            })
+            Some(&LogicalType::geography(
+                Some("srid:0".to_string()),
+                Some(EdgeInterpolationAlgorithm::KARNEY),
+            ))
         );
 
         Ok(())
