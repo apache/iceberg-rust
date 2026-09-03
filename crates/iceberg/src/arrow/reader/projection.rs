@@ -735,7 +735,8 @@ message schema {
                 .with_schema(new_schema.clone())
                 .with_project_field_ids(vec![1, 2]) // Request both columns 'a' and 'b'
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -834,7 +835,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -937,7 +939,8 @@ message schema {
                 .with_project_field_ids(vec![2, 4])
                 .with_case_sensitive(false)
                 .with_name_mapping(Some(name_mapping))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1045,7 +1048,8 @@ message schema {
                 .with_case_sensitive(false)
                 .with_name_mapping(Some(name_mapping))
                 .with_predicate(Some(predicate.bind(schema, true).unwrap()))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1138,7 +1142,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 3])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1225,7 +1230,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2, 3])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1326,7 +1332,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1456,7 +1463,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1553,7 +1561,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 5, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1664,7 +1673,8 @@ message schema {
                 .with_project_field_ids(vec![1, 2, 3])
                 .with_case_sensitive(false)
                 .with_predicate(Some(predicate.bind(schema, true).unwrap()))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1806,7 +1816,8 @@ message schema {
                 .with_case_sensitive(false)
                 .with_partition(Some(partition_data))
                 .with_partition_spec(Some(partition_spec))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -2013,7 +2024,8 @@ message schema {
                 .with_project_field_ids(vec![4])
                 .with_case_sensitive(false)
                 .with_predicate(Some(predicate.bind(iceberg_schema, true).unwrap()))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 

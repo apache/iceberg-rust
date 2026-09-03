@@ -287,7 +287,7 @@ pub fn iceberg_catalog_rest::RestCatalog::update_namespace<'life0, 'life1, 'asyn
 pub fn iceberg_catalog_rest::RestCatalog::update_table<'life0, 'async_trait>(&'life0 self, commit: iceberg::catalog::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct iceberg_catalog_rest::RestCatalogBuilder
 impl iceberg_catalog_rest::RestCatalogBuilder
-pub fn iceberg_catalog_rest::RestCatalogBuilder::with_auth_manager(self, auth_manager: alloc::sync::Arc<dyn iceberg_catalog_rest::AuthManager>) -> Self
+pub fn iceberg_catalog_rest::RestCatalogBuilder::with_auth_manager<M>(self, auth_manager: M) -> Self where M: iceberg_catalog_rest::AuthManager + 'static
 pub fn iceberg_catalog_rest::RestCatalogBuilder::with_client(self, client: reqwest::async_impl::client::Client) -> Self
 pub fn iceberg_catalog_rest::RestCatalogBuilder::with_session_context(self, context: iceberg::catalog::session::SessionContext) -> Self
 impl core::default::Default for iceberg_catalog_rest::RestCatalogBuilder
@@ -322,7 +322,7 @@ pub fn iceberg_catalog_rest::RestSessionCatalog::update_table<'life0, 'life1, 'a
 pub struct iceberg_catalog_rest::RestSessionCatalogBuilder
 impl iceberg_catalog_rest::RestSessionCatalogBuilder
 pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::error::Result<iceberg_catalog_rest::RestSessionCatalog>> + core::marker::Send
-pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::with_auth_manager(self, auth_manager: alloc::sync::Arc<dyn iceberg_catalog_rest::AuthManager>) -> Self
+pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::with_auth_manager<M>(self, auth_manager: M) -> Self where M: iceberg_catalog_rest::AuthManager + 'static
 pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::with_client(self, client: reqwest::async_impl::client::Client) -> Self
 pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::with_kms_client_factory(self, kms_client_factory: alloc::sync::Arc<dyn iceberg::encryption::kms::factory::KmsClientFactory>) -> Self
 pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::with_runtime(self, runtime: iceberg::runtime::Runtime) -> Self
