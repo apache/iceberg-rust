@@ -26,7 +26,7 @@ use arrow_array::{
     FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
     TimestampMicrosecondArray, TimestampNanosecondArray,
 };
-use arrow_schema::extension::ExtensionType;
+use arrow_schema::extension::{ExtensionType, Uuid as UuidExtensionType};
 use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, Schema as ArrowSchema, TimeUnit,
 };
@@ -179,6 +179,20 @@ pub trait ArrowSchemaVisitor {
     where Self: Sized {
         visit_type(field.data_type(), self)
     }
+
+    /// Called when a field carries the `arrow.uuid` extension type.
+    ///
+    /// The default treats the field as its underlying Arrow storage, preserving
+    /// the behavior of visitors that don't special-case UUIDs. A visitor that
+    /// produces Iceberg types should override this to fold the storage into a
+    /// single logical UUID.
+    ///
+    /// Takes the `&FieldRef` rather than a `&DataType` because the UUID signal
+    /// lives on the field's metadata, not on its data type.
+    fn uuid(&mut self, field: &FieldRef) -> Result<Self::T>
+    where Self: Sized {
+        visit_type(field.data_type(), self)
+    }
 }
 
 /// Visiting a type in post order.
@@ -249,6 +263,8 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
 fn visit_field<V: ArrowSchemaVisitor>(field: &FieldRef, visitor: &mut V) -> Result<V::T> {
     if field.extension_type_name() == Some(VariantExtensionType::NAME) {
         visitor.variant(field)
+    } else if field.extension_type_name() == Some(UuidExtensionType::NAME) {
+        visitor.uuid(field)
     } else {
         visit_type(field.data_type(), visitor)
     }
@@ -584,6 +600,23 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
         // fail. The enclosing field's own id is read by the caller.
         Ok(Type::Variant(VariantType))
     }
+
+    fn uuid(&mut self, field: &FieldRef) -> Result<Self::T> {
+        // The extension expects a fixed size binary.
+        // See: Apache Arrow spec https://arrow.apache.org/docs/format/CanonicalExtensions.html#uuid
+        let field_data_type = field.data_type();
+        let expected_data_type = DataType::FixedSizeBinary(16);
+        if *field_data_type != expected_data_type {
+            let error_message = format!(
+                "{} extension requires {expected_data_type} storage, found {field_data_type}",
+                UuidExtensionType::NAME,
+            );
+
+            return Err(Error::new(ErrorKind::DataInvalid, error_message));
+        }
+
+        Ok(Type::Primitive(PrimitiveType::Uuid))
+    }
 }
 
 struct ToArrowSchemaConverter;
@@ -634,9 +667,17 @@ impl SchemaVisitor for ToArrowSchemaConverter {
         // `arrow.parquet.variant` extension type so consumers read it as a Variant, not a struct.
         let arrow_field = if field.field_type.is_variant() {
             arrow_field.with_extension_type(VariantExtensionType)
+        } else if matches!(
+            field.field_type.as_ref(),
+            Type::Primitive(PrimitiveType::Uuid)
+        ) {
+            // A uuid column's storage is FixedSizeBinary(16); tag the field with the canonical
+            // `arrow.uuid` extension type so consumers read it as a UUID, not opaque bytes.
+            arrow_field.with_extension_type(UuidExtensionType)
         } else {
             arrow_field
         };
+
         Ok(ArrowSchemaOrFieldOrType::Field(arrow_field))
     }
 
@@ -1399,6 +1440,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use arrow_schema::extension::Uuid as DataTypeUuidExt;
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
 
     use super::*;
@@ -1705,6 +1747,74 @@ mod tests {
         pretty_assertions::assert_eq!(converted_schema, schema);
     }
 
+    #[test]
+    fn test_converting_uuid_from_arrow_to_iceberg_to_arrow_should_give_uuid() {
+        let arrow_schema = ArrowSchema::new(vec![
+            simple_field("uuid_field", DataType::FixedSizeBinary(16), false, "1")
+                .with_extension_type(DataTypeUuidExt),
+        ]);
+        let output =
+            schema_to_arrow_schema(&arrow_schema_to_schema(&arrow_schema).unwrap()).unwrap();
+
+        assert_eq!(arrow_schema, output);
+    }
+
+    #[test]
+    fn test_converting_uuid_from_iceberg_to_arrow_to_iceberg_should_give_uuid() {
+        let iceberg_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "uuid_field", Type::Primitive(PrimitiveType::Uuid)).into(),
+            ])
+            .build()
+            .unwrap();
+        let output =
+            arrow_schema_to_schema(&schema_to_arrow_schema(&iceberg_schema).unwrap()).unwrap();
+
+        assert_eq!(iceberg_schema, output);
+    }
+
+    #[test]
+    fn test_arrow_schema_to_schema_should_convert_uuid_when_fixed_size_binary() {
+        let converted_schema = arrow_schema_to_schema(&ArrowSchema::new(vec![
+            simple_field("uuid_field", DataType::FixedSizeBinary(16), false, "1")
+                .with_extension_type(DataTypeUuidExt),
+        ]))
+        .unwrap();
+
+        let expected = Schema::builder()
+            .with_fields([NestedField::required(
+                1,
+                "uuid_field",
+                Type::Primitive(PrimitiveType::Uuid),
+            )
+            .into()])
+            .build()
+            .unwrap();
+
+        pretty_assertions::assert_eq!(expected, converted_schema);
+    }
+
+    #[test]
+    fn test_arrow_schema_to_schema_should_reject_uuid_when_not_a_fixed_size_binary() {
+        // The field must be built correctly, and then changed to the wrong type,
+        // to avoid Arrow's own validation and panic.
+        let mut field = simple_field(
+            "incorrect_uuid_field",
+            DataType::FixedSizeBinary(16),
+            false,
+            "1",
+        )
+        .with_extension_type(DataTypeUuidExt);
+        field = field.with_data_type(DataType::Utf8);
+
+        let error = arrow_schema_to_schema(&ArrowSchema::new(vec![field])).unwrap_err();
+
+        pretty_assertions::assert_eq!(
+            "arrow.uuid extension requires FixedSizeBinary(16) storage, found Utf8",
+            error.message()
+        );
+    }
+
     fn arrow_schema_for_schema_to_arrow_schema_test() -> ArrowSchema {
         let fields = Fields::from(vec![
             simple_field("key", DataType::Int32, false, "28"),
@@ -1797,7 +1907,8 @@ mod tests {
             ),
             simple_field("map", map, false, "16"),
             simple_field("struct", r#struct, false, "17"),
-            simple_field("uuid", DataType::FixedSizeBinary(16), false, "30"),
+            simple_field("uuid", DataType::FixedSizeBinary(16), false, "30")
+                .with_extension_type(DataTypeUuidExt),
             Field::new(
                 "v",
                 DataType::Struct(Fields::from(vec![
@@ -2013,10 +2124,10 @@ mod tests {
 
     #[test]
     fn test_schema_to_arrow_schema() {
-        let arrow_schema = arrow_schema_for_schema_to_arrow_schema_test();
+        let expected_arrow_schema = arrow_schema_for_schema_to_arrow_schema_test();
         let schema = iceberg_schema_for_schema_to_arrow_schema();
         let converted_arrow_schema = schema_to_arrow_schema(&schema).unwrap();
-        assert_eq!(converted_arrow_schema, arrow_schema);
+        assert_eq!(converted_arrow_schema, expected_arrow_schema);
     }
 
     #[test]
@@ -2060,6 +2171,27 @@ mod tests {
                 Field::new("value", DataType::Binary, true),
             ]))
         );
+    }
+
+    #[test]
+    fn test_schema_to_arrow_schema_should_convert_uuid_to_arrow_uuid() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "uuid_field", Type::Primitive(PrimitiveType::Uuid)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let arrow_schema = schema_to_arrow_schema(&schema).unwrap();
+        let field = arrow_schema.field_with_name("uuid_field").unwrap();
+
+        assert_eq!(field.extension_type_name(), Some(UuidExtensionType::NAME));
+        // Attaching the extension type must not clobber the Iceberg field id.
+        assert_eq!(
+            field.metadata().get(PARQUET_FIELD_ID_META_KEY),
+            Some(&"1".to_string())
+        );
+        assert_eq!(*field.data_type(), DataType::FixedSizeBinary(16));
     }
 
     #[test]
@@ -2493,6 +2625,8 @@ mod tests {
             Field::new("id", DataType::Int64, false),
             Field::new("name", DataType::Utf8, true),
             Field::new("price", DataType::Decimal128(10, 2), false),
+            Field::new("uuid", DataType::FixedSizeBinary(16), false)
+                .with_extension_type(DataTypeUuidExt),
             Field::new(
                 "created_at",
                 DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
@@ -2544,9 +2678,9 @@ mod tests {
         let schema = arrow_schema_to_schema_auto_assign_ids(&arrow_schema).unwrap();
 
         // Build expected schema with exact field IDs following level-order assignment:
-        // Level 0: id=1, name=2, price=3, created_at=4, tags=5, address=6, attributes=7, orders=8
-        // Level 1: tags.element=9, address.{street=10,city=11,zip=12}, attributes.{key=13,value=14}, orders.element=15
-        // Level 2: orders.element.{order_id=16,amount=17}
+        // Level 0: id=1, name=2, price=3, uuid=4, created_at=5, tags=6, address=7, attributes=8, orders=9
+        // Level 1: tags.element=10, address.{street=11,city=12,zip=13}, attributes.{key=14,value=15}, orders.element=16
+        // Level 2: orders.element.{order_id=17,amount=18}
         let expected = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
@@ -2560,14 +2694,15 @@ mod tests {
                     }),
                 )
                 .into(),
-                NestedField::optional(4, "created_at", Type::Primitive(PrimitiveType::Timestamptz))
+                NestedField::required(4, "uuid", Type::Primitive(PrimitiveType::Uuid)).into(),
+                NestedField::optional(5, "created_at", Type::Primitive(PrimitiveType::Timestamptz))
                     .into(),
                 NestedField::optional(
-                    5,
+                    6,
                     "tags",
                     Type::List(ListType {
                         element_field: NestedField::list_element(
-                            9,
+                            10,
                             Type::Primitive(PrimitiveType::String),
                             false,
                         )
@@ -2576,29 +2711,29 @@ mod tests {
                 )
                 .into(),
                 NestedField::optional(
-                    6,
+                    7,
                     "address",
                     Type::Struct(StructType::new(vec![
-                        NestedField::optional(10, "street", Type::Primitive(PrimitiveType::String))
+                        NestedField::optional(11, "street", Type::Primitive(PrimitiveType::String))
                             .into(),
-                        NestedField::required(11, "city", Type::Primitive(PrimitiveType::String))
+                        NestedField::required(12, "city", Type::Primitive(PrimitiveType::String))
                             .into(),
-                        NestedField::optional(12, "zip", Type::Primitive(PrimitiveType::Int))
+                        NestedField::optional(13, "zip", Type::Primitive(PrimitiveType::Int))
                             .into(),
                     ])),
                 )
                 .into(),
                 NestedField::optional(
-                    7,
+                    8,
                     "attributes",
                     Type::Map(MapType {
                         key_field: NestedField::map_key_element(
-                            13,
+                            14,
                             Type::Primitive(PrimitiveType::String),
                         )
                         .into(),
                         value_field: NestedField::map_value_element(
-                            14,
+                            15,
                             Type::Primitive(PrimitiveType::String),
                             false,
                         )
@@ -2607,20 +2742,20 @@ mod tests {
                 )
                 .into(),
                 NestedField::optional(
-                    8,
+                    9,
                     "orders",
                     Type::List(ListType {
                         element_field: NestedField::list_element(
-                            15,
+                            16,
                             Type::Struct(StructType::new(vec![
                                 NestedField::required(
-                                    16,
+                                    17,
                                     "order_id",
                                     Type::Primitive(PrimitiveType::Long),
                                 )
                                 .into(),
                                 NestedField::required(
-                                    17,
+                                    18,
                                     "amount",
                                     Type::Primitive(PrimitiveType::Double),
                                 )
@@ -2637,6 +2772,6 @@ mod tests {
             .unwrap();
 
         pretty_assertions::assert_eq!(schema, expected);
-        assert_eq!(schema.highest_field_id(), 17);
+        assert_eq!(schema.highest_field_id(), 18);
     }
 }
