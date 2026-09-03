@@ -33,7 +33,7 @@ use iceberg::expr::Predicate;
 use iceberg::table::Table;
 
 use super::expr_to_predicate::convert_filters_to_predicate;
-use crate::to_datafusion_error;
+use crate::{IcebergCatalogConfig, to_datafusion_error};
 
 /// Manages the scanning process of an Iceberg [`Table`], encapsulating the
 /// necessary details and computed properties required for execution planning.
@@ -52,6 +52,8 @@ pub struct IcebergTableScan {
     predicates: Option<Predicate>,
     /// Optional limit on the number of rows to return
     limit: Option<usize>,
+    /// Catalog and storage the scanned table came from, if recorded
+    catalog_config: Option<IcebergCatalogConfig>,
 }
 
 impl IcebergTableScan {
@@ -79,7 +81,20 @@ impl IcebergTableScan {
             projection,
             predicates,
             limit,
+            catalog_config: None,
         }
+    }
+
+    pub(crate) fn with_catalog_config(
+        mut self,
+        catalog_config: Option<IcebergCatalogConfig>,
+    ) -> Self {
+        self.catalog_config = catalog_config;
+        self
+    }
+
+    pub fn catalog_config(&self) -> Option<&IcebergCatalogConfig> {
+        self.catalog_config.as_ref()
     }
 
     pub fn table(&self) -> &Table {
