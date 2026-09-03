@@ -48,6 +48,9 @@ pub enum ErrorKind {
     /// Iceberg namespace already exists at creation.
     NamespaceAlreadyExists,
 
+    /// Iceberg namespace is not empty.
+    NamespaceNotEmpty,
+
     /// Iceberg table already exists at creation.
     TableAlreadyExists,
 
@@ -82,6 +85,7 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::TableAlreadyExists => "TableAlreadyExists",
             ErrorKind::TableNotFound => "TableNotFound",
             ErrorKind::NamespaceAlreadyExists => "NamespaceAlreadyExists",
+            ErrorKind::NamespaceNotEmpty => "NamespaceNotEmpty",
             ErrorKind::NamespaceNotFound => "NamespaceNotFound",
             ErrorKind::PreconditionFailed => "PreconditionFailed",
             ErrorKind::CatalogCommitConflicts => "CatalogCommitConflicts",
