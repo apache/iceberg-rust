@@ -1237,6 +1237,7 @@ mod tests {
             .with_deletes(vec![FileScanTaskDeleteFile {
                 file_path: pos_del_path.clone(),
                 file_type: DataContentType::PositionDeletes,
+                file_format: DataFileFormat::Parquet,
                 partition_spec_id: 0,
                 equality_ids: None,
                 file_size_in_bytes: std::fs::metadata(&pos_del_path).unwrap().len(),

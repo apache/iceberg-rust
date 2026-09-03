@@ -318,6 +318,7 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
             .with_file_path(ctx.manifest_entry.file_path().to_string())
             .with_file_size_in_bytes(ctx.manifest_entry.file_size_in_bytes())
             .with_file_type(ctx.manifest_entry.content_type())
+            .with_file_format(ctx.manifest_entry.data_file().file_format())
             .with_partition_spec_id(ctx.partition_spec_id)
             .with_equality_ids(ctx.manifest_entry.data_file.equality_ids.clone())
             .with_referenced_data_file(ctx.manifest_entry.data_file.referenced_data_file.clone())
@@ -347,6 +348,10 @@ pub struct FileScanTaskDeleteFile {
 
     /// delete file type
     pub file_type: DataContentType,
+
+    /// The delete file's format, from the manifest entry. A `PositionDeletes` entry written as
+    /// `Puffin` is a V3 deletion vector; one written as `Parquet` is a position delete file.
+    pub file_format: DataFileFormat,
 
     /// partition id
     pub partition_spec_id: i32,
@@ -383,8 +388,11 @@ pub struct FileScanTaskDeleteFile {
     #[builder(default)]
     pub record_count: Option<u64>,
 
-    /// Key metadata for encrypted delete files (Parquet Modular Encryption).
-    /// When present, the reader uses this to build `FileDecryptionProperties`.
+    /// Key metadata for an encrypted delete file. When present, the reader uses this to
+    /// decrypt the file: for a Parquet equality or position delete file, this builds
+    /// `FileDecryptionProperties` (Parquet Modular Encryption); for a deletion vector, whose
+    /// Puffin file has no native encryption, this wraps the range read in an
+    /// `EncryptedInputFile` (AGS1 stream encryption).
     ///
     /// Same plaintext-DEK trust boundary as [`FileScanTask::key_metadata`]:
     /// this is serialized into the scan plan and crosses the planner -> worker
