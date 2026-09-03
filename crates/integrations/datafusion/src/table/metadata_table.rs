@@ -40,6 +40,45 @@ use crate::to_datafusion_error;
 pub struct IcebergMetadataTableProvider {
     pub(crate) table: Table,
     pub(crate) r#type: MetadataTableType,
+    /// Set when built through a config-backed table provider, so a distributed
+    /// engine can reload the table and rebuild this provider on a worker.
+    catalog_config: Option<crate::IcebergCatalogConfig>,
+}
+
+impl IcebergMetadataTableProvider {
+    /// Creates a metadata-table provider over an already-loaded table.
+    pub fn new(table: Table, r#type: MetadataTableType) -> Self {
+        Self {
+            table,
+            r#type,
+            catalog_config: None,
+        }
+    }
+
+    /// Attaches the config, so a distributed engine can rebuild this provider on
+    /// a worker.
+    pub fn with_catalog_config(
+        mut self,
+        catalog_config: Option<crate::IcebergCatalogConfig>,
+    ) -> Self {
+        self.catalog_config = catalog_config;
+        self
+    }
+
+    /// Returns the serializable catalog/storage config, if any.
+    pub fn catalog_config(&self) -> Option<&crate::IcebergCatalogConfig> {
+        self.catalog_config.as_ref()
+    }
+
+    /// Returns the table this provider inspects.
+    pub fn table(&self) -> &Table {
+        &self.table
+    }
+
+    /// Returns which metadata table this provider serves.
+    pub fn metadata_type(&self) -> &MetadataTableType {
+        &self.r#type
+    }
 }
 
 #[async_trait]
