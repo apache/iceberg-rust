@@ -24,8 +24,10 @@ use reqwest::header::HeaderMap;
 use reqwest::{Client, IntoUrl, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 
-use crate::RestCatalogConfig;
 use crate::auth::{AuthSession, NoopSession};
+use crate::catalog::{
+    REST_CATALOG_PROP_DISABLE_HEADER_REDACTION, RestCatalogConfig, explicit_headers_from_props,
+};
 use crate::request::HttpRequest;
 use crate::response::HttpResponse;
 
@@ -141,10 +143,43 @@ impl HttpClient {
         })
     }
 
-    /// Testing only: the session authenticating this client's requests.
-    #[cfg(test)]
-    pub(crate) fn auth_session(&self) -> &Arc<dyn AuthSession> {
-        &self.auth_session
+    /// Derives a client for table-scoped requests.
+    ///
+    /// The connection pool and catalog headers are inherited, explicit table
+    /// headers override them, and `auth_session` replaces the catalog session
+    /// only when the auth manager selected a table-specific child session.
+    pub(crate) fn for_table(
+        &self,
+        props: &HashMap<String, String>,
+        auth_session: Arc<dyn AuthSession>,
+    ) -> Result<Self> {
+        let mut extra_headers = self.extra_headers.clone();
+        let table_headers = explicit_headers_from_props(props)?;
+        let has_table_authorization = table_headers.contains_key(http::header::AUTHORIZATION);
+
+        if !Arc::ptr_eq(&self.auth_session, &auth_session) && !has_table_authorization {
+            // An inherited catalog Authorization header would otherwise be
+            // applied after, and overwrite, the table session's authentication.
+            extra_headers.remove(http::header::AUTHORIZATION);
+        }
+        extra_headers.extend(table_headers);
+
+        let disable_header_redaction = props
+            .get(REST_CATALOG_PROP_DISABLE_HEADER_REDACTION)
+            .map(|value| value.eq_ignore_ascii_case("true"))
+            .unwrap_or(self.disable_header_redaction);
+
+        Ok(Self {
+            client: self.client.clone(),
+            extra_headers,
+            disable_header_redaction,
+            auth_session,
+        })
+    }
+
+    /// Returns the session authenticating this client's requests.
+    pub(crate) fn auth_session(&self) -> Arc<dyn AuthSession> {
+        Arc::clone(&self.auth_session)
     }
 
     /// Testing only: the bearer token `session` would attach.
@@ -295,6 +330,19 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct TableSession;
+
+    #[async_trait::async_trait]
+    impl AuthSession for TableSession {
+        async fn authenticate(&self, request: &mut HttpRequest) -> Result<()> {
+            request
+                .headers_mut()
+                .insert("authorization", "Bearer table-token".parse().unwrap());
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn test_a_truncated_body_error_names_the_url() {
         // `bytes()` builds its error without a URL, so `read` attaches the one
@@ -410,6 +458,66 @@ mod tests {
             .await
             .unwrap();
         unsigned.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_table_client_does_not_inherit_conflicting_authorization_header() {
+        let mut server = mockito::Server::new_async().await;
+        let table_session = server
+            .mock("GET", "/session")
+            .match_header("authorization", "Bearer table-token")
+            .with_status(200)
+            .create_async()
+            .await;
+        let table_header = server
+            .mock("GET", "/header")
+            .match_header("authorization", "Bearer table-header")
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let config = RestCatalogConfig::builder()
+            .uri(server.url())
+            .props(HashMap::from([(
+                "header.Authorization".to_string(),
+                "Bearer catalog-header".to_string(),
+            )]))
+            .build();
+        let catalog_client = HttpClient::new(&config).unwrap();
+
+        let session_client = catalog_client
+            .for_table(&HashMap::new(), Arc::new(TableSession))
+            .unwrap();
+        session_client
+            .query_catalog(
+                HttpRequest::build(
+                    session_client.request(Method::GET, format!("{}/session", server.url())),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        table_session.assert_async().await;
+
+        let header_client = catalog_client
+            .for_table(
+                &HashMap::from([(
+                    "header.Authorization".to_string(),
+                    "Bearer table-header".to_string(),
+                )]),
+                Arc::new(TableSession),
+            )
+            .unwrap();
+        header_client
+            .query_catalog(
+                HttpRequest::build(
+                    header_client.request(Method::GET, format!("{}/header", server.url())),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        table_header.assert_async().await;
     }
 
     #[test]
