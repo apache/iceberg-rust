@@ -47,6 +47,7 @@ uuid = { workspace = true, features = ["v4"] }
 [dev-dependencies]
 bytes = { workspace = true }
 futures = { workspace = true }
+iceberg = { workspace = true, features = ["test-utils"] }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
 # `stream` lets tests build a streaming body to exercise HttpRequestBody::Streaming.

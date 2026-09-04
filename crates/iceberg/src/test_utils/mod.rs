@@ -16,163 +16,20 @@
 // under the License.
 
 //! Test utilities.
-//! This module is pub just for internal testing.
-//! It is subject to change and is not intended to be used by external users.
+//!
+//! Compiled under `cfg(test)`, or behind the `test-utils` feature for other
+//! crates in this workspace that need these fixtures from their own tests.
+//! Not public API: it is subject to change and is not intended to be used by
+//! external users. Items only needed within this crate stay `cfg(test)`.
 
+#[cfg(test)]
+mod encryption;
+mod record_batch;
+mod runtime;
 #[cfg(test)]
 pub(crate) mod scan;
 
-use std::sync::{Arc, OnceLock};
-
-use arrow_array::RecordBatch;
-use expect_test::Expect;
-use itertools::Itertools;
-
-use crate::TableIdent;
 #[cfg(test)]
-use crate::encryption::EncryptionManager;
-use crate::encryption::SensitiveBytes;
-use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
-use crate::io::FileIO;
-use crate::runtime::Runtime;
-use crate::spec::TableMetadata;
-use crate::table::Table;
-
-/// Returns a process-wide [`Runtime`] suitable for tests that need to construct
-/// a [`Table`] outside a tokio context.
-///
-/// The returned [`Runtime`] wraps a single shared multi-thread tokio runtime
-/// that is lazily built on first call and lives until process exit. Cloning is
-/// cheap, so test code can call this every time it needs a runtime to feed
-/// into [`TableBuilder::runtime`](crate::table::TableBuilder::runtime).
-pub fn test_runtime() -> Runtime {
-    static TOKIO_RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    let tokio_rt = TOKIO_RT.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("failed to build test tokio runtime")
-    });
-    Runtime::new(tokio_rt)
-}
-
-/// Snapshot testing to check the resulting record batch.
-///
-/// - `expected_schema/data`: put `expect![[""]]` as a placeholder,
-///   and then run test with `UPDATE_EXPECT=1 cargo test` to automatically update the result,
-///   or use rust-analyzer (see [video](https://github.com/rust-analyzer/expect-test)).
-///   Check the doc of [`expect_test`] for more details.
-/// - `ignore_check_columns`: Some columns are not stable, so we can skip them.
-/// - `sort_column`: The order of the data might be non-deterministic, so we can sort it by a column.
-pub fn check_record_batches(
-    record_batches: Vec<RecordBatch>,
-    expected_schema: Expect,
-    expected_data: Expect,
-    ignore_check_columns: &[&str],
-    sort_column: Option<&str>,
-) {
-    assert!(!record_batches.is_empty(), "Empty record batches");
-
-    // Combine record batches using the first batch's schema
-    let first_batch = record_batches.first().unwrap();
-    let record_batch =
-        arrow_select::concat::concat_batches(&first_batch.schema(), &record_batches).unwrap();
-
-    let mut columns = record_batch.columns().to_vec();
-    if let Some(sort_column) = sort_column {
-        let column = record_batch.column_by_name(sort_column).unwrap();
-        let indices = arrow_ord::sort::sort_to_indices(column, None, None).unwrap();
-        columns = columns
-            .iter()
-            .map(|column| arrow_select::take::take(column.as_ref(), &indices, None).unwrap())
-            .collect_vec();
-    }
-
-    expected_schema.assert_eq(&format!(
-        "{}",
-        record_batch.schema().fields().iter().format(",\n")
-    ));
-    expected_data.assert_eq(&format!(
-        "{}",
-        record_batch
-            .schema()
-            .fields()
-            .iter()
-            .zip_eq(columns)
-            .map(|(field, column)| {
-                if ignore_check_columns.contains(&field.name().as_str()) {
-                    format!("{}: (skipped)", field.name())
-                } else {
-                    format!("{}: {:?}", field.name(), column)
-                }
-            })
-            .format(",\n")
-    ));
-}
-
-/// An [`EncryptionManager`] backed by an in-memory KMS holding `table_key_id`.
-#[cfg(test)]
-pub(crate) fn make_encryption_manager(table_key_id: &str) -> Arc<EncryptionManager> {
-    let kms = MemoryKeyManagementClient::new();
-    kms.add_master_key(table_key_id).unwrap();
-    Arc::new(
-        EncryptionManager::builder()
-            .kms_client(Arc::new(kms) as Arc<dyn KeyManagementClient>)
-            .table_key_id(table_key_id)
-            .build(),
-    )
-}
-
-/// Build a table backed by the V3 encryption fixture and an in-memory KMS,
-/// so it has an [`EncryptionManager`](crate::encryption::EncryptionManager).
-///
-/// The fixture's snapshot references an encrypted manifest list; its bytes
-/// (the `manifest-list-v3-encrypted.avro` testdata, an encrypted empty list)
-/// are seeded into the in-memory `FileIO` at that path so callers can read
-/// the current snapshot's manifest list.
-pub async fn make_encrypted_table() -> Table {
-    let metadata_json = std::fs::read_to_string(format!(
-        "{}/testdata/table_metadata/TableMetadataV3ValidEncryption.json",
-        env!("CARGO_MANIFEST_DIR"),
-    ))
-    .unwrap();
-    let metadata: TableMetadata = serde_json::from_str(&metadata_json).unwrap();
-
-    let kms: Arc<dyn KeyManagementClient> = {
-        let k = MemoryKeyManagementClient::new();
-        k.add_master_key_bytes(
-            "master-1",
-            SensitiveBytes::new([
-                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
-                0x0e, 0x0f,
-            ]),
-        )
-        .unwrap();
-        Arc::new(k)
-    };
-
-    let file_io = FileIO::new_with_memory();
-
-    // Seed the encrypted (empty) manifest list at the path the snapshot references.
-    let manifest_list_bytes = std::fs::read(format!(
-        "{}/testdata/manifests_lists/manifest-list-v3-encrypted.avro",
-        env!("CARGO_MANIFEST_DIR"),
-    ))
-    .unwrap();
-    file_io
-        .new_output(metadata.current_snapshot().unwrap().manifest_list())
-        .unwrap()
-        .write(manifest_list_bytes.into())
-        .await
-        .unwrap();
-
-    Table::builder()
-        .metadata(metadata)
-        .metadata_location("memory:///table/metadata/v1.json")
-        .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-        .file_io(file_io)
-        .kms_client(kms)
-        .runtime(test_runtime())
-        .build()
-        .unwrap()
-}
+pub(crate) use encryption::{make_encrypted_table, make_encryption_manager};
+pub use record_batch::check_record_batches;
+pub use runtime::test_runtime;

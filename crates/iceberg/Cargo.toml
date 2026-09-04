@@ -31,6 +31,9 @@ repository = { workspace = true }
 
 [features]
 default = []
+# Exposes `iceberg::test_utils` for use by other crates' tests. Not public API;
+# enable it from `[dev-dependencies]` only.
+test-utils = ["dep:expect-test"]
 
 [dependencies]
 aes-gcm = { workspace = true }
@@ -54,7 +57,7 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 crc32fast = { workspace = true }
 derive_builder = { workspace = true }
-expect-test = { workspace = true }
+expect-test = { workspace = true, optional = true }
 fastnum = { workspace = true }
 flate2 = { workspace = true }
 fnv = { workspace = true }
