@@ -243,7 +243,7 @@ impl RestCatalogConfig {
         self.url_prefixed(&["namespaces", &ns.to_url_string(), "register"])
     }
 
-    fn table_endpoint(&self, table: &TableIdent) -> String {
+    pub(crate) fn table_endpoint(&self, table: &TableIdent) -> String {
         self.url_prefixed(&[
             "namespaces",
             &table.namespace.to_url_string(),
@@ -417,14 +417,14 @@ pub(crate) fn oauth_params_from_props(props: &HashMap<String, String>) -> HashMa
 }
 
 #[derive(Debug)]
-struct RestClient {
+pub(crate) struct RestClient {
     /// Carries the session the auth manager derived from the merged
     /// configuration, so every request below is authenticated.
-    http_client: HttpClient,
+    pub(crate) http_client: HttpClient,
     /// Runtime config is fetched from rest server and stored here.
     ///
     /// It could be different from the user config.
-    config: RestCatalogConfig,
+    pub(crate) config: RestCatalogConfig,
     /// Capabilities the server advertises (see [`RestSessionCatalog::supports_endpoint`]).
     endpoints: HashSet<Endpoint>,
 }
@@ -484,7 +484,7 @@ impl RestClient {
     }
 
     /// Sends `request`, authenticated by the client's session.
-    async fn query_catalog(&self, request: HttpRequest) -> Result<HttpResponse> {
+    pub(crate) async fn query_catalog(&self, request: HttpRequest) -> Result<HttpResponse> {
         self.http_client.query_catalog(request).await
     }
 
@@ -698,7 +698,7 @@ pub struct RestSessionCatalog {
     ///
     /// It could be different from the config fetched from the server and used at runtime.
     user_config: RestCatalogConfig,
-    client: OnceCell<RestClient>,
+    client: Arc<OnceCell<RestClient>>,
     /// Storage factory for creating FileIO instances.
     storage_factory: Option<Arc<dyn StorageFactory>>,
     runtime: Runtime,
@@ -708,7 +708,7 @@ pub struct RestSessionCatalog {
 
 impl RestSessionCatalog {
     /// Creates a `RestSessionCatalog` from a [`RestCatalogConfig`].
-    fn new(
+    pub(crate) fn new(
         config: RestCatalogConfig,
         auth_manager: Option<Box<dyn AuthManager>>,
         storage_factory: Option<Arc<dyn StorageFactory>>,
@@ -718,11 +718,41 @@ impl RestSessionCatalog {
         Self {
             auth_manager: auth_manager.map(Arc::from),
             user_config: config,
-            client: OnceCell::new(),
+            client: Arc::new(OnceCell::new()),
             storage_factory,
             runtime,
             kms_client,
         }
+    }
+
+    /// Same catalog identity with an empty HTTP client cache, for fire-and-forget
+    /// work (best-effort plan cancel on drop) that must not borrow `self`.
+    pub(crate) fn clone_uninitialized(&self) -> Self {
+        Self::new(
+            self.user_config.clone(),
+            self.auth_manager.clone(),
+            self.storage_factory.clone(),
+            self.runtime.clone(),
+            self.kms_client.clone(),
+        )
+    }
+
+    /// Shares the already-initialized HTTP client. Used when injecting this
+    /// catalog as a [`iceberg::scan::ScanPlanner`] so Auto/capability checks
+    /// do not repeat `GET /v1/config`.
+    pub(crate) fn clone_initialized(&self) -> Self {
+        Self {
+            auth_manager: self.auth_manager.clone(),
+            user_config: self.user_config.clone(),
+            client: Arc::clone(&self.client),
+            storage_factory: self.storage_factory.clone(),
+            runtime: self.runtime.clone(),
+            kms_client: self.kms_client.clone(),
+        }
+    }
+
+    pub(crate) fn runtime(&self) -> &Runtime {
+        &self.runtime
     }
 
     /// Sends a DELETE request for the given table, optionally requesting purge.
@@ -812,7 +842,7 @@ impl RestSessionCatalog {
     }
 
     /// Gets the [`RestClient`] from the catalog.
-    async fn client(&self) -> Result<&RestClient> {
+    pub(crate) async fn client(&self) -> Result<&RestClient> {
         self.client
             .get_or_try_init(|| async {
                 RestClient::init(&self.user_config, self.resolve_auth_manager()?).await
@@ -1195,7 +1225,8 @@ impl SessionCatalog for RestSessionCatalog {
             .identifier(table_ident.clone())
             .file_io(file_io)
             .metadata(response.metadata)
-            .runtime(self.runtime.clone());
+            .runtime(self.runtime.clone())
+            .scan_planner(Arc::new(self.clone_initialized()));
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
         }
@@ -1259,7 +1290,8 @@ impl SessionCatalog for RestSessionCatalog {
             .identifier(table_ident.clone())
             .file_io(file_io)
             .metadata(response.metadata)
-            .runtime(self.runtime.clone());
+            .runtime(self.runtime.clone())
+            .scan_planner(Arc::new(self.clone_initialized()));
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
         }
@@ -1398,7 +1430,8 @@ impl SessionCatalog for RestSessionCatalog {
             .file_io(file_io)
             .metadata(response.metadata)
             .metadata_location(metadata_location.clone())
-            .runtime(self.runtime.clone());
+            .runtime(self.runtime.clone())
+            .scan_planner(Arc::new(self.clone_initialized()));
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
         }
@@ -1478,7 +1511,8 @@ impl SessionCatalog for RestSessionCatalog {
             .file_io(file_io)
             .metadata(response.metadata)
             .metadata_location(response.metadata_location)
-            .runtime(self.runtime.clone());
+            .runtime(self.runtime.clone())
+            .scan_planner(Arc::new(self.clone_initialized()));
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
         }
