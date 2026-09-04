@@ -1015,7 +1015,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let tasks = Box::pin(futures::stream::iter(vec![task])) as FileScanTaskStream;
         let result = reader
             .read(tasks)
             .unwrap()
@@ -1114,7 +1114,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let tasks = Box::pin(futures::stream::iter(vec![task])) as FileScanTaskStream;
         let result: Result<Vec<RecordBatch>, _> =
             reader.read(tasks).unwrap().stream().try_collect().await;
 
