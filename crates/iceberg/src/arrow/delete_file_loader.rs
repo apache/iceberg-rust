@@ -124,16 +124,16 @@ impl DeleteFileLoader for BasicDeleteFileLoader {
     ) -> Result<ArrowRecordBatchStream> {
         let raw_batch_stream = self
             .parquet_to_batch_stream(
-                &task.file_path,
-                task.file_size_in_bytes,
-                task.key_metadata.as_deref(),
+                task.file_path(),
+                task.file_size_in_bytes(),
+                task.key_metadata(),
             )
             .await?;
 
         // For equality deletes, only evolve the equality_ids columns.
         // For positional deletes (equality_ids is None), use all field IDs.
-        let field_ids = match &task.equality_ids {
-            Some(ids) => ids.clone(),
+        let field_ids = match task.equality_ids() {
+            Some(ids) => ids.to_vec(),
             None => schema.field_id_to_name_map().keys().cloned().collect(),
         };
 
