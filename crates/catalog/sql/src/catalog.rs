@@ -78,52 +78,28 @@ static MAX_CONNECTIONS: u32 = 10; // Default the SQL pool to 10 connections if n
 static IDLE_TIMEOUT: u64 = 10; // Default the maximum idle timeout per connection to 10s before it is closed
 static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each connection to enabled prior to returning
 
-fn parse_pool_property<T>(
-    props: &HashMap<String, String>,
-    property: &'static str,
-    default: T,
-) -> Result<T>
+fn parse_pool_property<T>(value: &str) -> Result<T>
 where
     T: FromStr,
     T::Err: std::error::Error + Send + Sync + 'static,
 {
-    props.get(property).map_or(Ok(default), |value| {
-        value.parse().map_err(|error| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Failed to parse SQL catalog pool property",
-            )
-            .with_context("property", property)
-            .with_context("value", value)
-            .with_source(error)
-        })
+    value.parse().map_err(|error| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            "Failed to parse SQL catalog pool property",
+        )
+        .with_context("value", value)
+        .with_source(error)
     })
 }
 
 /// Builder for [`SqlCatalog`]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SqlCatalogBuilder {
-    uri: String,
-    warehouse_location: String,
-    sql_bind_style: SqlBindStyle,
     props: HashMap<String, String>,
     storage_factory: Option<Arc<dyn StorageFactory>>,
     kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
-}
-
-impl Default for SqlCatalogBuilder {
-    fn default() -> Self {
-        Self {
-            uri: String::new(),
-            warehouse_location: String::new(),
-            sql_bind_style: SqlBindStyle::DollarNumeric,
-            props: HashMap::new(),
-            storage_factory: None,
-            kms_client_factory: None,
-            runtime: None,
-        }
-    }
 }
 
 impl SqlCatalogBuilder {
@@ -132,7 +108,8 @@ impl SqlCatalogBuilder {
     /// If `SQL_CATALOG_PROP_URI` has a value set in `props` during `SqlCatalogBuilder::load`,
     /// that value takes precedence, and the value specified by this method will not be used.
     pub fn uri(mut self, uri: impl Into<String>) -> Self {
-        self.uri = uri.into();
+        self.props
+            .insert(SQL_CATALOG_PROP_URI.to_string(), uri.into());
         self
     }
 
@@ -141,7 +118,8 @@ impl SqlCatalogBuilder {
     /// If `SQL_CATALOG_PROP_WAREHOUSE` has a value set in `props` during `SqlCatalogBuilder::load`,
     /// that value takes precedence, and the value specified by this method will not be used.
     pub fn warehouse_location(mut self, location: impl Into<String>) -> Self {
-        self.warehouse_location = location.into();
+        self.props
+            .insert(SQL_CATALOG_PROP_WAREHOUSE.to_string(), location.into());
         self
     }
 
@@ -150,7 +128,10 @@ impl SqlCatalogBuilder {
     /// If `SQL_CATALOG_PROP_BIND_STYLE` has a value set in `props` during `SqlCatalogBuilder::load`,
     /// that value takes precedence, and the value specified by this method will not be used.
     pub fn sql_bind_style(mut self, sql_bind_style: SqlBindStyle) -> Self {
-        self.sql_bind_style = sql_bind_style;
+        self.props.insert(
+            SQL_CATALOG_PROP_BIND_STYLE.to_string(),
+            sql_bind_style.to_string(),
+        );
         self
     }
 
@@ -212,18 +193,7 @@ impl CatalogBuilder for SqlCatalogBuilder {
 
             let mut merged_props = self.props;
             merged_props.extend(props);
-            let mut catalog_properties = SqlCatalogProperties::from_properties(&merged_props)?;
-            if !merged_props.contains_key(SQL_CATALOG_PROP_URI) {
-                catalog_properties.uri = self.uri;
-            }
-            if !merged_props.contains_key(SQL_CATALOG_PROP_WAREHOUSE) {
-                catalog_properties.warehouse_location = self.warehouse_location;
-            }
-            if !merged_props.contains_key(SQL_CATALOG_PROP_BIND_STYLE)
-                && !merged_props.contains_key(SQL_CATALOG_PROP_BIND_STYLE_LEGACY)
-            {
-                catalog_properties.sql_bind_style = self.sql_bind_style;
-            }
+            let catalog_properties = SqlCatalogProperties::from_properties(&merged_props)?;
 
             let runtime = match self.runtime {
                 Some(rt) => rt,
@@ -303,6 +273,24 @@ pub(crate) struct SqlCatalogProperties {
         parse_with = parse_schema_version
     )]
     schema_version: Option<SchemaVersion>,
+    #[property(
+        key = "pool.max-connections",
+        default = MAX_CONNECTIONS,
+        parse_with = parse_pool_property
+    )]
+    max_connections: u32,
+    #[property(
+        key = "pool.idle-timeout",
+        default = IDLE_TIMEOUT,
+        parse_with = parse_pool_property
+    )]
+    idle_timeout: u64,
+    #[property(
+        key = "pool.test-before-acquire",
+        default = TEST_BEFORE_ACQUIRE,
+        parse_with = parse_pool_property
+    )]
+    test_before_acquire: bool,
 }
 
 #[derive(Debug)]
@@ -405,18 +393,14 @@ impl SqlCatalog {
             )
         })?;
         install_default_drivers();
-        let max_connections = parse_pool_property(&props, "pool.max-connections", MAX_CONNECTIONS)?;
-        let idle_timeout = parse_pool_property(&props, "pool.idle-timeout", IDLE_TIMEOUT)?;
-        let test_before_acquire =
-            parse_pool_property(&props, "pool.test-before-acquire", TEST_BEFORE_ACQUIRE)?;
         // Forward the complete property map so storage-backend keys reach FileIO.
         // Unrecognized keys are ignored by backends.
         let fileio = FileIOBuilder::new(factory).with_props(props).build();
 
         let pool = AnyPoolOptions::new()
-            .max_connections(max_connections)
-            .idle_timeout(Duration::from_secs(idle_timeout))
-            .test_before_acquire(test_before_acquire)
+            .max_connections(properties.max_connections)
+            .idle_timeout(Duration::from_secs(properties.idle_timeout))
+            .test_before_acquire(properties.test_before_acquire)
             .connect(&properties.uri)
             .await
             .map_err(from_sqlx_error)?;
@@ -1239,10 +1223,10 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::catalog::{
-        CATALOG_FIELD_RECORD_TYPE, CATALOG_TABLE_NAME, NAMESPACE_LOCATION_PROPERTY_KEY,
-        NAMESPACE_TABLE_NAME, SQL_CATALOG_PROP_BIND_STYLE, SQL_CATALOG_PROP_BIND_STYLE_LEGACY,
-        SQL_CATALOG_PROP_SCHEMA_VERSION, SQL_CATALOG_PROP_URI, SQL_CATALOG_PROP_WAREHOUSE,
-        SqlCatalogProperties,
+        CATALOG_FIELD_RECORD_TYPE, CATALOG_TABLE_NAME, IDLE_TIMEOUT, MAX_CONNECTIONS,
+        NAMESPACE_LOCATION_PROPERTY_KEY, NAMESPACE_TABLE_NAME, SQL_CATALOG_PROP_BIND_STYLE,
+        SQL_CATALOG_PROP_BIND_STYLE_LEGACY, SQL_CATALOG_PROP_SCHEMA_VERSION, SQL_CATALOG_PROP_URI,
+        SQL_CATALOG_PROP_WAREHOUSE, SqlCatalogProperties, TEST_BEFORE_ACQUIRE,
     };
     use crate::{SchemaVersion, SqlBindStyle, SqlCatalog, SqlCatalogBuilder};
 
@@ -1273,6 +1257,8 @@ mod tests {
                 "V1".to_string(),
             ),
             ("pool.max-connections".to_string(), "5".to_string()),
+            ("pool.idle-timeout".to_string(), "20".to_string()),
+            ("pool.test-before-acquire".to_string(), "false".to_string()),
         ]))
         .unwrap();
 
@@ -1280,6 +1266,9 @@ mod tests {
         assert_eq!(properties.warehouse_location, "/warehouse");
         assert_eq!(properties.sql_bind_style, SqlBindStyle::QMark);
         assert_eq!(properties.schema_version, Some(SchemaVersion::V1));
+        assert_eq!(properties.max_connections, 5);
+        assert_eq!(properties.idle_timeout, 20);
+        assert!(!properties.test_before_acquire);
     }
 
     #[test]
@@ -1290,6 +1279,9 @@ mod tests {
         assert_eq!(properties.warehouse_location, "");
         assert_eq!(properties.sql_bind_style, SqlBindStyle::DollarNumeric);
         assert_eq!(properties.schema_version, None);
+        assert_eq!(properties.max_connections, MAX_CONNECTIONS);
+        assert_eq!(properties.idle_timeout, IDLE_TIMEOUT);
+        assert_eq!(properties.test_before_acquire, TEST_BEFORE_ACQUIRE);
     }
 
     fn to_set<T: Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
