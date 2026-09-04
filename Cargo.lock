@@ -5119,6 +5119,7 @@ dependencies = [
  "opendal-layer-logging",
  "opendal-layer-retry",
  "opendal-layer-timeout",
+ "opendal-service-azblob",
  "opendal-service-azdls",
  "opendal-service-fs",
  "opendal-service-gcs",
@@ -5208,6 +5209,27 @@ checksum = "a704141924500f3803c05ed871b53305d2a2f11cb5ef20160c3ee688a1857f66"
 dependencies = [
  "opendal-core",
  "tokio",
+]
+
+[[package]]
+name = "opendal-service-azblob"
+version = "0.58.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3310fbbb48f111c6f590473c2cd15e1b7f8e384444b0d4e328f0464c864d767"
+dependencies = [
+ "base64 0.23.0",
+ "bytes",
+ "http 1.4.2",
+ "log",
+ "opendal-core",
+ "opendal-service-azure-common",
+ "quick-xml 0.41.0",
+ "reqsign-azure-storage",
+ "reqsign-core",
+ "reqsign-file-read-tokio",
+ "serde",
+ "sha2 0.11.0",
+ "uuid",
 ]
 
 [[package]]

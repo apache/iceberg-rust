@@ -2,6 +2,8 @@ pub mod iceberg_storage_opendal
 pub use iceberg_storage_opendal::AwsCredential
 pub use iceberg_storage_opendal::ProvideCredential
 pub enum iceberg_storage_opendal::OpenDalStorage
+pub iceberg_storage_opendal::OpenDalStorage::Azblob
+pub iceberg_storage_opendal::OpenDalStorage::Azblob::config: alloc::sync::Arc<opendal_service_azblob::config::AzblobConfig>
 pub iceberg_storage_opendal::OpenDalStorage::Azdls
 pub iceberg_storage_opendal::OpenDalStorage::Azdls::config: alloc::sync::Arc<opendal_service_azdls::config::AzdlsConfig>
 pub iceberg_storage_opendal::OpenDalStorage::Gcs
@@ -36,6 +38,7 @@ pub fn iceberg_storage_opendal::OpenDalStorage::serialize<__S>(&self, __serializ
 impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_opendal::OpenDalStorage
 pub fn iceberg_storage_opendal::OpenDalStorage::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub enum iceberg_storage_opendal::OpenDalStorageFactory
+pub iceberg_storage_opendal::OpenDalStorageFactory::Azblob
 pub iceberg_storage_opendal::OpenDalStorageFactory::Azdls
 pub iceberg_storage_opendal::OpenDalStorageFactory::Fs
 pub iceberg_storage_opendal::OpenDalStorageFactory::Gcs
