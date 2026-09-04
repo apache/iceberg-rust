@@ -74,7 +74,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
             record.name = Name::from(format!("r{}", field.id).as_str());
         }
 
-        if !field.required {
+        if !field.required && !is_avro_null(&field_schema) {
             field_schema = avro_optional(field_schema)?;
         }
 
@@ -126,7 +126,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
             record.name = Name::from(format!("r{}", list.element_field.id).as_str());
         }
 
-        if !list.element_field.required {
+        if !list.element_field.required && !is_avro_null(&field_schema) {
             field_schema = avro_optional(field_schema)?;
         }
 
@@ -147,7 +147,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
     ) -> Result<AvroSchemaOrField> {
         let key_field_schema = key_value.unwrap_left();
         let mut value_field_schema = value.unwrap_left();
-        if !map.value_field.required {
+        if !map.value_field.required && !is_avro_null(&value_field_schema) {
             value_field_schema = avro_optional(value_field_schema)?;
         }
 
@@ -222,6 +222,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
 
     fn primitive(&mut self, p: &PrimitiveType) -> Result<AvroSchemaOrField> {
         let avro_schema = match p {
+            PrimitiveType::Unknown => AvroSchema::Null,
             PrimitiveType::Boolean => AvroSchema::Boolean,
             PrimitiveType::Int => AvroSchema::Int,
             PrimitiveType::Long => AvroSchema::Long,
@@ -311,6 +312,10 @@ pub(crate) fn avro_decimal_schema(precision: usize, scale: usize) -> Result<Avro
 }
 
 fn avro_optional(avro_schema: AvroSchema) -> Result<AvroSchema> {
+    if is_avro_null(&avro_schema) {
+        return Ok(AvroSchema::Null);
+    }
+
     Ok(AvroSchema::Union(UnionSchema::new(vec![
         AvroSchema::Null,
         avro_schema,
@@ -322,6 +327,14 @@ fn is_avro_optional(avro_schema: &AvroSchema) -> bool {
         AvroSchema::Union(union) => union.is_nullable(),
         _ => false,
     }
+}
+
+fn is_avro_null(avro_schema: &AvroSchema) -> bool {
+    matches!(avro_schema, AvroSchema::Null)
+}
+
+fn unwrap_or_unknown(field_type: Option<Type>) -> Type {
+    field_type.unwrap_or(Type::Primitive(PrimitiveType::Unknown))
 }
 
 /// Post order avro schema visitor.
@@ -447,10 +460,10 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
             let field_id =
                 Self::get_element_id_from_attributes(&avro_field.custom_attributes, FIELD_ID_PROP)?;
 
-            let optional = is_avro_optional(&avro_field.schema);
+            let optional = is_avro_optional(&avro_field.schema) || is_avro_null(&avro_field.schema);
 
-            let mut field =
-                NestedField::new(field_id, &avro_field.name, field_type.unwrap(), !optional);
+            let field_type = unwrap_or_unknown(field_type);
+            let mut field = NestedField::new(field_id, &avro_field.name, field_type, !optional);
 
             if let Some(doc) = &avro_field.doc {
                 field = field.with_doc(doc);
@@ -482,7 +495,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
         }
 
         if options.len() == 1 {
-            Ok(Some(options.remove(0).unwrap()))
+            Ok(Some(unwrap_or_unknown(options.remove(0))))
         } else {
             Ok(Some(options.remove(1).unwrap()))
         }
@@ -490,10 +503,11 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
 
     fn array(&mut self, array: &ArraySchema, item: Option<Type>) -> Result<Self::T> {
         let element_field_id = Self::get_element_id_from_attributes(&array.attributes, ELEMENT_ID)?;
+        let item = unwrap_or_unknown(item);
         let element_field = NestedField::list_element(
             element_field_id,
-            item.unwrap(),
-            !is_avro_optional(&array.items),
+            item,
+            !is_avro_optional(&array.items) && !is_avro_null(&array.items),
         )
         .into();
         Ok(Some(Type::List(ListType { element_field })))
@@ -504,10 +518,11 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
         let key_field =
             NestedField::map_key_element(key_field_id, Type::Primitive(PrimitiveType::String));
         let value_field_id = Self::get_element_id_from_attributes(&map.attributes, VALUE_ID)?;
+        let value = unwrap_or_unknown(value);
         let value_field = NestedField::map_value_element(
             value_field_id,
-            value.unwrap(),
-            !is_avro_optional(&map.types),
+            value,
+            !is_avro_optional(&map.types) && !is_avro_null(&map.types),
         );
         Ok(Some(Type::Map(MapType {
             key_field: key_field.into(),
@@ -557,12 +572,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
                 "Can't convert avro map schema, missing key schema.",
             )
         })?;
-        let value = value.ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Can't convert avro map schema, missing value schema.",
-            )
-        })?;
+        let value = unwrap_or_unknown(value);
         let key_id = Self::get_element_id_from_attributes(
             &array.fields[0].custom_attributes,
             FIELD_ID_PROP,
@@ -575,7 +585,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
         let value_field = NestedField::map_value_element(
             value_id,
             value,
-            !is_avro_optional(&array.fields[1].schema),
+            !is_avro_optional(&array.fields[1].schema) && !is_avro_null(&array.fields[1].schema),
         );
         Ok(Some(Type::Map(MapType {
             key_field: key_field.into(),
@@ -657,6 +667,25 @@ mod tests {
         let converted_avro_converted_iceberg_schema =
             avro_schema_to_schema(&converted_avro_schema).unwrap();
         assert_eq!(iceberg_schema, converted_avro_converted_iceberg_schema);
+    }
+
+    #[test]
+    fn test_unknown_type_schema_conversion() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "empty", PrimitiveType::Unknown.into()).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let avro_schema = schema_to_avro_schema("table", &schema).unwrap();
+        let AvroSchema::Record(record) = &avro_schema else {
+            panic!("expected avro record schema");
+        };
+        assert!(is_avro_null(&record.fields[0].schema));
+        assert_eq!(record.fields[0].default, Some(Value::Null));
+
+        assert_eq!(schema, avro_schema_to_schema(&avro_schema).unwrap());
     }
 
     #[test]
