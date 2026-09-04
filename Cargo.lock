@@ -3834,6 +3834,7 @@ dependencies = [
  "futures",
  "http 1.5.0",
  "iceberg",
+ "iceberg-property-macro",
  "iceberg_test_utils",
  "itertools 0.13.0",
  "mockito",

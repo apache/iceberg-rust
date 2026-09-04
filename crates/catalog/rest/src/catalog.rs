@@ -31,6 +31,7 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, Runtime,
     SessionCatalog, SessionContext, TableCommit, TableCreation, TableIdent,
 };
+use iceberg_property_macro::Properties;
 use itertools::Itertools;
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, {self},
@@ -295,23 +296,23 @@ impl RestCatalogConfig {
             .unwrap_or(false)
     }
 
-    /// Merge the `RestCatalogConfig` with the a [`CatalogConfig`] (fetched from the REST server).
-    pub(crate) fn merge_with_config(mut self, mut config: CatalogConfig) -> Self {
-        if let Some(uri) = config.overrides.remove(REST_CATALOG_PROP_URI) {
-            self.uri = uri;
-        }
-
+    /// Merge the `RestCatalogConfig` with a [`CatalogConfig`] fetched from the REST server.
+    pub(crate) fn merge_with_config(mut self, config: CatalogConfig) -> Result<Self> {
         let mut props = config.defaults;
         props.extend(self.props);
-        // The builder moved the client warehouse off the props; restore it
-        // between defaults and overrides (default < client < override).
+        // Preserve the client values at their precedence level for configs created directly in
+        // this crate's tests as well as configs loaded from a raw property map.
+        props.insert(REST_CATALOG_PROP_URI.to_string(), self.uri);
         if let Some(warehouse) = &self.warehouse {
             props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse.clone());
         }
         props.extend(config.overrides);
 
+        let properties = RestCatalogProperties::from_properties(&props)?;
+        self.uri = properties.uri;
+        self.warehouse = properties.warehouse;
         self.props = props;
-        self
+        Ok(self)
     }
 }
 
@@ -459,7 +460,7 @@ impl RestClient {
             Some(advertised) if !advertised.is_empty() => advertised.iter().cloned().collect(),
             _ => crate::endpoint::DEFAULT_ENDPOINTS.clone(),
         };
-        let config = user_config.clone().merge_with_config(catalog_config);
+        let config = user_config.clone().merge_with_config(catalog_config)?;
         let http_client = http_client.update_with(&config)?;
         // The manager is handed an unauthenticated client: its own
         // requests must not be signed by the session it is deriving.
@@ -1492,24 +1493,18 @@ impl SessionCatalog for RestSessionCatalog {
 /// [`SessionContext`] with each [`SessionCatalog`] operation.
 #[derive(Debug)]
 pub struct RestSessionCatalogBuilder {
-    config: RestCatalogConfig,
+    client: Option<Client>,
     auth_manager: Option<Box<dyn AuthManager>>,
     storage_factory: Option<Arc<dyn StorageFactory>>,
     kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for RestSessionCatalogBuilder {
     fn default() -> Self {
         Self {
-            config: RestCatalogConfig {
-                name: None,
-                uri: "".to_string(),
-                warehouse: None,
-                props: HashMap::new(),
-                client: None,
-                default_client: Arc::new(OnceLock::new()),
-            },
+            client: None,
             auth_manager: None,
             storage_factory: None,
             kms_client_factory: None,
@@ -1521,7 +1516,7 @@ impl Default for RestSessionCatalogBuilder {
 impl RestSessionCatalogBuilder {
     /// Configures the catalog with a custom HTTP client.
     pub fn with_client(mut self, client: Client) -> Self {
-        self.config.client = Some(client);
+        self.client = Some(client);
         self
     }
 
@@ -1607,57 +1602,59 @@ impl RestSessionCatalogBuilder {
     /// The server configuration handshake, endpoint negotiation, and
     /// authentication sessions are initialized lazily on the first operation.
     pub fn load(
-        mut self,
+        self,
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<RestSessionCatalog>> + Send {
-        self.config.name = Some(name.into());
-
-        if props.contains_key(REST_CATALOG_PROP_URI) {
-            self.config.uri = props
-                .get(REST_CATALOG_PROP_URI)
-                .cloned()
-                .unwrap_or_default();
-        }
-
-        if props.contains_key(REST_CATALOG_PROP_WAREHOUSE) {
-            self.config.warehouse = props.get(REST_CATALOG_PROP_WAREHOUSE).cloned()
-        }
-
-        // Collect other remaining properties
-        self.config.props = props
-            .into_iter()
-            .filter(|(k, _)| k != REST_CATALOG_PROP_URI && k != REST_CATALOG_PROP_WAREHOUSE)
-            .collect();
+        let name = name.into();
 
         async move {
-            if self.config.name.is_none() {
-                Err(Error::new(
+            let catalog_properties = RestCatalogProperties::from_properties(&props)?;
+            if name.trim().is_empty() {
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name is required",
-                ))
-            } else if self.config.uri.is_empty() {
-                Err(Error::new(
+                ));
+            }
+            if catalog_properties.uri.is_empty() {
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog uri is required",
-                ))
-            } else {
-                let runtime = self.runtime.unwrap_or_else(Runtime::current);
-                let kms_client = match self.kms_client_factory {
-                    Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
-                    None => None,
-                };
-
-                Ok(RestSessionCatalog::new(
-                    self.config,
-                    self.auth_manager,
-                    self.storage_factory,
-                    runtime,
-                    kms_client,
-                ))
+                ));
             }
+
+            let runtime = self.runtime.unwrap_or_else(Runtime::current);
+            let kms_client = match self.kms_client_factory {
+                Some(factory) => Some(factory.create_kms_client(&props).await?),
+                None => None,
+            };
+            let config = RestCatalogConfig {
+                name: Some(name),
+                uri: catalog_properties.uri,
+                warehouse: catalog_properties.warehouse,
+                props,
+                client: self.client,
+                default_client: Arc::new(OnceLock::new()),
+            };
+
+            Ok(RestSessionCatalog::new(
+                config,
+                self.auth_manager,
+                self.storage_factory,
+                runtime,
+                kms_client,
+            ))
         }
     }
+}
+
+/// REST catalog properties parsed from a catalog property map.
+#[derive(Debug, Properties)]
+pub(crate) struct RestCatalogProperties {
+    #[property(key = REST_CATALOG_PROP_URI, default = "")]
+    uri: String,
+    #[property(key = REST_CATALOG_PROP_WAREHOUSE, default = None)]
+    warehouse: Option<String>,
 }
 
 #[cfg(test)]
@@ -1682,6 +1679,33 @@ mod tests {
     use super::*;
     use crate::auth::AuthSession;
     use crate::request::HttpRequest;
+
+    #[test]
+    fn test_catalog_properties() {
+        let properties = RestCatalogProperties::from_properties(&HashMap::from([
+            (
+                REST_CATALOG_PROP_URI.to_string(),
+                "http://localhost:8181".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_WAREHOUSE.to_string(),
+                "s3://warehouse".to_string(),
+            ),
+            ("token".to_string(), "secret".to_string()),
+        ]))
+        .unwrap();
+
+        assert_eq!(properties.uri, "http://localhost:8181");
+        assert_eq!(properties.warehouse.as_deref(), Some("s3://warehouse"));
+    }
+
+    #[test]
+    fn test_catalog_properties_defaults() {
+        let properties = RestCatalogProperties::from_properties(&HashMap::new()).unwrap();
+
+        assert_eq!(properties.uri, "");
+        assert_eq!(properties.warehouse, None);
+    }
 
     fn test_catalog(config: RestCatalogConfig) -> RestSessionCatalog {
         RestSessionCatalog::new(config, None, None, Runtime::current(), None)
@@ -2676,7 +2700,8 @@ mod tests {
             Runtime::current(),
             None,
         );
-        catalog.client().await.unwrap();
+        let client = catalog.client().await.unwrap();
+        assert_eq!(client.config.warehouse.as_deref(), Some("client-wh"));
         config_mock.assert_async().await;
         let props = captured.lock().await.clone().unwrap();
         assert_eq!(
@@ -2708,7 +2733,8 @@ mod tests {
             Runtime::current(),
             None,
         );
-        catalog.client().await.unwrap();
+        let client = catalog.client().await.unwrap();
+        assert_eq!(client.config.warehouse.as_deref(), Some("override-wh"));
         config_mock.assert_async().await;
         let props = captured.lock().await.clone().unwrap();
         assert_eq!(
@@ -4326,6 +4352,10 @@ mod tests {
                         REST_CATALOG_PROP_URI.to_string(),
                         "http://localhost:8080".to_string(),
                     ),
+                    (
+                        REST_CATALOG_PROP_WAREHOUSE.to_string(),
+                        "s3://warehouse".to_string(),
+                    ),
                     ("a".to_string(), "b".to_string()),
                 ]),
             )
@@ -4337,11 +4367,18 @@ mod tests {
         let catalog_config = &catalog.inner.user_config;
         assert_eq!(catalog_config.name.as_deref(), Some("test"));
         assert_eq!(catalog_config.uri, "http://localhost:8080");
-        assert_eq!(catalog_config.warehouse, None);
+        assert_eq!(catalog_config.warehouse.as_deref(), Some("s3://warehouse"));
         assert!(catalog_config.client.is_some());
 
         assert_eq!(catalog_config.props.get("a"), Some(&"b".to_string()));
-        assert!(!catalog_config.props.contains_key(REST_CATALOG_PROP_URI));
+        assert_eq!(
+            catalog_config.props.get(REST_CATALOG_PROP_URI),
+            Some(&"http://localhost:8080".to_string())
+        );
+        assert_eq!(
+            catalog_config.props.get(REST_CATALOG_PROP_WAREHOUSE),
+            Some(&"s3://warehouse".to_string())
+        );
     }
 
     #[tokio::test]
@@ -4363,6 +4400,23 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
             assert_eq!(err.message(), "Catalog uri is required");
         }
+    }
+
+    #[tokio::test]
+    async fn test_create_rest_catalog_empty_name() {
+        let error = RestCatalogBuilder::default()
+            .load(
+                "",
+                HashMap::from([(
+                    REST_CATALOG_PROP_URI.to_string(),
+                    "http://localhost:8080".to_string(),
+                )]),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert_eq!(error.message(), "Catalog name is required");
     }
 
     #[tokio::test]
@@ -4393,9 +4447,12 @@ mod tests {
         // The default builder sets no client (only `with_client` does).
         assert!(catalog_config.client.is_none());
 
-        // `uri` is consumed into its own field; other props are retained.
+        // The complete raw property map remains available to downstream consumers.
         assert_eq!(catalog_config.props.get("a"), Some(&"b".to_string()));
-        assert!(!catalog_config.props.contains_key(REST_CATALOG_PROP_URI));
+        assert_eq!(
+            catalog_config.props.get(REST_CATALOG_PROP_URI),
+            Some(&"http://localhost:8080".to_string())
+        );
     }
 
     #[tokio::test]
