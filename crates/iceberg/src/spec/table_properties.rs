@@ -284,6 +284,24 @@ pub struct TableProperties {
         getter
     )]
     parquet_dict_size_bytes: usize,
+    /// Parquet bloom filter toggles, keyed by column name.
+    #[property(
+        prefix = Self::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_ENABLED_PREFIX,
+        getter
+    )]
+    parquet_bloom_filter_column_enabled: HashMap<String, bool>,
+    /// Parquet bloom filter false-positive probabilities, keyed by column name.
+    #[property(
+        prefix = Self::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_FPP_PREFIX,
+        getter
+    )]
+    parquet_bloom_filter_column_fpp: HashMap<String, f64>,
+    /// Parquet bloom filter distinct-value estimates, keyed by column name.
+    #[property(
+        prefix = Self::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_NDV_PREFIX,
+        getter
+    )]
+    parquet_bloom_filter_column_ndv: HashMap<String, u64>,
     /// The master key id used to encrypt this table's manifest list and data
     /// files. `None` if `encryption.key-id` is not set.
     #[property(
@@ -529,6 +547,21 @@ impl TableProperties<'_> {
     pub const PROPERTY_PARQUET_DICT_SIZE_BYTES: &'static str = "write.parquet.dict-size-bytes";
     /// Default Parquet dictionary page size in bytes.
     pub const PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT: usize = 2 * 1024 * 1024;
+
+    /// Prefix for per-column Parquet bloom filter toggles, suffixed with the
+    /// column name, e.g. `write.parquet.bloom-filter-enabled.column.id`.
+    pub const PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_ENABLED_PREFIX: &'static str =
+        "write.parquet.bloom-filter-enabled.column.";
+
+    /// Prefix for per-column Parquet bloom filter false-positive probabilities.
+    pub const PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_FPP_PREFIX: &'static str =
+        "write.parquet.bloom-filter-fpp.column.";
+    /// Default false-positive probability for an enabled column.
+    pub const PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_FPP_DEFAULT: f64 = 0.01;
+
+    /// Prefix for per-column Parquet bloom filter distinct-value estimates.
+    pub const PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_NDV_PREFIX: &'static str =
+        "write.parquet.bloom-filter-ndv.column.";
 
     /// Property key for the master key id used to encrypt the table's manifest
     /// list and data files as defined in <https://iceberg.apache.org/docs/nightly/encryption/>.
