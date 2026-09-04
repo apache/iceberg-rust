@@ -222,6 +222,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * refactor(auth) Emphasize AuthManagers aren't shared between catalogs by @DerGut in https://github.com/apache/iceberg-rust/pull/3086
 * fix(partition): Align DateTime Transform to Java's Implementation by @Kurtiscwright in https://github.com/apache/iceberg-rust/pull/3022
 * feat(scan): [3/N] read and apply V3 deletion vectors by @mbutrovich in https://github.com/apache/iceberg-rust/pull/3035
+* fix: Address merge conflicts raising Clippy issues (#3137) by @dannycjones in https://github.com/apache/iceberg-rust/pull#3146
 
 ## [v0.10.1] - 2026-07-28
 
