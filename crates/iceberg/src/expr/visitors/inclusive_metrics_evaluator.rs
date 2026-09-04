@@ -455,33 +455,31 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
             return ROWS_MIGHT_MATCH;
         }
 
-        // Narrow the set against each bound, matching Java / PyIceberg.
-        let mut filtered_literals = literals.clone();
+        let lower_bound = self
+            .lower_bound(field_id)
+            .map(|bound| Self::promote_bound(bound, reference));
+        let upper_bound = self
+            .upper_bound(field_id)
+            .map(|bound| Self::promote_bound(bound, reference));
 
-        if let Some(lower_bound) = self.lower_bound(field_id) {
-            let lower_bound = &*Self::promote_bound(lower_bound, reference);
-            if lower_bound.is_nan() {
-                // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
-                return ROWS_MIGHT_MATCH;
-            }
-
-            filtered_literals.retain(|datum| datum.ge(lower_bound));
-            if filtered_literals.is_empty() {
-                return ROWS_CANNOT_MATCH;
-            }
+        if lower_bound.as_ref().is_some_and(|bound| bound.is_nan())
+            || upper_bound.as_ref().is_some_and(|bound| bound.is_nan())
+        {
+            // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
+            return ROWS_MIGHT_MATCH;
         }
 
-        if let Some(upper_bound) = self.upper_bound(field_id) {
-            let upper_bound = &*Self::promote_bound(upper_bound, reference);
-            if upper_bound.is_nan() {
-                // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
-                return ROWS_MIGHT_MATCH;
-            }
+        let any_literal_in_bounds = match (lower_bound.as_deref(), upper_bound.as_deref()) {
+            (Some(lower), Some(upper)) => literals
+                .iter()
+                .any(|datum| datum.ge(lower) && datum.le(upper)),
+            (Some(lower), None) => literals.iter().any(|datum| datum.ge(lower)),
+            (None, Some(upper)) => literals.iter().any(|datum| datum.le(upper)),
+            (None, None) => true,
+        };
 
-            filtered_literals.retain(|datum| datum.le(upper_bound));
-            if filtered_literals.is_empty() {
-                return ROWS_CANNOT_MATCH;
-            }
+        if !any_literal_in_bounds {
+            return ROWS_CANNOT_MATCH;
         }
 
         ROWS_MIGHT_MATCH
