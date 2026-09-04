@@ -501,18 +501,7 @@ mod _serde {
                 .map(|partition| {
                     let partition_type =
                         partition_type(value.partition_spec.as_deref(), &value.schema)?;
-                    let partition = partition.try_into(&partition_type).map_err(|err| {
-                        if value.partition_spec.is_none() {
-                            Error::new(
-                                ErrorKind::DataInvalid,
-                                "Non-empty FileScanTask partition requires a partition spec",
-                            )
-                            .with_source(err)
-                        } else {
-                            err
-                        }
-                    })?;
-                    match partition {
+                    match partition.try_into(&partition_type)? {
                         Some(Literal::Struct(partition)) => Ok(partition),
                         _ => Err(Error::new(
                             ErrorKind::DataInvalid,
@@ -522,28 +511,26 @@ mod _serde {
                 })
                 .transpose()?;
 
-            let task = Self {
-                file_size_in_bytes: value.file_size_in_bytes,
-                start: value.start,
-                length: value.length,
-                record_count: value.record_count,
-                first_row_id: value.first_row_id,
-                data_sequence_number: value.data_sequence_number,
-                data_file_path: value.data_file_path,
-                data_file_format: value.data_file_format,
-                schema: value.schema,
-                project_field_ids: value.project_field_ids,
-                predicate: value.predicate,
-                deletes: value.deletes,
-                partition,
-                partition_spec: value.partition_spec,
-                name_mapping: value.name_mapping,
-                unified_partition_type: value.unified_partition_type,
-                case_sensitive: value.case_sensitive,
-                key_metadata: value.key_metadata,
-            };
-            task.validate()?;
-            Ok(task)
+            Self::builder()
+                .with_file_size_in_bytes(value.file_size_in_bytes)
+                .with_start(value.start)
+                .with_length(value.length)
+                .with_record_count(value.record_count)
+                .with_first_row_id(value.first_row_id)
+                .with_data_sequence_number(value.data_sequence_number)
+                .with_data_file_path(value.data_file_path)
+                .with_data_file_format(value.data_file_format)
+                .with_schema(value.schema)
+                .with_project_field_ids(value.project_field_ids)
+                .with_predicate(value.predicate)
+                .with_deletes(value.deletes)
+                .with_partition(partition)
+                .with_partition_spec(value.partition_spec)
+                .with_name_mapping(value.name_mapping)
+                .with_unified_partition_type(value.unified_partition_type)
+                .with_case_sensitive(value.case_sensitive)
+                .with_key_metadata(value.key_metadata)
+                .build()
         }
     }
 }
