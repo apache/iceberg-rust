@@ -203,14 +203,14 @@ impl DeleteFilter {
             }
 
             let Some(predicate) = self
-                .get_equality_delete_predicate_for_delete_file_path(&delete.file_path)
+                .get_equality_delete_predicate_for_delete_file_path(delete.file_path())
                 .await
             else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!(
                         "Missing predicate for equality delete file '{}'",
-                        delete.file_path
+                        delete.file_path()
                     ),
                 ));
             };
@@ -274,7 +274,7 @@ impl DeleteFilter {
 }
 
 pub(crate) fn is_equality_delete(f: &FileScanTaskDeleteFile) -> bool {
-    matches!(f.file_type, DataContentType::EqualityDeletes)
+    matches!(f.file_type(), DataContentType::EqualityDeletes)
 }
 
 #[cfg(test)]
