@@ -540,8 +540,7 @@ mod _serde {
 }
 
 impl FileScanTaskDeleteFile {
-    /// Returns whether this delete file is a V3 deletion vector stored in Puffin.
-    pub fn is_deletion_vector(&self) -> bool {
+    fn is_deletion_vector(&self) -> bool {
         self.file_type == DataContentType::PositionDeletes
             && self.file_format == DataFileFormat::Puffin
     }
