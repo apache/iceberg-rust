@@ -565,7 +565,10 @@ impl FileScanTaskDeleteFile {
             None => {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    format!("deletion vector {} is missing content_offset", self.file_path),
+                    format!(
+                        "deletion vector {} is missing content_offset",
+                        self.file_path
+                    ),
                 ));
             }
             Some(offset) if offset < 0 => {
