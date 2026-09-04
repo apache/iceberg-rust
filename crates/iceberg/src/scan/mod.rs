@@ -3613,7 +3613,7 @@ pub mod tests {
             "positional delete file should be planned into the task"
         );
         assert_eq!(
-            tasks[0].deletes()[0].file_type,
+            tasks[0].deletes()[0].file_type(),
             DataContentType::PositionDeletes
         );
 

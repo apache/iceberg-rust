@@ -1310,21 +1310,24 @@ pub fn iceberg::scan::FileScanTask::serialize<__S>(&self, __serializer: __S) -> 
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::scan::FileScanTaskDeleteFile
-pub iceberg::scan::FileScanTaskDeleteFile::content_offset: core::option::Option<i64>
-pub iceberg::scan::FileScanTaskDeleteFile::content_size_in_bytes: core::option::Option<i64>
-pub iceberg::scan::FileScanTaskDeleteFile::equality_ids: core::option::Option<alloc::vec::Vec<i32>>
-pub iceberg::scan::FileScanTaskDeleteFile::file_format: iceberg::spec::DataFileFormat
-pub iceberg::scan::FileScanTaskDeleteFile::file_path: alloc::string::String
-pub iceberg::scan::FileScanTaskDeleteFile::file_size_in_bytes: u64
-pub iceberg::scan::FileScanTaskDeleteFile::file_type: iceberg::spec::DataContentType
-pub iceberg::scan::FileScanTaskDeleteFile::key_metadata: core::option::Option<alloc::boxed::Box<[u8]>>
-pub iceberg::scan::FileScanTaskDeleteFile::partition_spec_id: i32
-pub iceberg::scan::FileScanTaskDeleteFile::record_count: core::option::Option<u64>
-pub iceberg::scan::FileScanTaskDeleteFile::referenced_data_file: core::option::Option<alloc::string::String>
+impl iceberg::scan::FileScanTaskDeleteFile
+pub fn iceberg::scan::FileScanTaskDeleteFile::content_offset(&self) -> core::option::Option<i64>
+pub fn iceberg::scan::FileScanTaskDeleteFile::content_size_in_bytes(&self) -> core::option::Option<i64>
+pub fn iceberg::scan::FileScanTaskDeleteFile::equality_ids(&self) -> core::option::Option<&[i32]>
+pub fn iceberg::scan::FileScanTaskDeleteFile::file_format(&self) -> iceberg::spec::DataFileFormat
+pub fn iceberg::scan::FileScanTaskDeleteFile::file_path(&self) -> &str
+pub fn iceberg::scan::FileScanTaskDeleteFile::file_size_in_bytes(&self) -> u64
+pub fn iceberg::scan::FileScanTaskDeleteFile::file_type(&self) -> iceberg::spec::DataContentType
+pub fn iceberg::scan::FileScanTaskDeleteFile::key_metadata(&self) -> core::option::Option<&[u8]>
+pub fn iceberg::scan::FileScanTaskDeleteFile::partition_spec_id(&self) -> i32
+pub fn iceberg::scan::FileScanTaskDeleteFile::record_count(&self) -> core::option::Option<u64>
+pub fn iceberg::scan::FileScanTaskDeleteFile::referenced_data_file(&self) -> core::option::Option<&str>
 impl core::clone::Clone for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::clone(&self) -> iceberg::scan::FileScanTaskDeleteFile
 impl core::cmp::PartialEq for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::eq(&self, other: &iceberg::scan::FileScanTaskDeleteFile) -> bool
+impl core::convert::From<iceberg::scan::FileScanTaskDeleteFile> for iceberg::Result<iceberg::scan::FileScanTaskDeleteFile>
+pub fn iceberg::Result<iceberg::scan::FileScanTaskDeleteFile>::from(task: iceberg::scan::FileScanTaskDeleteFile) -> Self
 impl core::fmt::Debug for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTaskDeleteFile

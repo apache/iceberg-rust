@@ -214,31 +214,9 @@ impl PopulatedDeleteFileIndex {
                     // A deletion vector is a position delete stored as a Puffin blob. The file
                     // format is what distinguishes it from a position delete parquet file.
                     if data_file.file_format() == DataFileFormat::Puffin {
-                        // The spec requires referenced_data_file, content_offset and
-                        // content_size_in_bytes on a deletion vector, so a missing one is a
-                        // malformed manifest entry, not an ordinary position delete to fall back
-                        // on.
-                        let Some(path) = data_file.referenced_data_file() else {
-                            return Err(Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
-                                    "deletion vector {} is missing referenced_data_file",
-                                    arc_ctx.manifest_entry.file_path()
-                                ),
-                            ));
-                        };
-
-                        if data_file.content_offset().is_none()
-                            || data_file.content_size_in_bytes().is_none()
-                        {
-                            return Err(Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
-                                    "deletion vector {} is missing content_offset or content_size_in_bytes",
-                                    arc_ctx.manifest_entry.file_path()
-                                ),
-                            ));
-                        }
+                        let path = data_file
+                            .referenced_data_file()
+                            .expect("validated deletion vector must have referenced_data_file");
 
                         if let Some(existing) =
                             dvs_by_referenced_data_file.insert(path.clone(), arc_ctx)
@@ -455,7 +433,7 @@ mod tests {
             .unwrap();
         let actual_paths_to_apply_for_seq_4: Vec<String> = delete_files_to_apply_for_seq_4
             .into_iter()
-            .map(|file| file.file_path)
+            .map(|file| file.file_path().to_string())
             .collect();
 
         assert_eq!(
@@ -469,7 +447,7 @@ mod tests {
             .unwrap();
         let actual_paths_to_apply_for_seq_5: Vec<String> = delete_files_to_apply_for_seq_5
             .into_iter()
-            .map(|file| file.file_path)
+            .map(|file| file.file_path().to_string())
             .collect();
         assert_eq!(
             actual_paths_to_apply_for_seq_5,
@@ -482,7 +460,7 @@ mod tests {
             .unwrap();
         let actual_paths_to_apply_for_seq_6: Vec<String> = delete_files_to_apply_for_seq_6
             .into_iter()
-            .map(|file| file.file_path)
+            .map(|file| file.file_path().to_string())
             .collect();
         assert_eq!(
             actual_paths_to_apply_for_seq_6,
@@ -499,7 +477,7 @@ mod tests {
         let actual_paths_to_apply_for_partitioned_file: Vec<String> =
             delete_files_to_apply_for_partitioned_file
                 .into_iter()
-                .map(|file| file.file_path)
+                .map(|file| file.file_path().to_string())
                 .collect();
         assert_eq!(
             actual_paths_to_apply_for_partitioned_file,
@@ -554,7 +532,7 @@ mod tests {
             .unwrap();
         let actual_paths_to_apply_for_seq_4: Vec<String> = delete_files_to_apply_for_seq_4
             .into_iter()
-            .map(|file| file.file_path)
+            .map(|file| file.file_path().to_string())
             .collect();
 
         assert_eq!(
@@ -568,7 +546,7 @@ mod tests {
             .unwrap();
         let actual_paths_to_apply_for_seq_5: Vec<String> = delete_files_to_apply_for_seq_5
             .into_iter()
-            .map(|file| file.file_path)
+            .map(|file| file.file_path().to_string())
             .collect();
         assert_eq!(
             actual_paths_to_apply_for_seq_5,
@@ -581,7 +559,7 @@ mod tests {
             .unwrap();
         let actual_paths_to_apply_for_seq_6: Vec<String> = delete_files_to_apply_for_seq_6
             .into_iter()
-            .map(|file| file.file_path)
+            .map(|file| file.file_path().to_string())
             .collect();
         assert_eq!(
             actual_paths_to_apply_for_seq_6,
@@ -597,7 +575,7 @@ mod tests {
         let actual_paths_to_apply_for_different_partition: Vec<String> =
             delete_files_to_apply_for_different_partition
                 .into_iter()
-                .map(|file| file.file_path)
+                .map(|file| file.file_path().to_string())
                 .collect();
         assert!(actual_paths_to_apply_for_different_partition.is_empty());
 
@@ -609,7 +587,7 @@ mod tests {
         let actual_paths_to_apply_for_different_spec: Vec<String> =
             delete_files_to_apply_for_different_spec
                 .into_iter()
-                .map(|file| file.file_path)
+                .map(|file| file.file_path().to_string())
                 .collect();
         assert!(actual_paths_to_apply_for_different_spec.is_empty());
     }
@@ -630,7 +608,7 @@ mod tests {
             .get_deletes_for_data_file(&data_file_a, Some(0))
             .unwrap();
         assert_eq!(deletes_for_a.len(), 1);
-        assert_eq!(deletes_for_a[0].file_path, pos_delete.file_path());
+        assert_eq!(deletes_for_a[0].file_path(), pos_delete.file_path());
 
         // The delete references data file A, so it must not apply to data file B
         // even though B shares A's partition.
@@ -798,7 +776,7 @@ mod tests {
             .get_deletes_for_data_file(&data_file, Some(0))
             .unwrap()
             .into_iter()
-            .map(|delete| delete.file_path)
+            .map(|delete| delete.file_path().to_string())
             .collect();
         actual_paths.sort();
 
@@ -835,7 +813,7 @@ mod tests {
             .get_deletes_for_data_file(&data_file, Some(0))
             .unwrap()
             .into_iter()
-            .map(|delete| delete.file_path)
+            .map(|delete| delete.file_path().to_string())
             .collect();
         actual_paths.sort();
 
@@ -874,7 +852,10 @@ mod tests {
             .get_deletes_for_data_file(&data_file, Some(0))
             .unwrap();
         assert_eq!(deletes_for_referenced.len(), 1);
-        assert_eq!(deletes_for_referenced[0].file_path, pos_delete.file_path());
+        assert_eq!(
+            deletes_for_referenced[0].file_path(),
+            pos_delete.file_path()
+        );
 
         assert!(
             index
@@ -978,12 +959,12 @@ mod tests {
         };
 
         let task: FileScanTaskDeleteFile = (&ctx).into();
-        assert_eq!(task.file_type, DataContentType::PositionDeletes);
-        assert_eq!(task.content_offset, Some(4));
-        assert_eq!(task.content_size_in_bytes, Some(40));
-        assert_eq!(task.record_count, Some(3));
+        assert_eq!(task.file_type(), DataContentType::PositionDeletes);
+        assert_eq!(task.content_offset(), Some(4));
+        assert_eq!(task.content_size_in_bytes(), Some(40));
+        assert_eq!(task.record_count(), Some(3));
         assert_eq!(
-            task.referenced_data_file.as_deref(),
+            task.referenced_data_file(),
             Some("s3://bucket/data/part-0.parquet")
         );
     }
@@ -1014,7 +995,7 @@ mod tests {
             .get_deletes_for_data_file(&data_file, Some(0))
             .unwrap()
             .into_iter()
-            .map(|f| f.file_path)
+            .map(|f| f.file_path().to_string())
             .collect();
 
         // Only the deletion vector applies; the partition-scoped position delete file, which
@@ -1129,7 +1110,7 @@ mod tests {
             .get_deletes_for_data_file(&data_file, Some(0))
             .unwrap()
             .into_iter()
-            .map(|f| f.file_path)
+            .map(|f| f.file_path().to_string())
             .collect();
 
         // Only the deletion vector applies; the path-scoped position delete file, which would
@@ -1164,7 +1145,7 @@ mod tests {
             .get_deletes_for_data_file(&data_file, Some(0))
             .unwrap()
             .into_iter()
-            .map(|f| f.file_path)
+            .map(|f| f.file_path().to_string())
             .collect();
         applied.sort();
 
@@ -1175,56 +1156,39 @@ mod tests {
     }
 
     #[test]
-    fn test_deletion_vector_missing_referenced_data_file_is_rejected() {
-        let malformed_dv = DataFileBuilder::default()
-            .file_path("deletes.puffin".to_string())
-            .file_format(DataFileFormat::Puffin)
-            .content(DataContentType::PositionDeletes)
-            .record_count(1)
-            .content_offset(Some(4))
-            .content_size_in_bytes(Some(40))
-            .partition(Struct::empty())
-            .partition_spec_id(0)
-            .file_size_in_bytes(60)
+    fn test_deletion_vector_builder_rejects_missing_referenced_data_file() {
+        let err = FileScanTaskDeleteFile::builder()
+            .with_file_path("deletes.puffin".to_string())
+            .with_file_size_in_bytes(60)
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Puffin)
+            .with_partition_spec_id(0)
+            .with_content_offset(Some(4))
+            .with_content_size_in_bytes(Some(40))
+            .with_record_count(Some(1))
             .build()
-            .unwrap();
+            .unwrap_err();
 
-        let contexts = vec![DeleteFileContext {
-            manifest_entry: build_added_manifest_entry(5, &malformed_dv).into(),
-            partition_spec_id: 0,
-        }];
-
-        let err = PopulatedDeleteFileIndex::new(contexts).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.message().contains("missing referenced_data_file"));
     }
 
     #[test]
-    fn test_deletion_vector_missing_coordinates_is_rejected() {
-        let malformed_dv = DataFileBuilder::default()
-            .file_path("deletes.puffin".to_string())
-            .file_format(DataFileFormat::Puffin)
-            .content(DataContentType::PositionDeletes)
-            .record_count(1)
-            .referenced_data_file(Some("data.parquet".to_string()))
-            .content_size_in_bytes(Some(40))
-            .partition(Struct::empty())
-            .partition_spec_id(0)
-            .file_size_in_bytes(60)
+    fn test_deletion_vector_builder_rejects_missing_coordinates() {
+        let err = FileScanTaskDeleteFile::builder()
+            .with_file_path("deletes.puffin".to_string())
+            .with_file_size_in_bytes(60)
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Puffin)
+            .with_partition_spec_id(0)
+            .with_referenced_data_file(Some("data.parquet".to_string()))
+            .with_content_size_in_bytes(Some(40))
+            .with_record_count(Some(1))
             .build()
-            .unwrap();
+            .unwrap_err();
 
-        let contexts = vec![DeleteFileContext {
-            manifest_entry: build_added_manifest_entry(5, &malformed_dv).into(),
-            partition_spec_id: 0,
-        }];
-
-        let err = PopulatedDeleteFileIndex::new(contexts).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(
-            err.message()
-                .contains("missing content_offset or content_size_in_bytes")
-        );
+        assert!(err.message().contains("missing content_offset"));
     }
 
     #[test]
