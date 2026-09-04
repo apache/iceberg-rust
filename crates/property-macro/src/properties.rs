@@ -24,20 +24,20 @@ use syn::{
     Ident, Lit, Path, PathArguments, Token, Type,
 };
 
-struct PropertyField {
-    ident: Ident,
-    ty: Type,
+pub(crate) struct PropertyField {
+    pub(crate) ident: Ident,
+    pub(crate) ty: Type,
     key: Option<Expr>,
     additional_keys: Option<Vec<Expr>>,
     prefix: Option<Expr>,
-    nested: bool,
+    pub(crate) nested: bool,
     default: Option<Expr>,
     parse_with: Option<Path>,
     parse_properties_with: Option<Path>,
     option_inner_type: Option<Type>,
     map_value_type: Option<Type>,
-    public_getter: bool,
-    doc_attributes: Vec<Attribute>,
+    pub(crate) public_getter: bool,
+    pub(crate) doc_attributes: Vec<Attribute>,
 }
 
 enum PropertyOption {
@@ -52,7 +52,7 @@ enum PropertyOption {
 }
 
 #[derive(Default)]
-struct PropertyOptions {
+pub(crate) struct PropertyOptions {
     key: Option<Expr>,
     additional_keys: Option<Vec<Expr>>,
     prefix: Option<Expr>,
@@ -143,7 +143,7 @@ pub(crate) fn expand_properties(input: DeriveInput) -> syn::Result<TokenStream2>
     })
 }
 
-fn parse_property_field(
+pub(crate) fn parse_property_field(
     field: &Field,
     property_options: PropertyOptions,
 ) -> syn::Result<PropertyField> {
@@ -244,7 +244,7 @@ fn parse_property_field(
     })
 }
 
-fn property_options(field: &Field) -> syn::Result<PropertyOptions> {
+pub(crate) fn property_options(field: &Field) -> syn::Result<PropertyOptions> {
     let Some(attribute) = find_attribute(&field.attrs, "property")? else {
         return Err(Error::new_spanned(
             field,
@@ -394,9 +394,27 @@ fn find_attribute<'a>(
 
 fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
     let ident = &field.ident;
+    let parse = parse_field_value(field, ParseTarget::Owned)?;
+    Ok(quote!(#ident: #parse))
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ParseTarget {
+    Owned,
+    View,
+}
+
+pub(crate) fn parse_field_value(
+    field: &PropertyField,
+    target: ParseTarget,
+) -> syn::Result<TokenStream2> {
     if field.nested {
         let ty = &field.ty;
-        return Ok(quote!(#ident: <#ty>::from_properties(properties)?));
+        let constructor = match target {
+            ParseTarget::Owned => quote!(<#ty>::from_properties(properties)?),
+            ParseTarget::View => quote!(<#ty>::new(properties)),
+        };
+        return Ok(constructor);
     }
 
     let ty = &field.ty;
@@ -415,17 +433,15 @@ fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
             )
         })?;
         let default = typed_default(field)?;
-        return Ok(quote! {
-            #ident: {
-                let parsed: ::iceberg::Result<#ty> = #parse_properties_with(
-                    properties,
-                    #key,
-                    &[#(#additional_keys),*],
-                    #default,
-                );
-                parsed.map_err(|error| error.with_context("property", #key))?
-            }
-        });
+        return Ok(quote! {{
+            let parsed: ::iceberg::Result<#ty> = #parse_properties_with(
+                properties,
+                #key,
+                &[#(#additional_keys),*],
+                #default,
+            );
+            parsed.map_err(|error| error.with_context("property", #key))?
+        }});
     }
 
     if let Some(prefix) = &field.prefix {
@@ -441,7 +457,7 @@ fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
             quote!(value.parse::<#value_type>())
         };
         return Ok(quote! {
-            #ident: properties
+            properties
                 .iter()
                 .filter_map(|(key, value)| {
                     key.strip_prefix(#prefix).map(|suffix| {
@@ -512,7 +528,7 @@ fn parse_field(field: &PropertyField) -> syn::Result<TokenStream2> {
     };
 
     Ok(quote! {
-        #ident: match properties.get(#key) {
+        match properties.get(#key) {
             Some(value) => #parse,
             None => #default,
         }

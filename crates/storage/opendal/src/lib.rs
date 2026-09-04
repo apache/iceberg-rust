@@ -104,6 +104,15 @@ pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 ///
 /// Maps scheme to the corresponding OpenDalStorage storage variant.
 /// Use this factory with `FileIOBuilder::new(factory)` to create FileIO instances.
+///
+/// # Serialization
+///
+/// The receiving binary must enable the feature corresponding to the serialized backend variant.
+/// For example, deserializing `OpenDalStorageFactory::S3` requires the `opendal-s3` feature.
+///
+/// Serialization fails when the `OpenDalStorageFactory::S3` variant contains a custom AWS
+/// credential loader because the loader holds process-local state that cannot be reconstructed in
+/// another process. Construct the factory without a custom loader before serializing it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum OpenDalStorageFactory {
     /// Memory storage factory.
@@ -116,7 +125,11 @@ pub enum OpenDalStorageFactory {
     #[cfg(feature = "opendal-s3")]
     S3 {
         /// Custom AWS credential loader.
-        #[serde(skip)]
+        #[serde(
+            skip_deserializing,
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_custom_credential_loader"
+        )]
         customized_credential_load: Option<CustomAwsCredentialLoader>,
     },
     /// GCS storage factory.
@@ -131,6 +144,19 @@ pub enum OpenDalStorageFactory {
     /// HuggingFace Hub storage factory.
     #[cfg(feature = "opendal-hf")]
     Hf,
+}
+
+#[cfg(feature = "opendal-s3")]
+pub(crate) fn serialize_custom_credential_loader<S>(
+    _loader: &Option<CustomAwsCredentialLoader>,
+    _serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    Err(serde::ser::Error::custom(
+        "custom AWS credential loaders cannot be serialized",
+    ))
 }
 
 #[typetag::serde(name = "OpenDalStorageFactory")]
@@ -801,6 +827,37 @@ mod tests {
                 .with_prefix(prefix),
             )
         }
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[derive(Debug)]
+    struct EmptyCredentialLoader;
+
+    #[cfg(feature = "opendal-s3")]
+    impl ProvideCredential for EmptyCredentialLoader {
+        type Credential = AwsCredential;
+
+        async fn provide_credential(
+            &self,
+            _ctx: &reqsign_core::Context,
+        ) -> reqsign_core::Result<Option<AwsCredential>> {
+            Ok(None)
+        }
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[test]
+    fn test_s3_factory_custom_credential_loader_serialization_fails() {
+        let file_io = iceberg::io::FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+            customized_credential_load: Some(CustomAwsCredentialLoader::new(EmptyCredentialLoader)),
+        }))
+        .build();
+
+        let err = file_io.serialize_all().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("custom AWS credential loaders cannot be serialized")
+        );
     }
 
     #[cfg(feature = "opendal-memory")]

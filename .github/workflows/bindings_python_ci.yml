@@ -56,7 +56,7 @@ jobs:
           enable-cache: true
       - name: Install tools
         run: |
-          uv tool install ruff
+          uv tool install ruff@0.15.22
       - name: Check format
         working-directory: "bindings/python"
         run: |

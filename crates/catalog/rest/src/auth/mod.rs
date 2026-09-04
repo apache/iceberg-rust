@@ -38,11 +38,13 @@ pub const AUTH_TYPE_OAUTH2: &str = "oauth2";
 
 /// Creates the [`AuthSession`]s used to authenticate REST catalog requests.
 ///
-/// A manager is created once per catalog, either from the `rest.auth.type`
-/// property or injected through
+/// A manager is exclusively scoped to one catalog and must not be reused by
+/// other catalogs. It is either created from the `rest.auth.type` property or
+/// injected through
 /// [`RestCatalogBuilder::with_auth_manager`](crate::RestCatalogBuilder::with_auth_manager) or
 /// [`RestSessionCatalogBuilder::with_auth_manager`](crate::RestSessionCatalogBuilder::with_auth_manager).
-/// It builds the sessions the catalog then keeps.
+/// Catalog initialization calls [`AuthManager::catalog_session`] exactly once;
+/// later sessions may rely on the state established by that call.
 ///
 /// Session-construction methods are handed the catalog's [`HttpClient`], which
 /// an implementation may reuse for its own requests (e.g. a token exchange)

@@ -23,8 +23,10 @@ on:
       - main
   pull_request:
     paths:
-      - '**'                              # Include all files and directories in the repository by default.
-      - '!.github/ISSUE_TEMPLATE/**'      # Exclude files and directories that don't impact tests or code like templates, metadata, and documentation.
+      # Artifacts that must be included in releases, such as LICENSE and NOTICE, are deliberately not excluded so we can verify they will be bundled.
+      # Include all files and directories, then filter out files and directories that don't impact code, tests, or release artifacts.
+      - '**'
+      - '!.github/ISSUE_TEMPLATE/**'
       - '!dev/release/**'
       - '!website/**'
       - '!.asf.yml'
@@ -32,8 +34,6 @@ on:
       - '!.gitignore'
       - '!CONTRIBUTING.md'
       - '!CHANGELOG.md'
-      - '!LICENSE'
-      - '!NOTICE'
       - '!README.md'
 
 concurrency:
@@ -56,7 +56,7 @@ jobs:
 
       - name: Install lint tools
         # Keep versions in sync with the local install targets in Makefile.
-        uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2.86.1
+        uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
         with:
           tool: taplo@0.9.3,cargo-machete@0.7.0
 
@@ -74,6 +74,9 @@ jobs:
 
       - name: Check Cargo.lock is up-to-date
         run: cargo update --workspace --locked
+
+      - name: Check crates package LICENSE and NOTICE
+        run: make check-license-notice
 
       - name: Cargo Machete
         run: cargo machete
@@ -209,7 +212,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: matrix.test-suite.name == 'default'
-        uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2.86.1
+        uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
         with:
           tool: cargo-nextest
 

@@ -17,11 +17,12 @@
 
 use std::collections::HashMap;
 
-use iceberg_property_macro::Properties;
+use iceberg_property_macro::properties_view;
 
 use crate::compression::CompressionCodec;
 use crate::encryption::AesKeySize;
 use crate::error::{Error, ErrorKind, Result};
+use crate::spec::NameMapping;
 use crate::util::location::strip_trailing_slash;
 
 fn parse_location_property(path: &str) -> Result<String> {
@@ -30,29 +31,6 @@ fn parse_location_property(path: &str) -> Result<String> {
     }
 
     Ok(strip_trailing_slash(path).to_string())
-}
-
-/// Parse compression codec for metadata files from table properties.
-/// Retrieves the compression codec property, applies defaults, and parses the value.
-/// Only "none" (or empty string) and "gzip" are supported for metadata compression.
-///
-/// # Arguments
-///
-/// * `properties` - HashMap containing table properties
-///
-/// # Errors
-///
-/// Returns an error if the codec is not "none", "", or "gzip" (case-insensitive).
-/// Lz4 and Zstd are not supported for metadata file compression.
-pub(crate) fn parse_metadata_file_compression(
-    properties: &HashMap<String, String>,
-) -> Result<CompressionCodec> {
-    let value = properties
-        .get(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC)
-        .map(|s| s.as_str())
-        .unwrap_or(TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT);
-
-    parse_metadata_compression(value)
 }
 
 fn parse_metadata_compression(value: &str) -> Result<CompressionCodec> {
@@ -139,8 +117,9 @@ fn parse_parquet_compression(
     })
 }
 
-/// TableProperties that contains the properties of a table.
-#[derive(Debug, Properties)]
+properties_view! {
+/// Typed view over the properties of a table.
+#[derive(Debug)]
 pub struct TableProperties {
     /// The number of times to retry a commit.
     #[property(
@@ -358,9 +337,18 @@ pub struct TableProperties {
         getter
     )]
     write_object_storage_partitioned_paths: bool,
+    /// The table's default name mapping, used to assign field ids when reading data files
+    /// that carry no field id metadata. `None` if `schema.name-mapping.default` is not set.
+    #[property(
+        key = Self::PROPERTY_DEFAULT_NAME_MAPPING,
+        default = None,
+        getter
+    )]
+    default_name_mapping: Option<NameMapping>,
+}
 }
 
-impl TableProperties {
+impl TableProperties<'_> {
     /// Reserved table property for table format version.
     ///
     /// Iceberg will default a new table's format version to the latest stable and recommended
@@ -370,32 +358,33 @@ impl TableProperties {
     /// If this table property exists when creating a table, the table will use the specified format
     /// version. If a table updates this property, it will try to upgrade to the specified format
     /// version.
-    pub const PROPERTY_FORMAT_VERSION: &str = "format-version";
+    pub const PROPERTY_FORMAT_VERSION: &'static str = "format-version";
     /// Reserved table property for table UUID.
-    pub const PROPERTY_UUID: &str = "uuid";
+    pub const PROPERTY_UUID: &'static str = "uuid";
     /// Reserved table property for the total number of snapshots.
-    pub const PROPERTY_SNAPSHOT_COUNT: &str = "snapshot-count";
+    pub const PROPERTY_SNAPSHOT_COUNT: &'static str = "snapshot-count";
     /// Reserved table property for current snapshot summary.
-    pub const PROPERTY_CURRENT_SNAPSHOT_SUMMARY: &str = "current-snapshot-summary";
+    pub const PROPERTY_CURRENT_SNAPSHOT_SUMMARY: &'static str = "current-snapshot-summary";
     /// Reserved table property for current snapshot id.
-    pub const PROPERTY_CURRENT_SNAPSHOT_ID: &str = "current-snapshot-id";
+    pub const PROPERTY_CURRENT_SNAPSHOT_ID: &'static str = "current-snapshot-id";
     /// Reserved table property for current snapshot timestamp.
-    pub const PROPERTY_CURRENT_SNAPSHOT_TIMESTAMP: &str = "current-snapshot-timestamp-ms";
+    pub const PROPERTY_CURRENT_SNAPSHOT_TIMESTAMP: &'static str = "current-snapshot-timestamp-ms";
     /// Reserved table property for the JSON representation of current schema.
-    pub const PROPERTY_CURRENT_SCHEMA: &str = "current-schema";
+    pub const PROPERTY_CURRENT_SCHEMA: &'static str = "current-schema";
     /// Reserved table property for the JSON representation of current(default) partition spec.
-    pub const PROPERTY_DEFAULT_PARTITION_SPEC: &str = "default-partition-spec";
+    pub const PROPERTY_DEFAULT_PARTITION_SPEC: &'static str = "default-partition-spec";
     /// Reserved table property for the JSON representation of current(default) sort order.
-    pub const PROPERTY_DEFAULT_SORT_ORDER: &str = "default-sort-order";
+    pub const PROPERTY_DEFAULT_SORT_ORDER: &'static str = "default-sort-order";
 
     /// Property key for max number of previous versions to keep.
-    pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &str =
+    pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &'static str =
         "write.metadata.previous-versions-max";
     /// Default value for max number of previous versions to keep.
     pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize = 100;
 
     /// Property key for max number of partitions to keep summary stats for.
-    pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &str = "write.summary.partition-limit";
+    pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &'static str =
+        "write.summary.partition-limit";
     /// Default value for the max number of partitions to keep summary stats for.
     pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64 = 0;
 
@@ -403,7 +392,7 @@ impl TableProperties {
     ///
     /// Reserved table properties are only used to control behaviors when creating or updating a
     /// table. The value of these properties are not persisted as a part of the table metadata.
-    pub const RESERVED_PROPERTIES: [&str; 9] = [
+    pub const RESERVED_PROPERTIES: [&'static str; 9] = [
         Self::PROPERTY_FORMAT_VERSION,
         Self::PROPERTY_UUID,
         Self::PROPERTY_SNAPSHOT_COUNT,
@@ -416,88 +405,95 @@ impl TableProperties {
     ];
 
     /// Property key for number of commit retries.
-    pub const PROPERTY_COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
+    pub const PROPERTY_COMMIT_NUM_RETRIES: &'static str = "commit.retry.num-retries";
     /// Default value for number of commit retries.
     pub const PROPERTY_COMMIT_NUM_RETRIES_DEFAULT: usize = 4;
 
     /// Property key for minimum wait time (ms) between retries.
-    pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS: &str = "commit.retry.min-wait-ms";
+    pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS: &'static str = "commit.retry.min-wait-ms";
     /// Default value for minimum wait time (ms) between retries.
     pub const PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT: u64 = 100;
 
     /// Property key for maximum wait time (ms) between retries.
-    pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str = "commit.retry.max-wait-ms";
+    pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &'static str = "commit.retry.max-wait-ms";
     /// Default value for maximum wait time (ms) between retries.
     pub const PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64 = 60 * 1000; // 1 minute
 
     /// Property key for total maximum retry time (ms).
-    pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS: &str = "commit.retry.total-timeout-ms";
+    pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS: &'static str = "commit.retry.total-timeout-ms";
     /// Default value for total maximum retry time (ms).
     pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT: u64 = 30 * 60 * 1000; // 30 minutes
 
     /// Default file format for data files
-    pub const PROPERTY_DEFAULT_FILE_FORMAT: &str = "write.format.default";
+    pub const PROPERTY_DEFAULT_FILE_FORMAT: &'static str = "write.format.default";
     /// Default file format for delete files
-    pub const PROPERTY_DELETE_DEFAULT_FILE_FORMAT: &str = "write.delete.format.default";
+    pub const PROPERTY_DELETE_DEFAULT_FILE_FORMAT: &'static str = "write.delete.format.default";
     /// Default value for data file format
-    pub const PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT: &str = "parquet";
+    pub const PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT: &'static str = "parquet";
 
     /// Target file size for newly written files.
-    pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-bytes";
+    pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &'static str = "write.target-file-size-bytes";
     /// Default target file size
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
 
     /// Base location for metadata files (manifests, manifest lists, table metadata).
     /// When unset, metadata files default to the `metadata` directory under the table
     /// location.
-    pub const PROPERTY_WRITE_METADATA_PATH: &str = "write.metadata.path";
+    pub const PROPERTY_WRITE_METADATA_PATH: &'static str = "write.metadata.path";
+
+    /// Property key for the table's default name mapping, stored as a JSON
+    /// [`NameMapping`] document.
+    pub const PROPERTY_DEFAULT_NAME_MAPPING: &'static str = "schema.name-mapping.default";
 
     /// Compression codec for metadata files (JSON)
-    pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
+    pub const PROPERTY_METADATA_COMPRESSION_CODEC: &'static str =
+        "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
-    pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str = "none";
+    pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &'static str = "none";
     /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
     /// If false, uses `ClusteredWriter` (requires sorted data, more memory efficient).
-    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
+    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &'static str =
+        "write.datafusion.fanout.enabled";
     /// Default value for fanout writer enabled
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
 
     /// Property key for enabling garbage collection on drop.
     /// When set to `false`, data files will not be deleted when a table is dropped.
     /// Defaults to `true`.
-    pub const PROPERTY_GC_ENABLED: &str = "gc.enabled";
+    pub const PROPERTY_GC_ENABLED: &'static str = "gc.enabled";
     /// Default value for gc.enabled
     pub const PROPERTY_GC_ENABLED_DEFAULT: bool = true;
 
     /// Property key for the default maximum age of a snapshot to keep when expiring snapshots.
-    pub const PROPERTY_MAX_SNAPSHOT_AGE_MS: &str = "history.expire.max-snapshot-age-ms";
+    pub const PROPERTY_MAX_SNAPSHOT_AGE_MS: &'static str = "history.expire.max-snapshot-age-ms";
     /// Default value for history.expire.max-snapshot-age-ms (5 days).
     pub const PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT: i64 = 5 * 24 * 60 * 60 * 1000;
     /// Property key for the default minimum number of snapshots to keep when expiring snapshots.
-    pub const PROPERTY_MIN_SNAPSHOTS_TO_KEEP: &str = "history.expire.min-snapshots-to-keep";
+    pub const PROPERTY_MIN_SNAPSHOTS_TO_KEEP: &'static str = "history.expire.min-snapshots-to-keep";
     /// Default value for history.expire.min-snapshots-to-keep.
     pub const PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT: usize = 1;
     /// Property key for the default maximum age of a snapshot reference to keep when expiring.
-    pub const PROPERTY_MAX_REF_AGE_MS: &str = "history.expire.max-ref-age-ms";
+    pub const PROPERTY_MAX_REF_AGE_MS: &'static str = "history.expire.max-ref-age-ms";
     /// Default value for history.expire.max-ref-age-ms (effectively never expire refs).
     pub const PROPERTY_MAX_REF_AGE_MS_DEFAULT: i64 = i64::MAX;
 
     /// Enable content-defined chunking with parquet defaults (or per-property overrides).
-    pub const PROPERTY_PARQUET_CDC_ENABLED: &str = "write.parquet.content-defined-chunking.enabled";
+    pub const PROPERTY_PARQUET_CDC_ENABLED: &'static str =
+        "write.parquet.content-defined-chunking.enabled";
     /// Default value for content-defined chunking enabled.
     pub const PROPERTY_PARQUET_CDC_ENABLED_DEFAULT: bool = false;
     /// Minimum chunk size in bytes for content-defined chunking.
-    pub const PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE: &str =
+    pub const PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE: &'static str =
         "write.parquet.content-defined-chunking.min-chunk-size";
     /// Default matches `parquet::file::properties::DEFAULT_CDC_MIN_CHUNK_SIZE`.
     pub const PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE_DEFAULT: usize = 256 * 1024;
     /// Maximum chunk size in bytes for content-defined chunking.
-    pub const PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE: &str =
+    pub const PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE: &'static str =
         "write.parquet.content-defined-chunking.max-chunk-size";
     /// Default matches `parquet::file::properties::DEFAULT_CDC_MAX_CHUNK_SIZE`.
     pub const PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE_DEFAULT: usize = 1024 * 1024;
     /// Normalization level (gearhash bit adjustment) for content-defined chunking.
-    pub const PROPERTY_PARQUET_CDC_NORM_LEVEL: &str =
+    pub const PROPERTY_PARQUET_CDC_NORM_LEVEL: &'static str =
         "write.parquet.content-defined-chunking.norm-level";
     /// Default matches `parquet::file::properties::DEFAULT_CDC_NORM_LEVEL`.
     pub const PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32 = 0;
@@ -506,49 +502,50 @@ impl TableProperties {
     /// `lz4`, `lz4_raw`, `brotli`, `lzo`, `uncompressed`). The codec name is
     /// parsed into a [`CompressionCodec`] when properties are parsed; the level's
     /// range is validated when the writer is built.
-    pub const PROPERTY_PARQUET_COMPRESSION_CODEC: &str = "write.parquet.compression-codec";
+    pub const PROPERTY_PARQUET_COMPRESSION_CODEC: &'static str = "write.parquet.compression-codec";
     /// Default Parquet compression codec.
-    pub const PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT: &str = "zstd";
+    pub const PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT: &'static str = "zstd";
     /// Compression level for Parquet data files, for codecs that take one
     /// (`gzip`, `zstd`, `brotli`). When unset, the codec's default level is used.
-    pub const PROPERTY_PARQUET_COMPRESSION_LEVEL: &str = "write.parquet.compression-level";
+    pub const PROPERTY_PARQUET_COMPRESSION_LEVEL: &'static str = "write.parquet.compression-level";
 
     /// Approximate maximum size of a Parquet row group in bytes.
-    pub const PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES: &str = "write.parquet.row-group-size-bytes";
+    pub const PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES: &'static str =
+        "write.parquet.row-group-size-bytes";
     /// Default Parquet row group size in bytes.
     pub const PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT: usize = 128 * 1024 * 1024;
 
     /// Approximate maximum size of a Parquet data page in bytes.
-    pub const PROPERTY_PARQUET_PAGE_SIZE_BYTES: &str = "write.parquet.page-size-bytes";
+    pub const PROPERTY_PARQUET_PAGE_SIZE_BYTES: &'static str = "write.parquet.page-size-bytes";
     /// Default Parquet page size in bytes.
     pub const PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT: usize = 1024 * 1024;
 
     /// Maximum number of rows per Parquet data page.
-    pub const PROPERTY_PARQUET_PAGE_ROW_LIMIT: &str = "write.parquet.page-row-limit";
+    pub const PROPERTY_PARQUET_PAGE_ROW_LIMIT: &'static str = "write.parquet.page-row-limit";
     /// Default Parquet page row limit.
     pub const PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT: usize = 20000;
 
     /// Approximate maximum size of the Parquet dictionary page in bytes.
-    pub const PROPERTY_PARQUET_DICT_SIZE_BYTES: &str = "write.parquet.dict-size-bytes";
+    pub const PROPERTY_PARQUET_DICT_SIZE_BYTES: &'static str = "write.parquet.dict-size-bytes";
     /// Default Parquet dictionary page size in bytes.
     pub const PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT: usize = 2 * 1024 * 1024;
 
     /// Property key for the master key id used to encrypt the table's manifest
     /// list and data files as defined in <https://iceberg.apache.org/docs/nightly/encryption/>.
-    pub const PROPERTY_ENCRYPTION_KEY_ID: &str = "encryption.key-id";
+    pub const PROPERTY_ENCRYPTION_KEY_ID: &'static str = "encryption.key-id";
 
     /// Property key for the encryption data encryption key (DEK) length in bytes.
-    pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH: &str = "encryption.data-key-length";
+    pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH: &'static str = "encryption.data-key-length";
     /// Default value for the encryption DEK length (16 bytes = AES-128).
     pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT: usize = 16;
     /// Property key for the base directory for data files
-    pub const PROPERTY_WRITE_DATA_LOCATION: &str = "write.data.path";
+    pub const PROPERTY_WRITE_DATA_LOCATION: &'static str = "write.data.path";
     /// Property key for deprecated [`TableProperties::write_folder_storage_location`]
-    pub const PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &str = "write.folder-storage.path";
+    pub const PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &'static str = "write.folder-storage.path";
     /// Property key for deprecated object storage path, kept as a fallback for compatibility.
-    pub const PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &str = "write.object-storage.path";
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &'static str = "write.object-storage.path";
     /// Property key for controlling whether partition values are included in object storage paths.
-    pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &str =
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &'static str =
         "write.object-storage.partitioned-paths";
     /// Default value for [`TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS`]
     pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS_DEFAULT: bool = true;
@@ -556,15 +553,7 @@ impl TableProperties {
     /// The AES key size to use when generating data encryption keys, derived
     /// from `encryption.data-key-length`.
     pub fn data_encryption_key_size(&self) -> Result<AesKeySize> {
-        AesKeySize::from_key_length(self.encryption_data_key_length)
-    }
-}
-
-impl TryFrom<&HashMap<String, String>> for TableProperties {
-    type Error = Error;
-
-    fn try_from(properties: &HashMap<String, String>) -> Result<Self> {
-        Self::from_properties(properties)
+        AesKeySize::from_key_length(self.encryption_data_key_length()?)
     }
 }
 
@@ -576,46 +565,46 @@ mod tests {
     #[test]
     fn test_table_properties_default() {
         let props = HashMap::new();
-        let table_properties = TableProperties::try_from(&props).unwrap();
+        let table_properties = TableProperties::new(&props);
         assert_eq!(
-            table_properties.commit_num_retries,
+            table_properties.commit_num_retries().unwrap(),
             TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
         );
         assert_eq!(
-            table_properties.commit_min_retry_wait_ms,
+            table_properties.commit_min_retry_wait_ms().unwrap(),
             TableProperties::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS_DEFAULT
         );
         assert_eq!(
-            table_properties.commit_max_retry_wait_ms,
+            table_properties.commit_max_retry_wait_ms().unwrap(),
             TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT
         );
         assert_eq!(
-            table_properties.write_format_default,
+            table_properties.write_format_default().unwrap(),
             TableProperties::PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT.to_string()
         );
         assert_eq!(
-            table_properties.write_target_file_size_bytes,
+            table_properties.write_target_file_size_bytes().unwrap(),
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
         // Test compression defaults (none means CompressionCodec::None)
         assert_eq!(
-            table_properties.metadata_compression_codec,
+            table_properties.metadata_compression_codec().unwrap(),
             CompressionCodec::None
         );
         assert_eq!(
-            table_properties.gc_enabled,
+            table_properties.gc_enabled().unwrap(),
             TableProperties::PROPERTY_GC_ENABLED_DEFAULT
         );
         assert_eq!(
-            table_properties.max_snapshot_age_ms,
+            table_properties.max_snapshot_age_ms().unwrap(),
             TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT
         );
         assert_eq!(
-            table_properties.min_snapshots_to_keep,
+            table_properties.min_snapshots_to_keep().unwrap(),
             TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT
         );
         assert_eq!(
-            table_properties.max_ref_age_ms,
+            table_properties.max_ref_age_ms().unwrap(),
             TableProperties::PROPERTY_MAX_REF_AGE_MS_DEFAULT
         );
     }
@@ -636,20 +625,27 @@ mod tests {
                 "5678".to_string(),
             ),
         ]);
-        let table_properties = TableProperties::try_from(&props).unwrap();
-        assert_eq!(table_properties.max_snapshot_age_ms, 1234);
-        assert_eq!(table_properties.min_snapshots_to_keep, 7);
-        assert_eq!(table_properties.max_ref_age_ms, 5678);
+        let table_properties = TableProperties::new(&props);
+        assert_eq!(table_properties.max_snapshot_age_ms().unwrap(), 1234);
+        assert_eq!(table_properties.min_snapshots_to_keep().unwrap(), 7);
+        assert_eq!(table_properties.max_ref_age_ms().unwrap(), 5678);
     }
 
     #[test]
     fn test_table_properties_location_paths() {
         // Test unset.
-        let table_properties = TableProperties::try_from(&HashMap::new()).unwrap();
-        assert_eq!(table_properties.write_metadata_path, None);
-        assert_eq!(table_properties.write_data_location, None);
-        assert_eq!(table_properties.write_folder_storage_location, None);
-        assert_eq!(table_properties.write_object_storage_location, None);
+        let raw_properties = HashMap::new();
+        let table_properties = TableProperties::new(&raw_properties);
+        assert_eq!(table_properties.write_metadata_path().unwrap(), None);
+        assert_eq!(table_properties.write_data_location().unwrap(), None);
+        assert_eq!(
+            table_properties.write_folder_storage_location().unwrap(),
+            None
+        );
+        assert_eq!(
+            table_properties.write_object_storage_location().unwrap(),
+            None
+        );
 
         for key in [
             TableProperties::PROPERTY_WRITE_METADATA_PATH,
@@ -658,34 +654,48 @@ mod tests {
             TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION,
         ] {
             // Test empty paths are invalid and retain the property key as error context.
-            let error =
-                TableProperties::try_from(&HashMap::from([(key.to_string(), String::new())]))
-                    .unwrap_err();
+            let raw_properties = HashMap::from([(key.to_string(), String::new())]);
+            let table_properties = TableProperties::new(&raw_properties);
+            let error = match key {
+                TableProperties::PROPERTY_WRITE_METADATA_PATH => {
+                    table_properties.write_metadata_path().unwrap_err()
+                }
+                TableProperties::PROPERTY_WRITE_DATA_LOCATION => {
+                    table_properties.write_data_location().unwrap_err()
+                }
+                TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION => table_properties
+                    .write_folder_storage_location()
+                    .unwrap_err(),
+                TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION => table_properties
+                    .write_object_storage_location()
+                    .unwrap_err(),
+                _ => unreachable!(),
+            };
             assert_eq!(error.kind(), ErrorKind::DataInvalid);
             assert!(format!("{error}").contains(key));
 
             // Test all supported location properties share trailing-slash normalization.
-            let table_properties = TableProperties::try_from(&HashMap::from([(
+            let raw_properties = HashMap::from([(
                 key.to_string(),
                 "s3://other-bucket/custom-path/".to_string(),
-            )]))
-            .unwrap();
+            )]);
+            let table_properties = TableProperties::new(&raw_properties);
             let parsed = match key {
                 TableProperties::PROPERTY_WRITE_METADATA_PATH => {
-                    table_properties.write_metadata_path.as_deref()
+                    table_properties.write_metadata_path().unwrap()
                 }
                 TableProperties::PROPERTY_WRITE_DATA_LOCATION => {
-                    table_properties.write_data_location.as_deref()
+                    table_properties.write_data_location().unwrap()
                 }
                 TableProperties::PROPERTY_WRITE_FOLDER_STORAGE_LOCATION => {
-                    table_properties.write_folder_storage_location.as_deref()
+                    table_properties.write_folder_storage_location().unwrap()
                 }
                 TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_LOCATION => {
-                    table_properties.write_object_storage_location.as_deref()
+                    table_properties.write_object_storage_location().unwrap()
                 }
                 _ => unreachable!(),
             };
-            assert_eq!(parsed, Some("s3://other-bucket/custom-path"));
+            assert_eq!(parsed.as_deref(), Some("s3://other-bucket/custom-path"));
         }
     }
 
@@ -695,9 +705,9 @@ mod tests {
             TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
             "gzip".to_string(),
         )]);
-        let table_properties = TableProperties::try_from(&props).unwrap();
+        let table_properties = TableProperties::new(&props);
         assert_eq!(
-            table_properties.metadata_compression_codec,
+            table_properties.metadata_compression_codec().unwrap(),
             CompressionCodec::gzip_default()
         );
     }
@@ -708,9 +718,9 @@ mod tests {
             TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
             "none".to_string(),
         )]);
-        let table_properties = TableProperties::try_from(&props).unwrap();
+        let table_properties = TableProperties::new(&props);
         assert_eq!(
-            table_properties.metadata_compression_codec,
+            table_properties.metadata_compression_codec().unwrap(),
             CompressionCodec::None
         );
     }
@@ -722,9 +732,9 @@ mod tests {
             TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
             "GZIP".to_string(),
         )]);
-        let table_properties = TableProperties::try_from(&props_upper).unwrap();
+        let table_properties = TableProperties::new(&props_upper);
         assert_eq!(
-            table_properties.metadata_compression_codec,
+            table_properties.metadata_compression_codec().unwrap(),
             CompressionCodec::gzip_default()
         );
 
@@ -733,9 +743,9 @@ mod tests {
             TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
             "GzIp".to_string(),
         )]);
-        let table_properties = TableProperties::try_from(&props_mixed).unwrap();
+        let table_properties = TableProperties::new(&props_mixed);
         assert_eq!(
-            table_properties.metadata_compression_codec,
+            table_properties.metadata_compression_codec().unwrap(),
             CompressionCodec::gzip_default()
         );
 
@@ -744,9 +754,9 @@ mod tests {
             TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
             "NONE".to_string(),
         )]);
-        let table_properties = TableProperties::try_from(&props_none_upper).unwrap();
+        let table_properties = TableProperties::new(&props_none_upper);
         assert_eq!(
-            table_properties.metadata_compression_codec,
+            table_properties.metadata_compression_codec().unwrap(),
             CompressionCodec::None
         );
     }
@@ -775,12 +785,18 @@ mod tests {
                 "false".to_string(),
             ),
         ]);
-        let table_properties = TableProperties::try_from(&props).unwrap();
-        assert_eq!(table_properties.commit_num_retries, 10);
-        assert_eq!(table_properties.commit_max_retry_wait_ms, 20);
-        assert_eq!(table_properties.write_format_default, "avro".to_string());
-        assert_eq!(table_properties.write_target_file_size_bytes, 512);
-        assert!(!table_properties.gc_enabled);
+        let table_properties = TableProperties::new(&props);
+        assert_eq!(table_properties.commit_num_retries().unwrap(), 10);
+        assert_eq!(table_properties.commit_max_retry_wait_ms().unwrap(), 20);
+        assert_eq!(
+            table_properties.write_format_default().unwrap(),
+            "avro".to_string()
+        );
+        assert_eq!(
+            table_properties.write_target_file_size_bytes().unwrap(),
+            512
+        );
+        assert!(!table_properties.gc_enabled().unwrap());
     }
 
     #[test]
@@ -790,9 +806,10 @@ mod tests {
             "abc".to_string(),
         )]);
 
-        let table_properties = TableProperties::try_from(&invalid_retries).unwrap_err();
+        let table_properties = TableProperties::new(&invalid_retries);
+        let error = table_properties.commit_num_retries().unwrap_err();
         assert!(
-            table_properties.to_string().contains(
+            error.to_string().contains(
                 "Invalid value for commit.retry.num-retries: invalid digit found in string"
             )
         );
@@ -801,9 +818,10 @@ mod tests {
             TableProperties::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS.to_string(),
             "abc".to_string(),
         )]);
-        let table_properties = TableProperties::try_from(&invalid_min_wait).unwrap_err();
+        let table_properties = TableProperties::new(&invalid_min_wait);
+        let error = table_properties.commit_min_retry_wait_ms().unwrap_err();
         assert!(
-            table_properties.to_string().contains(
+            error.to_string().contains(
                 "Invalid value for commit.retry.min-wait-ms: invalid digit found in string"
             )
         );
@@ -812,9 +830,10 @@ mod tests {
             TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS.to_string(),
             "abc".to_string(),
         )]);
-        let table_properties = TableProperties::try_from(&invalid_max_wait).unwrap_err();
+        let table_properties = TableProperties::new(&invalid_max_wait);
+        let error = table_properties.commit_max_retry_wait_ms().unwrap_err();
         assert!(
-            table_properties.to_string().contains(
+            error.to_string().contains(
                 "Invalid value for commit.retry.max-wait-ms: invalid digit found in string"
             )
         );
@@ -823,8 +842,9 @@ mod tests {
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES.to_string(),
             "abc".to_string(),
         )]);
-        let table_properties = TableProperties::try_from(&invalid_target_size).unwrap_err();
-        assert!(table_properties.to_string().contains(
+        let table_properties = TableProperties::new(&invalid_target_size);
+        let error = table_properties.write_target_file_size_bytes().unwrap_err();
+        assert!(error.to_string().contains(
             "Invalid value for write.target-file-size-bytes: invalid digit found in string"
         ));
 
@@ -832,12 +852,9 @@ mod tests {
             TableProperties::PROPERTY_GC_ENABLED.to_string(),
             "notabool".to_string(),
         )]);
-        let table_properties = TableProperties::try_from(&invalid_gc_enabled).unwrap_err();
-        assert!(
-            table_properties
-                .to_string()
-                .contains("Invalid value for gc.enabled")
-        );
+        let table_properties = TableProperties::new(&invalid_gc_enabled);
+        let error = table_properties.gc_enabled().unwrap_err();
+        assert!(error.to_string().contains("Invalid value for gc.enabled"));
     }
 
     #[test]
@@ -849,7 +866,9 @@ mod tests {
                 TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
                 codec.to_string(),
             )]);
-            let err = TableProperties::try_from(&props).unwrap_err();
+            let err = TableProperties::new(&props)
+                .metadata_compression_codec()
+                .unwrap_err();
             let err_msg = err.to_string();
             assert!(
                 err_msg.contains(&format!("Invalid metadata compression codec: {codec}")),
@@ -863,102 +882,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_metadata_file_compression_valid() {
-        // Test with "none"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "none".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::None
-        );
-
-        // Test with empty string
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::None
-        );
-
-        // Test with "gzip"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "gzip".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::gzip_default()
-        );
-
-        // Test case insensitivity - "NONE"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "NONE".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::None
-        );
-
-        // Test case insensitivity - "GZIP"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "GZIP".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::gzip_default()
-        );
-
-        // Test case insensitivity - "GzIp"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "GzIp".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::gzip_default()
-        );
-
-        // Test default when property is missing
-        let props = HashMap::new();
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::None
-        );
-    }
-
-    #[test]
-    fn test_parse_metadata_file_compression_invalid() {
-        let invalid_codecs = ["lz4", "zstd", "snappy"];
-
-        for codec in invalid_codecs {
-            let props = HashMap::from([(
-                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-                codec.to_string(),
-            )]);
-            let err = parse_metadata_file_compression(&props).unwrap_err();
-            let err_msg = err.to_string();
-            assert!(
-                err_msg.contains("Invalid metadata compression codec"),
-                "Expected error message to contain 'Invalid metadata compression codec', got: {err_msg}"
-            );
-            assert!(
-                err_msg.contains("Only 'none' and 'gzip' are supported"),
-                "Expected error message to contain supported codecs, got: {err_msg}"
-            );
-        }
-    }
-
-    #[test]
     fn test_cdc_disabled_by_default() {
         let props = HashMap::new();
-        let tp = TableProperties::try_from(&props).unwrap();
-        assert!(!tp.cdc_enabled);
+        let tp = TableProperties::new(&props);
+        assert!(!tp.cdc_enabled().unwrap());
     }
 
     #[test]
@@ -967,11 +894,11 @@ mod tests {
             TableProperties::PROPERTY_PARQUET_CDC_ENABLED.to_string(),
             "true".to_string(),
         )]);
-        let tp = TableProperties::try_from(&props).unwrap();
-        assert!(tp.cdc_enabled);
-        assert_eq!(tp.cdc_min_chunk_size, 256 * 1024);
-        assert_eq!(tp.cdc_max_chunk_size, 1024 * 1024);
-        assert_eq!(tp.cdc_norm_level, 0);
+        let tp = TableProperties::new(&props);
+        assert!(tp.cdc_enabled().unwrap());
+        assert_eq!(tp.cdc_min_chunk_size().unwrap(), 256 * 1024);
+        assert_eq!(tp.cdc_max_chunk_size().unwrap(), 1024 * 1024);
+        assert_eq!(tp.cdc_norm_level().unwrap(), 0);
     }
 
     #[test]
@@ -980,8 +907,8 @@ mod tests {
             TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE.to_string(),
             "262144".to_string(),
         )]);
-        let tp = TableProperties::try_from(&props).unwrap();
-        assert!(!tp.cdc_enabled);
+        let tp = TableProperties::new(&props);
+        assert!(!tp.cdc_enabled().unwrap());
     }
 
     #[test]
@@ -1004,11 +931,11 @@ mod tests {
                 "1".to_string(),
             ),
         ]);
-        let tp = TableProperties::try_from(&props).unwrap();
-        assert!(tp.cdc_enabled);
-        assert_eq!(tp.cdc_min_chunk_size, 200000);
-        assert_eq!(tp.cdc_max_chunk_size, 900000);
-        assert_eq!(tp.cdc_norm_level, 1);
+        let tp = TableProperties::new(&props);
+        assert!(tp.cdc_enabled().unwrap());
+        assert_eq!(tp.cdc_min_chunk_size().unwrap(), 200000);
+        assert_eq!(tp.cdc_max_chunk_size().unwrap(), 900000);
+        assert_eq!(tp.cdc_norm_level().unwrap(), 1);
     }
 
     #[test]
@@ -1023,11 +950,11 @@ mod tests {
                 "2".to_string(),
             ),
         ]);
-        let tp = TableProperties::try_from(&props).unwrap();
-        assert!(tp.cdc_enabled);
-        assert_eq!(tp.cdc_min_chunk_size, 256 * 1024);
-        assert_eq!(tp.cdc_max_chunk_size, 1024 * 1024);
-        assert_eq!(tp.cdc_norm_level, 2);
+        let tp = TableProperties::new(&props);
+        assert!(tp.cdc_enabled().unwrap());
+        assert_eq!(tp.cdc_min_chunk_size().unwrap(), 256 * 1024);
+        assert_eq!(tp.cdc_max_chunk_size().unwrap(), 1024 * 1024);
+        assert_eq!(tp.cdc_norm_level().unwrap(), 2);
     }
 
     #[test]
@@ -1042,8 +969,8 @@ mod tests {
                 "-2".to_string(),
             ),
         ]);
-        let tp = TableProperties::try_from(&props).unwrap();
-        assert_eq!(tp.cdc_norm_level, -2);
+        let tp = TableProperties::new(&props);
+        assert_eq!(tp.cdc_norm_level().unwrap(), -2);
     }
 
     #[test]
@@ -1058,7 +985,9 @@ mod tests {
                 "not_a_number".to_string(),
             ),
         ]);
-        let err = TableProperties::try_from(&props).unwrap_err();
+        let err = TableProperties::new(&props)
+            .cdc_min_chunk_size()
+            .unwrap_err();
         assert!(
             err.to_string().contains(
                 "Invalid value for write.parquet.content-defined-chunking.min-chunk-size"
@@ -1078,7 +1007,7 @@ mod tests {
                 "not_a_number".to_string(),
             ),
         ]);
-        let err = TableProperties::try_from(&props).unwrap_err();
+        let err = TableProperties::new(&props).cdc_norm_level().unwrap_err();
         assert!(
             err.to_string()
                 .contains("Invalid value for write.parquet.content-defined-chunking.norm-level")
@@ -1088,32 +1017,33 @@ mod tests {
     #[test]
     fn test_cdc_no_properties() {
         let props = HashMap::from([("some.other.property".to_string(), "value".to_string())]);
-        let tp = TableProperties::try_from(&props).unwrap();
-        assert!(!tp.cdc_enabled);
+        let tp = TableProperties::new(&props);
+        assert!(!tp.cdc_enabled().unwrap());
     }
 
     #[test]
     fn test_parquet_sizing_defaults() {
-        let tp = TableProperties::try_from(&HashMap::new()).unwrap();
+        let props = HashMap::new();
+        let tp = TableProperties::new(&props);
         // Default codec is zstd at its default level.
         assert_eq!(
-            tp.parquet_compression_codec,
+            tp.parquet_compression_codec().unwrap(),
             CompressionCodec::zstd_default()
         );
         assert_eq!(
-            tp.parquet_row_group_size_bytes,
+            tp.parquet_row_group_size_bytes().unwrap(),
             TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT
         );
         assert_eq!(
-            tp.parquet_page_size_bytes,
+            tp.parquet_page_size_bytes().unwrap(),
             TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT
         );
         assert_eq!(
-            tp.parquet_page_row_limit,
+            tp.parquet_page_row_limit().unwrap(),
             TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT
         );
         assert_eq!(
-            tp.parquet_dict_size_bytes,
+            tp.parquet_dict_size_bytes().unwrap(),
             TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT
         );
     }
@@ -1146,13 +1076,16 @@ mod tests {
                 "131072".to_string(),
             ),
         ]);
-        let tp = TableProperties::try_from(&props).unwrap();
+        let tp = TableProperties::new(&props);
         // Codec name and level are folded into a single CompressionCodec.
-        assert_eq!(tp.parquet_compression_codec, CompressionCodec::Gzip(4));
-        assert_eq!(tp.parquet_row_group_size_bytes, 1048576);
-        assert_eq!(tp.parquet_page_size_bytes, 65536);
-        assert_eq!(tp.parquet_page_row_limit, 5000);
-        assert_eq!(tp.parquet_dict_size_bytes, 131072);
+        assert_eq!(
+            tp.parquet_compression_codec().unwrap(),
+            CompressionCodec::Gzip(4)
+        );
+        assert_eq!(tp.parquet_row_group_size_bytes().unwrap(), 1048576);
+        assert_eq!(tp.parquet_page_size_bytes().unwrap(), 65536);
+        assert_eq!(tp.parquet_page_row_limit().unwrap(), 5000);
+        assert_eq!(tp.parquet_dict_size_bytes().unwrap(), 131072);
     }
 
     #[test]
@@ -1161,7 +1094,9 @@ mod tests {
             TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES.to_string(),
             "not_a_number".to_string(),
         )]);
-        let err = TableProperties::try_from(&props).unwrap_err();
+        let err = TableProperties::new(&props)
+            .parquet_row_group_size_bytes()
+            .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(
             err.to_string()
@@ -1187,8 +1122,12 @@ mod tests {
                 TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
                 name.to_string(),
             )]);
-            let tp = TableProperties::try_from(&props).unwrap();
-            assert_eq!(tp.parquet_compression_codec, expected, "codec {name}");
+            let tp = TableProperties::new(&props);
+            assert_eq!(
+                tp.parquet_compression_codec().unwrap(),
+                expected,
+                "codec {name}"
+            );
         }
     }
 
@@ -1206,8 +1145,11 @@ mod tests {
                 "5".to_string(),
             ),
         ]);
-        let tp = TableProperties::try_from(&props).unwrap();
-        assert_eq!(tp.parquet_compression_codec, CompressionCodec::Snappy);
+        let tp = TableProperties::new(&props);
+        assert_eq!(
+            tp.parquet_compression_codec().unwrap(),
+            CompressionCodec::Snappy
+        );
     }
 
     #[test]
@@ -1220,8 +1162,8 @@ mod tests {
                 TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS.to_string(),
                 f.to_string(),
             )]);
-            let tp = TableProperties::try_from(&props).unwrap();
-            assert!(!tp.write_object_storage_partitioned_paths);
+            let tp = TableProperties::new(&props);
+            assert!(!tp.write_object_storage_partitioned_paths().unwrap());
         }
 
         for t in true_variants {
@@ -1229,8 +1171,53 @@ mod tests {
                 TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS.to_string(),
                 t.to_string(),
             )]);
-            let tp = TableProperties::try_from(&props).unwrap();
-            assert!(tp.write_object_storage_partitioned_paths);
+            let tp = TableProperties::new(&props);
+            assert!(tp.write_object_storage_partitioned_paths().unwrap());
         }
+    }
+
+    #[test]
+    fn test_table_properties_default_name_mapping() {
+        // Test unset.
+        let properties = HashMap::new();
+        assert!(
+            TableProperties::new(&properties)
+                .default_name_mapping()
+                .unwrap()
+                .is_none()
+        );
+
+        let properties = HashMap::from([(
+            TableProperties::PROPERTY_DEFAULT_NAME_MAPPING.to_string(),
+            r#"[{"field-id":1,"names":["id","record_id"]}]"#.to_string(),
+        )]);
+        let mapping = TableProperties::new(&properties)
+            .default_name_mapping()
+            .unwrap()
+            .unwrap();
+        assert_eq!(mapping.fields().len(), 1);
+        assert_eq!(mapping.fields()[0].field_id(), Some(1));
+        assert_eq!(mapping.fields()[0].names(), &[
+            "id".to_string(),
+            "record_id".to_string()
+        ]);
+    }
+
+    #[test]
+    fn test_table_properties_malformed_name_mapping() {
+        let properties = HashMap::from([(
+            TableProperties::PROPERTY_DEFAULT_NAME_MAPPING.to_string(),
+            "{ not valid json".to_string(),
+        )]);
+        let error = TableProperties::new(&properties)
+            .default_name_mapping()
+            .unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        // The property key must survive as error context.
+        assert!(
+            format!("{error}").contains(TableProperties::PROPERTY_DEFAULT_NAME_MAPPING),
+            "{error}"
+        );
     }
 }

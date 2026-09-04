@@ -156,6 +156,12 @@ fn build_storage_for_scheme(
 /// delegates operations to the appropriate [`OpenDalStorage`] variant based on
 /// the path scheme.
 ///
+/// # Serialization
+///
+/// Serialization fails when a custom S3 credential loader is configured because the loader holds
+/// process-local state that cannot be reconstructed in another process. Construct the factory
+/// without a custom loader before serializing it.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -172,7 +178,11 @@ fn build_storage_for_scheme(
 pub struct OpenDalResolvingStorageFactory {
     /// Custom AWS credential loader for S3 storage.
     #[cfg(feature = "opendal-s3")]
-    #[serde(skip)]
+    #[serde(
+        skip_deserializing,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::serialize_custom_credential_loader"
+    )]
     customized_credential_load: Option<CustomAwsCredentialLoader>,
 }
 
@@ -413,6 +423,36 @@ mod tests {
             .expect_err("a provider must not be silently discarded");
 
         assert_eq!(error.kind(), ErrorKind::FeatureUnsupported);
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[derive(Debug)]
+    struct EmptyCredentialLoader;
+
+    #[cfg(feature = "opendal-s3")]
+    impl crate::s3::ProvideCredential for EmptyCredentialLoader {
+        type Credential = crate::s3::AwsCredential;
+
+        async fn provide_credential(
+            &self,
+            _ctx: &reqsign_core::Context,
+        ) -> reqsign_core::Result<Option<Self::Credential>> {
+            Ok(None)
+        }
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[test]
+    fn test_custom_credential_loader_serialization_fails() {
+        let factory = OpenDalResolvingStorageFactory::new()
+            .with_s3_credential_loader(CustomAwsCredentialLoader::new(EmptyCredentialLoader));
+        let file_io = iceberg::io::FileIOBuilder::new(Arc::new(factory)).build();
+
+        let err = file_io.serialize_all().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("custom AWS credential loaders cannot be serialized")
+        );
     }
 
     /// Builds a resolving storage with empty props, suitable for `resolve()`

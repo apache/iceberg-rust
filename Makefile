@@ -86,7 +86,10 @@ check-public-api: install-cargo-public-api
 	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi
 
-check: check-fmt check-clippy check-toml cargo-machete
+check-license-notice:
+	bash ./dev/check_license_notice.sh
+
+check: check-fmt check-clippy check-toml cargo-machete check-license-notice
 
 doc-test:
 	cargo test --no-fail-fast --doc --all-features --workspace
