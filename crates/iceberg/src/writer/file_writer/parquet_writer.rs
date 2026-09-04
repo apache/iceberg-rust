@@ -170,8 +170,9 @@ fn invalid_level_error(codec: &str, source: impl Into<anyhow::Error>) -> Error {
 /// Apply the per-column `write.parquet.bloom-filter-*` properties to `builder`.
 ///
 /// `-enabled.column.` decides which columns are configured; `-fpp.column.` and
-/// `-ndv.column.` apply only to columns listed there. Columns missing from the
-/// schema are skipped, so a stale property cannot make a table unwritable.
+/// `-ndv.column.` apply only to columns listed there. A column that no longer
+/// resolves in the schema is logged and skipped, but a malformed value fails the
+/// write, as it does for every other property in [`TableProperties`].
 fn set_bloom_filter_properties(
     mut builder: WriterPropertiesBuilder,
     table_props: &TableProperties<'_>,
@@ -183,9 +184,17 @@ fn set_bloom_filter_properties(
     }
     let fpp = table_props.parquet_bloom_filter_column_fpp()?;
     let ndv = table_props.parquet_bloom_filter_column_ndv()?;
+    let column_paths = bloom_filter_column_paths(schema)?;
 
+    // Sorted so a malformed value always reports the same column first.
     for (column_name, is_enabled) in enabled.iter().sorted_by_key(|(name, _)| name.as_str()) {
-        let Some(column_path) = bloom_filter_column_path(schema, column_name) else {
+        let Some(column_path) = schema
+            .field_id_by_name(column_name)
+            .and_then(|field_id| column_paths.get(&field_id))
+        else {
+            tracing::warn!(
+                "Skipping bloom filter properties for column {column_name}: not found in schema"
+            );
             continue;
         };
         builder = builder.set_column_bloom_filter_enabled(column_path.clone(), *is_enabled);
@@ -199,43 +208,49 @@ fn set_bloom_filter_properties(
             .get(column_name)
             .copied()
             .unwrap_or(TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_FPP_DEFAULT);
+        // parquet-rs panics rather than erroring on an out-of-range fpp.
+        if !(fpp > 0.0 && fpp < 1.0) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid bloom filter fpp for column {column_name}: {fpp}, must be between 0.0 and 1.0 exclusive"
+                ),
+            ));
+        }
         builder = builder.set_column_bloom_filter_fpp(column_path.clone(), fpp);
         if let Some(ndv) = ndv.get(column_name) {
-            builder = builder.set_column_bloom_filter_max_ndv(column_path, *ndv);
+            // Zero sizes the filter down to the 32 byte minimum, which matches
+            // everything: a filter that costs I/O and prunes nothing.
+            if *ndv == 0 {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid bloom filter ndv for column {column_name}: must be positive"),
+                ));
+            }
+            builder = builder.set_column_bloom_filter_max_ndv(column_path.clone(), *ndv);
         }
     }
 
     Ok(builder)
 }
 
-/// Resolve an Iceberg column name to the Parquet leaf path that carries it.
+/// Map each primitive field id to the Parquet leaf path that carries it.
 ///
-/// Returns `None` unless the name is a primitive reachable through struct fields
-/// alone. Iceberg names a list element `a.element` where Parquet writes it at
-/// `a.list.element`; translating that needs the Parquet schema, which does not
-/// exist until write time, so list and map descendants are skipped rather than
-/// pointed at the wrong path.
-fn bloom_filter_column_path(schema: &Schema, column_name: &str) -> Option<ColumnPath> {
-    let field_id = schema.field_id_by_name(column_name)?;
-    if !schema.field_by_id(field_id)?.field_type.is_primitive() {
-        return None;
-    }
-
-    // The dotted name matches the Parquet path only if every step is a struct field.
-    let mut current = schema.as_struct();
-    let mut segments = Vec::new();
-    let mut remaining = column_name.split('.').peekable();
-    while let Some(segment) = remaining.next() {
-        let field = current.field_by_name(segment)?;
-        segments.push(segment.to_string());
-        match (&*field.field_type, remaining.peek().is_some()) {
-            (Type::Struct(nested), true) => current = nested,
-            (_, true) => return None,
-            (_, false) => {}
-        }
-    }
-
-    Some(ColumnPath::new(segments))
+/// Iceberg names a list element `a.element` where Parquet writes it at
+/// `a.list.element`, so the path cannot be derived from the property key alone.
+fn bloom_filter_column_paths(schema: &Schema) -> Result<HashMap<i32, ColumnPath>> {
+    let mut index = IndexByParquetPathName::new();
+    visit_schema(schema, &mut index)?;
+    Ok(index
+        .name_to_id
+        .iter()
+        .map(|(path, field_id)| {
+            (
+                *field_id,
+                ColumnPath::new(path.split('.').map(str::to_string).collect()),
+            )
+        })
+        .collect())
 }
 
 impl FileWriterBuilder for ParquetWriterBuilder {
@@ -2838,26 +2853,58 @@ mod tests {
                         )),
                     )
                     .into(),
+                    NestedField::required(
+                        7,
+                        "attrs",
+                        Type::Map(MapType::new(
+                            NestedField::map_key_element(8, Type::Primitive(PrimitiveType::String))
+                                .into(),
+                            NestedField::map_value_element(
+                                9,
+                                Type::Primitive(PrimitiveType::String),
+                                true,
+                            )
+                            .into(),
+                        )),
+                    )
+                    .into(),
                 ])
                 .build()
                 .unwrap(),
         )
     }
 
-    fn bloom_props(entries: &[(String, String)]) -> WriterProperties {
+    fn try_bloom_props(entries: &[(String, String)]) -> crate::Result<WriterProperties> {
         let raw_properties: HashMap<String, String> = entries.iter().cloned().collect();
-        ParquetWriterBuilder::from_table_properties(
+        Ok(ParquetWriterBuilder::from_table_properties(
             &TableProperties::new(&raw_properties),
             bloom_test_schema(),
-        )
-        .unwrap()
-        .props
+        )?
+        .props)
+    }
+
+    fn bloom_props(entries: &[(String, String)]) -> WriterProperties {
+        try_bloom_props(entries).unwrap()
     }
 
     fn enabled_key(column: &str) -> String {
         format!(
             "{}{column}",
             TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_ENABLED_PREFIX
+        )
+    }
+
+    fn fpp_key(column: &str) -> String {
+        format!(
+            "{}{column}",
+            TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_FPP_PREFIX
+        )
+    }
+
+    fn ndv_key(column: &str) -> String {
+        format!(
+            "{}{column}",
+            TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_NDV_PREFIX
         )
     }
 
@@ -2991,19 +3038,62 @@ mod tests {
     }
 
     #[test]
-    fn test_bloom_filter_collection_element_is_skipped() {
-        // Neither the Iceberg name nor the Parquet path should be configured.
-        let props = bloom_props(&[(enabled_key("tags.element"), "true".to_string())]);
+    fn test_bloom_filter_collection_elements() {
+        // Iceberg names these `tags.element` and `attrs.key`; Parquet nests them
+        // under the repeated group, so the property key alone is not the path.
+        let props = bloom_props(&[
+            (enabled_key("tags.element"), "true".to_string()),
+            (enabled_key("attrs.key"), "true".to_string()),
+        ]);
         for path in [
-            ColumnPath::from(vec!["tags".to_string(), "element".to_string()]),
             ColumnPath::from(vec![
                 "tags".to_string(),
                 "list".to_string(),
                 "element".to_string(),
             ]),
+            ColumnPath::from(vec![
+                "attrs".to_string(),
+                "key_value".to_string(),
+                "key".to_string(),
+            ]),
         ] {
-            assert!(props.bloom_filter_properties(&path).is_none());
+            assert!(
+                props.bloom_filter_properties(&path).is_some(),
+                "{path} should be configured"
+            );
         }
+        // The Iceberg-style path is not what Parquet writes.
+        assert!(
+            props
+                .bloom_filter_properties(&ColumnPath::from(vec![
+                    "tags".to_string(),
+                    "element".to_string()
+                ]))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_bloom_filter_invalid_fpp_is_rejected() {
+        // parquet-rs panics on these rather than returning an error.
+        for bad in ["0", "1", "-0.5", "1.5", "NaN"] {
+            let err = try_bloom_props(&[
+                (enabled_key("id"), "true".to_string()),
+                (fpp_key("id"), bad.to_string()),
+            ])
+            .expect_err("fpp {bad} should be rejected");
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        }
+    }
+
+    #[test]
+    fn test_bloom_filter_zero_ndv_is_rejected() {
+        let err = try_bloom_props(&[
+            (enabled_key("id"), "true".to_string()),
+            (ndv_key("id"), "0".to_string()),
+        ])
+        .expect_err("ndv 0 should be rejected");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
     #[test]
