@@ -1426,7 +1426,8 @@ mod tests {
             .with_file_type(DataContentType::PositionDeletes)
             .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
-            .build();
+            .build()
+            .unwrap();
 
         let eq_del = FileScanTaskDeleteFile::builder()
             .with_file_path(eq_delete_path.clone())
@@ -1435,7 +1436,8 @@ mod tests {
             .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
             .with_equality_ids(Some(vec![2, 3])) // Only use field IDs that exist in both schemas
-            .build();
+            .build()
+            .unwrap();
 
         let file_scan_task = FileScanTask::builder()
             .with_file_size_in_bytes(0)
@@ -1585,6 +1587,7 @@ mod tests {
             .with_record_count(Some(record_count))
             .with_key_metadata(key_metadata)
             .build()
+            .expect("deletion vector task should be valid")
     }
 
     #[tokio::test]
