@@ -437,14 +437,17 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
             return ROWS_MIGHT_MATCH;
         }
 
+        // Narrow the set against each bound, matching Java / PyIceberg.
+        let mut filtered_literals = literals.clone();
+
         if let Some(lower_bound) = self.lower_bound(field_id) {
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROWS_MIGHT_MATCH;
             }
 
-            if !literals.iter().any(|datum| datum.ge(lower_bound)) {
-                // if all values are less than lower bound, rows cannot match.
+            filtered_literals.retain(|datum| datum.ge(lower_bound));
+            if filtered_literals.is_empty() {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -455,8 +458,8 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
                 return ROWS_MIGHT_MATCH;
             }
 
-            if !literals.iter().any(|datum| datum.le(upper_bound)) {
-                // if all values are greater than upper bound, rows cannot match.
+            filtered_literals.retain(|datum| datum.le(upper_bound));
+            if filtered_literals.is_empty() {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -1549,6 +1552,17 @@ mod test {
             result,
             "Should read: number of items in In expression greater than threshold"
         );
+    }
+
+    #[test]
+    fn test_integer_in_straddling_bounds() {
+        let result = InclusiveMetricsEvaluator::eval(
+            &r#in_int("id", &[INT_MIN_VALUE - 25, INT_MAX_VALUE + 25]),
+            &get_test_file_1(),
+            true,
+        )
+        .unwrap();
+        assert!(!result, "Should skip: id in (5, 104), bounds are [30, 79]");
     }
 
     #[test]

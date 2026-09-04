@@ -409,12 +409,16 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             return ROWS_MIGHT_MATCH;
         }
 
+        // Narrow the set against each bound, matching InclusiveMetricsEvaluator.
+        let mut filtered_literals = literals.clone();
+
         if let Some(lower_bound) = &field.lower_bound {
             let lower_bound = ManifestFilterVisitor::bytes_to_datum(
                 lower_bound,
                 *reference.field().clone().field_type,
             );
-            if literals.iter().all(|datum| &lower_bound > datum) {
+            filtered_literals.retain(|datum| datum >= &lower_bound);
+            if filtered_literals.is_empty() {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -424,7 +428,8 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
                 upper_bound,
                 *reference.field().clone().field_type,
             );
-            if literals.iter().all(|datum| &upper_bound < datum) {
+            filtered_literals.retain(|datum| datum <= &upper_bound);
+            if filtered_literals.is_empty() {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -1372,6 +1377,30 @@ mod test {
             "Should read: id equal to lower bound (30 == 30)"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_straddling_bounds() -> Result<()> {
+        let case_sensitive = true;
+        let schema = create_schema()?;
+        let manifest_file = create_manifest_file(create_partitions());
+
+        let filter = Predicate::Set(SetExpression::new(
+            PredicateOperator::In,
+            Reference::new("id"),
+            FnvHashSet::from_iter(vec![
+                Datum::int(INT_MIN_VALUE - 25),
+                Datum::int(INT_MAX_VALUE + 25),
+            ]),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+        assert!(
+            !ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
+            "Should not read: id in (5, 104), summary is [30, 79]"
+        );
         Ok(())
     }
 
