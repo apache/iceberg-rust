@@ -30,8 +30,9 @@ use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
 use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::{CdcOptions, WriterProperties};
+use parquet::file::properties::{CdcOptions, WriterProperties, WriterPropertiesBuilder};
 use parquet::file::statistics::Statistics;
+use parquet::schema::types::ColumnPath;
 
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
@@ -101,15 +102,19 @@ impl ParquetWriterBuilder {
             None
         };
         let compression = parquet_compression(table_props.parquet_compression_codec()?)?;
-        let props = WriterProperties::builder()
+        let mut builder = WriterProperties::builder()
             .set_content_defined_chunking(cdc)
             .set_compression(compression)
             .set_max_row_group_bytes(Some(table_props.parquet_row_group_size_bytes()?))
             .set_data_page_size_limit(table_props.parquet_page_size_bytes()?)
             .set_data_page_row_count_limit(table_props.parquet_page_row_limit()?)
-            .set_dictionary_page_size_limit(table_props.parquet_dict_size_bytes()?)
-            .build();
-        Ok(Self::new_with_match_mode(props, schema, FieldMatchMode::Id))
+            .set_dictionary_page_size_limit(table_props.parquet_dict_size_bytes()?);
+        builder = set_bloom_filter_properties(builder, table_props, &schema)?;
+        Ok(Self::new_with_match_mode(
+            builder.build(),
+            schema,
+            FieldMatchMode::Id,
+        ))
     }
 
     /// Set the field match mode used to map Arrow fields to Iceberg fields.
@@ -160,6 +165,77 @@ fn invalid_level_error(codec: &str, source: impl Into<anyhow::Error>) -> Error {
         format!("Invalid {codec} compression level"),
     )
     .with_source(source)
+}
+
+/// Apply the per-column `write.parquet.bloom-filter-*` properties to `builder`.
+///
+/// `-enabled.column.` decides which columns are configured; `-fpp.column.` and
+/// `-ndv.column.` apply only to columns listed there. Columns missing from the
+/// schema are skipped, so a stale property cannot make a table unwritable.
+fn set_bloom_filter_properties(
+    mut builder: WriterPropertiesBuilder,
+    table_props: &TableProperties<'_>,
+    schema: &Schema,
+) -> Result<WriterPropertiesBuilder> {
+    let enabled = table_props.parquet_bloom_filter_column_enabled()?;
+    if enabled.is_empty() {
+        return Ok(builder);
+    }
+    let fpp = table_props.parquet_bloom_filter_column_fpp()?;
+    let ndv = table_props.parquet_bloom_filter_column_ndv()?;
+
+    for (column_name, is_enabled) in enabled.iter().sorted_by_key(|(name, _)| name.as_str()) {
+        let Some(column_path) = bloom_filter_column_path(schema, column_name) else {
+            continue;
+        };
+        builder = builder.set_column_bloom_filter_enabled(column_path.clone(), *is_enabled);
+        if !*is_enabled {
+            // Setting fpp or ndv would implicitly re-enable the filter.
+            continue;
+        }
+        // Applied unconditionally: parquet-rs defaults to 0.05, so leaving it
+        // unset would make an untuned column looser than Iceberg specifies.
+        let fpp = fpp
+            .get(column_name)
+            .copied()
+            .unwrap_or(TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_FPP_DEFAULT);
+        builder = builder.set_column_bloom_filter_fpp(column_path.clone(), fpp);
+        if let Some(ndv) = ndv.get(column_name) {
+            builder = builder.set_column_bloom_filter_max_ndv(column_path, *ndv);
+        }
+    }
+
+    Ok(builder)
+}
+
+/// Resolve an Iceberg column name to the Parquet leaf path that carries it.
+///
+/// Returns `None` unless the name is a primitive reachable through struct fields
+/// alone. Iceberg names a list element `a.element` where Parquet writes it at
+/// `a.list.element`; translating that needs the Parquet schema, which does not
+/// exist until write time, so list and map descendants are skipped rather than
+/// pointed at the wrong path.
+fn bloom_filter_column_path(schema: &Schema, column_name: &str) -> Option<ColumnPath> {
+    let field_id = schema.field_id_by_name(column_name)?;
+    if !schema.field_by_id(field_id)?.field_type.is_primitive() {
+        return None;
+    }
+
+    // The dotted name matches the Parquet path only if every step is a struct field.
+    let mut current = schema.as_struct();
+    let mut segments = Vec::new();
+    let mut remaining = column_name.split('.').peekable();
+    while let Some(segment) = remaining.next() {
+        let field = current.field_by_name(segment)?;
+        segments.push(segment.to_string());
+        match (&*field.field_type, remaining.peek().is_some()) {
+            (Type::Struct(nested), true) => current = nested,
+            (_, true) => return None,
+            (_, false) => {}
+        }
+    }
+
+    Some(ColumnPath::new(segments))
 }
 
 impl FileWriterBuilder for ParquetWriterBuilder {
@@ -769,6 +845,9 @@ mod tests {
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
+    use parquet::file::properties::ReaderProperties;
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::{ReadOptionsBuilder, SerializedFileReader};
     use parquet::file::statistics::ValueStatistics;
     use parquet::schema::types::ColumnPath;
     use tempfile::TempDir;
@@ -2725,6 +2804,306 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.to_string().contains("bogus"));
+    }
+
+    /// Covers each shape `bloom_filter_column_path` classifies: a top-level
+    /// primitive, one nested in a struct, and a list element.
+    fn bloom_test_schema() -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::required(2, "payload", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                    NestedField::required(
+                        3,
+                        "meta",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(4, "key", Type::Primitive(PrimitiveType::String))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                    NestedField::required(
+                        5,
+                        "tags",
+                        Type::List(ListType::new(
+                            NestedField::list_element(
+                                6,
+                                Type::Primitive(PrimitiveType::String),
+                                true,
+                            )
+                            .into(),
+                        )),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    fn bloom_props(entries: &[(String, String)]) -> WriterProperties {
+        let raw_properties: HashMap<String, String> = entries.iter().cloned().collect();
+        ParquetWriterBuilder::from_table_properties(
+            &TableProperties::new(&raw_properties),
+            bloom_test_schema(),
+        )
+        .unwrap()
+        .props
+    }
+
+    fn enabled_key(column: &str) -> String {
+        format!(
+            "{}{column}",
+            TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_ENABLED_PREFIX
+        )
+    }
+
+    #[test]
+    fn test_bloom_filters_off_by_default() {
+        let props = bloom_props(&[]);
+        assert!(
+            props
+                .bloom_filter_properties(&ColumnPath::from("id"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_bloom_filter_enabled_per_column() {
+        // Only the configured column gets a filter; siblings stay untouched.
+        let props = bloom_props(&[(enabled_key("id"), "true".to_string())]);
+        assert!(
+            props
+                .bloom_filter_properties(&ColumnPath::from("id"))
+                .is_some()
+        );
+        assert!(
+            props
+                .bloom_filter_properties(&ColumnPath::from("payload"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_bloom_filter_fpp_and_ndv_applied() {
+        let props = bloom_props(&[
+            (enabled_key("id"), "true".to_string()),
+            (
+                format!(
+                    "{}id",
+                    TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_FPP_PREFIX
+                ),
+                "0.001".to_string(),
+            ),
+            (
+                format!(
+                    "{}id",
+                    TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_NDV_PREFIX
+                ),
+                "12345".to_string(),
+            ),
+        ]);
+
+        let bloom = props
+            .bloom_filter_properties(&ColumnPath::from("id"))
+            .expect("bloom filter should be enabled for id");
+        assert_eq!(bloom.fpp(), 0.001);
+        assert_eq!(bloom.ndv(), 12345);
+    }
+
+    #[test]
+    fn test_bloom_filter_disabled_column_ignores_fpp_and_ndv() {
+        // fpp/ndv would re-enable the filter if applied to a disabled column.
+        let props = bloom_props(&[
+            (enabled_key("id"), "false".to_string()),
+            (
+                format!(
+                    "{}id",
+                    TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_FPP_PREFIX
+                ),
+                "0.001".to_string(),
+            ),
+            (
+                format!(
+                    "{}id",
+                    TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_NDV_PREFIX
+                ),
+                "12345".to_string(),
+            ),
+        ]);
+        assert!(
+            props
+                .bloom_filter_properties(&ColumnPath::from("id"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_bloom_filter_fpp_without_enabled_is_ignored() {
+        // `-enabled.column.` alone decides what gets configured.
+        let props = bloom_props(&[(
+            format!(
+                "{}id",
+                TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_FPP_PREFIX
+            ),
+            "0.001".to_string(),
+        )]);
+        assert!(
+            props
+                .bloom_filter_properties(&ColumnPath::from("id"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_bloom_filter_nested_struct_column() {
+        let props = bloom_props(&[(enabled_key("meta.key"), "true".to_string())]);
+        assert!(
+            props
+                .bloom_filter_properties(&ColumnPath::from(vec![
+                    "meta".to_string(),
+                    "key".to_string()
+                ]))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn test_bloom_filter_unknown_column_is_skipped() {
+        // A stale property must not make the table unwritable.
+        let props = bloom_props(&[
+            (enabled_key("does_not_exist"), "true".to_string()),
+            (enabled_key("id"), "true".to_string()),
+        ]);
+        assert!(
+            props
+                .bloom_filter_properties(&ColumnPath::from("does_not_exist"))
+                .is_none()
+        );
+        assert!(
+            props
+                .bloom_filter_properties(&ColumnPath::from("id"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn test_bloom_filter_collection_element_is_skipped() {
+        // Neither the Iceberg name nor the Parquet path should be configured.
+        let props = bloom_props(&[(enabled_key("tags.element"), "true".to_string())]);
+        for path in [
+            ColumnPath::from(vec!["tags".to_string(), "element".to_string()]),
+            ColumnPath::from(vec![
+                "tags".to_string(),
+                "list".to_string(),
+                "element".to_string(),
+            ]),
+        ] {
+            assert!(props.bloom_filter_properties(&path).is_none());
+        }
+    }
+
+    #[test]
+    fn test_bloom_filter_struct_column_itself_is_skipped() {
+        // `meta` is not a leaf, so there is no Parquet column to configure.
+        let props = bloom_props(&[(enabled_key("meta"), "true".to_string())]);
+        assert!(
+            props
+                .bloom_filter_properties(&ColumnPath::from("meta"))
+                .is_none()
+        );
+    }
+
+    /// The tests above check configuration; this one checks that a filter really
+    /// reaches the file, which is what previously did not happen.
+    #[tokio::test]
+    async fn test_bloom_filter_written_to_file() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("id", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("payload", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+        let iceberg_schema: SchemaRef = Arc::new(arrow_schema.as_ref().try_into().unwrap());
+        let batch = RecordBatch::try_new(arrow_schema, vec![
+            Arc::new(Int64Array::from_iter_values(0..64)) as ArrayRef,
+            Arc::new(Int64Array::from_iter_values(0..64)) as ArrayRef,
+        ])
+        .unwrap();
+
+        // Only `id` is configured, so `payload` doubles as the negative control.
+        let raw_properties = HashMap::from([(
+            format!(
+                "{}id",
+                TableProperties::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_ENABLED_PREFIX
+            ),
+            "true".to_string(),
+        )]);
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
+        let mut writer = ParquetWriterBuilder::from_table_properties(
+            &TableProperties::new(&raw_properties),
+            iceberg_schema,
+        )?
+        .build(output_file)
+        .await?;
+        writer.write(&batch).await?;
+        let data_file = writer
+            .close()
+            .await?
+            .into_iter()
+            .next()
+            .unwrap()
+            .content(DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        let bytes = file_io.new_input(data_file.file_path())?.read().await?;
+        let reader = SerializedFileReader::new_with_options(
+            bytes,
+            ReadOptionsBuilder::new()
+                .with_reader_properties(
+                    ReaderProperties::builder()
+                        .set_read_bloom_filter(true)
+                        .build(),
+                )
+                .build(),
+        )
+        .unwrap();
+        let row_group = reader.get_row_group(0).unwrap();
+
+        let sbbf = row_group
+            .get_column_bloom_filter(0)
+            .expect("id should carry a bloom filter");
+        assert!(sbbf.check(&7i64), "a written value must probe positive");
+        assert!(
+            !sbbf.check(&9999i64),
+            "an absent value should probe negative"
+        );
+        assert!(
+            row_group.get_column_bloom_filter(1).is_none(),
+            "payload was not configured and must have no bloom filter"
+        );
+
+        Ok(())
     }
 
     #[test]
