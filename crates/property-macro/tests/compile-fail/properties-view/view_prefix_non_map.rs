@@ -15,18 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::OnceLock;
+use iceberg_property_macro::properties_view;
 
-use tokio::runtime::{Handle, Runtime};
-
-static RUNTIME: OnceLock<Runtime> = OnceLock::new();
-
-pub fn runtime() -> Handle {
-    match Handle::try_current() {
-        Ok(h) => h.clone(),
-        _ => {
-            let rt = RUNTIME.get_or_init(|| Runtime::new().unwrap());
-            rt.handle().clone()
-        }
+properties_view! {
+    struct PrefixNonMap {
+        #[property(prefix = "values.")]
+        value: u64,
     }
 }
+
+fn main() {}

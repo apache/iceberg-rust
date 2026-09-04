@@ -450,6 +450,25 @@ fn json_map() {
 }
 
 #[test]
+fn json_map_rejects_mismatched_key_value_lengths() {
+    let map_type = Type::Map(MapType {
+        key_field: NestedField::map_key_element(0, Primitive(PrimitiveType::String)).into(),
+        value_field: NestedField::map_value_element(1, Primitive(PrimitiveType::Int), true).into(),
+    });
+
+    for record in [
+        r#"{"keys":["a","b"],"values":[1]}"#,
+        r#"{"keys":["a"],"values":[1,2]}"#,
+    ] {
+        let value = serde_json::from_str::<JsonValue>(record).unwrap();
+        let error = Literal::try_from_json(value, &map_type).unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(error.to_string().contains("must have the same length"));
+    }
+}
+
+#[test]
 fn avro_bytes_boolean() {
     let bytes = vec![1u8];
 

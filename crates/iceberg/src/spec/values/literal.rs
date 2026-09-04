@@ -598,6 +598,17 @@ impl Literal {
                     if let (Some(JsonValue::Array(keys)), Some(JsonValue::Array(values))) =
                         (object.remove("keys"), object.remove("values"))
                     {
+                        if keys.len() != values.len() {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Map keys and values must have the same length, got {} keys and {} values",
+                                    keys.len(),
+                                    values.len()
+                                ),
+                            ));
+                        }
+
                         Ok(Some(Literal::Map(Map::from_iter(
                             keys.into_iter()
                                 .zip(values)
