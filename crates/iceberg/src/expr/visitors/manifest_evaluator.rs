@@ -409,29 +409,27 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             return ROWS_MIGHT_MATCH;
         }
 
-        // Narrow the set against each bound, matching InclusiveMetricsEvaluator.
-        let mut filtered_literals = literals.clone();
+        let field_type = *reference.field().clone().field_type;
+        let lower_bound = field
+            .lower_bound
+            .as_ref()
+            .map(|bound| ManifestFilterVisitor::bytes_to_datum(bound, field_type.clone()));
+        let upper_bound = field
+            .upper_bound
+            .as_ref()
+            .map(|bound| ManifestFilterVisitor::bytes_to_datum(bound, field_type));
 
-        if let Some(lower_bound) = &field.lower_bound {
-            let lower_bound = ManifestFilterVisitor::bytes_to_datum(
-                lower_bound,
-                *reference.field().clone().field_type,
-            );
-            filtered_literals.retain(|datum| datum >= &lower_bound);
-            if filtered_literals.is_empty() {
-                return ROWS_CANNOT_MATCH;
-            }
-        }
+        let any_literal_in_bounds = match (&lower_bound, &upper_bound) {
+            (Some(lower), Some(upper)) => literals
+                .iter()
+                .any(|datum| datum >= lower && datum <= upper),
+            (Some(lower), None) => literals.iter().any(|datum| datum >= lower),
+            (None, Some(upper)) => literals.iter().any(|datum| datum <= upper),
+            (None, None) => true,
+        };
 
-        if let Some(upper_bound) = &field.upper_bound {
-            let upper_bound = ManifestFilterVisitor::bytes_to_datum(
-                upper_bound,
-                *reference.field().clone().field_type,
-            );
-            filtered_literals.retain(|datum| datum <= &upper_bound);
-            if filtered_literals.is_empty() {
-                return ROWS_CANNOT_MATCH;
-            }
+        if !any_literal_in_bounds {
+            return ROWS_CANNOT_MATCH;
         }
 
         ROWS_MIGHT_MATCH
