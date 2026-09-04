@@ -443,7 +443,8 @@ pub(crate) mod tests {
             .with_file_type(DataContentType::PositionDeletes)
             .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
-            .build();
+            .build()
+            .unwrap();
 
         let pos_del_2 = FileScanTaskDeleteFile::builder()
             .with_file_path(format!(
@@ -461,7 +462,8 @@ pub(crate) mod tests {
             .with_file_type(DataContentType::PositionDeletes)
             .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
-            .build();
+            .build()
+            .unwrap();
 
         let pos_del_3 = FileScanTaskDeleteFile::builder()
             .with_file_path(format!(
@@ -479,7 +481,8 @@ pub(crate) mod tests {
             .with_file_type(DataContentType::PositionDeletes)
             .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
-            .build();
+            .build()
+            .unwrap();
 
         let file_scan_tasks = vec![
             FileScanTask::builder()
@@ -556,7 +559,8 @@ pub(crate) mod tests {
                     .with_file_type(DataContentType::EqualityDeletes)
                     .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .with_case_sensitive(true)
             .build()

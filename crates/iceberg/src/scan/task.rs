@@ -333,12 +333,16 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
                     .map(Box::from),
             )
             .build()
+            .expect("delete file context should build a valid FileScanTaskDeleteFile")
     }
 }
 
 /// A task to scan part of file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TypedBuilder)]
-#[builder(field_defaults(setter(prefix = "with_")))]
+#[builder(
+    field_defaults(setter(prefix = "with_")),
+    build_method(into = Result<FileScanTaskDeleteFile>)
+)]
 pub struct FileScanTaskDeleteFile {
     /// The delete file path
     pub file_path: String,
@@ -403,6 +407,87 @@ pub struct FileScanTaskDeleteFile {
     pub key_metadata: Option<Box<[u8]>>,
 }
 
+impl FileScanTaskDeleteFile {
+    /// Returns whether this delete file is a V3 deletion vector stored in Puffin.
+    pub fn is_deletion_vector(&self) -> bool {
+        self.file_type == DataContentType::PositionDeletes
+            && self.file_format == DataFileFormat::Puffin
+    }
+
+    fn validate(&self) -> Result<()> {
+        if !self.is_deletion_vector() {
+            return Ok(());
+        }
+
+        if self.referenced_data_file.is_none() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} is missing referenced_data_file",
+                    self.file_path
+                ),
+            ));
+        }
+
+        match self.content_offset {
+            None => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("deletion vector {} is missing content_offset", self.file_path),
+                ));
+            }
+            Some(offset) if offset < 0 => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "deletion vector {} has negative content_offset {}",
+                        self.file_path, offset
+                    ),
+                ));
+            }
+            Some(_) => {}
+        }
+
+        match self.content_size_in_bytes {
+            None => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "deletion vector {} is missing content_size_in_bytes",
+                        self.file_path
+                    ),
+                ));
+            }
+            Some(size) if size < 0 => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "deletion vector {} has negative content_size_in_bytes {}",
+                        self.file_path, size
+                    ),
+                ));
+            }
+            Some(_) => {}
+        }
+
+        if self.record_count.is_none() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("deletion vector {} is missing record_count", self.file_path),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+impl From<FileScanTaskDeleteFile> for Result<FileScanTaskDeleteFile> {
+    fn from(task: FileScanTaskDeleteFile) -> Self {
+        task.validate()?;
+        Ok(task)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,6 +535,48 @@ mod tests {
                 .unwrap(),
         );
         (schema, partition_spec)
+    }
+
+    fn build_delete_file_task(
+        file_type: DataContentType,
+        file_format: DataFileFormat,
+    ) -> Result<FileScanTaskDeleteFile> {
+        FileScanTaskDeleteFile::builder()
+            .with_file_path("delete-file".to_string())
+            .with_file_size_in_bytes(100)
+            .with_file_type(file_type)
+            .with_file_format(file_format)
+            .with_partition_spec_id(0)
+            .build()
+    }
+
+    fn build_deletion_vector_task() -> Result<FileScanTaskDeleteFile> {
+        FileScanTaskDeleteFile::builder()
+            .with_file_path("dv.puffin".to_string())
+            .with_file_size_in_bytes(100)
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Puffin)
+            .with_partition_spec_id(0)
+            .with_referenced_data_file(Some("data.parquet".to_string()))
+            .with_content_offset(Some(7))
+            .with_content_size_in_bytes(Some(11))
+            .with_record_count(Some(3))
+            .build()
+    }
+
+    fn assert_delete_file_builder_error(
+        result: Result<FileScanTaskDeleteFile>,
+        expected_message: &str,
+    ) {
+        match result {
+            Ok(task) => panic!(
+                "expected delete file builder to fail with `{expected_message}`, but got Ok({task:?})"
+            ),
+            Err(err) => {
+                assert_eq!(err.kind(), ErrorKind::DataInvalid);
+                assert_eq!(err.message(), expected_message);
+            }
+        }
     }
 
     #[test]
@@ -563,5 +690,120 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[test]
+    fn test_delete_file_builder_accepts_valid_deletion_vector() {
+        build_deletion_vector_task().unwrap();
+    }
+
+    #[test]
+    fn test_delete_file_builder_rejects_dv_missing_referenced_data_file() {
+        assert_delete_file_builder_error(
+            FileScanTaskDeleteFile::builder()
+                .with_file_path("dv.puffin".to_string())
+                .with_file_size_in_bytes(100)
+                .with_file_type(DataContentType::PositionDeletes)
+                .with_file_format(DataFileFormat::Puffin)
+                .with_partition_spec_id(0)
+                .with_content_offset(Some(7))
+                .with_content_size_in_bytes(Some(11))
+                .with_record_count(Some(3))
+                .build(),
+            "deletion vector dv.puffin is missing referenced_data_file",
+        );
+    }
+
+    #[test]
+    fn test_delete_file_builder_rejects_dv_missing_content_offset() {
+        assert_delete_file_builder_error(
+            FileScanTaskDeleteFile::builder()
+                .with_file_path("dv.puffin".to_string())
+                .with_file_size_in_bytes(100)
+                .with_file_type(DataContentType::PositionDeletes)
+                .with_file_format(DataFileFormat::Puffin)
+                .with_partition_spec_id(0)
+                .with_referenced_data_file(Some("data.parquet".to_string()))
+                .with_content_size_in_bytes(Some(11))
+                .with_record_count(Some(3))
+                .build(),
+            "deletion vector dv.puffin is missing content_offset",
+        );
+    }
+
+    #[test]
+    fn test_delete_file_builder_rejects_dv_missing_content_size() {
+        assert_delete_file_builder_error(
+            FileScanTaskDeleteFile::builder()
+                .with_file_path("dv.puffin".to_string())
+                .with_file_size_in_bytes(100)
+                .with_file_type(DataContentType::PositionDeletes)
+                .with_file_format(DataFileFormat::Puffin)
+                .with_partition_spec_id(0)
+                .with_referenced_data_file(Some("data.parquet".to_string()))
+                .with_content_offset(Some(7))
+                .with_record_count(Some(3))
+                .build(),
+            "deletion vector dv.puffin is missing content_size_in_bytes",
+        );
+    }
+
+    #[test]
+    fn test_delete_file_builder_rejects_dv_missing_record_count() {
+        assert_delete_file_builder_error(
+            FileScanTaskDeleteFile::builder()
+                .with_file_path("dv.puffin".to_string())
+                .with_file_size_in_bytes(100)
+                .with_file_type(DataContentType::PositionDeletes)
+                .with_file_format(DataFileFormat::Puffin)
+                .with_partition_spec_id(0)
+                .with_referenced_data_file(Some("data.parquet".to_string()))
+                .with_content_offset(Some(7))
+                .with_content_size_in_bytes(Some(11))
+                .build(),
+            "deletion vector dv.puffin is missing record_count",
+        );
+    }
+
+    #[test]
+    fn test_delete_file_builder_rejects_negative_dv_offset() {
+        assert_delete_file_builder_error(
+            FileScanTaskDeleteFile::builder()
+                .with_file_path("dv.puffin".to_string())
+                .with_file_size_in_bytes(100)
+                .with_file_type(DataContentType::PositionDeletes)
+                .with_file_format(DataFileFormat::Puffin)
+                .with_partition_spec_id(0)
+                .with_referenced_data_file(Some("data.parquet".to_string()))
+                .with_content_offset(Some(-1))
+                .with_content_size_in_bytes(Some(11))
+                .with_record_count(Some(3))
+                .build(),
+            "deletion vector dv.puffin has negative content_offset -1",
+        );
+    }
+
+    #[test]
+    fn test_delete_file_builder_rejects_negative_dv_size() {
+        assert_delete_file_builder_error(
+            FileScanTaskDeleteFile::builder()
+                .with_file_path("dv.puffin".to_string())
+                .with_file_size_in_bytes(100)
+                .with_file_type(DataContentType::PositionDeletes)
+                .with_file_format(DataFileFormat::Puffin)
+                .with_partition_spec_id(0)
+                .with_referenced_data_file(Some("data.parquet".to_string()))
+                .with_content_offset(Some(7))
+                .with_content_size_in_bytes(Some(-1))
+                .with_record_count(Some(3))
+                .build(),
+            "deletion vector dv.puffin has negative content_size_in_bytes -1",
+        );
+    }
+
+    #[test]
+    fn test_delete_file_builder_accepts_non_dv_delete_without_dv_fields() {
+        build_delete_file_task(DataContentType::PositionDeletes, DataFileFormat::Parquet).unwrap();
+        build_delete_file_task(DataContentType::EqualityDeletes, DataFileFormat::Parquet).unwrap();
     }
 }
