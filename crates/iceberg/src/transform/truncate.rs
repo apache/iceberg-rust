@@ -23,7 +23,7 @@ use arrow_schema::DataType;
 use super::TransformFunction;
 use crate::Error;
 use crate::spec::decimal_utils::decimal_from_i128_with_scale;
-use crate::spec::{Datum, PrimitiveLiteral};
+use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 
 #[derive(Debug)]
 pub struct Truncate {
@@ -137,6 +137,18 @@ impl TransformFunction for Truncate {
                 );
                 Ok(Arc::new(res))
             }
+            DataType::LargeBinary => {
+                let len = self.width as usize;
+                let res: arrow_array::LargeBinaryArray = arrow_array::LargeBinaryArray::from_iter(
+                    input
+                        .as_any()
+                        .downcast_ref::<arrow_array::LargeBinaryArray>()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.map(|v| Self::truncate_binary(v, len))),
+                );
+                Ok(Arc::new(res))
+            }
             _ => Err(Error::new(
                 crate::ErrorKind::FeatureUnsupported,
                 format!(
@@ -173,6 +185,10 @@ impl TransformFunction for Truncate {
                 let len = self.width as usize;
                 Datum::string(Self::truncate_str(v, len).to_string())
             })),
+            PrimitiveLiteral::Binary(v) if input.data_type() == &PrimitiveType::Binary => {
+                let len = self.width as usize;
+                Ok(Some(Datum::binary(Self::truncate_binary(v, len).to_vec())))
+            }
             _ => Err(Error::new(
                 crate::ErrorKind::FeatureUnsupported,
                 format!(
@@ -852,5 +868,145 @@ mod test {
             .unwrap()
             .unwrap();
         assert_eq!(res, Datum::string("ice".to_string()),);
+    }
+
+    #[test]
+    fn test_binary_truncate() {
+        let fixture = super::Truncate::new(3);
+
+        let input = Arc::new(arrow_array::BinaryArray::from_iter_values([
+            b"\x01\x02\x03\x04\x05".as_slice(),
+            b"\x01\x02".as_slice(),
+            b"".as_slice(),
+        ]));
+        let res = fixture.transform(input).unwrap();
+        let res = res
+            .as_any()
+            .downcast_ref::<arrow_array::BinaryArray>()
+            .unwrap();
+        assert_eq!(res.value(0), b"\x01\x02\x03");
+        assert_eq!(res.value(1), b"\x01\x02");
+        assert_eq!(res.value(2), b"");
+    }
+
+    /// `schema_to_arrow_schema` maps an Iceberg `binary` column to `LargeBinary`.
+    #[test]
+    fn test_large_binary_truncate() {
+        let fixture = super::Truncate::new(3);
+
+        let input = Arc::new(arrow_array::LargeBinaryArray::from_iter_values([
+            b"\x01\x02\x03\x04\x05".as_slice(),
+            b"\x01\x02".as_slice(),
+            b"".as_slice(),
+        ]));
+        let res = fixture.transform(input).unwrap();
+        let res = res
+            .as_any()
+            .downcast_ref::<arrow_array::LargeBinaryArray>()
+            .unwrap();
+        assert_eq!(res.value(0), b"\x01\x02\x03");
+        assert_eq!(res.value(1), b"\x01\x02");
+        assert_eq!(res.value(2), b"");
+    }
+
+    #[test]
+    fn test_binary_literal() {
+        let fixture = super::Truncate::new(3);
+
+        for (input, expected) in [
+            (vec![1u8, 2, 3, 4, 5], vec![1u8, 2, 3]),
+            (vec![1u8, 2], vec![1u8, 2]),
+            (vec![], vec![]),
+        ] {
+            let res = fixture
+                .transform_literal(&Datum::binary(input))
+                .unwrap()
+                .unwrap();
+            assert_eq!(res, Datum::binary(expected));
+        }
+    }
+
+    #[test]
+    fn test_fixed_literal_is_rejected() {
+        assert!(
+            super::Truncate::new(3)
+                .transform_literal(&Datum::fixed(vec![1u8, 2, 3, 4]))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_projection_truncate_binary() -> Result<()> {
+        let value = || Datum::binary(vec![1u8, 2, 3, 4, 5]);
+        let prefix = || Datum::binary(vec![1u8, 2, 3]);
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(3),
+            "name",
+            NestedField::required(1, "value", Primitive(Binary)),
+        );
+
+        for op in [PredicateOperator::LessThan, PredicateOperator::LessThanOrEq] {
+            fixture.assert_projection(
+                &fixture.binary_predicate(op, value()),
+                Some(&format!("name <= {}", prefix())),
+            )?;
+        }
+
+        for op in [
+            PredicateOperator::GreaterThan,
+            PredicateOperator::GreaterThanOrEq,
+        ] {
+            fixture.assert_projection(
+                &fixture.binary_predicate(op, value()),
+                Some(&format!("name >= {}", prefix())),
+            )?;
+        }
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, value()),
+            Some(&format!("name = {}", prefix())),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::StartsWith, value()),
+            Some(&format!("name STARTS WITH {}", prefix())),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(PredicateOperator::In, vec![
+                value(),
+                Datum::binary(vec![1u8, 2, 3, 9]),
+            ]),
+            Some(&format!("name IN ({})", prefix())),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_strict_projection_truncate_binary() -> Result<()> {
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(3),
+            "name",
+            NestedField::required(1, "value", Primitive(Binary)),
+        );
+        let prefix = Datum::binary(vec![1u8, 2, 3]);
+
+        assert_eq!(
+            Transform::Truncate(3)
+                .strict_project(
+                    "name",
+                    &fixture.binary_predicate(
+                        PredicateOperator::NotEq,
+                        Datum::binary(vec![1u8, 2, 3, 4, 5])
+                    )
+                )?
+                .unwrap()
+                .to_string(),
+            format!("name != {prefix}")
+        );
+
+        Ok(())
     }
 }
