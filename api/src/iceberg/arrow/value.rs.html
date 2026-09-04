@@ -633,7 +633,7 @@
 <a href=#633 id=633 data-nosnippet>633</a>/// a single value that represents all rows.
 <a href=#634 id=634 data-nosnippet>634</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>create_primitive_array_single_element(
 <a href=#635 id=635 data-nosnippet>635</a>    data_type: <span class="kw-2">&amp;</span>DataType,
-<a href=#636 id=636 data-nosnippet>636</a>    prim_lit: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PrimitiveLiteral&gt;,
+<a href=#636 id=636 data-nosnippet>636</a>    prim_lit: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>PrimitiveLiteral&gt;,
 <a href=#637 id=637 data-nosnippet>637</a>) -&gt; <span class="prelude-ty">Result</span>&lt;ArrayRef&gt; {
 <a href=#638 id=638 data-nosnippet>638</a>    <span class="kw">match </span>(data_type, prim_lit) {
 <a href=#639 id=639 data-nosnippet>639</a>        (DataType::Boolean, <span class="prelude-val">Some</span>(PrimitiveLiteral::Boolean(v))) =&gt; {
@@ -816,7 +816,7 @@
 <a href=#816 id=816 data-nosnippet>816</a>/// repeated for each row.
 <a href=#817 id=817 data-nosnippet>817</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>create_primitive_array_repeated(
 <a href=#818 id=818 data-nosnippet>818</a>    data_type: <span class="kw-2">&amp;</span>DataType,
-<a href=#819 id=819 data-nosnippet>819</a>    prim_lit: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PrimitiveLiteral&gt;,
+<a href=#819 id=819 data-nosnippet>819</a>    prim_lit: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>PrimitiveLiteral&gt;,
 <a href=#820 id=820 data-nosnippet>820</a>    num_rows: usize,
 <a href=#821 id=821 data-nosnippet>821</a>) -&gt; <span class="prelude-ty">Result</span>&lt;ArrayRef&gt; {
 <a href=#822 id=822 data-nosnippet>822</a>    <span class="prelude-val">Ok</span>(<span class="kw">match </span>(data_type, prim_lit) {
@@ -949,7 +949,7 @@
 <a href=#949 id=949 data-nosnippet>949</a>            <span class="comment">// Create a StructArray filled with nulls, recursively creating null children
 <a href=#950 id=950 data-nosnippet>950</a>            </span><span class="kw">let </span>null_arrays: Vec&lt;ArrayRef&gt; = fields
 <a href=#951 id=951 data-nosnippet>951</a>                .iter()
-<a href=#952 id=952 data-nosnippet>952</a>                .map(|field| create_primitive_array_repeated(field.data_type(), <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, num_rows))
+<a href=#952 id=952 data-nosnippet>952</a>                .map(|field| create_primitive_array_repeated(field.data_type(), <span class="prelude-val">None</span>, num_rows))
 <a href=#953 id=953 data-nosnippet>953</a>                .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
 <a href=#954 id=954 data-nosnippet>954</a>
 <a href=#955 id=955 data-nosnippet>955</a>            Arc::new(StructArray::new(
@@ -1869,7 +1869,7 @@
 <a href=#1869 id=1869 data-nosnippet>1869</a>        <span class="kw">let </span>target_type = DataType::Decimal128(target_precision, target_scale);
 <a href=#1870 id=1870 data-nosnippet>1870</a>        <span class="kw">let </span>value = PrimitiveLiteral::Int128(<span class="number">10000000000</span>);
 <a href=#1871 id=1871 data-nosnippet>1871</a>
-<a href=#1872 id=1872 data-nosnippet>1872</a>        <span class="kw">let </span>array = create_primitive_array_single_element(<span class="kw-2">&amp;</span>target_type, <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(value))
+<a href=#1872 id=1872 data-nosnippet>1872</a>        <span class="kw">let </span>array = create_primitive_array_single_element(<span class="kw-2">&amp;</span>target_type, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>value))
 <a href=#1873 id=1873 data-nosnippet>1873</a>            .expect(<span class="string">"Failed to create decimal array"</span>);
 <a href=#1874 id=1874 data-nosnippet>1874</a>
 <a href=#1875 id=1875 data-nosnippet>1875</a>        <span class="kw">match </span>array.data_type() {
@@ -1890,7 +1890,7 @@
 <a href=#1890 id=1890 data-nosnippet>1890</a>        <span class="kw">let </span>value = PrimitiveLiteral::Int128(<span class="number">10000000000</span>);
 <a href=#1891 id=1891 data-nosnippet>1891</a>        <span class="kw">let </span>num_rows = <span class="number">5</span>;
 <a href=#1892 id=1892 data-nosnippet>1892</a>
-<a href=#1893 id=1893 data-nosnippet>1893</a>        <span class="kw">let </span>array = create_primitive_array_repeated(<span class="kw-2">&amp;</span>target_type, <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(value), num_rows)
+<a href=#1893 id=1893 data-nosnippet>1893</a>        <span class="kw">let </span>array = create_primitive_array_repeated(<span class="kw-2">&amp;</span>target_type, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>value), num_rows)
 <a href=#1894 id=1894 data-nosnippet>1894</a>            .expect(<span class="string">"Failed to create repeated decimal array"</span>);
 <a href=#1895 id=1895 data-nosnippet>1895</a>
 <a href=#1896 id=1896 data-nosnippet>1896</a>        <span class="kw">match </span>array.data_type() {
@@ -1910,7 +1910,7 @@
 <a href=#1910 id=1910 data-nosnippet>1910</a>        <span class="kw">let </span>value = PrimitiveLiteral::Long(<span class="number">1_740_600_000_000_000</span>);
 <a href=#1911 id=1911 data-nosnippet>1911</a>        <span class="kw">let </span>num_rows = <span class="number">3</span>;
 <a href=#1912 id=1912 data-nosnippet>1912</a>
-<a href=#1913 id=1913 data-nosnippet>1913</a>        <span class="kw">let </span>array = create_primitive_array_repeated(<span class="kw-2">&amp;</span>target_type, <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(value), num_rows)
+<a href=#1913 id=1913 data-nosnippet>1913</a>        <span class="kw">let </span>array = create_primitive_array_repeated(<span class="kw-2">&amp;</span>target_type, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>value), num_rows)
 <a href=#1914 id=1914 data-nosnippet>1914</a>            .expect(<span class="string">"Failed to create repeated timestamp microsecond array"</span>);
 <a href=#1915 id=1915 data-nosnippet>1915</a>
 <a href=#1916 id=1916 data-nosnippet>1916</a>        <span class="macro">assert_eq!</span>(array.data_type(), <span class="kw-2">&amp;</span>target_type);
@@ -1923,7 +1923,7 @@
 <a href=#1923 id=1923 data-nosnippet>1923</a>        <span class="kw">let </span>value = PrimitiveLiteral::Long(<span class="number">1_740_600_000_000_000</span>);
 <a href=#1924 id=1924 data-nosnippet>1924</a>        <span class="kw">let </span>num_rows = <span class="number">2</span>;
 <a href=#1925 id=1925 data-nosnippet>1925</a>
-<a href=#1926 id=1926 data-nosnippet>1926</a>        <span class="kw">let </span>array = create_primitive_array_repeated(<span class="kw-2">&amp;</span>target_type, <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(value), num_rows)
+<a href=#1926 id=1926 data-nosnippet>1926</a>        <span class="kw">let </span>array = create_primitive_array_repeated(<span class="kw-2">&amp;</span>target_type, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>value), num_rows)
 <a href=#1927 id=1927 data-nosnippet>1927</a>            .expect(<span class="string">"Failed to create repeated timestamp microsecond array with timezone"</span>);
 <a href=#1928 id=1928 data-nosnippet>1928</a>
 <a href=#1929 id=1929 data-nosnippet>1929</a>        <span class="macro">assert_eq!</span>(array.data_type(), <span class="kw-2">&amp;</span>target_type);
@@ -1938,7 +1938,7 @@
 <a href=#1938 id=1938 data-nosnippet>1938</a>
 <a href=#1939 id=1939 data-nosnippet>1939</a>        <span class="kw">let </span>utf8 = create_primitive_array_repeated(
 <a href=#1940 id=1940 data-nosnippet>1940</a>            <span class="kw-2">&amp;</span>DataType::Utf8,
-<a href=#1941 id=1941 data-nosnippet>1941</a>            <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(PrimitiveLiteral::String(text.to_string())),
+<a href=#1941 id=1941 data-nosnippet>1941</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::String(text.to_string())),
 <a href=#1942 id=1942 data-nosnippet>1942</a>            num_rows,
 <a href=#1943 id=1943 data-nosnippet>1943</a>        )
 <a href=#1944 id=1944 data-nosnippet>1944</a>        .unwrap();
@@ -1948,7 +1948,7 @@
 <a href=#1948 id=1948 data-nosnippet>1948</a>
 <a href=#1949 id=1949 data-nosnippet>1949</a>        <span class="kw">let </span>binary = create_primitive_array_repeated(
 <a href=#1950 id=1950 data-nosnippet>1950</a>            <span class="kw-2">&amp;</span>DataType::Binary,
-<a href=#1951 id=1951 data-nosnippet>1951</a>            <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(PrimitiveLiteral::Binary(bytes.clone())),
+<a href=#1951 id=1951 data-nosnippet>1951</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::Binary(bytes.clone())),
 <a href=#1952 id=1952 data-nosnippet>1952</a>            num_rows,
 <a href=#1953 id=1953 data-nosnippet>1953</a>        )
 <a href=#1954 id=1954 data-nosnippet>1954</a>        .unwrap();
@@ -1958,7 +1958,7 @@
 <a href=#1958 id=1958 data-nosnippet>1958</a>
 <a href=#1959 id=1959 data-nosnippet>1959</a>        <span class="kw">let </span>large = create_primitive_array_repeated(
 <a href=#1960 id=1960 data-nosnippet>1960</a>            <span class="kw-2">&amp;</span>DataType::LargeBinary,
-<a href=#1961 id=1961 data-nosnippet>1961</a>            <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(PrimitiveLiteral::Binary(bytes.clone())),
+<a href=#1961 id=1961 data-nosnippet>1961</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::Binary(bytes.clone())),
 <a href=#1962 id=1962 data-nosnippet>1962</a>            num_rows,
 <a href=#1963 id=1963 data-nosnippet>1963</a>        )
 <a href=#1964 id=1964 data-nosnippet>1964</a>        .unwrap();
@@ -1968,7 +1968,7 @@
 <a href=#1968 id=1968 data-nosnippet>1968</a>
 <a href=#1969 id=1969 data-nosnippet>1969</a>        <span class="kw">let </span>fixed = create_primitive_array_repeated(
 <a href=#1970 id=1970 data-nosnippet>1970</a>            <span class="kw-2">&amp;</span>DataType::FixedSizeBinary(bytes.len() <span class="kw">as </span>i32),
-<a href=#1971 id=1971 data-nosnippet>1971</a>            <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(PrimitiveLiteral::Binary(bytes.clone())),
+<a href=#1971 id=1971 data-nosnippet>1971</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::Binary(bytes.clone())),
 <a href=#1972 id=1972 data-nosnippet>1972</a>            num_rows,
 <a href=#1973 id=1973 data-nosnippet>1973</a>        )
 <a href=#1974 id=1974 data-nosnippet>1974</a>        .unwrap();
@@ -1985,7 +1985,7 @@
 <a href=#1985 id=1985 data-nosnippet>1985</a>        <span class="comment">// num_rows == 0 must produce an empty (not one-element) array.
 <a href=#1986 id=1986 data-nosnippet>1986</a>        </span><span class="kw">let </span>array = create_primitive_array_repeated(
 <a href=#1987 id=1987 data-nosnippet>1987</a>            <span class="kw-2">&amp;</span>DataType::Utf8,
-<a href=#1988 id=1988 data-nosnippet>1988</a>            <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(PrimitiveLiteral::String(<span class="string">"x"</span>.to_string())),
+<a href=#1988 id=1988 data-nosnippet>1988</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::String(<span class="string">"x"</span>.to_string())),
 <a href=#1989 id=1989 data-nosnippet>1989</a>            <span class="number">0</span>,
 <a href=#1990 id=1990 data-nosnippet>1990</a>        )
 <a href=#1991 id=1991 data-nosnippet>1991</a>        .unwrap();
@@ -1998,7 +1998,7 @@
 <a href=#1998 id=1998 data-nosnippet>1998</a>        // than silently producing a FixedSizeBinary array of the literal's width.
 <a href=#1999 id=1999 data-nosnippet>1999</a>        </span><span class="kw">let </span>err = create_primitive_array_repeated(
 <a href=#2000 id=2000 data-nosnippet>2000</a>            <span class="kw-2">&amp;</span>DataType::FixedSizeBinary(<span class="number">4</span>),
-<a href=#2001 id=2001 data-nosnippet>2001</a>            <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(PrimitiveLiteral::Binary(<span class="macro">vec!</span>[<span class="number">0x01</span>, <span class="number">0x02</span>, <span class="number">0x03</span>])),
+<a href=#2001 id=2001 data-nosnippet>2001</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::Binary(<span class="macro">vec!</span>[<span class="number">0x01</span>, <span class="number">0x02</span>, <span class="number">0x03</span>])),
 <a href=#2002 id=2002 data-nosnippet>2002</a>            <span class="number">2</span>,
 <a href=#2003 id=2003 data-nosnippet>2003</a>        )
 <a href=#2004 id=2004 data-nosnippet>2004</a>        .unwrap_err();
@@ -2012,7 +2012,7 @@
 <a href=#2012 id=2012 data-nosnippet>2012</a>        // empty fixed[n] array.
 <a href=#2013 id=2013 data-nosnippet>2013</a>        </span><span class="kw">let </span>result = create_primitive_array_repeated(
 <a href=#2014 id=2014 data-nosnippet>2014</a>            <span class="kw-2">&amp;</span>DataType::FixedSizeBinary(<span class="number">4</span>),
-<a href=#2015 id=2015 data-nosnippet>2015</a>            <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(PrimitiveLiteral::Binary(<span class="macro">vec!</span>[<span class="number">0xDE</span>, <span class="number">0xAD</span>, <span class="number">0xBE</span>, <span class="number">0xEF</span>])),
+<a href=#2015 id=2015 data-nosnippet>2015</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::Binary(<span class="macro">vec!</span>[<span class="number">0xDE</span>, <span class="number">0xAD</span>, <span class="number">0xBE</span>, <span class="number">0xEF</span>])),
 <a href=#2016 id=2016 data-nosnippet>2016</a>            <span class="number">0</span>,
 <a href=#2017 id=2017 data-nosnippet>2017</a>        );
 <a href=#2018 id=2018 data-nosnippet>2018</a>        <span class="macro">assert!</span>(result.is_err());
