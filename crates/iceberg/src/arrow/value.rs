@@ -633,7 +633,7 @@ pub fn arrow_primitive_to_literal(
 /// a single value that represents all rows.
 pub(crate) fn create_primitive_array_single_element(
     data_type: &DataType,
-    prim_lit: &Option<PrimitiveLiteral>,
+    prim_lit: Option<&PrimitiveLiteral>,
 ) -> Result<ArrayRef> {
     match (data_type, prim_lit) {
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(v))) => {
@@ -816,7 +816,7 @@ pub(crate) fn create_primitive_array_single_element(
 /// repeated for each row.
 pub(crate) fn create_primitive_array_repeated(
     data_type: &DataType,
-    prim_lit: &Option<PrimitiveLiteral>,
+    prim_lit: Option<&PrimitiveLiteral>,
     num_rows: usize,
 ) -> Result<ArrayRef> {
     Ok(match (data_type, prim_lit) {
@@ -949,7 +949,7 @@ pub(crate) fn create_primitive_array_repeated(
             // Create a StructArray filled with nulls, recursively creating null children
             let null_arrays: Vec<ArrayRef> = fields
                 .iter()
-                .map(|field| create_primitive_array_repeated(field.data_type(), &None, num_rows))
+                .map(|field| create_primitive_array_repeated(field.data_type(), None, num_rows))
                 .collect::<Result<Vec<_>>>()?;
 
             Arc::new(StructArray::new(
@@ -1869,7 +1869,7 @@ mod test {
         let target_type = DataType::Decimal128(target_precision, target_scale);
         let value = PrimitiveLiteral::Int128(10000000000);
 
-        let array = create_primitive_array_single_element(&target_type, &Some(value))
+        let array = create_primitive_array_single_element(&target_type, Some(&value))
             .expect("Failed to create decimal array");
 
         match array.data_type() {
@@ -1890,7 +1890,7 @@ mod test {
         let value = PrimitiveLiteral::Int128(10000000000);
         let num_rows = 5;
 
-        let array = create_primitive_array_repeated(&target_type, &Some(value), num_rows)
+        let array = create_primitive_array_repeated(&target_type, Some(&value), num_rows)
             .expect("Failed to create repeated decimal array");
 
         match array.data_type() {
@@ -1910,7 +1910,7 @@ mod test {
         let value = PrimitiveLiteral::Long(1_740_600_000_000_000);
         let num_rows = 3;
 
-        let array = create_primitive_array_repeated(&target_type, &Some(value), num_rows)
+        let array = create_primitive_array_repeated(&target_type, Some(&value), num_rows)
             .expect("Failed to create repeated timestamp microsecond array");
 
         assert_eq!(array.data_type(), &target_type);
@@ -1923,7 +1923,7 @@ mod test {
         let value = PrimitiveLiteral::Long(1_740_600_000_000_000);
         let num_rows = 2;
 
-        let array = create_primitive_array_repeated(&target_type, &Some(value), num_rows)
+        let array = create_primitive_array_repeated(&target_type, Some(&value), num_rows)
             .expect("Failed to create repeated timestamp microsecond array with timezone");
 
         assert_eq!(array.data_type(), &target_type);
@@ -1938,7 +1938,7 @@ mod test {
 
         let utf8 = create_primitive_array_repeated(
             &DataType::Utf8,
-            &Some(PrimitiveLiteral::String(text.to_string())),
+            Some(&PrimitiveLiteral::String(text.to_string())),
             num_rows,
         )
         .unwrap();
@@ -1948,7 +1948,7 @@ mod test {
 
         let binary = create_primitive_array_repeated(
             &DataType::Binary,
-            &Some(PrimitiveLiteral::Binary(bytes.clone())),
+            Some(&PrimitiveLiteral::Binary(bytes.clone())),
             num_rows,
         )
         .unwrap();
@@ -1958,7 +1958,7 @@ mod test {
 
         let large = create_primitive_array_repeated(
             &DataType::LargeBinary,
-            &Some(PrimitiveLiteral::Binary(bytes.clone())),
+            Some(&PrimitiveLiteral::Binary(bytes.clone())),
             num_rows,
         )
         .unwrap();
@@ -1968,7 +1968,7 @@ mod test {
 
         let fixed = create_primitive_array_repeated(
             &DataType::FixedSizeBinary(bytes.len() as i32),
-            &Some(PrimitiveLiteral::Binary(bytes.clone())),
+            Some(&PrimitiveLiteral::Binary(bytes.clone())),
             num_rows,
         )
         .unwrap();
@@ -1985,7 +1985,7 @@ mod test {
         // num_rows == 0 must produce an empty (not one-element) array.
         let array = create_primitive_array_repeated(
             &DataType::Utf8,
-            &Some(PrimitiveLiteral::String("x".to_string())),
+            Some(&PrimitiveLiteral::String("x".to_string())),
             0,
         )
         .unwrap();
@@ -1998,7 +1998,7 @@ mod test {
         // than silently producing a FixedSizeBinary array of the literal's width.
         let err = create_primitive_array_repeated(
             &DataType::FixedSizeBinary(4),
-            &Some(PrimitiveLiteral::Binary(vec![0x01, 0x02, 0x03])),
+            Some(&PrimitiveLiteral::Binary(vec![0x01, 0x02, 0x03])),
             2,
         )
         .unwrap_err();
@@ -2012,7 +2012,7 @@ mod test {
         // empty fixed[n] array.
         let result = create_primitive_array_repeated(
             &DataType::FixedSizeBinary(4),
-            &Some(PrimitiveLiteral::Binary(vec![0xDE, 0xAD, 0xBE, 0xEF])),
+            Some(&PrimitiveLiteral::Binary(vec![0xDE, 0xAD, 0xBE, 0xEF])),
             0,
         );
         assert!(result.is_err());
