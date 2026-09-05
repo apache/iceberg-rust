@@ -419,16 +419,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             .as_ref()
             .map(|bound| ManifestFilterVisitor::bytes_to_datum(bound, field_type));
 
-        let any_literal_in_bounds = match (&lower_bound, &upper_bound) {
-            (Some(lower), Some(upper)) => literals
-                .iter()
-                .any(|datum| datum >= lower && datum <= upper),
-            (Some(lower), None) => literals.iter().any(|datum| datum >= lower),
-            (None, Some(upper)) => literals.iter().any(|datum| datum <= upper),
-            (None, None) => true,
-        };
-
-        if !any_literal_in_bounds {
+        if !super::any_literal_in_bounds(lower_bound.as_ref(), upper_bound.as_ref(), literals) {
             return ROWS_CANNOT_MATCH;
         }
 

@@ -486,16 +486,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             return ROW_GROUP_MIGHT_MATCH;
         }
 
-        let any_literal_in_bounds = match (&lower_bound, &upper_bound) {
-            (Some(lower), Some(upper)) => literals
-                .iter()
-                .any(|datum| datum.ge(lower) && datum.le(upper)),
-            (Some(lower), None) => literals.iter().any(|datum| datum.ge(lower)),
-            (None, Some(upper)) => literals.iter().any(|datum| datum.le(upper)),
-            (None, None) => true,
-        };
-
-        if !any_literal_in_bounds {
+        if !super::any_literal_in_bounds(lower_bound.as_ref(), upper_bound.as_ref(), literals) {
             return ROW_GROUP_CANT_MATCH;
         }
 
