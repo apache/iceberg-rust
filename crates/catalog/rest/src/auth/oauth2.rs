@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -63,7 +63,7 @@ pub struct OAuth2Manager {
     endpoint_is_default: bool,
     /// Installed by `catalog_session`; replacing it atomically invalidates
     /// contextual sessions derived from the previous catalog configuration.
-    contextual_state: Mutex<Option<ContextualAuthState>>,
+    contextual_state: OnceLock<ContextualAuthState>,
 }
 
 /// Catalog-resolved configuration and the contextual sessions derived from it.
@@ -101,7 +101,7 @@ impl OAuth2Manager {
                 extra_oauth_params: HashMap::from([("scope".to_string(), "catalog".to_string())]),
             },
             endpoint_is_default: false,
-            contextual_state: Mutex::new(None),
+            contextual_state: OnceLock::new(),
         }
     }
 
@@ -147,7 +147,7 @@ impl OAuth2Manager {
                 extra_oauth_params: cfg.extra_oauth_params(),
             },
             endpoint_is_default: cfg.explicit_oauth2_server_uri().is_none(),
-            contextual_state: Mutex::new(None),
+            contextual_state: OnceLock::new(),
         })
     }
 }
@@ -176,14 +176,28 @@ impl AuthManager for OAuth2Manager {
         client: &HttpClient,
         props: &HashMap<String, String>,
     ) -> Result<Arc<dyn AuthSession>> {
+        if self.contextual_state.get().is_some() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "OAuth2Manager catalog session already initialized",
+            ));
+        }
+
         let (session, token_exchange) = self.build_session_from_properties(client, props).await?;
 
-        *self.contextual_state.lock().await = Some(ContextualAuthState {
-            token_exchange,
-            session_cache: Cache::builder()
-                .time_to_idle(session_idle_timeout(props)?)
-                .build(),
-        });
+        self.contextual_state
+            .set(ContextualAuthState {
+                token_exchange,
+                session_cache: Cache::builder()
+                    .time_to_idle(session_idle_timeout(props)?)
+                    .build(),
+            })
+            .map_err(|_| {
+                Error::new(
+                    ErrorKind::PreconditionFailed,
+                    "OAuth2Manager catalog session already initialized concurrently",
+                )
+            })?;
 
         Ok(Arc::new(session))
     }
@@ -201,8 +215,7 @@ impl AuthManager for OAuth2Manager {
             return Ok(catalog_session);
         };
 
-        let mut contextual_state = self.contextual_state.lock().await;
-        let contextual_state = contextual_state.as_mut().ok_or_else(|| {
+        let contextual_state = self.contextual_state.get().ok_or_else(|| {
             Error::new(
                 ErrorKind::PreconditionFailed,
                 "OAuth2 catalog session must be initialized before contextual sessions",
