@@ -38,9 +38,9 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::spec::decimal_utils::i128_from_be_bytes;
 use crate::spec::{
-    Datum, EdgeInterpolationAlgorithm, FIRST_FIELD_ID, GeographyType, GeometryType, ListType,
-    MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema, SchemaVisitor,
-    StructType, Type, VariantType,
+    DEFAULT_GEOSPATIAL_CRS, Datum, EdgeInterpolationAlgorithm, FIRST_FIELD_ID, GeographyType,
+    GeometryType, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType,
+    Schema, SchemaVisitor, StructType, Type, VariantType,
 };
 use crate::{Error, ErrorKind};
 
@@ -48,6 +48,7 @@ use crate::{Error, ErrorKind};
 pub const DEFAULT_MAP_FIELD_NAME: &str = "key_value";
 /// UTC time zone for Arrow timestamp type.
 pub const UTC_TIME_ZONE: &str = "+00:00";
+const UNSET_GEOSPATIAL_CRS: &str = "srid:0";
 
 /// The canonical Arrow [`arrow.parquet.variant`] extension type.
 ///
@@ -124,7 +125,7 @@ fn wkb_edges_to_edge_interpolation_algorithm(edges: WkbEdges) -> EdgeInterpolati
 
 fn iceberg_crs_from_wkb_metadata(crs: Option<&serde_json::Value>) -> Result<Option<String>> {
     match crs {
-        None => Ok(None),
+        None => Ok(Some(UNSET_GEOSPATIAL_CRS.to_string())),
         Some(serde_json::Value::String(crs)) => Ok(Some(crs.clone())),
         Some(serde_json::Value::Object(crs)) => {
             let id = crs.get("id");
@@ -727,12 +728,13 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                 arrow_field = arrow_field.with_extension_type(VariantExtensionType);
             }
             Type::Primitive(PrimitiveType::Geometry(geometry)) => {
-                let metadata = WkbMetadata::new(geometry.crs(), None);
+                let metadata =
+                    WkbMetadata::new(Some(geometry.crs().unwrap_or(DEFAULT_GEOSPATIAL_CRS)), None);
                 arrow_field.try_with_extension_type(WkbType::new(Some(metadata)))?;
             }
             Type::Primitive(PrimitiveType::Geography(geography)) => {
                 let metadata = WkbMetadata::new(
-                    geography.crs(),
+                    Some(geography.crs().unwrap_or(DEFAULT_GEOSPATIAL_CRS)),
                     Some(edge_interpolation_algorithm_to_wkb_edges(
                         geography.algorithm(),
                     )),
@@ -2398,27 +2400,47 @@ mod tests {
             ),
             "Expected list element to retain WKB extension metadata"
         );
+        assert_eq!(
+            element
+                .try_extension_type::<WkbType>()
+                .unwrap()
+                .metadata()
+                .crs
+                .as_ref()
+                .and_then(serde_json::Value::as_str),
+            Some(DEFAULT_GEOSPATIAL_CRS)
+        );
 
         let converted = arrow_schema_to_schema(&arrow_schema).unwrap();
         assert_eq!(converted.as_struct().fields(), schema.as_struct().fields());
     }
 
     #[test]
-    fn test_geospatial_arrow_projjson_crs_import() {
+    fn test_geospatial_arrow_crs_import() {
         let mut geom = simple_field("geom", DataType::LargeBinary, true, "1");
         geom.try_with_extension_type(WkbType::new(Some(WkbMetadata::new(
             Some(r#"{"id":{"authority":"EPSG","code":3857}}"#),
             None,
         ))))
         .unwrap();
+        let mut unset_geom = simple_field("unset_geom", DataType::LargeBinary, true, "2");
+        unset_geom
+            .try_with_extension_type(WkbType::new(Some(WkbMetadata::new(None, None))))
+            .unwrap();
 
-        let arrow_schema = ArrowSchema::new(vec![geom]);
+        let arrow_schema = ArrowSchema::new(vec![geom, unset_geom]);
         let schema = arrow_schema_to_schema(&arrow_schema).unwrap();
 
         assert_eq!(
             schema.field_by_id(1).unwrap().field_type.as_ref(),
             &Type::Primitive(PrimitiveType::Geometry(
                 GeometryType::new(Some("EPSG:3857".to_string())).unwrap()
+            ))
+        );
+        assert_eq!(
+            schema.field_by_id(2).unwrap().field_type.as_ref(),
+            &Type::Primitive(PrimitiveType::Geometry(
+                GeometryType::new(Some(UNSET_GEOSPATIAL_CRS.to_string())).unwrap()
             ))
         );
     }

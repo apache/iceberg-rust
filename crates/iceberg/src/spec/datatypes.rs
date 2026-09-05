@@ -43,8 +43,9 @@ pub const MAP_VALUE_FIELD_NAME: &str = "value";
 
 pub(crate) const MAX_DECIMAL_BYTES: u32 = 24;
 pub(crate) const MAX_DECIMAL_PRECISION: u32 = 38;
-const DEFAULT_GEOSPATIAL_CRS: &str = "OGC:CRS84";
+pub(crate) const DEFAULT_GEOSPATIAL_CRS: &str = "OGC:CRS84";
 const EQUIVALENT_DEFAULT_GEOSPATIAL_CRS: &str = "EPSG:4326";
+const MAX_GEOSPATIAL_CRS_BYTES: usize = 128;
 
 mod _decimal {
     use once_cell::sync::Lazy;
@@ -310,6 +311,12 @@ fn normalize_crs(crs: Option<String>) -> Result<Option<String>> {
         return Ok(None);
     };
     let crs = crs.trim().to_string();
+    if crs.len() > MAX_GEOSPATIAL_CRS_BYTES {
+        return Err(crate::Error::new(
+            crate::ErrorKind::DataInvalid,
+            format!("Geospatial CRS must be at most {MAX_GEOSPATIAL_CRS_BYTES} bytes"),
+        ));
+    }
     if crs.is_empty() || crs.contains([',', ')']) {
         return Err(crate::Error::new(
             crate::ErrorKind::DataInvalid,
@@ -1291,6 +1298,7 @@ mod tests {
         assert!(
             serde_json::from_str::<PrimitiveType>(r#""geography(OGC:CRS27,unknown)""#).is_err()
         );
+        assert!(GeometryType::new(Some("x".repeat(MAX_GEOSPATIAL_CRS_BYTES + 1))).is_err());
     }
 
     #[test]

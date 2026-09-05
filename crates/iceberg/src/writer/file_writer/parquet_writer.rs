@@ -2538,6 +2538,14 @@ mod tests {
                     .into(),
                     NestedField::optional(
                         1,
+                        "unset_geom",
+                        Type::Primitive(PrimitiveType::Geometry(
+                            GeometryType::new(Some("srid:0".to_string())).unwrap(),
+                        )),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        2,
                         "geog",
                         Type::Primitive(PrimitiveType::Geography(
                             GeographyType::new(None, IcebergEdgeInterpolationAlgorithm::Karney)
@@ -2558,7 +2566,9 @@ mod tests {
         let geog = Arc::new(arrow_array::LargeBinaryArray::from_vec(vec![
             geog_wkb.as_slice(),
         ])) as ArrayRef;
-        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![geom, geog]).unwrap();
+        let unset_geom = geom.clone();
+        let to_write =
+            RecordBatch::try_new(arrow_schema.clone(), vec![geom, unset_geom, geog]).unwrap();
 
         let output_file = file_io.new_output(
             location_gen.generate_location(None, &file_name_gen.generate_file_name()),
@@ -2593,12 +2603,16 @@ mod tests {
 
         assert_eq!(
             schema_descr.column(0).logical_type_ref(),
-            Some(&LogicalType::geometry(Some("srid:0".to_string())))
+            Some(&LogicalType::geometry(None))
         );
         assert_eq!(
             schema_descr.column(1).logical_type_ref(),
+            Some(&LogicalType::geometry(Some("srid:0".to_string())))
+        );
+        assert_eq!(
+            schema_descr.column(2).logical_type_ref(),
             Some(&LogicalType::geography(
-                Some("srid:0".to_string()),
+                None,
                 Some(EdgeInterpolationAlgorithm::KARNEY),
             ))
         );
