@@ -325,6 +325,14 @@ mod tests {
         writer.close().await.unwrap();
 
         let input_file = output_file.to_input_file();
+        let bytes = input_file.read().await.unwrap();
+        let footer_payload_offset = FileMetadata::MAGIC_LENGTH as usize
+            + blob_0().data.len()
+            + FileMetadata::MAGIC_LENGTH as usize;
+        assert_eq!(&bytes[footer_payload_offset..footer_payload_offset + 4], &[
+            0x04, 0x22, 0x4D, 0x18
+        ]);
+
         let metadata = read_file_metadata(&input_file).await.unwrap();
         assert_eq!(metadata.properties, file_properties());
         assert_eq!(metadata.blobs.len(), 1);
