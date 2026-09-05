@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use fnv::FnvHashSet;
+
+use crate::spec::Datum;
+
 pub(crate) mod bound_predicate_visitor;
 pub(crate) mod expression_evaluator;
 pub(crate) mod inclusive_metrics_evaluator;
@@ -26,3 +30,20 @@ pub(crate) mod rewrite_not;
 pub(crate) mod row_group_metrics_evaluator;
 pub(crate) mod strict_metrics_evaluator;
 pub(crate) mod strict_projection;
+
+/// Returns true if any literal could match the inclusive `[lower, upper]` range.
+/// Missing bounds are treated as unbounded on that side.
+pub(crate) fn any_literal_in_bounds(
+    lower: Option<&Datum>,
+    upper: Option<&Datum>,
+    literals: &FnvHashSet<Datum>,
+) -> bool {
+    match (lower, upper) {
+        (Some(lower), Some(upper)) => literals
+            .iter()
+            .any(|datum| datum.ge(lower) && datum.le(upper)),
+        (Some(lower), None) => literals.iter().any(|datum| datum.ge(lower)),
+        (None, Some(upper)) => literals.iter().any(|datum| datum.le(upper)),
+        (None, None) => true,
+    }
+}
