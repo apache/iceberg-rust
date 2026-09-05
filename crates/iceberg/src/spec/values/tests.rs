@@ -502,6 +502,17 @@ fn avro_bytes_string() {
 }
 
 #[test]
+fn avro_bytes_geometry() {
+    let bytes = vec![1u8, 2u8, 3u8, 4u8];
+    let ty = PrimitiveType::Geometry(Default::default());
+    check_avro_bytes_serde(
+        bytes.clone(),
+        Datum::new(ty.clone(), PrimitiveLiteral::Binary(bytes)),
+        &ty,
+    );
+}
+
+#[test]
 fn avro_bytes_decimal() {
     // (input_bytes, decimal_num, expect_scale, expect_precision)
     let cases = vec![
