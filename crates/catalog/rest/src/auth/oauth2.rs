@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use http::StatusCode;
 use iceberg::sensitive::SensitiveString;
 use iceberg::{Error, ErrorKind, Result, SessionContext};
+use moka::sync::Cache;
 use reqwest::header::HeaderMap;
 use tokio::sync::Mutex;
 
@@ -68,7 +69,7 @@ pub struct OAuth2Manager {
 /// Catalog-resolved configuration and the contextual sessions derived from it.
 struct ContextualAuthState {
     token_exchange: TokenExchangeConfig,
-    session_cache: HashMap<String, Arc<OAuth2Session>>,
+    session_cache: Cache<String, Arc<OAuth2Session>>,
 }
 
 /// Everything needed to perform a client-credentials token exchange, except
@@ -179,7 +180,9 @@ impl AuthManager for OAuth2Manager {
 
         *self.contextual_state.lock().await = Some(ContextualAuthState {
             token_exchange,
-            session_cache: HashMap::new(),
+            session_cache: Cache::builder()
+                .time_to_idle(session_idle_timeout(props)?)
+                .build(),
         });
 
         Ok(Arc::new(session))
@@ -212,7 +215,7 @@ impl AuthManager for OAuth2Manager {
 
         let token_exchange = contextual_state.token_exchange.clone();
 
-        let session = Arc::new(match credential {
+        let candidate_session = Arc::new(match credential {
             ContextualCredential::Token(token) => OAuth2Session {
                 token: Arc::new(Mutex::new(Some(CachedToken::static_token(token)))),
                 token_source: TokenSource::StaticToken,
@@ -232,9 +235,14 @@ impl AuthManager for OAuth2Manager {
                 parent: Some(catalog_session),
             },
         });
-        contextual_state
+
+        let session = contextual_state
             .session_cache
-            .insert(context.session_id().to_string(), session.clone());
+            .entry(context.session_id().to_string())
+            .or_insert(candidate_session) // If a concurrent insert won, we'll use it instead because it may already be in use.
+            .value()
+            .clone();
+
         Ok(session)
     }
 }
@@ -321,6 +329,41 @@ impl OAuth2Manager {
         };
         Ok((session, token_exchange))
     }
+}
+
+const AUTH_SESSION_TIMEOUT_MS_PROP: &str = "auth.session-timeout-ms";
+const DEFAULT_CONTEXTUAL_SESSION_IDLE_TIMEOUT: Duration = Duration::from_hours(1);
+// Moka's cache builder panics for expiration durations longer than 1,000
+// years, so we validate the property before constructing the cache.
+const MAX_CONTEXTUAL_SESSION_IDLE_TIMEOUT: Duration =
+    Duration::from_secs(1_000 * 365 * 24 * 60 * 60);
+
+fn session_idle_timeout(props: &HashMap<String, String>) -> Result<Duration> {
+    let Some(timeout_prop) = props.get(AUTH_SESSION_TIMEOUT_MS_PROP) else {
+        return Ok(DEFAULT_CONTEXTUAL_SESSION_IDLE_TIMEOUT);
+    };
+
+    let timeout_ms = timeout_prop.parse::<u64>().map_err(|e| {
+        Error::new(
+            ErrorKind::PreconditionFailed,
+            format!("Property {} not an integer", AUTH_SESSION_TIMEOUT_MS_PROP),
+        )
+        .with_source(e)
+    })?;
+
+    let timeout = Duration::from_millis(timeout_ms);
+
+    if timeout > MAX_CONTEXTUAL_SESSION_IDLE_TIMEOUT {
+        return Err(Error::new(
+            ErrorKind::PreconditionFailed,
+            format!(
+                "Property {AUTH_SESSION_TIMEOUT_MS_PROP} must not exceed {} ms, got {timeout_ms}",
+                MAX_CONTEXTUAL_SESSION_IDLE_TIMEOUT.as_millis()
+            ),
+        ));
+    }
+
+    Ok(timeout)
 }
 
 /// Attaches `token` as a `Authorization: Bearer <token>` header, marked
@@ -563,6 +606,58 @@ mod tests {
             .map(str::to_string)
     }
 
+    #[test]
+    fn test_session_idle_timeout_property() {
+        assert_eq!(
+            session_idle_timeout(&HashMap::new()).unwrap(),
+            DEFAULT_CONTEXTUAL_SESSION_IDLE_TIMEOUT
+        );
+
+        let custom_timeout = Duration::from_millis(1234);
+        let props = HashMap::from([(
+            AUTH_SESSION_TIMEOUT_MS_PROP.to_string(),
+            custom_timeout.as_millis().to_string(),
+        )]);
+        assert_eq!(session_idle_timeout(&props).unwrap(), custom_timeout);
+
+        let props = HashMap::from([(
+            AUTH_SESSION_TIMEOUT_MS_PROP.to_string(),
+            "not-an-integer".to_string(),
+        )]);
+        let error = session_idle_timeout(&props).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::PreconditionFailed);
+        assert_eq!(
+            error.message(),
+            format!("Property {AUTH_SESSION_TIMEOUT_MS_PROP} not an integer")
+        );
+
+        let max_timeout_ms =
+            u64::try_from(MAX_CONTEXTUAL_SESSION_IDLE_TIMEOUT.as_millis()).unwrap();
+        let props = HashMap::from([(
+            AUTH_SESSION_TIMEOUT_MS_PROP.to_string(),
+            max_timeout_ms.to_string(),
+        )]);
+
+        assert_eq!(
+            session_idle_timeout(&props).unwrap(),
+            MAX_CONTEXTUAL_SESSION_IDLE_TIMEOUT
+        );
+
+        let props = HashMap::from([(
+            AUTH_SESSION_TIMEOUT_MS_PROP.to_string(),
+            (max_timeout_ms + 1).to_string(),
+        )]);
+        let error = session_idle_timeout(&props).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::PreconditionFailed);
+        assert_eq!(
+            error.message(),
+            format!(
+                "Property {AUTH_SESSION_TIMEOUT_MS_PROP} must not exceed {max_timeout_ms} ms, got {}",
+                max_timeout_ms + 1
+            )
+        );
+    }
+
     #[tokio::test]
     async fn test_contextual_session_requires_catalog_session_initialization() {
         let manager = OAuth2Manager::new("http://localhost/unused").with_token("parent-token");
@@ -633,6 +728,35 @@ mod tests {
             .unwrap();
 
         assert!(Arc::ptr_eq(&session, &parent));
+    }
+
+    #[tokio::test]
+    async fn test_zero_idle_timeout_disables_contextual_session_reuse() {
+        let manager = OAuth2Manager::new("http://localhost/unused").with_token("parent-token");
+        let parent = manager
+            .catalog_session(
+                &test_client(),
+                &HashMap::from([(AUTH_SESSION_TIMEOUT_MS_PROP.to_string(), "0".to_string())]),
+            )
+            .await
+            .unwrap();
+        let first_context = context_with_token("session-1", "first-token");
+        let replacement_context = context_with_token("session-1", "replacement-token");
+
+        let first_session = manager
+            .contextual_session(&first_context, parent.clone())
+            .await
+            .unwrap();
+        let replacement_session = manager
+            .contextual_session(&replacement_context, parent)
+            .await
+            .unwrap();
+
+        assert!(!Arc::ptr_eq(&first_session, &replacement_session));
+        assert_eq!(
+            bearer_token(&replacement_session).await.as_deref(),
+            Some("replacement-token")
+        );
     }
 
     #[tokio::test]
