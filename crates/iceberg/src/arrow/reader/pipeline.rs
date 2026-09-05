@@ -2410,6 +2410,7 @@ mod tests {
 
         let delete = FileScanTaskDeleteFile::builder()
             .with_file_path(del_path.clone())
+            .with_file_format(DataFileFormat::Parquet)
             .with_file_size_in_bytes(std::fs::metadata(&del_path).unwrap().len())
             .with_file_type(DataContentType::PositionDeletes)
             .with_partition_spec_id(0)
