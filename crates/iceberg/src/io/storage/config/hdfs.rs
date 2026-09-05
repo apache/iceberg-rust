@@ -17,10 +17,6 @@
 
 //! HDFS storage configuration.
 
-use std::collections::HashMap;
-
-use iceberg_property_macro::Properties;
-
 /// HDFS NameNode RPC endpoint(s), e.g. `hdfs://namenode:8020`; a
 /// comma-separated list enables HA failover. When unset, the NameNode is
 /// derived from the path authority.
@@ -29,52 +25,3 @@ pub const HDFS_NAME_NODE: &str = "hdfs.name-node";
 /// `hadoop.dfs.client.failover.random.order`. Forwarded values (prefix
 /// stripped) override those loaded from `$HADOOP_CONF_DIR`.
 pub const HDFS_HADOOP_CONF_PREFIX: &str = "hadoop.";
-
-/// HDFS storage configuration.
-// No in-crate consumer yet: `iceberg-storage-opendal` parses the raw
-// properties itself and only shares the key constants above.
-#[allow(dead_code)]
-#[derive(Debug, Properties)]
-pub(crate) struct HdfsConfig {
-    /// NameNode endpoint(s); comma-separated for HA failover.
-    #[property(key = HDFS_NAME_NODE, default = None, getter)]
-    name_node: Option<String>,
-    /// Extra HDFS client configuration (the `hadoop.` prefix stripped).
-    #[property(prefix = HDFS_HADOOP_CONF_PREFIX, getter)]
-    options: HashMap<String, String>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_hdfs_config_from_properties() {
-        let props = HashMap::from([
-            (
-                HDFS_NAME_NODE.to_string(),
-                "hdfs://namenode:8020".to_string(),
-            ),
-            (
-                "hadoop.dfs.client.failover.random.order".to_string(),
-                "true".to_string(),
-            ),
-            ("unrelated.key".to_string(), "ignored".to_string()),
-        ]);
-
-        let cfg = HdfsConfig::from_properties(&props).unwrap();
-        assert_eq!(cfg.name_node().as_deref(), Some("hdfs://namenode:8020"));
-        assert_eq!(
-            cfg.options().get("dfs.client.failover.random.order"),
-            Some(&"true".to_string())
-        );
-        assert!(!cfg.options().contains_key("unrelated.key"));
-    }
-
-    #[test]
-    fn test_hdfs_config_empty() {
-        let cfg = HdfsConfig::from_properties(&HashMap::new()).unwrap();
-        assert_eq!(cfg.name_node().as_deref(), None);
-        assert!(cfg.options().is_empty());
-    }
-}

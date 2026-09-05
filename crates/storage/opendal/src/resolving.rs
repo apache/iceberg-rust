@@ -131,8 +131,8 @@ fn build_storage_for_scheme(
         }
         #[cfg(feature = "opendal-hdfs-native")]
         "hdfs" => {
-            let config = crate::hdfs::hdfs_config_parse(props.clone())?;
-            Ok(OpenDalStorage::Hdfs {
+            let config = crate::hdfs_native::hdfs_native_config_parse(props.clone())?;
+            Ok(OpenDalStorage::HdfsNative {
                 config: Arc::new(config),
                 operators: Arc::new(RwLock::new(HashMap::new())),
             })
@@ -405,20 +405,20 @@ mod tests {
 
     #[cfg(feature = "opendal-hdfs-native")]
     #[test]
-    fn test_resolve_hdfs_returns_hdfs_variant() {
+    fn test_resolve_hdfs_native_returns_hdfs_variant() {
         let storage = empty_resolving_storage();
 
         let resolved = storage.resolve("hdfs://nameservice1/a/b").unwrap();
 
         assert!(
-            matches!(&*resolved, OpenDalStorage::Hdfs { .. }),
-            "expected Hdfs variant, got {resolved:?}"
+            matches!(&*resolved, OpenDalStorage::HdfsNative { .. }),
+            "expected HdfsNative variant, got {resolved:?}"
         );
     }
 
     #[cfg(feature = "opendal-hdfs-native")]
     #[test]
-    fn test_resolve_hdfs_distinct_authorities_share_instance() {
+    fn test_resolve_hdfs_native_distinct_authorities_share_instance() {
         let storage = empty_resolving_storage();
 
         let a = storage.resolve("hdfs://ns1/a").unwrap();
@@ -426,7 +426,7 @@ mod tests {
 
         assert!(
             Arc::ptr_eq(&a, &b),
-            "different authorities should share the OpenDalStorage::Hdfs instance (operator cache is internal)"
+            "different authorities should share the OpenDalStorage::HdfsNative instance (operator cache is internal)"
         );
     }
 

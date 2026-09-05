@@ -29,7 +29,7 @@ use url::Url;
 use crate::utils::from_opendal_error;
 
 /// Parse iceberg properties to [`HdfsNativeConfig`].
-pub(crate) fn hdfs_config_parse(mut m: HashMap<String, String>) -> Result<HdfsNativeConfig> {
+pub(crate) fn hdfs_native_config_parse(mut m: HashMap<String, String>) -> Result<HdfsNativeConfig> {
     let mut cfg = HdfsNativeConfig::default();
 
     if let Some(name_node) = m.remove(HDFS_NAME_NODE) {
@@ -52,7 +52,7 @@ pub(crate) fn hdfs_config_parse(mut m: HashMap<String, String>) -> Result<HdfsNa
 
 /// Parse an HDFS path into `Some("hdfs://<authority>")` (`None` when
 /// authority-less) and the relative path (no leading `/`, opendal style).
-pub(crate) fn parse_hdfs_path(path: &str) -> Result<(Option<String>, &str)> {
+pub(crate) fn hdfs_native_parse_path(path: &str) -> Result<(Option<String>, &str)> {
     let url = Url::parse(path).map_err(|e| {
         Error::new(
             ErrorKind::DataInvalid,
@@ -89,12 +89,12 @@ pub(crate) fn parse_hdfs_path(path: &str) -> Result<(Option<String>, &str)> {
 /// Creates an operator for the path, cached per effective NameNode (the
 /// configured `hdfs.name-node`, else the path authority) — each operator
 /// holds an HDFS client with live RPC connections.
-pub(crate) fn hdfs_create_operator<'a>(
+pub(crate) fn hdfs_native_create_operator<'a>(
     path: &'a str,
     config: &HdfsNativeConfig,
     operators: &RwLock<HashMap<String, Operator>>,
 ) -> Result<(Operator, &'a str)> {
-    let (authority_name_node, relative_path) = parse_hdfs_path(path)?;
+    let (authority_name_node, relative_path) = hdfs_native_parse_path(path)?;
 
     let name_node = match config.name_node.clone().or(authority_name_node) {
         Some(name_node) => name_node,
@@ -126,7 +126,7 @@ pub(crate) fn hdfs_create_operator<'a>(
     let op = match cache.get(&name_node) {
         Some(op) => op.clone(),
         None => {
-            let op = hdfs_operator_build(config, &name_node)?;
+            let op = hdfs_native_operator_build(config, &name_node)?;
             cache.insert(name_node, op.clone());
             op
         }
@@ -138,12 +138,12 @@ pub(crate) fn hdfs_create_operator<'a>(
 /// Returns the `delete_stream` grouping key for a path: the effective
 /// NameNode, mirroring the operator-cache key so paths that resolve to
 /// different operators never share a deleter.
-pub(crate) fn hdfs_batch_key(config: &HdfsNativeConfig, path: &str) -> String {
+pub(crate) fn hdfs_native_batch_key(config: &HdfsNativeConfig, path: &str) -> String {
     config
         .name_node
         .clone()
         .or_else(|| {
-            parse_hdfs_path(path)
+            hdfs_native_parse_path(path)
                 .ok()
                 .and_then(|(name_node, _)| name_node)
         })
@@ -152,7 +152,7 @@ pub(crate) fn hdfs_batch_key(config: &HdfsNativeConfig, path: &str) -> String {
 
 /// Build a new OpenDAL [`Operator`]: OpenDAL splits `name_node` on commas
 /// into a synthetic HA name service; `$HADOOP_CONF_DIR` XML still merges in.
-fn hdfs_operator_build(config: &HdfsNativeConfig, name_node: &str) -> Result<Operator> {
+fn hdfs_native_operator_build(config: &HdfsNativeConfig, name_node: &str) -> Result<Operator> {
     let mut cfg = config.clone();
     cfg.name_node = Some(name_node.to_string());
     Operator::from_config(cfg).map_err(from_opendal_error)
@@ -163,7 +163,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_hdfs_config_parse_name_node_and_options() {
+    fn test_hdfs_native_config_parse_name_node_and_options() {
         let props = HashMap::from([
             (
                 HDFS_NAME_NODE.to_string(),
@@ -176,7 +176,7 @@ mod tests {
             ("unrelated.key".to_string(), "ignored".to_string()),
         ]);
 
-        let cfg = hdfs_config_parse(props).unwrap();
+        let cfg = hdfs_native_config_parse(props).unwrap();
 
         assert_eq!(
             cfg.name_node.as_deref(),
@@ -191,94 +191,94 @@ mod tests {
     }
 
     #[test]
-    fn test_hdfs_config_parse_empty() {
-        let cfg = hdfs_config_parse(HashMap::new()).unwrap();
+    fn test_hdfs_native_config_parse_empty() {
+        let cfg = hdfs_native_config_parse(HashMap::new()).unwrap();
 
         assert_eq!(cfg.name_node, None);
         assert_eq!(cfg.options, None);
     }
 
     #[test]
-    fn test_parse_hdfs_path_with_authority_and_rel() {
-        let (nn, rel) = parse_hdfs_path("hdfs://nameservice1/a/b").unwrap();
+    fn test_hdfs_native_parse_path_with_authority_and_rel() {
+        let (nn, rel) = hdfs_native_parse_path("hdfs://nameservice1/a/b").unwrap();
 
         assert_eq!(nn.as_deref(), Some("hdfs://nameservice1"));
         assert_eq!(rel, "a/b");
     }
 
     #[test]
-    fn test_parse_hdfs_path_with_authority_and_port() {
-        let (nn, rel) = parse_hdfs_path("hdfs://nn:8020/foo").unwrap();
+    fn test_hdfs_native_parse_path_with_authority_and_port() {
+        let (nn, rel) = hdfs_native_parse_path("hdfs://nn:8020/foo").unwrap();
 
         assert_eq!(nn.as_deref(), Some("hdfs://nn:8020"));
         assert_eq!(rel, "foo");
     }
 
     #[test]
-    fn test_parse_hdfs_path_with_authority_no_path() {
-        let (nn, rel) = parse_hdfs_path("hdfs://nameservice1").unwrap();
+    fn test_hdfs_native_parse_path_with_authority_no_path() {
+        let (nn, rel) = hdfs_native_parse_path("hdfs://nameservice1").unwrap();
 
         assert_eq!(nn.as_deref(), Some("hdfs://nameservice1"));
         assert_eq!(rel, "");
     }
 
     #[test]
-    fn test_parse_hdfs_path_with_authority_trailing_slash() {
-        let (nn, rel) = parse_hdfs_path("hdfs://nameservice1/").unwrap();
+    fn test_hdfs_native_parse_path_with_authority_trailing_slash() {
+        let (nn, rel) = hdfs_native_parse_path("hdfs://nameservice1/").unwrap();
 
         assert_eq!(nn.as_deref(), Some("hdfs://nameservice1"));
         assert_eq!(rel, "");
     }
 
     #[test]
-    fn test_parse_hdfs_path_authority_less_returns_none() {
-        let (nn, rel) = parse_hdfs_path("hdfs:///a/b").unwrap();
+    fn test_hdfs_native_parse_path_authority_less_returns_none() {
+        let (nn, rel) = hdfs_native_parse_path("hdfs:///a/b").unwrap();
 
         assert_eq!(nn, None);
         assert_eq!(rel, "a/b");
     }
 
     #[test]
-    fn test_parse_hdfs_path_wrong_scheme_errors() {
-        let err = parse_hdfs_path("file:///tmp/x").unwrap_err();
+    fn test_hdfs_native_parse_path_wrong_scheme_errors() {
+        let err = hdfs_native_parse_path("file:///tmp/x").unwrap_err();
 
         assert!(err.to_string().contains("expected scheme `hdfs://`"));
     }
 
     #[test]
-    fn test_parse_hdfs_path_invalid_url_errors() {
-        let err = parse_hdfs_path("not-a-url").unwrap_err();
+    fn test_hdfs_native_parse_path_invalid_url_errors() {
+        let err = hdfs_native_parse_path("not-a-url").unwrap_err();
 
         assert!(err.to_string().contains("Invalid hdfs path"));
     }
 
     #[test]
-    fn test_parse_hdfs_path_non_hierarchical_errors() {
+    fn test_hdfs_native_parse_path_non_hierarchical_errors() {
         // `hdfs:x` parses as a valid non-hierarchical URL; it must be
         // rejected rather than panic on slicing.
         for path in ["hdfs:x", "hdfs:/x", "hdfs:"] {
-            let err = parse_hdfs_path(path).unwrap_err();
+            let err = hdfs_native_parse_path(path).unwrap_err();
             assert!(err.to_string().contains("expected scheme `hdfs://`"));
         }
     }
 
     #[test]
-    fn test_hdfs_batch_key_distinguishes_ports() {
+    fn test_hdfs_native_batch_key_distinguishes_ports() {
         let config = HdfsNativeConfig::default();
 
         assert_eq!(
-            hdfs_batch_key(&config, "hdfs://namenode:8020/a"),
+            hdfs_native_batch_key(&config, "hdfs://namenode:8020/a"),
             "hdfs://namenode:8020"
         );
         assert_eq!(
-            hdfs_batch_key(&config, "hdfs://namenode:9000/b"),
+            hdfs_native_batch_key(&config, "hdfs://namenode:9000/b"),
             "hdfs://namenode:9000"
         );
     }
 
     #[test]
-    fn test_hdfs_batch_key_configured_name_node_wins() {
-        let config = hdfs_config_parse(HashMap::from([(
+    fn test_hdfs_native_batch_key_configured_name_node_wins() {
+        let config = hdfs_native_config_parse(HashMap::from([(
             HDFS_NAME_NODE.to_string(),
             "hdfs://nn1:8020,hdfs://nn2:8020".to_string(),
         )]))
@@ -287,18 +287,18 @@ mod tests {
         // All paths group under the configured NameNode, matching the
         // single cached operator they resolve to.
         assert_eq!(
-            hdfs_batch_key(&config, "hdfs://ns-a/x"),
+            hdfs_native_batch_key(&config, "hdfs://ns-a/x"),
             "hdfs://nn1:8020,hdfs://nn2:8020"
         );
         assert_eq!(
-            hdfs_batch_key(&config, "hdfs:///y"),
+            hdfs_native_batch_key(&config, "hdfs:///y"),
             "hdfs://nn1:8020,hdfs://nn2:8020"
         );
     }
 
     #[test]
-    fn test_hdfs_create_operator_configured_name_node_wins() {
-        let config = hdfs_config_parse(HashMap::from([(
+    fn test_hdfs_native_create_operator_configured_name_node_wins() {
+        let config = hdfs_native_config_parse(HashMap::from([(
             HDFS_NAME_NODE.to_string(),
             "hdfs://configured:8020".to_string(),
         )]))
@@ -306,7 +306,7 @@ mod tests {
         let operators = RwLock::new(HashMap::new());
 
         let (_, rel) =
-            hdfs_create_operator("hdfs://from-path:9000/a/b", &config, &operators).unwrap();
+            hdfs_native_create_operator("hdfs://from-path:9000/a/b", &config, &operators).unwrap();
 
         assert_eq!(rel, "a/b");
         let cache = operators.read().unwrap();
@@ -315,34 +315,35 @@ mod tests {
     }
 
     #[test]
-    fn test_hdfs_create_operator_uses_path_authority() {
+    fn test_hdfs_native_create_operator_uses_path_authority() {
         let config = HdfsNativeConfig::default();
         let operators = RwLock::new(HashMap::new());
 
-        let (_, rel) = hdfs_create_operator("hdfs://nn:8020/a/b", &config, &operators).unwrap();
+        let (_, rel) =
+            hdfs_native_create_operator("hdfs://nn:8020/a/b", &config, &operators).unwrap();
 
         assert_eq!(rel, "a/b");
         assert!(operators.read().unwrap().contains_key("hdfs://nn:8020"));
     }
 
     #[test]
-    fn test_hdfs_create_operator_caches_per_name_node() {
+    fn test_hdfs_native_create_operator_caches_per_name_node() {
         let config = HdfsNativeConfig::default();
         let operators = RwLock::new(HashMap::new());
 
-        hdfs_create_operator("hdfs://nn1:8020/a", &config, &operators).unwrap();
-        hdfs_create_operator("hdfs://nn1:8020/b", &config, &operators).unwrap();
-        hdfs_create_operator("hdfs://nn2:8020/c", &config, &operators).unwrap();
+        hdfs_native_create_operator("hdfs://nn1:8020/a", &config, &operators).unwrap();
+        hdfs_native_create_operator("hdfs://nn1:8020/b", &config, &operators).unwrap();
+        hdfs_native_create_operator("hdfs://nn2:8020/c", &config, &operators).unwrap();
 
         assert_eq!(operators.read().unwrap().len(), 2);
     }
 
     #[test]
-    fn test_hdfs_create_operator_authority_less_without_config_errors() {
+    fn test_hdfs_native_create_operator_authority_less_without_config_errors() {
         let config = HdfsNativeConfig::default();
         let operators = RwLock::new(HashMap::new());
 
-        let err = hdfs_create_operator("hdfs:///a/b", &config, &operators).unwrap_err();
+        let err = hdfs_native_create_operator("hdfs:///a/b", &config, &operators).unwrap_err();
 
         assert!(err.to_string().contains(HDFS_NAME_NODE));
     }

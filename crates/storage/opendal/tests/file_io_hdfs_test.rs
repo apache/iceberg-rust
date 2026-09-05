@@ -33,7 +33,7 @@ mod tests {
 
     fn get_file_io() -> FileIO {
         set_up();
-        FileIOBuilder::new(Arc::new(OpenDalStorageFactory::Hdfs)).build()
+        FileIOBuilder::new(Arc::new(OpenDalStorageFactory::HdfsNative)).build()
     }
 
     fn test_path(suffix: &str) -> String {
@@ -77,7 +77,7 @@ mod tests {
     #[tokio::test]
     async fn test_file_io_hdfs_configured_name_node() {
         set_up();
-        let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::Hdfs))
+        let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::HdfsNative))
             .with_prop(HDFS_NAME_NODE, get_hdfs_endpoint())
             .build();
 

@@ -76,10 +76,10 @@ cfg_if! {
 
 cfg_if! {
     if #[cfg(feature = "opendal-hdfs-native")] {
-        mod hdfs;
+        mod hdfs_native;
         use std::sync::RwLock;
 
-        use hdfs::*;
+        use hdfs_native::*;
         use opendal::services::HdfsNativeConfig;
     }
 }
@@ -147,7 +147,7 @@ pub enum OpenDalStorageFactory {
     Gcs,
     /// HDFS storage factory.
     #[cfg(feature = "opendal-hdfs-native")]
-    Hdfs,
+    HdfsNative,
     /// OSS storage factory.
     #[cfg(feature = "opendal-oss")]
     Oss,
@@ -195,8 +195,8 @@ impl StorageFactory for OpenDalStorageFactory {
                 config: gcs_config_parse(config.props().clone())?.into(),
             })),
             #[cfg(feature = "opendal-hdfs-native")]
-            OpenDalStorageFactory::Hdfs => Ok(Arc::new(OpenDalStorage::Hdfs {
-                config: hdfs_config_parse(config.props().clone())?.into(),
+            OpenDalStorageFactory::HdfsNative => Ok(Arc::new(OpenDalStorage::HdfsNative {
+                config: hdfs_native_config_parse(config.props().clone())?.into(),
                 operators: Arc::new(RwLock::new(HashMap::new())),
             })),
             #[cfg(feature = "opendal-oss")]
@@ -267,7 +267,7 @@ pub enum OpenDalStorage {
     /// The NameNode is taken from the `hdfs.name-node` property when set
     /// (comma-separated endpoints enable HA failover), else the path authority.
     #[cfg(feature = "opendal-hdfs-native")]
-    Hdfs {
+    HdfsNative {
         /// HDFS configuration.
         config: Arc<HdfsNativeConfig>,
         /// Operator cache keyed by effective NameNode.
@@ -380,8 +380,8 @@ impl OpenDalStorage {
                 }
             }
             #[cfg(feature = "opendal-hdfs-native")]
-            OpenDalStorage::Hdfs { config, operators } => {
-                hdfs_create_operator(path, config, operators)?
+            OpenDalStorage::HdfsNative { config, operators } => {
+                hdfs_native_create_operator(path, config, operators)?
             }
             #[cfg(feature = "opendal-oss")]
             OpenDalStorage::Oss { config } => {
@@ -442,7 +442,7 @@ impl OpenDalStorage {
             // The URL host alone would merge distinct NameNodes that differ
             // only by port; key by the effective NameNode instead.
             #[cfg(feature = "opendal-hdfs-native")]
-            OpenDalStorage::Hdfs { config, .. } => hdfs_batch_key(config, path),
+            OpenDalStorage::HdfsNative { config, .. } => hdfs_native_batch_key(config, path),
             _ => url::Url::parse(path)
                 .ok()
                 .and_then(|u| u.host_str().map(|s| s.to_string()))
@@ -501,8 +501,8 @@ impl OpenDalStorage {
                 }
             }
             #[cfg(feature = "opendal-hdfs-native")]
-            OpenDalStorage::Hdfs { .. } => {
-                let (_, relative_path) = parse_hdfs_path(path)?;
+            OpenDalStorage::HdfsNative { .. } => {
+                let (_, relative_path) = hdfs_native_parse_path(path)?;
                 Ok(relative_path)
             }
             #[cfg(feature = "opendal-oss")]
@@ -854,8 +854,8 @@ mod tests {
     }
 
     #[cfg(feature = "opendal-hdfs-native")]
-    fn hdfs_test_storage() -> OpenDalStorage {
-        OpenDalStorage::Hdfs {
+    fn hdfs_native_test_storage() -> OpenDalStorage {
+        OpenDalStorage::HdfsNative {
             config: Arc::new(HdfsNativeConfig::default()),
             operators: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -863,8 +863,8 @@ mod tests {
 
     #[cfg(feature = "opendal-hdfs-native")]
     #[test]
-    fn test_relativize_path_hdfs() {
-        let storage = hdfs_test_storage();
+    fn test_relativize_path_hdfs_native() {
+        let storage = hdfs_native_test_storage();
 
         assert_eq!(
             storage
@@ -882,16 +882,16 @@ mod tests {
 
     #[cfg(feature = "opendal-hdfs-native")]
     #[test]
-    fn test_relativize_path_hdfs_authority_less() {
-        let storage = hdfs_test_storage();
+    fn test_relativize_path_hdfs_native_authority_less() {
+        let storage = hdfs_native_test_storage();
 
         assert_eq!(storage.relativize_path("hdfs:///a/b").unwrap(), "a/b");
     }
 
     #[cfg(feature = "opendal-hdfs-native")]
     #[test]
-    fn test_relativize_path_hdfs_wrong_scheme_errors() {
-        let storage = hdfs_test_storage();
+    fn test_relativize_path_hdfs_native_wrong_scheme_errors() {
+        let storage = hdfs_native_test_storage();
 
         assert!(storage.relativize_path("s3://bucket/x").is_err());
     }
