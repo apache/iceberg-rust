@@ -46,6 +46,7 @@ use utils::from_opendal_error;
 cfg_if! {
     if #[cfg(feature = "opendal-azdls")] {
         mod azdls;
+        pub use azdls::AzdlsSasTokens;
         use azdls::*;
         use opendal::services::AzdlsConfig;
     }
@@ -177,6 +178,8 @@ impl StorageFactory for OpenDalStorageFactory {
             OpenDalStorageFactory::S3 { .. } => true,
             #[cfg(feature = "opendal-gcs")]
             OpenDalStorageFactory::Gcs => true,
+            #[cfg(feature = "opendal-azdls")]
+            OpenDalStorageFactory::Azdls => true,
             _ => false,
         };
         if credential_provider.is_some() && !supports_credential_provider {
@@ -213,6 +216,8 @@ impl StorageFactory for OpenDalStorageFactory {
             #[cfg(feature = "opendal-azdls")]
             OpenDalStorageFactory::Azdls => Ok(Arc::new(OpenDalStorage::Azdls {
                 config: azdls_config_parse(config.props().clone())?.into(),
+                sas_tokens: Arc::new(AzdlsSasTokens::from_properties(config.props())),
+                credential_provider,
             })),
             #[cfg(feature = "opendal-hf")]
             OpenDalStorageFactory::Hf => Ok(Arc::new(OpenDalStorage::Hf {
@@ -290,6 +295,12 @@ pub enum OpenDalStorage {
     Azdls {
         /// Azure DLS configuration.
         config: Arc<AzdlsConfig>,
+        /// Account-specific SAS tokens supplied by Java-compatible properties.
+        #[serde(default)]
+        sas_tokens: Arc<AzdlsSasTokens>,
+        /// Provider of refreshable vended credentials, supplied by the catalog.
+        #[serde(skip)]
+        credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
     },
     /// HuggingFace Hub storage variant.
     ///
@@ -448,7 +459,17 @@ impl OpenDalStorage {
                 }
             }
             #[cfg(feature = "opendal-azdls")]
-            OpenDalStorage::Azdls { config } => azdls_create_operator(path, config)?,
+            OpenDalStorage::Azdls {
+                config,
+                sas_tokens,
+                credential_provider,
+            } => azdls_create_operator(
+                path,
+                config,
+                sas_tokens,
+                credential_provider,
+                credential_scope,
+            )?,
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { config } => hf_config_build(config, path)?,
             #[cfg(all(
@@ -485,10 +506,13 @@ impl OpenDalStorage {
     ///
     /// For most backends the URL host (bucket name) is sufficient. For HF the host
     /// encodes the repo type, not the repo identity, so a more specific key is used.
+    #[allow(unreachable_patterns)]
     fn batch_key_for_path(&self, path: &str) -> String {
         match self {
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { .. } => hf_batch_key(path),
+            #[cfg(feature = "opendal-azdls")]
+            OpenDalStorage::Azdls { .. } => azdls_batch_key(path).unwrap_or_default(),
             _ => url::Url::parse(path)
                 .ok()
                 .and_then(|u| u.host_str().map(|s| s.to_string()))
@@ -510,6 +534,11 @@ impl OpenDalStorage {
             } => Some(provider),
             #[cfg(feature = "opendal-gcs")]
             OpenDalStorage::Gcs {
+                credential_provider: Some(provider),
+                ..
+            } => Some(provider),
+            #[cfg(feature = "opendal-azdls")]
+            OpenDalStorage::Azdls {
                 credential_provider: Some(provider),
                 ..
             } => Some(provider),
@@ -626,7 +655,7 @@ impl OpenDalStorage {
                 }
             }
             #[cfg(feature = "opendal-azdls")]
-            OpenDalStorage::Azdls { config } => {
+            OpenDalStorage::Azdls { config, .. } => {
                 let azure_path = path.parse::<AzureStoragePath>()?;
                 match_path_with_config(&azure_path, config)?;
                 let relative_path_len = azure_path.path.len();
@@ -805,13 +834,22 @@ impl FileWrite for OpenDalWriter {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
-    #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+    #[cfg(any(
+        feature = "opendal-s3",
+        feature = "opendal-gcs",
+        all(feature = "opendal-memory", feature = "opendal-azdls")
+    ))]
     #[derive(Debug)]
     struct AlwaysSupportedCredentialProvider;
 
-    #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+    #[cfg(any(
+        feature = "opendal-s3",
+        feature = "opendal-gcs",
+        all(feature = "opendal-memory", feature = "opendal-azdls")
+    ))]
     #[async_trait]
     impl StorageCredentialProvider for AlwaysSupportedCredentialProvider {
         async fn load_credential(&self, path: &str) -> Result<iceberg::io::StorageCredential> {
@@ -869,7 +907,11 @@ mod tests {
 
     #[cfg(all(
         feature = "opendal-memory",
-        any(feature = "opendal-s3", feature = "opendal-gcs")
+        any(
+            feature = "opendal-s3",
+            feature = "opendal-gcs",
+            feature = "opendal-azdls"
+        )
     ))]
     #[test]
     fn test_factory_rejects_credentials_for_unsupported_backend() {
@@ -1098,6 +1140,8 @@ mod tests {
                 endpoint: Some("https://myaccount.dfs.core.windows.net".to_string()),
                 ..Default::default()
             }),
+            sas_tokens: Arc::new(AzdlsSasTokens::default()),
+            credential_provider: None,
         };
 
         assert_eq!(

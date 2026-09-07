@@ -47,11 +47,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use iceberg::io::{
-    AWS_REFRESH_CREDENTIALS_ENABLED, AWS_REFRESH_CREDENTIALS_ENDPOINT,
-    GCS_REFRESH_CREDENTIALS_ENABLED, GCS_REFRESH_CREDENTIALS_ENDPOINT, GCS_TOKEN,
-    GCS_TOKEN_EXPIRES_AT, GcsCredential, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN,
-    S3_SESSION_TOKEN_EXPIRES_AT_MS, S3Credential, StorageCredential, StorageCredentialKind,
-    StorageCredentialProvider,
+    ADLS_REFRESH_CREDENTIALS_ENABLED, ADLS_REFRESH_CREDENTIALS_ENDPOINT,
+    ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX, ADLS_SAS_TOKEN_PREFIX, AWS_REFRESH_CREDENTIALS_ENABLED,
+    AWS_REFRESH_CREDENTIALS_ENDPOINT, AzdlsCredential, GCS_REFRESH_CREDENTIALS_ENABLED,
+    GCS_REFRESH_CREDENTIALS_ENDPOINT, GCS_TOKEN, GCS_TOKEN_EXPIRES_AT, GcsCredential,
+    S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN, S3_SESSION_TOKEN_EXPIRES_AT_MS,
+    S3Credential, StorageCredential, StorageCredentialKind, StorageCredentialProvider,
 };
 use iceberg::{Error, ErrorKind, Result, TableIdent};
 use rand::Rng;
@@ -60,9 +61,32 @@ use tokio::sync::Mutex;
 
 use crate::REST_CATALOG_PROP_SCAN_PLAN_ID;
 use crate::auth::AuthManager;
-use crate::client::{HttpClient, deserialize_unexpected_catalog_error};
+use crate::client::{HttpClient, unexpected_catalog_error_without_body};
 use crate::request::HttpRequest;
 use crate::types::LoadCredentialsResponse;
+
+type CredentialParser =
+    fn(config: &HashMap<String, String>, prefix: Option<String>) -> Result<StorageCredential>;
+type KeyedSeedCredentialParser =
+    fn(config: &HashMap<String, String>) -> HashMap<String, StorageCredential>;
+type KeyedSeedPathResolver = fn(path: &str) -> Result<KeyedSeedPath>;
+
+enum SeedStrategy {
+    /// One credential stored in the backend's flat properties.
+    Flat,
+    /// Credentials selected by a backend-specific key derived from each path.
+    Keyed(KeyedSeedStrategy),
+}
+
+struct KeyedSeedStrategy {
+    parse_credentials: KeyedSeedCredentialParser,
+    resolve_path: KeyedSeedPathResolver,
+}
+
+struct KeyedSeedPath {
+    key: String,
+    scope: String,
+}
 
 /// Cloud-specific details regarding vended-credential refresh.
 ///
@@ -79,8 +103,9 @@ struct CloudRefresh {
     /// Whether to jitter successful prefetch times like AWS `CachedSupplier`.
     jitter_prefetch: bool,
     /// Parse a complete credential from catalog-supplied properties.
-    parse_credential:
-        fn(config: &HashMap<String, String>, prefix: Option<String>) -> Result<StorageCredential>,
+    parse_credential: CredentialParser,
+    /// How initial credentials in the table properties are selected.
+    seed_strategy: SeedStrategy,
 }
 
 impl CloudRefresh {
@@ -91,6 +116,7 @@ impl CloudRefresh {
         enabled_key: AWS_REFRESH_CREDENTIALS_ENABLED,
         jitter_prefetch: true,
         parse_credential: parse_s3_credential,
+        seed_strategy: SeedStrategy::Flat,
     };
     /// Google Cloud Storage
     const GCP: Self = Self {
@@ -99,13 +125,23 @@ impl CloudRefresh {
         enabled_key: GCS_REFRESH_CREDENTIALS_ENABLED,
         jitter_prefetch: false,
         parse_credential: parse_gcs_credential,
+        seed_strategy: SeedStrategy::Flat,
     };
-    // TODO: Azure (ADLS) is not yet supported: opendal's Azdls builder exposes no
-    // custom credential-provider hook, and reqsign's SAS-token credential has no
-    // expiry, so reqsign-based refresh isn't possible.
+    /// Azure Data Lake Storage
+    const AZURE: Self = Self {
+        schemes: &["abfs", "abfss", "wasb", "wasbs"],
+        endpoint_key: ADLS_REFRESH_CREDENTIALS_ENDPOINT,
+        enabled_key: ADLS_REFRESH_CREDENTIALS_ENABLED,
+        jitter_prefetch: false,
+        parse_credential: parse_azdls_credential,
+        seed_strategy: SeedStrategy::Keyed(KeyedSeedStrategy {
+            parse_credentials: parse_azdls_account_seeds,
+            resolve_path: resolve_azdls_seed_path,
+        }),
+    };
 
     /// Backends with refresh support
-    const SUPPORTED: &[Self] = &[Self::AWS, Self::GCP];
+    const SUPPORTED: &[Self] = &[Self::AWS, Self::GCP, Self::AZURE];
 
     /// The backend that serves `location`, by its URL scheme, or `None` if no
     /// supported backend matches (in which case static credentials are used
@@ -232,10 +268,29 @@ struct ConfiguredCloud {
     cloud: &'static CloudRefresh,
     endpoint: String,
     cache: Mutex<CacheState>,
+    /// Initial property credentials whose scope cannot be represented by a
+    /// single leading URI prefix, keyed according to the cloud strategy.
+    keyed_seeds: HashMap<String, CachedEntry>,
     /// Only one caller fetches at a time. The cache lock is deliberately
     /// separate so other callers can keep using an unexpired credential while
     /// the refresh is in flight.
     refresh: Mutex<()>,
+}
+
+impl ConfiguredCloud {
+    fn keyed_seed_for_path(&self, path: &str) -> Result<Option<CachedEntry>> {
+        let SeedStrategy::Keyed(strategy) = &self.cloud.seed_strategy else {
+            return Ok(None);
+        };
+        let resolved = (strategy.resolve_path)(path)?;
+        let Some(seed) = self.keyed_seeds.get(&resolved.key) else {
+            return Ok(None);
+        };
+        Ok(Some(CachedEntry {
+            credential: seed.credential.clone().with_prefix(resolved.scope),
+            refresh_at: seed.refresh_at,
+        }))
+    }
 }
 
 /// Fetches and refreshes vended credentials from a REST catalog's table
@@ -322,7 +377,7 @@ impl RestVendedCredentialProvider {
                 }
                 Ok(ParsedCredentials { entries, errors })
             }
-            _ => Err(deserialize_unexpected_catalog_error(
+            _ => Err(unexpected_catalog_error_without_body(
                 response,
                 self.client.disable_header_redaction(),
             )),
@@ -333,7 +388,7 @@ impl RestVendedCredentialProvider {
         &self,
         configured: &ConfiguredCloud,
         path: &str,
-        fallback: Option<CachedEntry>,
+        fallback: Option<CredentialFallback>,
     ) -> Result<StorageCredential> {
         match self.fetch(configured).await {
             Ok(ParsedCredentials { entries, errors }) => {
@@ -360,8 +415,8 @@ impl RestVendedCredentialProvider {
                 if entries.is_empty() {
                     cache.record_failure();
                     return fallback
-                        .filter(|entry| entry.is_unexpired(SystemTime::now()))
-                        .map(|entry| entry.credential)
+                        .filter(|fallback| fallback.entry.is_unexpired(SystemTime::now()))
+                        .map(|fallback| fallback.entry.credential)
                         .ok_or(failure);
                 }
 
@@ -414,12 +469,15 @@ impl RestVendedCredentialProvider {
                     return Ok(credential);
                 }
 
-                // Cache valid credentials for other prefixes while retaining this
-                // path's still-usable credential when its replacement was absent or
-                // invalid. Backoff ensures the failed path is retried promptly.
-                if let Some(fallback) = fallback.filter(|entry| entry.is_unexpired(now)) {
-                    let credential = fallback.credential.clone();
-                    cache.insert_fallback_if_missing(fallback, now);
+                // Cache valid credentials for other prefixes. If none covers this
+                // path, retain its still-usable credential when its replacement was
+                // absent or invalid. Backoff ensures the failed path is retried promptly.
+                if let Some(fallback) = fallback.filter(|fallback| fallback.entry.is_unexpired(now))
+                {
+                    let credential = fallback.entry.credential.clone();
+                    if fallback.cacheable {
+                        cache.insert_fallback_if_missing(fallback.entry, now);
+                    }
                     cache.record_failure();
                     return Ok(credential);
                 }
@@ -435,8 +493,8 @@ impl RestVendedCredentialProvider {
                 // usable, serve it and retry after jittered backoff. Expired
                 // credentials are never served.
                 fallback
-                    .filter(|entry| entry.is_unexpired(SystemTime::now()))
-                    .map(|entry| entry.credential)
+                    .filter(|fallback| fallback.entry.is_unexpired(SystemTime::now()))
+                    .map(|fallback| fallback.entry.credential)
                     .ok_or(fetch_error)
             }
         }
@@ -453,8 +511,32 @@ impl std::fmt::Debug for RestVendedCredentialProvider {
 
 enum CacheDecision {
     Use(StorageCredential),
-    Refresh(Option<CachedEntry>),
+    Refresh(Option<CredentialFallback>),
     Backoff,
+}
+
+#[derive(Clone)]
+struct CredentialFallback {
+    entry: CachedEntry,
+    /// Whether this entry belongs in the ordinary prefix cache after a failed
+    /// replacement. Keyed seeds remain in their separately scoped map.
+    cacheable: bool,
+}
+
+impl CredentialFallback {
+    fn cached(entry: CachedEntry) -> Self {
+        Self {
+            entry,
+            cacheable: true,
+        }
+    }
+
+    fn keyed_seed(entry: CachedEntry) -> Self {
+        Self {
+            entry,
+            cacheable: false,
+        }
+    }
 }
 
 fn refresh_backoff_error(path: &str) -> Error {
@@ -464,27 +546,40 @@ fn refresh_backoff_error(path: &str) -> Error {
     )
 }
 
-async fn cache_decision(configured: &ConfiguredCloud, path: &str) -> CacheDecision {
+async fn cache_decision(configured: &ConfiguredCloud, path: &str) -> Result<CacheDecision> {
+    let keyed_seed = configured
+        .keyed_seed_for_path(path)?
+        .map(CredentialFallback::keyed_seed);
     let cache = configured.cache.lock().await;
-    let current = longest_prefix_match(&cache.entries, path).cloned();
     let now = SystemTime::now();
+    let cached = longest_prefix_match(&cache.entries, path)
+        .cloned()
+        .map(CredentialFallback::cached);
+    let current = match cached {
+        Some(cached) if cached.entry.is_unexpired(now) => Some(cached),
+        Some(expired) => keyed_seed.or(Some(expired)),
+        None => keyed_seed,
+    };
 
-    if let Some(entry) = current.as_ref().filter(|entry| entry.is_fresh(now)) {
-        return CacheDecision::Use(entry.credential.clone());
+    if let Some(fallback) = current
+        .as_ref()
+        .filter(|fallback| fallback.entry.is_fresh(now))
+    {
+        return Ok(CacheDecision::Use(fallback.entry.credential.clone()));
     }
 
     if cache
         .retry_not_before
         .is_some_and(|retry_at| Instant::now() < retry_at)
     {
-        return current
+        return Ok(current
             .as_ref()
-            .filter(|entry| entry.is_unexpired(now))
-            .map(|entry| CacheDecision::Use(entry.credential.clone()))
-            .unwrap_or(CacheDecision::Backoff);
+            .filter(|fallback| fallback.entry.is_unexpired(now))
+            .map(|fallback| CacheDecision::Use(fallback.entry.credential.clone()))
+            .unwrap_or(CacheDecision::Backoff));
     }
 
-    CacheDecision::Refresh(current)
+    Ok(CacheDecision::Refresh(current))
 }
 
 #[async_trait]
@@ -507,7 +602,7 @@ impl StorageCredentialProvider for RestVendedCredentialProvider {
             )
         })?;
 
-        let current = match cache_decision(configured, path).await {
+        let current = match cache_decision(configured, path).await? {
             CacheDecision::Use(credential) => return Ok(credential),
             CacheDecision::Refresh(current) => current,
             CacheDecision::Backoff => return Err(refresh_backoff_error(path)),
@@ -518,11 +613,11 @@ impl StorageCredentialProvider for RestVendedCredentialProvider {
         // for the in-flight refresh instead.
         let usable = current
             .as_ref()
-            .filter(|entry| entry.is_unexpired(SystemTime::now()));
-        let _refresh_guard = if let Some(entry) = usable {
+            .filter(|fallback| fallback.entry.is_unexpired(SystemTime::now()));
+        let _refresh_guard = if let Some(fallback) = usable {
             match configured.refresh.try_lock() {
                 Ok(guard) => guard,
-                Err(_) => return Ok(entry.credential.clone()),
+                Err(_) => return Ok(fallback.entry.credential.clone()),
             }
         } else {
             configured.refresh.lock().await
@@ -530,7 +625,7 @@ impl StorageCredentialProvider for RestVendedCredentialProvider {
 
         // Another caller may have completed a refresh between our cache check
         // and acquiring the single-flight guard.
-        let current = match cache_decision(configured, path).await {
+        let current = match cache_decision(configured, path).await? {
             CacheDecision::Use(credential) => return Ok(credential),
             CacheDecision::Refresh(current) => current,
             CacheDecision::Backoff => return Err(refresh_backoff_error(path)),
@@ -583,6 +678,8 @@ fn failure_backoff(consecutive_failures: u32) -> Duration {
 /// or `None` when no supported cloud advertises an enabled refresh endpoint.
 ///
 /// `base_uri` is the catalog URI, used to resolve a relative endpoint.
+/// `props` contains the effective FileIO properties after applying local
+/// overrides, and therefore supplies headers and client policy.
 /// `table_auth_props` is the unmerged config returned by the table endpoint:
 /// keeping it separate prevents local FileIO overrides from masking table auth.
 /// `auth_manager` derives an isolated child session when those properties
@@ -611,10 +708,26 @@ pub(crate) async fn build_vended_credential_provider(
                     .get(cloud.endpoint_key)
                     .filter(|value| !value.is_empty())?,
             );
-            let entries = (cloud.parse_credential)(props, None)
-                .ok()
-                .map(|credential| vec![CachedEntry::seed(credential, cloud.jitter_prefetch)])
-                .unwrap_or_default();
+            let (entries, keyed_seeds) = match &cloud.seed_strategy {
+                SeedStrategy::Flat => {
+                    let entries = (cloud.parse_credential)(props, None)
+                        .ok()
+                        .map(|credential| {
+                            vec![CachedEntry::seed(credential, cloud.jitter_prefetch)]
+                        })
+                        .unwrap_or_default();
+                    (entries, HashMap::new())
+                }
+                SeedStrategy::Keyed(strategy) => {
+                    let keyed_seeds = (strategy.parse_credentials)(props)
+                        .into_iter()
+                        .map(|(key, credential)| {
+                            (key, CachedEntry::seed(credential, cloud.jitter_prefetch))
+                        })
+                        .collect();
+                    (Vec::new(), keyed_seeds)
+                }
+            };
 
             Some(ConfiguredCloud {
                 cloud,
@@ -624,6 +737,7 @@ pub(crate) async fn build_vended_credential_provider(
                     consecutive_failures: 0,
                     retry_not_before: None,
                 }),
+                keyed_seeds,
                 refresh: Mutex::new(()),
             })
         })
@@ -643,7 +757,7 @@ pub(crate) async fn build_vended_credential_provider(
             client.auth_session(),
         )
         .await?;
-    let table_client = Arc::new(client.for_table(table_auth_props, table_session)?);
+    let table_client = Arc::new(client.for_table(props, table_session)?);
     let plan_id = props.get(REST_CATALOG_PROP_SCAN_PLAN_ID).cloned();
     Ok(Some(Arc::new(RestVendedCredentialProvider::new(
         table_client,
@@ -704,6 +818,103 @@ fn parse_gcs_credential(
         Some(prefix) => credential.with_prefix(prefix),
         None => credential,
     })
+}
+
+/// Parse an account-specific ADLS SAS credential returned by the catalog.
+fn parse_azdls_credential(
+    config: &HashMap<String, String>,
+    prefix: Option<String>,
+) -> Result<StorageCredential> {
+    let prefix = prefix.ok_or_else(|| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            "invalid vended ADLS credential: storage prefix is missing",
+        )
+    })?;
+    let account = azdls_account_name(&prefix)?;
+    let sas_token = required_nonempty(config, &format!("{ADLS_SAS_TOKEN_PREFIX}{account}"))?;
+    let expires_at = required_epoch_millis(
+        config,
+        &format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}{account}"),
+    )?;
+
+    Ok(
+        StorageCredential::new(StorageCredentialKind::Azdls(AzdlsCredential::new(
+            sas_token,
+        )))
+        .with_prefix(prefix)
+        .with_expiration(expires_at),
+    )
+}
+
+/// Parse every complete account-qualified ADLS credential from the initial
+/// table properties. Unlike a URI prefix, an Azure account occurs after the
+/// filesystem in a location, so these seeds are selected by account name.
+fn parse_azdls_account_seeds(
+    config: &HashMap<String, String>,
+) -> HashMap<String, StorageCredential> {
+    config
+        .iter()
+        .filter_map(|(key, value)| {
+            let account = key.strip_prefix(ADLS_SAS_TOKEN_PREFIX)?;
+            if account.is_empty() || value.is_empty() {
+                return None;
+            }
+            let expires_at = required_epoch_millis(
+                config,
+                &format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}{account}"),
+            )
+            .ok()?;
+            Some((
+                account.to_string(),
+                StorageCredential::new(StorageCredentialKind::Azdls(AzdlsCredential::new(value)))
+                    .with_expiration(expires_at),
+            ))
+        })
+        .collect()
+}
+
+fn resolve_azdls_seed_path(location: &str) -> Result<KeyedSeedPath> {
+    let (mut url, account) = parse_azdls_location(location)?;
+    url.set_path("/");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(KeyedSeedPath {
+        key: account,
+        scope: url.to_string(),
+    })
+}
+
+fn azdls_account_name(location: &str) -> Result<String> {
+    parse_azdls_location(location).map(|(_, account)| account)
+}
+
+fn parse_azdls_location(location: &str) -> Result<(Url, String)> {
+    let url = Url::parse(location).map_err(|error| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("invalid ADLS storage location: {location}"),
+        )
+        .with_source(error)
+    })?;
+    if !CloudRefresh::AZURE.schemes.contains(&url.scheme()) {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("invalid ADLS storage location scheme: {}", url.scheme()),
+        ));
+    }
+    let account = url
+        .host_str()
+        .and_then(|host| host.split('.').next())
+        .filter(|account| !account.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("ADLS storage location has no account name: {location}"),
+            )
+        })?;
+    Ok((url, account))
 }
 
 fn required_nonempty(config: &HashMap<String, String>, key: &str) -> Result<String> {
@@ -896,9 +1107,11 @@ mod tests {
         assert!(CloudRefresh::for_location("s3n://b/k").is_some());
         assert!(CloudRefresh::for_location("gs://b/k").is_some());
         assert!(CloudRefresh::for_location("gcs://b/k").is_some());
+        assert!(CloudRefresh::for_location("abfs").is_some());
+        assert!(CloudRefresh::for_location("abfss://fs@acct.dfs.core.windows.net/k").is_some());
+        assert!(CloudRefresh::for_location("wasb://fs@acct.blob.core.windows.net/k").is_some());
+        assert!(CloudRefresh::for_location("wasbs://fs@acct.blob.core.windows.net/k").is_some());
         assert!(CloudRefresh::for_location("not a url").is_none());
-        // Azure not supported yet -> no provider, static creds used as-is.
-        assert!(CloudRefresh::for_location("abfss://fs@acct.dfs.core.windows.net/k").is_none());
         assert!(CloudRefresh::AWS.matches_location("s3://bucket/path"));
         assert!(!CloudRefresh::AWS.matches_location("s3evil://bucket/path"));
     }
@@ -947,6 +1160,32 @@ mod tests {
             credential.expires_at(),
             Some(UNIX_EPOCH + Duration::from_millis(2000))
         );
+    }
+
+    #[test]
+    fn parse_azdls_requires_account_specific_token_and_expiry() {
+        let prefix = "abfss://container@account1.dfs.core.windows.net/table";
+        let token_key = format!("{ADLS_SAS_TOKEN_PREFIX}account1");
+        let expiry_key = format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}account1");
+        let mut config = HashMap::new();
+
+        assert!(parse_azdls_credential(&config, Some(prefix.to_string())).is_err());
+        config.insert(token_key, "sv=2026&sig=secret".to_string());
+        assert!(parse_azdls_credential(&config, Some(prefix.to_string())).is_err());
+        config.insert(expiry_key, "2500".to_string());
+
+        let credential = parse_azdls_credential(&config, Some(prefix.to_string())).unwrap();
+        assert_eq!(credential.prefix(), Some(prefix));
+        assert_eq!(
+            credential.expires_at(),
+            Some(UNIX_EPOCH + Duration::from_millis(2500))
+        );
+        match credential.kind() {
+            StorageCredentialKind::Azdls(azdls) => {
+                assert_eq!(azdls.sas_token(), "sv=2026&sig=secret")
+            }
+            other => panic!("expected ADLS, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1264,6 +1503,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fresh_azdls_seeds_are_scoped_and_served_without_fetching() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+        let props = HashMap::from([
+            (
+                CloudRefresh::AZURE.endpoint_key.to_string(),
+                "/v1/credentials".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_PREFIX}account1"),
+                "sv=2026&sig=seed".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}account1"),
+                epoch_millis(SystemTime::now() + Duration::from_secs(3600)),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_PREFIX}account2"),
+                "sv=2026&sig=other-seed".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}account2"),
+                epoch_millis(SystemTime::now() + Duration::from_secs(3600)),
+            ),
+        ]);
+        let provider = build_vended_credential_provider(
+            test_client(&server.url()),
+            &NoopAuthManager,
+            &test_table(),
+            &server.url(),
+            &props,
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let credential = provider
+            .load_credential("abfss://container@account1.dfs.core.windows.net/table/data/a.parquet")
+            .await
+            .unwrap();
+        assert_eq!(
+            credential.prefix(),
+            Some("abfss://container@account1.dfs.core.windows.net/")
+        );
+        match credential.kind() {
+            StorageCredentialKind::Azdls(azdls) => {
+                assert_eq!(azdls.sas_token(), "sv=2026&sig=seed")
+            }
+            other => panic!("expected ADLS credential, got {other:?}"),
+        }
+
+        let credential = provider
+            .load_credential("abfss://other-container@account2.dfs.core.windows.net/data/b.parquet")
+            .await
+            .unwrap();
+        assert_eq!(
+            credential.prefix(),
+            Some("abfss://other-container@account2.dfs.core.windows.net/")
+        );
+        match credential.kind() {
+            StorageCredentialKind::Azdls(azdls) => {
+                assert_eq!(azdls.sas_token(), "sv=2026&sig=other-seed")
+            }
+            other => panic!("expected ADLS credential, got {other:?}"),
+        }
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn invalid_azdls_path_is_rejected_before_refresh() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+        let props = HashMap::from([(
+            CloudRefresh::AZURE.endpoint_key.to_string(),
+            "/v1/credentials".to_string(),
+        )]);
+        let provider = test_provider(&server.url(), &props).await;
+
+        let error = provider
+            .load_credential("abfss:///data.parquet")
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(error.message().contains("no account name"));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn failed_refresh_is_backed_off_while_credential_is_unexpired() {
         let mut server = Server::new_async().await;
         // A refresh is due (the seed is within the buffer) but the catalog errors.
@@ -1349,6 +1686,7 @@ mod tests {
                     consecutive_failures: 0,
                     retry_not_before: None,
                 }),
+                keyed_seeds: HashMap::new(),
                 refresh: Mutex::new(()),
             },
         ]);
@@ -1427,6 +1765,7 @@ mod tests {
                     consecutive_failures: 0,
                     retry_not_before: None,
                 }),
+                keyed_seeds: HashMap::new(),
                 refresh: Mutex::new(()),
             },
         ]);
@@ -1565,6 +1904,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn effective_headers_override_raw_table_headers() {
+        let mut server = Server::new_async().await;
+        let body = s3_response(
+            "s3://bucket",
+            "AK",
+            SystemTime::now() + Duration::from_secs(3600),
+        );
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .match_header("authorization", "Bearer local-header")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let client = test_client(&server.url());
+        let props = HashMap::from([
+            (
+                CloudRefresh::AWS.endpoint_key.to_string(),
+                "/v1/credentials".to_string(),
+            ),
+            (
+                "header.Authorization".to_string(),
+                "Bearer local-header".to_string(),
+            ),
+        ]);
+        let table_auth = HashMap::from([
+            ("token".to_string(), "table-token".to_string()),
+            (
+                "header.Authorization".to_string(),
+                "Bearer table-header".to_string(),
+            ),
+        ]);
+        let auth_manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()));
+        let provider = build_vended_credential_provider(
+            client,
+            &auth_manager,
+            &test_table(),
+            &server.url(),
+            &props,
+            Some(&table_auth),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        provider.load_credential("s3://bucket/x/f").await.unwrap();
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn one_provider_refreshes_multiple_clouds() {
         let mut server = Server::new_async().await;
         let expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
@@ -1623,6 +2014,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refreshes_azdls_credentials() {
+        let mut server = Server::new_async().await;
+        let expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
+        let prefix = "abfss://container@account1.dfs.core.windows.net/table";
+        let body = format!(
+            r#"{{"storage-credentials":[{{"prefix":"{prefix}","config":{{"adls.sas-token.account1":"sv=2026&sig=secret","adls.sas-token-expires-at-ms.account1":"{expires}"}}}}]}}"#
+        );
+        let mock = server
+            .mock("GET", "/v1/azure-credentials")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+        let props = HashMap::from([(
+            CloudRefresh::AZURE.endpoint_key.to_string(),
+            "/v1/azure-credentials".to_string(),
+        )]);
+        let provider = test_provider(&server.url(), &props).await;
+
+        let credential = provider
+            .load_credential(&format!("{prefix}/data.parquet"))
+            .await
+            .unwrap();
+        match credential.kind() {
+            StorageCredentialKind::Azdls(azdls) => {
+                assert_eq!(azdls.sas_token(), "sv=2026&sig=secret")
+            }
+            other => panic!("expected ADLS credential, got {other:?}"),
+        }
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn refresh_failure_never_serves_expired_credential() {
         let mut server = Server::new_async().await;
         let mock = server
@@ -1642,6 +2067,50 @@ mod tests {
 
         assert!(provider.load_credential("s3://bucket/x/f").await.is_err());
         assert!(provider.load_credential("s3://bucket/x/f").await.is_err());
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn failed_azdls_refresh_uses_account_seed_until_expiry() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(503)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"error":{"message":"unavailable","type":"test","code":503}}"#)
+            .create_async()
+            .await;
+        let props = HashMap::from([
+            (
+                CloudRefresh::AZURE.endpoint_key.to_string(),
+                "/v1/credentials".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_PREFIX}account2"),
+                "sv=2026&sig=seed".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}account2"),
+                epoch_millis(SystemTime::now() + Duration::from_secs(60)),
+            ),
+        ]);
+        let provider = test_provider(&server.url(), &props).await;
+        let path = "abfss://container@account2.dfs.core.windows.net/data/a.parquet";
+
+        for _ in 0..2 {
+            let credential = provider.load_credential(path).await.unwrap();
+            assert_eq!(
+                credential.prefix(),
+                Some("abfss://container@account2.dfs.core.windows.net/")
+            );
+            match credential.kind() {
+                StorageCredentialKind::Azdls(azdls) => {
+                    assert_eq!(azdls.sas_token(), "sv=2026&sig=seed")
+                }
+                other => panic!("expected ADLS credential, got {other:?}"),
+            }
+        }
         mock.assert_async().await;
     }
 

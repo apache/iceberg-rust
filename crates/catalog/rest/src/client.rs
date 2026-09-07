@@ -145,9 +145,10 @@ impl HttpClient {
 
     /// Derives a client for table-scoped requests.
     ///
-    /// The connection pool and catalog headers are inherited, explicit table
-    /// headers override them, and `auth_session` replaces the catalog session
-    /// only when the auth manager selected a table-specific child session.
+    /// The connection pool and catalog headers are inherited, headers in the
+    /// effective table properties override them, and `auth_session` replaces
+    /// the catalog session only when the auth manager selected a table-specific
+    /// child session.
     pub(crate) fn for_table(
         &self,
         props: &HashMap<String, String>,
@@ -296,6 +297,25 @@ pub(crate) fn deserialize_unexpected_catalog_error(
     response: HttpResponse,
     disable_header_redaction: bool,
 ) -> Error {
+    unexpected_catalog_error(response, disable_header_redaction, true)
+}
+
+/// Builds an unexpected catalog error without retaining the response body.
+///
+/// Credential endpoints use this because even an unsuccessful response may
+/// contain credential material that must not be surfaced through an error.
+pub(crate) fn unexpected_catalog_error_without_body(
+    response: HttpResponse,
+    disable_header_redaction: bool,
+) -> Error {
+    unexpected_catalog_error(response, disable_header_redaction, false)
+}
+
+fn unexpected_catalog_error(
+    response: HttpResponse,
+    disable_header_redaction: bool,
+    include_body: bool,
+) -> Error {
     let err = Error::new(
         ErrorKind::Unexpected,
         "Received response with unexpected status code",
@@ -307,7 +327,7 @@ pub(crate) fn deserialize_unexpected_catalog_error(
     );
 
     let bytes = response.body();
-    if bytes.is_empty() {
+    if !include_body || bytes.is_empty() {
         return err;
     }
     err.with_context("json", String::from_utf8_lossy(bytes))
@@ -421,6 +441,23 @@ mod tests {
         assert!(err.contains("abc123"), "{err}");
         assert!(err.contains("nope"), "{err}");
         assert!(!err.contains("leaked"), "{err}");
+    }
+
+    #[test]
+    fn test_unexpected_error_can_omit_a_secret_body() {
+        let response = HttpResponse::new(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            HeaderMap::new(),
+            br#"{"secret": "do-not-expose"}"#.to_vec(),
+        );
+
+        let err = format!(
+            "{:?}",
+            unexpected_catalog_error_without_body(response, false)
+        );
+
+        assert!(err.contains("500"), "{err}");
+        assert!(!err.contains("do-not-expose"), "{err}");
     }
 
     #[tokio::test]

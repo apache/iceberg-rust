@@ -15,9 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+#[cfg(any(
+    feature = "opendal-s3",
+    feature = "opendal-gcs",
+    feature = "opendal-azdls"
+))]
 use crate::DynamicCredentialScope;
 
+#[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
 pub(crate) fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())
 }
@@ -34,7 +39,11 @@ pub(crate) fn from_opendal_error(e: opendal::Error) -> iceberg::Error {
 /// Convert a [`SystemTime`](std::time::SystemTime) credential expiry into the
 /// `reqsign` [`Timestamp`](reqsign_core::time::Timestamp) used on backend
 /// credential types (e.g. `AwsCredential::expires_in`, `google::Token::expires_at`).
-#[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+#[cfg(any(
+    feature = "opendal-s3",
+    feature = "opendal-gcs",
+    feature = "opendal-azdls"
+))]
 pub(crate) fn system_time_to_timestamp(
     time: std::time::SystemTime,
 ) -> reqsign_core::Result<reqsign_core::time::Timestamp> {
@@ -55,7 +64,11 @@ pub(crate) fn system_time_to_timestamp(
 
 /// Validate that a provider's declared credential prefix covers the path for
 /// which the backend requested the credential.
-#[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+#[cfg(any(
+    feature = "opendal-s3",
+    feature = "opendal-gcs",
+    feature = "opendal-azdls"
+))]
 pub(crate) fn validate_credential_prefix(
     path: &str,
     prefix: Option<&str>,

@@ -255,6 +255,40 @@ pub enum StorageCredentialKind {
     S3(S3Credential),
     /// Google Cloud Storage credentials.
     Gcs(GcsCredential),
+    /// Azure Data Lake Storage credentials.
+    Azdls(AzdlsCredential),
+}
+
+/// Temporary Azure Data Lake Storage credentials (a shared access signature).
+#[derive(Clone)]
+pub struct AzdlsCredential {
+    /// Shared access signature used to access Azure storage.
+    sas_token: String,
+}
+
+impl AzdlsCredential {
+    /// Create an Azure Data Lake Storage credential.
+    pub fn new(sas_token: impl Into<String>) -> Self {
+        Self {
+            sas_token: sas_token.into(),
+        }
+    }
+
+    /// Return the Azure shared access signature.
+    pub fn sas_token(&self) -> &str {
+        &self.sas_token
+    }
+
+    /// Consume this credential and return its shared access signature.
+    pub fn into_sas_token(self) -> String {
+        self.sas_token
+    }
+}
+
+impl Debug for AzdlsCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzdlsCredential").finish_non_exhaustive()
+    }
 }
 
 /// Temporary Amazon S3 credentials.

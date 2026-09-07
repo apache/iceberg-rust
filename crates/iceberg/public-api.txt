@@ -695,6 +695,7 @@ pub async fn iceberg::inspect::SnapshotsTable<'a>::scan(&self) -> iceberg::Resul
 pub fn iceberg::inspect::SnapshotsTable<'a>::schema(&self) -> iceberg::spec::Schema
 pub mod iceberg::io
 pub enum iceberg::io::StorageCredentialKind
+pub iceberg::io::StorageCredentialKind::Azdls(iceberg::io::AzdlsCredential)
 pub iceberg::io::StorageCredentialKind::Gcs(iceberg::io::GcsCredential)
 pub iceberg::io::StorageCredentialKind::S3(iceberg::io::S3Credential)
 impl core::clone::Clone for iceberg::io::StorageCredentialKind
@@ -731,6 +732,15 @@ impl serde_core::ser::Serialize for iceberg::io::AzdlsConfig
 pub fn iceberg::io::AzdlsConfig::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::io::AzdlsConfig
 pub fn iceberg::io::AzdlsConfig::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::io::AzdlsCredential
+impl iceberg::io::AzdlsCredential
+pub fn iceberg::io::AzdlsCredential::into_sas_token(self) -> alloc::string::String
+pub fn iceberg::io::AzdlsCredential::new(sas_token: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::io::AzdlsCredential::sas_token(&self) -> &str
+impl core::clone::Clone for iceberg::io::AzdlsCredential
+pub fn iceberg::io::AzdlsCredential::clone(&self) -> iceberg::io::AzdlsCredential
+impl core::fmt::Debug for iceberg::io::AzdlsCredential
+pub fn iceberg::io::AzdlsCredential::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::io::FileIO
 impl iceberg::io::FileIO
 pub fn iceberg::io::FileIO::config(&self) -> &iceberg::io::StorageConfig
@@ -1048,7 +1058,11 @@ pub const iceberg::io::ADLS_AUTHORITY_HOST: &str
 pub const iceberg::io::ADLS_CLIENT_ID: &str
 pub const iceberg::io::ADLS_CLIENT_SECRET: &str
 pub const iceberg::io::ADLS_CONNECTION_STRING: &str
+pub const iceberg::io::ADLS_REFRESH_CREDENTIALS_ENABLED: &str
+pub const iceberg::io::ADLS_REFRESH_CREDENTIALS_ENDPOINT: &str
 pub const iceberg::io::ADLS_SAS_TOKEN: &str
+pub const iceberg::io::ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX: &str
+pub const iceberg::io::ADLS_SAS_TOKEN_PREFIX: &str
 pub const iceberg::io::ADLS_TENANT_ID: &str
 pub const iceberg::io::AWS_REFRESH_CREDENTIALS_ENABLED: &str
 pub const iceberg::io::AWS_REFRESH_CREDENTIALS_ENDPOINT: &str

@@ -102,11 +102,10 @@ pub(crate) fn gcs_config_build(
     let mut cfg = cfg.clone();
     cfg.bucket = bucket.to_string();
 
-    // When a catalog-supplied provider is present, make it the sole credential
-    // source. `reqsign_google` only prepends a custom provider (unlike S3, which
-    // replaces the chain) and its chain continues to the next provider on error,
-    // so without this a failed refresh would silently fall back to the stale seed
-    // token or ambient GCP credentials.
+    // `reqsign_google` continues to the next provider even when a provider returns
+    // an error, and OpenDAL prepends custom providers to its default chain. Disable
+    // every other configured and ambient source so the catalog provider is
+    // effectively the sole source and refresh failures cannot silently fall back.
     let credential_provider = credential_provider
         .as_ref()
         .filter(|provider| provider.supports_path(path));
@@ -119,6 +118,8 @@ pub(crate) fn gcs_config_build(
         }
         cfg.token = None;
         cfg.credential = None;
+        cfg.credential_path = None;
+        cfg.service_account = None;
         cfg.disable_vm_metadata = true;
         cfg.disable_config_load = true;
     }

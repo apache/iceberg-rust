@@ -39,7 +39,11 @@ opendal-all = [
   "opendal-hf",
 ]
 
-opendal-azdls = ["opendal/services-azdls"]
+opendal-azdls = [
+  "opendal/services-azdls",
+  "reqsign-azure-storage",
+  "reqsign-core",
+]
 opendal-fs = ["opendal/services-fs"]
 opendal-gcs = ["opendal/services-gcs", "reqsign-google", "reqsign-core"]
 opendal-hf = ["opendal/services-hf"]
@@ -56,6 +60,7 @@ futures = { workspace = true }
 iceberg = { workspace = true }
 opendal = { workspace = true }
 reqsign-aws-v4 = { version = "3.0.0", optional = true }
+reqsign-azure-storage = { version = "3.2.1", optional = true }
 reqsign-core = { version = "3.0.0", optional = true }
 reqsign-google = { version = "3.0.0", optional = true }
 serde = { workspace = true }
