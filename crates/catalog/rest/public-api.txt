@@ -289,6 +289,7 @@ pub struct iceberg_catalog_rest::RestCatalogBuilder
 impl iceberg_catalog_rest::RestCatalogBuilder
 pub fn iceberg_catalog_rest::RestCatalogBuilder::with_auth_manager(self, auth_manager: alloc::sync::Arc<dyn iceberg_catalog_rest::AuthManager>) -> Self
 pub fn iceberg_catalog_rest::RestCatalogBuilder::with_client(self, client: reqwest::async_impl::client::Client) -> Self
+pub fn iceberg_catalog_rest::RestCatalogBuilder::with_page_size(self, page_size: u32) -> Self
 pub fn iceberg_catalog_rest::RestCatalogBuilder::with_session_context(self, context: iceberg::catalog::session::SessionContext) -> Self
 impl core::default::Default for iceberg_catalog_rest::RestCatalogBuilder
 pub fn iceberg_catalog_rest::RestCatalogBuilder::default() -> iceberg_catalog_rest::RestCatalogBuilder
@@ -325,6 +326,7 @@ pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::load(self, name: impl co
 pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::with_auth_manager(self, auth_manager: alloc::sync::Arc<dyn iceberg_catalog_rest::AuthManager>) -> Self
 pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::with_client(self, client: reqwest::async_impl::client::Client) -> Self
 pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::with_kms_client_factory(self, kms_client_factory: alloc::sync::Arc<dyn iceberg::encryption::kms::factory::KmsClientFactory>) -> Self
+pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::with_page_size(self, page_size: u32) -> Self
 pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::with_runtime(self, runtime: iceberg::runtime::Runtime) -> Self
 pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> Self
 impl core::default::Default for iceberg_catalog_rest::RestSessionCatalogBuilder
@@ -381,6 +383,7 @@ pub const iceberg_catalog_rest::AUTH_TYPE_NONE: &str
 pub const iceberg_catalog_rest::AUTH_TYPE_OAUTH2: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_AUTH_TYPE: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_PAGE_SIZE: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_URI: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_WAREHOUSE: &str
 pub trait iceberg_catalog_rest::AuthManager: core::fmt::Debug + core::marker::Send + core::marker::Sync

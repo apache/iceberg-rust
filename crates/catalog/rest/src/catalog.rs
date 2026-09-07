@@ -20,6 +20,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
+use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
@@ -56,6 +57,9 @@ use crate::types::{
 pub const REST_CATALOG_PROP_URI: &str = "uri";
 /// REST catalog warehouse location
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
+/// Requested maximum number of results per list response (a positive `u32`).
+/// When unset, no `pageSize` query parameter is sent.
+pub const REST_CATALOG_PROP_PAGE_SIZE: &str = "rest-page-size";
 /// Disable header redaction in error logs and `Debug` output (defaults to
 /// false for security)
 pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
@@ -113,6 +117,15 @@ impl CatalogBuilder for RestCatalogBuilder {
 }
 
 impl RestCatalogBuilder {
+    /// Sets the requested page size for namespace and table listings.
+    ///
+    /// See [`RestSessionCatalogBuilder::with_page_size`] for configuration
+    /// precedence and validation. All pages are still returned by list operations.
+    pub fn with_page_size(mut self, page_size: u32) -> Self {
+        self.inner = self.inner.with_page_size(page_size);
+        self
+    }
+
     /// Configures the catalog with a custom HTTP client.
     pub fn with_client(mut self, client: Client) -> Self {
         self.inner = self.inner.with_client(client);
@@ -217,6 +230,22 @@ impl RestCatalogConfig {
     /// The `oauth2-server-uri` property, only when explicitly configured.
     pub(crate) fn explicit_oauth2_server_uri(&self) -> Option<String> {
         self.props.get("oauth2-server-uri").cloned()
+    }
+
+    /// Parse only the effective value, after server defaults and overrides are merged.
+    fn page_size(&self) -> Result<Option<NonZeroU32>> {
+        self.props
+            .get(REST_CATALOG_PROP_PAGE_SIZE)
+            .map(|value| {
+                value.parse::<NonZeroU32>().map_err(|err| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("{REST_CATALOG_PROP_PAGE_SIZE} must be a positive u32"),
+                    )
+                    .with_source(err)
+                })
+            })
+            .transpose()
     }
 
     fn namespaces_endpoint(&self) -> String {
@@ -423,6 +452,8 @@ struct RestClient {
     config: RestCatalogConfig,
     /// Capabilities the server advertises (see [`RestSessionCatalog::supports_endpoint`]).
     endpoints: HashSet<Endpoint>,
+    /// Validated page size from the merged runtime configuration.
+    page_size: Option<NonZeroU32>,
 }
 
 impl RestClient {
@@ -456,6 +487,7 @@ impl RestClient {
             _ => crate::endpoint::DEFAULT_ENDPOINTS.clone(),
         };
         let config = user_config.clone().merge_with_config(catalog_config);
+        let page_size = config.page_size()?;
         let http_client = http_client.update_with(&config)?;
         // The manager is handed an unauthenticated client: its own
         // requests must not be signed by the session it is deriving.
@@ -470,6 +502,7 @@ impl RestClient {
             config,
             http_client: http_client.with_auth_session(session),
             endpoints,
+            page_size,
         })
     }
 
@@ -893,10 +926,15 @@ impl SessionCatalog for RestSessionCatalog {
         let client = self.client().await?;
         let endpoint = client.config.namespaces_endpoint();
         let mut namespaces = Vec::new();
-        let mut next_token = None;
+        // An empty initial token explicitly opts in to pagination.
+        let mut next_token = client.page_size.map(|_| String::new());
 
         loop {
             let mut request = client.http_client.request(Method::GET, endpoint.clone());
+
+            if let Some(page_size) = client.page_size {
+                request = request.query(&[("pageSize", page_size)]);
+            }
 
             // Filter on `parent={namespace}` if a parent namespace exists.
             if let Some(ns) = parent {
@@ -1076,10 +1114,15 @@ impl SessionCatalog for RestSessionCatalog {
         let client = self.client().await?;
         let endpoint = client.config.tables_endpoint(namespace);
         let mut identifiers = Vec::new();
-        let mut next_token = None;
+        // An empty initial token explicitly opts in to pagination.
+        let mut next_token = client.page_size.map(|_| String::new());
 
         loop {
             let mut request = client.http_client.request(Method::GET, endpoint.clone());
+
+            if let Some(page_size) = client.page_size {
+                request = request.query(&[("pageSize", page_size)]);
+            }
 
             if let Some(token) = next_token {
                 request = request.query(&[("pageToken", token)]);
@@ -1515,6 +1558,24 @@ impl Default for RestSessionCatalogBuilder {
 }
 
 impl RestSessionCatalogBuilder {
+    /// Sets the requested page size for namespace and table listings.
+    ///
+    /// This overrides server defaults. The `rest-page-size` property passed to
+    /// [`load`](Self::load) takes precedence over this value, and server overrides
+    /// take precedence over both. There is no client-side default.
+    ///
+    /// The effective value must be a positive `u32`; an invalid value produces
+    /// [`ErrorKind::DataInvalid`] when the catalog is first used, after the server
+    /// configuration is fetched. List operations continue to return all results,
+    /// fetching as many pages as necessary.
+    pub fn with_page_size(mut self, page_size: u32) -> Self {
+        self.config.props.insert(
+            REST_CATALOG_PROP_PAGE_SIZE.to_string(),
+            page_size.to_string(),
+        );
+        self
+    }
+
     /// Configures the catalog with a custom HTTP client.
     pub fn with_client(mut self, client: Client) -> Self {
         self.config.client = Some(client);
@@ -1617,10 +1678,11 @@ impl RestSessionCatalogBuilder {
         }
 
         // Collect other remaining properties
-        self.config.props = props
-            .into_iter()
-            .filter(|(k, _)| k != REST_CATALOG_PROP_URI && k != REST_CATALOG_PROP_WAREHOUSE)
-            .collect();
+        self.config.props.extend(
+            props
+                .into_iter()
+                .filter(|(k, _)| k != REST_CATALOG_PROP_URI && k != REST_CATALOG_PROP_WAREHOUSE),
+        );
 
         async move {
             if self.config.name.is_none() {
@@ -1704,6 +1766,148 @@ mod tests {
             Runtime::current(),
             None,
         )
+    }
+
+    #[tokio::test]
+    async fn test_page_size_precedence_and_pagination() {
+        // Server default < builder < load properties < server override.
+        for (default, builder, property, override_value, expected) in [
+            (None, None, None, None, None),
+            (Some("10"), None, None, None, Some(10)),
+            (Some("10"), Some(20), None, None, Some(20)),
+            (None, Some(20), None, None, Some(20)),
+            (Some("10"), None, Some("30"), None, Some(30)),
+            (Some("10"), Some(20), Some("30"), None, Some(30)),
+            (Some("10"), Some(20), Some("30"), Some("40"), Some(40)),
+            (None, None, None, Some("40"), Some(40)),
+            (None, Some(1), None, None, Some(1)),
+            (None, Some(u32::MAX), None, None, Some(u32::MAX)),
+            // Invalid lower-priority values must not reject a valid effective value.
+            (Some("invalid"), Some(20), None, None, Some(20)),
+            (None, Some(0), Some("invalid"), Some("40"), Some(40)),
+        ] {
+            let mut server = Server::new_async().await;
+            let page_size_props = |value: Option<&str>| -> HashMap<String, String> {
+                value
+                    .map(|value| (REST_CATALOG_PROP_PAGE_SIZE.to_string(), value.to_string()))
+                    .into_iter()
+                    .collect()
+            };
+            let config_mock = server
+                .mock("GET", "/v1/config")
+                .with_status(200)
+                .with_body(
+                    json!({
+                        "defaults": page_size_props(default),
+                        "overrides": page_size_props(override_value),
+                    })
+                    .to_string(),
+                )
+                .create_async()
+                .await;
+
+            let mut builder_config = RestCatalogBuilder::default();
+            if let Some(page_size) = builder {
+                builder_config = builder_config.with_page_size(page_size);
+            }
+            let mut props = page_size_props(property);
+            props.insert(REST_CATALOG_PROP_URI.to_string(), server.url());
+            let catalog = builder_config.load("test", props).await.unwrap();
+
+            // Check every request, including the empty token that opts in on page 1.
+            // Also verify that page size composes with a multipart parent namespace.
+            let mut mocks = Vec::new();
+            for (endpoint, parent, first_body, last_body) in [
+                (
+                    "/v1/namespaces",
+                    "parent=parent%1Fchild",
+                    json!({"namespaces": [["ns1"]], "next-page-token": "next/+"}),
+                    json!({"namespaces": [["ns2"]], "next-page-token": null}),
+                ),
+                (
+                    "/v1/namespaces/ns1/tables",
+                    "",
+                    json!({"identifiers": [{"namespace": ["ns1"], "name": "t1"}], "next-page-token": "next/+"}),
+                    json!({"identifiers": [{"namespace": ["ns1"], "name": "t2"}]}),
+                ),
+            ] {
+                for (token, body) in [("", first_body), ("next%2F%2B", last_body)] {
+                    let mut query = Vec::new();
+                    if let Some(page_size) = expected {
+                        query.push(format!("pageSize={page_size}"));
+                    }
+                    if !parent.is_empty() {
+                        query.push(parent.to_string());
+                    }
+                    if expected.is_some() || !token.is_empty() {
+                        query.push(format!("pageToken={token}"));
+                    }
+                    let query = if query.is_empty() {
+                        mockito::Matcher::Missing
+                    } else {
+                        mockito::Matcher::Exact(query.join("&"))
+                    };
+                    mocks.push(
+                        server
+                            .mock("GET", endpoint)
+                            .match_query(query)
+                            .with_status(200)
+                            .with_body(body.to_string())
+                            .expect(1)
+                            .create_async()
+                            .await,
+                    );
+                }
+            }
+
+            let parent = NamespaceIdent::from_vec(vec!["parent".into(), "child".into()]).unwrap();
+            assert_eq!(catalog.list_namespaces(Some(&parent)).await.unwrap(), vec![
+                NamespaceIdent::new("ns1".into()),
+                NamespaceIdent::new("ns2".into())
+            ],);
+            let namespace = NamespaceIdent::new("ns1".into());
+            assert_eq!(catalog.list_tables(&namespace).await.unwrap(), vec![
+                TableIdent::new(namespace.clone(), "t1".into()),
+                TableIdent::new(namespace, "t2".into())
+            ],);
+            config_mock.assert_async().await;
+            for mock in mocks {
+                mock.assert_async().await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_invalid_page_size() {
+        for value in ["", "0", "-1", "abc", "1.5", "4294967296"] {
+            for source in ["defaults", "client", "overrides"] {
+                let mut server = Server::new_async().await;
+                let mut config = json!({"defaults": {}, "overrides": {}});
+                let mut props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.url())]);
+                if source == "client" {
+                    props.insert(REST_CATALOG_PROP_PAGE_SIZE.to_string(), value.to_string());
+                } else {
+                    config[source][REST_CATALOG_PROP_PAGE_SIZE] = json!(value);
+                }
+                let config_mock = server
+                    .mock("GET", "/v1/config")
+                    .with_status(200)
+                    .with_body(config.to_string())
+                    .create_async()
+                    .await;
+                let catalog = RestSessionCatalogBuilder::default()
+                    .load("test", props)
+                    .await
+                    .unwrap();
+                let err = catalog
+                    .list_namespaces(&SessionContext::empty(), None)
+                    .await
+                    .unwrap_err();
+                assert_eq!(err.kind(), ErrorKind::DataInvalid);
+                assert!(err.to_string().contains(REST_CATALOG_PROP_PAGE_SIZE));
+                config_mock.assert_async().await;
+            }
+        }
     }
 
     #[tokio::test]
