@@ -16,12 +16,12 @@
 # under the License.
 
 [package]
-name = "iceberg-storage-object_store"
 edition = { workspace = true }
-version = { workspace = true }
 license = { workspace = true }
-repository = { workspace = true }
+name = "iceberg-storage-object_store"
 publish = true
+repository = { workspace = true }
+version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg object_store storage implementation"

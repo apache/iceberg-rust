@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use iceberg::io::S3Config;
 use iceberg::{Error, ErrorKind, Result};
-use object_store::aws::AmazonS3Builder;
 use object_store::ObjectStore;
+use object_store::aws::AmazonS3Builder;
 use url::Url;
 
 /// Parse an absolute S3 URL into (scheme, bucket, relative_path).

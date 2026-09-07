@@ -18,8 +18,8 @@
 //! `object_store`-based storage implementation for Apache Iceberg.
 //!
 //! This crate provides [`ObjectStoreStorage`] and [`ObjectStoreStorageFactory`],
-//! which implement the [`Storage`](iceberg::io::Storage) and
-//! [`StorageFactory`](iceberg::io::StorageFactory) traits from the `iceberg` crate
+//! which implement the [`Storage`] and
+//! [`StorageFactory`] traits from the `iceberg` crate
 //! using the [`object_store`](https://docs.rs/object_store) crate as the backend.
 //!
 //! Currently only S3 storage is supported (via the `object_store-s3` feature flag,
