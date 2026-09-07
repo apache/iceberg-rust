@@ -267,7 +267,7 @@ impl FileWrite for ObjectStoreWriter {
             .writer
             .as_mut()
             .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Writer has already been closed"))?;
-        writer.write(&bs);
+        writer.put(bs);
         Ok(())
     }
 

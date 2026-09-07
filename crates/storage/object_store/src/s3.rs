@@ -49,6 +49,13 @@ pub(crate) fn parse_s3_url(path: &str) -> Result<(&str, &str, &str)> {
         )
     })?;
 
+    if bucket_str.is_empty() {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid s3 url: {path}, missing bucket"),
+        ));
+    };
+
     let prefix_len = scheme.len() + "://".len() + bucket_str.len() + "/".len();
     let relative = if path.len() > prefix_len {
         &path[prefix_len..]
@@ -139,5 +146,11 @@ mod tests {
         assert_eq!(schema, "s3n");
         assert_eq!(bucket, "my-bucket");
         assert_eq!(relative, "path/to/file.parquet");
+    }
+
+    #[test]
+    fn test_parse_s3_url_empty_bucket() {
+        assert!(parse_s3_url("s3:///path/to/file.parquet").is_err());
+        assert!(parse_s3_url("s3://").is_err());
     }
 }
