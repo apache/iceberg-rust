@@ -2525,7 +2525,8 @@ mod tests {
             .with_project_field_ids(vec![user_field_id, RESERVED_FIELD_ID_ROW_ID])
             .with_first_row_id(Some(100))
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;

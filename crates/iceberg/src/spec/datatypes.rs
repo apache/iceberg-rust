@@ -599,100 +599,18 @@ impl TryFrom<SerdeNestedField> for NestedField {
     type Error = crate::Error;
 
     fn try_from(value: SerdeNestedField) -> Result<Self> {
-        fn validate_unknown_values(default: &JsonValue, field_type: &Type) -> Result<()> {
-            if default.is_null() {
-                return Ok(());
-            }
+        let initial_default = value
+            .initial_default
+            .map(|default| Literal::try_from_json(default, &value.field_type))
+            .transpose()?
+            .flatten();
+        let write_default = value
+            .write_default
+            .map(|default| Literal::try_from_json(default, &value.field_type))
+            .transpose()?
+            .flatten();
 
-            match (field_type, default) {
-                (Type::Primitive(PrimitiveType::Unknown), _) => {
-                    ensure_data_valid!(false, "Unknown type only supports null default values",);
-                }
-                (Type::Struct(struct_type), JsonValue::Object(object)) => {
-                    for field in struct_type.fields() {
-                        if let Some(value) = object.get(&field.id.to_string()) {
-                            validate_unknown_values(value, &field.field_type)?;
-                        }
-                    }
-                }
-                (Type::List(list_type), JsonValue::Array(values)) => {
-                    for value in values {
-                        validate_unknown_values(value, &list_type.element_field.field_type)?;
-                    }
-                }
-                (Type::Map(map_type), JsonValue::Object(object)) => {
-                    if let Some(JsonValue::Array(keys)) = object.get("keys") {
-                        for key in keys {
-                            validate_unknown_values(key, &map_type.key_field.field_type)?;
-                        }
-                    }
-                    if let Some(JsonValue::Array(values)) = object.get("values") {
-                        for value in values {
-                            validate_unknown_values(value, &map_type.value_field.field_type)?;
-                        }
-                    }
-                }
-                _ => {}
-            }
-
-            Ok(())
-        }
-
-        fn validate_unknown_is_optional(
-            required: bool,
-            field_type: &Type,
-            field_name: &str,
-        ) -> Result<()> {
-            match field_type {
-                Type::Primitive(PrimitiveType::Unknown) => {
-                    ensure_data_valid!(
-                        !required,
-                        "Field {} cannot be required because unknown type must be optional",
-                        field_name
-                    );
-                }
-                Type::Struct(struct_type) => {
-                    for field in struct_type.fields() {
-                        validate_unknown_is_optional(
-                            field.required,
-                            &field.field_type,
-                            &field.name,
-                        )?;
-                    }
-                }
-                Type::List(list_type) => {
-                    let field = &list_type.element_field;
-                    validate_unknown_is_optional(field.required, &field.field_type, &field.name)?;
-                }
-                Type::Map(map_type) => {
-                    for field in [&map_type.key_field, &map_type.value_field] {
-                        validate_unknown_is_optional(
-                            field.required,
-                            &field.field_type,
-                            &field.name,
-                        )?;
-                    }
-                }
-                Type::Primitive(_) | Type::Variant(_) => {}
-            }
-
-            Ok(())
-        }
-
-        fn parse_default(default: Option<JsonValue>, field_type: &Type) -> Result<Option<Literal>> {
-            let Some(default) = default else {
-                return Ok(None);
-            };
-            validate_unknown_values(&default, field_type)?;
-            Literal::try_from_json(default, field_type)
-        }
-
-        validate_unknown_is_optional(value.required, &value.field_type, &value.name)?;
-
-        let initial_default = parse_default(value.initial_default, &value.field_type)?;
-        let write_default = parse_default(value.write_default, &value.field_type)?;
-
-        Ok(NestedField {
+        let field = NestedField {
             id: value.id,
             name: value.name,
             required: value.required,
@@ -700,7 +618,9 @@ impl TryFrom<SerdeNestedField> for NestedField {
             write_default,
             field_type: value.field_type,
             doc: value.doc,
-        })
+        };
+        field.validate_unknown_type()?;
+        Ok(field)
     }
 }
 
@@ -724,6 +644,77 @@ impl From<NestedField> for SerdeNestedField {
 pub type NestedFieldRef = Arc<NestedField>;
 
 impl NestedField {
+    pub(crate) fn validate_unknown_type(&self) -> Result<()> {
+        ensure_data_valid!(
+            !self
+                .initial_default
+                .iter()
+                .chain(self.write_default.iter())
+                .any(|default| {
+                    Self::default_contains_non_null_unknown(default, &self.field_type)
+                }),
+            "Field {} cannot have non-null defaults because unknown type requires null defaults",
+            self.name
+        );
+
+        match self.field_type.as_ref() {
+            Type::Primitive(PrimitiveType::Unknown) => {
+                ensure_data_valid!(
+                    !self.required,
+                    "Field {} cannot be required because unknown type must be optional",
+                    self.name
+                );
+            }
+            Type::Struct(struct_type) => {
+                for field in struct_type.fields() {
+                    field.validate_unknown_type()?;
+                }
+            }
+            Type::List(list_type) => {
+                list_type.element_field.validate_unknown_type()?;
+            }
+            Type::Map(map_type) => {
+                map_type.key_field.validate_unknown_type()?;
+                map_type.value_field.validate_unknown_type()?;
+            }
+            Type::Primitive(_) | Type::Variant(_) => {}
+        }
+
+        Ok(())
+    }
+
+    fn default_contains_non_null_unknown(default: &Literal, field_type: &Type) -> bool {
+        match (default, field_type) {
+            (_, Type::Primitive(PrimitiveType::Unknown)) => true,
+            (Literal::Struct(value), Type::Struct(struct_type)) => value
+                .iter()
+                .zip(struct_type.fields())
+                .any(|(value, field)| {
+                    value.is_some_and(|value| {
+                        Self::default_contains_non_null_unknown(value, &field.field_type)
+                    })
+                }),
+            (Literal::List(values), Type::List(list_type)) => values.iter().any(|value| {
+                value.as_ref().is_some_and(|value| {
+                    Self::default_contains_non_null_unknown(
+                        value,
+                        &list_type.element_field.field_type,
+                    )
+                })
+            }),
+            (Literal::Map(map), Type::Map(map_type)) => map.iter().any(|(key, value)| {
+                Self::default_contains_non_null_unknown(key, &map_type.key_field.field_type)
+                    || value.as_ref().is_some_and(|value| {
+                        Self::default_contains_non_null_unknown(
+                            value,
+                            &map_type.value_field.field_type,
+                        )
+                    })
+            }),
+            _ => false,
+        }
+    }
+
     /// Construct a new field.
     pub fn new(id: i32, name: impl ToString, field_type: Type, required: bool) -> Self {
         Self {

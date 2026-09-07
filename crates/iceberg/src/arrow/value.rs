@@ -1892,16 +1892,16 @@ mod test {
     fn test_create_null_array_rejects_non_null_literal() {
         let literal = Some(PrimitiveLiteral::Int(1));
 
-        assert!(create_primitive_array_single_element(&DataType::Null, &literal).is_err());
-        assert!(create_primitive_array_repeated(&DataType::Null, &literal, 2).is_err());
+        assert!(create_primitive_array_single_element(&DataType::Null, literal.as_ref()).is_err());
+        assert!(create_primitive_array_repeated(&DataType::Null, literal.as_ref(), 2).is_err());
         assert_eq!(
-            create_primitive_array_single_element(&DataType::Null, &None)
+            create_primitive_array_single_element(&DataType::Null, None)
                 .unwrap()
                 .len(),
             1
         );
         assert_eq!(
-            create_primitive_array_repeated(&DataType::Null, &None, 2)
+            create_primitive_array_repeated(&DataType::Null, None, 2)
                 .unwrap()
                 .len(),
             2
