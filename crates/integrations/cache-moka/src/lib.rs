@@ -32,7 +32,11 @@ const DEFAULT_CACHE_SIZE_BYTES: u64 = 32 * 1024 * 1024; // 32MiB
 fn byte_bounded_cache<V>(max_capacity_bytes: u64) -> moka::sync::Cache<String, Arc<V>>
 where V: Send + Sync + 'static {
     moka::sync::Cache::builder()
-        .weigher(|_, value: &Arc<V>| size_of_val(value.as_ref()) as u32)
+        .weigher(|_, value: &Arc<V>| {
+            // Saturate rather than truncate: `moka` weights are `u32`, and a silently
+            // wrapped weight would let the cache grow past `max_capacity_bytes`.
+            u32::try_from(size_of_val(value.as_ref())).unwrap_or(u32::MAX)
+        })
         .max_capacity(max_capacity_bytes)
         .build()
 }
