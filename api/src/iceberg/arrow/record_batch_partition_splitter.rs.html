@@ -179,10 +179,10 @@
 <a href=#179 id=179 data-nosnippet>179</a>        <span class="comment">// Group the batch by row value.
 <a href=#180 id=180 data-nosnippet>180</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>group_ids = HashMap::new();
 <a href=#181 id=181 data-nosnippet>181</a>        partition_structs
-<a href=#182 id=182 data-nosnippet>182</a>            .iter()
+<a href=#182 id=182 data-nosnippet>182</a>            .into_iter()
 <a href=#183 id=183 data-nosnippet>183</a>            .enumerate()
 <a href=#184 id=184 data-nosnippet>184</a>            .for_each(|(row_id, row)| {
-<a href=#185 id=185 data-nosnippet>185</a>                group_ids.entry(row.clone()).or_insert(<span class="macro">vec!</span>[]).push(row_id);
+<a href=#185 id=185 data-nosnippet>185</a>                group_ids.entry(row).or_insert(<span class="macro">vec!</span>[]).push(row_id);
 <a href=#186 id=186 data-nosnippet>186</a>            });
 <a href=#187 id=187 data-nosnippet>187</a>
 <a href=#188 id=188 data-nosnippet>188</a>        <span class="comment">// Partition the batch with same partition partition_values
