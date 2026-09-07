@@ -15,23 +15,32 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::str::FromStr;
 use std::sync::Arc;
 
 use iceberg::io::S3Config;
 use iceberg::{Error, ErrorKind, Result};
-use object_store::aws::AmazonS3Builder;
 use object_store::ObjectStore;
+use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 use url::Url;
 
-/// Parse an absolute S3 URL into (scheme, bucket, relative_path).
+/// Parsed components of an S3 URL.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ParsedS3Url {
+    pub(crate) scheme: String,
+    pub(crate) bucket: String,
+    pub(crate) relative: String,
+}
+
+/// Parse an absolute S3 URL into [`ParsedS3Url`].
 ///
-/// Accepts `s3://` and `s3a://` `s3n://` schemes.
-pub(crate) fn parse_s3_url(path: &str) -> Result<(&str, &str, &str)> {
+/// Accepts `s3://`, `s3a://`, and `s3n://` schemes.
+pub(crate) fn parse_s3_url(path: &str) -> Result<ParsedS3Url> {
     let url = Url::parse(path).map_err(|e| {
         Error::new(ErrorKind::DataInvalid, format!("Invalid URL: {path}")).with_source(e)
     })?;
 
-    let scheme = &path[..url.scheme().len()];
+    let scheme = url.scheme();
     match scheme {
         "s3" | "s3a" | "s3n" => {}
         _ => {
@@ -42,35 +51,50 @@ pub(crate) fn parse_s3_url(path: &str) -> Result<(&str, &str, &str)> {
         }
     }
 
-    let bucket_str = url.host_str().ok_or_else(|| {
+    let bucket = url.host_str().ok_or_else(|| {
         Error::new(
             ErrorKind::DataInvalid,
             format!("Invalid s3 url: {path}, missing bucket"),
         )
     })?;
 
-    if bucket_str.is_empty() {
+    if bucket.is_empty() {
         return Err(Error::new(
             ErrorKind::DataInvalid,
-            format!("Invalid s3 url: {path}, missing bucket"),
+            format!("Empty s3 url: {path}, missing bucket"),
         ));
-    };
+    }
 
-    let prefix_len = scheme.len() + "://".len() + bucket_str.len() + "/".len();
-    let relative = if path.len() > prefix_len {
-        &path[prefix_len..]
-    } else {
-        ""
-    };
+    let relative = url.path().trim_start_matches('/');
 
-    let bucket_start = scheme.len() + "://".len();
-    let bucket = &path[bucket_start..bucket_start + bucket_str.len()];
-
-    Ok((scheme, bucket, relative))
+    Ok(ParsedS3Url {
+        scheme: scheme.to_string(),
+        bucket: bucket.to_string(),
+        relative: relative.to_string(),
+    })
 }
 
 /// Build an `AmazonS3` store from iceberg's `S3Config` for a given bucket.
 pub(crate) fn build_s3_store(config: &S3Config, bucket: &str) -> Result<Arc<dyn ObjectStore>> {
+    if config.role_arn.is_some() {
+        return Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "S3 assume-role (role_arn) is not supported by object_store backend",
+        ));
+    }
+    if config.disable_ec2_metadata {
+        return Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "S3 disable_ec2_metadata is not supported by object_store backend",
+        ));
+    }
+    if config.disable_config_load {
+        return Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "S3 disable_config_load is not supported by object_store backend",
+        ));
+    }
+
     let mut builder = AmazonS3Builder::new().with_bucket_name(bucket);
 
     if let Some(ref endpoint) = config.endpoint {
@@ -98,6 +122,37 @@ pub(crate) fn build_s3_store(config: &S3Config, bucket: &str) -> Result<Arc<dyn 
         builder = builder.with_skip_signature(true);
     }
 
+    if let Some(ref sse) = config.server_side_encryption {
+        match sse.as_str() {
+            "aws:kms" => {
+                let key = config
+                    .server_side_encryption_aws_kms_key_id
+                    .as_deref()
+                    .unwrap_or_default();
+                builder = builder.with_sse_kms_encryption(key);
+            }
+            "AES256" => {
+                builder = builder.with_config(
+                    AmazonS3ConfigKey::from_str("aws_server_side_encryption").map_err(|e| {
+                        Error::new(ErrorKind::Unexpected, "Failed to parse S3 config key")
+                            .with_source(e)
+                    })?,
+                    "AES256",
+                );
+            }
+            other => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("Unsupported server side encryption type: {other}"),
+                ));
+            }
+        }
+    }
+
+    if let Some(ref custom_key) = config.server_side_encryption_customer_key {
+        builder = builder.with_ssec_encryption(custom_key);
+    }
+
     let store = builder.build().map_err(|e| {
         Error::new(ErrorKind::Unexpected, "Failed to build S3 object store").with_source(e)
     })?;
@@ -110,20 +165,18 @@ mod tests {
 
     #[test]
     fn test_parse_s3_url() {
-        let (scheme, bucket, relative) =
-            parse_s3_url("s3://my-bucket/path/to/file.parquet").unwrap();
-        assert_eq!(scheme, "s3");
-        assert_eq!(bucket, "my-bucket");
-        assert_eq!(relative, "path/to/file.parquet");
+        let parsed = parse_s3_url("s3://my-bucket/path/to/file.parquet").unwrap();
+        assert_eq!(parsed.scheme, "s3");
+        assert_eq!(parsed.bucket, "my-bucket");
+        assert_eq!(parsed.relative, "path/to/file.parquet");
     }
 
     #[test]
     fn test_parse_s3a_url() {
-        let (scheme, bucket, relative) =
-            parse_s3_url("s3a://my-bucket/path/to/file.parquet").unwrap();
-        assert_eq!(scheme, "s3a");
-        assert_eq!(bucket, "my-bucket");
-        assert_eq!(relative, "path/to/file.parquet");
+        let parsed = parse_s3_url("s3a://my-bucket/path/to/file.parquet").unwrap();
+        assert_eq!(parsed.scheme, "s3a");
+        assert_eq!(parsed.bucket, "my-bucket");
+        assert_eq!(parsed.relative, "path/to/file.parquet");
     }
 
     #[test]
@@ -133,24 +186,96 @@ mod tests {
 
     #[test]
     fn test_parse_s3_url_bucket_only() {
-        let (scheme, bucket, relative) = parse_s3_url("s3://my-bucket/").unwrap();
-        assert_eq!(scheme, "s3");
-        assert_eq!(bucket, "my-bucket");
-        assert_eq!(relative, "");
+        let parsed = parse_s3_url("s3://my-bucket/").unwrap();
+        assert_eq!(parsed.scheme, "s3");
+        assert_eq!(parsed.bucket, "my-bucket");
+        assert_eq!(parsed.relative, "");
     }
 
     #[test]
     fn test_parse_s3n_url() {
-        let (schema, bucket, relative) =
-            parse_s3_url("s3n://my-bucket/path/to/file.parquet").unwrap();
-        assert_eq!(schema, "s3n");
-        assert_eq!(bucket, "my-bucket");
-        assert_eq!(relative, "path/to/file.parquet");
+        let parsed = parse_s3_url("s3n://my-bucket/path/to/file.parquet").unwrap();
+        assert_eq!(parsed.scheme, "s3n");
+        assert_eq!(parsed.bucket, "my-bucket");
+        assert_eq!(parsed.relative, "path/to/file.parquet");
+    }
+
+    #[test]
+    fn test_parse_s3_url_uppercase_scheme() {
+        let parsed = parse_s3_url("S3://my-bucket/path/to/file.parquet").unwrap();
+        assert_eq!(parsed.scheme, "s3");
+        assert_eq!(parsed.bucket, "my-bucket");
+        assert_eq!(parsed.relative, "path/to/file.parquet");
+    }
+
+    #[test]
+    fn test_parse_s3_url_percent_encoded_bucket() {
+        let parsed = parse_s3_url("s3://my%2Dbucket/path/to/file.parquet").unwrap();
+        assert_eq!(parsed.scheme, "s3");
+        assert_eq!(parsed.bucket, "my%2Dbucket");
+        assert_eq!(parsed.relative, "path/to/file.parquet");
+    }
+
+    #[test]
+    fn test_parse_s3_url_percent_encoded_path() {
+        let parsed = parse_s3_url("s3://my-bucket/path%20with%20spaces/file.parquet").unwrap();
+        assert_eq!(parsed.scheme, "s3");
+        assert_eq!(parsed.bucket, "my-bucket");
+        assert_eq!(parsed.relative, "path%20with%20spaces/file.parquet");
     }
 
     #[test]
     fn test_parse_s3_url_empty_bucket() {
         assert!(parse_s3_url("s3:///path/to/file.parquet").is_err());
         assert!(parse_s3_url("s3://").is_err());
+    }
+
+    #[test]
+    fn test_build_s3_store_kms_encryption() {
+        let config = S3Config::builder()
+            .region("us-east-1")
+            .server_side_encryption("aws:kms")
+            .server_side_encryption_aws_kms_key_id("arn:aws:kms:us-east-1:123456789012:key/test")
+            .build();
+        assert!(build_s3_store(&config, "my-bucket").is_ok());
+    }
+
+    #[test]
+    fn test_build_s3_store_ssec_encryption() {
+        let config = S3Config::builder()
+            .region("us-east-1")
+            .server_side_encryption_customer_key("MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=")
+            .build();
+        assert!(build_s3_store(&config, "my-bucket").is_ok());
+    }
+
+    #[test]
+    fn test_build_s3_store_unsupported_role_arn() {
+        let config = S3Config::builder()
+            .region("us-east-1")
+            .role_arn("arn:aws:iam::123456789012:role/test-role")
+            .build();
+        let err = build_s3_store(&config, "my-bucket").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+    }
+
+    #[test]
+    fn test_build_s3_store_unsupported_disable_ec2_metadata() {
+        let config = S3Config::builder()
+            .region("us-east-1")
+            .disable_ec2_metadata(true)
+            .build();
+        let err = build_s3_store(&config, "my-bucket").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+    }
+
+    #[test]
+    fn test_build_s3_store_unsupported_disable_config_load() {
+        let config = S3Config::builder()
+            .region("us-east-1")
+            .disable_config_load(true)
+            .build();
+        let err = build_s3_store(&config, "my-bucket").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
     }
 }

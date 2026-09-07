@@ -3993,6 +3993,7 @@ dependencies = [
  "dashmap",
  "futures",
  "iceberg",
+ "iceberg_test_utils",
  "object_store",
  "serde",
  "serde_json",

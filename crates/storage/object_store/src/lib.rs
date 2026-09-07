@@ -18,8 +18,8 @@
 //! `object_store`-based storage implementation for Apache Iceberg.
 //!
 //! This crate provides [`ObjectStoreStorage`] and [`ObjectStoreStorageFactory`],
-//! which implement the [`Storage`](iceberg::io::Storage) and
-//! [`StorageFactory`](iceberg::io::StorageFactory) traits from the `iceberg` crate
+//! which implement the [`Storage`] and
+//! [`StorageFactory`] traits from the `iceberg` crate
 //! using the [`object_store`](https://docs.rs/object_store) crate as the backend.
 //!
 //! Currently only S3 storage is supported (via the `object_store-s3` feature flag,
@@ -54,6 +54,11 @@ fn from_object_store_error(e: object_store::Error) -> Error {
     Error::new(ErrorKind::Unexpected, "Failure in doing io operation").with_source(e)
 }
 
+/// Convert `object_store::ObjectMeta` into `iceberg::io::FileMetadata`.
+fn to_file_metadata(meta: object_store::ObjectMeta) -> FileMetadata {
+    FileMetadata { size: meta.size }
+}
+
 /// `object_store`-based storage factory.
 ///
 /// Use this factory with `FileIOBuilder::new(factory)` to create FileIO instances
@@ -73,13 +78,23 @@ impl StorageFactory for ObjectStoreStorageFactory {
             #[cfg(feature = "object_store-s3")]
             ObjectStoreStorageFactory::S3 => {
                 let s3_config = S3Config::try_from(config)?;
-                Ok(Arc::new(ObjectStoreStorage::S3 {
+                Ok(Arc::new(ObjectStoreStorage::S3(S3Storage {
                     config: Arc::new(s3_config),
                     store_cache: Arc::new(DashMap::new()),
-                }))
+                })))
             }
         }
     }
+}
+
+type StoreCache = Arc<DashMap<String, Arc<dyn ObjectStore>>>;
+
+/// `object_store` S3 storage state.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct S3Storage {
+    config: Arc<S3Config>,
+    #[serde(skip, default)]
+    store_cache: StoreCache,
 }
 
 /// `object_store`-based storage implementation.
@@ -89,33 +104,42 @@ impl StorageFactory for ObjectStoreStorageFactory {
 pub enum ObjectStoreStorage {
     /// S3 storage variant.
     #[cfg(feature = "object_store-s3")]
-    S3 {
-        /// Parsed S3 configuration from iceberg core.
-        config: Arc<S3Config>,
-        /// Per-bucket store cache.
-        #[serde(skip, default)]
-        store_cache: Arc<DashMap<String, Arc<dyn ObjectStore>>>,
-    },
+    S3(S3Storage),
+}
+
+struct StoreAndPath {
+    store: Arc<dyn ObjectStore>,
+    path: ObjectStorePath,
 }
 
 impl ObjectStoreStorage {
     /// Get or create a cached store and extract the relative `ObjectStorePath`.
-    fn get_store_and_path(&self, path: &str) -> Result<(Arc<dyn ObjectStore>, ObjectStorePath)> {
+    fn get_store_and_path(&self, path: &str) -> Result<StoreAndPath> {
         match self {
             #[cfg(feature = "object_store-s3")]
-            ObjectStoreStorage::S3 {
-                config,
-                store_cache,
-            } => {
-                let (_scheme, bucket, relative) = parse_s3_url(path)?;
+            ObjectStoreStorage::S3(s3) => {
+                let parsed = parse_s3_url(path)?;
 
-                let store = store_cache
-                    .entry(bucket.to_string())
-                    .or_try_insert_with(|| build_s3_store(config, bucket))?
+                let store = s3
+                    .store_cache
+                    .entry(parsed.bucket.clone())
+                    .or_try_insert_with(|| build_s3_store(&s3.config, &parsed.bucket))?
                     .value()
                     .clone();
 
-                Ok((store, ObjectStorePath::from(relative)))
+                let object_path =
+                    ObjectStorePath::from_url_path(&parsed.relative).map_err(|e| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Invalid URL path: {}", parsed.relative),
+                        )
+                        .with_source(e)
+                    })?;
+
+                Ok(StoreAndPath {
+                    store,
+                    path: object_path,
+                })
             }
         }
     }
@@ -125,8 +149,8 @@ impl ObjectStoreStorage {
 #[async_trait]
 impl Storage for ObjectStoreStorage {
     async fn exists(&self, path: &str) -> Result<bool> {
-        let (store, object_path) = self.get_store_and_path(path)?;
-        match store.head(&object_path).await {
+        let target = self.get_store_and_path(path)?;
+        match target.store.head(&target.path).await {
             Ok(_) => Ok(true),
             Err(object_store::Error::NotFound { .. }) => Ok(false),
             Err(e) => Err(from_object_store_error(e)),
@@ -134,46 +158,48 @@ impl Storage for ObjectStoreStorage {
     }
 
     async fn metadata(&self, path: &str) -> Result<FileMetadata> {
-        let (store, object_path) = self.get_store_and_path(path)?;
-        let meta = store
-            .head(&object_path)
+        let target = self.get_store_and_path(path)?;
+        let meta = target
+            .store
+            .head(&target.path)
             .await
             .map_err(from_object_store_error)?;
-        Ok(FileMetadata {
-            size: meta.size as u64,
-        })
+        Ok(to_file_metadata(meta))
     }
 
     async fn read(&self, path: &str) -> Result<Bytes> {
-        let (store, object_path) = self.get_store_and_path(path)?;
-        let result = store
-            .get(&object_path)
+        let target = self.get_store_and_path(path)?;
+        let result = target
+            .store
+            .get(&target.path)
             .await
             .map_err(from_object_store_error)?;
         result.bytes().await.map_err(from_object_store_error)
     }
 
     async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
-        let (store, object_path) = self.get_store_and_path(path)?;
+        let target = self.get_store_and_path(path)?;
         Ok(Box::new(ObjectStoreReader {
-            store,
-            path: object_path,
+            store: target.store,
+            path: target.path,
         }))
     }
 
     async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
-        let (store, object_path) = self.get_store_and_path(path)?;
-        store
-            .put(&object_path, PutPayload::from_bytes(bs))
+        let target = self.get_store_and_path(path)?;
+        target
+            .store
+            .put(&target.path, PutPayload::from_bytes(bs))
             .await
             .map_err(from_object_store_error)?;
         Ok(())
     }
 
     async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
-        let (store, object_path) = self.get_store_and_path(path)?;
-        let upload = store
-            .put_multipart(&object_path)
+        let target = self.get_store_and_path(path)?;
+        let upload = target
+            .store
+            .put_multipart(&target.path)
             .await
             .map_err(from_object_store_error)?;
         let writer = WriteMultipart::new(upload);
@@ -183,26 +209,28 @@ impl Storage for ObjectStoreStorage {
     }
 
     async fn delete(&self, path: &str) -> Result<()> {
-        let (store, object_path) = self.get_store_and_path(path)?;
-        store
-            .delete(&object_path)
+        let target = self.get_store_and_path(path)?;
+        target
+            .store
+            .delete(&target.path)
             .await
             .map_err(from_object_store_error)?;
         Ok(())
     }
 
     async fn delete_prefix(&self, path: &str) -> Result<()> {
-        let (store, object_path) = self.get_store_and_path(path)?;
-        let prefix = if object_path.as_ref().ends_with('/') {
-            object_path
+        let target = self.get_store_and_path(path)?;
+        let prefix = if target.path.as_ref().ends_with('/') {
+            target.path
         } else {
-            ObjectStorePath::from(format!("{}/", object_path.as_ref()))
+            ObjectStorePath::from(format!("{}/", target.path.as_ref()))
         };
 
-        let mut list_stream = store.list(Some(&prefix));
+        let mut list_stream = target.store.list(Some(&prefix));
         while let Some(entry) = list_stream.next().await {
             let entry = entry.map_err(from_object_store_error)?;
-            store
+            target
+                .store
                 .delete(&entry.location)
                 .await
                 .map_err(from_object_store_error)?;
@@ -214,9 +242,10 @@ impl Storage for ObjectStoreStorage {
         paths
             .map(Ok)
             .try_for_each_concurrent(16, |path| async move {
-                let (store, object_path) = self.get_store_and_path(&path)?;
-                store
-                    .delete(&object_path)
+                let target = self.get_store_and_path(&path)?;
+                target
+                    .store
+                    .delete(&target.path)
                     .await
                     .map_err(from_object_store_error)?;
                 Ok(())
@@ -260,6 +289,18 @@ struct ObjectStoreWriter {
     writer: Option<WriteMultipart>,
 }
 
+impl Drop for ObjectStoreWriter {
+    fn drop(&mut self) {
+        if let Some(writer) = self.writer.take()
+            && let Ok(handle) = tokio::runtime::Handle::try_current()
+        {
+            handle.spawn(async move {
+                let _ = writer.abort().await;
+            });
+        }
+    }
+}
+
 #[async_trait]
 impl FileWrite for ObjectStoreWriter {
     async fn write(&mut self, bs: Bytes) -> Result<()> {
@@ -287,46 +328,51 @@ mod tests {
 
     #[cfg(feature = "object_store-s3")]
     fn make_s3_storage() -> ObjectStoreStorage {
-        ObjectStoreStorage::S3 {
+        ObjectStoreStorage::S3(S3Storage {
             config: Arc::new(S3Config::default()),
             store_cache: Arc::new(DashMap::new()),
-        }
+        })
     }
 
     #[cfg(feature = "object_store-s3")]
     #[test]
     fn test_store_cache_reuses_store() {
         let storage = make_s3_storage();
-        let (store1, _) = storage
+        let target1 = storage
             .get_store_and_path("s3://test-bucket/file1.parquet")
             .unwrap();
-        let (store2, _) = storage
+        let target2 = storage
             .get_store_and_path("s3://test-bucket/file2.parquet")
             .unwrap();
-        assert!(Arc::ptr_eq(&store1, &store2));
+        assert!(Arc::ptr_eq(&target1.store, &target2.store));
     }
 
     #[cfg(feature = "object_store-s3")]
     #[test]
     fn test_store_cache_different_buckets() {
         let storage = make_s3_storage();
-        let (store1, _) = storage
+        let target1 = storage
             .get_store_and_path("s3://bucket-a/file.parquet")
             .unwrap();
-        let (store2, _) = storage
+        let target2 = storage
             .get_store_and_path("s3://bucket-b/file.parquet")
             .unwrap();
-        assert!(!Arc::ptr_eq(&store1, &store2));
+        assert!(!Arc::ptr_eq(&target1.store, &target2.store));
     }
 
     #[cfg(feature = "object_store-s3")]
     #[test]
     fn test_relative_path_extraction() {
         let storage = make_s3_storage();
-        let (_, path) = storage
+        let target = storage
             .get_store_and_path("s3://my-bucket/data/file.parquet")
             .unwrap();
-        assert_eq!(path.as_ref(), "data/file.parquet");
+        assert_eq!(target.path.as_ref(), "data/file.parquet");
+
+        let target_encoded = storage
+            .get_store_and_path("s3://my-bucket/data%20dir/file.parquet")
+            .unwrap();
+        assert_eq!(target_encoded.path.as_ref(), "data dir/file.parquet");
     }
 
     #[cfg(feature = "object_store-s3")]
@@ -336,8 +382,8 @@ mod tests {
         let serialized = serde_json::to_string(&storage).unwrap();
         let deserialized: ObjectStoreStorage = serde_json::from_str(&serialized).unwrap();
         match deserialized {
-            ObjectStoreStorage::S3 { config, .. } => {
-                assert_eq!(config, Arc::new(S3Config::default()));
+            ObjectStoreStorage::S3(s3) => {
+                assert_eq!(s3.config, Arc::new(S3Config::default()));
             }
         }
     }
