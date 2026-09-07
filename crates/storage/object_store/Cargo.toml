@@ -21,6 +21,7 @@ edition = { workspace = true }
 version = { workspace = true }
 license = { workspace = true }
 repository = { workspace = true }
+publish = true
 
 categories = ["database"]
 description = "Apache Iceberg object_store storage implementation"
@@ -36,10 +37,14 @@ bytes = { workspace = true }
 dashmap = { workspace = true }
 futures = { workspace = true }
 iceberg = { workspace = true }
-object_store = { version = "0.12" }
+object_store = { workspace = true }
 serde = { workspace = true }
 typetag = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -34,8 +34,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
-use futures::StreamExt;
 use futures::stream::BoxStream;
+use futures::{StreamExt, TryStreamExt};
 #[cfg(feature = "object_store-s3")]
 use iceberg::io::S3Config;
 use iceberg::io::{
@@ -44,7 +44,7 @@ use iceberg::io::{
 };
 use iceberg::{Error, ErrorKind, Result};
 use object_store::path::Path as ObjectStorePath;
-use object_store::{ObjectStore, PutPayload, WriteMultipart};
+use object_store::{ObjectStore, ObjectStoreExt, PutPayload, WriteMultipart};
 #[cfg(feature = "object_store-s3")]
 use s3::{build_s3_store, parse_s3_url};
 use serde::{Deserialize, Serialize};
@@ -210,15 +210,18 @@ impl Storage for ObjectStoreStorage {
         Ok(())
     }
 
-    async fn delete_stream(&self, mut paths: BoxStream<'static, String>) -> Result<()> {
-        while let Some(path) = paths.next().await {
-            let (store, object_path) = self.get_store_and_path(&path)?;
-            store
-                .delete(&object_path)
-                .await
-                .map_err(from_object_store_error)?;
-        }
-        Ok(())
+    async fn delete_stream(&self, paths: BoxStream<'static, String>) -> Result<()> {
+        paths
+            .map(Ok)
+            .try_for_each_concurrent(16, |path| async move {
+                let (store, object_path) = self.get_store_and_path(&path)?;
+                store
+                    .delete(&object_path)
+                    .await
+                    .map_err(from_object_store_error)?;
+                Ok(())
+            })
+            .await
     }
 
     fn new_input(&self, path: &str) -> Result<InputFile> {
@@ -324,5 +327,38 @@ mod tests {
             .get_store_and_path("s3://my-bucket/data/file.parquet")
             .unwrap();
         assert_eq!(path.as_ref(), "data/file.parquet");
+    }
+
+    #[cfg(feature = "object_store-s3")]
+    #[test]
+    fn test_storage_serialization_roundtrip() {
+        let storage = make_s3_storage();
+        let serialized = serde_json::to_string(&storage).unwrap();
+        let deserialized: ObjectStoreStorage = serde_json::from_str(&serialized).unwrap();
+        match deserialized {
+            ObjectStoreStorage::S3 { config, .. } => {
+                assert_eq!(config, Arc::new(S3Config::default()));
+            }
+        }
+    }
+
+    #[cfg(feature = "object_store-s3")]
+    #[test]
+    fn test_storage_factory_serialization_roundtrip() {
+        let factory = ObjectStoreStorageFactory::S3;
+        let serialized = serde_json::to_string(&factory).unwrap();
+        let deserialized: ObjectStoreStorageFactory = serde_json::from_str(&serialized).unwrap();
+        assert!(matches!(deserialized, ObjectStoreStorageFactory::S3));
+    }
+
+    #[cfg(feature = "object_store-s3")]
+    #[test]
+    fn test_file_io_serialization_roundtrip() {
+        use iceberg::io::FileIOBuilder;
+        let factory = Arc::new(ObjectStoreStorageFactory::S3);
+        let file_io = FileIOBuilder::new(factory).build();
+        let bytes = file_io.serialize_all().unwrap();
+        let deserialized = iceberg::io::FileIO::deserialize_all(&bytes).unwrap();
+        assert_eq!(file_io.config(), deserialized.config());
     }
 }

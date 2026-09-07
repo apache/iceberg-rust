@@ -19,13 +19,13 @@ use std::sync::Arc;
 
 use iceberg::io::S3Config;
 use iceberg::{Error, ErrorKind, Result};
-use object_store::ObjectStore;
 use object_store::aws::AmazonS3Builder;
+use object_store::ObjectStore;
 use url::Url;
 
 /// Parse an absolute S3 URL into (scheme, bucket, relative_path).
 ///
-/// Accepts `s3://` and `s3a://` schemes.
+/// Accepts `s3://` and `s3a://` `s3n://` schemes.
 pub(crate) fn parse_s3_url(path: &str) -> Result<(&str, &str, &str)> {
     let url = Url::parse(path).map_err(|e| {
         Error::new(ErrorKind::DataInvalid, format!("Invalid URL: {path}")).with_source(e)
@@ -33,7 +33,7 @@ pub(crate) fn parse_s3_url(path: &str) -> Result<(&str, &str, &str)> {
 
     let scheme = &path[..url.scheme().len()];
     match scheme {
-        "s3" | "s3a" => {}
+        "s3" | "s3a" | "s3n" => {}
         _ => {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
@@ -130,5 +130,14 @@ mod tests {
         assert_eq!(scheme, "s3");
         assert_eq!(bucket, "my-bucket");
         assert_eq!(relative, "");
+    }
+
+    #[test]
+    fn test_parse_s3n_url() {
+        let (schema, bucket, relative) =
+            parse_s3_url("s3n://my-bucket/path/to/file.parquet").unwrap();
+        assert_eq!(schema, "s3n");
+        assert_eq!(bucket, "my-bucket");
+        assert_eq!(relative, "path/to/file.parquet");
     }
 }
