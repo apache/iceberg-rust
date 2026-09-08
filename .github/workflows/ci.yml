@@ -52,16 +52,16 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
 
       - name: Install lint tools
         # Keep versions in sync with the local install targets in Makefile.
-        uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
+        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
         with:
           tool: taplo@0.9.3,cargo-machete@0.7.0
 
       - name: Check License Header
-        uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
+        uses: apache/skywalking-eyes/header@a196742f472feaffafea537ce5a2a4c3c53a8de4 # v0.9.0
 
       - name: Check toml format
         run: taplo fmt --check
@@ -82,7 +82,7 @@ jobs:
         run: cargo machete
 
       - name: Check typos
-        uses: crate-ci/typos@8a48f81b6c64dcfea44b3633223084c4be58ac5f # v1.49.0
+        uses: crate-ci/typos@4d9c206a77c041268485162b8e2579ad7a5cb9a3 # v1.50.0
 
   clippy:
     needs: lint
@@ -93,7 +93,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
 
       - name: Cargo clippy
         run: make check-clippy
@@ -117,7 +117,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -138,7 +138,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -173,7 +173,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -202,7 +202,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -212,7 +212,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: matrix.test-suite.name == 'default'
-        uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
+        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
         with:
           tool: cargo-nextest
 
@@ -249,12 +249,12 @@ jobs:
           persist-credentials: false
       - name: Get MSRV
         id: get-msrv
-        uses: ./.github/actions/get-msrv
+        uses: $/.github/actions/get-msrv
       - name: Setup MSRV Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
         with:
           rust-version: ${{ steps.get-msrv.outputs.msrv }}
       - name: Setup Nightly Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Check MSRV
         run: make check-msrv

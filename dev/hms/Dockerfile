@@ -20,10 +20,12 @@ ENV HADOOP_VERSION=3.1.0
 
 USER root
 
-RUN apt-get update -qq && apt-get -qq -y install curl && \
-    curl https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/${HADOOP_VERSION}/hadoop-aws-${HADOOP_VERSION}.jar -Lo /opt/hive/lib/hadoop-aws-${HADOOP_VERSION}.jar && \
-    curl https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.11.271/aws-java-sdk-bundle-1.11.271.jar -Lo /opt/hive/lib/aws-java-sdk-bundle-1.11.271.jar && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+ADD --chmod=644 --checksum=sha256:a18508b9348af095ea41301e439354dbd449e304ac44c6885b2b4fe78de88126 \
+    https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/${HADOOP_VERSION}/hadoop-aws-${HADOOP_VERSION}.jar \
+    /opt/hive/lib/hadoop-aws-${HADOOP_VERSION}.jar
+ADD --chmod=644 --checksum=sha256:faf78ac4880f56cf52791d84ec1068ce7c66acc4295d580a726104b734c01fcd \
+    https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.11.271/aws-java-sdk-bundle-1.11.271.jar \
+    /opt/hive/lib/aws-java-sdk-bundle-1.11.271.jar
 
 COPY core-site.xml /opt/hadoop/etc/hadoop/core-site.xml
 
