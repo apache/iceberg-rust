@@ -102,7 +102,7 @@ impl ExtensionType for VariantExtensionType {
 
 /// A post order arrow schema visitor.
 ///
-/// For order of methods called, please refer to [`visit_schema`].
+/// For order of methods called, please refer to the internal `visit_schema` function.
 pub trait ArrowSchemaVisitor {
     /// Return type of this visitor on arrow field.
     type T;
@@ -2388,7 +2388,7 @@ mod tests {
             assert_eq!(array.value(0), 42);
         }
         {
-            let datum = Datum::float(42.42);
+            let datum = Datum::float(42.42_f32);
             let arrow_datum = get_arrow_datum(&datum).unwrap();
             let (array, is_scalar) = arrow_datum.get();
             let array = array.as_any().downcast_ref::<Float32Array>().unwrap();

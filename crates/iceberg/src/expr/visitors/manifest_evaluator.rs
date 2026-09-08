@@ -612,8 +612,8 @@ mod test {
             FieldSummary {
                 contains_null: true,
                 contains_nan: None,
-                lower_bound: Some(Datum::float(0.0).to_bytes().unwrap()),
-                upper_bound: Some(Datum::float(20.0).to_bytes().unwrap()),
+                lower_bound: Some(Datum::float(0.0_f32).to_bytes().unwrap()),
+                upper_bound: Some(Datum::float(20.0_f32).to_bytes().unwrap()),
             },
             // all_nulls_double
             FieldSummary {
@@ -647,8 +647,8 @@ mod test {
             FieldSummary {
                 contains_null: false,
                 contains_nan: Some(false),
-                lower_bound: Some(Datum::float(0.0).to_bytes().unwrap()),
-                upper_bound: Some(Datum::float(20.0).to_bytes().unwrap()),
+                lower_bound: Some(Datum::float(0.0_f32).to_bytes().unwrap()),
+                upper_bound: Some(Datum::float(20.0_f32).to_bytes().unwrap()),
             },
             // all_nulls_missing_nan_float
             FieldSummary {

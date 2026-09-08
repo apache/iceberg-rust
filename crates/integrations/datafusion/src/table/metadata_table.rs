@@ -34,8 +34,8 @@ use iceberg::table::Table;
 use crate::physical_plan::metadata_scan::IcebergMetadataScan;
 use crate::to_datafusion_error;
 
-/// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
-/// managing access to a [`MetadataTable`].
+/// Represents a [`TableProvider`] for the Iceberg [`iceberg::Catalog`],
+/// managing access to a [`iceberg::inspect::MetadataTable`].
 #[derive(Debug, Clone)]
 pub struct IcebergMetadataTableProvider {
     pub(crate) table: Table,

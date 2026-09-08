@@ -1,5 +1,5 @@
 error: Properties fields must declare #[property(...)]
-  --> tests/compile-fail/missing_property.rs:23:5
+  --> tests/compile-fail/derive-properties/missing_property.rs:23:5
    |
 23 |     value: u64,
    |     ^^^^^^^^^^

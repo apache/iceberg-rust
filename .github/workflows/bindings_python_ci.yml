@@ -56,7 +56,7 @@ jobs:
           enable-cache: true
       - name: Install tools
         run: |
-          uv tool install ruff
+          uv tool install ruff@0.15.22
       - name: Check format
         working-directory: "bindings/python"
         run: |
@@ -85,7 +85,7 @@ jobs:
       # Linux maturin builds may run inside manylinux Docker, so host Rust caches only help Windows/macOS.
       - name: Setup Rust toolchain
         if: runner.os != 'Linux'
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Cache Rust artifacts
         if: runner.os != 'Linux'
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

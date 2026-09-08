@@ -37,7 +37,7 @@ pub struct Blob {
 
 impl Blob {
     #[inline]
-    /// See blob types: https://iceberg.apache.org/puffin-spec/#blob-types
+    /// See blob types: <https://iceberg.apache.org/puffin-spec/#blob-types>
     pub fn blob_type(&self) -> &str {
         &self.r#type
     }

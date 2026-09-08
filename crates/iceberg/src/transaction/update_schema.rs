@@ -32,12 +32,11 @@ use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 // Default ID for a new column. This will be re-assigned to a fresh ID at commit time.
 const DEFAULT_FIELD_ID: i32 = 0;
 
-/// Declarative specification for adding a column in [`UpdateSchemaAction`].
+/// Declarative specification for adding a column in an [`UpdateSchemaAction`].
 ///
 /// Use helper constructors such as [`AddColumn::optional`] and [`AddColumn::required`],
-/// optionally combined with [`AddColumn::with_parent`] and [`AddColumn::with_doc`], then pass
-/// the value to
-/// [`UpdateSchemaAction::add_column`].
+/// optionally combined with the builder's `parent` and `doc` setters via
+/// [`AddColumn::builder`], then pass the value to [`UpdateSchemaAction::add_column`].
 #[derive(TypedBuilder)]
 pub struct AddColumn {
     #[builder(default = None, setter(strip_option, into))]
@@ -132,7 +131,7 @@ impl UpdateSchemaAction {
     /// Add a column to the table schema.
     ///
     /// To add a root-level column, leave `AddColumn::parent` as `None`.
-    /// For nested additions, set a parent path (for example via [`AddColumn::with_parent`]).
+    /// For nested additions, set a parent path.
     /// If the parent resolves to a map/list, the column is added to map value/list element.
     pub fn add_column(mut self, add_column: AddColumn) -> Self {
         self.additions.push(add_column);

@@ -47,6 +47,31 @@ mod tests {
             .build()
     }
 
+    fn roundtrip_file_io(file_io: &FileIO) -> FileIO {
+        let serialized = file_io.serialize_all().unwrap();
+        FileIO::deserialize_all(&serialized).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_file_io_gcs_serialization_roundtrip() {
+        let file_io = roundtrip_file_io(&get_file_io_gcs().await);
+        let path = format!("{}/serialization-roundtrip", get_gs_path());
+
+        let _ = file_io.delete(&path).await;
+        file_io
+            .new_output(&path)
+            .unwrap()
+            .write(Bytes::from_static(b"roundtrip"))
+            .await
+            .unwrap();
+        assert_eq!(
+            file_io.new_input(&path).unwrap().read().await.unwrap(),
+            Bytes::from_static(b"roundtrip")
+        );
+        file_io.delete(&path).await.unwrap();
+        assert!(!file_io.exists(&path).await.unwrap());
+    }
+
     // Create a bucket against the emulated GCS storage server.
     async fn create_bucket(name: &str, server_endpoint: &str) -> anyhow::Result<()> {
         let mut bucket_data = HashMap::new();

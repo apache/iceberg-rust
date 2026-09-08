@@ -1,0 +1,5 @@
+error: properties_view! requires a struct-shaped declaration with named fields
+  --> tests/compile-fail/properties-view/view_tuple_declaration.rs:21:12
+   |
+21 |     struct TupleView(#[property(key = "value", default = 1)] u64);
+   |            ^^^^^^^^^

@@ -150,35 +150,36 @@ pub(crate) enum ColumnSource {
         source_index: usize,
     },
 
-    // Signifies that a new column has been inserted before the column
-    // with index `index`. (we choose "before" rather than "after" so
-    // that we can use usize; if we insert after, then we need to
-    // be able to store -1 here to signify that a new
-    // column is to be added at the front of the column list).
-    // If multiple columns need to be inserted at a given
-    // location, they should all be given the same index, as the index
-    // here refers to the original RecordBatch, not the interim state after
-    // a preceding operation.
+    // Materializes a column by looking up its per-file constant in the
+    // transformer's `constant_fields` map by `field_id`, producing a column of
+    // `target_type`. Handles the three non-coalesce `ColumnConstant` variants:
+    // scalar values (`_file`, `_spec_id`, identity partitions), the `_partition`
+    // struct, and all-null metadata columns. The coalesce variant routes to
+    // `Coalesce` instead. Resolved at apply time rather than baking the value here.
+    ConstantLookup {
+        field_id: i32,
+        target_type: DataType,
+    },
+
+    // Inserts a schema-evolution default value (the field's `initial_default`,
+    // or null for an absent optional field). Distinct from `ConstantLookup`:
+    // this value comes from the table schema, not the per-file constant map.
     Add {
         target_type: DataType,
         value: Option<PrimitiveLiteral>,
     },
 
-    // A struct column where each child is a constant primitive value.
-    // Used for the _partition metadata column.
-    AddStructConstant {
-        fields: Fields,
-        child_values: Vec<Option<PrimitiveLiteral>>,
-    },
-
     // A metadata column read from the file and coalesced with a per-file
-    // fallback: the source column's value where non-null, else `fallback`.
-    // Used for `_last_updated_sequence_number` when the file physically carries
-    // the per-row column. The result is cast to `target_type` so it matches the
-    // (run-end-encoded) type the constant and null paths produce for the column.
-    CoalesceLastUpdatedSeq {
+    // fallback looked up in `constant_fields` by `field_id`: the source column's
+    // value where non-null, else the fallback constant. The entry at `field_id`
+    // must be a `ColumnConstant::CoalesceLastUpdatedSeq` (the apply arm rejects
+    // any other variant). Used for `_last_updated_sequence_number` when the file
+    // physically carries the per-row column. The result is cast to `target_type`
+    // so it matches the (run-end-encoded) type the constant and null paths
+    // produce for the column.
+    Coalesce {
+        field_id: i32,
         source_index: usize,
-        fallback: PrimitiveLiteral,
         target_type: DataType,
     },
     // The iceberg spec refers to other permissible schema evolution actions
@@ -229,8 +230,9 @@ enum SchemaComparison {
 ///
 /// All per-file constants (scalar metadata like `_file`, identity partition values,
 /// and the `_partition` struct) are stored in a single `constant_fields` map keyed by
-/// field_id. This unified representation (via [`ColumnConstant`]) means the
-/// transformer handles all constant columns through one code path.
+/// field_id (via [`ColumnConstant`]). Each is resolved at apply time from that single
+/// map (through a `ConstantLookup` or `Coalesce` action) rather than baked into the
+/// action.
 #[derive(Debug)]
 pub(crate) struct RecordBatchTransformerBuilder {
     snapshot_schema: Arc<IcebergSchema>,
@@ -704,9 +706,12 @@ impl RecordBatchTransformer {
                     Some(ColumnConstant::Struct(pc))
                         if *field_id == RESERVED_FIELD_ID_PARTITION =>
                     {
-                        return Ok(ColumnSource::AddStructConstant {
-                            fields: pc.fields().clone(),
-                            child_values: pc.child_values().to_vec(),
+                        // The struct apply arm rebuilds the column from the map entry's own
+                        // fields/child_values, so `target_type` is a placeholder here and is
+                        // not read for the struct case (only the scalar/null cases consult it).
+                        return Ok(ColumnSource::ConstantLookup {
+                            field_id: *field_id,
+                            target_type: DataType::Struct(pc.fields().clone()),
                         });
                     }
                     Some(ColumnConstant::Struct(_)) => {
@@ -747,8 +752,8 @@ impl RecordBatchTransformer {
                                     .clone()
                             };
 
-                            return Ok(ColumnSource::Add {
-                                value: Some(datum.literal().clone()),
+                            return Ok(ColumnSource::ConstantLookup {
+                                field_id: *field_id,
                                 target_type: arrow_type,
                             });
                         }
@@ -756,8 +761,8 @@ impl RecordBatchTransformer {
                         // to read from the file instead of using the constant.
                     }
                     Some(ColumnConstant::Null(arrow_type)) => {
-                        return Ok(ColumnSource::Add {
-                            value: None,
+                        return Ok(ColumnSource::ConstantLookup {
+                            field_id: *field_id,
                             target_type: arrow_type.clone(),
                         });
                     }
@@ -775,9 +780,9 @@ impl RecordBatchTransformer {
                                     ),
                                 )
                             })?;
-                        return Ok(ColumnSource::CoalesceLastUpdatedSeq {
+                        return Ok(ColumnSource::Coalesce {
+                            field_id: *field_id,
                             source_index: *source_index,
-                            fallback: datum.literal().clone(),
                             target_type: datum_to_arrow_type_with_ree(datum),
                         });
                     }
@@ -928,23 +933,57 @@ impl RecordBatchTransformer {
                     } => cast(&*columns[*source_index], target_type)?,
 
                     ColumnSource::Add { target_type, value } => {
-                        Self::create_column(target_type, value, num_rows)?
+                        Self::create_column(target_type, value.as_ref(), num_rows)?
                     }
 
-                    ColumnSource::AddStructConstant {
-                        fields,
-                        child_values,
-                    } => Self::create_struct_column(fields, child_values, num_rows)?,
+                    // Resolve the per-file constant for this field id from the map and
+                    // materialize it as the target type.
+                    ColumnSource::ConstantLookup {
+                        field_id,
+                        target_type,
+                    } => match self.constant_fields.get(field_id) {
+                        Some(ColumnConstant::Scalar(datum)) => {
+                            Self::create_column(target_type, Some(datum.literal()), num_rows)?
+                        }
+                        Some(ColumnConstant::Null(_)) => {
+                            Self::create_column(target_type, None, num_rows)?
+                        }
+                        Some(ColumnConstant::Struct(sc)) => {
+                            Self::create_struct_column(sc.fields(), sc.child_values(), num_rows)?
+                        }
+                        other => {
+                            return Err(Error::new(
+                                ErrorKind::Unexpected,
+                                format!(
+                                    "ConstantLookup for field id {field_id} expected a scalar, \
+                                     null, or struct constant, found {other:?}"
+                                ),
+                            ));
+                        }
+                    },
 
-                    ColumnSource::CoalesceLastUpdatedSeq {
+                    ColumnSource::Coalesce {
+                        field_id,
                         source_index,
-                        fallback,
                         target_type,
-                    } => Self::create_coalesce_column(
-                        &columns[*source_index],
-                        fallback,
-                        target_type,
-                    )?,
+                    } => {
+                        let Some(ColumnConstant::CoalesceLastUpdatedSeq(datum)) =
+                            self.constant_fields.get(field_id)
+                        else {
+                            return Err(Error::new(
+                                ErrorKind::Unexpected,
+                                format!(
+                                    "Coalesce for field id {field_id} expected a coalesce \
+                                     fallback constant in the constant map"
+                                ),
+                            ));
+                        };
+                        Self::create_coalesce_column(
+                            &columns[*source_index],
+                            datum.literal(),
+                            target_type,
+                        )?
+                    }
                 })
             })
             .collect()
@@ -981,7 +1020,7 @@ impl RecordBatchTransformer {
 
     fn create_column(
         target_type: &DataType,
-        prim_lit: &Option<PrimitiveLiteral>,
+        prim_lit: Option<&PrimitiveLiteral>,
         num_rows: usize,
     ) -> Result<ArrayRef> {
         // Check if this is a RunEndEncoded type (for constant fields)
@@ -1033,7 +1072,7 @@ impl RecordBatchTransformer {
             .iter()
             .zip(child_values.iter())
             .map(|(field, value)| {
-                create_primitive_array_repeated(field.data_type(), value, num_rows)
+                create_primitive_array_repeated(field.data_type(), value.as_ref(), num_rows)
             })
             .collect::<Result<_>>()?;
 

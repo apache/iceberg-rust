@@ -1,5 +1,5 @@
 error: nested fields obtain defaults from their own property annotations and cannot declare default in #[property(...)]
-  --> tests/compile-fail/nested_default.rs:29:5
+  --> tests/compile-fail/derive-properties/nested_default.rs:29:5
    |
 29 | /     #[property(nested, default = unreachable!())]
 30 | |     inner: Inner,

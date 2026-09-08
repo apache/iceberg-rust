@@ -69,6 +69,26 @@ pub struct FileIO {
     storage: Arc<OnceLock<Arc<dyn Storage>>>,
 }
 
+mod _serde {
+    use std::sync::Arc;
+
+    use serde::{Deserialize, Serialize};
+
+    use super::{StorageConfig, StorageFactory};
+
+    #[derive(Serialize)]
+    pub(super) struct SerializableFileIO<'a> {
+        pub(super) config: &'a StorageConfig,
+        pub(super) factory: &'a Arc<dyn StorageFactory>,
+    }
+
+    #[derive(Deserialize)]
+    pub(super) struct DeserializedFileIO {
+        pub(super) config: StorageConfig,
+        pub(super) factory: Arc<dyn StorageFactory>,
+    }
+}
+
 impl FileIO {
     /// Create a new FileIO backed by in-memory storage.
     ///
@@ -90,6 +110,42 @@ impl FileIO {
             factory: Arc::new(LocalFsStorageFactory),
             storage: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Serializes all portable state of this `FileIO` into a byte vector.
+    ///
+    /// This includes the storage configuration and factory, but not the cached storage instance.
+    /// The storage cache is rebuilt lazily on first use after calling [`FileIO::deserialize_all`].
+    ///
+    /// The serialized representation is not a stable format and may change between crate versions.
+    /// Applications should not rely on it for long-term storage or exchange it between incompatible
+    /// versions of this crate.
+    ///
+    /// All storage configuration properties are included in the serialized representation. These
+    /// properties may contain credentials or other sensitive values, so the returned bytes must be
+    /// protected in transit and at rest by the application embedding this crate.
+    ///
+    /// Storage factories are serialized through [`typetag`](https://docs.rs/typetag). Third-party
+    /// factories must use `#[typetag::serde]` on their [`StorageFactory`] implementation.
+    pub fn serialize_all(&self) -> Result<Vec<u8>> {
+        Ok(serde_json::to_vec(&_serde::SerializableFileIO {
+            config: &self.config,
+            factory: &self.factory,
+        })?)
+    }
+
+    /// Deserializes a `FileIO` previously produced by [`FileIO::serialize_all`].
+    ///
+    /// The receiving binary must use a compatible crate version and link the concrete factory
+    /// implementation so it is registered with `typetag`. Backend-specific requirements are
+    /// documented by each storage factory implementation.
+    pub fn deserialize_all(bytes: &[u8]) -> Result<Self> {
+        let _serde::DeserializedFileIO { config, factory } = serde_json::from_slice(bytes)?;
+        Ok(Self {
+            config,
+            factory,
+            storage: Arc::new(OnceLock::new()),
+        })
     }
 
     /// Get the storage configuration.
@@ -543,5 +599,82 @@ mod tests {
 
         assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
         assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_memory_file_io_serialization_roundtrip() {
+        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+            .with_prop("test-property", "test-value")
+            .with_prop("s3.session-token", "test-token")
+            .build();
+
+        file_io
+            .new_output("memory://test/file.txt")
+            .unwrap()
+            .write("test".into())
+            .await
+            .unwrap();
+        assert!(file_io.storage.get().is_some());
+
+        let serialized = file_io.serialize_all().unwrap();
+        let deserialized = FileIO::deserialize_all(&serialized).unwrap();
+        assert!(deserialized.storage.get().is_none());
+        assert_eq!(
+            deserialized.config().get("test-property"),
+            Some(&"test-value".to_string())
+        );
+        assert_eq!(
+            deserialized.config().get("s3.session-token"),
+            Some(&"test-token".to_string())
+        );
+
+        deserialized
+            .new_output("memory://test/roundtrip.txt")
+            .unwrap()
+            .write("roundtrip".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            deserialized
+                .new_input("memory://test/roundtrip.txt")
+                .unwrap()
+                .read()
+                .await
+                .unwrap(),
+            Bytes::from("roundtrip")
+        );
+        assert!(deserialized.storage.get().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_local_fs_file_io_serialization_roundtrip() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("roundtrip.txt");
+        let path = path.to_str().unwrap();
+        let file_io = FileIOBuilder::new(Arc::new(LocalFsStorageFactory))
+            .with_prop("test-property", "test-value")
+            .build();
+
+        file_io
+            .new_output(path)
+            .unwrap()
+            .write("roundtrip".into())
+            .await
+            .unwrap();
+        assert!(file_io.storage.get().is_some());
+
+        let serialized = file_io.serialize_all().unwrap();
+        let deserialized = FileIO::deserialize_all(&serialized).unwrap();
+        assert!(deserialized.storage.get().is_none());
+        assert_eq!(
+            deserialized.config().get("test-property"),
+            Some(&"test-value".to_string())
+        );
+        assert!(deserialized.exists(path).await.unwrap());
+        assert_eq!(
+            deserialized.new_input(path).unwrap().read().await.unwrap(),
+            Bytes::from("roundtrip")
+        );
+        assert!(deserialized.storage.get().is_some());
     }
 }

@@ -169,7 +169,7 @@ impl AesGcmCipher {
     /// * `aad` - Additional authenticated data (optional)
     ///
     /// # Returns
-    /// The encrypted data in the format: [12-byte nonce][ciphertext][16-byte auth tag]
+    /// The encrypted data in the format: `[12-byte nonce][ciphertext][16-byte auth tag]`
     /// This matches the Java implementation format for compatibility.
     pub fn encrypt(&self, plaintext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>> {
         match self.key_size {

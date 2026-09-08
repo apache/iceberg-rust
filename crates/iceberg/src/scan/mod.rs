@@ -40,9 +40,8 @@ use crate::io::FileIO;
 use crate::metadata_columns::{
     RESERVED_FIELD_ID_PARTITION, get_metadata_field_id, is_metadata_column_name,
 };
-use crate::partitioning::compute_unified_partition_type;
 use crate::runtime::Runtime;
-use crate::spec::{DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, Schema, SnapshotRef};
+use crate::spec::{DataContentType, Schema, SchemaRef, SnapshotRef, StructType};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::{Error, ErrorKind, Result};
@@ -59,6 +58,73 @@ fn resolve_field_id(schema: &Schema, column_name: &str, case_sensitive: bool) ->
             .field_by_name_case_insensitive(column_name)
             .map(|field| field.id)
     }
+}
+
+fn collect_scan_field_ids(
+    schema: &Schema,
+    column_names: Option<&[String]>,
+    case_sensitive: bool,
+) -> Result<Vec<i32>> {
+    let Some(column_names) = column_names else {
+        return Ok(schema.as_struct().fields().iter().map(|f| f.id).collect());
+    };
+
+    column_names
+        .iter()
+        .map(|column_name| {
+            if is_metadata_column_name(column_name) {
+                return get_metadata_field_id(column_name);
+            }
+
+            let field_id = resolve_field_id(schema, column_name, case_sensitive).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Column {column_name} not found in table. Schema: {schema}"),
+                )
+            })?;
+
+            schema
+                .as_struct()
+                .field_by_id(field_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::FeatureUnsupported,
+                        format!(
+                            "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
+                        ),
+                    )
+                })?;
+
+            Ok(field_id)
+        })
+        .collect()
+}
+
+fn bind_scan_predicate(
+    schema: &SchemaRef,
+    predicate: Option<&Predicate>,
+    case_sensitive: bool,
+) -> Result<Option<Arc<BoundPredicate>>> {
+    predicate
+        .map(|predicate| predicate.bind(schema.clone(), case_sensitive))
+        .transpose()
+        .map(|predicate| predicate.map(Arc::new))
+}
+
+fn projected_partition_type(
+    table: &Table,
+    schema: &Schema,
+    field_ids: &[i32],
+) -> Result<Option<Arc<StructType>>> {
+    if !field_ids.contains(&RESERVED_FIELD_ID_PARTITION) {
+        return Ok(None);
+    }
+
+    table
+        .metadata()
+        .unified_partition_type(schema)
+        .map(Arc::new)
+        .map(Some)
 }
 
 /// Builder to create table scan.
@@ -233,85 +299,17 @@ impl<'a> TableScanBuilder<'a> {
         };
 
         let schema = snapshot.schema(self.table.metadata())?;
-
-        let mut field_ids = vec![];
-        let column_names = self.column_names.clone().unwrap_or_else(|| {
-            schema
-                .as_struct()
-                .fields()
-                .iter()
-                .map(|f| f.name.clone())
-                .collect()
-        });
-
-        for column_name in column_names.iter() {
-            // Handle metadata columns (like "_file")
-            if is_metadata_column_name(column_name) {
-                field_ids.push(get_metadata_field_id(column_name)?);
-                continue;
-            }
-
-            let field_id =
-                resolve_field_id(&schema, column_name, self.case_sensitive).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Column {column_name} not found in table. Schema: {schema}"),
-                    )
-                })?;
-
-            schema
-                .as_struct()
-                .field_by_id(field_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::FeatureUnsupported,
-                        format!(
-                        "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
-                    ),
-                )
-            })?;
-
-            field_ids.push(field_id);
-        }
-
-        let snapshot_bound_predicate = if let Some(ref predicates) = self.filter {
-            Some(predicates.bind(schema.clone(), self.case_sensitive)?)
-        } else {
-            None
-        };
-
+        let field_ids =
+            collect_scan_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
+        let snapshot_bound_predicate =
+            bind_scan_predicate(&schema, self.filter.as_ref(), self.case_sensitive)?;
         let name_mapping = self
             .table
             .metadata()
-            .properties()
-            .get(DEFAULT_SCHEMA_NAME_MAPPING)
-            .map(|raw| {
-                serde_json::from_str::<NameMapping>(raw).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Failed to parse table property {DEFAULT_SCHEMA_NAME_MAPPING} as a NameMapping"
-                        ),
-                    )
-                    .with_source(e)
-                })
-            })
-            .transpose()?
+            .table_properties()
+            .default_name_mapping()?
             .map(Arc::new);
-
-        // Compute unified partition type if _partition is projected
-        let unified_partition_type = if field_ids.contains(&RESERVED_FIELD_ID_PARTITION) {
-            let partition_type = compute_unified_partition_type(
-                self.table
-                    .metadata()
-                    .partition_specs_iter()
-                    .map(|s| s.as_ref()),
-                &schema,
-            )?;
-            Some(Arc::new(partition_type))
-        } else {
-            None
-        };
+        let unified_partition_type = projected_partition_type(self.table, &schema, &field_ids)?;
 
         let plan_context = PlanContext {
             snapshot,
@@ -319,7 +317,7 @@ impl<'a> TableScanBuilder<'a> {
             snapshot_schema: schema,
             case_sensitive: self.case_sensitive,
             predicate: self.filter.map(Arc::new),
-            snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
+            snapshot_bound_predicate,
             object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
             name_mapping,
@@ -662,13 +660,13 @@ pub mod tests {
         RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_DELETE_FILE_PATH,
         RESERVED_FIELD_ID_DELETE_FILE_POS, RESERVED_FIELD_ID_POS,
     };
-    use crate::scan::FileScanTask;
+    use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
     use crate::spec::{
-        DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, DataFileBuilder, DataFileFormat, Datum,
-        FormatVersion, Literal, MAIN_BRANCH, ManifestEntry, ManifestListWriter, ManifestStatus,
-        ManifestWriterBuilder, NestedField, Operation, PartitionSpec, PrimitiveType, Schema,
-        Snapshot, Struct, StructType, Summary, TableMetadata, TableMetadataBuilder, Type,
-        UnboundPartitionSpec,
+        DataContentType, DataFileBuilder, DataFileFormat, Datum, FormatVersion, Literal,
+        MAIN_BRANCH, ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
+        MappedField, NameMapping, NestedField, Operation, PartitionSpec, PrimitiveType, Schema,
+        Snapshot, Struct, StructType, Summary, TableMetadata, TableMetadataBuilder,
+        TableProperties, Transform, Type, UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -1896,7 +1894,8 @@ pub mod tests {
     #[test]
     fn test_table_scan_with_name_mapping_property() {
         let mapping_json = r#"[{"field-id":1,"names":["id","record_id"]}]"#;
-        let table = table_with_property(DEFAULT_SCHEMA_NAME_MAPPING, mapping_json);
+        let table =
+            table_with_property(TableProperties::PROPERTY_DEFAULT_NAME_MAPPING, mapping_json);
 
         let table_scan = table.scan().build().unwrap();
         let mapping = table_scan
@@ -1917,7 +1916,10 @@ pub mod tests {
 
     #[test]
     fn test_table_scan_with_malformed_name_mapping_property() {
-        let table = table_with_property(DEFAULT_SCHEMA_NAME_MAPPING, "{ not valid json");
+        let table = table_with_property(
+            TableProperties::PROPERTY_DEFAULT_NAME_MAPPING,
+            "{ not valid json",
+        );
 
         let err = table
             .scan()
@@ -1934,7 +1936,7 @@ pub mod tests {
         let mapping_json = r#"[{"field-id":1,"names":["id","record_id"]}]"#;
         let mut metadata = fixture.table.metadata().clone();
         metadata.properties.insert(
-            DEFAULT_SCHEMA_NAME_MAPPING.to_string(),
+            TableProperties::PROPERTY_DEFAULT_NAME_MAPPING.to_string(),
             mapping_json.to_string(),
         );
         let table = Table::builder()
@@ -1960,8 +1962,7 @@ pub mod tests {
         assert!(!tasks.is_empty(), "expected at least one FileScanTask");
         for task in &tasks {
             let mapping = task
-                .name_mapping
-                .as_ref()
+                .name_mapping()
                 .expect("name_mapping should reach the FileScanTask");
             assert_eq!(mapping.fields().len(), 1);
             assert_eq!(mapping.fields()[0].field_id(), Some(1));
@@ -2002,17 +2003,17 @@ pub mod tests {
 
         assert_eq!(tasks.len(), 2);
 
-        tasks.sort_by_key(|t| t.data_file_path.to_string());
+        tasks.sort_by_key(|t| t.data_file_path().to_string());
 
         // Check first task is added data file
         assert_eq!(
-            tasks[0].data_file_path,
+            tasks[0].data_file_path(),
             format!("{}/1.parquet", &fixture.table_location)
         );
 
         // Check second task is existing data file
         assert_eq!(
-            tasks[1].data_file_path,
+            tasks[1].data_file_path(),
             format!("{}/3.parquet", &fixture.table_location)
         );
     }
@@ -2035,23 +2036,23 @@ pub mod tests {
             .unwrap();
 
         assert_eq!(tasks.len(), 2);
-        tasks.sort_by_key(|task| task.data_file_path.to_string());
+        tasks.sort_by_key(|task| task.data_file_path().to_string());
 
         // The added file inherits the current snapshot's data sequence number,
         // the existing file keeps the one it was written with.
         assert_eq!(
-            tasks[0].data_file_path,
+            tasks[0].data_file_path(),
             format!("{}/1.parquet", &fixture.table_location)
         );
-        assert_eq!(tasks[0].data_sequence_number, Some(1));
+        assert_eq!(tasks[0].data_sequence_number(), Some(1));
         assert_eq!(
-            tasks[1].data_file_path,
+            tasks[1].data_file_path(),
             format!("{}/3.parquet", &fixture.table_location)
         );
-        assert_eq!(tasks[1].data_sequence_number, Some(0));
+        assert_eq!(tasks[1].data_sequence_number(), Some(0));
 
         // first_row_id is a v3 concept; a v2 manifest carries none.
-        assert!(tasks.iter().all(|task| task.first_row_id.is_none()));
+        assert!(tasks.iter().all(|task| task.first_row_id().is_none()));
     }
 
     #[tokio::test]
@@ -2076,20 +2077,15 @@ pub mod tests {
 
         // The manifest-level first_row_id (42) is inherited onto the entry on
         // read, then carried onto the task.
-        assert_eq!(task.first_row_id, Some(42));
+        assert_eq!(task.first_row_id(), Some(42));
         // The data sequence number is threaded through the same v3 read path.
-        assert_eq!(task.data_sequence_number, Some(1));
+        assert_eq!(task.data_sequence_number(), Some(1));
     }
 
     #[tokio::test]
-    async fn test_filtered_scan_with_dropped_partition_source_column() {
+    async fn test_filtered_scan_rejects_dropped_partition_source_column() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
-
-        // baseline: the same filtered scan against the table before evolution
-        let baseline = scan_y_gte_5(&fixture.table).await;
-        assert!(!baseline.is_empty());
-        assert!(baseline.iter().all(|y| *y >= 5));
 
         // Evolve the table so that the manifests reference a historical spec whose source
         // column is no longer in the current schema: make an unpartitioned spec the
@@ -2140,37 +2136,23 @@ pub mod tests {
             .metadata;
         let table = fixture.table.clone().with_metadata(Arc::new(metadata));
 
-        // planning and reading must succeed, and the results must match the table before
-        // evolution: no rows wrongly pruned and none returned unfiltered
-        let evolved = scan_y_gte_5(&table).await;
-        assert_eq!(evolved, baseline);
-    }
-
-    async fn scan_y_gte_5(table: &Table) -> Vec<i64> {
         let table_scan = table
             .scan()
             .select(["y"])
             .with_filter(Reference::new("y").greater_than_or_equal_to(Datum::long(5)))
             .build()
             .unwrap();
-        let batches: Vec<_> = table_scan
-            .to_arrow()
+
+        let err = table_scan
+            .plan_files()
             .await
             .unwrap()
-            .try_collect()
+            .try_collect::<Vec<_>>()
             .await
-            .unwrap();
+            .unwrap_err();
 
-        let mut values: Vec<i64> = batches
-            .iter()
-            .flat_map(|batch| {
-                let col = batch.column_by_name("y").unwrap();
-                let arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
-                (0..arr.len()).map(|i| arr.value(i)).collect::<Vec<_>>()
-            })
-            .collect();
-        values.sort_unstable();
-        values
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.message().contains("No column with source column id 1"));
     }
 
     #[tokio::test]
@@ -2648,49 +2630,76 @@ pub mod tests {
         assert_eq!(string_arr.value(0), "Apache");
     }
 
-    #[test]
-    fn test_file_scan_task_serialize_deserialize() {
-        let test_fn = |task: FileScanTask| {
-            let serialized = serde_json::to_string(&task).unwrap();
-            let deserialized: FileScanTask = serde_json::from_str(&serialized).unwrap();
-
-            assert_eq!(task.data_file_path, deserialized.data_file_path);
-            assert_eq!(task.start, deserialized.start);
-            assert_eq!(task.length, deserialized.length);
-            assert_eq!(task.project_field_ids, deserialized.project_field_ids);
-            assert_eq!(task.predicate, deserialized.predicate);
-            assert_eq!(task.schema, deserialized.schema);
-            assert_eq!(task.first_row_id, deserialized.first_row_id);
-            assert_eq!(task.data_sequence_number, deserialized.data_sequence_number);
-        };
-
-        // without predicate
-        let schema = Arc::new(
+    fn file_scan_task_test_schema(primitive_type: PrimitiveType) -> Arc<Schema> {
+        Arc::new(
             Schema::builder()
                 .with_fields(vec![Arc::new(NestedField::required(
                     1,
                     "x",
-                    Type::Primitive(PrimitiveType::Binary),
+                    Type::Primitive(primitive_type),
                 ))])
                 .build()
                 .unwrap(),
+        )
+    }
+
+    fn assert_file_scan_task_serde_round_trip(task: FileScanTask) {
+        // Regression test for https://github.com/apache/iceberg-rust/issues/3089.
+        let serialized = serde_json::to_string(&task).unwrap();
+        let deserialized: FileScanTask = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(task, deserialized);
+    }
+
+    fn file_scan_task_with_partition(
+        primitive_type: PrimitiveType,
+        transform: Transform,
+        partition_value: Literal,
+    ) -> FileScanTask {
+        let schema = file_scan_task_test_schema(primitive_type);
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_partition_field("x", "x_partition", transform)
+                .unwrap()
+                .build()
+                .unwrap(),
         );
+        FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(123)
+            .with_start(10)
+            .with_length(100)
+            .with_project_field_ids(vec![1])
+            .with_schema(schema)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_partition(Some(Struct::from_iter([Some(partition_value)])))
+            .with_partition_spec(Some(partition_spec))
+            .with_case_sensitive(true)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_without_predicate() {
         let task = FileScanTask::builder()
             .with_data_file_path("data_file_path".to_string())
             .with_file_size_in_bytes(0)
             .with_start(0)
             .with_length(100)
             .with_project_field_ids(vec![1, 2, 3])
-            .with_schema(schema.clone())
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
             .with_record_count(Some(100))
             .with_first_row_id(Some(1000))
             .with_data_sequence_number(Some(5))
             .with_data_file_format(DataFileFormat::Parquet)
             .with_case_sensitive(false)
-            .build();
-        test_fn(task);
+            .build()
+            .unwrap();
+        assert_file_scan_task_serde_round_trip(task);
+    }
 
-        // with predicate
+    #[test]
+    fn test_file_scan_task_serde_with_predicate() {
         let task = FileScanTask::builder()
             .with_data_file_path("data_file_path".to_string())
             .with_file_size_in_bytes(0)
@@ -2698,11 +2707,154 @@ pub mod tests {
             .with_length(100)
             .with_project_field_ids(vec![1, 2, 3])
             .with_predicate(Some(BoundPredicate::AlwaysTrue))
-            .with_schema(schema)
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
             .with_data_file_format(DataFileFormat::Avro)
             .with_case_sensitive(false)
-            .build();
-        test_fn(task);
+            .build()
+            .unwrap();
+
+        let serialized = serde_json::to_value(&task).unwrap();
+        assert!(serialized.get("record_count").is_none());
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_unpartitioned_file_scan_task_serde() {
+        let task = FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(0)
+            .with_start(0)
+            .with_length(100)
+            .with_project_field_ids(vec![1, 2, 3])
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_partition(Some(Struct::empty()))
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_all_optional_fields() {
+        let schema = file_scan_task_test_schema(PrimitiveType::Long);
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_partition_field("x", "x", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+        let unified_partition_type = Arc::new(partition_spec.partition_type(&schema).unwrap());
+        let task = FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(123)
+            .with_start(10)
+            .with_length(100)
+            .with_project_field_ids(vec![1])
+            .with_schema(schema)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_path("delete_file_path".to_string())
+                    .with_file_size_in_bytes(23)
+                    .with_file_type(DataContentType::EqualityDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
+                    .with_partition_spec_id(0)
+                    .with_equality_ids(Some(vec![1]))
+                    .with_referenced_data_file(Some("data_file_path".to_string()))
+                    .with_content_offset(Some(12))
+                    .with_content_size_in_bytes(Some(34))
+                    .with_record_count(Some(5))
+                    .with_key_metadata(Some(vec![4, 5, 6].into_boxed_slice()))
+                    .build(),
+            ])
+            .with_partition(Some(Struct::from_iter([Some(Literal::long(42))])))
+            .with_partition_spec(Some(partition_spec))
+            .with_name_mapping(Some(Arc::new(NameMapping::new(vec![MappedField::new(
+                Some(1),
+                vec!["x".to_string()],
+                vec![],
+            )]))))
+            .with_unified_partition_type(Some(unified_partition_type))
+            .with_case_sensitive(true)
+            .with_key_metadata(Some(vec![1, 2, 3].into_boxed_slice()))
+            .build()
+            .unwrap();
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_date_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Date,
+            Transform::Identity,
+            Literal::date(19_000),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_timestamp_ns_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::TimestampNs,
+            Transform::Identity,
+            Literal::timestamp_nano(1_510_871_468_123_456_789),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_timestamptz_ns_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::TimestamptzNs,
+            Transform::Identity,
+            Literal::timestamptz_nano(1_510_871_468_123_456_789),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_decimal_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Decimal {
+                precision: 9,
+                scale: 2,
+            },
+            Transform::Identity,
+            Literal::decimal(12_345),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_uuid_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Uuid,
+            Transform::Identity,
+            Literal::uuid(Uuid::from_u128(0x12345678_90ab_cdef_1234_567890abcdef)),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_fixed_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Fixed(4),
+            Transform::Identity,
+            Literal::fixed([1, 2, 3, 4]),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_bucket_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::String,
+            Transform::Bucket(4),
+            Literal::int(2),
+        );
+        assert_file_scan_task_serde_round_trip(task);
     }
 
     #[tokio::test]
@@ -3560,12 +3712,12 @@ pub mod tests {
         assert_eq!(tasks.len(), 1, "expected a single FileScanTask");
         let task = &tasks[0];
         assert!(
-            task.project_field_ids.contains(&RESERVED_FIELD_ID_POS),
+            task.project_field_ids().contains(&RESERVED_FIELD_ID_POS),
             "_pos field id must be projected into the FileScanTask"
         );
-        assert_eq!(task.start, 0, "TableScan should plan whole-file tasks");
-        assert_eq!(task.length, task.file_size_in_bytes);
-        assert!(task.deletes.is_empty());
+        assert_eq!(task.start(), 0, "TableScan should plan whole-file tasks");
+        assert_eq!(task.length(), task.file_size_in_bytes());
+        assert!(task.deletes().is_empty());
 
         // Reading that task yields absolute _pos 0..300 in order.
         let batches: Vec<_> = fixture
@@ -3632,12 +3784,12 @@ pub mod tests {
             .unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(
-            tasks[0].deletes.len(),
+            tasks[0].deletes().len(),
             1,
             "positional delete file should be planned into the task"
         );
         assert_eq!(
-            tasks[0].deletes[0].file_type,
+            tasks[0].deletes()[0].file_type,
             DataContentType::PositionDeletes
         );
 
