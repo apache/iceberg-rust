@@ -42,7 +42,7 @@ arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-cast = { workspace = true }
 arrow-ord = { workspace = true }
-arrow-schema = { workspace = true }
+arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 arrow-select = { workspace = true }
 arrow-string = { workspace = true }
 as-any = { workspace = true }
