@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-
 use aws_sdk_kms::types::{DataKeySpec, EncryptionAlgorithmSpec};
 use iceberg::{Error, ErrorKind, Result};
+use iceberg_property_macro::Properties;
 
 /// Catalog property selecting an AWS profile.
 pub const AWS_PROFILE_NAME: &str = "profile_name";
@@ -42,30 +41,22 @@ pub const KMS_DATA_KEY_SPEC: &str = "kms.data-key-spec";
 /// Default AWS KMS generated key size, matching Iceberg Java.
 pub const KMS_DATA_KEY_SPEC_DEFAULT: &str = "AES_256";
 
-#[derive(Clone)]
+#[derive(Clone, Properties)]
 pub(crate) struct AwsKmsConfig {
+    #[property(key = KMS_ENDPOINT, default = None)]
     pub(crate) endpoint: Option<String>,
+    #[property(
+        key = KMS_ENCRYPTION_ALGORITHM_SPEC,
+        default = KMS_ENCRYPTION_ALGORITHM_SPEC_DEFAULT,
+        parse_with = parse_encryption_algorithm
+    )]
     pub(crate) encryption_algorithm: EncryptionAlgorithmSpec,
+    #[property(
+        key = KMS_DATA_KEY_SPEC,
+        default = KMS_DATA_KEY_SPEC_DEFAULT,
+        parse_with = parse_data_key_spec
+    )]
     pub(crate) data_key_spec: DataKeySpec,
-}
-
-impl AwsKmsConfig {
-    pub(crate) fn from_properties(properties: &HashMap<String, String>) -> Result<Self> {
-        let encryption_algorithm = properties
-            .get(KMS_ENCRYPTION_ALGORITHM_SPEC)
-            .map(String::as_str)
-            .unwrap_or(KMS_ENCRYPTION_ALGORITHM_SPEC_DEFAULT);
-        let data_key_spec = properties
-            .get(KMS_DATA_KEY_SPEC)
-            .map(String::as_str)
-            .unwrap_or(KMS_DATA_KEY_SPEC_DEFAULT);
-
-        Ok(Self {
-            endpoint: properties.get(KMS_ENDPOINT).cloned(),
-            encryption_algorithm: parse_encryption_algorithm(encryption_algorithm)?,
-            data_key_spec: parse_data_key_spec(data_key_spec)?,
-        })
-    }
 }
 
 fn parse_encryption_algorithm(value: &str) -> Result<EncryptionAlgorithmSpec> {
@@ -90,6 +81,8 @@ fn parse_data_key_spec(value: &str) -> Result<DataKeySpec> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     #[test]

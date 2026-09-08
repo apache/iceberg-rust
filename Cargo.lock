@@ -4099,6 +4099,7 @@ dependencies = [
  "aws-smithy-mocks",
  "iceberg",
  "iceberg-catalog-rest",
+ "iceberg-property-macro",
  "tokio",
 ]
 
