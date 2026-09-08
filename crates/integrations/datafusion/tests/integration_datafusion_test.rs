@@ -29,7 +29,8 @@ use expect_test::expect;
 use iceberg::io::LocalFsStorageFactory;
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg::spec::{
-    NestedField, PrimitiveType, Schema, StructType, Transform, Type, UnboundPartitionSpec,
+    NestedField, PrimitiveType, Schema, StructType, Transform, Type, UnboundPartitionField,
+    UnboundPartitionSpec,
 };
 use iceberg::test_utils::check_record_batches;
 use iceberg::{
@@ -601,8 +602,8 @@ async fn test_insert_into_nested() -> Result<()> {
     // Insert data with nested structs
     let insert_sql = r#"
     INSERT INTO catalog.test_insert_nested.nested_table
-    SELECT 
-        1 as id, 
+    SELECT
+        1 as id,
         'Alice' as name,
         named_struct(
             'address', named_struct(
@@ -616,8 +617,8 @@ async fn test_insert_into_nested() -> Result<()> {
             )
         ) as profile
     UNION ALL
-    SELECT 
-        2 as id, 
+    SELECT
+        2 as id,
         'Bob' as name,
         named_struct(
             'address', named_struct(
@@ -739,15 +740,15 @@ async fn test_insert_into_nested() -> Result<()> {
     let df = ctx
         .sql(
             r#"
-            SELECT 
-                id, 
+            SELECT
+                id,
                 name,
                 profile.address.street,
                 profile.address.city,
                 profile.address.zip,
                 profile.contact.email,
                 profile.contact.phone
-            FROM catalog.test_insert_nested.nested_table 
+            FROM catalog.test_insert_nested.nested_table
             ORDER BY id
         "#,
         )
@@ -811,7 +812,7 @@ async fn test_insert_into_nested() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_insert_into_partitioned() -> Result<()> {
+async fn test_insert_into_partitioned_by_string() -> Result<()> {
     let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("test_partitioned_write".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
@@ -853,8 +854,8 @@ async fn test_insert_into_partitioned() -> Result<()> {
     let df = ctx
         .sql(
             r#"
-            INSERT INTO catalog.test_partitioned_write.partitioned_table 
-            VALUES 
+            INSERT INTO catalog.test_partitioned_write.partitioned_table
+            VALUES
                 (1, 'electronics', 'laptop'),
                 (2, 'electronics', 'phone'),
                 (3, 'books', 'novel'),
@@ -942,6 +943,101 @@ async fn test_insert_into_partitioned() -> Result<()> {
     assert!(
         file_io.exists(&clothing_path).await?,
         "Expected partition directory: {clothing_path}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_insert_into_partitioned_by_uuid() -> Result<()> {
+    let iceberg_catalog = get_iceberg_catalog().await;
+    let namespace = NamespaceIdent::new("test_insert_uuid".to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    let schema = Schema::builder()
+        .with_schema_id(0)
+        .with_fields(vec![
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::required(2, "uuid", Type::Primitive(PrimitiveType::Uuid)).into(),
+        ])
+        .build()?;
+
+    let creation = TableCreation::builder()
+        .location(temp_path())
+        .name("partitioned_table".to_string())
+        .properties(HashMap::new())
+        .schema(schema)
+        .partition_spec(
+            UnboundPartitionSpec::builder()
+                .with_spec_id(0)
+                .add_partition_fields([UnboundPartitionField::builder()
+                    .source_id(2)
+                    .field_id(2)
+                    .name("uuid".to_string())
+                    .transform(Transform::Identity)
+                    .build()])
+                .unwrap()
+                .build(),
+        )
+        .build();
+    iceberg_catalog.create_table(&namespace, creation).await?;
+
+    let client = Arc::new(iceberg_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client.clone()).await?);
+    let ctx = SessionContext::new();
+    ctx.register_catalog("catalog", catalog);
+
+    ctx.sql(
+        "INSERT INTO catalog.test_insert_uuid.partitioned_table
+         VALUES (1, X'aaaaaaaabbbbccccddddeeeeeeeeeeee')",
+    )
+    .await
+    .unwrap()
+    .collect()
+    .await
+    .unwrap();
+
+    // Read the UUID back out.
+    let batches = ctx
+        .sql("SELECT * FROM catalog.test_insert_uuid.partitioned_table")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    check_record_batches(
+        batches,
+        expect![[r#"
+            Field { "id": Int32, metadata: {"PARQUET:field_id": "1"} },
+            Field { "uuid": FixedSizeBinary(16), metadata: {"PARQUET:field_id": "2"} }"#]],
+        expect![[r#"
+            id: PrimitiveArray<Int32>
+            [
+              1,
+            ],
+            uuid: FixedSizeBinaryArray<16>
+            [
+              [170, 170, 170, 170, 187, 187, 204, 204, 221, 221, 238, 238, 238, 238, 238, 238],
+            ]"#]],
+        &[],
+        Some("id"),
+    );
+
+    // Verify that data files exist under correct UUID paths
+    let table_ident = TableIdent::new(namespace.clone(), "partitioned_table".to_string());
+    let table = client.load_table(&table_ident).await?;
+    let table_location = table.metadata().location();
+    let file_io = table.file_io();
+
+    // List files under each expected partition path
+    let uuid_partition_path =
+        format!("{table_location}/data/uuid=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+
+    // Verify partition directories exist and contain data files
+    assert!(
+        file_io.exists(&uuid_partition_path).await?,
+        "Expected partition directory: {uuid_partition_path}"
     );
 
     Ok(())
