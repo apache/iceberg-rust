@@ -29,33 +29,30 @@ async-trait@0.1.89		X								X
 atoi@2.0.0										X				
 atomic-waker@1.1.2		X								X				
 autocfg@1.5.1		X								X				
-aws-config@1.8.18		X												
-aws-credential-types@1.2.14		X												
+aws-config@1.12.0		X												
+aws-credential-types@1.3.0		X												
 aws-lc-rs@1.17.1		X						X						
 aws-lc-sys@0.42.0		X			X			X		X	X			
-aws-runtime@1.7.5		X												
-aws-sdk-kms@1.111.0		X												
-aws-sdk-sso@1.102.0		X												
-aws-sdk-ssooidc@1.104.0		X												
-aws-sdk-sts@1.107.0		X												
-aws-sigv4@1.4.5		X												
+aws-runtime@1.9.2		X												
+aws-sdk-kms@1.118.0		X												
+aws-sdk-sso@1.109.0		X												
+aws-sdk-ssooidc@1.111.0		X												
+aws-sdk-sts@1.114.0		X												
+aws-sigv4@1.5.1		X												
 aws-smithy-async@1.3.0		X												
-aws-smithy-http@0.63.6		X												
 aws-smithy-http@0.64.0		X												
 aws-smithy-http-client@1.4.0		X												
-aws-smithy-json@0.62.7		X												
-aws-smithy-observability@0.2.6		X												
+aws-smithy-json@0.63.0		X												
 aws-smithy-observability@0.3.0		X												
 aws-smithy-protocol-test@0.64.0		X												
-aws-smithy-query@0.60.15		X												
-aws-smithy-runtime@1.12.0		X												
+aws-smithy-query@0.62.0		X												
+aws-smithy-runtime@1.14.0		X												
 aws-smithy-runtime-api@1.16.0		X												
 aws-smithy-runtime-api-macros@1.1.0		X												
-aws-smithy-schema@0.1.0		X												
 aws-smithy-schema@0.2.0		X												
 aws-smithy-types@1.6.3		X												
-aws-smithy-xml@0.60.15		X												
-aws-types@1.3.16		X												
+aws-smithy-xml@0.62.0		X												
+aws-types@1.6.0		X												
 backon@1.6.0		X												
 base64@0.22.1		X								X				
 base64@0.23.0		X								X				
