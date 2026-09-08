@@ -7,7 +7,7 @@ pub fn iceberg_aws::AwsSdkCredentialProvider::clone(&self) -> iceberg_aws::AwsSd
 impl core::fmt::Debug for iceberg_aws::AwsSdkCredentialProvider
 pub fn iceberg_aws::AwsSdkCredentialProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl reqsign_core::api::ProvideCredential for iceberg_aws::AwsSdkCredentialProvider
-pub type iceberg_aws::AwsSdkCredentialProvider::Credential = reqsign_aws_v4::credential::Credential
+pub type iceberg_aws::AwsSdkCredentialProvider::Credential = reqsign_aws_core::credential::Credential
 pub async fn iceberg_aws::AwsSdkCredentialProvider::provide_credential(&self, _ctx: &reqsign_core::context::Context) -> reqsign_core::error::Result<core::option::Option<Self::Credential>>
 pub const iceberg_aws::AWS_ACCESS_KEY_ID: &str
 pub const iceberg_aws::AWS_ASSUME_ROLE_ARN: &str
