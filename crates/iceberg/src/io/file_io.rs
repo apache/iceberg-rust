@@ -795,6 +795,31 @@ mod tests {
         assert!(deserialized.storage.get().is_some());
     }
 
+    /// Per-prefix vended credentials must survive serialization, or a worker
+    /// that receives this FileIO cannot read the data they were vended for.
+    #[tokio::test]
+    async fn test_prefixed_credentials_survive_serialization_roundtrip() {
+        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+            .with_prop("s3.access-key-id", "default-key")
+            .with_prefixed_props("memory://warehouse/t", [("s3.access-key-id", "vended-key")])
+            .build();
+
+        let deserialized = FileIO::deserialize_all(&file_io.serialize_all().unwrap()).unwrap();
+
+        assert_eq!(
+            deserialized
+                .config_for("memory://warehouse/t/data/f.parquet")
+                .get("s3.access-key-id"),
+            Some(&"vended-key".to_string())
+        );
+        assert_eq!(
+            deserialized
+                .config_for("memory://elsewhere/f.parquet")
+                .get("s3.access-key-id"),
+            Some(&"default-key".to_string())
+        );
+    }
+
     #[tokio::test]
     async fn test_local_fs_file_io_serialization_roundtrip() {
         let tmp_dir = TempDir::new().unwrap();
