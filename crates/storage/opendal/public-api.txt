@@ -15,6 +15,7 @@ pub iceberg_storage_opendal::OpenDalStorage::Oss::config: alloc::sync::Arc<opend
 pub iceberg_storage_opendal::OpenDalStorage::S3
 pub iceberg_storage_opendal::OpenDalStorage::S3::config: alloc::sync::Arc<opendal_service_s3::config::S3Config>
 pub iceberg_storage_opendal::OpenDalStorage::S3::customized_credential_load: core::option::Option<iceberg_storage_opendal::CustomAwsCredentialLoader>
+pub iceberg_storage_opendal::OpenDalStorage::S3::multipart_part_size: u64
 impl core::clone::Clone for iceberg_storage_opendal::OpenDalStorage
 pub fn iceberg_storage_opendal::OpenDalStorage::clone(&self) -> iceberg_storage_opendal::OpenDalStorage
 impl core::fmt::Debug for iceberg_storage_opendal::OpenDalStorage

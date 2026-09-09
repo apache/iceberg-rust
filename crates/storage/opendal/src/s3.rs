@@ -37,19 +37,19 @@ use url::Url;
 use crate::utils::{from_opendal_error, is_truthy};
 
 /// S3 rejects a non-final part smaller than this.
-const MULTIPART_PART_SIZE_MIN: usize = 5 * 1024 * 1024;
+const MULTIPART_PART_SIZE_MIN: u64 = 5 * 1024 * 1024;
 
 /// Matches Java `S3FileIOProperties.MULTIPART_SIZE_DEFAULT`.
-pub(crate) fn default_multipart_part_size() -> usize {
+pub(crate) fn default_multipart_part_size() -> u64 {
     32 * 1024 * 1024
 }
 
 /// Parse iceberg props to s3 multipart upload part size.
-pub(crate) fn s3_multipart_part_size_parse(m: &HashMap<String, String>) -> Result<usize> {
+pub(crate) fn s3_multipart_part_size_parse(m: &HashMap<String, String>) -> Result<u64> {
     let Some(value) = m.get(S3_MULTIPART_PART_SIZE_BYTES) else {
         return Ok(default_multipart_part_size());
     };
-    let part_size = value.parse::<usize>().map_err(|e| {
+    let part_size = value.parse::<u64>().map_err(|e| {
         Error::new(
             ErrorKind::DataInvalid,
             format!("Invalid {S3_MULTIPART_PART_SIZE_BYTES}: {value}: {e}"),
@@ -234,7 +234,7 @@ mod tests {
         assert!(!parse_with(Some("true")));
     }
 
-    fn parse_part_size(prop: Option<&str>) -> Result<usize> {
+    fn parse_part_size(prop: Option<&str>) -> Result<u64> {
         let mut props = HashMap::new();
         if let Some(v) = prop {
             props.insert(S3_MULTIPART_PART_SIZE_BYTES.to_string(), v.to_string());

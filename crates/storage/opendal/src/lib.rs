@@ -237,7 +237,7 @@ pub enum OpenDalStorage {
         config: Arc<S3Config>,
         /// Bytes carried by one multipart upload request.
         #[serde(default = "default_multipart_part_size")]
-        multipart_part_size: usize,
+        multipart_part_size: u64,
         /// Custom AWS credential loader.
         #[serde(skip)]
         customized_credential_load: Option<CustomAwsCredentialLoader>,
@@ -412,7 +412,7 @@ impl OpenDalStorage {
                 multipart_part_size,
                 ..
             } => WriteOptions {
-                chunk: Some(*multipart_part_size),
+                chunk: Some(usize::try_from(*multipart_part_size).unwrap_or(usize::MAX)),
                 ..WriteOptions::default()
             },
             _ => WriteOptions::default(),
