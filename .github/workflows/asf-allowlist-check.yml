@@ -39,4 +39,9 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
+    # The allowlist checker recognizes ./, but not $/, as a local action prefix.
+    # Normalize its disposable checkout while preserving $/ in source workflows.
+    - name: Normalize self-repository references for the allowlist checker
+      run: |
+        find .github -type f -name '*.yml' -exec sed -i 's#uses: \$/#uses: ./#g' {} +
     - uses: apache/infrastructure-actions/allowlist-check@61dcea11f19e2bbe1263f14d72235e8da17d3ad0  # allowlist-check/v1.0.0

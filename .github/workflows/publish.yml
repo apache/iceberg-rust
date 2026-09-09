@@ -43,10 +43,10 @@ jobs:
 
       - name: Get MSRV
         id: get-msrv
-        uses: ./.github/actions/get-msrv
+        uses: $/.github/actions/get-msrv
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
         with:
           rust-version: ${{ steps.get-msrv.outputs.msrv }}
 
