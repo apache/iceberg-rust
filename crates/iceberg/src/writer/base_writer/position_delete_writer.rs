@@ -19,7 +19,9 @@
 //!
 //! A position delete file has two required columns: `file_path` (`string`, field id
 //! [`RESERVED_FIELD_ID_DELETE_FILE_PATH`]) and `pos` (`long`, field id
-//! [`RESERVED_FIELD_ID_DELETE_FILE_POS`]). The writer takes batches already shaped as
+//! [`RESERVED_FIELD_ID_DELETE_FILE_POS`]). The spec also allows an optional `row` column
+//! that inlines the deleted row's values; this writer does not support it yet, so batches
+//! must contain only the two required columns. The writer takes batches already shaped as
 //! those two columns (see [`position_delete_schema`]) and sets
 //! [`DataContentType::PositionDeletes`] on the output. It does not sort its input; see
 //! [`PositionDeleteFileWriter::write`].
