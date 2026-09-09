@@ -3326,7 +3326,7 @@ mod tests {
         let catalog = RestCatalog::new(
             SessionContext::empty(),
             RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(NoopAuthManager)),
+            Some(Box::new(NoopAuthManager)),
             Some(Arc::new(LocalFsStorageFactory)),
             Runtime::current(),
             None,
