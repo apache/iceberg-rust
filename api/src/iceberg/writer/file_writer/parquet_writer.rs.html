@@ -360,7 +360,7 @@
 <a href=#360 id=360 data-nosnippet>360</a>    }
 <a href=#361 id=361 data-nosnippet>361</a>
 <a href=#362 id=362 data-nosnippet>362</a>    <span class="doccomment">/// Update statistics
-<a href=#363 id=363 data-nosnippet>363</a>    </span><span class="kw">fn </span>update(<span class="kw-2">&amp;mut </span><span class="self">self</span>, field_id: i32, value: Statistics) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#363 id=363 data-nosnippet>363</a>    </span><span class="kw">fn </span>update(<span class="kw-2">&amp;mut </span><span class="self">self</span>, field_id: i32, value: <span class="kw-2">&amp;</span>Statistics) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#364 id=364 data-nosnippet>364</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(ty) = <span class="self">self
 <a href=#365 id=365 data-nosnippet>365</a>            </span>.schema
 <a href=#366 id=366 data-nosnippet>366</a>            .field_by_id(field_id)
@@ -378,7 +378,7 @@
 <a href=#378 id=378 data-nosnippet>378</a>        };
 <a href=#379 id=379 data-nosnippet>379</a>
 <a href=#380 id=380 data-nosnippet>380</a>        <span class="kw">if </span>value.min_is_exact() {
-<a href=#381 id=381 data-nosnippet>381</a>            <span class="kw">let </span><span class="prelude-val">Some</span>(min_datum) = get_parquet_stat_min_as_datum(<span class="kw-2">&amp;</span>ty, <span class="kw-2">&amp;</span>value)<span class="question-mark">? </span><span class="kw">else </span>{
+<a href=#381 id=381 data-nosnippet>381</a>            <span class="kw">let </span><span class="prelude-val">Some</span>(min_datum) = get_parquet_stat_min_as_datum(<span class="kw-2">&amp;</span>ty, value)<span class="question-mark">? </span><span class="kw">else </span>{
 <a href=#382 id=382 data-nosnippet>382</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#383 id=383 data-nosnippet>383</a>                    ErrorKind::Unexpected,
 <a href=#384 id=384 data-nosnippet>384</a>                    <span class="macro">format!</span>(<span class="string">"Statistics {value} is not match with field type {ty}."</span>),
@@ -389,7 +389,7 @@
 <a href=#389 id=389 data-nosnippet>389</a>        }
 <a href=#390 id=390 data-nosnippet>390</a>
 <a href=#391 id=391 data-nosnippet>391</a>        <span class="kw">if </span>value.max_is_exact() {
-<a href=#392 id=392 data-nosnippet>392</a>            <span class="kw">let </span><span class="prelude-val">Some</span>(max_datum) = get_parquet_stat_max_as_datum(<span class="kw-2">&amp;</span>ty, <span class="kw-2">&amp;</span>value)<span class="question-mark">? </span><span class="kw">else </span>{
+<a href=#392 id=392 data-nosnippet>392</a>            <span class="kw">let </span><span class="prelude-val">Some</span>(max_datum) = get_parquet_stat_max_as_datum(<span class="kw-2">&amp;</span>ty, value)<span class="question-mark">? </span><span class="kw">else </span>{
 <a href=#393 id=393 data-nosnippet>393</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#394 id=394 data-nosnippet>394</a>                    ErrorKind::Unexpected,
 <a href=#395 id=395 data-nosnippet>395</a>                    <span class="macro">format!</span>(<span class="string">"Statistics {value} is not match with field type {ty}."</span>),
@@ -488,7 +488,7 @@
 <a href=#488 id=488 data-nosnippet>488</a>                            <span class="kw-2">*</span>per_col_null_val_num.entry(field_id).or_insert(<span class="number">0</span>) += null_count;
 <a href=#489 id=489 data-nosnippet>489</a>                        }
 <a href=#490 id=490 data-nosnippet>490</a>
-<a href=#491 id=491 data-nosnippet>491</a>                        min_max_agg.update(field_id, statistics.clone())<span class="question-mark">?</span>;
+<a href=#491 id=491 data-nosnippet>491</a>                        min_max_agg.update(field_id, statistics)<span class="question-mark">?</span>;
 <a href=#492 id=492 data-nosnippet>492</a>                    }
 <a href=#493 id=493 data-nosnippet>493</a>                }
 <a href=#494 id=494 data-nosnippet>494</a>            }
@@ -2523,16 +2523,16 @@
 <a href=#2523 id=2523 data-nosnippet>2523</a>        <span class="kw">let </span>create_statistics =
 <a href=#2524 id=2524 data-nosnippet>2524</a>            |min, max| Statistics::Int32(ValueStatistics::new(min, max, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="bool-val">false</span>));
 <a href=#2525 id=2525 data-nosnippet>2525</a>        min_max_agg
-<a href=#2526 id=2526 data-nosnippet>2526</a>            .update(<span class="number">0</span>, create_statistics(<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(<span class="number">42</span>)))
+<a href=#2526 id=2526 data-nosnippet>2526</a>            .update(<span class="number">0</span>, <span class="kw-2">&amp;</span>create_statistics(<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(<span class="number">42</span>)))
 <a href=#2527 id=2527 data-nosnippet>2527</a>            .unwrap();
 <a href=#2528 id=2528 data-nosnippet>2528</a>        min_max_agg
-<a href=#2529 id=2529 data-nosnippet>2529</a>            .update(<span class="number">0</span>, create_statistics(<span class="prelude-val">Some</span>(<span class="number">0</span>), <span class="prelude-val">Some</span>(i32::MAX)))
+<a href=#2529 id=2529 data-nosnippet>2529</a>            .update(<span class="number">0</span>, <span class="kw-2">&amp;</span>create_statistics(<span class="prelude-val">Some</span>(<span class="number">0</span>), <span class="prelude-val">Some</span>(i32::MAX)))
 <a href=#2530 id=2530 data-nosnippet>2530</a>            .unwrap();
 <a href=#2531 id=2531 data-nosnippet>2531</a>        min_max_agg
-<a href=#2532 id=2532 data-nosnippet>2532</a>            .update(<span class="number">0</span>, create_statistics(<span class="prelude-val">Some</span>(i32::MIN), <span class="prelude-val">None</span>))
+<a href=#2532 id=2532 data-nosnippet>2532</a>            .update(<span class="number">0</span>, <span class="kw-2">&amp;</span>create_statistics(<span class="prelude-val">Some</span>(i32::MIN), <span class="prelude-val">None</span>))
 <a href=#2533 id=2533 data-nosnippet>2533</a>            .unwrap();
 <a href=#2534 id=2534 data-nosnippet>2534</a>        min_max_agg
-<a href=#2535 id=2535 data-nosnippet>2535</a>            .update(<span class="number">0</span>, create_statistics(<span class="prelude-val">None</span>, <span class="prelude-val">None</span>))
+<a href=#2535 id=2535 data-nosnippet>2535</a>            .update(<span class="number">0</span>, <span class="kw-2">&amp;</span>create_statistics(<span class="prelude-val">None</span>, <span class="prelude-val">None</span>))
 <a href=#2536 id=2536 data-nosnippet>2536</a>            .unwrap();
 <a href=#2537 id=2537 data-nosnippet>2537</a>
 <a href=#2538 id=2538 data-nosnippet>2538</a>        <span class="kw">let </span>(lower_bounds, upper_bounds) = min_max_agg.produce();
