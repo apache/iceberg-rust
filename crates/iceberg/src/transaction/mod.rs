@@ -69,7 +69,7 @@ use std::time::Duration;
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWithContext};
 pub use update_schema::AddColumn;
 
-use crate::error::Result;
+use crate::error::{Error, ErrorKind, Result};
 use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
@@ -123,12 +123,69 @@ impl Transaction {
             requirement.check(Some(table.metadata()))?;
         }
 
-        let updated_table = Self::update_table_metadata(table, &updates)?;
+        let updated_table = if updates.is_empty() {
+            table
+        } else {
+            Self::update_table_metadata(table, &updates)?
+        };
 
         existing_updates.extend(updates);
-        existing_requirements.extend(requirements);
+        Self::append_new_requirements(existing_requirements, requirements);
 
         Ok(updated_table)
+    }
+
+    /// Keep the first requirement for each metadata value that a transaction protects.
+    ///
+    /// Actions are evaluated against the transaction's staged metadata, so later actions may
+    /// produce requirements for values written by earlier actions. Catalogs, however, validate
+    /// the complete commit against the transaction base. The first requirement for a protected
+    /// value is the one derived from that base; later requirements for the same value are
+    /// redundant.
+    fn append_new_requirements(
+        existing_requirements: &mut Vec<TableRequirement>,
+        requirements: Vec<TableRequirement>,
+    ) {
+        for requirement in requirements {
+            if !existing_requirements
+                .iter()
+                .any(|existing| Self::same_requirement_target(existing, &requirement))
+            {
+                existing_requirements.push(requirement);
+            }
+        }
+    }
+
+    fn same_requirement_target(left: &TableRequirement, right: &TableRequirement) -> bool {
+        match (left, right) {
+            (TableRequirement::NotExist, TableRequirement::NotExist)
+            | (TableRequirement::UuidMatch { .. }, TableRequirement::UuidMatch { .. })
+            | (
+                TableRequirement::LastAssignedFieldIdMatch { .. },
+                TableRequirement::LastAssignedFieldIdMatch { .. },
+            )
+            | (
+                TableRequirement::CurrentSchemaIdMatch { .. },
+                TableRequirement::CurrentSchemaIdMatch { .. },
+            )
+            | (
+                TableRequirement::LastAssignedPartitionIdMatch { .. },
+                TableRequirement::LastAssignedPartitionIdMatch { .. },
+            )
+            | (
+                TableRequirement::DefaultSpecIdMatch { .. },
+                TableRequirement::DefaultSpecIdMatch { .. },
+            )
+            | (
+                TableRequirement::DefaultSortOrderIdMatch { .. },
+                TableRequirement::DefaultSortOrderIdMatch { .. },
+            ) => true,
+            (
+                TableRequirement::RefSnapshotIdMatch { r#ref: left, .. },
+                TableRequirement::RefSnapshotIdMatch { r#ref: right, .. },
+            ) => left == right,
+            _ => false,
+        }
     }
 
     /// Sets table to a new version.
@@ -210,6 +267,17 @@ impl Transaction {
     async fn do_commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {
         let refreshed = catalog.load_table(self.table.identifier()).await?;
 
+        let expected_uuid = self.table.metadata().uuid();
+        let found_uuid = refreshed.metadata().uuid();
+        if expected_uuid != found_uuid {
+            return Err(Error::new(
+                ErrorKind::CatalogCommitConflicts,
+                "Cannot commit transaction: table UUID does not match",
+            )
+            .with_context("expected", expected_uuid)
+            .with_context("found", found_uuid));
+        }
+
         if self.table.metadata() != refreshed.metadata()
             || self.table.metadata_location() != refreshed.metadata_location()
         {
@@ -219,7 +287,9 @@ impl Transaction {
 
         let mut current_table = self.table.clone();
         let mut existing_updates: Vec<TableUpdate> = vec![];
-        let mut existing_requirements: Vec<TableRequirement> = vec![];
+        let mut existing_requirements = vec![TableRequirement::UuidMatch {
+            uuid: self.table.metadata().uuid(),
+        }];
 
         for action in &self.actions {
             let action_commit = Arc::clone(action).commit(&current_table).await?;
@@ -230,6 +300,10 @@ impl Transaction {
                 &mut existing_updates,
                 &mut existing_requirements,
             )?;
+        }
+
+        if existing_updates.is_empty() {
+            return Ok(current_table);
         }
 
         let table_commit = TableCommit::builder()
@@ -250,6 +324,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    use async_trait::async_trait;
+
     use crate::catalog::MockCatalog;
     use crate::io::FileIO;
     use crate::memory::tests::new_memory_catalog;
@@ -259,8 +335,9 @@ mod tests {
     };
     use crate::table::Table;
     use crate::test_utils::{make_encrypted_table, test_runtime};
+    use crate::transaction::action::{ActionCommit, TransactionAction};
     use crate::transaction::{ApplyTransactionAction, Transaction};
-    use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
+    use crate::{Catalog, Error, ErrorKind, Result, TableCreation, TableIdent, TableRequirement};
 
     pub fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -395,6 +472,15 @@ mod tests {
             .unwrap()
     }
 
+    struct NoopAction;
+
+    #[async_trait]
+    impl TransactionAction for NoopAction {
+        async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
+            Ok(ActionCommit::new(Vec::new(), Vec::new()))
+        }
+    }
+
     /// Helper function to set up a mock catalog with retryable errors
     fn setup_mock_catalog_with_retryable_errors(
         success_after_attempts: Option<u32>,
@@ -520,6 +606,172 @@ mod tests {
             assert_eq!(err.message(), "Commit conflict");
             assert!(err.retryable(), "Error should be retryable");
         }
+    }
+
+    #[test]
+    fn test_requirements_are_scoped_to_transaction_base() {
+        let uuid = uuid::Uuid::new_v4();
+        let base_requirements = vec![
+            TableRequirement::NotExist,
+            TableRequirement::UuidMatch { uuid },
+            TableRequirement::RefSnapshotIdMatch {
+                r#ref: "main".to_string(),
+                snapshot_id: Some(10),
+            },
+            TableRequirement::LastAssignedFieldIdMatch {
+                last_assigned_field_id: 3,
+            },
+            TableRequirement::CurrentSchemaIdMatch {
+                current_schema_id: 1,
+            },
+            TableRequirement::LastAssignedPartitionIdMatch {
+                last_assigned_partition_id: 1_000,
+            },
+            TableRequirement::DefaultSpecIdMatch { default_spec_id: 1 },
+            TableRequirement::DefaultSortOrderIdMatch {
+                default_sort_order_id: 1,
+            },
+        ];
+        let mut expected = base_requirements.clone();
+        expected.push(TableRequirement::RefSnapshotIdMatch {
+            r#ref: "audit".to_string(),
+            snapshot_id: Some(30),
+        });
+
+        let mut requirements = base_requirements;
+        Transaction::append_new_requirements(&mut requirements, vec![
+            TableRequirement::NotExist,
+            TableRequirement::UuidMatch {
+                uuid: uuid::Uuid::new_v4(),
+            },
+            TableRequirement::RefSnapshotIdMatch {
+                r#ref: "main".to_string(),
+                snapshot_id: Some(20),
+            },
+            TableRequirement::LastAssignedFieldIdMatch {
+                last_assigned_field_id: 4,
+            },
+            TableRequirement::CurrentSchemaIdMatch {
+                current_schema_id: 2,
+            },
+            TableRequirement::LastAssignedPartitionIdMatch {
+                last_assigned_partition_id: 1_001,
+            },
+            TableRequirement::DefaultSpecIdMatch { default_spec_id: 2 },
+            TableRequirement::DefaultSortOrderIdMatch {
+                default_sort_order_id: 2,
+            },
+            TableRequirement::RefSnapshotIdMatch {
+                r#ref: "audit".to_string(),
+                snapshot_id: Some(30),
+            },
+        ]);
+
+        assert_eq!(requirements, expected);
+    }
+
+    #[tokio::test]
+    async fn test_commit_does_not_rebase_onto_recreated_table() {
+        let table = setup_test_table("3");
+        let replacement_metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .assign_uuid(uuid::Uuid::new_v4())
+            .build()
+            .unwrap()
+            .metadata;
+        let replacement = table.clone().with_metadata(Arc::new(replacement_metadata));
+        let tx = create_test_transaction(&table);
+
+        let mut mock_catalog = MockCatalog::new();
+        let original = table.clone();
+        let load_attempts = AtomicU32::new(0);
+        mock_catalog
+            .expect_load_table()
+            .times(2)
+            .returning_st(move |_| {
+                let table = if load_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    original.clone()
+                } else {
+                    replacement.clone()
+                };
+                Box::pin(async move { Ok(table) })
+            });
+        mock_catalog
+            .expect_update_table()
+            .times(1)
+            .returning_st(|_| {
+                Box::pin(async {
+                    Err(
+                        Error::new(ErrorKind::CatalogCommitConflicts, "Commit conflict")
+                            .with_retryable(true),
+                    )
+                })
+            });
+
+        let err = tx.commit(&mock_catalog).await.unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::CatalogCommitConflicts);
+        assert_eq!(
+            err.message(),
+            "Cannot commit transaction: table UUID does not match"
+        );
+        assert!(!err.retryable());
+    }
+
+    #[tokio::test]
+    async fn test_commit_rejects_table_recreated_after_refresh() {
+        let table = setup_test_table("0");
+        let replacement_metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .assign_uuid(uuid::Uuid::new_v4())
+            .build()
+            .unwrap()
+            .metadata;
+        let replacement = table.clone().with_metadata(Arc::new(replacement_metadata));
+        let tx = create_test_transaction(&table);
+
+        let mut catalog = MockCatalog::new();
+        let refreshed = table.clone();
+        catalog
+            .expect_load_table()
+            .once()
+            .returning_st(move |_| Box::pin(std::future::ready(Ok(refreshed.clone()))));
+        catalog
+            .expect_update_table()
+            .once()
+            .returning_st(move |commit| {
+                let result = commit.apply(replacement.clone());
+                Box::pin(std::future::ready(result))
+            });
+
+        let err = tx.commit(&catalog).await.unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::CatalogCommitConflicts);
+        assert_eq!(
+            err.message(),
+            "Requirement failed: Table UUID does not match"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_skips_catalog_update_when_all_actions_are_noops() {
+        let table = make_v2_table();
+        let refreshed = table.clone();
+        let mut catalog = MockCatalog::new();
+        catalog
+            .expect_load_table()
+            .once()
+            .returning_st(move |_| Box::pin(std::future::ready(Ok(refreshed.clone()))));
+        catalog.expect_update_table().never();
+
+        let tx = NoopAction.apply(Transaction::new(&table)).unwrap();
+        let committed = tx.commit(&catalog).await.unwrap();
+
+        assert_eq!(committed.metadata(), table.metadata());
     }
 
     #[tokio::test]
