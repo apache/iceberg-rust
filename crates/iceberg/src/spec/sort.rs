@@ -195,14 +195,7 @@ impl SortOrderBuilder {
                     }
 
                     let field_transform = sort_field.transform;
-                    if field_transform.result_type(source_type).is_err() {
-                        return Err(Error::new(
-                            ErrorKind::Unexpected,
-                            format!(
-                                "Invalid source type {source_type} for transform {field_transform}"
-                            ),
-                        ));
-                    }
+                    field_transform.result_type(source_type)?;
                 }
             }
         }
@@ -473,12 +466,12 @@ mod tests {
             )
             .build(&schema);
 
+        let err = sort_order_builder_result.expect_err("Expected an Err value");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert_eq!(
-            sort_order_builder_result
-                .expect_err("Expected an Err value")
-                .message(),
-            "Invalid source type int for transform year"
-        )
+            err.message(),
+            "int is not a valid input type of year transform"
+        );
     }
 
     #[test]

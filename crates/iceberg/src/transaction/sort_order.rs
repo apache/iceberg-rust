@@ -45,6 +45,13 @@ impl PendingSortField {
             )
         })?;
 
+        if matches!(self.transform, Transform::Unknown | Transform::Void) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Cannot sort by transform {}", self.transform),
+            ));
+        }
+
         Ok(SortField::builder()
             .source_id(field_id)
             .transform(self.transform)
@@ -85,6 +92,8 @@ impl ReplaceSortOrderAction {
     ///
     /// Whether the transform is valid for the column's type is checked at commit time,
     /// once the table schema is available (mirroring Java's `SortOrder.Builder.build()`).
+    /// `Transform::Unknown` and `Transform::Void` are rejected at commit time with
+    /// [`ErrorKind::DataInvalid`].
     ///
     /// Note: `Term` is currently a plain column reference. Once it becomes
     /// transform-carrying (#2665), sort-order declaration is expected to converge on
@@ -99,16 +108,9 @@ impl ReplaceSortOrderAction {
         self.add_sort_field(name, transform, SortDirection::Ascending, null_order)
     }
 
-    /// Adds a field for sorting in descending order by a transform of the column's value
-    /// (e.g. `Transform::Bucket(16)`, `Transform::Year`, `Transform::Truncate(4)`).
+    /// Adds a field for sorting in descending order by a transform of the column's value.
     ///
-    /// Whether the transform is valid for the column's type is checked at commit time,
-    /// once the table schema is available (mirroring Java's `SortOrder.Builder.build()`).
-    ///
-    /// Note: `Term` is currently a plain column reference. Once it becomes
-    /// transform-carrying (#2665), sort-order declaration is expected to converge on
-    /// Term-based `asc`/`desc` (as in Java's `SortOrderBuilder`), at which point the
-    /// `_with_transform` variants can be deprecated in its favor.
+    /// See [`Self::asc_with_transform`] for validation and future API direction.
     pub fn desc_with_transform(
         self,
         name: &str,
@@ -266,10 +268,11 @@ mod tests {
         let mut action_commit = TransactionAction::commit(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
 
-        let sort_order = match &updates[0] {
-            TableUpdate::AddSortOrder { sort_order } => sort_order,
-            other => panic!("expected AddSortOrder, got {other:?}"),
+        assert_eq!(updates.len(), 2);
+        let TableUpdate::AddSortOrder { sort_order } = &updates[0] else {
+            panic!("expected AddSortOrder, got {:?}", updates[0]);
         };
+        assert_eq!(sort_order.fields.len(), 1);
         assert_eq!(sort_order.fields[0].transform, Transform::Bucket(16));
     }
 
@@ -283,11 +286,32 @@ mod tests {
             NullOrder::First,
         ));
 
-        let err = match TransactionAction::commit(action, &table).await {
-            Err(e) => e,
-            Ok(_) => panic!("year transform on a long column should be rejected"),
-        };
-        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        let err = TransactionAction::commit(action, &table)
+            .await
+            .err()
+            .expect("year transform on a long column should be rejected");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[tokio::test]
+    async fn test_replace_sort_order_rejects_unknown_and_void_transforms() {
+        let table = make_v2_table();
+        for transform in [Transform::Unknown, Transform::Void] {
+            for action in [
+                ReplaceSortOrderAction::new().asc_with_transform("x", transform, NullOrder::First),
+                ReplaceSortOrderAction::new().desc_with_transform("x", transform, NullOrder::Last),
+            ] {
+                let err = TransactionAction::commit(Arc::new(action), &table)
+                    .await
+                    .err()
+                    .expect("unknown and void sort transforms should be rejected");
+                assert_eq!(err.kind(), ErrorKind::DataInvalid);
+                assert_eq!(
+                    err.message(),
+                    format!("Cannot sort by transform {transform}")
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -317,7 +341,9 @@ mod tests {
         assert_eq!(sort_order.fields.len(), 2);
         assert_eq!(sort_order.fields[0].transform, Transform::Bucket(16));
         assert_eq!(sort_order.fields[0].direction, SortDirection::Ascending);
+        assert_eq!(sort_order.fields[0].null_order, NullOrder::First);
         assert_eq!(sort_order.fields[1].transform, Transform::Truncate(4));
         assert_eq!(sort_order.fields[1].direction, SortDirection::Descending);
+        assert_eq!(sort_order.fields[1].null_order, NullOrder::Last);
     }
 }
