@@ -21,8 +21,8 @@ use std::sync::Arc;
 use iceberg::io::{
     CLIENT_REGION, S3_ACCESS_KEY_ID, S3_ALLOW_ANONYMOUS, S3_ASSUME_ROLE_ARN,
     S3_ASSUME_ROLE_EXTERNAL_ID, S3_ASSUME_ROLE_SESSION_NAME, S3_DISABLE_CONFIG_LOAD,
-    S3_DISABLE_EC2_METADATA, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
-    S3_SESSION_TOKEN, S3_SSE_KEY, S3_SSE_MD5, S3_SSE_TYPE,
+    S3_DISABLE_EC2_METADATA, S3_ENDPOINT, S3_MULTIPART_PART_SIZE_BYTES, S3_PATH_STYLE_ACCESS,
+    S3_REGION, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN, S3_SSE_KEY, S3_SSE_MD5, S3_SSE_TYPE,
 };
 use iceberg::{Error, ErrorKind, Result};
 use opendal::services::S3Config;
@@ -35,6 +35,36 @@ use reqsign_core::{ProvideCredentialChain, ProvideCredentialDyn};
 use url::Url;
 
 use crate::utils::{from_opendal_error, is_truthy};
+
+/// S3 rejects a non-final part smaller than this.
+const MULTIPART_PART_SIZE_MIN: usize = 5 * 1024 * 1024;
+
+/// Matches Java `S3FileIOProperties.MULTIPART_SIZE_DEFAULT`.
+pub(crate) fn default_multipart_part_size() -> usize {
+    32 * 1024 * 1024
+}
+
+/// Parse iceberg props to s3 multipart upload part size.
+pub(crate) fn s3_multipart_part_size_parse(m: &HashMap<String, String>) -> Result<usize> {
+    let Some(value) = m.get(S3_MULTIPART_PART_SIZE_BYTES) else {
+        return Ok(default_multipart_part_size());
+    };
+    let part_size = value.parse::<usize>().map_err(|e| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid {S3_MULTIPART_PART_SIZE_BYTES}: {value}: {e}"),
+        )
+    })?;
+    if part_size < MULTIPART_PART_SIZE_MIN {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Invalid {S3_MULTIPART_PART_SIZE_BYTES}: {part_size} is below the S3 minimum part size of {MULTIPART_PART_SIZE_MIN}"
+            ),
+        ));
+    }
+    Ok(part_size)
+}
 
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {
@@ -184,9 +214,9 @@ impl CustomAwsCredentialLoader {
 mod tests {
     use std::collections::HashMap;
 
-    use iceberg::io::S3_PATH_STYLE_ACCESS;
+    use iceberg::io::{S3_MULTIPART_PART_SIZE_BYTES, S3_PATH_STYLE_ACCESS};
 
-    use super::s3_config_parse;
+    use super::*;
 
     fn parse_with(prop: Option<&str>) -> bool {
         let mut props = HashMap::new();
@@ -202,5 +232,28 @@ mod tests {
         assert!(parse_with(None));
         assert!(parse_with(Some("false")));
         assert!(!parse_with(Some("true")));
+    }
+
+    fn parse_part_size(prop: Option<&str>) -> Result<usize> {
+        let mut props = HashMap::new();
+        if let Some(v) = prop {
+            props.insert(S3_MULTIPART_PART_SIZE_BYTES.to_string(), v.to_string());
+        }
+        s3_multipart_part_size_parse(&props)
+    }
+
+    #[test]
+    fn s3_multipart_part_size_parse_defaults_and_overrides() {
+        // Match Iceberg S3FileIOProperties.MULTIPART_SIZE_DEFAULT = 32 MiB.
+        assert_eq!(parse_part_size(None).unwrap(), 32 * 1024 * 1024);
+        assert_eq!(parse_part_size(Some("8388608")).unwrap(), 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn s3_multipart_part_size_parse_rejects_invalid() {
+        // Match Iceberg S3FileIOProperties.MULTIPART_SIZE_MIN = 5 MiB.
+        assert!(parse_part_size(Some("5242880")).is_ok());
+        assert!(parse_part_size(Some("5242879")).is_err());
+        assert!(parse_part_size(Some("not-a-number")).is_err());
     }
 }
