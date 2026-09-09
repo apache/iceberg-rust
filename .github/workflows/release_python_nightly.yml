@@ -40,7 +40,7 @@ jobs:
     needs: set-version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -53,7 +53,7 @@ jobs:
           CURRENT=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[0].version')
           echo "pep440=${CURRENT}.dev${TIMESTAMP}" >> $GITHUB_OUTPUT
 
-      - uses: ./.github/actions/overwrite-package-version
+      - uses: $/.github/actions/overwrite-package-version
         with:
           version: ${{ steps.version.outputs.pep440 }}
 
@@ -86,7 +86,7 @@ jobs:
             }
           - { os: ubuntu-latest, target: "armv7l" }
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -99,20 +99,20 @@ jobs:
           CURRENT=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[0].version')
           echo "pep440=${CURRENT}.dev${TIMESTAMP}" >> $GITHUB_OUTPUT
 
-      - uses: ./.github/actions/overwrite-package-version
+      - uses: $/.github/actions/overwrite-package-version
         with:
           version: ${{ steps.version.outputs.pep440 }}
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: 3.12
 
       - name: Get MSRV
         id: get-msrv
-        uses: ./.github/actions/get-msrv
+        uses: $/.github/actions/get-msrv
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
         with:
           rust-version: ${{ steps.get-msrv.outputs.msrv }}
 
@@ -124,7 +124,7 @@ jobs:
           command: build
           args: --release -o dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
 
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.9.3"
           enable-cache: true
@@ -136,7 +136,7 @@ jobs:
         working-directory: "bindings/python"
         shell: bash
         run: |
-          uv pip install --no-build --reinstall --system --find-links dist/ pyiceberg-core
+          uv pip install --no-build --reinstall --system --no-index --find-links dist/ pyiceberg-core
 
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

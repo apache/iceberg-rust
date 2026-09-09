@@ -152,7 +152,7 @@ mod test {
         let bs = fs::read(full_path).expect("read_file must succeed");
 
         let parsed_manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V1).unwrap();
+            ManifestList::parse_with_version(&bs, FormatVersion::V1).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }
@@ -196,7 +196,7 @@ mod test {
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
                     partitions: Some(
-                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1).to_bytes().unwrap())}]
+                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1_f32).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1_f32).to_bytes().unwrap())}]
                     ),
                     key_metadata: None,
                     first_row_id: None,
@@ -230,7 +230,7 @@ mod test {
         let bs = fs::read(full_path).expect("read_file must succeed");
 
         let parsed_manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
+            ManifestList::parse_with_version(&bs, FormatVersion::V2).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }
@@ -270,7 +270,7 @@ mod test {
         let bs = writer.into_inner().unwrap();
 
         let parsed_manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
+            ManifestList::parse_with_version(&bs, FormatVersion::V2).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }
@@ -314,7 +314,7 @@ mod test {
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
                     partitions: Some(
-                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1).to_bytes().unwrap())}]
+                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1_f32).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1_f32).to_bytes().unwrap())}]
                     ),
                     key_metadata: None,
                     first_row_id: Some(13),
@@ -349,7 +349,7 @@ mod test {
         let bs = fs::read(full_path).expect("read_file must succeed");
 
         let parsed_manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V3).unwrap();
+            ManifestList::parse_with_version(&bs, FormatVersion::V3).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }

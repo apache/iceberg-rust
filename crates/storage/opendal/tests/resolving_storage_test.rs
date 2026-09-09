@@ -51,6 +51,11 @@ mod tests {
             .build()
     }
 
+    fn roundtrip_file_io(file_io: &iceberg::io::FileIO) -> iceberg::io::FileIO {
+        let serialized = file_io.serialize_all().unwrap();
+        iceberg::io::FileIO::deserialize_all(&serialized).unwrap()
+    }
+
     fn temp_fs_path(name: &str) -> String {
         let dir = std::env::temp_dir().join("iceberg_resolving_tests");
         std::fs::create_dir_all(&dir).unwrap();
@@ -62,7 +67,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mixed_scheme_write_and_read() {
-        let file_io = get_resolving_file_io();
+        let file_io = roundtrip_file_io(&get_resolving_file_io());
 
         let s3_path = format!(
             "s3://bucket1/{}",

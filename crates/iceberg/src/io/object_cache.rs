@@ -21,8 +21,8 @@ use std::sync::Arc;
 use crate::encryption::EncryptionManager;
 use crate::io::FileIO;
 use crate::spec::{
-    FormatVersion, Manifest, ManifestFile, ManifestList, ManifestListReader, SchemaId, SnapshotRef,
-    TableMetadataRef,
+    FormatVersion, Manifest, ManifestFile, ManifestList, ManifestListReader, ManifestReader,
+    SchemaId, SnapshotRef, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -37,7 +37,11 @@ pub(crate) enum CachedItem {
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub(crate) enum CachedObjectKey {
     ManifestList((String, FormatVersion, SchemaId)),
-    Manifest(String),
+    // The manifest-level `first_row_id` is part of the key because the parsed
+    // manifest inherits it onto its entries: the same physical manifest can be
+    // referenced with different offsets across snapshots and branches, so it
+    // cannot be shared under the path alone.
+    Manifest((String, Option<u64>)),
 }
 
 /// Caches metadata objects deserialized from immutable files
@@ -99,13 +103,16 @@ impl ObjectCache {
     /// or retrieves one from FileIO and parses it if not present
     pub(crate) async fn get_manifest(&self, manifest_file: &ManifestFile) -> Result<Arc<Manifest>> {
         if self.cache_disabled {
-            return manifest_file
-                .load_manifest(&self.file_io)
+            return ManifestReader::new(self.file_io.clone())
+                .read(manifest_file)
                 .await
                 .map(Arc::new);
         }
 
-        let key = CachedObjectKey::Manifest(manifest_file.manifest_path.clone());
+        let key = CachedObjectKey::Manifest((
+            manifest_file.manifest_path.clone(),
+            manifest_file.first_row_id,
+        ));
 
         let cache_entry = self
             .cache
@@ -180,7 +187,9 @@ impl ObjectCache {
     }
 
     async fn fetch_and_parse_manifest(&self, manifest_file: &ManifestFile) -> Result<CachedItem> {
-        let manifest = manifest_file.load_manifest(&self.file_io).await?;
+        let manifest = ManifestReader::new(self.file_io.clone())
+            .read(manifest_file)
+            .await?;
 
         Ok(CachedItem::Manifest(Arc::new(manifest)))
     }
@@ -432,6 +441,75 @@ mod tests {
                 .last()
                 .unwrap(),
             "1.parquet"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_manifest_keys_on_first_row_id() {
+        use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SchemaRef, Type};
+
+        let io = FileIO::new_with_memory();
+        let path = "memory:///metadata/first_row_id_manifest.avro";
+
+        let schema: SchemaRef = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap()
+            .into();
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        let mut writer = ManifestWriterBuilder::new(
+            io.new_output(path).unwrap(),
+            Some(1),
+            schema,
+            partition_spec,
+        )
+        .build_v3_data();
+        writer
+            .add_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFileBuilder::default()
+                            .content(DataContentType::Data)
+                            .file_path(path.to_string())
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let manifest_file = writer.write_manifest_file().await.unwrap();
+
+        // Two manifest-list references to the same physical manifest carrying
+        // different offsets, as time travel or two branches would produce.
+        let mut manifest_file_a = manifest_file.clone();
+        manifest_file_a.first_row_id = Some(1000);
+        let mut manifest_file_b = manifest_file;
+        manifest_file_b.first_row_id = Some(2000);
+
+        let object_cache = ObjectCache::new(io, None);
+
+        let manifest_a = object_cache.get_manifest(&manifest_file_a).await.unwrap();
+        let manifest_b = object_cache.get_manifest(&manifest_file_b).await.unwrap();
+
+        // A cache keyed on path alone would serve manifest_a's inherited ids for
+        // the second read; keying on first_row_id keeps them distinct.
+        assert_eq!(
+            manifest_a.entries()[0].data_file().first_row_id(),
+            Some(1000)
+        );
+        assert_eq!(
+            manifest_b.entries()[0].data_file().first_row_id(),
+            Some(2000)
         );
     }
 }

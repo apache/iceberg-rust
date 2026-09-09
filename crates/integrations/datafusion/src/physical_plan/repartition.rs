@@ -206,7 +206,7 @@ mod tests {
         let partition_spec = iceberg::spec::PartitionSpec::builder(schema.clone())
             .build()
             .unwrap();
-        let sort_order = iceberg::spec::SortOrder::builder().build(&schema).unwrap();
+        let sort_order = SortOrder::builder().build(&schema).unwrap();
         let table_metadata_builder = iceberg::spec::TableMetadataBuilder::new(
             schema,
             partition_spec,
@@ -244,7 +244,7 @@ mod tests {
         let repartitioned_plan = repartition(
             input.clone(),
             table.metadata_ref(),
-            std::num::NonZeroUsize::new(4).unwrap(),
+            NonZeroUsize::new(4).unwrap(),
         )
         .unwrap();
 
@@ -257,12 +257,8 @@ mod tests {
         let table = create_test_table();
         let input = Arc::new(EmptyExec::new(create_test_arrow_schema()));
 
-        let repartitioned_plan = repartition(
-            input,
-            table.metadata_ref(),
-            std::num::NonZeroUsize::new(8).unwrap(),
-        )
-        .unwrap();
+        let repartitioned_plan =
+            repartition(input, table.metadata_ref(), NonZeroUsize::new(8).unwrap()).unwrap();
 
         let partitioning = repartitioned_plan.properties().output_partitioning();
         match partitioning {
@@ -278,7 +274,7 @@ mod tests {
         let _table = create_test_table();
         let _input = Arc::new(EmptyExec::new(create_test_arrow_schema()));
 
-        let result = std::num::NonZeroUsize::new(0);
+        let result = NonZeroUsize::new(0);
         assert!(result.is_none(), "NonZeroUsize::new(0) should return None");
 
         // Test that we can't call repartition with 0 partitions
@@ -295,7 +291,7 @@ mod tests {
         let repartitioned_plan = repartition(
             input,
             table.metadata_ref(),
-            std::num::NonZeroUsize::new(target_partitions).unwrap(),
+            NonZeroUsize::new(target_partitions).unwrap(),
         )
         .unwrap();
 
@@ -313,12 +309,8 @@ mod tests {
         let table = create_test_table();
         let input = Arc::new(EmptyExec::new(create_test_arrow_schema()));
 
-        let repartitioned_plan = repartition(
-            input,
-            table.metadata_ref(),
-            std::num::NonZeroUsize::new(3).unwrap(),
-        )
-        .unwrap();
+        let repartitioned_plan =
+            repartition(input, table.metadata_ref(), NonZeroUsize::new(3).unwrap()).unwrap();
 
         let partitioning = repartitioned_plan.properties().output_partitioning();
         match partitioning {
@@ -391,12 +383,8 @@ mod tests {
             ArrowField::new("category", ArrowDataType::Utf8, false),
         ]));
         let input = Arc::new(EmptyExec::new(arrow_schema));
-        let repartitioned_plan = repartition(
-            input,
-            table.metadata_ref(),
-            std::num::NonZeroUsize::new(4).unwrap(),
-        )
-        .unwrap();
+        let repartitioned_plan =
+            repartition(input, table.metadata_ref(), NonZeroUsize::new(4).unwrap()).unwrap();
 
         let partitioning = repartitioned_plan.properties().output_partitioning();
         // For bucketed tables without _partition column, should use round-robin
@@ -483,12 +471,8 @@ mod tests {
             ),
         ]));
         let input = Arc::new(EmptyExec::new(arrow_schema));
-        let repartitioned_plan = repartition(
-            input,
-            table.metadata_ref(),
-            std::num::NonZeroUsize::new(4).unwrap(),
-        )
-        .unwrap();
+        let repartitioned_plan =
+            repartition(input, table.metadata_ref(), NonZeroUsize::new(4).unwrap()).unwrap();
 
         let partitioning = repartitioned_plan.properties().output_partitioning();
         match partitioning {
@@ -503,8 +487,7 @@ mod tests {
                 let column_names: Vec<String> = exprs
                     .iter()
                     .filter_map(|expr| {
-                        expr.as_any()
-                            .downcast_ref::<Column>()
+                        expr.downcast_ref::<Column>()
                             .map(|col| col.name().to_string())
                     })
                     .collect();
@@ -532,7 +515,7 @@ mod tests {
         let partition_spec = iceberg::spec::PartitionSpec::builder(schema.clone())
             .build()
             .unwrap();
-        let sort_order = iceberg::spec::SortOrder::builder().build(&schema).unwrap();
+        let sort_order = SortOrder::builder().build(&schema).unwrap();
 
         let mut properties = std::collections::HashMap::new();
         properties.insert("write.distribution-mode".to_string(), "none".to_string());
@@ -558,12 +541,8 @@ mod tests {
             .unwrap();
 
         let input = Arc::new(EmptyExec::new(create_test_arrow_schema()));
-        let repartitioned_plan = repartition(
-            input,
-            table.metadata_ref(),
-            std::num::NonZeroUsize::new(4).unwrap(),
-        )
-        .unwrap();
+        let repartitioned_plan =
+            repartition(input, table.metadata_ref(), NonZeroUsize::new(4).unwrap()).unwrap();
 
         let partitioning = repartitioned_plan.properties().output_partitioning();
         assert!(
@@ -609,7 +588,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let sort_order = iceberg::spec::SortOrder::builder().build(&schema).unwrap();
+        let sort_order = SortOrder::builder().build(&schema).unwrap();
         let table_metadata_builder = iceberg::spec::TableMetadataBuilder::new(
             schema,
             partition_spec,
@@ -640,12 +619,8 @@ mod tests {
             ),
         ]));
         let input = Arc::new(EmptyExec::new(arrow_schema));
-        let repartitioned_plan = repartition(
-            input,
-            table.metadata_ref(),
-            std::num::NonZeroUsize::new(4).unwrap(),
-        )
-        .unwrap();
+        let repartitioned_plan =
+            repartition(input, table.metadata_ref(), NonZeroUsize::new(4).unwrap()).unwrap();
 
         let partitioning = repartitioned_plan.properties().output_partitioning();
         assert!(
@@ -685,7 +660,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let sort_order = iceberg::spec::SortOrder::builder().build(&schema).unwrap();
+        let sort_order = SortOrder::builder().build(&schema).unwrap();
         let table_metadata_builder = iceberg::spec::TableMetadataBuilder::new(
             schema,
             partition_spec,
@@ -717,12 +692,8 @@ mod tests {
             ),
         ]));
         let input = Arc::new(EmptyExec::new(arrow_schema));
-        let repartitioned_plan = repartition(
-            input,
-            table.metadata_ref(),
-            std::num::NonZeroUsize::new(4).unwrap(),
-        )
-        .unwrap();
+        let repartitioned_plan =
+            repartition(input, table.metadata_ref(), NonZeroUsize::new(4).unwrap()).unwrap();
 
         let partitioning = repartitioned_plan.properties().output_partitioning();
         match partitioning {
@@ -731,8 +702,7 @@ mod tests {
                 let column_names: Vec<String> = exprs
                     .iter()
                     .filter_map(|expr| {
-                        expr.as_any()
-                            .downcast_ref::<Column>()
+                        expr.downcast_ref::<Column>()
                             .map(|col| col.name().to_string())
                     })
                     .collect();
@@ -769,7 +739,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let sort_order = iceberg::spec::SortOrder::builder().build(&schema).unwrap();
+        let sort_order = SortOrder::builder().build(&schema).unwrap();
         let table_metadata_builder = iceberg::spec::TableMetadataBuilder::new(
             schema,
             partition_spec,
@@ -805,12 +775,8 @@ mod tests {
         ]));
         let input = Arc::new(EmptyExec::new(arrow_schema));
 
-        let repartitioned_plan = repartition(
-            input,
-            table.metadata_ref(),
-            std::num::NonZeroUsize::new(4).unwrap(),
-        )
-        .unwrap();
+        let repartitioned_plan =
+            repartition(input, table.metadata_ref(), NonZeroUsize::new(4).unwrap()).unwrap();
 
         let partitioning = repartitioned_plan.properties().output_partitioning();
         assert!(
@@ -843,7 +809,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let sort_order = iceberg::spec::SortOrder::builder().build(&schema).unwrap();
+        let sort_order = SortOrder::builder().build(&schema).unwrap();
         let table_metadata_builder = iceberg::spec::TableMetadataBuilder::new(
             schema,
             partition_spec,
@@ -875,12 +841,8 @@ mod tests {
         ]));
         let input = Arc::new(EmptyExec::new(arrow_schema));
 
-        let repartitioned_plan = repartition(
-            input,
-            table.metadata_ref(),
-            std::num::NonZeroUsize::new(4).unwrap(),
-        )
-        .unwrap();
+        let repartitioned_plan =
+            repartition(input, table.metadata_ref(), NonZeroUsize::new(4).unwrap()).unwrap();
 
         let partitioning = repartitioned_plan.properties().output_partitioning();
         assert!(

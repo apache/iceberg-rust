@@ -397,7 +397,7 @@ mod tests {
 
     /// Helper to verify partition data files
     fn verify_partition_files(
-        data_files: &[iceberg::spec::DataFile],
+        data_files: &[DataFile],
         expected_total: u64,
     ) -> HashMap<String, u64> {
         let total_records: u64 = data_files.iter().map(|f| f.record_count()).sum();

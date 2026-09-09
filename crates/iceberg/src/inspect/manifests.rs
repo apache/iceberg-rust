@@ -26,11 +26,11 @@ use arrow_array::types::{Int32Type, Int64Type};
 use arrow_schema::{DataType, Field, Fields};
 use futures::{StreamExt, stream};
 
-use crate::Result;
 use crate::arrow::schema_to_arrow_schema;
 use crate::scan::ArrowRecordBatchStream;
 use crate::spec::{Datum, FieldSummary, ListType, NestedField, PrimitiveType, StructType, Type};
 use crate::table::Table;
+use crate::{Error, ErrorKind, Result};
 
 /// Manifests table.
 pub struct ManifestsTable<'a> {
@@ -184,13 +184,19 @@ impl<'a> ManifestsTable<'a> {
                     .table
                     .metadata()
                     .partition_spec_by_id(manifest.partition_spec_id)
-                    .unwrap();
-                let spec_struct = spec
-                    .partition_type(self.table.metadata().current_schema())
-                    .unwrap();
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Partition spec {} for manifest {} is not in table metadata",
+                                manifest.partition_spec_id, manifest.manifest_path
+                            ),
+                        )
+                    })?;
+                let spec_struct = spec.partition_type(self.table.metadata().current_schema())?;
                 self.append_partition_summaries(
                     &mut partition_summaries,
-                    &manifest.partitions.clone().unwrap_or_else(Vec::new),
+                    manifest.partitions.as_deref().unwrap_or(&[]),
                     spec_struct,
                 );
             }
@@ -278,10 +284,13 @@ impl<'a> ManifestsTable<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use expect_test::expect;
     use futures::TryStreamExt;
 
     use crate::scan::tests::TableTestFixture;
+    use crate::spec::TableMetadata;
     use crate::test_utils::check_record_batches;
 
     #[tokio::test]
@@ -378,5 +387,40 @@ mod tests {
             &["path", "length"],
             Some("path"),
         );
+    }
+
+    #[tokio::test]
+    async fn test_manifests_table_with_dropped_partition_source_column() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Evolve the table so that the manifests reference a historical spec whose source
+        // column is no longer in the current schema: add an unpartitioned default spec, then
+        // drop the source column of the original spec.
+        let mut metadata = serde_json::to_value(fixture.table.metadata()).unwrap();
+        let current_schema_id = metadata["current-schema-id"].clone();
+        let schemas = metadata["schemas"].as_array_mut().unwrap();
+        for schema in schemas {
+            if schema["schema-id"] == current_schema_id {
+                let fields = schema["fields"].as_array_mut().unwrap();
+                fields.retain(|field| field["id"] != 1);
+                let identifier_ids = schema["identifier-field-ids"].as_array_mut().unwrap();
+                identifier_ids.retain(|id| *id != 1);
+            }
+        }
+
+        metadata["partition-specs"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"spec-id": 1, "fields": []}));
+        metadata["default-spec-id"] = serde_json::json!(1);
+
+        let metadata: TableMetadata = serde_json::from_value(metadata).unwrap();
+        let table = fixture.table.clone().with_metadata(Arc::new(metadata));
+
+        match table.inspect().manifests().scan().await {
+            Err(err) => assert!(err.to_string().contains("No column with source column id")),
+            Ok(_) => panic!("expected scan to fail for a dropped partition source column"),
+        }
     }
 }

@@ -259,7 +259,8 @@ mod tests {
                 .with_project_field_ids(vec![1])
                 .with_predicate(Some(predicate.bind(schema, true).unwrap()))
                 .with_case_sensitive(false)
-                .build();
+                .build()
+                .unwrap();
             Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream
         };
 
@@ -551,7 +552,8 @@ mod tests {
             .with_project_field_ids(vec![1])
             .with_record_count(Some(100))
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         // Task 2: read the second and third row groups
         let task2 = FileScanTask::builder()
@@ -564,7 +566,8 @@ mod tests {
             .with_project_field_ids(vec![1])
             .with_record_count(Some(200))
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         let tasks1 = Box::pin(futures::stream::iter(vec![Ok(task1)])) as FileScanTaskStream;
         let result1 = reader
@@ -699,7 +702,8 @@ mod tests {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1])
                 .with_case_sensitive(false)
-                .build();
+                .build()
+                .unwrap();
 
             let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
             let batches = reader
@@ -806,7 +810,8 @@ mod tests {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1])
                 .with_case_sensitive(false)
-                .build();
+                .build()
+                .unwrap();
 
             let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
             let batches = reader
@@ -856,7 +861,7 @@ mod tests {
 
     fn simple_predicate(schema: SchemaRef) -> BoundPredicate {
         Reference::new("x")
-            .greater_than(crate::spec::Datum::int(0))
+            .greater_than(Datum::int(0))
             .bind(schema.clone(), false)
             .unwrap()
     }
@@ -1100,7 +1105,7 @@ mod tests {
         ])
         .unwrap();
 
-        let file = std::fs::File::create(&file_path).unwrap();
+        let file = File::create(&file_path).unwrap();
         let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
@@ -1108,7 +1113,7 @@ mod tests {
         // Truly exercising a file without column/offset index
         {
             use parquet::file::reader::{FileReader, SerializedFileReader};
-            let f = std::fs::File::open(&file_path).unwrap();
+            let f = File::open(&file_path).unwrap();
             let rdr = SerializedFileReader::new(f).unwrap();
             assert!(
                 rdr.metadata().column_index().is_none(),
@@ -1133,22 +1138,18 @@ mod tests {
             .build();
 
         let file_size = std::fs::metadata(&file_path).unwrap().len();
-        let task = FileScanTask {
-            file_size_in_bytes: file_size,
-            start: 0,
-            length: 0,
-            record_count: None,
-            data_file_path: file_path.clone(),
-            data_file_format: DataFileFormat::Parquet,
-            schema: iceberg_schema.clone(),
-            project_field_ids: vec![1, 2],
-            predicate: Some(predicate),
-            deletes: vec![],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            case_sensitive: false,
-        };
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(file_size)
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(iceberg_schema.clone())
+            .with_project_field_ids(vec![1, 2])
+            .with_predicate(Some(predicate))
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
 
         let stream = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let batches: Vec<RecordBatch> = reader
@@ -1204,7 +1205,7 @@ mod tests {
             .set_statistics_enabled(EnabledStatistics::None)
             .build();
 
-        let pos_del_file = std::fs::File::create(&pos_del_path).unwrap();
+        let pos_del_file = File::create(&pos_del_path).unwrap();
         let mut pos_del_writer = ArrowWriter::try_new(
             pos_del_file,
             pos_del_arrow_schema.clone(),
@@ -1224,28 +1225,31 @@ mod tests {
             .with_row_selection_enabled(true)
             .build();
 
-        let task_sub2 = FileScanTask {
-            file_size_in_bytes: file_size,
-            start: 0,
-            length: 0,
-            record_count: None,
-            data_file_path: file_path.clone(),
-            data_file_format: DataFileFormat::Parquet,
-            schema: iceberg_schema.clone(),
-            project_field_ids: vec![1, 2],
-            predicate: Some(predicate_sub2),
-            deletes: vec![FileScanTaskDeleteFile {
+        let task_sub2 = FileScanTask::builder()
+            .with_file_size_in_bytes(file_size)
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(iceberg_schema.clone())
+            .with_project_field_ids(vec![1, 2])
+            .with_predicate(Some(predicate_sub2))
+            .with_deletes(vec![FileScanTaskDeleteFile {
                 file_path: pos_del_path.clone(),
                 file_type: DataContentType::PositionDeletes,
+                file_format: DataFileFormat::Parquet,
                 partition_spec_id: 0,
                 equality_ids: None,
                 file_size_in_bytes: std::fs::metadata(&pos_del_path).unwrap().len(),
-            }],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            case_sensitive: false,
-        };
+                referenced_data_file: None,
+                content_offset: None,
+                content_size_in_bytes: None,
+                record_count: None,
+                key_metadata: None,
+            }])
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
 
         let stream_sub2 =
             Box::pin(futures::stream::iter(vec![Ok(task_sub2)])) as FileScanTaskStream;

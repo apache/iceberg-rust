@@ -28,7 +28,6 @@
 pub mod metadata_table;
 pub mod table_provider_factory;
 
-use std::any::Any;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -110,10 +109,6 @@ impl IcebergTableProvider {
 
 #[async_trait]
 impl TableProvider for IcebergTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> ArrowSchemaRef {
         self.schema.clone()
     }
@@ -223,11 +218,7 @@ impl TableProvider for IcebergTableProvider {
             sort_by_partition(repartitioned_plan)?
         };
 
-        let write_plan = Arc::new(IcebergWriteExec::new(
-            table.clone(),
-            write_input,
-            self.schema.clone(),
-        ));
+        let write_plan = Arc::new(IcebergWriteExec::new(table.clone(), write_input));
 
         // Merge the outputs of write_plan into one so we can commit all files together
         let coalesce_partitions = Arc::new(CoalescePartitionsExec::new(write_plan));
@@ -301,10 +292,6 @@ impl IcebergStaticTableProvider {
 
 #[async_trait]
 impl TableProvider for IcebergStaticTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> ArrowSchemaRef {
         self.schema.clone()
     }
@@ -676,8 +663,7 @@ mod tests {
         let mut properties = HashMap::new();
         if let Some(enabled) = fanout_enabled {
             properties.insert(
-                iceberg::spec::TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED
-                    .to_string(),
+                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED.to_string(),
                 enabled.to_string(),
             );
         }
@@ -836,7 +822,6 @@ mod tests {
 
         // Verify that the scan plan is an IcebergTableScan
         let iceberg_scan = scan_plan
-            .as_any()
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 
@@ -867,7 +852,6 @@ mod tests {
 
         // Verify that the scan plan is an IcebergTableScan
         let iceberg_scan = scan_plan
-            .as_any()
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 
@@ -896,7 +880,6 @@ mod tests {
 
         // Verify that the scan plan is an IcebergTableScan
         let iceberg_scan = scan_plan
-            .as_any()
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 

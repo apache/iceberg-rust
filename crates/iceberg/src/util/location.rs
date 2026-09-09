@@ -15,18 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::OnceLock;
+/// Strips trailing slashes from a location, preserving a bare URI scheme root
+pub(crate) fn strip_trailing_slash(path: &str) -> &str {
+    let mut path = path;
+    while !path.ends_with("://") {
+        let Some(stripped) = path.strip_suffix('/') else {
+            break;
+        };
+        path = stripped;
+    }
+    path
+}
 
-use tokio::runtime::{Handle, Runtime};
-
-static RUNTIME: OnceLock<Runtime> = OnceLock::new();
-
-pub fn runtime() -> Handle {
-    match Handle::try_current() {
-        Ok(h) => h.clone(),
-        _ => {
-            let rt = RUNTIME.get_or_init(|| Runtime::new().unwrap());
-            rt.handle().clone()
-        }
+#[test]
+fn test_strip_trailing_slash() {
+    for (path, expected) in [
+        ("s3://bucket/db/tbl", "s3://bucket/db/tbl"),
+        ("s3://bucket/db/tbl/", "s3://bucket/db/tbl"),
+        ("s3://bucket/db/tbl////", "s3://bucket/db/tbl"),
+        ("blobstore://", "blobstore://"),
+        ("blobstore:///", "blobstore://"),
+        ("file:///", "file://"),
+        ("////", ""),
+        ("", ""),
+    ] {
+        assert_eq!(strip_trailing_slash(path), expected);
     }
 }

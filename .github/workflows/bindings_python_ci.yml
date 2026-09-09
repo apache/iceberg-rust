@@ -47,16 +47,16 @@ jobs:
   check-python:
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.9.3"
           enable-cache: true
       - name: Install tools
         run: |
-          uv tool install ruff
+          uv tool install ruff@0.15.22
       - name: Check format
         working-directory: "bindings/python"
         run: |
@@ -76,19 +76,19 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: 3.12
       # Linux maturin builds may run inside manylinux Docker, so host Rust caches only help Windows/macOS.
       - name: Setup Rust toolchain
         if: runner.os != 'Linux'
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Cache Rust artifacts
         if: runner.os != 'Linux'
-        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: bindings-python
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -97,7 +97,7 @@ jobs:
           working-directory: "bindings/python"
           command: build
           args: --out dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.9.3"
           enable-cache: true
@@ -109,8 +109,10 @@ jobs:
       - name: Install built wheel
         working-directory: "bindings/python"
         shell: bash
+        # --no-index keeps resolution inside dist/: --find-links alone only adds a
+        # source, so a newer PyPI release would win and be tested instead.
         run: |
-          uv pip install --no-build --reinstall --find-links dist/ pyiceberg-core
+          uv pip install --no-build --reinstall --no-index --find-links dist/ pyiceberg-core
       - name: Run tests
         working-directory: "bindings/python"
         shell: bash

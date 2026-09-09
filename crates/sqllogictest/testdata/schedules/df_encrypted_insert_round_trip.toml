@@ -15,36 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Typos Check
+[engines]
+df = { type = "datafusion" }
 
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
-
-env:
-  RUST_BACKTRACE: 1
-
-permissions:
-  contents: read
-
-jobs:
-  typos-check:
-    name: typos check
-    runs-on: ubuntu-slim
-    timeout-minutes: 10
-    env:
-      FORCE_COLOR: 1
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - name: Check typos
-        uses: crate-ci/typos@37bb98842b0d8c4ffebdb75301a13db0267cef89 # v1.47.2
+[[steps]]
+engine = "df"
+slt = "df_test/encrypted_insert_round_trip.slt"
