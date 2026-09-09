@@ -44,21 +44,6 @@ pub struct ManifestMetadata {
 impl ManifestMetadata {
     /// Parse from metadata in avro file.
     pub fn parse(meta: &HashMap<String, Vec<u8>>) -> Result<Self> {
-        let schema = Arc::new({
-            let bs = meta.get("schema").ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "schema is required in manifest metadata but not found",
-                )
-            })?;
-            serde_json::from_slice::<Schema>(bs).map_err(|err| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Fail to parse schema in manifest metadata",
-                )
-                .with_source(err)
-            })?
-        });
         let schema_id: i32 = meta
             .get("schema-id")
             .map(|bs| {
@@ -72,22 +57,39 @@ impl ManifestMetadata {
             })
             .transpose()?
             .unwrap_or(0);
+        let raw_schema = meta.get("schema").ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "schema is required in manifest metadata but not found",
+            )
+        })?;
+        let partition_fields = {
+            let bs = meta.get("partition-spec").ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "partition-spec is required in manifest metadata but not found",
+                )
+            })?;
+            serde_json::from_slice::<Vec<PartitionField>>(bs).map_err(|err| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Fail to parse partition spec in manifest metadata",
+                )
+                .with_source(err)
+            })?
+        };
+        let schema = Arc::new(parse_manifest_table_schema(raw_schema).or_else(|err| {
+            if partition_fields.is_empty() {
+                // Some writers store the manifest-entry schema under the
+                // `schema` metadata key. For unpartitioned manifests we can
+                // still plan file scans; column bounds that require the table
+                // schema are ignored when their field ids cannot be resolved.
+                Schema::builder().with_schema_id(schema_id).build()
+            } else {
+                Err(err)
+            }
+        })?);
         let partition_spec = {
-            let fields = {
-                let bs = meta.get("partition-spec").ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "partition-spec is required in manifest metadata but not found",
-                    )
-                })?;
-                serde_json::from_slice::<Vec<PartitionField>>(bs).map_err(|err| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Fail to parse partition spec in manifest metadata",
-                    )
-                    .with_source(err)
-                })?
-            };
             let spec_id = meta
                 .get("partition-spec-id")
                 .map(|bs| {
@@ -103,7 +105,7 @@ impl ManifestMetadata {
                 .unwrap_or(0);
             PartitionSpec::builder(schema.clone())
                 .with_spec_id(spec_id)
-                .add_unbound_fields(fields.into_iter().map(|f| f.into_unbound()))?
+                .add_unbound_fields(partition_fields.into_iter().map(|f| f.into_unbound()))?
                 .build()?
         };
         let format_version = if let Some(bs) = meta.get("format-version") {
@@ -156,4 +158,14 @@ impl ManifestMetadata {
     pub fn content(&self) -> &ManifestContentType {
         &self.content
     }
+}
+
+fn parse_manifest_table_schema(bs: &[u8]) -> Result<Schema> {
+    serde_json::from_slice::<Schema>(bs).map_err(|err| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            "Fail to parse schema in manifest metadata",
+        )
+        .with_source(err)
+    })
 }
