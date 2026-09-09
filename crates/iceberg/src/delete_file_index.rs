@@ -318,11 +318,12 @@ impl PopulatedDeleteFileIndex {
             }
         }
 
-        // A deletion vector supersedes all position delete files for its data file, per the spec:
-        // "readers ignore any position delete files that would otherwise match it, because the DV
-        // subsumes them". An exact path match on referenced_data_file is sufficient proof of
-        // applicability, the same as for the position deletes below, so this is checked before
-        // (and instead of) either position delete map.
+        // A deletion vector supersedes all position delete files for its data file: a DV must
+        // replace every position delete file previously written for it, so that "readers can
+        // safely ignore matching position delete files" (spec, Deletion Vectors). An exact path
+        // match on referenced_data_file is sufficient proof of applicability, the same as for the
+        // position deletes below, so this is checked before (and instead of) either position
+        // delete map.
         if let Some(dv) = self.dvs_by_referenced_data_file.get(data_file.file_path()) {
             let dv_data_file = dv.manifest_entry.data_file();
             // A file path belongs to exactly one partition for its lifetime, so an exact path
