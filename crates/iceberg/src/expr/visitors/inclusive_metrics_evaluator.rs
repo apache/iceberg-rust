@@ -440,12 +440,13 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         let lower_bound = self.lower_bound(field_id);
         let upper_bound = self.upper_bound(field_id);
 
-        if lower_bound.is_some_and(|d| d.is_nan()) || upper_bound.is_some_and(|d| d.is_nan()) {
-            // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
-            return ROWS_MIGHT_MATCH;
-        }
-
-        if !super::any_literal_in_bounds(lower_bound, upper_bound, literals) {
+        // A NaN bound is unreliable on that side only. Drop it to unbounded
+        // so a valid bound can still prune.
+        if !super::any_literal_in_bounds(
+            super::finite_bound(lower_bound),
+            super::finite_bound(upper_bound),
+            literals,
+        ) {
             return ROWS_CANNOT_MATCH;
         }
 
@@ -1551,6 +1552,34 @@ mod test {
     }
 
     #[test]
+    fn test_float_in_nan_upper_bound_prunes_below_lower() {
+        let result = InclusiveMetricsEvaluator::eval(
+            &r#in_float("no_nans", &[2.0, 3.0]),
+            &get_test_file_float_nan_upper(),
+            true,
+        )
+        .unwrap();
+        assert!(
+            !result,
+            "Should skip: NaN upper is unbounded, both literals are below lower 4.0"
+        );
+    }
+
+    #[test]
+    fn test_float_in_nan_lower_bound_prunes_above_upper() {
+        let result = InclusiveMetricsEvaluator::eval(
+            &r#in_float("no_nans", &[2.0, 3.0]),
+            &get_test_file_float_nan_lower(),
+            true,
+        )
+        .unwrap();
+        assert!(
+            !result,
+            "Should skip: NaN lower is unbounded, both literals are above upper 1.0"
+        );
+    }
+
+    #[test]
     fn test_integer_not_in() {
         let result = InclusiveMetricsEvaluator::eval(
             &r#not_in_int("id", &[INT_MIN_VALUE - 25, INT_MIN_VALUE - 24]),
@@ -1879,6 +1908,16 @@ mod test {
         filter.bind(schema.clone(), true).unwrap()
     }
 
+    fn in_float(reference: &str, float_literals: &[f32]) -> BoundPredicate {
+        let schema = create_test_schema();
+        let filter = Predicate::Set(SetExpression::new(
+            In,
+            Reference::new(reference),
+            FnvHashSet::from_iter(float_literals.iter().copied().map(Datum::float)),
+        ));
+        filter.bind(schema.clone(), true).unwrap()
+    }
+
     fn not_in_int(reference: &str, int_literals: &[i32]) -> BoundPredicate {
         let schema = create_test_schema();
         let filter = Predicate::Set(SetExpression::new(
@@ -2092,6 +2131,59 @@ mod test {
             content_size_in_bytes: None,
         }
     }
+
+    fn get_test_file_float_nan_upper() -> DataFile {
+        DataFile {
+            content: DataContentType::Data,
+            file_path: "/test/path".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: Struct::empty(),
+            record_count: 10,
+            file_size_in_bytes: 10,
+            column_sizes: Default::default(),
+            value_counts: HashMap::from([(9, 10)]),
+            null_value_counts: HashMap::from([(9, 0)]),
+            nan_value_counts: HashMap::from([(9, 0)]),
+            lower_bounds: HashMap::from([(9, Datum::float(4.0_f32))]),
+            upper_bounds: HashMap::from([(9, Datum::float(f32::NAN))]),
+            key_metadata: None,
+            split_offsets: None,
+            equality_ids: None,
+            sort_order_id: None,
+            partition_spec_id: 0,
+            first_row_id: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+
+    fn get_test_file_float_nan_lower() -> DataFile {
+        DataFile {
+            content: DataContentType::Data,
+            file_path: "/test/path".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: Struct::empty(),
+            record_count: 10,
+            file_size_in_bytes: 10,
+            column_sizes: Default::default(),
+            value_counts: HashMap::from([(9, 10)]),
+            null_value_counts: HashMap::from([(9, 0)]),
+            nan_value_counts: HashMap::from([(9, 0)]),
+            lower_bounds: HashMap::from([(9, Datum::float(f32::NAN))]),
+            upper_bounds: HashMap::from([(9, Datum::float(1.0_f32))]),
+            key_metadata: None,
+            split_offsets: None,
+            equality_ids: None,
+            sort_order_id: None,
+            partition_spec_id: 0,
+            first_row_id: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+
     fn get_test_file_2() -> DataFile {
         DataFile {
             content: DataContentType::Data,

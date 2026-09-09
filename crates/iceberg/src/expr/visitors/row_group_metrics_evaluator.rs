@@ -479,14 +479,13 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         let lower_bound = self.min_value(field_id)?;
         let upper_bound = self.max_value(field_id)?;
 
-        if lower_bound.as_ref().is_some_and(|d| d.is_nan())
-            || upper_bound.as_ref().is_some_and(|d| d.is_nan())
-        {
-            // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
-            return ROW_GROUP_MIGHT_MATCH;
-        }
-
-        if !super::any_literal_in_bounds(lower_bound.as_ref(), upper_bound.as_ref(), literals) {
+        // A NaN bound is unreliable on that side only. Drop it to unbounded
+        // so a valid bound can still prune. See InclusiveMetricsEvaluator.
+        if !super::any_literal_in_bounds(
+            super::finite_bound(lower_bound.as_ref()),
+            super::finite_bound(upper_bound.as_ref()),
+            literals,
+        ) {
             return ROW_GROUP_CANT_MATCH;
         }
 
@@ -1671,9 +1670,9 @@ mod tests {
     }
 
     #[test]
-    fn eval_true_for_lower_bound_is_nan_filter_is_in() -> Result<()> {
-        // TODO: should this be false, since the max stat
-        //       is lower than the min val in the set?
+    fn eval_false_for_lower_bound_is_nan_all_literals_above_upper_is_in() -> Result<()> {
+        // NaN lower is treated as unbounded. The valid upper bound (1.0)
+        // still prunes IN (2.0, 3.0).
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
@@ -1701,7 +1700,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert!(result);
+        assert!(!result);
         Ok(())
     }
 
@@ -1762,6 +1761,41 @@ mod tests {
         )?;
 
         assert!(result);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_nan_upper_bound_all_literals_below_lower_is_in() -> Result<()> {
+        // NaN upper is treated as unbounded. The valid lower bound (4.0)
+        // still prunes IN (2.0, 3.0).
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(
+                Some(4.0),
+                Some(f32::NAN),
+                None,
+                Some(0),
+                false,
+            )),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .is_in([Datum::float(2.0_f32), Datum::float(3.0_f32)])
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert!(!result);
         Ok(())
     }
 

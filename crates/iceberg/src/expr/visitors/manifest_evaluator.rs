@@ -409,7 +409,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             return ROWS_MIGHT_MATCH;
         }
 
-        let field_type = *reference.field().clone().field_type;
+        let field_type = *reference.field().field_type.clone();
         let lower_bound = field
             .lower_bound
             .as_ref()
