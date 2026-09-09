@@ -453,6 +453,35 @@ mod tests {
     }
 
     #[test]
+    fn test_build_should_return_err_if_source_field_is_variant() {
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::optional(1, "v", Type::Variant(crate::spec::VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let sort_order_builder_result = SortOrder::builder()
+            .with_sort_field(
+                SortField::builder()
+                    .source_id(1)
+                    .direction(SortDirection::Ascending)
+                    .null_order(NullOrder::First)
+                    .transform(Transform::Identity)
+                    .build(),
+            )
+            .build(&schema);
+
+        assert_eq!(
+            sort_order_builder_result
+                .expect_err("Expected an Err value")
+                .message(),
+            "Cannot sort by non-primitive source field: variant"
+        )
+    }
+
+    #[test]
     fn test_build_should_return_err_if_source_field_type_is_not_supported_by_transform() {
         let schema = Schema::builder()
             .with_schema_id(1)

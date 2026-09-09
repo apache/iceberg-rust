@@ -33,36 +33,30 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     environment: publish
+    permissions:
+      contents: read
+      id-token: write  # Required for crates.io trusted publishing
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Get MSRV
         id: get-msrv
-        uses: ./.github/actions/get-msrv
+        uses: $/.github/actions/get-msrv
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
         with:
           rust-version: ${{ steps.get-msrv.outputs.msrv }}
+
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+        id: auth
 
       - name: Publish crates
         # Only publish if it's a tag and the tag is not a pre-release
         if: ${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-') }}
-        run: cargo publish --workspace --all-features # zizmor: ignore[use-trusted-publishing] -- https://github.com/apache/iceberg-rust/issues/1539
+        run: cargo publish --workspace --all-features
         shell: bash
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-  # Trigger Python release after crate publishing completes.
-  # Only runs for tag pushes; for manual Python releases, use workflow_dispatch on release_python.yml directly.
-  release-python:
-    needs: [publish]
-    if: ${{ startsWith(github.ref, 'refs/tags/') }}
-    permissions:
-      contents: read
-      id-token: write # Required for PyPI trusted publishing in the called workflow
-    uses: ./.github/workflows/release_python.yml
-    with:
-      release_tag: ${{ github.ref_name }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

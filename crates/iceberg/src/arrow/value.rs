@@ -21,15 +21,16 @@ use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray,
     FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray,
     LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
-    Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
+    Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray, new_null_array,
 };
+use arrow_buffer::BooleanBuffer;
 use arrow_schema::{DataType, FieldRef, TimeUnit};
 use uuid::Uuid;
 
 use super::get_field_id_from_metadata;
 use crate::spec::{
     ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveLiteral, PrimitiveType,
-    SchemaWithPartnerVisitor, Struct, StructType, Type, visit_struct_with_partner,
+    SchemaWithPartnerVisitor, Struct, StructType, Type, VariantType, visit_struct_with_partner,
     visit_type_with_partner,
 };
 use crate::{Error, ErrorKind, Result};
@@ -425,6 +426,13 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
             }
         }
     }
+
+    fn variant(&mut self, _v: &VariantType, _partner: &ArrayRef) -> Result<Vec<Option<Literal>>> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Converting variant Arrow array to Iceberg literal is not supported yet",
+        ))
+    }
 }
 
 /// Defines how Arrow fields are matched with Iceberg fields when converting data.
@@ -625,12 +633,12 @@ pub fn arrow_primitive_to_literal(
 /// a single value that represents all rows.
 pub(crate) fn create_primitive_array_single_element(
     data_type: &DataType,
-    prim_lit: &Option<PrimitiveLiteral>,
+    prim_lit: Option<&PrimitiveLiteral>,
 ) -> Result<ArrayRef> {
     // No value: a single NULL of any (possibly nested) type (#2618). The `1` is
     // `new_null_array`'s row count.
     if prim_lit.is_none() {
-        return Ok(arrow_array::new_null_array(data_type, 1));
+        return Ok(new_null_array(data_type, 1));
     }
     match (data_type, prim_lit) {
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(v))) => {
@@ -712,22 +720,31 @@ pub(crate) fn create_primitive_array_single_element(
 /// repeated for each row.
 pub(crate) fn create_primitive_array_repeated(
     data_type: &DataType,
-    prim_lit: &Option<PrimitiveLiteral>,
+    prim_lit: Option<&PrimitiveLiteral>,
     num_rows: usize,
 ) -> Result<ArrayRef> {
     // No value to repeat: an all-NULL column of any (possibly nested) type (#2618).
     if prim_lit.is_none() {
-        return Ok(arrow_array::new_null_array(data_type, num_rows));
+        return Ok(new_null_array(data_type, num_rows));
     }
     Ok(match (data_type, prim_lit) {
+        // --- Primitive Some arms ---
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(value))) => {
-            Arc::new(BooleanArray::from(vec![*value; num_rows]))
+            let buffer = if *value {
+                BooleanBuffer::new_set(num_rows)
+            } else {
+                BooleanBuffer::new_unset(num_rows)
+            };
+            Arc::new(BooleanArray::new(buffer, None))
         }
         (DataType::Int32, Some(PrimitiveLiteral::Int(value))) => {
             Arc::new(Int32Array::from(vec![*value; num_rows]))
         }
         (DataType::Date32, Some(PrimitiveLiteral::Int(value))) => {
             Arc::new(Date32Array::from(vec![*value; num_rows]))
+        }
+        (DataType::Int64, Some(PrimitiveLiteral::Int(value))) => {
+            Arc::new(Int64Array::from(vec![i64::from(*value); num_rows]))
         }
         (DataType::Int64, Some(PrimitiveLiteral::Long(value))) => {
             Arc::new(Int64Array::from(vec![*value; num_rows]))
@@ -760,11 +777,41 @@ pub(crate) fn create_primitive_array_repeated(
         (DataType::Float64, Some(PrimitiveLiteral::Double(value))) => {
             Arc::new(Float64Array::from(vec![value.0; num_rows]))
         }
-        (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => {
-            Arc::new(StringArray::from(vec![value.clone(); num_rows]))
+        (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => Arc::new(
+            StringArray::from_iter_values(std::iter::repeat_n(value.as_str(), num_rows)),
+        ),
+        (DataType::Binary, Some(PrimitiveLiteral::Binary(value))) => Arc::new(
+            BinaryArray::from_iter_values(std::iter::repeat_n(value.as_slice(), num_rows)),
+        ),
+        (DataType::LargeBinary, Some(PrimitiveLiteral::Binary(value))) => Arc::new(
+            LargeBinaryArray::from_iter_values(std::iter::repeat_n(value.as_slice(), num_rows)),
+        ),
+        (DataType::FixedSizeBinary(len), Some(PrimitiveLiteral::Binary(value))) => {
+            // try_from_iter infers the width from the data, never from `len`, so a
+            // wrong-width literal would otherwise produce a FixedSizeBinary of the
+            // wrong width instead of erroring.
+            if value.len() != *len as usize {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "FixedSizeBinary literal length {} does not match declared width {len}",
+                        value.len()
+                    ),
+                ));
+            }
+
+            Arc::new(
+                FixedSizeBinaryArray::try_from_iter(std::iter::repeat_n(value.as_slice(), num_rows))
+                    .map_err(|e| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Failed to create FixedSizeBinary({len}) array: {e}"),
+                        )
+                    })?,
+            )
         }
-        (DataType::Binary, Some(PrimitiveLiteral::Binary(value))) => {
-            Arc::new(BinaryArray::from_vec(vec![value; num_rows]))
+        (DataType::Time64(TimeUnit::Microsecond), Some(PrimitiveLiteral::Long(value))) => {
+            Arc::new(Time64MicrosecondArray::from(vec![*value; num_rows]))
         }
         (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::Int128(value))) => {
             Arc::new(
@@ -794,11 +841,12 @@ pub(crate) fn create_primitive_array_repeated(
                     })?,
             )
         }
-        (DataType::Null, _) => Arc::new(arrow_array::NullArray::new(num_rows)),
+        (DataType::Null, Some(_)) => Arc::new(arrow_array::NullArray::new(num_rows)),
+
         (dt, _) => {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                format!("unexpected target column type {dt}"),
+                format!("unexpected target column type {dt}, prim_lit {prim_lit:?}"),
             ));
         }
     })
@@ -1033,7 +1081,7 @@ mod test {
                 Some(Literal::bool(true)),
                 Some(Literal::int(3)),
                 Some(Literal::long(5)),
-                Some(Literal::float(1.1)),
+                Some(Literal::float(1.1_f32)),
                 Some(Literal::double(3.3)),
                 Some(Literal::decimal(1000)),
                 Some(Literal::date(18628)),
@@ -1047,7 +1095,7 @@ mod test {
                 Some(Literal::bool(false)),
                 Some(Literal::int(4)),
                 Some(Literal::long(6)),
-                Some(Literal::float(2.2)),
+                Some(Literal::float(2.2_f32)),
                 Some(Literal::double(4.4)),
                 Some(Literal::decimal(2000)),
                 Some(Literal::date(18629)),
@@ -1148,6 +1196,43 @@ mod test {
         let iceberg_struct_type = StructType::new(vec![]);
         let result = arrow_struct_to_literal(&struct_array, &iceberg_struct_type).unwrap();
         assert_eq!(result, vec![None; 0]);
+    }
+
+    #[test]
+    fn test_arrow_variant_to_literal_is_unsupported() {
+        // Converting a variant Arrow array back to an Iceberg literal is not implemented;
+        // the visitor must reject it rather than silently decode it incorrectly.
+        let variant_child = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(Field::new("metadata", DataType::Binary, false)),
+                Arc::new(BinaryArray::from(vec![Some(b"m".as_ref())])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("value", DataType::Binary, false)),
+                Arc::new(BinaryArray::from(vec![Some(b"v".as_ref())])) as ArrayRef,
+            ),
+        ])) as ArrayRef;
+
+        let struct_array = Arc::new(StructArray::from(vec![(
+            Arc::new(
+                Field::new("v", variant_child.data_type().clone(), false).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+                ),
+            ),
+            variant_child,
+        )])) as ArrayRef;
+
+        let ty = StructType::new(vec![
+            NestedField::required(1, "v", Type::Variant(VariantType)).into(),
+        ]);
+
+        let err = arrow_struct_to_literal(&struct_array, &ty).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(
+            err.to_string()
+                .contains("Converting variant Arrow array to Iceberg literal is not supported yet"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -1664,7 +1749,7 @@ mod test {
         let target_type = DataType::Decimal128(target_precision, target_scale);
         let value = PrimitiveLiteral::Int128(10000000000);
 
-        let array = create_primitive_array_single_element(&target_type, &Some(value))
+        let array = create_primitive_array_single_element(&target_type, Some(&value))
             .expect("Failed to create decimal array");
 
         match array.data_type() {
@@ -1685,7 +1770,7 @@ mod test {
         let value = PrimitiveLiteral::Int128(10000000000);
         let num_rows = 5;
 
-        let array = create_primitive_array_repeated(&target_type, &Some(value), num_rows)
+        let array = create_primitive_array_repeated(&target_type, Some(&value), num_rows)
             .expect("Failed to create repeated decimal array");
 
         match array.data_type() {
@@ -1705,7 +1790,7 @@ mod test {
         let value = PrimitiveLiteral::Long(1_740_600_000_000_000);
         let num_rows = 3;
 
-        let array = create_primitive_array_repeated(&target_type, &Some(value), num_rows)
+        let array = create_primitive_array_repeated(&target_type, Some(&value), num_rows)
             .expect("Failed to create repeated timestamp microsecond array");
 
         assert_eq!(array.data_type(), &target_type);
@@ -1718,10 +1803,98 @@ mod test {
         let value = PrimitiveLiteral::Long(1_740_600_000_000_000);
         let num_rows = 2;
 
-        let array = create_primitive_array_repeated(&target_type, &Some(value), num_rows)
+        let array = create_primitive_array_repeated(&target_type, Some(&value), num_rows)
             .expect("Failed to create repeated timestamp microsecond array with timezone");
 
         assert_eq!(array.data_type(), &target_type);
         assert_eq!(array.len(), num_rows);
+    }
+
+    #[test]
+    fn test_create_string_and_binary_arrays_repeated() {
+        let text = "partition-value-2026";
+        let bytes: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let num_rows = 4;
+
+        let utf8 = create_primitive_array_repeated(
+            &DataType::Utf8,
+            Some(&PrimitiveLiteral::String(text.to_string())),
+            num_rows,
+        )
+        .unwrap();
+        let utf8 = utf8.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(utf8.len(), num_rows);
+        assert!((0..num_rows).all(|i| utf8.value(i) == text));
+
+        let binary = create_primitive_array_repeated(
+            &DataType::Binary,
+            Some(&PrimitiveLiteral::Binary(bytes.clone())),
+            num_rows,
+        )
+        .unwrap();
+        let binary = binary.as_any().downcast_ref::<BinaryArray>().unwrap();
+        assert_eq!(binary.len(), num_rows);
+        assert!((0..num_rows).all(|i| binary.value(i) == bytes.as_slice()));
+
+        let large = create_primitive_array_repeated(
+            &DataType::LargeBinary,
+            Some(&PrimitiveLiteral::Binary(bytes.clone())),
+            num_rows,
+        )
+        .unwrap();
+        let large = large.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
+        assert_eq!(large.len(), num_rows);
+        assert!((0..num_rows).all(|i| large.value(i) == bytes.as_slice()));
+
+        let fixed = create_primitive_array_repeated(
+            &DataType::FixedSizeBinary(bytes.len() as i32),
+            Some(&PrimitiveLiteral::Binary(bytes.clone())),
+            num_rows,
+        )
+        .unwrap();
+        let fixed = fixed
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(fixed.len(), num_rows);
+        assert!((0..num_rows).all(|i| fixed.value(i) == bytes.as_slice()));
+    }
+
+    #[test]
+    fn test_create_string_array_repeated_empty() {
+        // num_rows == 0 must produce an empty (not one-element) array.
+        let array = create_primitive_array_repeated(
+            &DataType::Utf8,
+            Some(&PrimitiveLiteral::String("x".to_string())),
+            0,
+        )
+        .unwrap();
+        assert_eq!(array.len(), 0);
+    }
+
+    #[test]
+    fn test_create_fixed_size_binary_repeated_wrong_width_errors() {
+        // A literal whose length differs from the declared width must error rather
+        // than silently producing a FixedSizeBinary array of the literal's width.
+        let err = create_primitive_array_repeated(
+            &DataType::FixedSizeBinary(4),
+            Some(&PrimitiveLiteral::Binary(vec![0x01, 0x02, 0x03])),
+            2,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("does not match declared width"));
+    }
+
+    #[test]
+    fn test_create_fixed_size_binary_repeated_empty_errors() {
+        // arrow's try_from_iter cannot infer the fixed width from an empty iterator,
+        // so num_rows == 0 over a fixed[n] column surfaces as an error rather than an
+        // empty fixed[n] array.
+        let result = create_primitive_array_repeated(
+            &DataType::FixedSizeBinary(4),
+            Some(&PrimitiveLiteral::Binary(vec![0xDE, 0xAD, 0xBE, 0xEF])),
+            0,
+        );
+        assert!(result.is_err());
     }
 }

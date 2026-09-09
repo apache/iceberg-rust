@@ -39,10 +39,6 @@ pub(crate) async fn create_sdk_config(
 ) -> SdkConfig {
     let mut config = aws_config::defaults(BehaviorVersion::latest());
 
-    if properties.is_empty() {
-        return config.load().await;
-    }
-
     if let Some(endpoint_url) = endpoint_url {
         config = config.endpoint_url(endpoint_url);
     }
@@ -68,4 +64,21 @@ pub(crate) async fn create_sdk_config(
     }
 
     config.load().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_config_with_custom_endpoint() {
+        let properties = HashMap::new();
+        let endpoint_url = "http://localhost:5001";
+
+        let sdk_config = create_sdk_config(&properties, Some(endpoint_url.to_string())).await;
+
+        let result = sdk_config.endpoint_url().unwrap();
+
+        assert_eq!(result, endpoint_url);
+    }
 }

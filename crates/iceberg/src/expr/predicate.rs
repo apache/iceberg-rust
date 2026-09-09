@@ -53,7 +53,7 @@ impl<'de, T: Deserialize<'de>, const N: usize> Deserialize<'de> for LogicalExpre
     where D: serde::Deserializer<'de> {
         let inputs = Vec::<Box<T>>::deserialize(deserializer)?;
         Ok(LogicalExpression::new(
-            array_init::from_iter(inputs.into_iter()).ok_or_else(|| {
+            array_init::from_iter(inputs).ok_or_else(|| {
                 serde::de::Error::custom(format!("Failed to deserialize LogicalExpression: the len of inputs is not match with the len of LogicalExpression {N}"))
             })?,
         ))

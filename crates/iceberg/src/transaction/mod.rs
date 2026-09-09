@@ -54,6 +54,7 @@ mod action;
 
 pub use action::*;
 mod append;
+mod expire_snapshots;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -72,13 +73,14 @@ use crate::error::Result;
 use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
-use crate::transaction::append::FastAppendAction;
-use crate::transaction::sort_order::ReplaceSortOrderAction;
-use crate::transaction::update_location::UpdateLocationAction;
-use crate::transaction::update_properties::UpdatePropertiesAction;
-use crate::transaction::update_schema::UpdateSchemaAction;
-use crate::transaction::update_statistics::UpdateStatisticsAction;
-use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
+pub use crate::transaction::append::FastAppendAction;
+pub use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
+pub use crate::transaction::sort_order::ReplaceSortOrderAction;
+pub use crate::transaction::update_location::UpdateLocationAction;
+pub use crate::transaction::update_properties::UpdatePropertiesAction;
+pub use crate::transaction::update_schema::UpdateSchemaAction;
+pub use crate::transaction::update_statistics::UpdateStatisticsAction;
+pub use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
@@ -164,6 +166,11 @@ impl Transaction {
         UpdateStatisticsAction::new()
     }
 
+    /// Expire snapshots from the table metadata.
+    pub fn expire_snapshots(&self) -> ExpireSnapshotsAction {
+        ExpireSnapshotsAction::new()
+    }
+
     /// Commit transaction.
     pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
         if self.actions.is_empty() {
@@ -171,7 +178,7 @@ impl Transaction {
             return Ok(self.table);
         }
 
-        let table_props = self.table.metadata().table_properties()?;
+        let table_props = self.table.metadata().table_properties();
 
         let backoff = Self::build_backoff(table_props)?;
         let tx = self;
@@ -188,14 +195,14 @@ impl Transaction {
         .1
     }
 
-    fn build_backoff(props: TableProperties) -> Result<ExponentialBackoff> {
+    fn build_backoff(props: TableProperties<'_>) -> Result<ExponentialBackoff> {
         Ok(ExponentialBuilder::new()
-            .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms))
-            .with_max_delay(Duration::from_millis(props.commit_max_retry_wait_ms))
+            .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms()?))
+            .with_max_delay(Duration::from_millis(props.commit_max_retry_wait_ms()?))
             .with_total_delay(Some(Duration::from_millis(
-                props.commit_total_retry_timeout_ms,
+                props.commit_total_retry_timeout_ms()?,
             )))
-            .with_max_times(props.commit_num_retries)
+            .with_max_times(props.commit_num_retries()?)
             .with_factor(2.0)
             .build())
     }
@@ -248,9 +255,10 @@ mod tests {
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
+        TableProperties,
     };
     use crate::table::Table;
-    use crate::test_utils::test_runtime;
+    use crate::test_utils::{make_encrypted_table, test_runtime};
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
 
@@ -520,7 +528,7 @@ mod tests {
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
 
         let mut file_seq = 0u32;
-        let mut append_file = |table: &crate::table::Table, record_count: u64, file_size: u64| {
+        let mut append_file = |table: &Table, record_count: u64, file_size: u64| {
             file_seq += 1;
             let file = DataFileBuilder::default()
                 .content(DataContentType::Data)
@@ -558,6 +566,58 @@ mod tests {
         assert_eq!(summary.get("total-records").unwrap(), "30");
         assert_eq!(summary.get("total-data-files").unwrap(), "2");
         assert_eq!(summary.get("total-files-size").unwrap(), "300");
+    }
+
+    #[tokio::test]
+    async fn test_commit_to_encrypted_table() {
+        let table = make_encrypted_table().await.with_metadata_location(
+            "memory:///table/metadata/00000-9c12d441-03fe-4693-9a96-a0705ddf69c1.metadata.json"
+                .to_string(),
+        );
+        let refreshed_table = table.clone();
+        let update_table = table.clone();
+        let mut mock_catalog = MockCatalog::new();
+        mock_catalog
+            .expect_load_table()
+            .times(1)
+            .returning_st(move |_| {
+                let refreshed_table = refreshed_table.clone();
+                Box::pin(async move { Ok(refreshed_table) })
+            });
+        mock_catalog
+            .expect_update_table()
+            .times(1)
+            .returning_st(move |commit| {
+                let update_table = update_table.clone();
+                Box::pin(async move { commit.apply(update_table) })
+            });
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_table_properties()
+            .set("test.key".to_string(), "test.value".to_string())
+            .apply(tx)
+            .unwrap();
+
+        let updated_table = tx.commit(&mock_catalog).await.unwrap();
+
+        assert_eq!(
+            updated_table
+                .metadata()
+                .properties()
+                .get(TableProperties::PROPERTY_ENCRYPTION_KEY_ID)
+                .map(String::as_str),
+            Some("master-1")
+        );
+        assert_eq!(
+            updated_table
+                .metadata()
+                .properties()
+                .get("test.key")
+                .map(String::as_str),
+            Some("test.value")
+        );
+        assert!(updated_table.encryption_manager().is_some());
     }
 }
 

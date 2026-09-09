@@ -35,7 +35,7 @@ use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
 use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2};
 use crate::spec::{
     DataContentType, DataFile, FieldSummary, ManifestEntry, ManifestFile, ManifestMetadata,
-    ManifestStatus, PrimitiveLiteral, SchemaRef, StructType,
+    ManifestStatus, PrimitiveLiteral, SchemaRef, StructType, Type,
 };
 use crate::{Error, ErrorKind};
 
@@ -56,11 +56,10 @@ pub struct ManifestWriterBuilder {
 }
 
 impl ManifestWriterBuilder {
-    /// Create a new builder.
+    /// Create a new builder for unencrypted manifests.
     pub fn new(
         output: OutputFile,
         snapshot_id: Option<i64>,
-        key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
     ) -> Self {
@@ -69,7 +68,7 @@ impl ManifestWriterBuilder {
             writer_future: Box::pin(async move { output.writer().await }),
             location,
             snapshot_id,
-            key_metadata,
+            key_metadata: None,
             schema,
             partition_spec,
         }
@@ -81,19 +80,19 @@ impl ManifestWriterBuilder {
     pub fn new_from_encrypted(
         encrypted_output: EncryptedOutputFile,
         snapshot_id: Option<i64>,
-        key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
-    ) -> Self {
+    ) -> Result<Self> {
         let location = encrypted_output.location().to_owned();
-        Self {
+        let key_metadata = Some(encrypted_output.key_metadata().encode()?.to_vec());
+        Ok(Self {
             writer_future: Box::pin(async move { encrypted_output.writer().await }),
             location,
             snapshot_id,
             key_metadata,
             schema,
             partition_spec,
-        }
+        })
     }
 
     /// Build a [`ManifestWriter`] for format version 1.
@@ -124,6 +123,7 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V2)
             .content(ManifestContentType::Data)
             .build();
+
         ManifestWriter::new(
             self.writer_future,
             self.location,
@@ -445,6 +445,9 @@ impl ManifestWriter {
             .metadata
             .partition_spec
             .partition_type(&self.metadata.schema)?;
+        // Wrap once and reuse for every entry so the per-entry conversion does
+        // not rebuild the partition type's field-name lookup on each call.
+        let partition_struct_type = Type::Struct(partition_type.clone());
         let table_schema = &self.metadata.schema;
         let avro_schema = match self.metadata.format_version {
             FormatVersion::V1 => manifest_schema_v1(&partition_type)?,
@@ -490,11 +493,13 @@ impl ManifestWriter {
         // Write manifest entries
         for entry in std::mem::take(&mut self.manifest_entries) {
             let value = match self.metadata.format_version {
-                FormatVersion::V1 => to_value(ManifestEntryV1::try_from(entry, &partition_type)?)?
-                    .resolve(&avro_schema)?,
+                FormatVersion::V1 => {
+                    to_value(ManifestEntryV1::try_from(entry, &partition_struct_type)?)?
+                        .resolve(&avro_schema)?
+                }
                 // Manifest entry format did not change between V2 and V3
                 FormatVersion::V2 | FormatVersion::V3 => {
-                    to_value(ManifestEntryV2::try_from(entry, &partition_type)?)?
+                    to_value(ManifestEntryV2::try_from(entry, &partition_struct_type)?)?
                         .resolve(&avro_schema)?
                 }
             };
@@ -732,7 +737,6 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(3),
-            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )
@@ -820,7 +824,6 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(1),
-            None,
             schema.clone(),
             partition_spec.clone(),
         )

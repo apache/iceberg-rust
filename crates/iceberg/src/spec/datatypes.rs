@@ -19,21 +19,20 @@
  * Data Types
  */
 use std::collections::HashMap;
-use std::convert::identity;
 use std::fmt;
 use std::ops::Index;
 use std::sync::{Arc, OnceLock};
 
 use ::serde::de::{MapAccess, Visitor};
 use serde::de::{Error, IntoDeserializer};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
 
 use super::values::Literal;
 use crate::ensure_data_valid;
 use crate::error::Result;
-use crate::spec::PrimitiveLiteral;
 use crate::spec::datatypes::_decimal::{MAX_PRECISION, REQUIRED_LENGTH};
+use crate::spec::{FormatVersion, PrimitiveLiteral};
 
 /// Field name for list type.
 pub const LIST_FIELD_NAME: &str = "element";
@@ -90,6 +89,8 @@ pub enum Type {
     List(ListType),
     /// Map type
     Map(MapType),
+    /// Variant Type
+    Variant(VariantType),
 }
 
 impl fmt::Display for Type {
@@ -99,6 +100,7 @@ impl fmt::Display for Type {
             Type::Struct(s) => write!(f, "{s}"),
             Type::List(_) => write!(f, "list"),
             Type::Map(_) => write!(f, "map"),
+            Type::Variant(_) => write!(f, "variant"),
         }
     }
 }
@@ -122,6 +124,30 @@ impl Type {
         matches!(self, Type::Struct(_) | Type::List(_) | Type::Map(_))
     }
 
+    /// Whether the type is variant type.
+    #[inline(always)]
+    pub fn is_variant(&self) -> bool {
+        matches!(self, Type::Variant(_))
+    }
+
+    /// Minimum [`FormatVersion`] required to support this type, **without** taking
+    /// nested field types into account.
+    ///
+    /// `TimestampNs` / `TimestamptzNs` / `Variant` require [`FormatVersion::V3`]; every
+    /// other type is valid from [`FormatVersion::V1`]. Mirrors Java's
+    /// `Schema.MIN_FORMAT_VERSIONS` (a shallow lookup keyed by type id), so it
+    /// intentionally does not recurse: callers needing the floor for a whole schema
+    /// iterate its flattened fields (see [`Schema::calc_min_compatible_format`]).
+    ///
+    /// [`Schema::calc_min_compatible_format`]: crate::spec::Schema::calc_min_compatible_format
+    pub(crate) fn min_format_version(&self) -> FormatVersion {
+        match self {
+            Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs)
+            | Type::Variant(_) => FormatVersion::V3,
+            _ => FormatVersion::V1,
+        }
+    }
+
     /// Convert Type to reference of PrimitiveType
     pub fn as_primitive_type(&self) -> Option<&PrimitiveType> {
         if let Type::Primitive(primitive_type) = self {
@@ -140,7 +166,7 @@ impl Type {
         }
     }
 
-    /// Return max precision for decimal given [`num_bytes`] bytes.
+    /// Return max precision for decimal given `num_bytes` bytes.
     #[inline(always)]
     pub fn decimal_max_precision(num_bytes: u32) -> Result<u32> {
         ensure_data_valid!(
@@ -150,7 +176,7 @@ impl Type {
         Ok(MAX_PRECISION[num_bytes as usize - 1])
     }
 
-    /// Returns minimum bytes required for decimal with [`precision`].
+    /// Returns minimum bytes required for decimal with `precision`.
     #[inline(always)]
     pub fn decimal_required_bytes(precision: u32) -> Result<u32> {
         ensure_data_valid!(
@@ -340,7 +366,7 @@ fn serialize_decimal<S>(
 where
     S: Serializer,
 {
-    serializer.serialize_str(&format!("decimal({precision},{scale})"))
+    serializer.serialize_str(&format!("decimal({precision}, {scale})"))
 }
 
 fn deserialize_fixed<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
@@ -370,7 +396,7 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Float => write!(f, "float"),
             PrimitiveType::Double => write!(f, "double"),
             PrimitiveType::Decimal { precision, scale } => {
-                write!(f, "decimal({precision},{scale})")
+                write!(f, "decimal({precision}, {scale})")
             }
             PrimitiveType::Date => write!(f, "date"),
             PrimitiveType::Time => write!(f, "time"),
@@ -426,21 +452,21 @@ impl<'de> Deserialize<'de> for StructType {
                         Field::Type => {
                             let type_val: String = map.next_value()?;
                             if type_val != "struct" {
-                                return Err(serde::de::Error::custom(format!(
+                                return Err(Error::custom(format!(
                                     "expected type 'struct', got '{type_val}'"
                                 )));
                             }
                         }
                         Field::Fields => {
                             if fields.is_some() {
-                                return Err(serde::de::Error::duplicate_field("fields"));
+                                return Err(Error::duplicate_field("fields"));
                             }
                             fields = Some(map.next_value()?);
                         }
                     }
                 }
                 let fields: Vec<NestedFieldRef> =
-                    fields.ok_or_else(|| de::Error::missing_field("fields"))?;
+                    fields.ok_or_else(|| Error::missing_field("fields"))?;
 
                 Ok(StructType::new(fields))
             }
@@ -527,7 +553,7 @@ impl fmt::Display for StructType {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
-#[serde(from = "SerdeNestedField", into = "SerdeNestedField")]
+#[serde(try_from = "SerdeNestedField", into = "SerdeNestedField")]
 /// A struct is a tuple of typed values. Each field in the tuple is named and has an integer id that is unique in the table schema.
 /// Each field can be either optional or required, meaning that values can (or cannot) be null. Fields may be any type.
 /// Fields may have an optional comment or doc string. Fields can have default values.
@@ -564,25 +590,30 @@ struct SerdeNestedField {
     pub write_default: Option<JsonValue>,
 }
 
-impl From<SerdeNestedField> for NestedField {
-    fn from(value: SerdeNestedField) -> Self {
-        NestedField {
+impl TryFrom<SerdeNestedField> for NestedField {
+    type Error = crate::Error;
+
+    fn try_from(value: SerdeNestedField) -> Result<Self> {
+        let initial_default = value
+            .initial_default
+            .map(|x| Literal::try_from_json(x, &value.field_type))
+            .transpose()?
+            .flatten();
+        let write_default = value
+            .write_default
+            .map(|x| Literal::try_from_json(x, &value.field_type))
+            .transpose()?
+            .flatten();
+
+        Ok(NestedField {
             id: value.id,
             name: value.name,
             required: value.required,
-            initial_default: value.initial_default.and_then(|x| {
-                Literal::try_from_json(x, &value.field_type)
-                    .ok()
-                    .and_then(identity)
-            }),
-            write_default: value.write_default.and_then(|x| {
-                Literal::try_from_json(x, &value.field_type)
-                    .ok()
-                    .and_then(identity)
-            }),
+            initial_default,
+            write_default,
             field_type: value.field_type,
             doc: value.doc,
-        }
+        })
     }
 }
 
@@ -710,6 +741,7 @@ pub(super) mod _serde {
     use crate::spec::datatypes::Type::Map;
     use crate::spec::datatypes::{
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
+        VariantType,
     };
 
     /// List type for serialization and deserialization
@@ -737,6 +769,7 @@ pub(super) mod _serde {
             value: Cow<'a, Type>,
         },
         Primitive(PrimitiveType),
+        Variant(VariantType),
     }
 
     impl From<SerdeType<'_>> for Type {
@@ -775,6 +808,7 @@ pub(super) mod _serde {
                     Self::Struct(StructType::new(fields.into_owned()))
                 }
                 SerdeType::Primitive(p) => Self::Primitive(p),
+                SerdeType::Variant(v) => Self::Variant(v),
             }
         }
     }
@@ -788,7 +822,7 @@ pub(super) mod _serde {
                     element_required: list.element_field.required,
                     element: Cow::Borrowed(&list.element_field.field_type),
                 },
-                Type::Map(map) => SerdeType::Map {
+                Map(map) => SerdeType::Map {
                     r#type: "map".to_string(),
                     key_id: map.key_field.id,
                     key: Cow::Borrowed(&map.key_field.field_type),
@@ -801,6 +835,7 @@ pub(super) mod _serde {
                     fields: Cow::Borrowed(&s.fields),
                 },
                 Type::Primitive(p) => SerdeType::Primitive(p.clone()),
+                Type::Variant(v) => SerdeType::Variant(*v),
             }
         }
     }
@@ -844,6 +879,42 @@ impl MapType {
     }
 }
 
+/// Variant type - can hold semi-structured data of any type.
+/// This is an Iceberg V3 feature.
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+pub struct VariantType;
+
+impl fmt::Display for VariantType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "variant")
+    }
+}
+
+impl From<VariantType> for Type {
+    fn from(_: VariantType) -> Self {
+        Type::Variant(VariantType)
+    }
+}
+
+impl Serialize for VariantType {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where S: Serializer {
+        serializer.serialize_str("variant")
+    }
+}
+
+impl<'de> Deserialize<'de> for VariantType {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where D: Deserializer<'de> {
+        let s = String::deserialize(deserializer)?;
+        if s == "variant" {
+            Ok(VariantType)
+        } else {
+            Err(D::Error::custom(format!("expected 'variant', got '{s}'")))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -874,7 +945,7 @@ mod tests {
             {"id": 3, "name": "long_field", "required": true, "type": "long"},
             {"id": 4, "name": "float_field", "required": true, "type": "float"},
             {"id": 5, "name": "double_field", "required": true, "type": "double"},
-            {"id": 6, "name": "decimal_field", "required": true, "type": "decimal(9,2)"},
+            {"id": 6, "name": "decimal_field", "required": true, "type": "decimal(9, 2)"},
             {"id": 7, "name": "date_field", "required": true, "type": "date"},
             {"id": 8, "name": "time_field", "required": true, "type": "time"},
             {"id": 9, "name": "timestamp_field", "required": true, "type": "timestamp"},
@@ -1273,6 +1344,42 @@ mod tests {
         ];
         for (ty, literal) in pairs {
             assert!(ty.compatible(&literal));
+        }
+    }
+
+    #[test]
+    fn variant_type_serde() {
+        let json = r#"{"id": 1, "name": "v", "required": true, "type": "variant"}"#;
+        let field: NestedField = serde_json::from_str(json).unwrap();
+        assert_eq!(*field.field_type, Type::Variant(VariantType));
+
+        let serialized = serde_json::to_string(&field).unwrap();
+        let roundtrip: NestedField = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(field, roundtrip);
+    }
+
+    #[test]
+    fn nested_field_rejects_invalid_map_defaults() {
+        for default_name in ["initial-default", "write-default"] {
+            let json = format!(
+                r#"{{
+                    "id": 1,
+                    "name": "properties",
+                    "required": false,
+                    "type": {{
+                        "type": "map",
+                        "key-id": 2,
+                        "key": "string",
+                        "value-id": 3,
+                        "value-required": false,
+                        "value": "int"
+                    }},
+                    "{default_name}": {{"keys": ["a", "b"], "values": [1]}}
+                }}"#
+            );
+
+            let error = serde_json::from_str::<NestedField>(&json).unwrap_err();
+            assert!(error.to_string().contains("must have the same length"));
         }
     }
 

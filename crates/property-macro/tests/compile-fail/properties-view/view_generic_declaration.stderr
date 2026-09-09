@@ -1,0 +1,5 @@
+error: properties_view! does not support generic declarations
+  --> tests/compile-fail/properties-view/view_generic_declaration.rs:21:23
+   |
+21 |     struct GenericView<T> {
+   |                       ^^^

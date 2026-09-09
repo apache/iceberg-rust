@@ -19,3 +19,9 @@ Specify what test covers (unit test, integration test, etc.).
 
 If tests are not included in your PR, please explain why (for example, are they covered by existing tests)?
 -->
+
+## AI Disclosure
+
+<!--
+https://iceberg.apache.org/contribute/#guidelines-for-ai-assisted-contributions
+-->

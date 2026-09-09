@@ -27,9 +27,11 @@ pub mod kms;
 mod manager;
 mod stream;
 
-pub use crypto::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
+pub use crypto::{AesGcmCipher, AesKeySize, SecureKey};
 pub use io::{EncryptedInputFile, EncryptedOutputFile};
 pub use key_metadata::StandardKeyMetadata;
 pub use kms::{GeneratedKey, KeyManagementClient};
 pub use manager::EncryptionManager;
 pub use stream::{AesGcmFileRead, AesGcmFileWrite};
+
+pub use crate::sensitive::SensitiveBytes;

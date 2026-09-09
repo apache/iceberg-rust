@@ -22,14 +22,19 @@ use std::sync::Arc;
 use datafusion::catalog::CatalogProvider;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_sqllogictest::DataFusion;
+use iceberg::encryption::kms::MemoryKmsClientFactory;
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
-use iceberg::spec::{NestedField, PrimitiveType, Schema, Transform, Type, UnboundPartitionSpec};
+use iceberg::spec::{
+    NestedField, PrimitiveType, Schema, TableProperties, Transform, Type, UnboundPartitionSpec,
+};
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
 use iceberg_datafusion::IcebergCatalogProvider;
 use indicatif::ProgressBar;
 
 use crate::engine::{DatafusionCatalogConfig, EngineRunner, run_slt_with_runner};
 use crate::error::Result;
+
+const TEST_MASTER_KEY_ID: &str = "test-master-key";
 
 pub struct DataFusionEngine {
     test_data_path: PathBuf,
@@ -79,7 +84,11 @@ impl DataFusionEngine {
     ) -> anyhow::Result<Arc<dyn CatalogProvider>> {
         // TODO: Use catalog_config to load different catalog types via iceberg-catalog-loader
         // See: https://github.com/apache/iceberg-rust/issues/1780
+        let kms_factory = MemoryKmsClientFactory::new();
+        kms_factory.add_master_key(TEST_MASTER_KEY_ID)?;
+
         let catalog = MemoryCatalogBuilder::default()
+            .with_kms_client_factory(Arc::new(kms_factory))
             .load(
                 "memory",
                 HashMap::from([(
@@ -96,6 +105,7 @@ impl DataFusionEngine {
         // Create partitioned test table (unpartitioned tables are now created via SQL)
         Self::create_partitioned_table(&catalog, &namespace).await?;
         Self::create_binary_table(&catalog, &namespace).await?;
+        Self::create_encrypted_table(&catalog, &namespace).await?;
 
         Ok(Arc::new(
             IcebergCatalogProvider::try_new(Arc::new(catalog)).await?,
@@ -156,6 +166,35 @@ impl DataFusionEngine {
                 TableCreation::builder()
                     .name("test_binary_table".to_string())
                     .schema(schema)
+                    .build(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn create_encrypted_table(
+        catalog: &impl Catalog,
+        namespace: &NamespaceIdent,
+    ) -> anyhow::Result<()> {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()?;
+
+        catalog
+            .create_table(
+                namespace,
+                TableCreation::builder()
+                    .name("test_encrypted_round_trip".to_string())
+                    .schema(schema)
+                    .format_version(iceberg::spec::FormatVersion::V3)
+                    .properties([(
+                        TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+                        TEST_MASTER_KEY_ID.to_string(),
+                    )])
                     .build(),
             )
             .await?;

@@ -27,14 +27,14 @@ use crate::{Error, ErrorKind, Result, TableUpdate};
 ///
 /// This action is used to explicitly set a new metadata location during a transaction,
 /// typically as part of advanced commit or recovery flows. The location is optional until
-/// explicitly set via [`set_location`].
+/// explicitly set via [`UpdateLocationAction::set_location`].
 pub struct UpdateLocationAction {
     location: Option<String>,
 }
 
 impl UpdateLocationAction {
     /// Creates a new [`UpdateLocationAction`] with no location set.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         UpdateLocationAction { location: None }
     }
 
@@ -50,12 +50,6 @@ impl UpdateLocationAction {
     pub fn set_location(mut self, location: String) -> Self {
         self.location = Some(location);
         self
-    }
-}
-
-impl Default for UpdateLocationAction {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
