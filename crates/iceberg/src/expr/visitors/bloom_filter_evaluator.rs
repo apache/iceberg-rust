@@ -196,10 +196,42 @@ impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
 fn check_in_bloom_filter(sbbf: &Sbbf, datum: &Datum, physical_type: PhysicalType) -> bool {
     match datum.literal() {
         PrimitiveLiteral::Boolean(v) => sbbf.check(v),
-        PrimitiveLiteral::Int(v) => sbbf.check(v),
-        PrimitiveLiteral::Long(v) => sbbf.check(v),
-        PrimitiveLiteral::Float(v) => sbbf.check(&v.0),
-        PrimitiveLiteral::Double(v) => sbbf.check(&v.0),
+        // A promoted column (int -> long, float -> double) keeps its original
+        // physical width in files written before the promotion, and the writer
+        // hashed that width, so probe at the file's width rather than the
+        // predicate's.
+        PrimitiveLiteral::Int(v) => match physical_type {
+            PhysicalType::INT32 => sbbf.check(v),
+            PhysicalType::INT64 => sbbf.check(&i64::from(*v)),
+            _ => true,
+        },
+        PrimitiveLiteral::Long(v) => match physical_type {
+            PhysicalType::INT64 => sbbf.check(v),
+            PhysicalType::INT32 => match i32::try_from(*v) {
+                Ok(narrowed) => sbbf.check(&narrowed),
+                // Out of range for the column, so it cannot be present.
+                Err(_) => true,
+            },
+            _ => true,
+        },
+        PrimitiveLiteral::Float(v) => match physical_type {
+            PhysicalType::FLOAT => sbbf.check(&v.0),
+            PhysicalType::DOUBLE => sbbf.check(&f64::from(v.0)),
+            _ => true,
+        },
+        PrimitiveLiteral::Double(v) => match physical_type {
+            PhysicalType::DOUBLE => sbbf.check(&v.0),
+            PhysicalType::FLOAT => {
+                let narrowed = v.0 as f32;
+                // Only an exactly representable value can equal a widened f32.
+                if f64::from(narrowed) == v.0 {
+                    sbbf.check(&narrowed)
+                } else {
+                    true
+                }
+            }
+            _ => true,
+        },
         PrimitiveLiteral::String(v) => sbbf.check(v.as_str()),
         PrimitiveLiteral::Binary(v) => sbbf.check(v.as_slice()),
         PrimitiveLiteral::Int128(v) => {
@@ -964,5 +996,158 @@ mod tests {
             result,
             "Should match when physical type is FIXED_LEN_BYTE_ARRAY even for low-precision decimal"
         );
+    }
+
+    fn single_field_schema(name: &str, ty: PrimitiveType) -> Schema {
+        Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, name, Type::Primitive(ty)).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    /// After an `int` -> `long` promotion the predicate carries a `long`, but files
+    /// written before the promotion store the column as `INT32` and hashed it at
+    /// that width. Probing at the predicate's width made every lookup miss and
+    /// silently pruned row groups holding matching rows.
+    #[test]
+    fn test_promoted_int_to_long_present_is_not_pruned() {
+        let schema = single_field_schema("id", PrimitiveType::Long);
+        let bloom_filters = HashMap::from([(
+            1,
+            (
+                create_bloom_filter_with_values_i32(&[100, 150, 199]),
+                PhysicalType::INT32,
+            ),
+        )]);
+
+        let predicate = Reference::new("id")
+            .equal_to(Datum::long(150))
+            .bind(schema.into(), true)
+            .unwrap();
+
+        let result = BloomFilterEvaluator::eval(&predicate, &bloom_filters).unwrap();
+        assert!(
+            result,
+            "long predicate against an INT32 column must find the promoted value"
+        );
+    }
+
+    #[test]
+    fn test_promoted_int_to_long_absent_still_prunes() {
+        let schema = single_field_schema("id", PrimitiveType::Long);
+        let bloom_filters = HashMap::from([(
+            1,
+            (
+                create_bloom_filter_with_values_i32(&[100, 150, 199]),
+                PhysicalType::INT32,
+            ),
+        )]);
+
+        let predicate = Reference::new("id")
+            .equal_to(Datum::long(4242))
+            .bind(schema.into(), true)
+            .unwrap();
+
+        let result = BloomFilterEvaluator::eval(&predicate, &bloom_filters).unwrap();
+        assert!(!result, "genuinely absent value must still prune");
+    }
+
+    /// A `long` predicate outside `i32` range cannot be present in an `INT32`
+    /// column; stay conservative rather than probe a truncated value.
+    #[test]
+    fn test_long_out_of_int32_range_does_not_prune() {
+        let schema = single_field_schema("id", PrimitiveType::Long);
+        let bloom_filters = HashMap::from([(
+            1,
+            (
+                create_bloom_filter_with_values_i32(&[1, 2, 3]),
+                PhysicalType::INT32,
+            ),
+        )]);
+
+        let predicate = Reference::new("id")
+            .equal_to(Datum::long(i64::from(i32::MAX) + 1))
+            .bind(schema.into(), true)
+            .unwrap();
+
+        let result = BloomFilterEvaluator::eval(&predicate, &bloom_filters).unwrap();
+        assert!(result, "out-of-range long must not prune");
+    }
+
+    fn create_bloom_filter_with_values_f32(values: &[f32]) -> Sbbf {
+        let mut sbbf = Sbbf::new_with_ndv_fpp(values.len() as u64, 0.01).unwrap();
+        for v in values {
+            sbbf.insert(v);
+        }
+        sbbf
+    }
+
+    /// The `float` -> `double` counterpart of the `int` -> `long` promotion above.
+    #[test]
+    fn test_promoted_float_to_double_present_is_not_pruned() {
+        let schema = single_field_schema("val", PrimitiveType::Double);
+        let bloom_filters = HashMap::from([(
+            1,
+            (
+                create_bloom_filter_with_values_f32(&[1.5, 2.25, 4.0]),
+                PhysicalType::FLOAT,
+            ),
+        )]);
+
+        let predicate = Reference::new("val")
+            .equal_to(Datum::double(1.5))
+            .bind(schema.into(), true)
+            .unwrap();
+
+        let result = BloomFilterEvaluator::eval(&predicate, &bloom_filters).unwrap();
+        assert!(
+            result,
+            "double predicate against a FLOAT column must find the promoted value"
+        );
+    }
+
+    #[test]
+    fn test_promoted_float_to_double_absent_still_prunes() {
+        let schema = single_field_schema("val", PrimitiveType::Double);
+        let bloom_filters = HashMap::from([(
+            1,
+            (
+                create_bloom_filter_with_values_f32(&[1.5, 2.25, 4.0]),
+                PhysicalType::FLOAT,
+            ),
+        )]);
+
+        let predicate = Reference::new("val")
+            .equal_to(Datum::double(9.75))
+            .bind(schema.into(), true)
+            .unwrap();
+
+        let result = BloomFilterEvaluator::eval(&predicate, &bloom_filters).unwrap();
+        assert!(!result, "genuinely absent value must still prune");
+    }
+
+    /// A double with no exact `f32` representation cannot equal any widened
+    /// `f32` in the column, so probing it would be meaningless; stay conservative.
+    #[test]
+    fn test_double_not_representable_as_f32_does_not_prune() {
+        let schema = single_field_schema("val", PrimitiveType::Double);
+        let bloom_filters = HashMap::from([(
+            1,
+            (
+                create_bloom_filter_with_values_f32(&[1.5, 2.25]),
+                PhysicalType::FLOAT,
+            ),
+        )]);
+
+        let predicate = Reference::new("val")
+            .equal_to(Datum::double(0.1))
+            .bind(schema.into(), true)
+            .unwrap();
+
+        let result = BloomFilterEvaluator::eval(&predicate, &bloom_filters).unwrap();
+        assert!(result, "non-representable double must not prune");
     }
 }
