@@ -452,7 +452,8 @@ mod tests {
                     .with_file_type(DataContentType::PositionDeletes)
                     .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .with_case_sensitive(false)
             .build()
@@ -672,7 +673,8 @@ mod tests {
                     .with_file_type(DataContentType::PositionDeletes)
                     .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .with_case_sensitive(false)
             .build()
@@ -886,7 +888,8 @@ mod tests {
                     .with_file_type(DataContentType::PositionDeletes)
                     .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .with_case_sensitive(false)
             .build()
@@ -1005,7 +1008,8 @@ mod tests {
                     .with_content_offset(Some(content_offset))
                     .with_content_size_in_bytes(Some(content_size))
                     .with_record_count(Some(2))
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .with_case_sensitive(false)
             .build();
@@ -1102,7 +1106,8 @@ mod tests {
                     .with_content_offset(Some(0))
                     .with_content_size_in_bytes(Some(blob.len() as i64))
                     .with_record_count(Some(5))
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .with_case_sensitive(false)
             .build();
