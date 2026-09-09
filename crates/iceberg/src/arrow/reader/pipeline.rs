@@ -45,7 +45,7 @@ use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
 use crate::encryption::StandardKeyMetadata;
 use crate::error::Result;
 use crate::expr::visitors::bloom_filter_evaluator::{
-    BloomFilterEvaluator, collect_bloom_filter_field_ids,
+    BloomFilterEvaluator, ColumnBloomFilter, collect_bloom_filter_field_ids,
 };
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::metadata_columns::{
@@ -744,10 +744,7 @@ impl FileScanTaskReader {
         let mut result = Vec::with_capacity(candidate_row_groups.len());
 
         for &rg_idx in candidate_row_groups {
-            let mut bloom_filters: HashMap<
-                i32,
-                (parquet::bloom_filter::Sbbf, parquet::basic::Type),
-            > = HashMap::new();
+            let mut bloom_filters: HashMap<i32, ColumnBloomFilter> = HashMap::new();
 
             for &field_id in &bloom_filter_field_ids {
                 let col_idx = field_id_map[&field_id];
@@ -759,13 +756,17 @@ impl FileScanTaskReader {
                 }
 
                 let physical_type = col_meta.column_type();
+                let type_length = col_meta.column_descr().type_length();
 
                 match builder
                     .get_row_group_column_bloom_filter(rg_idx, col_idx)
                     .await
                 {
                     Ok(Some(sbbf)) => {
-                        bloom_filters.insert(field_id, (sbbf, physical_type));
+                        bloom_filters.insert(
+                            field_id,
+                            ColumnBloomFilter::new(sbbf, physical_type, type_length),
+                        );
                     }
                     Ok(None) => {}
                     Err(_) => {

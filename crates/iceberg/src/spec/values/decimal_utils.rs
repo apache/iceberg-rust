@@ -196,38 +196,31 @@ pub fn i128_to_be_bytes_min(value: i128) -> Vec<u8> {
     bytes[start..].to_vec()
 }
 
-/// Encode an i128 decimal value as a fixed-length big-endian byte array,
-/// matching how Parquet stores `FIXED_LEN_BYTE_ARRAY` decimals.
+/// Encode an i128 as exactly `len` big-endian two's complement bytes, matching a
+/// Parquet `FIXED_LEN_BYTE_ARRAY` column of that declared `type_length`.
 ///
-/// The result is sign-extended or trimmed to exactly the number of bytes
-/// required for the given precision, matching the Java implementation in
-/// `DecimalUtil.toReusedFixLengthBytes`.
-pub fn decimal_to_fixed_length_bytes(value: i128, precision: u32) -> Vec<u8> {
-    let required_len = parquet_decimal_byte_length(precision);
-    let be_bytes = value.to_be_bytes(); // 16 bytes, big-endian, two's complement
-
-    if required_len >= 16 {
-        // Sign-extend to the required length
-        let fill_byte = if value < 0 { 0xFF } else { 0x00 };
-        let mut buf = vec![fill_byte; required_len];
-        let offset = required_len - 16;
-        buf[offset..].copy_from_slice(&be_bytes);
-        buf
-    } else {
-        // Trim leading bytes (value fits in fewer bytes)
-        let offset = 16 - required_len;
-        be_bytes[offset..].to_vec()
+/// Returns `None` if `value` does not fit in `len` bytes, since a truncated
+/// encoding would represent a different number.
+pub fn decimal_to_fixed_length_bytes_exact(value: i128, len: usize) -> Option<Vec<u8>> {
+    if len == 0 || len > 16 {
+        return None;
     }
-}
 
-/// Returns the number of bytes required to store a decimal with the given
-/// precision as a Parquet `FIXED_LEN_BYTE_ARRAY`.
-///
-/// Mirrors `parquet::arrow::schema::decimal_length_from_precision` which is
-/// not publicly accessible outside the parquet crate without the `experimental`
-/// feature flag.
-fn parquet_decimal_byte_length(precision: u32) -> usize {
-    (((10.0_f64.powi(precision as i32) + 1.0).log2() + 1.0) / 8.0).ceil() as usize
+    let be_bytes = value.to_be_bytes();
+    let offset = 16 - len;
+    let sign_byte = if value < 0 { 0xFF } else { 0x00 };
+
+    // The bytes being dropped must be pure sign extension.
+    if be_bytes[..offset].iter().any(|&b| b != sign_byte) {
+        return None;
+    }
+
+    // The retained leading byte must carry the value's sign.
+    if (be_bytes[offset] & 0x80 != 0) != (value < 0) {
+        return None;
+    }
+
+    Some(be_bytes[offset..].to_vec())
 }
 
 #[cfg(test)]
@@ -392,59 +385,75 @@ mod tests {
     }
 
     #[test]
-    fn test_parquet_decimal_byte_length() {
-        // INT32 range (precision 1-9) should need <= 4 bytes
-        assert!(parquet_decimal_byte_length(1) <= 4);
-        assert!(parquet_decimal_byte_length(9) <= 4);
-        // INT64 range (precision 10-18) should need <= 8 bytes
-        assert!(parquet_decimal_byte_length(10) <= 8);
-        assert!(parquet_decimal_byte_length(18) <= 8);
-        // FIXED_LEN_BYTE_ARRAY range (precision 19+)
-        assert_eq!(parquet_decimal_byte_length(19), 9);
-        assert_eq!(parquet_decimal_byte_length(38), 16);
+    fn test_decimal_to_fixed_length_bytes_exact_positive() {
+        let bytes = decimal_to_fixed_length_bytes_exact(12345, 9).unwrap();
+        assert_eq!(bytes.len(), 9);
+        // Big-endian, zero-padded on the left: 12345 = 0x3039
+        assert_eq!(bytes[7], 0x30);
+        assert_eq!(bytes[8], 0x39);
+        assert!(bytes[..7].iter().all(|&b| b == 0x00));
     }
 
     #[test]
-    fn test_decimal_to_parquet_fixed_bytes_positive() {
-        // 12345 with precision 20 (requires 9 bytes)
-        let bytes = decimal_to_fixed_length_bytes(12345, 20);
-        assert_eq!(bytes.len(), parquet_decimal_byte_length(20));
-        // Should be big-endian, zero-padded on the left
-        assert_eq!(bytes[bytes.len() - 2], 0x30); // 12345 = 0x3039
-        assert_eq!(bytes[bytes.len() - 1], 0x39);
-        // Leading bytes should be 0x00 (positive)
-        assert!(bytes[..bytes.len() - 2].iter().all(|&b| b == 0x00));
-    }
-
-    #[test]
-    fn test_decimal_to_parquet_fixed_bytes_negative() {
-        // -1 with precision 20
-        let bytes = decimal_to_fixed_length_bytes(-1, 20);
-        assert_eq!(bytes.len(), parquet_decimal_byte_length(20));
-        // All bytes should be 0xFF (-1 in two's complement)
+    fn test_decimal_to_fixed_length_bytes_exact_negative() {
+        let bytes = decimal_to_fixed_length_bytes_exact(-1, 9).unwrap();
+        assert_eq!(bytes.len(), 9);
         assert!(bytes.iter().all(|&b| b == 0xFF));
     }
 
     #[test]
-    fn test_decimal_to_parquet_fixed_bytes_round_trip() {
-        // Verify that encoding then decoding via i128_from_be_bytes gives back
-        // the original value
-        for (value, precision) in [
-            (0i128, 20),
-            (1, 20),
-            (-1, 20),
-            (12345, 20),
-            (-12345, 20),
-            (i64::MAX as i128, 20),
-            (i64::MIN as i128, 20),
+    fn test_decimal_to_fixed_length_bytes_exact_round_trip() {
+        for value in [
+            0i128,
+            1,
+            -1,
+            12345,
+            -12345,
+            i64::MAX as i128,
+            i64::MIN as i128,
         ] {
-            let bytes = decimal_to_fixed_length_bytes(value, precision);
-            let decoded = i128_from_be_bytes(&bytes);
+            let bytes = decimal_to_fixed_length_bytes_exact(value, 16).unwrap();
+            assert_eq!(bytes.len(), 16);
             assert_eq!(
-                decoded,
+                i128_from_be_bytes(&bytes),
                 Some(value),
-                "Round trip failed for value={value}, precision={precision}"
+                "Round trip failed for value={value}"
             );
         }
+    }
+
+    /// The length must be honoured exactly: a value needing more bytes cannot be
+    /// truncated into the column's width, because the truncation would encode a
+    /// different number and probe the wrong bloom filter slot.
+    #[test]
+    fn test_decimal_to_fixed_length_bytes_exact_rejects_overflow() {
+        // 200 needs a leading zero byte to stay positive in two's complement.
+        assert_eq!(decimal_to_fixed_length_bytes_exact(200, 1), None);
+        assert_eq!(
+            decimal_to_fixed_length_bytes_exact(200, 2),
+            Some(vec![0x00, 0xC8])
+        );
+
+        assert_eq!(decimal_to_fixed_length_bytes_exact(-200, 1), None);
+        assert_eq!(
+            decimal_to_fixed_length_bytes_exact(-200, 2),
+            Some(vec![0xFF, 0x38])
+        );
+
+        // Exactly representable boundaries.
+        assert_eq!(
+            decimal_to_fixed_length_bytes_exact(127, 1),
+            Some(vec![0x7F])
+        );
+        assert_eq!(decimal_to_fixed_length_bytes_exact(128, 1), None);
+        assert_eq!(
+            decimal_to_fixed_length_bytes_exact(-128, 1),
+            Some(vec![0x80])
+        );
+        assert_eq!(decimal_to_fixed_length_bytes_exact(-129, 1), None);
+
+        assert_eq!(decimal_to_fixed_length_bytes_exact(i128::MAX, 15), None);
+        assert_eq!(decimal_to_fixed_length_bytes_exact(0, 0), None);
+        assert_eq!(decimal_to_fixed_length_bytes_exact(0, 17), None);
     }
 }

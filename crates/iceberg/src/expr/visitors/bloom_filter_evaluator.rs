@@ -28,15 +28,36 @@ use parquet::data_type::ByteArray;
 use crate::Result;
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
-use crate::spec::decimal_utils::decimal_to_fixed_length_bytes;
+use crate::spec::decimal_utils::decimal_to_fixed_length_bytes_exact;
 use crate::spec::{Datum, PrimitiveLiteral};
 
 const ROW_GROUP_MIGHT_MATCH: Result<bool> = Ok(true);
 const ROW_GROUP_CANT_MATCH: Result<bool> = Ok(false);
 
+/// A column's bloom filter for one row group, together with the file's physical
+/// encoding of that column. A probe must be encoded the way the writer encoded
+/// the values it inserted, so the encoding travels with the filter.
+pub(crate) struct ColumnBloomFilter {
+    sbbf: Sbbf,
+    physical_type: PhysicalType,
+    /// `type_length` from the file's column descriptor. Only meaningful for
+    /// `FIXED_LEN_BYTE_ARRAY`.
+    type_length: i32,
+}
+
+impl ColumnBloomFilter {
+    pub(crate) fn new(sbbf: Sbbf, physical_type: PhysicalType, type_length: i32) -> Self {
+        Self {
+            sbbf,
+            physical_type,
+            type_length,
+        }
+    }
+}
+
 pub(crate) struct BloomFilterEvaluator<'a> {
-    /// Maps Iceberg field_id -> (bloom filter, Parquet physical type) for this row group
-    bloom_filters: &'a HashMap<i32, (Sbbf, PhysicalType)>,
+    /// Maps Iceberg field_id -> bloom filter for this row group
+    bloom_filters: &'a HashMap<i32, ColumnBloomFilter>,
 }
 
 impl<'a> BloomFilterEvaluator<'a> {
@@ -45,7 +66,7 @@ impl<'a> BloomFilterEvaluator<'a> {
     /// `true` if it might match.
     pub(crate) fn eval(
         filter: &BoundPredicate,
-        bloom_filters: &HashMap<i32, (Sbbf, PhysicalType)>,
+        bloom_filters: &HashMap<i32, ColumnBloomFilter>,
     ) -> Result<bool> {
         if bloom_filters.is_empty() {
             return ROW_GROUP_MIGHT_MATCH;
@@ -57,12 +78,12 @@ impl<'a> BloomFilterEvaluator<'a> {
 
     fn check_datum(&self, reference: &BoundReference, datum: &Datum) -> bool {
         let field_id = reference.field().id;
-        let Some((sbbf, physical_type)) = self.bloom_filters.get(&field_id) else {
+        let Some(column) = self.bloom_filters.get(&field_id) else {
             // No bloom filter for this column — conservatively might match
             return true;
         };
 
-        check_in_bloom_filter(sbbf, datum, *physical_type)
+        check_in_bloom_filter(column, datum)
     }
 }
 
@@ -193,7 +214,14 @@ impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
 /// writer used when inserting into the bloom filter. We use the actual
 /// physical type from the column metadata to ensure correctness regardless
 /// of which writer produced the file.
-fn check_in_bloom_filter(sbbf: &Sbbf, datum: &Datum, physical_type: PhysicalType) -> bool {
+fn check_in_bloom_filter(column: &ColumnBloomFilter, datum: &Datum) -> bool {
+    let ColumnBloomFilter {
+        sbbf,
+        physical_type,
+        type_length,
+    } = column;
+    let physical_type = *physical_type;
+
     match datum.literal() {
         PrimitiveLiteral::Boolean(v) => sbbf.check(v),
         // A promoted column (int -> long, float -> double) keeps its original
@@ -241,15 +269,18 @@ fn check_in_bloom_filter(sbbf: &Sbbf, datum: &Datum, physical_type: PhysicalType
                 PhysicalType::INT32 => sbbf.check(&(*v as i32)),
                 PhysicalType::INT64 => sbbf.check(&(*v as i64)),
                 PhysicalType::FIXED_LEN_BYTE_ARRAY => {
-                    // to_be_bytes() truncated to the column's fixed length.
-                    // We use the Iceberg type's precision to determine the
-                    // byte length, which must match the file's fixed length.
-                    let crate::spec::PrimitiveType::Decimal { precision, .. } = datum.data_type()
-                    else {
-                        return true;
-                    };
-                    let bytes = decimal_to_fixed_length_bytes(*v, *precision);
-                    sbbf.check(&ByteArray::from(bytes))
+                    // Encode to the file's declared length, not one derived from
+                    // the Iceberg precision: a widened precision would change the
+                    // length and miss every entry the writer inserted.
+                    match usize::try_from(*type_length)
+                        .ok()
+                        .and_then(|len| decimal_to_fixed_length_bytes_exact(*v, len))
+                    {
+                        Some(bytes) => sbbf.check(&ByteArray::from(bytes)),
+                        // Unusable length, or a value too large for the column to
+                        // hold — conservatively might match.
+                        None => true,
+                    }
                 }
                 _ => true, // Unexpected physical type — conservatively might match
             }
@@ -403,13 +434,13 @@ impl<'a> BoundPredicateVisitor for BloomFilterEvaluator<'a> {
         _predicate: &BoundPredicate,
     ) -> Result<Self::T> {
         let field_id = reference.field().id;
-        let Some((sbbf, physical_type)) = self.bloom_filters.get(&field_id) else {
+        let Some(column) = self.bloom_filters.get(&field_id) else {
             return ROW_GROUP_MIGHT_MATCH;
         };
 
         // If ANY literal might be present, the row group might match
         for literal in literals {
-            if check_in_bloom_filter(sbbf, literal, *physical_type) {
+            if check_in_bloom_filter(column, literal) {
                 return ROW_GROUP_MIGHT_MATCH;
             }
         }
@@ -437,9 +468,9 @@ mod tests {
     use parquet::bloom_filter::Sbbf;
     use parquet::data_type::ByteArray;
 
-    use super::BloomFilterEvaluator;
-    use crate::expr::{Bind, Reference};
-    use crate::spec::decimal_utils::decimal_to_fixed_length_bytes;
+    use super::{BloomFilterEvaluator, ColumnBloomFilter};
+    use crate::expr::{Bind, BoundPredicate, Reference};
+    use crate::spec::decimal_utils::decimal_to_fixed_length_bytes_exact;
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
 
     fn create_test_schema() -> Schema {
@@ -474,9 +505,10 @@ mod tests {
         let schema = create_test_schema();
         let bloom_filters = HashMap::from([(
             1,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_i32(&[1, 2, 3]),
                 PhysicalType::INT32,
+                0,
             ),
         )]);
 
@@ -494,9 +526,10 @@ mod tests {
         let schema = create_test_schema();
         let bloom_filters = HashMap::from([(
             1,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_i32(&[1, 2, 3]),
                 PhysicalType::INT32,
+                0,
             ),
         )]);
 
@@ -534,9 +567,10 @@ mod tests {
         let schema = create_test_schema();
         let bloom_filters = HashMap::from([(
             1,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_i32(&[1, 2, 3]),
                 PhysicalType::INT32,
+                0,
             ),
         )]);
 
@@ -557,9 +591,10 @@ mod tests {
         let schema = create_test_schema();
         let bloom_filters = HashMap::from([(
             1,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_i32(&[1, 2, 3]),
                 PhysicalType::INT32,
+                0,
             ),
         )]);
 
@@ -581,16 +616,18 @@ mod tests {
         let bloom_filters = HashMap::from([
             (
                 1,
-                (
+                ColumnBloomFilter::new(
                     create_bloom_filter_with_values_i32(&[1, 2, 3]),
                     PhysicalType::INT32,
+                    0,
                 ),
             ),
             (
                 2,
-                (
+                ColumnBloomFilter::new(
                     create_bloom_filter_with_values_str(&["alice", "bob"]),
                     PhysicalType::BYTE_ARRAY,
+                    0,
                 ),
             ),
         ]);
@@ -615,9 +652,10 @@ mod tests {
         let schema = create_test_schema();
         let bloom_filters = HashMap::from([(
             1,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_i32(&[1, 2, 3]),
                 PhysicalType::INT32,
+                0,
             ),
         )]);
 
@@ -638,9 +676,10 @@ mod tests {
         let schema = create_test_schema();
         let bloom_filters = HashMap::from([(
             1,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_i32(&[1, 2, 3]),
                 PhysicalType::INT32,
+                0,
             ),
         )]);
 
@@ -660,9 +699,10 @@ mod tests {
         let schema = create_test_schema();
         let bloom_filters = HashMap::from([(
             1,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_i32(&[1, 2, 3]),
                 PhysicalType::INT32,
+                0,
             ),
         )]);
 
@@ -680,9 +720,10 @@ mod tests {
         let schema = create_test_schema();
         let bloom_filters = HashMap::from([(
             2,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_str(&["alice", "bob"]),
                 PhysicalType::BYTE_ARRAY,
+                0,
             ),
         )]);
 
@@ -700,9 +741,10 @@ mod tests {
         let schema = create_test_schema();
         let bloom_filters = HashMap::from([(
             2,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_str(&["alice", "bob"]),
                 PhysicalType::BYTE_ARRAY,
+                0,
             ),
         )]);
 
@@ -747,7 +789,8 @@ mod tests {
         sbbf.insert(&12345_i32);
         sbbf.insert(&67890_i32);
 
-        let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::INT32))]);
+        let bloom_filters =
+            HashMap::from([(1, ColumnBloomFilter::new(sbbf, PhysicalType::INT32, 0))]);
 
         let predicate = Reference::new("amount")
             .equal_to(
@@ -772,7 +815,8 @@ mod tests {
         sbbf.insert(&12345_i32);
         sbbf.insert(&67890_i32);
 
-        let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::INT32))]);
+        let bloom_filters =
+            HashMap::from([(1, ColumnBloomFilter::new(sbbf, PhysicalType::INT32, 0))]);
 
         // Value "999.99" has mantissa 99999, not in the bloom filter
         let predicate = Reference::new("amount")
@@ -800,7 +844,8 @@ mod tests {
         let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
         sbbf.insert(&mantissa);
 
-        let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::INT64))]);
+        let bloom_filters =
+            HashMap::from([(1, ColumnBloomFilter::new(sbbf, PhysicalType::INT64, 0))]);
 
         let predicate = Reference::new("amount")
             .equal_to(
@@ -824,7 +869,8 @@ mod tests {
         let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
         sbbf.insert(&123456789012345_i64);
 
-        let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::INT64))]);
+        let bloom_filters =
+            HashMap::from([(1, ColumnBloomFilter::new(sbbf, PhysicalType::INT64, 0))]);
 
         let predicate = Reference::new("amount")
             .equal_to(
@@ -848,12 +894,16 @@ mod tests {
 
         // Large mantissa that requires FIXED_LEN_BYTE_ARRAY
         let mantissa: i128 = 12345678901234567890;
-        let bytes = decimal_to_fixed_length_bytes(mantissa, 25);
+        let bytes = decimal_to_fixed_length_bytes_exact(mantissa, 11).unwrap();
+        let type_length = bytes.len() as i32;
 
         let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
         sbbf.insert(&ByteArray::from(bytes));
 
-        let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY))]);
+        let bloom_filters = HashMap::from([(
+            1,
+            ColumnBloomFilter::new(sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY, type_length),
+        )]);
 
         let predicate = Reference::new("amount")
             .equal_to(
@@ -878,12 +928,16 @@ mod tests {
         let schema = create_decimal_schema(25, 2);
 
         let mantissa: i128 = 12345678901234567890;
-        let bytes = decimal_to_fixed_length_bytes(mantissa, 25);
+        let bytes = decimal_to_fixed_length_bytes_exact(mantissa, 11).unwrap();
+        let type_length = bytes.len() as i32;
 
         let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
         sbbf.insert(&ByteArray::from(bytes));
 
-        let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY))]);
+        let bloom_filters = HashMap::from([(
+            1,
+            ColumnBloomFilter::new(sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY, type_length),
+        )]);
 
         // Different value not in the bloom filter
         let predicate = Reference::new("amount")
@@ -916,7 +970,8 @@ mod tests {
         let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
         sbbf.insert(&(-12345_i32));
 
-        let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::INT32))]);
+        let bloom_filters =
+            HashMap::from([(1, ColumnBloomFilter::new(sbbf, PhysicalType::INT32, 0))]);
 
         let predicate = Reference::new("amount")
             .equal_to(
@@ -938,12 +993,16 @@ mod tests {
         let schema = create_decimal_schema(25, 2);
 
         let mantissa: i128 = -12345678901234567890;
-        let bytes = decimal_to_fixed_length_bytes(mantissa, 25);
+        let bytes = decimal_to_fixed_length_bytes_exact(mantissa, 11).unwrap();
+        let type_length = bytes.len() as i32;
 
         let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
         sbbf.insert(&ByteArray::from(bytes));
 
-        let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY))]);
+        let bloom_filters = HashMap::from([(
+            1,
+            ColumnBloomFilter::new(sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY, type_length),
+        )]);
 
         let predicate = Reference::new("amount")
             .equal_to(
@@ -973,12 +1032,16 @@ mod tests {
 
         // Simulate a file where decimal(5,2) was stored as FIXED_LEN_BYTE_ARRAY
         let mantissa: i128 = 12345;
-        let bytes = decimal_to_fixed_length_bytes(mantissa, 5);
+        let bytes = decimal_to_fixed_length_bytes_exact(mantissa, 3).unwrap();
+        let type_length = bytes.len() as i32;
 
         let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
         sbbf.insert(&ByteArray::from(bytes));
 
-        let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY))]);
+        let bloom_filters = HashMap::from([(
+            1,
+            ColumnBloomFilter::new(sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY, type_length),
+        )]);
 
         let predicate = Reference::new("amount")
             .equal_to(
@@ -996,6 +1059,109 @@ mod tests {
             result,
             "Should match when physical type is FIXED_LEN_BYTE_ARRAY even for low-precision decimal"
         );
+    }
+
+    /// Builds the (schema, bloom filter) pair for a `decimal` column that the file
+    /// stored at `file_type_length` bytes while the table schema now declares
+    /// `schema_precision`, as a precision-widening evolution produces.
+    fn widened_decimal_case(
+        mantissa: i128,
+        file_type_length: usize,
+        schema_precision: u32,
+    ) -> (Schema, HashMap<i32, ColumnBloomFilter>) {
+        let bytes = decimal_to_fixed_length_bytes_exact(mantissa, file_type_length).unwrap();
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        sbbf.insert(&ByteArray::from(bytes));
+
+        let filters = HashMap::from([(
+            1,
+            ColumnBloomFilter::new(
+                sbbf,
+                PhysicalType::FIXED_LEN_BYTE_ARRAY,
+                file_type_length as i32,
+            ),
+        )]);
+
+        (create_decimal_schema(schema_precision, 2), filters)
+    }
+
+    fn decimal_eq_predicate(schema: Schema, mantissa: i128, precision: u32) -> BoundPredicate {
+        Reference::new("amount")
+            .equal_to(
+                Datum::decimal_with_precision(
+                    crate::spec::decimal_utils::decimal_from_i128_with_scale(mantissa, 2),
+                    precision,
+                )
+                .unwrap(),
+            )
+            .bind(schema.into(), true)
+            .unwrap()
+    }
+
+    /// Widening a decimal's precision does not rewrite existing files, so the
+    /// column keeps its original `type_length`. Deriving the probe length from the
+    /// widened precision changed the encoding and missed every entry the writer
+    /// inserted, silently pruning row groups holding matching rows.
+    #[test]
+    fn test_decimal_widened_precision_present_is_not_pruned() {
+        let mantissa: i128 = 12345678901234567890;
+        // File written as decimal(20,2) -> 9 bytes; schema since widened to 38.
+        let (schema, filters) = widened_decimal_case(mantissa, 9, 38);
+        let predicate = decimal_eq_predicate(schema, mantissa, 38);
+
+        let result = BloomFilterEvaluator::eval(&predicate, &filters).unwrap();
+        assert!(
+            result,
+            "widened decimal precision must still find the value at the file's length"
+        );
+    }
+
+    #[test]
+    fn test_decimal_widened_precision_absent_still_prunes() {
+        let mantissa: i128 = 12345678901234567890;
+        let (schema, filters) = widened_decimal_case(mantissa, 9, 38);
+        let predicate = decimal_eq_predicate(schema, 999999999999999999, 38);
+
+        let result = BloomFilterEvaluator::eval(&predicate, &filters).unwrap();
+        assert!(!result, "genuinely absent value must still prune");
+    }
+
+    /// A value too wide for the column's `type_length` cannot be present, but
+    /// truncating it would probe an unrelated slot, so stay conservative.
+    #[test]
+    fn test_decimal_value_wider_than_column_does_not_prune() {
+        let (schema, filters) = widened_decimal_case(1234, 2, 38);
+        let predicate = decimal_eq_predicate(schema, i64::MAX as i128, 38);
+
+        let result = BloomFilterEvaluator::eval(&predicate, &filters).unwrap();
+        assert!(result, "value too wide for the column must not prune");
+    }
+
+    /// A zero or oversized `type_length` is unusable; never prune on it.
+    #[test]
+    fn test_decimal_unusable_type_length_does_not_prune() {
+        let mantissa: i128 = 1234;
+        let bytes = decimal_to_fixed_length_bytes_exact(mantissa, 4).unwrap();
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        sbbf.insert(&ByteArray::from(bytes));
+
+        for bogus_length in [0, -1, 17] {
+            let filters = HashMap::from([(
+                1,
+                ColumnBloomFilter::new(
+                    Sbbf::new_with_ndv_fpp(10, 0.01).unwrap(),
+                    PhysicalType::FIXED_LEN_BYTE_ARRAY,
+                    bogus_length,
+                ),
+            )]);
+            let predicate = decimal_eq_predicate(create_decimal_schema(38, 2), mantissa, 38);
+
+            let result = BloomFilterEvaluator::eval(&predicate, &filters).unwrap();
+            assert!(
+                result,
+                "type_length {bogus_length} is unusable and must not prune"
+            );
+        }
     }
 
     fn single_field_schema(name: &str, ty: PrimitiveType) -> Schema {
@@ -1017,9 +1183,10 @@ mod tests {
         let schema = single_field_schema("id", PrimitiveType::Long);
         let bloom_filters = HashMap::from([(
             1,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_i32(&[100, 150, 199]),
                 PhysicalType::INT32,
+                0,
             ),
         )]);
 
@@ -1040,9 +1207,10 @@ mod tests {
         let schema = single_field_schema("id", PrimitiveType::Long);
         let bloom_filters = HashMap::from([(
             1,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_i32(&[100, 150, 199]),
                 PhysicalType::INT32,
+                0,
             ),
         )]);
 
@@ -1062,9 +1230,10 @@ mod tests {
         let schema = single_field_schema("id", PrimitiveType::Long);
         let bloom_filters = HashMap::from([(
             1,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_i32(&[1, 2, 3]),
                 PhysicalType::INT32,
+                0,
             ),
         )]);
 
@@ -1091,9 +1260,10 @@ mod tests {
         let schema = single_field_schema("val", PrimitiveType::Double);
         let bloom_filters = HashMap::from([(
             1,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_f32(&[1.5, 2.25, 4.0]),
                 PhysicalType::FLOAT,
+                0,
             ),
         )]);
 
@@ -1114,9 +1284,10 @@ mod tests {
         let schema = single_field_schema("val", PrimitiveType::Double);
         let bloom_filters = HashMap::from([(
             1,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_f32(&[1.5, 2.25, 4.0]),
                 PhysicalType::FLOAT,
+                0,
             ),
         )]);
 
@@ -1136,9 +1307,10 @@ mod tests {
         let schema = single_field_schema("val", PrimitiveType::Double);
         let bloom_filters = HashMap::from([(
             1,
-            (
+            ColumnBloomFilter::new(
                 create_bloom_filter_with_values_f32(&[1.5, 2.25]),
                 PhysicalType::FLOAT,
+                0,
             ),
         )]);
 
