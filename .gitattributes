@@ -1,1 +1,10 @@
+# Paths left out of the source archive built by dev/release/create_rc.sh.
+# Files needed to build, test, and verify from source (dev/, .licenserc.yaml,
+# lint configs) must stay in.
 website export-ignore
+.asf.yaml export-ignore
+.devcontainer export-ignore
+.gitattributes export-ignore
+.github export-ignore
+.gitignore export-ignore
+.idea export-ignore
