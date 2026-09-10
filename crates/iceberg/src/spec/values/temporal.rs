@@ -98,15 +98,12 @@ pub(crate) mod timestamptz {
     }
 
     pub(crate) fn microseconds_to_datetimetz(micros: i64) -> DateTime<Utc> {
-        let (secs, rem) = (micros / 1_000_000, micros % 1_000_000);
-
-        DateTime::from_timestamp(secs, rem as u32 * 1_000).unwrap()
+        // This shouldn't fail until the year 262000
+        DateTime::from_timestamp_micros(micros).unwrap()
     }
 
     pub(crate) fn nanoseconds_to_datetimetz(nanos: i64) -> DateTime<Utc> {
-        let (secs, rem) = (nanos / 1_000_000_000, nanos % 1_000_000_000);
-
-        DateTime::from_timestamp(secs, rem as u32).unwrap()
+        DateTime::from_timestamp_nanos(nanos)
     }
 
     /// Nanoseconds since the Unix epoch, or `None` if outside the representable `i64` range
