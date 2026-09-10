@@ -152,6 +152,11 @@ jobs:
             cargo check -p "$pkg" --all-targets || exit 1
           done
 
+      # Dry-runs the publish.yml command to catch crates that cannot be published,
+      # such as packages missing files or dependency cycles between workspace crates.
+      - name: Check each crate can be published
+        run: cargo publish --workspace --all-features --dry-run
+
   # Verifies the core iceberg crate compiles without default features, ensuring
   # optional functionality is properly gated behind feature flags.
   build_with_no_default_features:
