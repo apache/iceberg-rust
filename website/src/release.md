@@ -215,8 +215,10 @@ This script creates:
 - SHA-512 checksum: `apache-iceberg-rust-${iceberg_version}.tar.gz.sha512`
 - Signed annotated RC tag: `v${iceberg_version}-rc.${rc}`
 
-The publish dry-run packages and builds every crate as the final release would, so a crate that cannot be published fails RC creation.
-The script checks license headers against the generated source archive, not the live Git worktree. If enabled, SVN upload runs after local artifact verification and before RC tag creation. The script creates the signed RC tag as the final release step, then prints a draft VOTE email for `dev@iceberg.apache.org`.
+The script runs a number of verifications.
+It performs a dry-run packaging step and builds every crate as the final release would, so a crate that cannot be published fails RC creation.
+It also checks license headers against the generated source archive.
+If enabled, SVN upload runs after local artifact verification and before RC tag creation. The script creates the signed RC tag as the final release step, then prints a draft VOTE email for `dev@iceberg.apache.org`.
 
 To upload artifacts to ASF dev dist as part of RC creation, pass:
 
