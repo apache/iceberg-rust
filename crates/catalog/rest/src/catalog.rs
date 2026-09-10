@@ -1497,8 +1497,8 @@ impl SessionCatalog for RestSessionCatalog {
 
         // The commit response carries no credentials, so this FileIO has only the
         // catalog-level config. `Transaction::do_commit` swaps in the credentialed
-        // one from its pre-commit load; only a direct `update_table` caller sees
-        // this plain one.
+        // one from its pre-commit load, and it is the only caller there can be:
+        // `TableCommit` is buildable inside the `iceberg` crate alone.
         let file_io = self
             .load_file_io(Some(&response.metadata_location), None, None)
             .await?;
