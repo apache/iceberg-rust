@@ -230,15 +230,6 @@ The script does not push the RC tag. Review the output, then push the tag manual
 git push origin "v${iceberg_version}-rc.${rc}"
 ```
 
-Pushing the RC tag triggers the publish workflow for crates, which dry-runs the crate publish without uploading anything.
-Verify that the run succeeded before starting the vote, using the following GitHub CLI command or the equivalent on the GitHub website:
-
-```shell
-gh run list --repo apache/iceberg-rust --workflow publish.yml --branch "v${iceberg_version}-rc.${rc}"
-```
-
-A failed run means the crates cannot be published as tagged, so the problem must be fixed in a new RC.
-
 If an RC has a problem, abandon that RC and increment the RC number.
 
 ### Trigger release candidate PyPI publish
