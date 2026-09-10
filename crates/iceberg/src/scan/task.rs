@@ -312,8 +312,10 @@ pub(crate) struct DeleteFileContext {
     pub(crate) partition_spec_id: i32,
 }
 
-impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
-    fn from(ctx: &DeleteFileContext) -> Self {
+impl TryFrom<&DeleteFileContext> for FileScanTaskDeleteFile {
+    type Error = Error;
+
+    fn try_from(ctx: &DeleteFileContext) -> Result<Self> {
         FileScanTaskDeleteFile::builder()
             .with_file_path(ctx.manifest_entry.file_path().to_string())
             .with_file_size_in_bytes(ctx.manifest_entry.file_size_in_bytes())
@@ -333,7 +335,6 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
                     .map(Box::from),
             )
             .build()
-            .expect("delete file context should build a valid FileScanTaskDeleteFile")
     }
 }
 
@@ -469,6 +470,40 @@ impl FileScanTaskDeleteFile {
     }
 
     fn validate(&self) -> Result<()> {
+        if let Some(offset) = self.content_offset
+            && offset < 0
+        {
+            let kind = if self.is_deletion_vector() {
+                "deletion vector"
+            } else {
+                "delete file"
+            };
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "{kind} {} has negative content_offset {}",
+                    self.file_path, offset
+                ),
+            ));
+        }
+
+        if let Some(size) = self.content_size_in_bytes
+            && size < 0
+        {
+            let kind = if self.is_deletion_vector() {
+                "deletion vector"
+            } else {
+                "delete file"
+            };
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "{kind} {} has negative content_size_in_bytes {}",
+                    self.file_path, size
+                ),
+            ));
+        }
+
         if !self.is_deletion_vector() {
             return Ok(());
         }
@@ -483,48 +518,24 @@ impl FileScanTaskDeleteFile {
             ));
         }
 
-        match self.content_offset {
-            None => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "deletion vector {} is missing content_offset",
-                        self.file_path
-                    ),
-                ));
-            }
-            Some(offset) if offset < 0 => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "deletion vector {} has negative content_offset {}",
-                        self.file_path, offset
-                    ),
-                ));
-            }
-            Some(_) => {}
+        if self.content_offset.is_none() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} is missing content_offset",
+                    self.file_path
+                ),
+            ));
         }
 
-        match self.content_size_in_bytes {
-            None => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "deletion vector {} is missing content_size_in_bytes",
-                        self.file_path
-                    ),
-                ));
-            }
-            Some(size) if size < 0 => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "deletion vector {} has negative content_size_in_bytes {}",
-                        self.file_path, size
-                    ),
-                ));
-            }
-            Some(_) => {}
+        if self.content_size_in_bytes.is_none() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} is missing content_size_in_bytes",
+                    self.file_path
+                ),
+            ));
         }
 
         if self.record_count.is_none() {
@@ -865,6 +876,33 @@ mod tests {
                 .with_record_count(Some(3))
                 .build(),
             "deletion vector dv.puffin has negative content_size_in_bytes -1",
+        );
+    }
+
+    #[test]
+    fn test_delete_file_builder_rejects_negative_coordinates_for_non_dv() {
+        assert_delete_file_builder_error(
+            FileScanTaskDeleteFile::builder()
+                .with_file_path("position-deletes.parquet".to_string())
+                .with_file_size_in_bytes(100)
+                .with_file_type(DataContentType::PositionDeletes)
+                .with_file_format(DataFileFormat::Parquet)
+                .with_partition_spec_id(0)
+                .with_content_offset(Some(-1))
+                .build(),
+            "delete file position-deletes.parquet has negative content_offset -1",
+        );
+
+        assert_delete_file_builder_error(
+            FileScanTaskDeleteFile::builder()
+                .with_file_path("equality-deletes.parquet".to_string())
+                .with_file_size_in_bytes(100)
+                .with_file_type(DataContentType::EqualityDeletes)
+                .with_file_format(DataFileFormat::Parquet)
+                .with_partition_spec_id(0)
+                .with_content_size_in_bytes(Some(-1))
+                .build(),
+            "delete file equality-deletes.parquet has negative content_size_in_bytes -1",
         );
     }
 
