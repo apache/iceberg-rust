@@ -1233,6 +1233,7 @@ The release branch should be used as the base for the pull request.</p>
 <li><code>--create_rc_tag 1</code>: create the signed annotated RC tag as the final release step.</li>
 <li><code>--check_headers 1</code>: check Apache license headers against the source archive.</li>
 <li><code>--check_deps 1</code>: run dependency license checks before artifact creation.</li>
+<li><code>--check_publish 1</code>: dry-run publishing every crate to crates.io before artifact creation.</li>
 <li><code>--sign 1</code>: create and verify the detached GPG signature.</li>
 <li><code>--upload_svn 0</code>: upload RC artifacts to the ASF dev dist SVN repository.</li>
 <li><code>--svn_dist_url https://dist.apache.org/repos/dist/dev/iceberg</code>: SVN directory URL where the RC artifact directory will be uploaded.</li>
@@ -1245,7 +1246,10 @@ The release branch should be used as the base for the pull request.</p>
 <li>SHA-512 checksum: <code>apache-iceberg-rust-${iceberg_version}.tar.gz.sha512</code></li>
 <li>Signed annotated RC tag: <code>v${iceberg_version}-rc.${rc}</code></li>
 </ul>
-<p>The script checks license headers against the generated source archive, not the live Git worktree. If enabled, SVN upload runs after local artifact verification and before RC tag creation. The script creates the signed RC tag as the final release step, then prints a draft VOTE email for <code>dev@iceberg.apache.org</code>.</p>
+<p>The script runs a number of verifications.
+It performs a dry-run packaging step and builds every crate as the final release would, so a crate that cannot be published fails RC creation.
+It also checks license headers against the generated source archive.
+If enabled, SVN upload runs after local artifact verification and before RC tag creation. The script creates the signed RC tag as the final release step, then prints a draft VOTE email for <code>dev@iceberg.apache.org</code>.</p>
 <p>To upload artifacts to ASF dev dist as part of RC creation, pass:</p>
 <pre><code class="language-shell">dev/release/create_rc.sh ${iceberg_version} ${rc} --upload_svn 1
 </code></pre>

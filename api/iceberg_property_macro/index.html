@@ -16,7 +16,12 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<h2 id="iceberg-property-macros"><a class="doc-anchor" href="#iceberg-property-macros">§</a>Iceberg property macros</h2><h3 id="properties-derive-macro"><a class="doc-anchor" href="#properties-derive-macro">§</a><code>Properties</code> derive macro</h3>
+<h2 id="iceberg-property-macros"><a class="doc-anchor" href="#iceberg-property-macros">§</a>Iceberg property macros</h2>
+<p>This crate contains the property macros used internally by
+<a href="https://crates.io/crates/iceberg"><code>iceberg</code></a>. It is published only because
+<code>iceberg</code> depends on it and has no API stability guarantees, so depend on
+<code>iceberg</code> rather than on this crate.</p>
+<h3 id="properties-derive-macro"><a class="doc-anchor" href="#properties-derive-macro">§</a><code>Properties</code> derive macro</h3>
 <p><code>#[derive(Properties)]</code> parses an owned typed struct from a flat
 <code>HashMap&lt;String, String&gt;</code> and can generate opt-in read-only getters. It
 deliberately does not generate property-map serialization or implement
