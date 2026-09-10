@@ -44,6 +44,7 @@ use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
 use crate::encryption::StandardKeyMetadata;
 use crate::error::Result;
+use crate::expr::BoundPredicate;
 use crate::expr::visitors::bloom_filter_evaluator::{
     BloomFilterEvaluator, ColumnBloomFilter, collect_bloom_filter_field_ids,
 };
@@ -725,7 +726,7 @@ impl FileScanTaskReader {
     /// Reads bloom filters for relevant columns and evaluates the predicate
     /// against them to filter out row groups that definitely don't match.
     async fn filter_row_groups_by_bloom_filter(
-        predicate: &crate::expr::BoundPredicate,
+        predicate: &BoundPredicate,
         builder: &mut ParquetRecordBatchStreamBuilder<ArrowFileReader>,
         candidate_row_groups: &[usize],
         field_id_map: &HashMap<i32, usize>,
