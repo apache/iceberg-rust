@@ -770,8 +770,12 @@ impl FileScanTaskReader {
                         );
                     }
                     Ok(None) => {}
-                    Err(_) => {
-                        // If we can't read the bloom filter, conservatively include the row group
+                    Err(e) => {
+                        // Left absent from the map, so the evaluator treats the column
+                        // as might-match and the row group survives.
+                        tracing::debug!(
+                            "Bloom filter for field {field_id} in row group {rg_idx} could not be read: {e}"
+                        );
                     }
                 }
             }
@@ -779,7 +783,12 @@ impl FileScanTaskReader {
             match BloomFilterEvaluator::eval(predicate, &bloom_filters) {
                 Ok(true) => result.push(rg_idx),
                 Ok(false) => { /* Row group pruned by bloom filter */ }
-                Err(_) => result.push(rg_idx), // On error, conservatively include
+                Err(e) => {
+                    tracing::debug!(
+                        "Bloom filter evaluation failed for row group {rg_idx}, including it: {e}"
+                    );
+                    result.push(rg_idx);
+                }
             }
         }
 
