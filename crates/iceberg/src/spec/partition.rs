@@ -171,7 +171,7 @@ impl PartitionSpec {
                         &field.name,
                         &field
                             .transform
-                            .to_human_string(&field_types[i].field_type, value),
+                            .to_human_string(field_types[i].field_type(), value),
                     )
                     .finish()
             })
@@ -471,7 +471,7 @@ impl PartitionSpecBuilder {
                     ),
                 )
             })?
-            .id;
+            .id();
         let field = UnboundPartitionField {
             source_id,
             field_id: None,
@@ -583,9 +583,10 @@ impl PartitionSpecBuilder {
                         ),
                     )
                 })?;
-            let res_type = partition_field.transform.result_type(&field.field_type)?;
+            let res_type = partition_field.transform.result_type(field.field_type())?;
             let field =
                 NestedField::optional(partition_field.field_id, &partition_field.name, res_type)
+                    .expect("valid nested field")
                     .into();
             struct_fields.push(field);
         }
@@ -603,14 +604,16 @@ impl PartitionSpecBuilder {
         match schema.field_by_name(field.name.as_str()) {
             Some(schema_collision) => {
                 if field.transform == Transform::Identity {
-                    if schema_collision.id == field.source_id {
+                    if schema_collision.id() == field.source_id {
                         Ok(())
                     } else {
                         Err(Error::new(
                             ErrorKind::DataInvalid,
                             format!(
                                 "Cannot create identity partition sourced from different field in schema. Field name '{}' has id `{}` in schema but partition source id is `{}`",
-                                field.name, schema_collision.id, field.source_id
+                                field.name,
+                                schema_collision.id(),
+                                field.source_id
                             ),
                         ))
                     }
@@ -642,26 +645,26 @@ impl PartitionSpecBuilder {
         })?;
 
         if field.transform != Transform::Void {
-            if !schema_field.field_type.is_primitive() {
+            if !schema_field.field_type().is_primitive() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "Cannot partition by non-primitive source field: '{}'.",
-                        schema_field.field_type
+                        schema_field.field_type()
                     ),
                 ));
             }
 
             if field
                 .transform
-                .result_type(&schema_field.field_type)
+                .result_type(schema_field.field_type())
                 .is_err()
             {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "Invalid source type: '{}' for transform: '{}'.",
-                        schema_field.field_type,
+                        schema_field.field_type(),
                         field.transform.dedup_name()
                     ),
                 ));
@@ -790,8 +793,12 @@ mod tests {
     fn test_is_unpartitioned() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -945,8 +952,12 @@ mod tests {
     fn test_new_unpartition() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -988,13 +999,24 @@ mod tests {
         let partition_spec: PartitionSpec = serde_json::from_str(spec).unwrap();
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(3, "ts", Type::Primitive(PrimitiveType::Timestamp)).into(),
-                NestedField::required(4, "ts_day", Type::Primitive(PrimitiveType::Timestamp))
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
                     .into(),
-                NestedField::required(5, "id_bucket", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(6, "id_truncate", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(3, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(4, "ts_day", Type::Primitive(PrimitiveType::Timestamp))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(5, "id_bucket", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(6, "id_truncate", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1008,6 +1030,7 @@ mod tests {
                 &partition_spec.fields[0].name,
                 Type::Primitive(PrimitiveType::Date)
             )
+            .expect("valid nested field")
         );
         assert_eq!(
             *partition_type.fields()[1],
@@ -1016,6 +1039,7 @@ mod tests {
                 &partition_spec.fields[1].name,
                 Type::Primitive(PrimitiveType::Int)
             )
+            .expect("valid nested field")
         );
         assert_eq!(
             *partition_type.fields()[2],
@@ -1024,6 +1048,7 @@ mod tests {
                 &partition_spec.fields[2].name,
                 Type::Primitive(PrimitiveType::String)
             )
+            .expect("valid nested field")
         );
     }
 
@@ -1039,13 +1064,24 @@ mod tests {
         let partition_spec: PartitionSpec = serde_json::from_str(spec).unwrap();
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(3, "ts", Type::Primitive(PrimitiveType::Timestamp)).into(),
-                NestedField::required(4, "ts_day", Type::Primitive(PrimitiveType::Timestamp))
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
                     .into(),
-                NestedField::required(5, "id_bucket", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(6, "id_truncate", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(3, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(4, "ts_day", Type::Primitive(PrimitiveType::Timestamp))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(5, "id_bucket", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(6, "id_truncate", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1081,8 +1117,12 @@ mod tests {
         let partition_spec: PartitionSpec = serde_json::from_str(spec).unwrap();
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1103,8 +1143,12 @@ mod tests {
     fn test_builder_disallow_duplicate_field_ids() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1129,9 +1173,15 @@ mod tests {
     fn test_builder_auto_assign_field_ids() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(3, "ts", Type::Primitive(PrimitiveType::Timestamp)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(3, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1171,8 +1221,12 @@ mod tests {
     fn test_builder_valid_schema() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1202,6 +1256,7 @@ mod tests {
             spec.partition_type(&schema).unwrap(),
             StructType::new(vec![
                 NestedField::optional(1000, "id_bucket[16]", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
                     .into()
             ])
         )
@@ -1211,7 +1266,9 @@ mod tests {
     fn test_collision_with_schema_name() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1237,8 +1294,12 @@ mod tests {
     fn test_builder_collision_is_ok_for_identity_transforms() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "number", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "number", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1276,9 +1337,15 @@ mod tests {
     fn test_builder_all_source_ids_must_exist() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(3, "ts", Type::Primitive(PrimitiveType::Timestamp)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(3, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1328,8 +1395,12 @@ mod tests {
     fn test_builder_disallows_variant_source() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "v", Type::Variant(crate::spec::VariantType)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(2, "v", Type::Variant(crate::spec::VariantType))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1369,7 +1440,9 @@ mod tests {
     fn test_builder_incompatible_transforms_disallowed() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1413,8 +1486,12 @@ mod tests {
     fn test_is_compatible_with() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1450,7 +1527,9 @@ mod tests {
     fn test_not_compatible_with_transform_different() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1486,8 +1565,12 @@ mod tests {
     fn test_not_compatible_with_source_id_different() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1523,8 +1606,12 @@ mod tests {
     fn test_not_compatible_with_order_different() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1584,8 +1671,12 @@ mod tests {
     fn test_highest_field_id() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1616,8 +1707,12 @@ mod tests {
     fn test_has_sequential_ids() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1650,8 +1745,12 @@ mod tests {
     fn test_sequential_ids_must_start_at_1000() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1684,8 +1783,12 @@ mod tests {
     fn test_sequential_ids_must_have_no_gaps() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1718,11 +1821,18 @@ mod tests {
     fn test_partition_to_path() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(3, "timestamp", Type::Primitive(PrimitiveType::Timestamp))
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
                     .into(),
-                NestedField::required(4, "empty", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(3, "timestamp", Type::Primitive(PrimitiveType::Timestamp))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(4, "empty", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1757,8 +1867,11 @@ mod tests {
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "\"esc\"#1", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
                     .into(),
-                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1785,8 +1898,11 @@ mod tests {
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "\"esc\"#1", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
                     .into(),
-                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();

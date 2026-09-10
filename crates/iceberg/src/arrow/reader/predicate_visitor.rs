@@ -76,22 +76,22 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
     }
 
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(reference.field().id());
         Ok(())
     }
 
     fn not_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(reference.field().id());
         Ok(())
     }
 
     fn is_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(reference.field().id());
         Ok(())
     }
 
     fn not_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(reference.field().id());
         Ok(())
     }
 
@@ -101,7 +101,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(reference.field().id());
         Ok(())
     }
 
@@ -111,7 +111,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(reference.field().id());
         Ok(())
     }
 
@@ -121,7 +121,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(reference.field().id());
         Ok(())
     }
 
@@ -131,7 +131,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(reference.field().id());
         Ok(())
     }
 
@@ -141,7 +141,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(reference.field().id());
         Ok(())
     }
 
@@ -151,7 +151,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(reference.field().id());
         Ok(())
     }
 
@@ -161,7 +161,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(reference.field().id());
         Ok(())
     }
 
@@ -171,7 +171,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(reference.field().id());
         Ok(())
     }
 
@@ -181,7 +181,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(reference.field().id());
         Ok(())
     }
 
@@ -191,7 +191,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(reference.field().id());
         Ok(())
     }
 }
@@ -213,13 +213,13 @@ impl PredicateConverter<'_> {
     /// due to schema evolution.
     fn bound_reference(&mut self, reference: &BoundReference) -> Result<Option<usize>> {
         // The leaf column's index in Parquet schema.
-        if let Some(column_idx) = self.column_map.get(&reference.field().id) {
+        if let Some(column_idx) = self.column_map.get(&reference.field().id()) {
             if self.parquet_schema.get_column_root(*column_idx).is_group() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "Leaf column `{}` in predicates isn't a root column in Parquet schema.",
-                        reference.field().name
+                        reference.field().name()
                     ),
                 ));
             }
@@ -233,7 +233,7 @@ impl PredicateConverter<'_> {
                     ErrorKind::DataInvalid,
                     format!(
                 "Leaf column `{}` in predicates cannot be found in the required column indices.",
-                reference.field().name
+                reference.field().name()
             ),
                 ))?;
 
@@ -676,10 +676,18 @@ mod tests {
                 .with_schema_id(1)
                 .with_identifier_field_ids(vec![2])
                 .with_fields(vec![
-                    NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
-                    NestedField::optional(4, "qux", Type::Primitive(PrimitiveType::Float)).into(),
+                    NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(4, "qux", Type::Primitive(PrimitiveType::Float))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),

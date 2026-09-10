@@ -121,9 +121,15 @@ impl DataFusionEngine {
     ) -> anyhow::Result<()> {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "category", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::optional(3, "value", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "category", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(3, "value", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()?;
 
@@ -155,8 +161,12 @@ impl DataFusionEngine {
     ) -> anyhow::Result<()> {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Binary)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Binary))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()?;
 
@@ -179,8 +189,12 @@ impl DataFusionEngine {
     ) -> anyhow::Result<()> {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()?;
 

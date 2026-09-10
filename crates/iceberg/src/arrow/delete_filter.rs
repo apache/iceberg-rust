@@ -534,7 +534,9 @@ pub(crate) mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "Id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::required(1, "Id", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),

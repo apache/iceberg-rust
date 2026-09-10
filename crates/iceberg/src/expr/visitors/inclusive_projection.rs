@@ -61,7 +61,7 @@ impl InclusiveProjection {
         reference: &BoundReference,
         predicate: &BoundPredicate,
     ) -> Result<Predicate, Error> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         // This could be made a bit neater if `try_reduce` ever becomes stable
         self.get_parts_for_field_id(field_id)
@@ -245,21 +245,18 @@ mod tests {
     fn build_test_schema() -> Schema {
         Schema::builder()
             .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "a",
-                    Type::Primitive(PrimitiveType::Int),
-                )),
-                Arc::new(NestedField::required(
-                    2,
-                    "date",
-                    Type::Primitive(PrimitiveType::Date),
-                )),
-                Arc::new(NestedField::required(
-                    3,
-                    "name",
-                    Type::Primitive(PrimitiveType::String),
-                )),
+                Arc::new(
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::required(2, "date", Type::Primitive(PrimitiveType::Date))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::required(3, "name", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field"),
+                ),
             ])
             .build()
             .unwrap()

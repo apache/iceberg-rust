@@ -77,7 +77,11 @@ fn check_avro_bytes_serde(input: Vec<u8>, expected_datum: Datum, expected_type: 
 }
 
 fn check_convert_with_avro(expected_literal: Literal, expected_type: &Type) {
-    let fields = vec![NestedField::required(1, "col", expected_type.clone()).into()];
+    let fields = vec![
+        NestedField::required(1, "col", expected_type.clone())
+            .expect("valid nested field")
+            .into(),
+    ];
     let schema = Schema::builder()
         .with_fields(fields.clone())
         .build()
@@ -102,7 +106,11 @@ fn check_convert_with_avro(expected_literal: Literal, expected_type: &Type) {
 fn check_serialize_avro(literal: Literal, ty: &Type, expect_value: Value) {
     let expect_value = Value::Record(vec![("col".to_string(), expect_value)]);
 
-    let fields = vec![NestedField::required(1, "col", ty.clone()).into()];
+    let fields = vec![
+        NestedField::required(1, "col", ty.clone())
+            .expect("valid nested field")
+            .into(),
+    ];
     let schema = Schema::builder()
         .with_fields(fields.clone())
         .build()
@@ -396,9 +404,15 @@ fn json_struct() {
             None,
         ])),
         &Type::Struct(StructType::new(vec![
-            NestedField::required(1, "id", Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(2, "name", Primitive(PrimitiveType::String)).into(),
-            NestedField::optional(3, "address", Primitive(PrimitiveType::String)).into(),
+            NestedField::required(1, "id", Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
+            NestedField::optional(2, "name", Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
+            NestedField::optional(3, "address", Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
         ])),
     );
 }
@@ -416,7 +430,9 @@ fn json_list() {
             None,
         ]),
         &Type::List(ListType {
-            element_field: NestedField::list_element(0, Primitive(PrimitiveType::Int), true).into(),
+            element_field: NestedField::list_element(0, Primitive(PrimitiveType::Int), true)
+                .expect("valid nested field")
+                .into(),
         }),
     );
 }
@@ -442,8 +458,11 @@ fn json_map() {
             ),
         ])),
         &Type::Map(MapType {
-            key_field: NestedField::map_key_element(0, Primitive(PrimitiveType::String)).into(),
+            key_field: NestedField::map_key_element(0, Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
             value_field: NestedField::map_value_element(1, Primitive(PrimitiveType::Int), true)
+                .expect("valid nested field")
                 .into(),
         }),
     );
@@ -452,8 +471,12 @@ fn json_map() {
 #[test]
 fn json_map_rejects_mismatched_key_value_lengths() {
     let map_type = Type::Map(MapType {
-        key_field: NestedField::map_key_element(0, Primitive(PrimitiveType::String)).into(),
-        value_field: NestedField::map_value_element(1, Primitive(PrimitiveType::Int), true).into(),
+        key_field: NestedField::map_key_element(0, Primitive(PrimitiveType::String))
+            .expect("valid nested field")
+            .into(),
+        value_field: NestedField::map_value_element(1, Primitive(PrimitiveType::Int), true)
+            .expect("valid nested field")
+            .into(),
     });
 
     for record in [
@@ -881,6 +904,7 @@ fn avro_convert_test_list() {
         ]),
         &Type::List(ListType {
             element_field: NestedField::list_element(0, Primitive(PrimitiveType::Int), false)
+                .expect("valid nested field")
                 .into(),
         }),
     );
@@ -892,13 +916,19 @@ fn avro_convert_test_list() {
             Some(Literal::Primitive(PrimitiveLiteral::Int(3))),
         ]),
         &Type::List(ListType {
-            element_field: NestedField::list_element(0, Primitive(PrimitiveType::Int), true).into(),
+            element_field: NestedField::list_element(0, Primitive(PrimitiveType::Int), true)
+                .expect("valid nested field")
+                .into(),
         }),
     );
 }
 
 fn check_convert_with_avro_map(expected_literal: Literal, expected_type: &Type) {
-    let fields = vec![NestedField::required(1, "col", expected_type.clone()).into()];
+    let fields = vec![
+        NestedField::required(1, "col", expected_type.clone())
+            .expect("valid nested field")
+            .into(),
+    ];
     let schema = Schema::builder()
         .with_fields(fields.clone())
         .build()
@@ -949,8 +979,11 @@ fn avro_convert_test_map() {
             (Literal::Primitive(PrimitiveLiteral::Int(3)), None),
         ])),
         &Type::Map(MapType {
-            key_field: NestedField::map_key_element(2, Primitive(PrimitiveType::Int)).into(),
+            key_field: NestedField::map_key_element(2, Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
             value_field: NestedField::map_value_element(3, Primitive(PrimitiveType::Long), false)
+                .expect("valid nested field")
                 .into(),
         }),
     );
@@ -971,8 +1004,11 @@ fn avro_convert_test_map() {
             ),
         ])),
         &Type::Map(MapType {
-            key_field: NestedField::map_key_element(2, Primitive(PrimitiveType::Int)).into(),
+            key_field: NestedField::map_key_element(2, Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
             value_field: NestedField::map_value_element(3, Primitive(PrimitiveType::Long), true)
+                .expect("valid nested field")
                 .into(),
         }),
     );
@@ -996,8 +1032,11 @@ fn avro_convert_test_string_map() {
             ),
         ])),
         &Type::Map(MapType {
-            key_field: NestedField::map_key_element(2, Primitive(PrimitiveType::String)).into(),
+            key_field: NestedField::map_key_element(2, Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
             value_field: NestedField::map_value_element(3, Primitive(PrimitiveType::Int), false)
+                .expect("valid nested field")
                 .into(),
         }),
     );
@@ -1018,8 +1057,11 @@ fn avro_convert_test_string_map() {
             ),
         ])),
         &Type::Map(MapType {
-            key_field: NestedField::map_key_element(2, Primitive(PrimitiveType::String)).into(),
+            key_field: NestedField::map_key_element(2, Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
             value_field: NestedField::map_value_element(3, Primitive(PrimitiveType::Int), true)
+                .expect("valid nested field")
                 .into(),
         }),
     );
@@ -1036,9 +1078,15 @@ fn avro_convert_test_record() {
             None,
         ])),
         &Type::Struct(StructType::new(vec![
-            NestedField::required(2, "id", Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(3, "name", Primitive(PrimitiveType::String)).into(),
-            NestedField::optional(4, "address", Primitive(PrimitiveType::String)).into(),
+            NestedField::required(2, "id", Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
+            NestedField::optional(3, "name", Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
+            NestedField::optional(4, "address", Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
         ])),
     );
 }

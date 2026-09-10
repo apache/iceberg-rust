@@ -256,11 +256,11 @@ pub(crate) mod _serde {
                     let mut optional = Vec::new();
                     if let Type::Struct(struct_ty) = ty {
                         for (value, field) in r#struct.into_iter().zip(struct_ty.fields()) {
-                            if field.required {
+                            if field.is_required() {
                                 if let Some(value) = value {
                                     required.push((
-                                        field.name.clone(),
-                                        RawLiteralEnum::try_from(value, &field.field_type)?,
+                                        field.name().to_string(),
+                                        RawLiteralEnum::try_from(value, field.field_type())?,
                                     ));
                                 } else {
                                     return Err(Error::new(
@@ -270,11 +270,11 @@ pub(crate) mod _serde {
                                 }
                             } else if let Some(value) = value {
                                 optional.push((
-                                    field.name.clone(),
-                                    Some(RawLiteralEnum::try_from(value, &field.field_type)?),
+                                    field.name().to_string(),
+                                    Some(RawLiteralEnum::try_from(value, field.field_type())?),
                                 ));
                             } else {
-                                optional.push((field.name.clone(), None));
+                                optional.push((field.name().to_string(), None));
                             }
                         }
                     } else {
@@ -291,14 +291,14 @@ pub(crate) mod _serde {
                             .into_iter()
                             .map(|v| {
                                 v.map(|v| {
-                                    RawLiteralEnum::try_from(v, &list_ty.element_field.field_type)
+                                    RawLiteralEnum::try_from(v, list_ty.element_field.field_type())
                                 })
                                 .transpose()
                             })
                             .collect::<Result<_, Error>>()?;
                         RawLiteralEnum::List(List {
                             list,
-                            required: list_ty.element_field.required,
+                            required: list_ty.element_field.is_required(),
                         })
                     } else {
                         return Err(Error::new(
@@ -309,7 +309,8 @@ pub(crate) mod _serde {
                 }
                 Literal::Map(map) => {
                     if let Type::Map(map_ty) = ty {
-                        if let Type::Primitive(PrimitiveType::String) = *map_ty.key_field.field_type
+                        if let Type::Primitive(PrimitiveType::String) =
+                            *map_ty.key_field.field_type()
                         {
                             let mut raw = Vec::with_capacity(map.len());
                             for (k, v) in map {
@@ -319,7 +320,7 @@ pub(crate) mod _serde {
                                         v.map(|v| {
                                             RawLiteralEnum::try_from(
                                                 v,
-                                                &map_ty.value_field.field_type,
+                                                map_ty.value_field.field_type(),
                                             )
                                         })
                                         .transpose()?,
@@ -333,18 +334,18 @@ pub(crate) mod _serde {
                             }
                             RawLiteralEnum::StringMap(StringMap {
                                 raw,
-                                required: map_ty.value_field.required,
+                                required: map_ty.value_field.is_required(),
                             })
                         } else {
                             let list = map.into_iter().map(|(k,v)| {
                                 let raw_k =
-                                    RawLiteralEnum::try_from(k, &map_ty.key_field.field_type)?;
+                                    RawLiteralEnum::try_from(k, map_ty.key_field.field_type())?;
                                 let raw_v = v
                                     .map(|v| {
-                                        RawLiteralEnum::try_from(v, &map_ty.value_field.field_type)
+                                        RawLiteralEnum::try_from(v, map_ty.value_field.field_type())
                                     })
                                     .transpose()?;
-                                if map_ty.value_field.required {
+                                if map_ty.value_field.is_required() {
                                     Ok(Some(RawLiteralEnum::Record(Record {
                                         required: vec![
                                             (MAP_KEY_FIELD_NAME.to_string(), raw_k),
@@ -523,7 +524,7 @@ pub(crate) mod _serde {
                             .into_iter()
                             .map(|v| {
                                 if let Some(v) = v {
-                                    v.try_into(&ty.element_field.field_type)
+                                    v.try_into(ty.element_field.field_type())
                                 } else {
                                     Ok(None)
                                 }
@@ -531,8 +532,8 @@ pub(crate) mod _serde {
                             .collect::<Result<_, Error>>()?,
                     ))),
                     Type::Map(map_ty) => {
-                        let key_ty = map_ty.key_field.field_type.as_ref();
-                        let value_ty = map_ty.value_field.field_type.as_ref();
+                        let key_ty = map_ty.key_field.field_type();
+                        let value_ty = map_ty.value_field.field_type();
                         let mut map = Map::new();
                         for k_v in v.list {
                             let k_v = k_v.ok_or_else(|| invalid_err_with_reason("list","In deserialize, None will be represented as Some(RawLiteral::Null), all element in list must be valid"))?;
@@ -565,7 +566,7 @@ pub(crate) mod _serde {
                                             )
                                         })?;
                                         let value = v.try_into(value_ty)?;
-                                        if map_ty.value_field.required && value.is_none() {
+                                        if map_ty.value_field.is_required() && value.is_none() {
                                             return Err(invalid_err_with_reason(
                                                 "list",
                                                 "Value element is required in this Map",
@@ -690,14 +691,15 @@ pub(crate) mod _serde {
                                             &format!("field {} is not exist", field_name),
                                         )
                                     })?;
-                                let value = value.try_into(&field.field_type)?;
+                                let value = value.try_into(field.field_type())?;
                                 Ok(value)
                             })
                             .collect::<Result<_, Error>>()?;
                         Ok(Some(Literal::Struct(Struct::from_iter(iters))))
                     }
                     Type::Map(map_ty) => {
-                        if *map_ty.key_field.field_type != Type::Primitive(PrimitiveType::String) {
+                        if *map_ty.key_field.field_type() != Type::Primitive(PrimitiveType::String)
+                        {
                             return Err(invalid_err_with_reason(
                                 "record",
                                 "Map key must be string",
@@ -705,8 +707,8 @@ pub(crate) mod _serde {
                         }
                         let mut map = Map::new();
                         for (k, v) in required {
-                            let value = v.try_into(&map_ty.value_field.field_type)?;
-                            if map_ty.value_field.required && value.is_none() {
+                            let value = v.try_into(map_ty.value_field.field_type())?;
+                            if map_ty.value_field.is_required() && value.is_none() {
                                 return Err(invalid_err_with_reason(
                                     "record",
                                     "Value element is required in this Map",

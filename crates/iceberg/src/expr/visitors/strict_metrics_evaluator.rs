@@ -117,7 +117,7 @@ impl<'a> StrictMetricsEvaluator<'a> {
         cmp_fn: fn(&Datum, &Datum) -> bool,
         use_lower_bound: bool,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if self.may_contain_null(field_id) || self.may_contain_nan(field_id) {
             return ROWS_MIGHT_NOT_MATCH;
@@ -166,7 +166,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
     }
 
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if self.contains_nulls_only(field_id) {
             return ROWS_MUST_MATCH;
@@ -180,7 +180,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if let Some(&count) = self.null_count(field_id) {
             if count == 0 {
@@ -193,7 +193,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
     }
 
     fn is_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         let contains_only = self.contains_nans_only(field_id);
 
@@ -205,7 +205,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
     }
 
     fn not_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if let Some(&nan_count) = self.nan_count(field_id)
             && nan_count == 0
@@ -244,7 +244,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if let Some(lower) = self.lower_bound(field_id)
             && lower.is_nan()
@@ -270,7 +270,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if self.may_contain_null(field_id) || self.may_contain_nan(field_id) {
             return ROWS_MIGHT_NOT_MATCH;
@@ -296,7 +296,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if self.contains_nulls_only(field_id) || self.contains_nans_only(field_id) {
             return ROWS_MUST_MATCH;
@@ -347,7 +347,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if self.may_contain_null(field_id) || self.may_contain_nan(field_id) {
             return ROWS_MIGHT_NOT_MATCH;
@@ -371,7 +371,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if self.contains_nulls_only(field_id) || self.contains_nans_only(field_id) {
             return ROWS_MUST_MATCH;
@@ -431,89 +431,91 @@ mod test {
         let table_schema = Schema::builder()
             .with_fields(vec![
                 // field id=1: "id" (Int)
-                Arc::new(NestedField::required(
-                    1,
-                    "id",
-                    Type::Primitive(PrimitiveType::Int),
-                )),
+                Arc::new(
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field"),
+                ),
                 // field id=2: "no_stats" (Int)
-                Arc::new(NestedField::optional(
-                    2,
-                    "no_stats",
-                    Type::Primitive(PrimitiveType::Int),
-                )),
+                Arc::new(
+                    NestedField::optional(2, "no_stats", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field"),
+                ),
                 // field id=3: "required" (String)
-                Arc::new(NestedField::required(
-                    3,
-                    "required",
-                    Type::Primitive(PrimitiveType::String),
-                )),
+                Arc::new(
+                    NestedField::required(3, "required", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field"),
+                ),
                 // field id=4: "all_nulls" (String)
-                Arc::new(NestedField::optional(
-                    4,
-                    "all_nulls",
-                    Type::Primitive(PrimitiveType::String),
-                )),
+                Arc::new(
+                    NestedField::optional(4, "all_nulls", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field"),
+                ),
                 // field id=5: "some_nulls" (String)
-                Arc::new(NestedField::optional(
-                    5,
-                    "some_nulls",
-                    Type::Primitive(PrimitiveType::String),
-                )),
+                Arc::new(
+                    NestedField::optional(5, "some_nulls", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field"),
+                ),
                 // field id=6: "no_nulls" (String)
-                Arc::new(NestedField::optional(
-                    6,
-                    "no_nulls",
-                    Type::Primitive(PrimitiveType::String),
-                )),
+                Arc::new(
+                    NestedField::optional(6, "no_nulls", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field"),
+                ),
                 // field id=7: "all_nans" (Double)
-                Arc::new(NestedField::optional(
-                    7,
-                    "all_nans",
-                    Type::Primitive(PrimitiveType::Double),
-                )),
+                Arc::new(
+                    NestedField::optional(7, "all_nans", Type::Primitive(PrimitiveType::Double))
+                        .expect("valid nested field"),
+                ),
                 // field id=8: "some_nans" (Float)
-                Arc::new(NestedField::optional(
-                    8,
-                    "some_nans",
-                    Type::Primitive(PrimitiveType::Float),
-                )),
+                Arc::new(
+                    NestedField::optional(8, "some_nans", Type::Primitive(PrimitiveType::Float))
+                        .expect("valid nested field"),
+                ),
                 // field id=9: "no_nans" (Float)
-                Arc::new(NestedField::optional(
-                    9,
-                    "no_nans",
-                    Type::Primitive(PrimitiveType::Float),
-                )),
+                Arc::new(
+                    NestedField::optional(9, "no_nans", Type::Primitive(PrimitiveType::Float))
+                        .expect("valid nested field"),
+                ),
                 // field id=10: "all_nulls_double" (Double)
-                Arc::new(NestedField::optional(
-                    10,
-                    "all_nulls_double",
-                    Type::Primitive(PrimitiveType::Double),
-                )),
+                Arc::new(
+                    NestedField::optional(
+                        10,
+                        "all_nulls_double",
+                        Type::Primitive(PrimitiveType::Double),
+                    )
+                    .expect("valid nested field"),
+                ),
                 // field id=11: "all_nans_v1_stats" (Float)
-                Arc::new(NestedField::optional(
-                    11,
-                    "all_nans_v1_stats",
-                    Type::Primitive(PrimitiveType::Float),
-                )),
+                Arc::new(
+                    NestedField::optional(
+                        11,
+                        "all_nans_v1_stats",
+                        Type::Primitive(PrimitiveType::Float),
+                    )
+                    .expect("valid nested field"),
+                ),
                 // field id=12: "nan_and_null_only" (Double)
-                Arc::new(NestedField::optional(
-                    12,
-                    "nan_and_null_only",
-                    Type::Primitive(PrimitiveType::Double),
-                )),
+                Arc::new(
+                    NestedField::optional(
+                        12,
+                        "nan_and_null_only",
+                        Type::Primitive(PrimitiveType::Double),
+                    )
+                    .expect("valid nested field"),
+                ),
                 // field id=13: "no_nan_stats" (Double)
-                Arc::new(NestedField::optional(
-                    13,
-                    "no_nan_stats",
-                    Type::Primitive(PrimitiveType::Double),
-                )),
+                Arc::new(
+                    NestedField::optional(
+                        13,
+                        "no_nan_stats",
+                        Type::Primitive(PrimitiveType::Double),
+                    )
+                    .expect("valid nested field"),
+                ),
                 // field id=14: "some_empty" (String)
-                Arc::new(NestedField::optional(
-                    14,
-                    "some_empty",
-                    Type::Primitive(PrimitiveType::String),
-                )),
+                Arc::new(
+                    NestedField::optional(14, "some_empty", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field"),
+                ),
             ])
             .build()
             .unwrap();

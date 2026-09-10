@@ -185,7 +185,7 @@ impl SortOrderBuilder {
                     ));
                 }
                 Some(source_field) => {
-                    let source_type = source_field.field_type.as_ref();
+                    let source_type = source_field.field_type();
 
                     if !source_type.is_primitive() {
                         return Err(Error::new(
@@ -387,7 +387,9 @@ mod tests {
         let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -425,9 +427,11 @@ mod tests {
                             Type::Primitive(PrimitiveType::String),
                             true,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
             ])
             .build()
@@ -457,7 +461,9 @@ mod tests {
         let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::optional(1, "v", Type::Variant(crate::spec::VariantType)).into(),
+                NestedField::optional(1, "v", Type::Variant(crate::spec::VariantType))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -486,7 +492,9 @@ mod tests {
         let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -515,8 +523,12 @@ mod tests {
         let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();

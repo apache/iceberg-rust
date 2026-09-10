@@ -81,21 +81,21 @@ pub(crate) fn visit_type<V: SchemaVisitor>(r#type: &Type, visitor: &mut V) -> Re
         Type::Primitive(p) => visitor.primitive(p),
         Type::List(list) => {
             visitor.before_list_element(&list.element_field)?;
-            let value = visit_type(&list.element_field.field_type, visitor)?;
+            let value = visit_type(list.element_field.field_type(), visitor)?;
             visitor.after_list_element(&list.element_field)?;
             visitor.list(list, value)
         }
         Type::Map(map) => {
             let key_result = {
                 visitor.before_map_key(&map.key_field)?;
-                let ret = visit_type(&map.key_field.field_type, visitor)?;
+                let ret = visit_type(map.key_field.field_type(), visitor)?;
                 visitor.after_map_key(&map.key_field)?;
                 ret
             };
 
             let value_result = {
                 visitor.before_map_value(&map.value_field)?;
-                let ret = visit_type(&map.value_field.field_type, visitor)?;
+                let ret = visit_type(map.value_field.field_type(), visitor)?;
                 visitor.after_map_value(&map.value_field)?;
                 ret
             };
@@ -112,7 +112,7 @@ pub fn visit_struct<V: SchemaVisitor>(s: &StructType, visitor: &mut V) -> Result
     let mut results = Vec::with_capacity(s.fields().len());
     for field in s.fields() {
         visitor.before_struct_field(field)?;
-        let result = visit_type(&field.field_type, visitor)?;
+        let result = visit_type(field.field_type(), visitor)?;
         visitor.after_struct_field(field)?;
         let result = visitor.field(field, result)?;
         results.push(result);
@@ -221,7 +221,7 @@ pub(crate) fn visit_type_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: Part
             let list_element_partner = accessor.list_element_partner(partner)?;
             visitor.before_list_element(&list.element_field, list_element_partner)?;
             let element_results = visit_type_with_partner(
-                &list.element_field.field_type,
+                list.element_field.field_type(),
                 list_element_partner,
                 visitor,
                 accessor,
@@ -232,14 +232,18 @@ pub(crate) fn visit_type_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: Part
         Type::Map(map) => {
             let key_partner = accessor.map_key_partner(partner)?;
             visitor.before_map_key(&map.key_field, key_partner)?;
-            let key_result =
-                visit_type_with_partner(&map.key_field.field_type, key_partner, visitor, accessor)?;
+            let key_result = visit_type_with_partner(
+                map.key_field.field_type(),
+                key_partner,
+                visitor,
+                accessor,
+            )?;
             visitor.after_map_key(&map.key_field, key_partner)?;
 
             let value_partner = accessor.map_value_partner(partner)?;
             visitor.before_map_value(&map.value_field, value_partner)?;
             let value_result = visit_type_with_partner(
-                &map.value_field.field_type,
+                map.value_field.field_type(),
                 value_partner,
                 visitor,
                 accessor,
@@ -264,7 +268,7 @@ pub fn visit_struct_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: PartnerAc
     for field in s.fields() {
         let field_partner = accessor.field_partner(partner, field)?;
         visitor.before_struct_field(field, field_partner)?;
-        let result = visit_type_with_partner(&field.field_type, field_partner, visitor, accessor)?;
+        let result = visit_type_with_partner(field.field_type(), field_partner, visitor, accessor)?;
         visitor.after_struct_field(field, field_partner)?;
         let result = visitor.field(field, field_partner, result)?;
         results.push(result);

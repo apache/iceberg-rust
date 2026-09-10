@@ -154,7 +154,7 @@ impl<'a> PageIndexEvaluator<'a> {
             ));
         };
 
-        let Some(field_type) = field.field_type.as_primitive_type() else {
+        let Some(field_type) = field.field_type().as_primitive_type() else {
             return Err(Error::new(
                 ErrorKind::Unexpected,
                 format!("Field with id {field_id} not convertible to primitive type"),
@@ -386,7 +386,7 @@ impl<'a> PageIndexEvaluator<'a> {
         cmp_fn: fn(&Datum, &Datum) -> bool,
         use_lower_bound: bool,
     ) -> Result<RowSelection> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         self.calc_row_selection(
             field_id,
@@ -448,7 +448,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         self.calc_row_selection(
             field_id,
@@ -462,7 +462,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         self.calc_row_selection(
             field_id,
@@ -478,7 +478,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
     ) -> Result<RowSelection> {
         // NaN counts not present in ColumnChunkMetadata Statistics.
         // Only float columns can be NaN.
-        if reference.field().field_type.is_floating_type() {
+        if reference.field().field_type().is_floating_type() {
             self.select_all_rows()
         } else {
             self.skip_all_rows()
@@ -536,7 +536,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         self.calc_row_selection(
             field_id,
@@ -581,7 +581,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         let PrimitiveLiteral::String(datum) = datum.literal() else {
             return Err(Error::new(
@@ -647,7 +647,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         // notStartsWith will match unless all values must start with the prefix.
         // This happens when the lower and upper bounds both start with the prefix.
@@ -722,7 +722,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if literals.len() > IN_PREDICATE_LIMIT {
             // skip evaluating the predicate if the number of values is too big
@@ -1344,18 +1344,19 @@ mod tests {
     fn build_iceberg_schema_and_field_map() -> Result<(Arc<Schema>, HashMap<i32, usize>)> {
         let iceberg_schema = Schema::builder()
             .with_fields([
-                Arc::new(NestedField::new(
-                    1,
-                    "col_float",
-                    Type::Primitive(PrimitiveType::Float),
-                    false,
-                )),
-                Arc::new(NestedField::new(
-                    2,
-                    "col_string",
-                    Type::Primitive(PrimitiveType::String),
-                    false,
-                )),
+                Arc::new(
+                    NestedField::new(1, "col_float", Type::Primitive(PrimitiveType::Float), false)
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::new(
+                        2,
+                        "col_string",
+                        Type::Primitive(PrimitiveType::String),
+                        false,
+                    )
+                    .expect("valid nested field"),
+                ),
             ])
             .build()?;
         let iceberg_schema_ref = Arc::new(iceberg_schema);

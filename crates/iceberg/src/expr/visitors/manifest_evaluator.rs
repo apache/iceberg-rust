@@ -144,7 +144,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
 
         // contains_null encodes whether at least one partition value is null,
         // lowerBound is null if all partition values are null
-        if ManifestFilterVisitor::are_all_null(field, &reference.field().field_type) {
+        if ManifestFilterVisitor::are_all_null(field, reference.field().field_type()) {
             ROWS_CANNOT_MATCH
         } else {
             ROWS_MIGHT_MATCH
@@ -159,7 +159,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             return ROWS_CANNOT_MATCH;
         }
 
-        if ManifestFilterVisitor::are_all_null(field, &reference.field().field_type) {
+        if ManifestFilterVisitor::are_all_null(field, reference.field().field_type()) {
             return ROWS_CANNOT_MATCH;
         }
 
@@ -189,7 +189,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             Some(bound_bytes) => {
                 let bound = ManifestFilterVisitor::bytes_to_datum(
                     bound_bytes,
-                    *reference.field().field_type.clone(),
+                    reference.field().field_type().clone(),
                 );
                 if datum <= &bound {
                     ROWS_CANNOT_MATCH
@@ -212,7 +212,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             Some(bound_bytes) => {
                 let bound = ManifestFilterVisitor::bytes_to_datum(
                     bound_bytes,
-                    *reference.field().field_type.clone(),
+                    reference.field().field_type().clone(),
                 );
                 if datum < &bound {
                     ROWS_CANNOT_MATCH
@@ -235,7 +235,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             Some(bound_bytes) => {
                 let bound = ManifestFilterVisitor::bytes_to_datum(
                     bound_bytes,
-                    *reference.field().field_type.clone(),
+                    reference.field().field_type().clone(),
                 );
                 if datum >= &bound {
                     ROWS_CANNOT_MATCH
@@ -258,7 +258,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             Some(bound_bytes) => {
                 let bound = ManifestFilterVisitor::bytes_to_datum(
                     bound_bytes,
-                    *reference.field().field_type.clone(),
+                    reference.field().field_type().clone(),
                 );
                 if datum > &bound {
                     ROWS_CANNOT_MATCH
@@ -285,7 +285,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         if let Some(lower_bound_bytes) = &field.lower_bound {
             let lower_bound = ManifestFilterVisitor::bytes_to_datum(
                 lower_bound_bytes,
-                *reference.field().field_type.clone(),
+                reference.field().field_type().clone(),
             );
             if &lower_bound > datum {
                 return ROWS_CANNOT_MATCH;
@@ -295,7 +295,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         if let Some(upper_bound_bytes) = &field.upper_bound {
             let upper_bound = ManifestFilterVisitor::bytes_to_datum(
                 upper_bound_bytes,
-                *reference.field().field_type.clone(),
+                reference.field().field_type().clone(),
             );
             if &upper_bound < datum {
                 return ROWS_CANNOT_MATCH;
@@ -412,7 +412,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         if let Some(lower_bound) = &field.lower_bound {
             let lower_bound = ManifestFilterVisitor::bytes_to_datum(
                 lower_bound,
-                *reference.field().clone().field_type,
+                reference.field().field_type().clone(),
             );
             if literals.iter().all(|datum| &lower_bound > datum) {
                 return ROWS_CANNOT_MATCH;
@@ -422,7 +422,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         if let Some(upper_bound) = &field.upper_bound {
             let upper_bound = ManifestFilterVisitor::bytes_to_datum(
                 upper_bound,
-                *reference.field().clone().field_type,
+                reference.field().field_type().clone(),
             );
             if literals.iter().all(|datum| &upper_bound < datum) {
                 return ROWS_CANNOT_MATCH;
@@ -507,71 +507,90 @@ mod test {
     fn create_schema() -> Result<SchemaRef> {
         let schema = Schema::builder()
             .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "id",
-                    Type::Primitive(PrimitiveType::Int),
-                )),
-                Arc::new(NestedField::optional(
-                    2,
-                    "all_nulls_missing_nan",
-                    Type::Primitive(PrimitiveType::String),
-                )),
-                Arc::new(NestedField::optional(
-                    3,
-                    "some_nulls",
-                    Type::Primitive(PrimitiveType::String),
-                )),
-                Arc::new(NestedField::optional(
-                    4,
-                    "no_nulls",
-                    Type::Primitive(PrimitiveType::String),
-                )),
-                Arc::new(NestedField::optional(
-                    5,
-                    "float",
-                    Type::Primitive(PrimitiveType::Float),
-                )),
-                Arc::new(NestedField::optional(
-                    6,
-                    "all_nulls_double",
-                    Type::Primitive(PrimitiveType::Double),
-                )),
-                Arc::new(NestedField::optional(
-                    7,
-                    "all_nulls_no_nans",
-                    Type::Primitive(PrimitiveType::Float),
-                )),
-                Arc::new(NestedField::optional(
-                    8,
-                    "all_nans",
-                    Type::Primitive(PrimitiveType::Double),
-                )),
-                Arc::new(NestedField::optional(
-                    9,
-                    "both_nan_and_null",
-                    Type::Primitive(PrimitiveType::Float),
-                )),
-                Arc::new(NestedField::optional(
-                    10,
-                    "no_nan_or_null",
-                    Type::Primitive(PrimitiveType::Double),
-                )),
-                Arc::new(NestedField::optional(
-                    11,
-                    "all_nulls_missing_nan_float",
-                    Type::Primitive(PrimitiveType::Float),
-                )),
-                Arc::new(NestedField::optional(
-                    12,
-                    "all_same_value_or_null",
-                    Type::Primitive(PrimitiveType::String),
-                )),
-                Arc::new(NestedField::optional(
-                    13,
-                    "no_nulls_same_value_a",
-                    Type::Primitive(PrimitiveType::String),
-                )),
+                Arc::new(
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(
+                        2,
+                        "all_nulls_missing_nan",
+                        Type::Primitive(PrimitiveType::String),
+                    )
+                    .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(3, "some_nulls", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(4, "no_nulls", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(5, "float", Type::Primitive(PrimitiveType::Float))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(
+                        6,
+                        "all_nulls_double",
+                        Type::Primitive(PrimitiveType::Double),
+                    )
+                    .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(
+                        7,
+                        "all_nulls_no_nans",
+                        Type::Primitive(PrimitiveType::Float),
+                    )
+                    .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(8, "all_nans", Type::Primitive(PrimitiveType::Double))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(
+                        9,
+                        "both_nan_and_null",
+                        Type::Primitive(PrimitiveType::Float),
+                    )
+                    .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(
+                        10,
+                        "no_nan_or_null",
+                        Type::Primitive(PrimitiveType::Double),
+                    )
+                    .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(
+                        11,
+                        "all_nulls_missing_nan_float",
+                        Type::Primitive(PrimitiveType::Float),
+                    )
+                    .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(
+                        12,
+                        "all_same_value_or_null",
+                        Type::Primitive(PrimitiveType::String),
+                    )
+                    .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(
+                        13,
+                        "no_nulls_same_value_a",
+                        Type::Primitive(PrimitiveType::String),
+                    )
+                    .expect("valid nested field"),
+                ),
             ])
             .build()?;
 

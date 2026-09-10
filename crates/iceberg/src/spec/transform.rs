@@ -485,7 +485,7 @@ impl Transform {
                 BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
                 BoundPredicate::Binary(expr) => {
                     if matches!(
-                        expr.term().field().field_type.as_primitive_type(),
+                        expr.term().field().field_type().as_primitive_type(),
                         Some(&PrimitiveType::Int)
                             | Some(&PrimitiveType::Long)
                             | Some(&PrimitiveType::Decimal { .. })

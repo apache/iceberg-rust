@@ -2214,8 +2214,8 @@ pub iceberg::spec::MapType::key_field: iceberg::spec::NestedFieldRef
 pub iceberg::spec::MapType::value_field: iceberg::spec::NestedFieldRef
 impl iceberg::spec::MapType
 pub fn iceberg::spec::MapType::new(key_field: iceberg::spec::NestedFieldRef, value_field: iceberg::spec::NestedFieldRef) -> Self
-pub fn iceberg::spec::MapType::optional(key_id: i32, key_type: iceberg::spec::Type, value_id: i32, value_type: iceberg::spec::Type) -> Self
-pub fn iceberg::spec::MapType::required(key_id: i32, key_type: iceberg::spec::Type, value_id: i32, value_type: iceberg::spec::Type) -> Self
+pub fn iceberg::spec::MapType::optional(key_id: i32, key_type: iceberg::spec::Type, value_id: i32, value_type: iceberg::spec::Type) -> iceberg::Result<Self>
+pub fn iceberg::spec::MapType::required(key_id: i32, key_type: iceberg::spec::Type, value_id: i32, value_type: iceberg::spec::Type) -> iceberg::Result<Self>
 impl core::clone::Clone for iceberg::spec::MapType
 pub fn iceberg::spec::MapType::clone(&self) -> iceberg::spec::MapType
 impl core::cmp::Eq for iceberg::spec::MapType
@@ -2279,33 +2279,34 @@ pub fn iceberg::spec::NameMapping::serialize<__S>(&self, __serializer: __S) -> c
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::NameMapping
 pub fn iceberg::spec::NameMapping::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::spec::NestedField
-pub iceberg::spec::NestedField::doc: core::option::Option<alloc::string::String>
-pub iceberg::spec::NestedField::field_type: alloc::boxed::Box<iceberg::spec::Type>
-pub iceberg::spec::NestedField::id: i32
-pub iceberg::spec::NestedField::initial_default: core::option::Option<iceberg::spec::Literal>
-pub iceberg::spec::NestedField::name: alloc::string::String
-pub iceberg::spec::NestedField::required: bool
-pub iceberg::spec::NestedField::write_default: core::option::Option<iceberg::spec::Literal>
 impl iceberg::spec::NestedField
-pub fn iceberg::spec::NestedField::list_element(id: i32, field_type: iceberg::spec::Type, required: bool) -> Self
-pub fn iceberg::spec::NestedField::map_key_element(id: i32, field_type: iceberg::spec::Type) -> Self
-pub fn iceberg::spec::NestedField::map_value_element(id: i32, field_type: iceberg::spec::Type, required: bool) -> Self
-pub fn iceberg::spec::NestedField::new(id: i32, name: impl alloc::string::ToString, field_type: iceberg::spec::Type, required: bool) -> Self
-pub fn iceberg::spec::NestedField::optional(id: i32, name: impl alloc::string::ToString, field_type: iceberg::spec::Type) -> Self
-pub fn iceberg::spec::NestedField::required(id: i32, name: impl alloc::string::ToString, field_type: iceberg::spec::Type) -> Self
-pub fn iceberg::spec::NestedField::with_doc(self, doc: impl alloc::string::ToString) -> Self
-pub fn iceberg::spec::NestedField::with_initial_default(self, value: iceberg::spec::Literal) -> Self
-pub fn iceberg::spec::NestedField::with_write_default(self, value: iceberg::spec::Literal) -> Self
+pub fn iceberg::spec::NestedField::doc(&self) -> core::option::Option<&str>
+pub fn iceberg::spec::NestedField::field_type(&self) -> &iceberg::spec::Type
+pub fn iceberg::spec::NestedField::id(&self) -> i32
+pub fn iceberg::spec::NestedField::initial_default(&self) -> core::option::Option<&iceberg::spec::Literal>
+pub fn iceberg::spec::NestedField::is_required(&self) -> bool
+pub fn iceberg::spec::NestedField::list_element(id: i32, field_type: iceberg::spec::Type, required: bool) -> iceberg::Result<Self>
+pub fn iceberg::spec::NestedField::map_key_element(id: i32, field_type: iceberg::spec::Type) -> iceberg::Result<Self>
+pub fn iceberg::spec::NestedField::map_value_element(id: i32, field_type: iceberg::spec::Type, required: bool) -> iceberg::Result<Self>
+pub fn iceberg::spec::NestedField::name(&self) -> &str
+pub fn iceberg::spec::NestedField::new(id: i32, name: impl alloc::string::ToString, field_type: iceberg::spec::Type, required: bool) -> iceberg::Result<Self>
+pub fn iceberg::spec::NestedField::optional(id: i32, name: impl alloc::string::ToString, field_type: iceberg::spec::Type) -> iceberg::Result<Self>
+pub fn iceberg::spec::NestedField::required(id: i32, name: impl alloc::string::ToString, field_type: iceberg::spec::Type) -> iceberg::Result<Self>
+pub fn iceberg::spec::NestedField::write_default(&self) -> core::option::Option<&iceberg::spec::Literal>
 impl core::clone::Clone for iceberg::spec::NestedField
 pub fn iceberg::spec::NestedField::clone(&self) -> iceberg::spec::NestedField
 impl core::cmp::Eq for iceberg::spec::NestedField
 impl core::cmp::PartialEq for iceberg::spec::NestedField
 pub fn iceberg::spec::NestedField::eq(&self, other: &iceberg::spec::NestedField) -> bool
+impl core::convert::From<iceberg::spec::NestedField> for iceberg::Result<iceberg::spec::NestedField>
+pub fn iceberg::Result<iceberg::spec::NestedField>::from(field: iceberg::spec::NestedField) -> Self
 impl core::fmt::Debug for iceberg::spec::NestedField
 pub fn iceberg::spec::NestedField::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for iceberg::spec::NestedField
 pub fn iceberg::spec::NestedField::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::spec::NestedField
+impl iceberg::spec::NestedField
+pub fn iceberg::spec::NestedField::builder() -> NestedFieldBuilder<((), (), (), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::spec::NestedField
 pub fn iceberg::spec::NestedField::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::NestedField

@@ -237,12 +237,14 @@ mod tests {
                         "id",
                         Type::Primitive(crate::spec::PrimitiveType::Int),
                     )
+                    .expect("valid nested field")
                     .into(),
                     NestedField::required(
                         2,
                         "name",
                         Type::Primitive(crate::spec::PrimitiveType::String),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -351,12 +353,14 @@ mod tests {
                         "id",
                         Type::Primitive(crate::spec::PrimitiveType::Int),
                     )
+                    .expect("valid nested field")
                     .into(),
                     NestedField::required(
                         2,
                         "name",
                         Type::Primitive(crate::spec::PrimitiveType::String),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
