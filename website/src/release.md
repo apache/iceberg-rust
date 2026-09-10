@@ -527,9 +527,8 @@ The creation of the final release tag triggers the publish workflow for crates.
 Python packages are manually triggered later.
 Please verify that the triggered workflows for the crates succeeded.
 
-Note, this workflow for crates is expected to fail if new crates are being published for the first time.
-In this instance, a committer must manually publish the crate in order to continue.
-See [publishing a crate for the first time](#publishing-a-crate-for-the-first-time) for what steps to take.
+New crates are reserved on crates.io when they are added, so the workflow should not fail on a new crate.
+If it does, see [if the Publish workflow fails on a missing crate](#if-the-publish-workflow-fails-on-a-missing-crate).
 Once all the crates are published, Python publishing should start.
 
 Python publishing is performed by a GitHub workflow, however the trigger is manual.
@@ -642,8 +641,9 @@ Publish an empty placeholder crate as version `0.0.0`, so it never collides with
 The placeholder is created outside the repository; overriding the version inside the workspace does not work because other workspace crates depend on the new crate at the workspace version.
 
 ```shell
-cargo new --lib --vcs none --name <package-name> /tmp/<package-name>
+mkdir -p /tmp/<package-name>/src
 cd /tmp/<package-name>
+touch src/lib.rs
 cat > Cargo.toml <<'EOF'
 [package]
 name = "<package-name>"
@@ -672,6 +672,8 @@ Then add two PMC members other than yourself as individual owners.
 ```shell
 cargo owner --add <github-handle> <package-name>
 ```
+
+This sends an invitation; ask each invitee to accept it on crates.io.
 
 Individual owners are required because a team owner can publish and yank versions but cannot add or remove owners.
 Without them, the crate could become unmanageable if a PMC member becomes inactive.
