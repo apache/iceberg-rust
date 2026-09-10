@@ -78,6 +78,7 @@ static MAX_CONNECTIONS: u32 = 10; // Default the SQL pool to 10 connections if n
 static IDLE_TIMEOUT: u64 = 10; // Default the maximum idle timeout per connection to 10s before it is closed
 static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each connection to enabled prior to returning
 
+/// Parses one pool-property value; the `Properties` derive adds the property-key context.
 fn parse_pool_property<T>(value: &str) -> Result<T>
 where
     T: FromStr,
@@ -125,8 +126,9 @@ impl SqlCatalogBuilder {
 
     /// Configure the bound SQL Statement
     ///
-    /// If `SQL_CATALOG_PROP_BIND_STYLE` has a value set in `props` during `SqlCatalogBuilder::load`,
-    /// that value takes precedence, and the value specified by this method will not be used.
+    /// If either `SQL_CATALOG_PROP_BIND_STYLE` or the legacy `sql_bind_style` property has a value
+    /// set in `props` during `SqlCatalogBuilder::load`, that load-time value takes precedence.
+    /// When both load-time keys are present, `SQL_CATALOG_PROP_BIND_STYLE` takes precedence.
     pub fn sql_bind_style(mut self, sql_bind_style: SqlBindStyle) -> Self {
         self.props.insert(
             SQL_CATALOG_PROP_BIND_STYLE.to_string(),
@@ -191,9 +193,21 @@ impl CatalogBuilder for SqlCatalogBuilder {
                 ));
             }
 
+            let load_overrides_bind_style = props.contains_key(SQL_CATALOG_PROP_BIND_STYLE)
+                || props.contains_key(SQL_CATALOG_PROP_BIND_STYLE_LEGACY);
             let mut merged_props = self.props;
+            if load_overrides_bind_style {
+                // Treat the preferred and legacy names as aliases so either load-time spelling
+                // overrides a value configured on the builder.
+                merged_props.remove(SQL_CATALOG_PROP_BIND_STYLE);
+                merged_props.remove(SQL_CATALOG_PROP_BIND_STYLE_LEGACY);
+            }
             merged_props.extend(props);
             let catalog_properties = SqlCatalogProperties::from_properties(&merged_props)?;
+
+            // The catalog URI is consumed above and may contain database credentials. Do not
+            // expose this security-sensitive value to FileIO or KMS extension points.
+            merged_props.remove(SQL_CATALOG_PROP_URI);
 
             let runtime = match self.runtime {
                 Some(rt) => rt,
@@ -222,22 +236,25 @@ fn parse_sql_bind_style(
     additional_keys: &[&str],
     default: SqlBindStyle,
 ) -> Result<SqlBindStyle> {
-    properties
-        .get(key)
-        .or_else(|| additional_keys.iter().find_map(|key| properties.get(*key)))
-        .map_or(Ok(default), |value| {
-            SqlBindStyle::from_str(value).map_err(|_| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "`{}` values are valid only if they're `{}` or `{}`",
-                        SQL_CATALOG_PROP_BIND_STYLE,
-                        SqlBindStyle::DollarNumeric,
-                        SqlBindStyle::QMark
-                    ),
-                )
-            })
+    let configured_value = properties.get(key).map(|value| (key, value)).or_else(|| {
+        additional_keys
+            .iter()
+            .find_map(|alt_key| properties.get(*alt_key).map(|value| (*alt_key, value)))
+    });
+
+    configured_value.map_or(Ok(default), |(configured_key, value)| {
+        SqlBindStyle::from_str(value).map_err(|_| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "`{}` values are valid only if they're `{}` or `{}`",
+                    configured_key,
+                    SqlBindStyle::DollarNumeric,
+                    SqlBindStyle::QMark
+                ),
+            )
         })
+    })
 }
 
 fn parse_schema_version(value: &str) -> Result<SchemaVersion> {
@@ -1026,7 +1043,7 @@ impl Catalog for SqlCatalog {
                 None => {
                     format!(
                         "{}/{}",
-                        self.properties.warehouse_location.clone(),
+                        &self.properties.warehouse_location,
                         namespace.join("/")
                     )
                 }
@@ -1284,6 +1301,38 @@ mod tests {
         assert_eq!(properties.test_before_acquire, TEST_BEFORE_ACQUIRE);
     }
 
+    #[test]
+    fn test_preferred_bind_style_key_takes_precedence_over_legacy_key() {
+        let properties = SqlCatalogProperties::from_properties(&HashMap::from([
+            (
+                SQL_CATALOG_PROP_BIND_STYLE.to_string(),
+                SqlBindStyle::QMark.to_string(),
+            ),
+            (
+                SQL_CATALOG_PROP_BIND_STYLE_LEGACY.to_string(),
+                SqlBindStyle::DollarNumeric.to_string(),
+            ),
+        ]))
+        .unwrap();
+
+        assert_eq!(properties.sql_bind_style, SqlBindStyle::QMark);
+    }
+
+    #[test]
+    fn test_invalid_legacy_bind_style_error_names_configured_key() {
+        let error = SqlCatalogProperties::from_properties(&HashMap::from([(
+            SQL_CATALOG_PROP_BIND_STYLE_LEGACY.to_string(),
+            "invalid".to_string(),
+        )]))
+        .unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            error.message(),
+            "`sql_bind_style` values are valid only if they're `DollarNumeric` or `QMark`"
+        );
+    }
+
     fn to_set<T: Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
         HashSet::from_iter(vec)
     }
@@ -1509,7 +1558,10 @@ mod tests {
                 "iceberg",
                 HashMap::from_iter([
                     (SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri),
-                    (SQL_CATALOG_PROP_WAREHOUSE.to_string(), warehouse_location),
+                    (
+                        SQL_CATALOG_PROP_WAREHOUSE.to_string(),
+                        warehouse_location.clone(),
+                    ),
                     ("s3.region".to_string(), "us-east-1".to_string()),
                     ("hf.token".to_string(), "hf_test_token".to_string()),
                 ]),
@@ -1518,6 +1570,11 @@ mod tests {
             .unwrap();
 
         let props = catalog.fileio.config().props();
+        assert_eq!(props.get(SQL_CATALOG_PROP_URI), None);
+        assert_eq!(
+            props.get(SQL_CATALOG_PROP_WAREHOUSE),
+            Some(&warehouse_location)
+        );
         assert_eq!(props.get("s3.region"), Some(&"us-east-1".to_string()));
         assert_eq!(props.get("hf.token"), Some(&"hf_test_token".to_string()));
     }
@@ -1618,6 +1675,31 @@ mod tests {
         let catalog = catalog.unwrap();
         assert!(catalog.properties.warehouse_location == warehouse_location);
         assert!(catalog.properties.sql_bind_style == SqlBindStyle::QMark);
+    }
+
+    #[tokio::test]
+    async fn test_load_legacy_bind_style_overrides_builder_method() {
+        let sql_lite_uri = format!("sqlite:{}", temp_path());
+        sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();
+
+        let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .sql_bind_style(SqlBindStyle::DollarNumeric)
+            .load(
+                "iceberg",
+                HashMap::from([
+                    (SQL_CATALOG_PROP_URI.to_string(), sql_lite_uri),
+                    (SQL_CATALOG_PROP_WAREHOUSE.to_string(), temp_path()),
+                    (
+                        SQL_CATALOG_PROP_BIND_STYLE_LEGACY.to_string(),
+                        SqlBindStyle::QMark.to_string(),
+                    ),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(catalog.properties.sql_bind_style, SqlBindStyle::QMark);
     }
 
     /// values assigned via props take precedence
