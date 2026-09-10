@@ -688,5 +688,13 @@ The next release publishes the crate's first real version along with the rest of
 
 #### If the Publish workflow fails on a missing crate
 
-Reserve the crate as above, using the `0.0.0` placeholder and never the release version, then re-run the failed workflow run from the GitHub Actions UI.
-The workflow fails before uploading anything, and re-running keeps the original tag as the workflow ref, so the publish step runs as if the tag had just been pushed.
+Reserve the crate as above, using the `0.0.0` placeholder and never the release version.
+
+Then check the failed run's log for `Uploaded` lines to see which crates were already published, since cargo uploads crates one at a time in dependency order.
+
+- If nothing was uploaded, re-run the failed workflow run from the GitHub Actions UI. Re-running keeps the original tag as the workflow ref.
+- If some crates were uploaded, publish the rest from a clean checkout of the release tag, excluding each crate that was already published:
+
+```shell
+cargo publish --workspace --all-features --exclude <published-crate> --exclude <published-crate>
+```
