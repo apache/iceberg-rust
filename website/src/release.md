@@ -637,16 +637,24 @@ List them with `cargo owner --list iceberg`.
 
 #### Step 1: Reserve the crate name
 
-Check out the pull request branch and publish the crate as version `0.0.0`, so the placeholder never collides with a real release.
+Publish an empty placeholder crate as version `0.0.0`, so it never collides with a real release.
+The placeholder is created outside the repository; overriding the version inside the workspace does not work because other workspace crates depend on the new crate at the workspace version.
 
 ```shell
-cd crates/<crate-dir>
-sed -i.bak 's/^version = { workspace = true }/version = "0.0.0"/' Cargo.toml
-cargo publish --package <package-name> --allow-dirty
-mv Cargo.toml.bak Cargo.toml
+cargo new --lib --vcs none --name <package-name> /tmp/<package-name>
+cd /tmp/<package-name>
+cat > Cargo.toml <<'EOF'
+[package]
+name = "<package-name>"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Placeholder that reserves the crate name for Apache Iceberg Rust. See the repository for the real crate."
+repository = "https://github.com/apache/iceberg-rust"
+EOF
+cargo publish --dry-run
+cargo publish
 ```
-
-Do not commit the version change.
 
 #### Step 2: Configure crate owners
 
