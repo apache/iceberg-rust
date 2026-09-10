@@ -132,8 +132,14 @@ impl SchemaVisitor for SchemaToAvroSchema {
             record.name = Name::from(format!("r{}", list.element_field.id).as_str());
         }
 
-        if !list.element_field.required && !is_avro_null(&field_schema) {
-            field_schema = avro_optional(field_schema)?;
+        if !list.element_field.required {
+            if is_avro_null(&field_schema) {
+                // Unknown maps directly to Avro null. Wrapping it as optional would create
+                // an invalid union with duplicate null variants.
+                field_schema = AvroSchema::Null;
+            } else {
+                field_schema = avro_optional(field_schema)?;
+            }
         }
 
         Ok(Either::Left(AvroSchema::Array(ArraySchema {
@@ -153,8 +159,14 @@ impl SchemaVisitor for SchemaToAvroSchema {
     ) -> Result<AvroSchemaOrField> {
         let key_field_schema = key_value.unwrap_left();
         let mut value_field_schema = value.unwrap_left();
-        if !map.value_field.required && !is_avro_null(&value_field_schema) {
-            value_field_schema = avro_optional(value_field_schema)?;
+        if !map.value_field.required {
+            if is_avro_null(&value_field_schema) {
+                // Unknown maps directly to Avro null. Wrapping it as optional would create
+                // an invalid union with duplicate null variants.
+                value_field_schema = AvroSchema::Null;
+            } else {
+                value_field_schema = avro_optional(value_field_schema)?;
+            }
         }
 
         if matches!(key_field_schema, AvroSchema::String) {
@@ -676,6 +688,25 @@ mod tests {
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::optional(1, "empty", PrimitiveType::Unknown.into()).into(),
+                NestedField::required(
+                    2,
+                    "unknowns",
+                    Type::List(ListType::new(
+                        NestedField::list_element(3, PrimitiveType::Unknown.into(), false).into(),
+                    )),
+                )
+                .into(),
+                NestedField::required(
+                    4,
+                    "unknown_values",
+                    Type::Map(MapType::optional(
+                        5,
+                        PrimitiveType::String.into(),
+                        6,
+                        PrimitiveType::Unknown.into(),
+                    )),
+                )
+                .into(),
             ])
             .build()
             .unwrap();
@@ -686,6 +717,14 @@ mod tests {
         };
         assert!(is_avro_null(&record.fields[0].schema));
         assert_eq!(record.fields[0].default, Some(Value::Null));
+        let AvroSchema::Array(array) = &record.fields[1].schema else {
+            panic!("expected Avro array schema");
+        };
+        assert!(is_avro_null(&array.items));
+        let AvroSchema::Map(map) = &record.fields[2].schema else {
+            panic!("expected Avro map schema");
+        };
+        assert!(is_avro_null(&map.types));
 
         assert_eq!(schema, avro_schema_to_schema(&avro_schema).unwrap());
     }
