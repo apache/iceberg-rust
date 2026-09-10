@@ -83,7 +83,10 @@ jobs:
       # See "Adding a new crate" in website/src/release.md.
       - name: Check publishable crates exist on crates.io
         run: |
-          for pkg in $(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.publish != []) | .name'); do
+          pkgs=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.publish != []) | .name')
+          # A failed `cargo metadata` would otherwise leave the loop empty and the step green.
+          [ -n "$pkgs" ] || { echo "::error::No publishable crates found in the workspace, expected at least one"; exit 1; }
+          for pkg in $pkgs; do
             # --registry is required, otherwise cargo resolves the local workspace member.
             if ! cargo info --registry crates-io "$pkg" >/dev/null; then
               echo "::error::$pkg is not on crates.io. Reserve it before merging; see 'Adding a new crate' in website/src/release.md"
