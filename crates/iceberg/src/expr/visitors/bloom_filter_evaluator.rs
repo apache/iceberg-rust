@@ -269,14 +269,8 @@ fn check_in_bloom_filter(column: &ColumnBloomFilter, datum: &Datum) -> bool {
             match physical_type {
                 // Narrow only when the mantissa round-trips; a truncated copy would
                 // hash to an unrelated slot.
-                PhysicalType::INT32 => match i32::try_from(*v) {
-                    Ok(narrowed) => sbbf.check(&narrowed),
-                    Err(_) => true,
-                },
-                PhysicalType::INT64 => match i64::try_from(*v) {
-                    Ok(narrowed) => sbbf.check(&narrowed),
-                    Err(_) => true,
-                },
+                PhysicalType::INT32 => sbbf.check(&(*v as i32)),
+                PhysicalType::INT64 => sbbf.check(&(*v as i64)),
                 PhysicalType::FIXED_LEN_BYTE_ARRAY => {
                     // Encode to the file's declared length, not one derived from
                     // the Iceberg precision: a widened precision would change the
