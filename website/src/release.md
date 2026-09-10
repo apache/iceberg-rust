@@ -629,10 +629,11 @@ Reserve the crate promptly once the pull request is open, and have a committer d
 The committer needs:
 
 - A crates.io account linked to their GitHub account.
-- A crates.io API token with the `publish-new` and `change-owners` scopes, used with `cargo login`.
 - Membership in the `apache/iceberg-private` GitHub team, with the `read:org` permission granted to crates.io, in order to add that team as an owner.
+- A crates.io API token with the `publish-new` and `change-owners` scopes, used with `cargo login`.
+  Existing tokens usually lack `publish-new`; create one at [crates.io/settings/tokens](https://crates.io/settings/tokens).
 
-Committers who already own the existing Iceberg crates meet all of these.
+Committers who already own the existing Iceberg crates meet the first two.
 List them with `cargo owner --list iceberg`.
 
 #### Step 1: Reserve the crate name
@@ -655,6 +656,8 @@ EOF
 cargo publish --dry-run
 cargo publish
 ```
+
+A `403 Forbidden: authentication failed` error means the token lacks the `publish-new` scope.
 
 #### Step 2: Configure crate owners
 
