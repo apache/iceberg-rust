@@ -202,6 +202,7 @@ Useful options include:
 - `--create_rc_tag 1`: create the signed annotated RC tag as the final release step.
 - `--check_headers 1`: check Apache license headers against the source archive.
 - `--check_deps 1`: run dependency license checks before artifact creation.
+- `--check_publish 1`: dry-run publishing every crate to crates.io before artifact creation.
 - `--sign 1`: create and verify the detached GPG signature.
 - `--upload_svn 0`: upload RC artifacts to the ASF dev dist SVN repository.
 - `--svn_dist_url https://dist.apache.org/repos/dist/dev/iceberg`: SVN directory URL where the RC artifact directory will be uploaded.
@@ -214,6 +215,7 @@ This script creates:
 - SHA-512 checksum: `apache-iceberg-rust-${iceberg_version}.tar.gz.sha512`
 - Signed annotated RC tag: `v${iceberg_version}-rc.${rc}`
 
+The publish dry-run packages and builds every crate as the final release would, so a crate that cannot be published fails RC creation.
 The script checks license headers against the generated source archive, not the live Git worktree. If enabled, SVN upload runs after local artifact verification and before RC tag creation. The script creates the signed RC tag as the final release step, then prints a draft VOTE email for `dev@iceberg.apache.org`.
 
 To upload artifacts to ASF dev dist as part of RC creation, pass:
@@ -227,6 +229,15 @@ The script does not push the RC tag. Review the output, then push the tag manual
 ```shell
 git push origin "v${iceberg_version}-rc.${rc}"
 ```
+
+Pushing the RC tag triggers the publish workflow for crates, which dry-runs the crate publish without uploading anything.
+Verify that the run succeeded before starting the vote, using the following GitHub CLI command or the equivalent on the GitHub website:
+
+```shell
+gh run list --repo apache/iceberg-rust --workflow publish.yml --branch "v${iceberg_version}-rc.${rc}"
+```
+
+A failed run means the crates cannot be published as tagged, so the problem must be fixed in a new RC.
 
 If an RC has a problem, abandon that RC and increment the RC number.
 

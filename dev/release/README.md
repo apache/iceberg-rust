@@ -42,7 +42,7 @@ Common options:
 dev/release/create_rc.sh 0.9.1 2 --release_ref <commit-ish>
 dev/release/create_rc.sh 0.9.1 2 --create_rc_tag 0 --sign 0
 dev/release/create_rc.sh 0.9.1 2 --upload_svn 1
-dev/release/create_rc.sh 0.9.1 2 --check_headers 0 --check_deps 0
+dev/release/create_rc.sh 0.9.1 2 --check_headers 0 --check_deps 0 --check_publish 0
 ```
 
 Defaults:
@@ -52,6 +52,7 @@ Defaults:
 - `--create_rc_tag 1`: create the signed annotated RC tag as the final release step.
 - `--check_headers 1`: check Apache license headers against the source archive.
 - `--check_deps 1`: run dependency license checks before artifact creation.
+- `--check_publish 1`: dry-run publishing every crate to crates.io before artifact creation.
 - `--sign 1`: create and verify the detached GPG signature.
 - `--upload_svn 0`: upload RC artifacts to the ASF dev dist SVN repository.
 - `--svn_dist_url https://dist.apache.org/repos/dist/dev/iceberg`: SVN directory URL where the RC artifact directory will be uploaded.
