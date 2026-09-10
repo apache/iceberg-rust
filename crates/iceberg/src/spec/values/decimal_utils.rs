@@ -201,7 +201,7 @@ pub fn i128_to_be_bytes_min(value: i128) -> Vec<u8> {
 ///
 /// Returns `None` if `value` does not fit in `len` bytes, since a truncated
 /// encoding would represent a different number.
-pub fn decimal_to_fixed_length_bytes_exact(value: i128, len: usize) -> Option<Vec<u8>> {
+pub(crate) fn decimal_to_fixed_length_bytes_exact(value: i128, len: usize) -> Option<Vec<u8>> {
     if len == 0 || len > 16 {
         return None;
     }
