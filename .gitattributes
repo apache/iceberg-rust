@@ -1,10 +1,20 @@
 # Paths left out of the source archive built by dev/release/create_rc.sh.
 # Files needed to build, test, and verify from source (dev/, .licenserc.yaml,
 # lint configs) must stay in.
+#
+# .github is listed entry by entry rather than wholesale: GitHub resolves the
+# `uses: $/...` self-repository action references in our workflows by fetching a
+# repository archive, which honours export-ignore. Excluding .github as a whole
+# therefore hides .github/actions from that fetch and every workflow using a
+# local composite action fails with "Can't find 'action.yml'".
 website export-ignore
 .asf.yaml export-ignore
 .devcontainer export-ignore
 .gitattributes export-ignore
-.github export-ignore
+.github/ISSUE_TEMPLATE export-ignore
+.github/PULL_REQUEST_TEMPLATE.md export-ignore
+.github/copilot-instructions.md export-ignore
+.github/dependabot.yml export-ignore
+.github/workflows export-ignore
 .gitignore export-ignore
 .idea export-ignore
