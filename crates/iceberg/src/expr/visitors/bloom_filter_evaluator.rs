@@ -60,7 +60,7 @@ pub(crate) struct BloomFilterEvaluator<'a> {
     bloom_filters: &'a HashMap<i32, ColumnBloomFilter>,
 }
 
-impl<'a> BloomFilterEvaluator<'a> {
+impl BloomFilterEvaluator<'_> {
     /// Evaluate the predicate against the provided bloom filters.
     /// Returns `false` if the row group definitely does not match,
     /// `true` if it might match.
@@ -294,7 +294,7 @@ fn check_in_bloom_filter(column: &ColumnBloomFilter, datum: &Datum) -> bool {
     }
 }
 
-impl<'a> BoundPredicateVisitor for BloomFilterEvaluator<'a> {
+impl BoundPredicateVisitor for BloomFilterEvaluator<'_> {
     type T = bool;
 
     fn always_true(&mut self) -> Result<Self::T> {
