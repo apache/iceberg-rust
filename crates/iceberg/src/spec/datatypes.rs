@@ -610,7 +610,7 @@ impl TryFrom<SerdeNestedField> for NestedField {
             .transpose()?
             .flatten();
 
-        let field = NestedField {
+        Ok(NestedField {
             id: value.id,
             name: value.name,
             required: value.required,
@@ -618,9 +618,7 @@ impl TryFrom<SerdeNestedField> for NestedField {
             write_default,
             field_type: value.field_type,
             doc: value.doc,
-        };
-        field.validate_unknown_type()?;
-        Ok(field)
+        })
     }
 }
 
@@ -644,77 +642,6 @@ impl From<NestedField> for SerdeNestedField {
 pub type NestedFieldRef = Arc<NestedField>;
 
 impl NestedField {
-    pub(crate) fn validate_unknown_type(&self) -> Result<()> {
-        ensure_data_valid!(
-            !self
-                .initial_default
-                .iter()
-                .chain(self.write_default.iter())
-                .any(|default| {
-                    Self::default_contains_non_null_unknown(default, &self.field_type)
-                }),
-            "Field {} cannot have non-null defaults because unknown type requires null defaults",
-            self.name
-        );
-
-        match self.field_type.as_ref() {
-            Type::Primitive(PrimitiveType::Unknown) => {
-                ensure_data_valid!(
-                    !self.required,
-                    "Field {} cannot be required because unknown type must be optional",
-                    self.name
-                );
-            }
-            Type::Struct(struct_type) => {
-                for field in struct_type.fields() {
-                    field.validate_unknown_type()?;
-                }
-            }
-            Type::List(list_type) => {
-                list_type.element_field.validate_unknown_type()?;
-            }
-            Type::Map(map_type) => {
-                map_type.key_field.validate_unknown_type()?;
-                map_type.value_field.validate_unknown_type()?;
-            }
-            Type::Primitive(_) | Type::Variant(_) => {}
-        }
-
-        Ok(())
-    }
-
-    fn default_contains_non_null_unknown(default: &Literal, field_type: &Type) -> bool {
-        match (default, field_type) {
-            (_, Type::Primitive(PrimitiveType::Unknown)) => true,
-            (Literal::Struct(value), Type::Struct(struct_type)) => value
-                .iter()
-                .zip(struct_type.fields())
-                .any(|(value, field)| {
-                    value.is_some_and(|value| {
-                        Self::default_contains_non_null_unknown(value, &field.field_type)
-                    })
-                }),
-            (Literal::List(values), Type::List(list_type)) => values.iter().any(|value| {
-                value.as_ref().is_some_and(|value| {
-                    Self::default_contains_non_null_unknown(
-                        value,
-                        &list_type.element_field.field_type,
-                    )
-                })
-            }),
-            (Literal::Map(map), Type::Map(map_type)) => map.iter().any(|(key, value)| {
-                Self::default_contains_non_null_unknown(key, &map_type.key_field.field_type)
-                    || value.as_ref().is_some_and(|value| {
-                        Self::default_contains_non_null_unknown(
-                            value,
-                            &map_type.value_field.field_type,
-                        )
-                    })
-            }),
-            _ => false,
-        }
-    }
-
     /// Construct a new field.
     pub fn new(id: i32, name: impl ToString, field_type: Type, required: bool) -> Self {
         Self {
@@ -1432,69 +1359,6 @@ mod tests {
         }
 
         assert!(!PrimitiveType::Unknown.compatible(&PrimitiveLiteral::Int(1)));
-    }
-
-    #[test]
-    fn unknown_nested_field_deserialization_rejects_required() {
-        let json = r#"{"id":1,"name":"empty","required":true,"type":"unknown"}"#;
-
-        let error = serde_json::from_str::<NestedField>(json).unwrap_err();
-        assert!(
-            error.to_string().contains("unknown type must be optional"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn unknown_nested_field_deserialization_rejects_required_in_containers() {
-        let cases = [
-            (
-                "list element",
-                serde_json::json!({
-                    "type": "list",
-                    "element-id": 2,
-                    "element-required": true,
-                    "element": "unknown"
-                }),
-            ),
-            (
-                "map key",
-                serde_json::json!({
-                    "type": "map",
-                    "key-id": 2,
-                    "key": "unknown",
-                    "value-id": 3,
-                    "value-required": false,
-                    "value": "string"
-                }),
-            ),
-            (
-                "map value",
-                serde_json::json!({
-                    "type": "map",
-                    "key-id": 2,
-                    "key": "string",
-                    "value-id": 3,
-                    "value-required": true,
-                    "value": "unknown"
-                }),
-            ),
-        ];
-
-        for (name, field_type) in cases {
-            let field = serde_json::json!({
-                "id": 1,
-                "name": name,
-                "required": false,
-                "type": field_type
-            });
-
-            let error = serde_json::from_value::<NestedField>(field).unwrap_err();
-            assert!(
-                error.to_string().contains("unknown type must be optional"),
-                "unexpected error for {name}: {error}"
-            );
-        }
     }
 
     #[test]

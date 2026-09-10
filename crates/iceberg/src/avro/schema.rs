@@ -74,8 +74,14 @@ impl SchemaVisitor for SchemaToAvroSchema {
             record.name = Name::from(format!("r{}", field.id).as_str());
         }
 
-        if !field.required && !is_avro_null(&field_schema) {
-            field_schema = avro_optional(field_schema)?;
+        if !field.required {
+            if is_avro_null(&field_schema) {
+                // Unknown maps directly to Avro null. Wrapping it as optional would create
+                // an invalid union with duplicate null variants.
+                field_schema = AvroSchema::Null;
+            } else {
+                field_schema = avro_optional(field_schema)?;
+            }
         }
 
         let default = if let Some(literal) = &field.initial_default {
@@ -312,10 +318,6 @@ pub(crate) fn avro_decimal_schema(precision: usize, scale: usize) -> Result<Avro
 }
 
 fn avro_optional(avro_schema: AvroSchema) -> Result<AvroSchema> {
-    if is_avro_null(&avro_schema) {
-        return Ok(AvroSchema::Null);
-    }
-
     Ok(AvroSchema::Union(UnionSchema::new(vec![
         AvroSchema::Null,
         avro_schema,
