@@ -29,7 +29,7 @@ use crate::Result;
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::decimal_utils::decimal_to_fixed_length_bytes_exact;
-use crate::spec::{Datum, PrimitiveLiteral};
+use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, Type};
 
 const ROW_GROUP_MIGHT_MATCH: Result<bool> = Ok(true);
 const ROW_GROUP_CANT_MATCH: Result<bool> = Ok(false);
@@ -95,11 +95,28 @@ impl BloomFilterEvaluator<'_> {
 /// the evaluator can act on it. In particular `not` discards its subtree: the
 /// evaluator's `not` returns might-match regardless, so a filter fetched for a
 /// field under a `NOT` could never prune and would be pure wasted I/O.
+///
+/// Boolean fields are skipped for the same reason: with only two possible values,
+/// a column chunk's min/max statistics already determine membership exactly, so a
+/// bloom filter cannot prune anything statistics did not, and reading one costs a
+/// round trip to learn nothing.
 pub(crate) fn collect_bloom_filter_field_ids(predicate: &BoundPredicate) -> Result<HashSet<i32>> {
     visit(&mut BloomFilterFieldIdCollector, predicate)
 }
 
 struct BloomFilterFieldIdCollector;
+
+/// Field IDs worth fetching a bloom filter for: none if probing the column could
+/// never prune.
+fn probeable_field_id(reference: &BoundReference) -> HashSet<i32> {
+    if matches!(
+        reference.field().field_type.as_ref(),
+        Type::Primitive(PrimitiveType::Boolean)
+    ) {
+        return HashSet::new();
+    }
+    HashSet::from([reference.field().id])
+}
 
 impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
     type T = HashSet<i32>;
@@ -179,7 +196,7 @@ impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
     }
 
     fn eq(&mut self, r: &BoundReference, _l: &Datum, _p: &BoundPredicate) -> Result<Self::T> {
-        Ok(HashSet::from([r.field().id]))
+        Ok(probeable_field_id(r))
     }
 
     fn not_eq(&mut self, _r: &BoundReference, _l: &Datum, _p: &BoundPredicate) -> Result<Self::T> {
@@ -210,7 +227,7 @@ impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
         _literals: &FnvHashSet<Datum>,
         _p: &BoundPredicate,
     ) -> Result<Self::T> {
-        Ok(HashSet::from([r.field().id]))
+        Ok(probeable_field_id(r))
     }
 
     fn not_in(
@@ -238,7 +255,10 @@ fn check_in_bloom_filter(column: &ColumnBloomFilter, datum: &Datum) -> bool {
     let physical_type = *physical_type;
 
     match datum.literal() {
-        PrimitiveLiteral::Boolean(v) => sbbf.check(v),
+        // Parquet does not define bloom filter semantics for BOOLEAN — parquet-java
+        // only hashes int/long/float/double/binary. arrow-rs does write them, but min/max
+        // statistics already decide membership for a two-valued domain, so there is nothing to gain.
+        PrimitiveLiteral::Boolean(_) => true,
         // A promoted column (int -> long, float -> double) keeps its original
         // physical width in files written before the promotion, and the writer
         // hashed that width, so probe at the file's width rather than the
@@ -790,6 +810,59 @@ mod tests {
             .unwrap();
 
         assert_eq!(collected_ids(predicate), vec![2]);
+    }
+
+    /// A boolean column's min/max statistics already determine membership exactly,
+    /// so fetching a bloom filter for one can never prune and is pure wasted I/O.
+    #[test]
+    fn test_does_not_collect_boolean_field_ids() {
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "flag", Type::Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let predicate = Reference::new("flag")
+            .equal_to(Datum::bool(true))
+            .and(Reference::new("flag").is_in([Datum::bool(false)]))
+            .and(Reference::new("id").equal_to(Datum::int(1)))
+            .bind(schema.into(), true)
+            .unwrap();
+
+        assert_eq!(
+            collected_ids(predicate),
+            vec![2],
+            "only the non-boolean field should be collected"
+        );
+    }
+
+    /// Even given a filter, a boolean probe stays conservative: Parquet does not
+    /// define bloom filter semantics for BOOLEAN, so the encoding is not portable.
+    #[test]
+    fn test_boolean_probe_never_prunes() {
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "flag", Type::Primitive(PrimitiveType::Boolean)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        sbbf.insert(&true);
+        let filters = HashMap::from([(1, ColumnBloomFilter::new(sbbf, PhysicalType::BOOLEAN, 0))]);
+
+        // `false` was never inserted, yet the row group must survive.
+        let predicate = Reference::new("flag")
+            .equal_to(Datum::bool(false))
+            .bind(schema.into(), true)
+            .unwrap();
+
+        let result = BloomFilterEvaluator::eval(&predicate, &filters).unwrap();
+        assert!(result, "boolean probes must never prune");
     }
 
     /// Range and `not_eq` predicates cannot be probed, so they contribute nothing.
