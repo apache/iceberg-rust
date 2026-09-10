@@ -282,7 +282,13 @@ fn check_in_bloom_filter(column: &ColumnBloomFilter, datum: &Datum) -> bool {
                         None => true,
                     }
                 }
-                _ => true, // Unexpected physical type — conservatively might match
+                // Known gap: BYTE_ARRAY decimals are valid in Parquet (though not in
+                // Iceberg's Appendix A) and some older Spark writers emit them. Not
+                // probed because BYTE_ARRAY carries no `type_length` and sign-extension
+                // padding is writer-dependent, so a single-length probe would miss
+                // padded entries and prune row groups that do hold the value. A sound
+                // version ORs a check over every length from minimal..=16.
+                _ => true, // Conservatively might match
             }
         }
         PrimitiveLiteral::UInt128(v) => {
