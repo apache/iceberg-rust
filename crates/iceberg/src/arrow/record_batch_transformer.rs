@@ -869,6 +869,8 @@ impl RecordBatchTransformer {
                         ));
                     }
 
+                    // TODO: Materialize complex initial defaults instead of silently null-filling
+                    // them. A struct default must produce a non-null struct with child defaults.
                     let default_value = iceberg_field.initial_default.as_ref().and_then(|lit| {
                         if let Literal::Primitive(prim) = lit {
                             Some(prim.clone())
@@ -1151,12 +1153,14 @@ mod test {
     use arrow_cast::cast;
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 
-    use super::field_with_id;
+    use super::{PARQUET_FIELD_ID_META_KEY, field_with_id};
     use crate::arrow::build_partition_constant;
     use crate::arrow::record_batch_transformer::{
         RecordBatchTransformer, RecordBatchTransformerBuilder,
     };
-    use crate::spec::{Literal, NestedField, PrimitiveType, Schema, Struct, Type};
+    use crate::spec::{
+        ListType, Literal, MapType, NestedField, PrimitiveType, Schema, Struct, Type,
+    };
 
     /// Helper to extract string values from either StringArray or RunEndEncoded<StringArray>
     /// Returns empty string for null values
@@ -1443,6 +1447,173 @@ mod test {
         assert!(struct_column.is_null(0));
         assert!(struct_column.is_null(1));
         assert!(struct_column.is_null(2));
+    }
+
+    /// Evolved table schema for the #2618 regression test: `id` plus three
+    /// later-added optional nested columns — a list, a map, and a struct that
+    /// itself contains a nested list (`ys`). The nested-in-struct list is the
+    /// case a per-type NULL-fill would miss.
+    fn schema_with_added_nested_columns() -> Schema {
+        Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(
+                    2,
+                    "xs",
+                    Type::List(ListType {
+                        element_field: NestedField::list_element(
+                            3,
+                            Type::Primitive(PrimitiveType::Int),
+                            false,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+                NestedField::optional(
+                    4,
+                    "props",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            5,
+                            Type::Primitive(PrimitiveType::String),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            6,
+                            Type::Primitive(PrimitiveType::Int),
+                            false,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+                NestedField::optional(
+                    7,
+                    "s",
+                    Type::Struct(crate::spec::StructType::new(vec![
+                        NestedField::optional(8, "a", Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::optional(
+                            9,
+                            "ys",
+                            Type::List(ListType {
+                                element_field: NestedField::list_element(
+                                    10,
+                                    Type::Primitive(PrimitiveType::Long),
+                                    false,
+                                )
+                                .into(),
+                            }),
+                        )
+                        .into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn schema_evolution_adds_list_map_and_nested_struct_columns_with_nulls() {
+        // Regression test for https://github.com/apache/iceberg-rust/issues/2618.
+        //
+        // The story the test tells, in order:
+        //   1. An old data file was written with only the `id` column.
+        //   2. The table schema has since evolved, adding optional list / map /
+        //      struct columns (see `schema_with_added_nested_columns`).
+        //   3. Reading the old file against the evolved schema must fill those
+        //      absent columns with typed all-NULL arrays — previously this errored
+        //      with "unexpected target column type" for the nested types.
+
+        // (1) The old data file: just `id`.
+        let file_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "id",
+            DataType::Int32,
+            false,
+            1,
+        )]));
+        let file_batch =
+            RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
+                .unwrap();
+
+        // (2) Read it against the evolved schema, projecting id + the three added columns.
+        let snapshot_schema = Arc::new(schema_with_added_nested_columns());
+        let projected_iceberg_field_ids = [1, 2, 4, 7];
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
+                .build();
+        let result = transformer.process_record_batch(file_batch).unwrap();
+
+        // (3a) `id` survives unchanged.
+        assert_eq!(result.num_columns(), 4);
+        assert_eq!(result.num_rows(), 3);
+        let id_column = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_column.values(), &[1, 2, 3]);
+
+        // (3b) The added columns carry the evolved schema's Arrow types and are all-NULL.
+        assert!(matches!(
+            result.schema().field(1).data_type(),
+            DataType::List(_)
+        ));
+        assert!(matches!(
+            result.schema().field(2).data_type(),
+            DataType::Map(_, _)
+        ));
+        for (idx, name) in [(1, "xs"), (2, "props"), (3, "s")] {
+            assert_eq!(
+                result.column(idx).null_count(),
+                3,
+                "added nested column `{name}` should be all-NULL"
+            );
+        }
+
+        // (3c) The all-NULL struct still carries its full nested shape (`a` plus the
+        // nested list `ys`), not a degenerate empty struct — this is what the
+        // type-preserving NULL fill guarantees over an enumerate-each-type fix.
+        let result_schema = result.schema();
+        let DataType::Struct(struct_fields) = result_schema.field(3).data_type() else {
+            panic!("field `s` should be a struct");
+        };
+        let child_names: Vec<&str> = struct_fields.iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(child_names, vec!["a", "ys"]);
+
+        let DataType::List(xs_element) = result_schema.field(1).data_type() else {
+            panic!("field `xs` should be a list");
+        };
+        let DataType::Map(entries, _) = result_schema.field(2).data_type() else {
+            panic!("field `props` should be a map");
+        };
+        let DataType::Struct(map_fields) = entries.data_type() else {
+            panic!("map entries should be a struct");
+        };
+        let DataType::List(ys_element) = struct_fields[1].data_type() else {
+            panic!("field `ys` should be a list");
+        };
+        for (field, expected_id) in [
+            (xs_element, "3"),
+            (&map_fields[0], "5"),
+            (&map_fields[1], "6"),
+            (&struct_fields[0], "8"),
+            (&struct_fields[1], "9"),
+            (ys_element, "10"),
+        ] {
+            assert_eq!(
+                field
+                    .metadata()
+                    .get(PARQUET_FIELD_ID_META_KEY)
+                    .map(String::as_str),
+                Some(expected_id),
+                "nested field `{}` should preserve its field ID",
+                field.name()
+            );
+        }
     }
 
     pub fn source_record_batch() -> RecordBatch {
