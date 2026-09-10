@@ -237,7 +237,8 @@ fn check_in_bloom_filter(column: &ColumnBloomFilter, datum: &Datum) -> bool {
             PhysicalType::INT64 => sbbf.check(v),
             PhysicalType::INT32 => match i32::try_from(*v) {
                 Ok(narrowed) => sbbf.check(&narrowed),
-                // Out of range for the column, so it cannot be present.
+                // Too wide for an INT32 column to hold, so there is nothing
+                // meaningful to probe — keep the row group.
                 Err(_) => true,
             },
             _ => true,
@@ -266,8 +267,16 @@ fn check_in_bloom_filter(column: &ColumnBloomFilter, datum: &Datum) -> bool {
             // Decimal: dispatch based on the actual Parquet physical type
             // from the file, not inferred from precision.
             match physical_type {
-                PhysicalType::INT32 => sbbf.check(&(*v as i32)),
-                PhysicalType::INT64 => sbbf.check(&(*v as i64)),
+                // Narrow only when the mantissa round-trips; a truncated copy would
+                // hash to an unrelated slot.
+                PhysicalType::INT32 => match i32::try_from(*v) {
+                    Ok(narrowed) => sbbf.check(&narrowed),
+                    Err(_) => true,
+                },
+                PhysicalType::INT64 => match i64::try_from(*v) {
+                    Ok(narrowed) => sbbf.check(&narrowed),
+                    Err(_) => true,
+                },
                 PhysicalType::FIXED_LEN_BYTE_ARRAY => {
                     // Encode to the file's declared length, not one derived from
                     // the Iceberg precision: a widened precision would change the
@@ -1141,6 +1150,49 @@ mod tests {
 
         let result = BloomFilterEvaluator::eval(&predicate, &filters).unwrap();
         assert!(result, "value too wide for the column must not prune");
+    }
+
+    /// The `INT32` / `INT64` counterparts of the case above: after a precision
+    /// widening the bound literal can carry a mantissa wider than the file's
+    /// physical column, and a truncated probe would hash an unrelated slot.
+    #[test]
+    fn test_decimal_wider_than_int32_column_does_not_prune() {
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        sbbf.insert(&12345_i32);
+        let filters = HashMap::from([(1, ColumnBloomFilter::new(sbbf, PhysicalType::INT32, 0))]);
+
+        // File written as decimal(9,2) -> INT32; schema since widened to decimal(38,2).
+        let predicate = decimal_eq_predicate(create_decimal_schema(38, 2), i64::MAX as i128, 38);
+
+        let result = BloomFilterEvaluator::eval(&predicate, &filters).unwrap();
+        assert!(result, "mantissa too wide for an INT32 column must not prune");
+    }
+
+    #[test]
+    fn test_decimal_wider_than_int64_column_does_not_prune() {
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        sbbf.insert(&12345_i64);
+        let filters = HashMap::from([(1, ColumnBloomFilter::new(sbbf, PhysicalType::INT64, 0))]);
+
+        let predicate =
+            decimal_eq_predicate(create_decimal_schema(38, 2), i128::from(i64::MAX) + 1, 38);
+
+        let result = BloomFilterEvaluator::eval(&predicate, &filters).unwrap();
+        assert!(result, "mantissa too wide for an INT64 column must not prune");
+    }
+
+    /// A mantissa that does fit must still prune when genuinely absent, so the
+    /// `try_from` guard above does not disable pruning outright.
+    #[test]
+    fn test_decimal_within_int64_column_still_prunes() {
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        sbbf.insert(&12345_i64);
+        let filters = HashMap::from([(1, ColumnBloomFilter::new(sbbf, PhysicalType::INT64, 0))]);
+
+        let predicate = decimal_eq_predicate(create_decimal_schema(38, 2), 999_999, 38);
+
+        let result = BloomFilterEvaluator::eval(&predicate, &filters).unwrap();
+        assert!(!result, "absent in-range mantissa must still prune");
     }
 
     /// A zero or oversized `type_length` is unusable; never prune on it.
