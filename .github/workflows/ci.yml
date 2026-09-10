@@ -78,6 +78,19 @@ jobs:
       - name: Check crates package LICENSE and NOTICE
         run: make check-license-notice
 
+      # Trusted publishing cannot create a crate (https://crates.io/docs/trusted-publishing),
+      # so a new publishable crate must be reserved on crates.io before it is merged.
+      # See "Adding a new crate" in website/src/release.md.
+      - name: Check publishable crates exist on crates.io
+        run: |
+          for pkg in $(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.publish == null) | .name'); do
+            # --registry is required, otherwise cargo resolves the local workspace member.
+            if ! cargo info --registry crates-io "$pkg" >/dev/null; then
+              echo "::error::$pkg is not on crates.io. Reserve it before merging; see 'Adding a new crate' in website/src/release.md"
+              exit 1
+            fi
+          done
+
       - name: Cargo Machete
         run: cargo machete
 

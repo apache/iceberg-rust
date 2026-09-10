@@ -610,45 +610,75 @@ however it is in the community's best interest to publish it soon after.
 
 ## Appendix
 
-### Publishing a crate for the first time
+### Adding a new crate
 
-Publishing the Iceberg crates is automated using GitHub Actions,
-which authenticates with crates.io using trusted publishing.
+Every publishable crate must exist on crates.io before the pull request that adds it is merged.
+CI enforces this with a check that fails for any publishable crate missing from crates.io.
 
-Trusted publishing must first be configured for each crate.
-If the crate has never been published, crates.io rejects attempts to publish.
+The release workflow publishes crates with [trusted publishing](https://crates.io/docs/trusted-publishing), which cannot create a crate.
+crates.io requires the first version of a crate to be published manually with an API token ([announcement](https://blog.rust-lang.org/2025/07/11/crates-io-development-update-2025-07/)).
+Publishing the crate by hand after the release workflow fails does not work either: the workflow runs `cargo publish --workspace`, which refuses to run if any crate already exists at the release version.
 
-When a release workflow fails due to the presence of a new crate, a committer must perform steps enumerated below.
-Once complete, future versions can be published automatically using GitHub Actions.
+A committer therefore reserves the crate when it is added, in three steps: publish a placeholder version, configure owners, and configure trusted publishing.
 
-#### Initial crate publish
+#### Prerequisites
 
-Manually publish the crate using the following command.
-You **must** have the source code checked out matching the pushed Git tag for the release.
+Any crates.io account can publish an unclaimed name, and the first publisher becomes the crate's only owner.
+Reserve the crate promptly once the pull request is open, and have a committer do it, since the reserver must hand ownership to the project.
 
-```shell
-cargo publish --package <package-name>
-```
+The committer needs:
 
-#### Configure crate permissions
+- A crates.io account linked to their GitHub account.
+- A crates.io API token with the `publish-new` and `change-owners` scopes, used with `cargo login`.
+- Membership in the `apache/iceberg-private` GitHub team, with the `read:org` permission granted to crates.io, in order to add that team as an owner.
 
-After publishing succeeds, the crate must be configured to allow other committers to publish.
+Committers who already own the existing Iceberg crates meet all of these.
+List them with `cargo owner --list iceberg`.
 
-Add the GitHub team that Apache Iceberg committers are a member of.
+#### Step 1: Reserve the crate name
 
-```shell
-cargo owner --add github:<github-team-org>:<github-team-name>
-```
-
-Additionally, add two PMC members (excluding yourself) as owners of the crate.
-A GitHub team cannot manage permissions for the crate, so it is important that individuals have ownership to continue being able to manage the crate should a PMC member become inactive.
-See the [Cargo documentation for `cargo owner`](https://doc.rust-lang.org/cargo/reference/publishing.html#cargo-owner) for reference.
+Check out the pull request branch and publish the crate as version `0.0.0`, so the placeholder never collides with a real release.
 
 ```shell
-cargo owner --add <github-handle>
+cd crates/<crate-dir>
+sed -i.bak 's/^version = { workspace = true }/version = "0.0.0"/' Cargo.toml
+cargo publish --package <package-name> --allow-dirty
+mv Cargo.toml.bak Cargo.toml
 ```
 
-#### Configure trusted publishing
+Do not commit the version change.
 
-Review the [crates.io trusted publishing documentation](https://crates.io/docs/trusted-publishing) for the latest instructions on how to configure it.
-You should also review another already-existing crate for reference.
+#### Step 2: Configure crate owners
+
+Add the GitHub team that owns the existing Iceberg crates.
+
+```shell
+cargo owner --add github:apache:iceberg-private <package-name>
+```
+
+Then add two PMC members other than yourself as individual owners.
+
+```shell
+cargo owner --add <github-handle> <package-name>
+```
+
+Individual owners are required because a team owner can publish and yank versions but cannot add or remove owners.
+Without them, the crate could become unmanageable if a PMC member becomes inactive.
+See the [Cargo documentation for `cargo owner`](https://doc.rust-lang.org/cargo/reference/publishing.html#cargo-owner).
+
+#### Step 3: Configure trusted publishing
+
+As a crate owner, open the crate's settings on the crates.io website and add a trusted publisher, following the [crates.io trusted publishing documentation](https://crates.io/docs/trusted-publishing).
+Use an existing Iceberg crate as the reference:
+
+- Repository: `apache/iceberg-rust`
+- Workflow: `publish.yml`
+- Environment: `publish`
+
+Then re-run CI on the pull request.
+The next release publishes the crate's first real version along with the rest of the workspace.
+
+#### If the Publish workflow fails on a missing crate
+
+Reserve the crate as above, using the `0.0.0` placeholder and never the release version, then re-run the failed workflow run from the GitHub Actions UI.
+The workflow fails before uploading anything, and re-running keeps the original tag as the workflow ref, so the publish step runs as if the tag had just been pushed.
