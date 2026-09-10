@@ -65,6 +65,9 @@ Defaults:
 cargo install --locked cargo-deny
 ```
 
+`--check_publish 1` runs `cargo publish --workspace --dry-run`, which packages and compiles every crate and needs network access to crates.io.
+Pass `--check_publish 0` to skip it when offline or when iterating on the script.
+
 ## Verify an RC
 
 ```shell
