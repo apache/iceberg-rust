@@ -333,9 +333,9 @@ impl CachingDeleteFileLoader {
     /// Validates a deletion-vector task and returns what the read needs as typed values:
     /// `(start, len, referenced data file path, expected cardinality)`.
     ///
-    /// The builder guarantees that a deletion vector already carries
-    /// `referenced_data_file`, `content_offset`, `content_size_in_bytes`, and `record_count`.
-    /// This helper keeps only the conversions still needed for the read.
+    /// Builder-created tasks are validated up front, but deserialized scan plans can bypass the
+    /// builder. Keep the required-field checks here so malformed plans return `DataInvalid`
+    /// instead of panicking.
     ///
     /// Equality and ordinary position deletes have no equivalent validation in this loader: a
     /// malformed equality/position delete file fails loudly when the Parquet reader can't open
@@ -346,19 +346,45 @@ impl CachingDeleteFileLoader {
     fn validate_deletion_vector_task(
         task: &FileScanTaskDeleteFile,
     ) -> Result<(u64, u64, String, u64)> {
-        let content_offset = task
-            .content_offset()
-            .expect("validated deletion vector must have content_offset");
-        let content_size = task
-            .content_size_in_bytes()
-            .expect("validated deletion vector must have content_size_in_bytes");
+        let content_offset = task.content_offset().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} is missing content_offset",
+                    task.file_path()
+                ),
+            )
+        })?;
+        let content_size = task.content_size_in_bytes().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} is missing content_size_in_bytes",
+                    task.file_path()
+                ),
+            )
+        })?;
         let data_file_path = task
             .referenced_data_file()
             .map(ToOwned::to_owned)
-            .expect("validated deletion vector must have referenced_data_file");
-        let record_count = task
-            .record_count()
-            .expect("validated deletion vector must have record_count");
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "deletion vector {} is missing referenced_data_file",
+                        task.file_path()
+                    ),
+                )
+            })?;
+        let record_count = task.record_count().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} is missing record_count",
+                    task.file_path()
+                ),
+            )
+        })?;
 
         let start = u64::try_from(content_offset).map_err(|_| {
             Error::new(
@@ -854,8 +880,27 @@ mod tests {
     use super::*;
     use crate::arrow::delete_filter::tests::setup;
     use crate::scan::FileScanTaskDeleteFile;
-    use crate::spec::{DataContentType, Schema};
+    use crate::spec::{DataContentType, DataFileFormat, Schema};
     use crate::test_utils::encode_dv_blob;
+
+    #[test]
+    fn test_validate_deserialized_deletion_vector_rejects_missing_fields() {
+        let task: FileScanTaskDeleteFile = serde_json::from_value(serde_json::json!({
+            "file_path": "dv.puffin",
+            "file_size_in_bytes": 100,
+            "file_type": "PositionDeletes",
+            "file_format": "Puffin",
+            "partition_spec_id": 0
+        }))
+        .unwrap();
+        assert_eq!(task.file_type(), DataContentType::PositionDeletes);
+        assert_eq!(task.file_format(), DataFileFormat::Puffin);
+
+        let err = CachingDeleteFileLoader::validate_deletion_vector_task(&task).unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("missing content_offset"));
+    }
 
     #[tokio::test]
     async fn test_delete_file_loader_parse_equality_deletes() {
