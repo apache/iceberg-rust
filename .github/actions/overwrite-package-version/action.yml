@@ -24,18 +24,8 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Install toml-cli
-      # Avoid `--locked` as its lock file is not recently updated,
-      # and its dependencies at the time rely on unstable nightly features since removed.
-      run: cargo install toml-cli
-      shell: bash
-
-    - name: Set pyproject version
+    - name: Update package version
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
-      run: |
-        echo "Setting pyproject version to: ${VERSION}"
-        PYPROJECT="bindings/python/pyproject.toml"
-        toml set "$PYPROJECT" project.version "${VERSION}" > tmp.toml && mv tmp.toml "$PYPROJECT"
-        sed 's/dynamic = \["version"\]/dynamic = []/' "$PYPROJECT" > tmp.toml && mv tmp.toml "$PYPROJECT"
+      run: bash "$GITHUB_ACTION_PATH/run.sh"

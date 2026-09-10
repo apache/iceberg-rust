@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,18 +16,15 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file is heavily inspired by
-#  [datafusion](https://github.com/apache/datafusion/blob/main/.github/actions/setup-builder/action.yaml).
-name: Prepare Rust Builder
-description: 'Prepare Rust Build Environment'
-inputs:
-  rust-version:
-    description: 'version of rust to install and use'
-runs:
-  using: "composite"
-  steps:
-    - name: Setup Rust toolchain
-      shell: bash
-      env:
-        RUST_VERSION: ${{ inputs.rust-version }}
-      run: bash "$GITHUB_ACTION_PATH/run.sh"
+set -euo pipefail
+
+# Avoid `--locked` as toml-cli's lock file is not recently updated,
+# and its dependencies at the time rely on removed nightly features.
+cargo install toml-cli
+
+echo "Setting pyproject version to: ${VERSION}"
+pyproject="bindings/python/pyproject.toml"
+toml set "$pyproject" project.version "${VERSION}" > tmp.toml
+mv tmp.toml "$pyproject"
+sed 's/dynamic = \["version"\]/dynamic = []/' "$pyproject" > tmp.toml
+mv tmp.toml "$pyproject"

@@ -53,9 +53,10 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
+        shell: bash
+        env:
+          RUST_VERSION: stable
+        run: bash "$GITHUB_WORKSPACE/.github/actions/setup-builder/run.sh"
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,18 +16,18 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file is heavily inspired by
-#  [datafusion](https://github.com/apache/datafusion/blob/main/.github/actions/setup-builder/action.yaml).
-name: Prepare Rust Builder
-description: 'Prepare Rust Build Environment'
-inputs:
-  rust-version:
-    description: 'version of rust to install and use'
-runs:
-  using: "composite"
-  steps:
-    - name: Setup Rust toolchain
-      shell: bash
-      env:
-        RUST_VERSION: ${{ inputs.rust-version }}
-      run: bash "$GITHUB_ACTION_PATH/run.sh"
+set -euo pipefail
+
+if [[ -n "${RUST_VERSION:-}" ]]; then
+  echo "Installing ${RUST_VERSION}"
+  rustup toolchain install "${RUST_VERSION}"
+  rustup override set "${RUST_VERSION}"
+else
+  echo "Installing toolchain according to rust-toolchain.toml"
+  rustup show
+fi
+
+rustup component add rustfmt clippy
+
+# https://github.com/actions/checkout/issues/766
+git config --global --add safe.directory "$GITHUB_WORKSPACE"

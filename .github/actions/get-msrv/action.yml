@@ -29,7 +29,4 @@ runs:
     - name: Get MSRV
       id: get-msrv
       shell: bash
-      run: |
-        msrv=$(grep '^rust-version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-        echo "msrv=$msrv" >> $GITHUB_OUTPUT
-        echo "MSRV is $msrv"
+      run: bash "$GITHUB_ACTION_PATH/run.sh"

@@ -41,7 +41,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/.github/actions/setup-builder/run.sh"
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

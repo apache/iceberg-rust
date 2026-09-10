@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,18 +16,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file is heavily inspired by
-#  [datafusion](https://github.com/apache/datafusion/blob/main/.github/actions/setup-builder/action.yaml).
-name: Prepare Rust Builder
-description: 'Prepare Rust Build Environment'
-inputs:
-  rust-version:
-    description: 'version of rust to install and use'
-runs:
-  using: "composite"
-  steps:
-    - name: Setup Rust toolchain
-      shell: bash
-      env:
-        RUST_VERSION: ${{ inputs.rust-version }}
-      run: bash "$GITHUB_ACTION_PATH/run.sh"
+set -euo pipefail
+
+msrv=$(grep '^rust-version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+echo "msrv=$msrv" >> "$GITHUB_OUTPUT"
+echo "MSRV is $msrv"
