@@ -1165,7 +1165,10 @@ mod tests {
         let predicate = decimal_eq_predicate(create_decimal_schema(38, 2), i64::MAX as i128, 38);
 
         let result = BloomFilterEvaluator::eval(&predicate, &filters).unwrap();
-        assert!(result, "mantissa too wide for an INT32 column must not prune");
+        assert!(
+            result,
+            "mantissa too wide for an INT32 column must not prune"
+        );
     }
 
     #[test]
@@ -1178,7 +1181,10 @@ mod tests {
             decimal_eq_predicate(create_decimal_schema(38, 2), i128::from(i64::MAX) + 1, 38);
 
         let result = BloomFilterEvaluator::eval(&predicate, &filters).unwrap();
-        assert!(result, "mantissa too wide for an INT64 column must not prune");
+        assert!(
+            result,
+            "mantissa too wide for an INT64 column must not prune"
+        );
     }
 
     /// A mantissa that does fit must still prune when genuinely absent, so the
