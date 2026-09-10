@@ -152,6 +152,12 @@ jobs:
             cargo check -p "$pkg" --all-targets || exit 1
           done
 
+      # Dry-runs the publish without compiling, which catches dependency cycles between
+      # workspace crates, versions that do not resolve on crates.io, and missing metadata.
+      # publish.yml runs the full dry-run with compilation on release candidate tags.
+      - name: Check each crate can be published
+        run: cargo publish --workspace --all-features --dry-run --no-verify
+
   # Verifies the core iceberg crate compiles without default features, ensuring
   # optional functionality is properly gated behind feature flags.
   build_with_no_default_features:
