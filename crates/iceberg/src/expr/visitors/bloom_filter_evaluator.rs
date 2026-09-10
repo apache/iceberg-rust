@@ -89,59 +89,66 @@ impl BloomFilterEvaluator<'_> {
 
 /// Collects field IDs that appear in `eq` or `in` predicates — the only
 /// predicate types that benefit from bloom filter checks.
+///
+/// Each node returns the field IDs its subtree contributes, mirroring
+/// [`BloomFilterEvaluator`]'s structure so that a field is collected only where
+/// the evaluator can act on it. In particular `not` discards its subtree: the
+/// evaluator's `not` returns might-match regardless, so a filter fetched for a
+/// field under a `NOT` could never prune and would be pure wasted I/O.
 pub(crate) fn collect_bloom_filter_field_ids(predicate: &BoundPredicate) -> Result<HashSet<i32>> {
-    let mut visitor = BloomFilterFieldIdCollector {
-        field_ids: HashSet::new(),
-    };
-    visit(&mut visitor, predicate)?;
-    Ok(visitor.field_ids)
+    visit(&mut BloomFilterFieldIdCollector, predicate)
 }
 
-struct BloomFilterFieldIdCollector {
-    field_ids: HashSet<i32>,
-}
+struct BloomFilterFieldIdCollector;
 
 impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
-    type T = ();
+    type T = HashSet<i32>;
 
-    fn always_true(&mut self) -> Result<()> {
-        Ok(())
+    fn always_true(&mut self) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 
-    fn always_false(&mut self) -> Result<()> {
-        Ok(())
+    fn always_false(&mut self) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 
-    fn and(&mut self, _lhs: (), _rhs: ()) -> Result<()> {
-        Ok(())
+    fn and(&mut self, mut lhs: Self::T, rhs: Self::T) -> Result<Self::T> {
+        lhs.extend(rhs);
+        Ok(lhs)
     }
 
-    fn or(&mut self, _lhs: (), _rhs: ()) -> Result<()> {
-        Ok(())
+    fn or(&mut self, mut lhs: Self::T, rhs: Self::T) -> Result<Self::T> {
+        lhs.extend(rhs);
+        Ok(lhs)
     }
 
-    fn not(&mut self, _inner: ()) -> Result<()> {
-        Ok(())
+    fn not(&mut self, _inner: Self::T) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 
-    fn is_null(&mut self, _r: &BoundReference, _p: &BoundPredicate) -> Result<()> {
-        Ok(())
+    fn is_null(&mut self, _r: &BoundReference, _p: &BoundPredicate) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 
-    fn not_null(&mut self, _r: &BoundReference, _p: &BoundPredicate) -> Result<()> {
-        Ok(())
+    fn not_null(&mut self, _r: &BoundReference, _p: &BoundPredicate) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 
-    fn is_nan(&mut self, _r: &BoundReference, _p: &BoundPredicate) -> Result<()> {
-        Ok(())
+    fn is_nan(&mut self, _r: &BoundReference, _p: &BoundPredicate) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 
-    fn not_nan(&mut self, _r: &BoundReference, _p: &BoundPredicate) -> Result<()> {
-        Ok(())
+    fn not_nan(&mut self, _r: &BoundReference, _p: &BoundPredicate) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 
-    fn less_than(&mut self, _r: &BoundReference, _l: &Datum, _p: &BoundPredicate) -> Result<()> {
-        Ok(())
+    fn less_than(
+        &mut self,
+        _r: &BoundReference,
+        _l: &Datum,
+        _p: &BoundPredicate,
+    ) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 
     fn less_than_or_eq(
@@ -149,12 +156,17 @@ impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
         _r: &BoundReference,
         _l: &Datum,
         _p: &BoundPredicate,
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 
-    fn greater_than(&mut self, _r: &BoundReference, _l: &Datum, _p: &BoundPredicate) -> Result<()> {
-        Ok(())
+    fn greater_than(
+        &mut self,
+        _r: &BoundReference,
+        _l: &Datum,
+        _p: &BoundPredicate,
+    ) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 
     fn greater_than_or_eq(
@@ -162,21 +174,25 @@ impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
         _r: &BoundReference,
         _l: &Datum,
         _p: &BoundPredicate,
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 
-    fn eq(&mut self, r: &BoundReference, _l: &Datum, _p: &BoundPredicate) -> Result<()> {
-        self.field_ids.insert(r.field().id);
-        Ok(())
+    fn eq(&mut self, r: &BoundReference, _l: &Datum, _p: &BoundPredicate) -> Result<Self::T> {
+        Ok(HashSet::from([r.field().id]))
     }
 
-    fn not_eq(&mut self, _r: &BoundReference, _l: &Datum, _p: &BoundPredicate) -> Result<()> {
-        Ok(())
+    fn not_eq(&mut self, _r: &BoundReference, _l: &Datum, _p: &BoundPredicate) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 
-    fn starts_with(&mut self, _r: &BoundReference, _l: &Datum, _p: &BoundPredicate) -> Result<()> {
-        Ok(())
+    fn starts_with(
+        &mut self,
+        _r: &BoundReference,
+        _l: &Datum,
+        _p: &BoundPredicate,
+    ) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 
     fn not_starts_with(
@@ -184,8 +200,8 @@ impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
         _r: &BoundReference,
         _l: &Datum,
         _p: &BoundPredicate,
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 
     fn r#in(
@@ -193,9 +209,8 @@ impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
         r: &BoundReference,
         _literals: &FnvHashSet<Datum>,
         _p: &BoundPredicate,
-    ) -> Result<()> {
-        self.field_ids.insert(r.field().id);
-        Ok(())
+    ) -> Result<Self::T> {
+        Ok(HashSet::from([r.field().id]))
     }
 
     fn not_in(
@@ -203,8 +218,8 @@ impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
         _r: &BoundReference,
         _literals: &FnvHashSet<Datum>,
         _p: &BoundPredicate,
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<Self::T> {
+        Ok(HashSet::new())
     }
 }
 
@@ -483,7 +498,7 @@ mod tests {
     use parquet::bloom_filter::Sbbf;
     use parquet::data_type::ByteArray;
 
-    use super::{BloomFilterEvaluator, ColumnBloomFilter};
+    use super::{BloomFilterEvaluator, ColumnBloomFilter, collect_bloom_filter_field_ids};
     use crate::expr::{Bind, BoundPredicate, Reference};
     use crate::spec::decimal_utils::decimal_to_fixed_length_bytes_exact;
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
@@ -707,6 +722,88 @@ mod tests {
 
         let result = BloomFilterEvaluator::eval(&predicate, &bloom_filters).unwrap();
         assert!(result, "NOT should always return might-match");
+    }
+
+    // --- Field ID collection ---
+    //
+    // The collector decides which bloom filters get fetched, one round trip per
+    // column per row group, so anything it reports that the evaluator cannot act
+    // on is wasted I/O.
+
+    fn collected_ids(predicate: BoundPredicate) -> Vec<i32> {
+        let mut ids: Vec<i32> = collect_bloom_filter_field_ids(&predicate)
+            .unwrap()
+            .into_iter()
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    #[test]
+    fn test_collects_eq_and_in_field_ids() {
+        let schema = create_test_schema();
+        let predicate = Reference::new("id")
+            .equal_to(Datum::int(1))
+            .and(Reference::new("name").is_in([Datum::string("alice")]))
+            .bind(schema.into(), true)
+            .unwrap();
+
+        assert_eq!(collected_ids(predicate), vec![1, 2]);
+    }
+
+    /// `not` discards its subtree, so `eq`/`in` beneath a `NOT` are not collected.
+    /// The evaluator's `not` returns might-match regardless, so fetching those
+    /// filters could never prune.
+    #[test]
+    fn test_does_not_collect_eq_under_not() {
+        let schema = create_test_schema();
+        let predicate = Reference::new("id")
+            .equal_to(Datum::int(1))
+            .not()
+            .bind(schema.into(), true)
+            .unwrap();
+
+        assert!(collected_ids(predicate).is_empty());
+    }
+
+    #[test]
+    fn test_does_not_collect_in_under_not() {
+        let schema = create_test_schema();
+        let predicate = Reference::new("id")
+            .is_in([Datum::int(1), Datum::int(2)])
+            .not()
+            .bind(schema.into(), true)
+            .unwrap();
+
+        assert!(collected_ids(predicate).is_empty());
+    }
+
+    /// A `NOT` must not suppress collection for its siblings.
+    #[test]
+    fn test_collects_sibling_of_not() {
+        let schema = create_test_schema();
+        let predicate = Reference::new("id")
+            .equal_to(Datum::int(1))
+            .not()
+            .and(Reference::new("name").equal_to(Datum::string("alice")))
+            .bind(schema.into(), true)
+            .unwrap();
+
+        assert_eq!(collected_ids(predicate), vec![2]);
+    }
+
+    /// Range and `not_eq` predicates cannot be probed, so they contribute nothing.
+    #[test]
+    fn test_does_not_collect_unprobeable_operators() {
+        let schema = create_test_schema();
+        let predicate = Reference::new("id")
+            .less_than(Datum::int(1))
+            .and(Reference::new("id").not_equal_to(Datum::int(2)))
+            .and(Reference::new("name").is_not_null())
+            .bind(schema.into(), true)
+            .unwrap();
+
+        assert!(collected_ids(predicate).is_empty());
     }
 
     #[test]
