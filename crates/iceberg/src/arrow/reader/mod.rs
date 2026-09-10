@@ -111,8 +111,9 @@ impl ArrowReaderBuilder {
     /// checked. Row groups where the bloom filter proves the value is absent
     /// are skipped entirely.
     ///
-    /// Defaults to disabled, as reading bloom filters requires additional I/O
-    /// per column per row group.
+    /// Defaults to disabled. Each bloom filter is a separate read, and they are
+    /// issued serially — one round trip per relevant column per row group, before
+    /// any data is read. TODO(#3191)
     pub fn with_bloom_filter_enabled(mut self, bloom_filter_enabled: bool) -> Self {
         self.bloom_filter_enabled = bloom_filter_enabled;
         self
