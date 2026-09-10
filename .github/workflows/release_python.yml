@@ -120,7 +120,7 @@ jobs:
           # Convert semver RC (0.9.0-rc.1) to PEP 440 (0.9.0rc1)
           echo "pep440=$(echo "$CARGO_VERSION" | sed 's/-rc\.\([0-9]*\)/rc\1/')" >> $GITHUB_OUTPUT
 
-      - uses: $/.github/actions/overwrite-package-version
+      - uses: ./.github/actions/overwrite-package-version
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
         with:
           version: ${{ steps.version.outputs.pep440 }}
@@ -167,7 +167,7 @@ jobs:
           # Convert semver RC (0.9.0-rc.1) to PEP 440 (0.9.0rc1)
           echo "pep440=$(echo "$CARGO_VERSION" | sed 's/-rc\.\([0-9]*\)/rc\1/')" >> $GITHUB_OUTPUT
 
-      - uses: $/.github/actions/overwrite-package-version
+      - uses: ./.github/actions/overwrite-package-version
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
         with:
           version: ${{ steps.version.outputs.pep440 }}
@@ -177,10 +177,10 @@ jobs:
           python-version: 3.12
       - name: Get MSRV
         id: get-msrv
-        uses: $/.github/actions/get-msrv
+        uses: ./.github/actions/get-msrv
 
       - name: Setup Rust toolchain
-        uses: $/.github/actions/setup-builder
+        uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ steps.get-msrv.outputs.msrv }}
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0

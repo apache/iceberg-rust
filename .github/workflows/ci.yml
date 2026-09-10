@@ -52,7 +52,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: $/.github/actions/setup-builder
+        uses: ./.github/actions/setup-builder
 
       - name: Install lint tools
         # Keep versions in sync with the local install targets in Makefile.
@@ -93,7 +93,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: $/.github/actions/setup-builder
+        uses: ./.github/actions/setup-builder
 
       - name: Cargo clippy
         run: make check-clippy
@@ -117,7 +117,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: $/.github/actions/setup-builder
+        uses: ./.github/actions/setup-builder
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -138,7 +138,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: $/.github/actions/setup-builder
+        uses: ./.github/actions/setup-builder
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -173,7 +173,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: $/.github/actions/setup-builder
+        uses: ./.github/actions/setup-builder
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -202,7 +202,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: $/.github/actions/setup-builder
+        uses: ./.github/actions/setup-builder
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -249,12 +249,12 @@ jobs:
           persist-credentials: false
       - name: Get MSRV
         id: get-msrv
-        uses: $/.github/actions/get-msrv
+        uses: ./.github/actions/get-msrv
       - name: Setup MSRV Rust toolchain
-        uses: $/.github/actions/setup-builder
+        uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ steps.get-msrv.outputs.msrv }}
       - name: Setup Nightly Rust toolchain
-        uses: $/.github/actions/setup-builder
+        uses: ./.github/actions/setup-builder
       - name: Check MSRV
         run: make check-msrv
