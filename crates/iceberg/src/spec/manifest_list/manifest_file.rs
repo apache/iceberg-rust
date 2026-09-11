@@ -20,8 +20,8 @@ use std::str::FromStr;
 use serde_derive::{Deserialize, Serialize};
 
 use super::ByteBuf;
-use crate::error::Result;
-use crate::{Error, ErrorKind};
+use crate::Error;
+use crate::error::{Result, invalid_data};
 
 /// Entry in a manifest list.
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
@@ -139,10 +139,7 @@ impl FromStr for ManifestContentType {
         match s {
             "data" => Ok(ManifestContentType::Data),
             "deletes" => Ok(ManifestContentType::Deletes),
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid manifest content type: {s}"),
-            )),
+            _ => Err(invalid_data!("Invalid manifest content type: {s}")),
         }
     }
 }
@@ -163,9 +160,8 @@ impl TryFrom<i32> for ManifestContentType {
         match value {
             0 => Ok(ManifestContentType::Data),
             1 => Ok(ManifestContentType::Deletes),
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid manifest content type. Expected 0 or 1, got {value}"),
+            _ => Err(invalid_data!(
+                "Invalid manifest content type. Expected 0 or 1, got {value}"
             )),
         }
     }

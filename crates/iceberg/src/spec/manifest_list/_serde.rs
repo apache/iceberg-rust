@@ -24,7 +24,7 @@ use serde_derive::{Deserialize, Serialize};
 
 use super::ManifestFile;
 use crate::Error;
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::spec::FieldSummary;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -319,56 +319,32 @@ impl TryFrom<ManifestFile> for ManifestFileV3 {
             added_files_count: value
                 .added_files_count
                 .ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "added_data_files_count in ManifestFileV3 is required",
-                    )
+                    invalid_data!("added_data_files_count in ManifestFileV3 is required")
                 })?
                 .try_into()?,
             existing_files_count: value
                 .existing_files_count
                 .ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "existing_data_files_count in ManifestFileV3 is required",
-                    )
+                    invalid_data!("existing_data_files_count in ManifestFileV3 is required")
                 })?
                 .try_into()?,
             deleted_files_count: value
                 .deleted_files_count
                 .ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "deleted_data_files_count in ManifestFileV3 is required",
-                    )
+                    invalid_data!("deleted_data_files_count in ManifestFileV3 is required")
                 })?
                 .try_into()?,
             added_rows_count: value
                 .added_rows_count
-                .ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "added_rows_count in ManifestFileV3 is required",
-                    )
-                })?
+                .ok_or_else(|| invalid_data!("added_rows_count in ManifestFileV3 is required"))?
                 .try_into()?,
             existing_rows_count: value
                 .existing_rows_count
-                .ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "existing_rows_count in ManifestFileV3 is required",
-                    )
-                })?
+                .ok_or_else(|| invalid_data!("existing_rows_count in ManifestFileV3 is required"))?
                 .try_into()?,
             deleted_rows_count: value
                 .deleted_rows_count
-                .ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "deleted_rows_count in ManifestFileV3 is required",
-                    )
-                })?
+                .ok_or_else(|| invalid_data!("deleted_rows_count in ManifestFileV3 is required"))?
                 .try_into()?,
             partitions: value.partitions,
             key_metadata,
@@ -393,55 +369,37 @@ impl TryFrom<ManifestFile> for ManifestFileV2 {
             added_files_count: value
                 .added_files_count
                 .ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "added_data_files_count in ManifestFileV2 should be require",
-                    )
+                    invalid_data!("added_data_files_count in ManifestFileV2 should be require")
                 })?
                 .try_into()?,
             existing_files_count: value
                 .existing_files_count
                 .ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "existing_data_files_count in ManifestFileV2 should be require",
-                    )
+                    invalid_data!("existing_data_files_count in ManifestFileV2 should be require")
                 })?
                 .try_into()?,
             deleted_files_count: value
                 .deleted_files_count
                 .ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "deleted_data_files_count in ManifestFileV2 should be require",
-                    )
+                    invalid_data!("deleted_data_files_count in ManifestFileV2 should be require")
                 })?
                 .try_into()?,
             added_rows_count: value
                 .added_rows_count
                 .ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "added_rows_count in ManifestFileV2 should be require",
-                    )
+                    invalid_data!("added_rows_count in ManifestFileV2 should be require")
                 })?
                 .try_into()?,
             existing_rows_count: value
                 .existing_rows_count
                 .ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "existing_rows_count in ManifestFileV2 should be require",
-                    )
+                    invalid_data!("existing_rows_count in ManifestFileV2 should be require")
                 })?
                 .try_into()?,
             deleted_rows_count: value
                 .deleted_rows_count
                 .ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "deleted_rows_count in ManifestFileV2 should be require",
-                    )
+                    invalid_data!("deleted_rows_count in ManifestFileV2 should be require")
                 })?
                 .try_into()?,
             partitions: value.partitions,

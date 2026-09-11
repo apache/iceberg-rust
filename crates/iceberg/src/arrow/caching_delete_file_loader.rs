@@ -29,6 +29,7 @@ use crate::arrow::scan_metrics::ScanMetrics;
 use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
 use crate::encryption::{EncryptedInputFile, StandardKeyMetadata};
+use crate::error::invalid_data;
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Predicate, Reference};
 use crate::io::FileIO;
@@ -348,55 +349,37 @@ impl CachingDeleteFileLoader {
         task: &FileScanTaskDeleteFile,
     ) -> Result<(u64, u64, String, u64)> {
         let content_offset = task.content_offset.ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion vector {} is missing content_offset",
-                    task.file_path
-                ),
+            invalid_data!(
+                "deletion vector {} is missing content_offset",
+                task.file_path
             )
         })?;
         let content_size = task.content_size_in_bytes.ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion vector {} is missing content_size_in_bytes",
-                    task.file_path
-                ),
+            invalid_data!(
+                "deletion vector {} is missing content_size_in_bytes",
+                task.file_path
             )
         })?;
         let data_file_path = task.referenced_data_file.clone().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion vector {} is missing referenced_data_file",
-                    task.file_path
-                ),
+            invalid_data!(
+                "deletion vector {} is missing referenced_data_file",
+                task.file_path
             )
         })?;
         let record_count = task.record_count.ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("deletion vector {} is missing record_count", task.file_path),
-            )
+            invalid_data!("deletion vector {} is missing record_count", task.file_path)
         })?;
 
         let start = u64::try_from(content_offset).map_err(|_| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion vector {} has negative content_offset {content_offset}",
-                    task.file_path
-                ),
+            invalid_data!(
+                "deletion vector {} has negative content_offset {content_offset}",
+                task.file_path
             )
         })?;
         let len = u64::try_from(content_size).map_err(|_| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion vector {} has negative content_size_in_bytes {content_size}",
-                    task.file_path
-                ),
+            invalid_data!(
+                "deletion vector {} has negative content_size_in_bytes {content_size}",
+                task.file_path
             )
         })?;
 
@@ -412,11 +395,8 @@ impl CachingDeleteFileLoader {
     ) -> Result<()> {
         let actual = delete_vector.len();
         if actual != expected {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion vector {dv_path} decoded to {actual} positions, expected {expected} from record_count"
-                ),
+            return Err(invalid_data!(
+                "deletion vector {dv_path} decoded to {actual} positions, expected {expected} from record_count"
             ));
         }
         Ok(())
@@ -528,15 +508,13 @@ impl CachingDeleteFileLoader {
             let columns = batch.columns();
 
             let Some(file_paths) = columns[0].as_any().downcast_ref::<StringArray>() else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Could not downcast file paths array to StringArray",
+                return Err(invalid_data!(
+                    "Could not downcast file paths array to StringArray"
                 ));
             };
             let Some(positions) = columns[1].as_any().downcast_ref::<Int64Array>() else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Could not downcast positions array to Int64Array",
+                return Err(invalid_data!(
+                    "Could not downcast positions array to Int64Array"
                 ));
             };
 
@@ -551,15 +529,11 @@ impl CachingDeleteFileLoader {
 
             for (file_path, pos) in file_paths.iter().zip(positions.iter()) {
                 let (Some(file_path), Some(pos)) = (file_path, pos) else {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "null values in delete file",
-                    ));
+                    return Err(invalid_data!("null values in delete file"));
                 };
                 if pos < 0 {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("negative position in delete file {file_path}: {pos}"),
+                    return Err(invalid_data!(
+                        "negative position in delete file {file_path}: {pos}"
                     ));
                 }
 

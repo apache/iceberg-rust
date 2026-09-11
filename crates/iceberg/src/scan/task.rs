@@ -21,12 +21,13 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
+use crate::Result;
+use crate::error::invalid_data;
 use crate::expr::BoundPredicate;
 use crate::spec::{
     DataContentType, DataFileFormat, ManifestEntryRef, NameMapping, PartitionSpec, Schema,
     SchemaRef, Struct, StructType,
 };
-use crate::{Error, ErrorKind, Result};
 
 /// A stream of [`FileScanTask`].
 pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;
@@ -231,25 +232,20 @@ impl FileScanTask {
         match (self.partition.as_ref(), self.partition_spec.as_deref()) {
             (None, None) => Ok(()),
             (None, Some(partition_spec)) if partition_spec.is_unpartitioned() => Ok(()),
-            (None, Some(_)) => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "FileScanTask with a partitioned spec requires partition values",
+            (None, Some(_)) => Err(invalid_data!(
+                "FileScanTask with a partitioned spec requires partition values"
             )),
             (Some(partition), None) if partition.fields().is_empty() => Ok(()),
-            (Some(_), None) => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Non-empty FileScanTask partition requires a partition spec",
+            (Some(_), None) => Err(invalid_data!(
+                "Non-empty FileScanTask partition requires a partition spec"
             )),
             (Some(partition), Some(partition_spec))
                 if partition.fields().len() != partition_spec.fields().len() =>
             {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "FileScanTask partition has {} fields but partition spec has {} fields",
-                        partition.fields().len(),
-                        partition_spec.fields().len()
-                    ),
+                Err(invalid_data!(
+                    "FileScanTask partition has {} fields but partition spec has {} fields",
+                    partition.fields().len(),
+                    partition_spec.fields().len()
                 ))
             }
             (Some(_), Some(partition_spec)) => {
@@ -370,12 +366,13 @@ mod _serde {
     use serde::{Deserialize, Serialize};
 
     use super::{FileScanTask, FileScanTaskDeleteFile};
+    use crate::error::invalid_data;
     use crate::expr::BoundPredicate;
     use crate::spec::{
         DataFileFormat, Literal, NameMapping, PartitionSpec, RawLiteral, SchemaRef, StructType,
         Type,
     };
-    use crate::{Error, ErrorKind, Result};
+    use crate::{Error, Result};
 
     #[derive(Deserialize)]
     pub(super) struct FileScanTaskSerde {
@@ -503,10 +500,7 @@ mod _serde {
                         partition_type(value.partition_spec.as_deref(), &value.schema)?;
                     match partition.try_into(&partition_type)? {
                         Some(Literal::Struct(partition)) => Ok(partition),
-                        _ => Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "FileScanTask partition must be a struct",
-                        )),
+                        _ => Err(invalid_data!("FileScanTask partition must be a struct")),
                     }
                 })
                 .transpose()?;
