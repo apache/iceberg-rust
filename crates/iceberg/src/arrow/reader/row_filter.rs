@@ -1679,30 +1679,43 @@ mod tests {
         .await;
     }
 
-    /// `Sbbf` hashes raw IEEE bytes, so it treats `-0.0` and `0.0` as distinct. The
-    /// row filter's `arrow_ord::cmp::eq` happens to agree today, but for unrelated
-    /// reasons, so pin that the two stay consistent.
+    /// `Sbbf` hashes raw IEEE bytes, so `-0.0` and `0.0` are distinct entries, and arrow's
+    /// float `is_eq` is bitwise for the same reason. That agreement is what makes it safe
+    /// to prune a row group holding only the opposite zero: if the row filter ever became
+    /// IEEE-lenient, those pruned rows would be rows it should have returned, and the
+    /// on/off comparison catches the divergence. A probe that canonicalized the sign
+    /// instead only over-keeps, costing pruning rather than correctness.
+    ///
+    /// Each row group pairs its zero with a larger filler value so its min/max range
+    /// spans the other zero. Statistics therefore cannot prune it and the bloom filter
+    /// is what discriminates, without relying on the writer widening a single-value
+    /// group's bounds to `[-0.0, +0.0]`.
     #[tokio::test]
     async fn test_bloom_pushdown_float_signed_zero() {
+        const FILLER: f32 = 5.0;
         let tmp = TempDir::new().unwrap();
         let path = format!("{}/float_zero.parquet", tmp.path().to_str().unwrap());
 
-        // Row group 0 holds only -0.0; row group 1 only +0.0; row group 2 neither.
+        // Row group 0 holds -0.0 and never +0.0; row group 1 the reverse; row group 2
+        // neither zero.
         write_value_fixture(
             &path,
             DataType::Float32,
             |g| {
-                let fill = match g {
+                let zero = match g {
                     0 => -0.0f32,
                     1 => 0.0f32,
                     _ => 7.5f32,
                 };
-                Arc::new(Float32Array::from(vec![fill; ROWS_PER_GROUP as usize]))
+                let mut values = vec![zero; ROWS_PER_GROUP as usize - 1];
+                values.push(FILLER);
+                Arc::new(Float32Array::from(values))
             },
             true,
         );
 
         let schema = value_schema(Type::Primitive(PrimitiveType::Float));
+        let zero_rows = ROWS_PER_GROUP as usize - 1;
 
         for (label, probe) in [("positive_zero", 0.0f32), ("negative_zero", -0.0f32)] {
             let (on, _, _) = assert_pushdown_agrees(
@@ -1713,10 +1726,11 @@ mod tests {
                 Reference::new("v").equal_to(Datum::float(probe)),
             )
             .await;
-            // Whatever the reader's notion of equality, pushdown must not change it.
-            assert!(
-                rows(&on) > 0,
-                "{label}: expected the baseline to match rows"
+            // Only the group holding this exact zero matches, on both paths.
+            assert_eq!(
+                rows(&on),
+                zero_rows,
+                "{label}: expected only the row group holding this zero to match"
             );
         }
     }
