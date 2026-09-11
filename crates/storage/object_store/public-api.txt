@@ -1,0 +1,37 @@
+pub mod iceberg_storage_object_store
+pub enum iceberg_storage_object_store::ObjectStoreStorage
+pub iceberg_storage_object_store::ObjectStoreStorage::S3
+pub iceberg_storage_object_store::ObjectStoreStorage::S3::config: alloc::sync::Arc<iceberg::io::storage::config::s3::S3Config>
+pub iceberg_storage_object_store::ObjectStoreStorage::S3::store_cache: alloc::sync::Arc<dashmap::DashMap<alloc::string::String, alloc::sync::Arc<dyn object_store::ObjectStore>>>
+impl core::clone::Clone for iceberg_storage_object_store::ObjectStoreStorage
+pub fn iceberg_storage_object_store::ObjectStoreStorage::clone(&self) -> iceberg_storage_object_store::ObjectStoreStorage
+impl core::fmt::Debug for iceberg_storage_object_store::ObjectStoreStorage
+pub fn iceberg_storage_object_store::ObjectStoreStorage::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::io::storage::Storage for iceberg_storage_object_store::ObjectStoreStorage
+pub fn iceberg_storage_object_store::ObjectStoreStorage::delete<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_object_store::ObjectStoreStorage::delete_prefix<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_object_store::ObjectStoreStorage::delete_stream<'life0, 'async_trait>(&'life0 self, paths: futures_core::stream::BoxStream<'static, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn iceberg_storage_object_store::ObjectStoreStorage::exists<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_object_store::ObjectStoreStorage::metadata<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::io::file_io::FileMetadata>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_object_store::ObjectStoreStorage::new_input(&self, path: &str) -> iceberg::error::Result<iceberg::io::file_io::InputFile>
+pub fn iceberg_storage_object_store::ObjectStoreStorage::new_output(&self, path: &str) -> iceberg::error::Result<iceberg::io::file_io::OutputFile>
+pub fn iceberg_storage_object_store::ObjectStoreStorage::read<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<bytes::bytes::Bytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_object_store::ObjectStoreStorage::reader<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::boxed::Box<dyn iceberg::io::file_io::FileRead>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_object_store::ObjectStoreStorage::write<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str, bs: bytes::bytes::Bytes) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_object_store::ObjectStoreStorage::writer<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::boxed::Box<dyn iceberg::io::file_io::FileWrite>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl serde_core::ser::Serialize for iceberg_storage_object_store::ObjectStoreStorage
+pub fn iceberg_storage_object_store::ObjectStoreStorage::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_object_store::ObjectStoreStorage
+pub fn iceberg_storage_object_store::ObjectStoreStorage::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub enum iceberg_storage_object_store::ObjectStoreStorageFactory
+pub iceberg_storage_object_store::ObjectStoreStorageFactory::S3
+impl core::clone::Clone for iceberg_storage_object_store::ObjectStoreStorageFactory
+pub fn iceberg_storage_object_store::ObjectStoreStorageFactory::clone(&self) -> iceberg_storage_object_store::ObjectStoreStorageFactory
+impl core::fmt::Debug for iceberg_storage_object_store::ObjectStoreStorageFactory
+pub fn iceberg_storage_object_store::ObjectStoreStorageFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::io::storage::StorageFactory for iceberg_storage_object_store::ObjectStoreStorageFactory
+pub fn iceberg_storage_object_store::ObjectStoreStorageFactory::build(&self, config: &iceberg::io::storage::config::StorageConfig) -> iceberg::error::Result<alloc::sync::Arc<dyn iceberg::io::storage::Storage>>
+impl serde_core::ser::Serialize for iceberg_storage_object_store::ObjectStoreStorageFactory
+pub fn iceberg_storage_object_store::ObjectStoreStorageFactory::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_object_store::ObjectStoreStorageFactory
+pub fn iceberg_storage_object_store::ObjectStoreStorageFactory::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
