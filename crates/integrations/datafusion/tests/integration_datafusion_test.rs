@@ -18,13 +18,19 @@
 //! Integration tests for Iceberg Datafusion with Hive Metastore.
 
 use std::collections::HashMap;
+use std::fs::File;
 use std::sync::Arc;
 use std::vec;
 
-use datafusion::arrow::array::{Array, StringArray, UInt64Array};
+use datafusion::arrow::array::{Array, ArrayRef, Int32Array, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::prelude::SessionConfig;
 use expect_test::expect;
 use iceberg::io::LocalFsStorageFactory;
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
@@ -32,10 +38,21 @@ use iceberg::spec::{
     NestedField, PrimitiveType, Schema, StructType, Transform, Type, UnboundPartitionSpec,
 };
 use iceberg::test_utils::check_record_batches;
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
+use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+use iceberg::writer::file_writer::ParquetWriterBuilder;
+use iceberg::writer::file_writer::location_generator::{
+    DefaultFileNameGenerator, DefaultLocationGenerator,
+};
+use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{
     Catalog, CatalogBuilder, MemoryCatalog, NamespaceIdent, Result, TableCreation, TableIdent,
 };
-use iceberg_datafusion::IcebergCatalogProvider;
+use iceberg_datafusion::physical_plan::IcebergTableScan;
+use iceberg_datafusion::{IcebergCatalogProvider, IcebergDataFusionConfig};
+use parquet::file::properties::WriterProperties;
+use parquet::file::reader::{FileReader, SerializedFileReader};
 use tempfile::TempDir;
 
 fn temp_path() -> String {
@@ -93,6 +110,532 @@ fn get_table_creation(
         .build();
 
     Ok(creation)
+}
+
+async fn get_multi_file_table_context(
+    namespace_name: &str,
+    table_name: &str,
+    data_file_count: usize,
+) -> Result<(Arc<MemoryCatalog>, NamespaceIdent, String)> {
+    let iceberg_catalog = Arc::new(get_iceberg_catalog().await);
+    let namespace = NamespaceIdent::new(namespace_name.to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    let creation = get_table_creation(temp_path(), table_name, None)?;
+    iceberg_catalog.create_table(&namespace, creation).await?;
+
+    let write_ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_target_partitions(data_file_count),
+    );
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("foo1", DataType::Int32, false),
+        Field::new("foo2", DataType::Utf8, false),
+    ]));
+
+    let batches: Vec<RecordBatch> = (1..=data_file_count as i32)
+        .map(|idx| {
+            RecordBatch::try_new(arrow_schema.clone(), vec![
+                Arc::new(Int32Array::from(vec![idx])) as ArrayRef,
+                Arc::new(StringArray::from(vec![format!("row-{idx}")])) as ArrayRef,
+            ])
+        })
+        .collect::<std::result::Result<_, _>>()?;
+
+    let partitions = batches.into_iter().map(|batch| vec![batch]).collect();
+    let source_table = Arc::new(MemTable::try_new(arrow_schema, partitions).unwrap());
+    write_ctx
+        .register_table("source_table", source_table)
+        .unwrap();
+
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(iceberg_catalog.clone()).await?);
+    write_ctx.register_catalog("catalog", catalog);
+
+    let insert_sql =
+        format!("INSERT INTO catalog.{namespace_name}.{table_name} SELECT * FROM source_table");
+    let batches = write_ctx
+        .sql(&insert_sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(batches.len(), 1);
+
+    let rows_inserted = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap();
+    assert_eq!(rows_inserted.value(0), data_file_count as u64);
+
+    Ok((iceberg_catalog, namespace, table_name.to_string()))
+}
+
+async fn get_multi_row_group_table_context(
+    namespace_name: &str,
+    table_name: &str,
+) -> Result<(Arc<MemoryCatalog>, NamespaceIdent, String)> {
+    let iceberg_catalog = Arc::new(get_iceberg_catalog().await);
+    let namespace = NamespaceIdent::new(namespace_name.to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    let creation = get_table_creation(temp_path(), table_name, None)?;
+    let table = iceberg_catalog.create_table(&namespace, creation).await?;
+    let arrow_schema: Arc<ArrowSchema> = Arc::new(
+        table
+            .metadata()
+            .current_schema()
+            .as_ref()
+            .try_into()
+            .unwrap(),
+    );
+
+    let file_rows = [
+        vec![
+            (1, "row-1"),
+            (2, "row-2"),
+            (100, "row-100"),
+            (101, "row-101"),
+        ],
+        vec![
+            (50, "row-50"),
+            (150, "row-150"),
+            (151, "row-151"),
+            (152, "row-152"),
+        ],
+        vec![
+            (99, "row-99"),
+            (1000, "row-1000"),
+            (1001, "row-1001"),
+            (1002, "row-1002"),
+        ],
+    ];
+
+    let location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
+    let writer_properties = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(2))
+        .build();
+    let mut data_files = Vec::with_capacity(file_rows.len());
+
+    for (file_idx, rows) in file_rows.into_iter().enumerate() {
+        let parquet_writer_builder = ParquetWriterBuilder::new(
+            writer_properties.clone(),
+            table.metadata().current_schema().clone(),
+        );
+        let file_name_generator = DefaultFileNameGenerator::new(
+            format!("multi-row-group-{file_idx}"),
+            None,
+            iceberg::spec::DataFileFormat::Parquet,
+        );
+        let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            parquet_writer_builder,
+            table.file_io().clone(),
+            location_generator.clone(),
+            file_name_generator,
+        );
+        let data_file_writer_builder = DataFileWriterBuilder::new(rolling_file_writer_builder);
+        let mut data_file_writer = data_file_writer_builder.build(None).await?;
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(Int32Array::from(
+                rows.iter().map(|(foo1, _)| *foo1).collect::<Vec<_>>(),
+            )) as ArrayRef,
+            Arc::new(StringArray::from(
+                rows.iter().map(|(_, foo2)| *foo2).collect::<Vec<_>>(),
+            )) as ArrayRef,
+        ])?;
+
+        data_file_writer.write(batch).await?;
+        let file_data_files = data_file_writer.close().await?;
+        assert_eq!(file_data_files.len(), 1);
+        data_files.extend(file_data_files);
+    }
+
+    for data_file in &data_files {
+        let file_path = data_file
+            .file_path()
+            .strip_prefix("file://")
+            .unwrap_or(data_file.file_path());
+        let reader = SerializedFileReader::new(File::open(file_path)?)?;
+        assert!(
+            reader.metadata().num_row_groups() > 1,
+            "expected multiple row groups for {}",
+            data_file.file_path()
+        );
+    }
+
+    let tx = Transaction::new(&table);
+    let action = tx.fast_append().add_data_files(data_files);
+    let tx = action.apply(tx)?;
+    tx.commit(iceberg_catalog.as_ref()).await?;
+
+    Ok((iceberg_catalog, namespace, table_name.to_string()))
+}
+
+async fn get_read_context(
+    catalog: Arc<MemoryCatalog>,
+    target_partitions: usize,
+    enable_eager_scan_planning: Option<bool>,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::new_with_config(read_session_config(
+        target_partitions,
+        enable_eager_scan_planning,
+    ));
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(catalog).await?);
+    ctx.register_catalog("catalog", catalog);
+    Ok(ctx)
+}
+
+fn read_session_config(
+    target_partitions: usize,
+    enable_eager_scan_planning: Option<bool>,
+) -> SessionConfig {
+    let config = SessionConfig::new().with_target_partitions(target_partitions);
+
+    match enable_eager_scan_planning {
+        Some(enabled) => {
+            let mut iceberg_config = IcebergDataFusionConfig::default();
+            iceberg_config.enable_eager_scan_planning = enabled;
+            config.with_option_extension(iceberg_config)
+        }
+        None => config,
+    }
+}
+
+async fn scan_plan(
+    ctx: &SessionContext,
+    namespace: &NamespaceIdent,
+    table_name: &str,
+) -> Arc<dyn ExecutionPlan> {
+    let provider = ctx.catalog("catalog").unwrap();
+    let namespace_name = &namespace[0];
+    let schema = provider.schema(namespace_name).unwrap();
+    let table = schema.table(table_name).await.unwrap().unwrap();
+
+    let state = ctx.state();
+    table.scan(&state, None, &[], None).await.unwrap()
+}
+
+async fn scan_partition_count(
+    ctx: &SessionContext,
+    namespace: &NamespaceIdent,
+    table_name: &str,
+) -> usize {
+    let plan = scan_plan(ctx, namespace, table_name).await;
+    plan.downcast_ref::<IcebergTableScan>()
+        .expect("Expected IcebergTableScan");
+    plan.properties().output_partitioning().partition_count()
+}
+
+fn find_iceberg_scan(plan: &dyn ExecutionPlan) -> Option<&IcebergTableScan> {
+    if let Some(scan) = plan.downcast_ref::<IcebergTableScan>() {
+        return Some(scan);
+    }
+
+    plan.children()
+        .into_iter()
+        .find_map(|child| find_iceberg_scan(child.as_ref()))
+}
+
+#[tokio::test]
+async fn test_multi_file_scan_produces_multiple_partitions() -> Result<()> {
+    let data_file_count = 3;
+    // Ask for more partitions than files to verify scan planning does not expose empty partitions.
+    let target_partitions = data_file_count + 1;
+    let (iceberg_catalog, namespace, table_name) = get_multi_file_table_context(
+        "test_multi_file_scan_partitions",
+        "my_table",
+        data_file_count,
+    )
+    .await?;
+    let ctx = get_read_context(iceberg_catalog, target_partitions, Some(true)).await?;
+    let plan = scan_plan(&ctx, &namespace, &table_name).await;
+    plan.downcast_ref::<IcebergTableScan>()
+        .expect("Expected IcebergTableScan");
+
+    let actual_partition_count = plan.properties().output_partitioning().partition_count();
+    assert_eq!(actual_partition_count, data_file_count);
+
+    // Pins the eager plan's task-group accounting. The reader settings it derives from
+    // the retained TableScan are not introspectable, so their equivalence with the lazy
+    // path is covered behaviorally by test_multi_partition_scan_matches_single_partition_results.
+    let display = datafusion::physical_plan::displayable(plan.as_ref())
+        .one_line()
+        .to_string();
+    assert!(
+        display.contains("task_groups:[3] tasks:[3]"),
+        "unexpected eager scan display: {display}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_multi_file_scan_defaults_to_single_lazy_partition() -> Result<()> {
+    let data_file_count = 3;
+    let target_partitions = data_file_count + 1;
+    let (iceberg_catalog, namespace, table_name) = get_multi_file_table_context(
+        "test_multi_file_scan_default_lazy",
+        "my_table",
+        data_file_count,
+    )
+    .await?;
+    let ctx = get_read_context(iceberg_catalog, target_partitions, None).await?;
+
+    let actual_partition_count = scan_partition_count(&ctx, &namespace, &table_name).await;
+
+    assert_eq!(actual_partition_count, 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_set_enable_eager_scan_planning() -> Result<()> {
+    let data_file_count = 3;
+    let target_partitions = data_file_count + 1;
+    let (iceberg_catalog, namespace, table_name) =
+        get_multi_file_table_context("test_set_eager_scan_planning", "my_table", data_file_count)
+            .await?;
+    let ctx = get_read_context(iceberg_catalog, target_partitions, Some(false)).await?;
+
+    ctx.sql("SET iceberg.enable_eager_scan_planning = true")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let actual_partition_count = scan_partition_count(&ctx, &namespace, &table_name).await;
+
+    assert_eq!(actual_partition_count, data_file_count);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_multi_partition_scan_enforces_global_limit() -> Result<()> {
+    let data_file_count = 3;
+    let limit = 2;
+    let target_partitions = data_file_count + 1;
+    let (iceberg_catalog, namespace, table_name) = get_multi_file_table_context(
+        "test_multi_partition_scan_limit",
+        "my_table",
+        data_file_count,
+    )
+    .await?;
+    let ctx = get_read_context(iceberg_catalog, target_partitions, Some(true)).await?;
+    let namespace_name = &namespace[0];
+    let query =
+        format!("SELECT foo1, foo2 FROM catalog.{namespace_name}.{table_name} LIMIT {limit}");
+    let dataframe = ctx.sql(&query).await.unwrap();
+    let plan = dataframe.create_physical_plan().await.unwrap();
+
+    // The physical optimizer absorbs the initial GlobalLimitExec into
+    // CoalescePartitionsExec; its fetch enforces the global bound in the final plan.
+    // After a DataFusion bump, failure here likely means the plan shape changed, not eager scanning.
+    let global_limit_coalescer = plan
+        .downcast_ref::<CoalescePartitionsExec>()
+        .expect("Expected a globally limited CoalescePartitionsExec");
+    assert_eq!(global_limit_coalescer.fetch(), Some(limit));
+
+    let scan = find_iceberg_scan(global_limit_coalescer.input().as_ref())
+        .expect("Expected IcebergTableScan below the global limit");
+    assert_eq!(scan.limit(), Some(limit));
+    assert_eq!(
+        scan.properties().output_partitioning().partition_count(),
+        data_file_count
+    );
+
+    let batches = dataframe.collect().await.unwrap();
+    let mut seen_ids = std::collections::HashSet::new();
+    for batch in &batches {
+        let foo1 = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let foo2 = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        for row in 0..batch.num_rows() {
+            let id = foo1.value(row);
+            assert!((1..=data_file_count as i32).contains(&id));
+            assert_eq!(foo2.value(row), format!("row-{id}"));
+            assert!(seen_ids.insert(id), "duplicate row {id}");
+        }
+    }
+
+    assert_eq!(
+        batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        limit
+    );
+    assert_eq!(seen_ids.len(), limit);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_multi_partition_ordered_scan_enforces_global_limit() -> Result<()> {
+    let data_file_count = 3;
+    let limit = 2;
+    let target_partitions = data_file_count + 1;
+    let (iceberg_catalog, namespace, table_name) = get_multi_file_table_context(
+        "test_multi_partition_ordered_scan_limit",
+        "my_table",
+        data_file_count,
+    )
+    .await?;
+    let ctx = get_read_context(iceberg_catalog, target_partitions, Some(true)).await?;
+    let namespace_name = &namespace[0];
+    let query = format!(
+        "SELECT foo1, foo2 FROM catalog.{namespace_name}.{table_name} ORDER BY foo1 LIMIT {limit}"
+    );
+    let dataframe = ctx.sql(&query).await.unwrap();
+    let plan = dataframe.create_physical_plan().await.unwrap();
+
+    let scan = find_iceberg_scan(plan.as_ref()).expect("Expected IcebergTableScan in ordered plan");
+    assert_eq!(
+        scan.properties().output_partitioning().partition_count(),
+        data_file_count
+    );
+
+    let batches = dataframe.collect().await.unwrap();
+    let rows = batches
+        .iter()
+        .flat_map(|batch| {
+            let foo1 = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            let foo2 = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+
+            (0..batch.num_rows()).map(|row| (foo1.value(row), foo2.value(row).to_string()))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(rows, vec![
+        (1, "row-1".to_string()),
+        (2, "row-2".to_string())
+    ]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_multi_partition_scan_matches_single_partition_results() -> Result<()> {
+    let data_file_count = 3;
+    let target_partitions = data_file_count + 1;
+    let (iceberg_catalog, namespace, table_name) =
+        get_multi_row_group_table_context("test_multi_partition_scan_results", "my_table").await?;
+    let namespace_name = &namespace[0];
+
+    let lazy_ctx = get_read_context(iceberg_catalog.clone(), target_partitions, None).await?;
+    let eager_single_partition_ctx =
+        get_read_context(iceberg_catalog.clone(), 1, Some(true)).await?;
+    let eager_multi_partition_ctx =
+        get_read_context(iceberg_catalog, target_partitions, Some(true)).await?;
+
+    let query = format!(
+        "SELECT foo1, foo2 FROM catalog.{namespace_name}.{table_name} WHERE foo1 >= 100 ORDER BY foo1"
+    );
+
+    let lazy_batches = lazy_ctx.sql(&query).await.unwrap().collect().await.unwrap();
+    let eager_single_partition_batches = eager_single_partition_ctx
+        .sql(&query)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let eager_multi_partition_batches = eager_multi_partition_ctx
+        .sql(&query)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let assert_expected_batches = |batches| {
+        check_record_batches(
+            batches,
+            expect![[r#"
+                Field { "foo1": Int32, metadata: {"PARQUET:field_id": "1"} },
+                Field { "foo2": Utf8, metadata: {"PARQUET:field_id": "2"} }"#]],
+            expect![[r#"
+                foo1: PrimitiveArray<Int32>
+                [
+                  100,
+                  101,
+                  150,
+                  151,
+                  152,
+                  1000,
+                  1001,
+                  1002,
+                ],
+                foo2: StringArray
+                [
+                  "row-100",
+                  "row-101",
+                  "row-150",
+                  "row-151",
+                  "row-152",
+                  "row-1000",
+                  "row-1001",
+                  "row-1002",
+                ]"#]],
+            &[],
+            None,
+        );
+    };
+
+    assert_expected_batches(lazy_batches);
+    assert_expected_batches(eager_single_partition_batches);
+    assert_expected_batches(eager_multi_partition_batches);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_iceberg_table_scan_rejects_non_empty_children() -> Result<()> {
+    use datafusion::common::DataFusionError;
+    use datafusion::physical_plan::empty::EmptyExec;
+
+    let (iceberg_catalog, namespace, table_name) =
+        get_multi_file_table_context("test_iceberg_table_scan_rejects_children", "my_table", 1)
+            .await?;
+    let ctx = get_read_context(iceberg_catalog, 1, Some(true)).await?;
+    let provider = ctx.catalog("catalog").unwrap();
+    let schema = provider.schema(&namespace[0]).unwrap();
+    let table = schema.table(&table_name).await.unwrap().unwrap();
+    let state = ctx.state();
+    let scan_plan = table.scan(&state, None, &[], None).await.unwrap();
+    scan_plan
+        .downcast_ref::<IcebergTableScan>()
+        .expect("Expected IcebergTableScan");
+
+    let child = Arc::new(EmptyExec::new(scan_plan.schema())) as Arc<dyn ExecutionPlan>;
+    let error = scan_plan
+        .with_new_children(vec![child])
+        .expect_err("IcebergTableScan should reject children");
+
+    assert!(
+        matches!(
+            error,
+            DataFusionError::Internal(ref message)
+                if message == "IcebergTableScan is a leaf node and cannot have children"
+        ),
+        "unexpected error: {error}"
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
