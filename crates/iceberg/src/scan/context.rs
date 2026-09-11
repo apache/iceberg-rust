@@ -23,13 +23,14 @@ use futures::{SinkExt, TryFutureExt};
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
+use crate::scan::plan::BoundPredicates;
+use crate::scan::source::ManifestSource;
 use crate::scan::{
-    BoundPredicates, ExpressionEvaluatorCache, FileScanTask, ManifestEvaluatorCache,
-    PartitionFilterCache,
+    ExpressionEvaluatorCache, FileScanTask, ManifestEvaluatorCache, PartitionFilterCache,
 };
 use crate::spec::{
-    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
-    PartitionSpecRef, SchemaRef, SnapshotRef, StructType, TableMetadataRef,
+    ManifestContentType, ManifestEntryRef, ManifestFile, NameMapping, PartitionSpecRef, SchemaRef,
+    StructType, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -154,14 +155,14 @@ impl ManifestEntryContext {
     }
 }
 
-/// PlanContext wraps a [`SnapshotRef`] alongside all the other
-/// objects that are required to perform a scan file plan.
+/// PlanContext holds everything required to perform a scan file plan: the
+/// manifests to read, and how to project, filter and evaluate their entries.
 #[derive(Debug)]
 pub(crate) struct PlanContext {
-    pub snapshot: SnapshotRef,
+    pub manifest_source: Arc<dyn ManifestSource>,
 
     pub table_metadata: TableMetadataRef,
-    pub snapshot_schema: SchemaRef,
+    pub plan_schema: SchemaRef,
     pub case_sensitive: bool,
     pub predicate: Option<Arc<Predicate>>,
     pub snapshot_bound_predicate: Option<Arc<BoundPredicate>>,
@@ -177,44 +178,16 @@ pub(crate) struct PlanContext {
 }
 
 impl PlanContext {
-    pub(crate) async fn get_manifest_list(&self) -> Result<Arc<ManifestList>> {
-        self.object_cache
-            .as_ref()
-            .get_manifest_list(&self.snapshot, &self.table_metadata)
-            .await
-    }
-
-    /// Returns the partition filter for a manifest. See [`PartitionFilterCache::get`] for the
-    /// always-true fallback when the manifest's spec cannot be resolved against the scan schema.
-    fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
-        let partition_spec_id = manifest_file.partition_spec_id;
-
-        let partition_filter = self.partition_filter_cache.get(
-            partition_spec_id,
-            &self.table_metadata,
-            &self.snapshot_schema,
-            self.case_sensitive,
-            self.predicate
-                .as_ref()
-                .ok_or(Error::new(
-                    ErrorKind::Unexpected,
-                    "Expected a predicate but none present",
-                ))?
-                .as_ref()
-                .bind(self.snapshot_schema.clone(), self.case_sensitive)?,
-        )?;
-
-        Ok(partition_filter)
-    }
-
-    pub(crate) fn build_manifest_file_contexts(
+    pub(crate) async fn build_manifest_file_contexts(
         &self,
-        manifest_list: Arc<ManifestList>,
         tx_data: Sender<ManifestEntryContext>,
         delete_file_idx: DeleteFileIndex,
         delete_file_tx: Sender<ManifestEntryContext>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
-        let mut manifest_files = manifest_list.entries().iter().collect::<Vec<_>>();
+        let mut manifest_files = self
+            .manifest_source
+            .manifest_files(&self.object_cache, &self.table_metadata)
+            .await?;
         // Sort manifest files to process delete manifests first.
         // This avoids a deadlock where the producer blocks on sending data manifest entries
         // (because the data channel is full) while the delete manifest consumer is waiting
@@ -236,7 +209,7 @@ impl PlanContext {
             };
 
             let partition_bound_predicate = if self.predicate.is_some() {
-                let partition_bound_predicate = self.get_partition_filter(manifest_file)?;
+                let partition_bound_predicate = self.get_partition_filter(&manifest_file)?;
 
                 // evaluate the ManifestFile against the partition filter. Skip
                 // if it cannot contain any matching rows
@@ -246,7 +219,7 @@ impl PlanContext {
                         manifest_file.partition_spec_id,
                         partition_bound_predicate.clone(),
                     )
-                    .eval(manifest_file)?
+                    .eval(&manifest_file)?
                 {
                     continue;
                 }
@@ -271,7 +244,7 @@ impl PlanContext {
 
     fn create_manifest_file_context(
         &self,
-        manifest_file: &ManifestFile,
+        manifest_file: ManifestFile,
         partition_filter: Option<Arc<BoundPredicate>>,
         sender: Sender<ManifestEntryContext>,
         delete_file_index: DeleteFileIndex,
@@ -288,22 +261,47 @@ impl PlanContext {
                 None
             };
 
+        let partition_spec = self
+            .table_metadata
+            .partition_spec_by_id(manifest_file.partition_spec_id)
+            .cloned();
+
         ManifestFileContext {
-            manifest_file: manifest_file.clone(),
+            manifest_file,
             bound_predicates,
             sender,
             object_cache: self.object_cache.clone(),
-            snapshot_schema: self.snapshot_schema.clone(),
+            snapshot_schema: self.plan_schema.clone(),
             field_ids: self.field_ids.clone(),
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
             delete_file_index,
             name_mapping: self.name_mapping.clone(),
             case_sensitive: self.case_sensitive,
-            partition_spec: self
-                .table_metadata
-                .partition_spec_by_id(manifest_file.partition_spec_id)
-                .cloned(),
+            partition_spec,
             unified_partition_type: self.unified_partition_type.clone(),
         }
+    }
+
+    /// Returns the partition filter for a manifest. See [`PartitionFilterCache::get`] for the
+    /// always-true fallback when the manifest's spec cannot be resolved against the scan schema.
+    fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
+        let partition_spec_id = manifest_file.partition_spec_id;
+
+        let partition_filter = self.partition_filter_cache.get(
+            partition_spec_id,
+            &self.table_metadata,
+            &self.plan_schema,
+            self.case_sensitive,
+            self.predicate
+                .as_ref()
+                .ok_or(Error::new(
+                    ErrorKind::Unexpected,
+                    "Expected a predicate but none present",
+                ))?
+                .as_ref()
+                .bind(self.plan_schema.clone(), self.case_sensitive)?,
+        )?;
+
+        Ok(partition_filter)
     }
 }
