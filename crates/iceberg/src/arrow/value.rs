@@ -1986,6 +1986,34 @@ mod test {
     }
 
     #[test]
+    fn test_create_boolean_array_repeated() {
+        let num_rows = 4;
+
+        for value in [true, false] {
+            let array = create_primitive_array_repeated(
+                &DataType::Boolean,
+                Some(&PrimitiveLiteral::Boolean(value)),
+                num_rows,
+            )
+            .unwrap();
+            let array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+            assert_eq!(array.len(), num_rows);
+            assert_eq!(array.null_count(), 0);
+            assert!((0..num_rows).all(|i| array.value(i) == value));
+        }
+
+        // num_rows == 0 must produce an empty (not one-element) array.
+        let empty = create_primitive_array_repeated(
+            &DataType::Boolean,
+            Some(&PrimitiveLiteral::Boolean(true)),
+            0,
+        )
+        .unwrap();
+        assert_eq!(empty.len(), 0);
+        assert_eq!(empty.null_count(), 0);
+    }
+
+    #[test]
     fn test_create_string_array_repeated_empty() {
         // num_rows == 0 must produce an empty (not one-element) array.
         let array = create_primitive_array_repeated(
