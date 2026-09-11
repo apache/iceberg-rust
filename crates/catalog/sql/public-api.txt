@@ -61,7 +61,7 @@ pub fn iceberg_catalog_sql::SqlCatalogBuilder::sql_bind_style(self, sql_bind_sty
 pub fn iceberg_catalog_sql::SqlCatalogBuilder::uri(self, uri: impl core::convert::Into<alloc::string::String>) -> Self
 pub fn iceberg_catalog_sql::SqlCatalogBuilder::warehouse_location(self, location: impl core::convert::Into<alloc::string::String>) -> Self
 impl core::default::Default for iceberg_catalog_sql::SqlCatalogBuilder
-pub fn iceberg_catalog_sql::SqlCatalogBuilder::default() -> Self
+pub fn iceberg_catalog_sql::SqlCatalogBuilder::default() -> iceberg_catalog_sql::SqlCatalogBuilder
 impl core::fmt::Debug for iceberg_catalog_sql::SqlCatalogBuilder
 pub fn iceberg_catalog_sql::SqlCatalogBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::catalog::CatalogBuilder for iceberg_catalog_sql::SqlCatalogBuilder
