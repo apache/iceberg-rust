@@ -34,7 +34,7 @@ use arrow_string::like::starts_with;
 use fnv::FnvHashSet;
 use parquet::schema::types::SchemaDescriptor;
 
-use crate::arrow::get_arrow_datum;
+use crate::arrow::{get_arrow_datum, type_to_arrow_type};
 use crate::error::Result;
 use crate::expr::visitors::bound_predicate_visitor::BoundPredicateVisitor;
 use crate::expr::{BoundPredicate, BoundReference};
@@ -274,6 +274,25 @@ fn project_column(
     }
 }
 
+/// Promote physical numeric columns before evaluating predicates bound to the table schema.
+/// Narrowing the literal instead can overflow to null or lose floating-point precision.
+fn project_predicate_column(
+    batch: &RecordBatch,
+    column_idx: usize,
+    column_type: &DataType,
+) -> std::result::Result<ArrayRef, ArrowError> {
+    let column = project_column(batch, column_idx)?;
+    match (column.data_type(), column_type) {
+        (DataType::Int32, DataType::Int64) | (DataType::Float32, DataType::Float64) => {
+            cast(&column, column_type)
+        }
+        (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) if p1 < p2 && s1 == s2 => {
+            cast(&column, column_type)
+        }
+        _ => Ok(column),
+    }
+}
+
 fn compute_is_nan(array: &ArrayRef) -> std::result::Result<BooleanArray, ArrowError> {
     // Compute NaN over the contiguous values slice, then fold the null bitmap
     // in with a single bitwise AND so that null slots become false.
@@ -420,10 +439,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(idx) = self.bound_reference(reference)? {
+            let column_type = type_to_arrow_type(&reference.field().field_type)?;
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_predicate_column(&batch, idx, &column_type)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 lt(&left, literal.as_ref())
             }))
@@ -440,10 +460,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(idx) = self.bound_reference(reference)? {
+            let column_type = type_to_arrow_type(&reference.field().field_type)?;
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_predicate_column(&batch, idx, &column_type)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 lt_eq(&left, literal.as_ref())
             }))
@@ -460,10 +481,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(idx) = self.bound_reference(reference)? {
+            let column_type = type_to_arrow_type(&reference.field().field_type)?;
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_predicate_column(&batch, idx, &column_type)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 gt(&left, literal.as_ref())
             }))
@@ -480,10 +502,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(idx) = self.bound_reference(reference)? {
+            let column_type = type_to_arrow_type(&reference.field().field_type)?;
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_predicate_column(&batch, idx, &column_type)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 gt_eq(&left, literal.as_ref())
             }))
@@ -500,10 +523,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(idx) = self.bound_reference(reference)? {
+            let column_type = type_to_arrow_type(&reference.field().field_type)?;
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_predicate_column(&batch, idx, &column_type)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 eq(&left, literal.as_ref())
             }))
@@ -520,10 +544,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(idx) = self.bound_reference(reference)? {
+            let column_type = type_to_arrow_type(&reference.field().field_type)?;
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_predicate_column(&batch, idx, &column_type)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 neq(&left, literal.as_ref())
             }))
@@ -581,6 +606,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(idx) = self.bound_reference(reference)? {
+            let column_type = type_to_arrow_type(&reference.field().field_type)?;
             let literals: Vec<_> = literals
                 .iter()
                 .map(|lit| get_arrow_datum(lit).unwrap())
@@ -588,7 +614,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native is_in kernel
-                let left = project_column(&batch, idx)?;
+                let left = project_predicate_column(&batch, idx, &column_type)?;
 
                 let mut acc = BooleanArray::from(vec![false; batch.num_rows()]);
                 for literal in &literals {
@@ -611,6 +637,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(idx) = self.bound_reference(reference)? {
+            let column_type = type_to_arrow_type(&reference.field().field_type)?;
             let literals: Vec<_> = literals
                 .iter()
                 .map(|lit| get_arrow_datum(lit).unwrap())
@@ -618,7 +645,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native not_in kernel
-                let left = project_column(&batch, idx)?;
+                let left = project_predicate_column(&batch, idx, &column_type)?;
                 let mut acc = BooleanArray::from(vec![true; batch.num_rows()]);
                 for literal in &literals {
                     let literal = try_cast_literal(literal, left.data_type())?;
@@ -639,7 +666,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 /// i.e. LargeUtf8 and Utf8 or Utf8View and Utf8 or Utf8View and LargeUtf8.
 ///
 /// The Arrow compute kernels that we use must match the type exactly, so first cast the literal
-/// into the type of the batch we read from Parquet before sending it to the compute kernel.
+/// into the column type after applying any numeric promotion to the column.
 fn try_cast_literal(
     literal: &Arc<dyn ArrowDatum + Send + Sync>,
     column_type: &DataType,
