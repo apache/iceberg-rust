@@ -496,7 +496,7 @@ mod test {
     };
     use crate::spec::{
         DataContentType, DataFile, DataFileFormat, Datum, NestedField, PartitionSpec,
-        PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Struct, Transform, Type,
+        PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Struct, StructType, Transform, Type,
         UnboundPartitionField,
     };
 
@@ -1898,6 +1898,228 @@ mod test {
             FnvHashSet::from_iter(str_literals.iter().map(Datum::string)),
         ));
         filter.bind(schema.clone(), true).unwrap()
+    }
+
+    /// Mirrors Java's `TestInclusiveMetricsEvaluator.NESTED_SCHEMA`: a required struct and an
+    /// optional struct, each holding one required and one optional leaf. The interesting field is
+    /// `optional_address.required_street2` -- required, but reachable only through an optional
+    /// parent, so it *is* null whenever that parent is null.
+    fn create_nested_test_schema() -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    Arc::new(NestedField::required(
+                        100,
+                        "required_address",
+                        Type::Struct(StructType::new(vec![
+                            Arc::new(NestedField::required(
+                                102,
+                                "required_street1",
+                                Type::Primitive(PrimitiveType::String),
+                            )),
+                            Arc::new(NestedField::optional(
+                                103,
+                                "optional_street1",
+                                Type::Primitive(PrimitiveType::String),
+                            )),
+                        ])),
+                    )),
+                    Arc::new(NestedField::optional(
+                        101,
+                        "optional_address",
+                        Type::Struct(StructType::new(vec![
+                            Arc::new(NestedField::required(
+                                104,
+                                "required_street2",
+                                Type::Primitive(PrimitiveType::String),
+                            )),
+                            Arc::new(NestedField::optional(
+                                105,
+                                "optional_street2",
+                                Type::Primitive(PrimitiveType::String),
+                            )),
+                        ])),
+                    )),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// Mirrors Java's `TestInclusiveMetricsEvaluator.FILE_6`. Field 102
+    /// (`required_address.required_street1`) is deliberately absent from `null_value_counts`, as in
+    /// Java, so the "no null-count stats" path is covered too.
+    fn get_nested_test_file() -> DataFile {
+        DataFile {
+            content: DataContentType::Data,
+            file_path: "/test/nested".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: Struct::empty(),
+            record_count: 10,
+            file_size_in_bytes: 10,
+
+            value_counts: HashMap::from([
+                (100, 5),
+                (101, 5),
+                (102, 5),
+                (103, 5),
+                (104, 5),
+                (105, 5),
+            ]),
+
+            null_value_counts: HashMap::from([(100, 0), (101, 5), (103, 5), (104, 5), (105, 5)]),
+
+            nan_value_counts: HashMap::default(),
+            lower_bounds: HashMap::default(),
+            upper_bounds: HashMap::default(),
+
+            column_sizes: Default::default(),
+            key_metadata: None,
+            split_offsets: None,
+            equality_ids: None,
+            sort_order_id: None,
+            partition_spec_id: 0,
+            first_row_id: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+
+    fn nested_is_null(reference: &str) -> BoundPredicate {
+        Predicate::Unary(UnaryExpression::new(IsNull, Reference::new(reference)))
+            .bind(create_nested_test_schema(), true)
+            .unwrap()
+    }
+
+    fn nested_not_null(reference: &str) -> BoundPredicate {
+        Predicate::Unary(UnaryExpression::new(NotNull, Reference::new(reference)))
+            .bind(create_nested_test_schema(), true)
+            .unwrap()
+    }
+
+    /// Port of Java's `TestInclusiveMetricsEvaluator.testIsNullInNestedStruct`.
+    ///
+    /// This is the layer where the bind-time fold becomes observable: folding `IS NULL` to
+    /// `AlwaysFalse` reaches `always_false` -> `ROWS_CANNOT_MATCH`, pruning the file outright. A
+    /// required leaf under an optional parent must therefore *not* fold, or every row where the
+    /// parent is null is silently dropped.
+    #[test]
+    fn test_is_null_in_nested_struct() {
+        let file = get_nested_test_file();
+
+        let result = InclusiveMetricsEvaluator::eval(
+            &nested_is_null("required_address.required_street1"),
+            &file,
+            true,
+        )
+        .unwrap();
+        assert!(
+            !result,
+            "Should skip: required_address.required_street1 is required and so are its ancestors"
+        );
+
+        let result = InclusiveMetricsEvaluator::eval(
+            &nested_is_null("required_address.optional_street1"),
+            &file,
+            true,
+        )
+        .unwrap();
+        assert!(
+            result,
+            "Should read: required_address.optional_street1 is optional"
+        );
+
+        // The regression case. `required_street2` is required, but `optional_address` is not, so
+        // the value is null wherever the parent is null.
+        let result = InclusiveMetricsEvaluator::eval(
+            &nested_is_null("optional_address.required_street2"),
+            &file,
+            true,
+        )
+        .unwrap();
+        assert!(
+            result,
+            "Should read: optional_address is optional, so required_street2 can still be null"
+        );
+
+        let result = InclusiveMetricsEvaluator::eval(
+            &nested_is_null("optional_address.optional_street2"),
+            &file,
+            true,
+        )
+        .unwrap();
+        assert!(result, "Should read: optional_address is optional");
+    }
+
+    /// Port of Java's `TestInclusiveMetricsEvaluator.testNotNullInNestedStruct`.
+    #[test]
+    fn test_not_null_in_nested_struct() {
+        let file = get_nested_test_file();
+
+        let result = InclusiveMetricsEvaluator::eval(
+            &nested_not_null("required_address.required_street1"),
+            &file,
+            true,
+        )
+        .unwrap();
+        assert!(
+            result,
+            "Should read: required_address.required_street1 is required"
+        );
+
+        // All 5 values are null, so no row can be non-null.
+        let result = InclusiveMetricsEvaluator::eval(
+            &nested_not_null("required_address.optional_street1"),
+            &file,
+            true,
+        )
+        .unwrap();
+        assert!(
+            !result,
+            "Should skip: required_address.optional_street1 is all nulls"
+        );
+
+        let result = InclusiveMetricsEvaluator::eval(
+            &nested_not_null("optional_address.required_street2"),
+            &file,
+            true,
+        )
+        .unwrap();
+        assert!(
+            !result,
+            "Should skip: optional_address.required_street2 is all nulls"
+        );
+
+        let result = InclusiveMetricsEvaluator::eval(
+            &nested_not_null("optional_address.optional_street2"),
+            &file,
+            true,
+        )
+        .unwrap();
+        assert!(
+            !result,
+            "Should skip: optional_address.optional_street2 is all nulls"
+        );
+    }
+
+    /// Java's `testIsNullInNestedStruct` also covers `isNull("required_address")` and
+    /// `isNull("optional_address")` -- references to the struct columns themselves. Those cannot be
+    /// bound in this crate yet: `build_accessors` registers accessors only for primitive leaves, so
+    /// binding fails before any evaluation.
+    /// TODO: Complex columns accessors.
+    #[test]
+    fn test_struct_column_null_check_cannot_bind_yet() {
+        for reference in ["required_address", "optional_address"] {
+            let err = Predicate::Unary(UnaryExpression::new(IsNull, Reference::new(reference)))
+                .bind(create_nested_test_schema(), true)
+                .unwrap_err();
+            assert!(
+                err.message()
+                    .contains(&format!("Accessor for Field {reference} not found")),
+                "unexpected message for {reference}: {err}"
+            );
+        }
     }
 
     fn create_test_schema() -> Arc<Schema> {
