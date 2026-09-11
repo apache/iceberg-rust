@@ -22,19 +22,7 @@ on:
     branches:
       - main
   pull_request:
-    paths:
-      # Artifacts that must be included in releases, such as LICENSE and NOTICE, are deliberately not excluded so we can verify they will be bundled.
-      # Include all files and directories, then filter out files and directories that don't impact code, tests, or release artifacts.
-      - '**'
-      - '!.github/ISSUE_TEMPLATE/**'
-      - '!dev/release/**'
-      - '!website/**'
-      - '!.asf.yml'
-      - '!.gitattributes'
-      - '!.gitignore'
-      - '!CONTRIBUTING.md'
-      - '!CHANGELOG.md'
-      - '!README.md'
+  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
@@ -280,3 +268,17 @@ jobs:
         uses: $/.github/actions/setup-builder
       - name: Check MSRV
         run: make check-msrv
+
+  ci-required:
+    if: ${{ always() }}
+    needs: [lint, clippy, build, check_standalone, build_with_no_default_features, tests, msrv]
+    runs-on: ubuntu-slim
+    steps:
+      - name: Verify CI jobs succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          read -ra results <<< "$RESULTS"
+          for result in "${results[@]}"; do
+            test "$result" = "success"
+          done
