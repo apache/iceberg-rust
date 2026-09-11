@@ -272,8 +272,8 @@ fn check_in_bloom_filter(column: &ColumnBloomFilter, datum: &Datum) -> bool {
             PhysicalType::INT64 => sbbf.check(v),
             PhysicalType::INT32 => match i32::try_from(*v) {
                 Ok(narrowed) => sbbf.check(&narrowed),
-                // Too wide for an INT32 column to hold, so there is nothing
-                // meaningful to probe — keep the row group.
+                // Too wide for an INT32 column to hold, so the value is provably
+                // absent and pruning here would be sound; kept conservative for now.
                 Err(_) => true,
             },
             _ => true,
