@@ -273,8 +273,10 @@ pub(crate) struct DeleteFileContext {
     pub(crate) partition_spec_id: i32,
 }
 
-impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
-    fn from(ctx: &DeleteFileContext) -> Self {
+impl TryFrom<&DeleteFileContext> for FileScanTaskDeleteFile {
+    type Error = Error;
+
+    fn try_from(ctx: &DeleteFileContext) -> Result<Self> {
         FileScanTaskDeleteFile::builder()
             .with_file_path(ctx.manifest_entry.file_path().to_string())
             .with_file_size_in_bytes(ctx.manifest_entry.file_size_in_bytes())
@@ -299,7 +301,10 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
 
 /// A task to scan part of file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TypedBuilder)]
-#[builder(field_defaults(setter(prefix = "with_")))]
+#[builder(
+    field_defaults(setter(prefix = "with_")),
+    build_method(into = Result<FileScanTaskDeleteFile>)
+)]
 pub struct FileScanTaskDeleteFile {
     /// The delete file path
     pub file_path: String,
@@ -362,6 +367,96 @@ pub struct FileScanTaskDeleteFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[builder(default)]
     pub key_metadata: Option<Box<[u8]>>,
+}
+
+impl FileScanTaskDeleteFile {
+    /// Whether this delete file is a V3 deletion vector rather than a position delete file.
+    pub(crate) fn is_deletion_vector(&self) -> bool {
+        self.file_type == DataContentType::PositionDeletes
+            && self.file_format == DataFileFormat::Puffin
+    }
+
+    /// The deletion vector blob's byte range within its Puffin file, the data file whose rows it
+    /// deletes, and the cardinality the manifest entry claims for it.
+    ///
+    /// The spec requires `referenced_data_file`, `content_offset` and `content_size_in_bytes` on
+    /// a deletion vector, and one is always built from a manifest entry, so `record_count` is
+    /// always present too. A missing or negative field is a malformed manifest entry rather than
+    /// an I/O failure: unlike a Parquet delete file, whose reader fails loudly on garbage, these
+    /// coordinates drive a raw byte-range read with no format to fail against, so a bad one
+    /// would otherwise decode silently into the wrong (or no) deletes, per the same
+    /// corrupted-blob concern Iceberg-Java validates in
+    /// `BitmapPositionDeleteIndex.deserializeBitmap`.
+    pub(crate) fn deletion_vector_coordinates(&self) -> Result<(u64, u64, &str, u64)> {
+        let content_offset = self.content_offset.ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} is missing content_offset",
+                    self.file_path
+                ),
+            )
+        })?;
+        let content_size = self.content_size_in_bytes.ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} is missing content_size_in_bytes",
+                    self.file_path
+                ),
+            )
+        })?;
+        let data_file_path = self.referenced_data_file.as_deref().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} is missing referenced_data_file",
+                    self.file_path
+                ),
+            )
+        })?;
+        let record_count = self.record_count.ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("deletion vector {} is missing record_count", self.file_path),
+            )
+        })?;
+
+        let start = u64::try_from(content_offset).map_err(|_| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} has negative content_offset {content_offset}",
+                    self.file_path
+                ),
+            )
+        })?;
+        let len = u64::try_from(content_size).map_err(|_| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector {} has negative content_size_in_bytes {content_size}",
+                    self.file_path
+                ),
+            )
+        })?;
+
+        Ok((start, len, data_file_path, record_count))
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.is_deletion_vector() {
+            self.deletion_vector_coordinates()?;
+        }
+        Ok(())
+    }
+}
+
+impl From<FileScanTaskDeleteFile> for Result<FileScanTaskDeleteFile> {
+    fn from(task: FileScanTaskDeleteFile) -> Self {
+        task.validate()?;
+        Ok(task)
+    }
 }
 
 mod _serde {
@@ -695,5 +790,117 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    fn build_deletion_vector(
+        referenced_data_file: Option<String>,
+        content_offset: Option<i64>,
+        content_size_in_bytes: Option<i64>,
+        record_count: Option<u64>,
+    ) -> Result<FileScanTaskDeleteFile> {
+        FileScanTaskDeleteFile::builder()
+            .with_file_path("deletes.puffin".to_string())
+            .with_file_size_in_bytes(100)
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Puffin)
+            .with_partition_spec_id(0)
+            .with_referenced_data_file(referenced_data_file)
+            .with_content_offset(content_offset)
+            .with_content_size_in_bytes(content_size_in_bytes)
+            .with_record_count(record_count)
+            .build()
+    }
+
+    // A well-formed deletion vector, for tests that then clear or corrupt one field.
+    fn valid_deletion_vector() -> Result<FileScanTaskDeleteFile> {
+        build_deletion_vector(Some("data.parquet".to_string()), Some(4), Some(40), Some(2))
+    }
+
+    #[test]
+    fn test_delete_file_builder_accepts_valid_deletion_vector() {
+        let task = valid_deletion_vector().unwrap();
+
+        assert!(task.is_deletion_vector());
+        let (start, len, data_file_path, record_count) =
+            task.deletion_vector_coordinates().unwrap();
+        assert_eq!(start, 4);
+        assert_eq!(len, 40);
+        assert_eq!(data_file_path, "data.parquet");
+        assert_eq!(record_count, 2);
+    }
+
+    #[test]
+    fn test_delete_file_builder_rejects_deletion_vector_missing_content_offset() {
+        let err = build_deletion_vector(Some("data.parquet".to_string()), None, Some(40), Some(2))
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("missing content_offset"));
+    }
+
+    #[test]
+    fn test_delete_file_builder_rejects_deletion_vector_missing_content_size() {
+        let err = build_deletion_vector(Some("data.parquet".to_string()), Some(4), None, Some(2))
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("missing content_size_in_bytes"));
+    }
+
+    #[test]
+    fn test_delete_file_builder_rejects_deletion_vector_missing_referenced_data_file() {
+        let err = build_deletion_vector(None, Some(4), Some(40), Some(2)).unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("missing referenced_data_file"));
+    }
+
+    #[test]
+    fn test_delete_file_builder_rejects_deletion_vector_missing_record_count() {
+        let err = build_deletion_vector(Some("data.parquet".to_string()), Some(4), Some(40), None)
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("missing record_count"));
+    }
+
+    #[test]
+    fn test_delete_file_builder_rejects_deletion_vector_negative_content_offset() {
+        let err = build_deletion_vector(
+            Some("data.parquet".to_string()),
+            Some(-1),
+            Some(40),
+            Some(2),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("negative content_offset"));
+    }
+
+    #[test]
+    fn test_delete_file_builder_rejects_deletion_vector_negative_content_size() {
+        let err =
+            build_deletion_vector(Some("data.parquet".to_string()), Some(4), Some(-1), Some(2))
+                .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("negative content_size_in_bytes"));
+    }
+
+    // A position delete file carries none of the deletion vector fields, so validation must not
+    // demand them of it.
+    #[test]
+    fn test_delete_file_builder_accepts_position_delete_without_deletion_vector_fields() {
+        let task = FileScanTaskDeleteFile::builder()
+            .with_file_path("pos-deletes.parquet".to_string())
+            .with_file_size_in_bytes(100)
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
+            .with_partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert!(!task.is_deletion_vector());
     }
 }

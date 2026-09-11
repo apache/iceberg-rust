@@ -1325,6 +1325,8 @@ impl core::clone::Clone for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::clone(&self) -> iceberg::scan::FileScanTaskDeleteFile
 impl core::cmp::PartialEq for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::eq(&self, other: &iceberg::scan::FileScanTaskDeleteFile) -> bool
+impl core::convert::From<iceberg::scan::FileScanTaskDeleteFile> for iceberg::Result<iceberg::scan::FileScanTaskDeleteFile>
+pub fn iceberg::Result<iceberg::scan::FileScanTaskDeleteFile>::from(task: iceberg::scan::FileScanTaskDeleteFile) -> Self
 impl core::fmt::Debug for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTaskDeleteFile

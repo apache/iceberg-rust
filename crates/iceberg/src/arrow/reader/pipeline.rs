@@ -2414,7 +2414,8 @@ mod tests {
             .with_file_size_in_bytes(std::fs::metadata(&del_path).unwrap().len())
             .with_file_type(DataContentType::PositionDeletes)
             .with_partition_spec_id(0)
-            .build();
+            .build()
+            .unwrap();
         let task = row_id_task_with_options(data_path, Some(100), 0, 0, vec![delete]);
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();

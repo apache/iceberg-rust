@@ -56,10 +56,10 @@ struct PopulatedDeleteFileIndex {
     global_equality_deletes: Vec<Arc<DeleteFileContext>>,
     eq_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
     pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
-    pos_deletes_by_path: HashMap<String, Vec<Arc<DeleteFileContext>>>,
+    pos_deletes_by_referenced_data_file: HashMap<String, Vec<Arc<DeleteFileContext>>>,
     // V3 deletion vectors, keyed by the data file they apply to (referenced_data_file). At most
     // one exists per data file per snapshot, and when one applies it supersedes any position
-    // delete files for that data file, partition-scoped or path-scoped alike.
+    // delete files for that data file, whether indexed by partition or by referenced data file.
     dvs_by_referenced_data_file: HashMap<String, Arc<DeleteFileContext>>,
 }
 
@@ -136,8 +136,8 @@ impl DeleteFileIndex {
     /// Gets all the delete files that apply to the specified data file.
     ///
     /// Fails if building the index found a spec violation, such as multiple deletion vectors
-    /// referencing the same data file, or if a matched deletion vector's sequence number
-    /// violates the spec relative to `seq_num`.
+    /// referencing the same data file, or if a matched deletion vector violates the spec
+    /// relative to `seq_num` or is missing a field the spec requires of it.
     pub(crate) async fn get_deletes_for_data_file(
         &self,
         data_file: &DataFile,
@@ -196,7 +196,7 @@ impl PopulatedDeleteFileIndex {
             HashMap::default();
         let mut pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>> =
             HashMap::default();
-        let mut pos_deletes_by_path: HashMap<String, Vec<Arc<DeleteFileContext>>> =
+        let mut pos_deletes_by_referenced_data_file: HashMap<String, Vec<Arc<DeleteFileContext>>> =
             HashMap::default();
         let mut dvs_by_referenced_data_file: HashMap<String, Arc<DeleteFileContext>> =
             HashMap::default();
@@ -214,10 +214,9 @@ impl PopulatedDeleteFileIndex {
                     // A deletion vector is a position delete stored as a Puffin blob. The file
                     // format is what distinguishes it from a position delete parquet file.
                     if data_file.file_format() == DataFileFormat::Puffin {
-                        // The spec requires referenced_data_file, content_offset and
-                        // content_size_in_bytes on a deletion vector, so a missing one is a
-                        // malformed manifest entry, not an ordinary position delete to fall back
-                        // on.
+                        // referenced_data_file is what the index keys a deletion vector by, so
+                        // its absence is fatal here rather than deferred to the scan task's own
+                        // validation of the remaining spec-required fields.
                         let Some(path) = data_file.referenced_data_file() else {
                             return Err(Error::new(
                                 ErrorKind::DataInvalid,
@@ -227,18 +226,6 @@ impl PopulatedDeleteFileIndex {
                                 ),
                             ));
                         };
-
-                        if data_file.content_offset().is_none()
-                            || data_file.content_size_in_bytes().is_none()
-                        {
-                            return Err(Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
-                                    "deletion vector {} is missing content_offset or content_size_in_bytes",
-                                    arc_ctx.manifest_entry.file_path()
-                                ),
-                            ));
-                        }
 
                         if let Some(existing) =
                             dvs_by_referenced_data_file.insert(path.clone(), arc_ctx)
@@ -257,7 +244,10 @@ impl PopulatedDeleteFileIndex {
                     }
 
                     if let Some(path) = referenced_data_file(data_file) {
-                        pos_deletes_by_path.entry(path).or_default().push(arc_ctx);
+                        pos_deletes_by_referenced_data_file
+                            .entry(path)
+                            .or_default()
+                            .push(arc_ctx);
                     } else {
                         pos_deletes_by_partition
                             .entry(partition.clone())
@@ -284,7 +274,7 @@ impl PopulatedDeleteFileIndex {
             global_equality_deletes,
             eq_deletes_by_partition,
             pos_deletes_by_partition,
-            pos_deletes_by_path,
+            pos_deletes_by_referenced_data_file,
             dvs_by_referenced_data_file,
         })
     }
@@ -295,7 +285,9 @@ impl PopulatedDeleteFileIndex {
     /// with the data file's: a data file's path is permanently tied to one partition, and the
     /// spec guarantees a DV is only ever written at or after the sequence number of the data
     /// file it applies to, so either violation means the delete manifest is inconsistent, not
-    /// that the DV simply doesn't apply.
+    /// that the DV simply doesn't apply. Also fails if a matched delete file cannot be turned
+    /// into a scan task, which for a deletion vector means its manifest entry is missing a
+    /// spec-required Puffin coordinate.
     fn get_deletes_for_data_file(
         &self,
         data_file: &DataFile,
@@ -303,34 +295,35 @@ impl PopulatedDeleteFileIndex {
     ) -> Result<Vec<FileScanTaskDeleteFile>> {
         let mut results = vec![];
 
-        self.global_equality_deletes
-            .iter()
+        // filter that returns true if the provided delete file's sequence number is **greater than** `seq_num`
+        let global_eq_deletes = self.global_equality_deletes.iter().filter(|&delete| {
+            seq_num
+                .map(|seq_num| delete.manifest_entry.sequence_number() > Some(seq_num))
+                .unwrap_or_else(|| true)
+        });
+        for delete in global_eq_deletes {
+            results.push(delete.as_ref().try_into()?);
+        }
+
+        if let Some(deletes) = self.eq_deletes_by_partition.get(data_file.partition()) {
             // filter that returns true if the provided delete file's sequence number is **greater than** `seq_num`
-            .filter(|&delete| {
+            let deletes = deletes.iter().filter(|&delete| {
                 seq_num
                     .map(|seq_num| delete.manifest_entry.sequence_number() > Some(seq_num))
                     .unwrap_or_else(|| true)
-            })
-            .for_each(|delete| results.push(delete.as_ref().into()));
-
-        if let Some(deletes) = self.eq_deletes_by_partition.get(data_file.partition()) {
-            deletes
-                .iter()
-                // filter that returns true if the provided delete file's sequence number is **greater than** `seq_num`
-                .filter(|&delete| {
-                    seq_num
-                        .map(|seq_num| delete.manifest_entry.sequence_number() > Some(seq_num))
-                        .unwrap_or_else(|| true)
-                        && data_file.partition_spec_id == delete.partition_spec_id
-                })
-                .for_each(|delete| results.push(delete.as_ref().into()));
+                    && data_file.partition_spec_id == delete.partition_spec_id
+            });
+            for delete in deletes {
+                results.push(delete.as_ref().try_into()?);
+            }
         }
 
-        // A deletion vector supersedes all position delete files for its data file, per the spec:
-        // "readers ignore any position delete files that would otherwise match it, because the DV
-        // subsumes them". An exact path match on referenced_data_file is sufficient proof of
-        // applicability, the same as for pos_deletes_by_path below, so this is checked before
-        // (and instead of) pos_deletes_by_partition and pos_deletes_by_path.
+        // A deletion vector supersedes all position delete files for its data file: a DV must
+        // replace every position delete file previously written for it, so that "readers can
+        // safely ignore matching position delete files" (spec, Deletion Vectors). An exact path
+        // match on referenced_data_file is sufficient proof of applicability, the same as for the
+        // position deletes below, so this is checked before (and instead of) either position
+        // delete map.
         if let Some(dv) = self.dvs_by_referenced_data_file.get(data_file.file_path()) {
             let dv_data_file = dv.manifest_entry.data_file();
             // A file path belongs to exactly one partition for its lifetime, so an exact path
@@ -365,36 +358,39 @@ impl PopulatedDeleteFileIndex {
                     ));
                 }
             }
-            results.push(dv.as_ref().into());
+            results.push(dv.as_ref().try_into()?);
             return Ok(results);
         }
 
         if let Some(deletes) = self.pos_deletes_by_partition.get(data_file.partition()) {
-            deletes
-                .iter()
-                // filter that returns true if the provided delete file's sequence number is **greater than or equal to** `seq_num`
-                .filter(|&delete| {
-                    seq_num
-                        .map(|seq_num| delete.manifest_entry.sequence_number() >= Some(seq_num))
-                        .unwrap_or_else(|| true)
-                        && data_file.partition_spec_id == delete.partition_spec_id
-                })
-                .for_each(|delete| results.push(delete.as_ref().into()));
+            // filter that returns true if the provided delete file's sequence number is **greater than or equal to** `seq_num`
+            let deletes = deletes.iter().filter(|&delete| {
+                seq_num
+                    .map(|seq_num| delete.manifest_entry.sequence_number() >= Some(seq_num))
+                    .unwrap_or_else(|| true)
+                    && data_file.partition_spec_id == delete.partition_spec_id
+            });
+            for delete in deletes {
+                results.push(delete.as_ref().try_into()?);
+            }
         }
 
         // Position deletes indexed by the exact path of the data file they reference.
         // An exact path match is sufficient proof that the delete applies, so no
         // partition spec id check is performed.
-        if let Some(deletes) = self.pos_deletes_by_path.get(data_file.file_path()) {
-            deletes
-                .iter()
-                // filter that returns true if the provided delete file's sequence number is **greater than or equal to** `seq_num`
-                .filter(|&delete| {
-                    seq_num
-                        .map(|seq_num| delete.manifest_entry.sequence_number() >= Some(seq_num))
-                        .unwrap_or(true)
-                })
-                .for_each(|delete| results.push(delete.as_ref().into()));
+        if let Some(deletes) = self
+            .pos_deletes_by_referenced_data_file
+            .get(data_file.file_path())
+        {
+            // filter that returns true if the provided delete file's sequence number is **greater than or equal to** `seq_num`
+            let deletes = deletes.iter().filter(|&delete| {
+                seq_num
+                    .map(|seq_num| delete.manifest_entry.sequence_number() >= Some(seq_num))
+                    .unwrap_or(true)
+            });
+            for delete in deletes {
+                results.push(delete.as_ref().try_into()?);
+            }
         }
 
         Ok(results)
@@ -977,7 +973,7 @@ mod tests {
             partition_spec_id: 0,
         };
 
-        let task: FileScanTaskDeleteFile = (&ctx).into();
+        let task: FileScanTaskDeleteFile = (&ctx).try_into().unwrap();
         assert_eq!(task.file_type, DataContentType::PositionDeletes);
         assert_eq!(task.content_offset, Some(4));
         assert_eq!(task.content_size_in_bytes, Some(40));
@@ -1201,12 +1197,16 @@ mod tests {
 
     #[test]
     fn test_deletion_vector_missing_coordinates_is_rejected() {
+        let data_file = build_unpartitioned_data_file();
+
+        // Indexing only needs referenced_data_file, so a missing Puffin coordinate surfaces when
+        // the matched entry is converted into a scan task, not when the index is built.
         let malformed_dv = DataFileBuilder::default()
             .file_path("deletes.puffin".to_string())
             .file_format(DataFileFormat::Puffin)
             .content(DataContentType::PositionDeletes)
             .record_count(1)
-            .referenced_data_file(Some("data.parquet".to_string()))
+            .referenced_data_file(Some(data_file.file_path().to_string()))
             .content_size_in_bytes(Some(40))
             .partition(Struct::empty())
             .partition_spec_id(0)
@@ -1219,12 +1219,12 @@ mod tests {
             partition_spec_id: 0,
         }];
 
-        let err = PopulatedDeleteFileIndex::new(contexts).unwrap_err();
+        let index = PopulatedDeleteFileIndex::new(contexts).unwrap();
+        let err = index
+            .get_deletes_for_data_file(&data_file, Some(0))
+            .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(
-            err.message()
-                .contains("missing content_offset or content_size_in_bytes")
-        );
+        assert!(err.message().contains("missing content_offset"));
     }
 
     #[test]
