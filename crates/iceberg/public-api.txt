@@ -2839,6 +2839,10 @@ pub const iceberg::spec::TableProperties<'_>::PROPERTY_METADATA_PREVIOUS_VERSION
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_MIN_SNAPSHOTS_TO_KEEP: &'static str
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT: usize
+pub const iceberg::spec::TableProperties<'_>::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_ENABLED_PREFIX: &'static str
+pub const iceberg::spec::TableProperties<'_>::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_FPP_DEFAULT: f64
+pub const iceberg::spec::TableProperties<'_>::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_FPP_PREFIX: &'static str
+pub const iceberg::spec::TableProperties<'_>::PROPERTY_PARQUET_BLOOM_FILTER_COLUMN_NDV_PREFIX: &'static str
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_PARQUET_CDC_ENABLED: &'static str
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_PARQUET_CDC_ENABLED_DEFAULT: bool
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE: &'static str
@@ -2890,6 +2894,9 @@ pub fn iceberg::spec::TableProperties<'properties>::max_snapshot_age_ms(&self) -
 pub fn iceberg::spec::TableProperties<'properties>::metadata_compression_codec(&self) -> iceberg::Result<iceberg::compression::CompressionCodec>
 pub fn iceberg::spec::TableProperties<'properties>::min_snapshots_to_keep(&self) -> iceberg::Result<usize>
 pub fn iceberg::spec::TableProperties<'properties>::new(properties: &'properties std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
+pub fn iceberg::spec::TableProperties<'properties>::parquet_bloom_filter_column_enabled(&self) -> iceberg::Result<std::collections::hash::map::HashMap<alloc::string::String, bool>>
+pub fn iceberg::spec::TableProperties<'properties>::parquet_bloom_filter_column_fpp(&self) -> iceberg::Result<std::collections::hash::map::HashMap<alloc::string::String, f64>>
+pub fn iceberg::spec::TableProperties<'properties>::parquet_bloom_filter_column_ndv(&self) -> iceberg::Result<std::collections::hash::map::HashMap<alloc::string::String, u64>>
 pub fn iceberg::spec::TableProperties<'properties>::parquet_compression_codec(&self) -> iceberg::Result<iceberg::compression::CompressionCodec>
 pub fn iceberg::spec::TableProperties<'properties>::parquet_dict_size_bytes(&self) -> iceberg::Result<usize>
 pub fn iceberg::spec::TableProperties<'properties>::parquet_page_row_limit(&self) -> iceberg::Result<usize>
