@@ -150,19 +150,27 @@ pub struct FileScanTask {
     #[builder(default)]
     pub unified_partition_type: Option<Arc<StructType>>,
 
-    /// The sort order that this file's rows are sorted by, resolved from the data file's
-    /// `sort_order_id` against the table's known sort orders. `Some` only if the id resolves
-    /// to a sort order with at least one field. `None` if the file has no sort order id, the
-    /// id doesn't resolve against the table's sort orders, or it resolves to the reserved
-    /// unsorted order (id 0, per the spec).
+    /// The raw `sort_order_id` recorded on the data file (spec field 140), carried through
+    /// unresolved. See [`DataFile::sort_order_id()`](crate::spec::DataFile::sort_order_id).
+    /// `None` if the file has no sort order id.
     ///
-    /// Note: this reflects only the file's own recorded sort order id, not necessarily the
-    /// table's current default sort order — see [`crate::spec::DataFile::sort_order_id`].
-    /// Serde: not yet implemented.
+    /// This preserves the distinction that [`sort_order`](Self::sort_order) collapses: a
+    /// non-zero id that does not resolve against the table's sort orders still marks the file
+    /// as physically sorted, which a consumer such as the DataFusion sorted-scan optimizer
+    /// needs even when the order definition itself is unavailable.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(serialize_with = "serialize_not_implemented")]
-    #[serde(deserialize_with = "deserialize_not_implemented")]
+    #[builder(default)]
+    pub sort_order_id: Option<i32>,
+
+    /// The sort order that this file's rows are sorted by, resolved from the data file's
+    /// [`sort_order_id`](Self::sort_order_id) against the table's known sort orders. `Some`
+    /// only when the id resolves to an order that has sort fields. `None` if the file has no
+    /// sort order id, the id does not resolve, or it resolves to an order with no sort fields
+    /// (the reserved unsorted order, id 0 per the spec). Use [`sort_order_id`](Self::sort_order_id)
+    /// to tell those cases apart.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[builder(default)]
     pub sort_order: Option<SortOrderRef>,
 

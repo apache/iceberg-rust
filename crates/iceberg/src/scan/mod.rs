@@ -23,6 +23,7 @@ mod context;
 use context::*;
 mod task;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -42,7 +43,9 @@ use crate::metadata_columns::{
 };
 use crate::partitioning::compute_unified_partition_type;
 use crate::runtime::Runtime;
-use crate::spec::{DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, Schema, SnapshotRef};
+use crate::spec::{
+    DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, Schema, SnapshotRef, SortOrderRef,
+};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::{Error, ErrorKind, Result};
@@ -313,6 +316,16 @@ impl<'a> TableScanBuilder<'a> {
             None
         };
 
+        // Precompute the table's sort orders once, keyed by id, so each manifest-file
+        // context carries only this narrow map instead of the full table metadata.
+        let sort_orders = Arc::new(
+            self.table
+                .metadata()
+                .sort_orders_iter()
+                .map(|order| (order.order_id, order.clone()))
+                .collect::<HashMap<i64, SortOrderRef>>(),
+        );
+
         let plan_context = PlanContext {
             snapshot,
             table_metadata: self.table.metadata_ref(),
@@ -327,6 +340,7 @@ impl<'a> TableScanBuilder<'a> {
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
             unified_partition_type,
+            sort_orders,
         };
 
         Ok(TableScan {
@@ -667,8 +681,8 @@ pub mod tests {
         DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, DataFileBuilder, DataFileFormat, Datum,
         FormatVersion, Literal, MAIN_BRANCH, ManifestEntry, ManifestListWriter, ManifestStatus,
         ManifestWriterBuilder, NestedField, Operation, PartitionSpec, PrimitiveType, Schema,
-        Snapshot, Struct, StructType, Summary, TableMetadata, TableMetadataBuilder, Type,
-        UnboundPartitionSpec,
+        Snapshot, SortOrder, Struct, StructType, Summary, TableMetadata, TableMetadataBuilder,
+        Type, UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -1705,7 +1719,7 @@ pub mod tests {
                 current_snapshot.sequence_number(),
             );
             manifest_list_write
-                .add_manifests(vec![data_file_manifest].into_iter())
+                .add_manifests(std::iter::once(data_file_manifest))
                 .unwrap();
             manifest_list_write.close().await.unwrap();
         }
@@ -2042,6 +2056,15 @@ pub mod tests {
     async fn test_plan_files_carries_sort_order_into_file_scan_task() {
         let mut fixture = TableTestFixture::new();
 
+        // Inject the reserved unsorted order (id 0) inline rather than editing the shared
+        // testdata fixture, so the id-0 file below exercises the `!is_unsorted()` filter
+        // branch instead of the `and_then` short-circuit an absent entry would take.
+        let mut metadata = fixture.table.metadata().clone();
+        metadata
+            .sort_orders
+            .insert(0, Arc::new(SortOrder::unsorted_order()));
+        fixture.table = fixture.table.with_metadata(Arc::new(metadata));
+
         let expected_sort_order = fixture
             .table
             .metadata()
@@ -2049,6 +2072,7 @@ pub mod tests {
             .unwrap()
             .clone();
 
+        // sort_order_ids: resolvable (3), absent, unresolvable (99), reserved unsorted (0).
         fixture
             .setup_manifest_files_with_sort_order_ids([Some(3), None, Some(99), Some(0)])
             .await;
@@ -2067,41 +2091,62 @@ pub mod tests {
 
         assert_eq!(tasks.len(), 4, "expected all four FileScanTasks");
 
+        // Aggregates catch a systemic regression (every entry resolving to id 3, or
+        // resolution dropping entirely) that the per-file checks below would each still pass.
+        assert_eq!(
+            tasks.iter().filter(|t| t.sort_order.is_some()).count(),
+            1,
+            "exactly one file resolves to a sort order"
+        );
+        assert_eq!(
+            tasks.iter().filter(|t| t.sort_order_id.is_some()).count(),
+            3,
+            "three files carry a raw sort_order_id"
+        );
+
         let resolved = tasks
             .iter()
             .find(|t| t.data_file_path.ends_with("1.parquet"))
             .unwrap();
+        assert_eq!(resolved.sort_order_id, Some(3));
         assert_eq!(
             resolved.sort_order,
             Some(expected_sort_order),
-            "sort_order_id(3) should resolve to the table's sort order at id 3"
+            "sort_order_id 3 should resolve to the table's sort order at id 3"
         );
 
         let missing = tasks
             .iter()
             .find(|t| t.data_file_path.ends_with("2.parquet"))
             .unwrap();
+        assert_eq!(missing.sort_order_id, None);
         assert!(
             missing.sort_order.is_none(),
-            "a file with no sort_order_id should carry no sort_order"
+            "a file with no sort_order_id carries no sort_order"
         );
 
         let unresolvable = tasks
             .iter()
             .find(|t| t.data_file_path.ends_with("3.parquet"))
             .unwrap();
+        assert_eq!(
+            unresolvable.sort_order_id,
+            Some(99),
+            "the raw id is preserved even when it does not resolve"
+        );
         assert!(
             unresolvable.sort_order.is_none(),
-            "a file with an unresolvable sort_order_id should carry no sort_order"
+            "an unresolvable sort_order_id resolves to no sort_order"
         );
 
         let unsorted = tasks
             .iter()
             .find(|t| t.data_file_path.ends_with("4.parquet"))
             .unwrap();
+        assert_eq!(unsorted.sort_order_id, Some(0));
         assert!(
             unsorted.sort_order.is_none(),
-            "a file with sort_order_id(0), the reserved unsorted order, should carry no sort_order"
+            "the reserved unsorted order (id 0) resolves to no sort_order"
         );
     }
 

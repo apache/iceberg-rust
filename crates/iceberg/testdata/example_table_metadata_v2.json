@@ -42,10 +42,6 @@
   "default-sort-order-id": 3,
   "sort-orders": [
     {
-      "order-id": 0,
-      "fields": []
-    },
-    {
       "order-id": 3,
       "fields": [
         {"transform": "identity", "source-id": 2, "direction": "asc", "null-order": "nulls-first"},
