@@ -88,6 +88,7 @@
 mod auth;
 mod catalog;
 mod client;
+mod credential;
 pub use client::HttpClient;
 mod request;
 pub use request::{HttpRequest, HttpRequestBody};

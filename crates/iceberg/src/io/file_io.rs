@@ -22,9 +22,10 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 
 use super::storage::{
-    LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageFactory,
+    LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageCredentialProvider,
+    StorageFactory,
 };
-use crate::Result;
+use crate::{Error, ErrorKind, Result};
 
 /// FileIO implementation, used to manipulate files in underlying storage.
 ///
@@ -65,6 +66,8 @@ pub struct FileIO {
     config: StorageConfig,
     /// Factory for creating storage instances
     factory: Arc<dyn StorageFactory>,
+    /// Optional provider of refreshable, backend-specific credentials
+    credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
     /// Cached storage instance (lazily initialized)
     storage: Arc<OnceLock<Arc<dyn Storage>>>,
 }
@@ -97,6 +100,7 @@ impl FileIO {
         Self {
             config: StorageConfig::new(),
             factory: Arc::new(MemoryStorageFactory),
+            credential_provider: None,
             storage: Arc::new(OnceLock::new()),
         }
     }
@@ -108,6 +112,7 @@ impl FileIO {
         Self {
             config: StorageConfig::new(),
             factory: Arc::new(LocalFsStorageFactory),
+            credential_provider: None,
             storage: Arc::new(OnceLock::new()),
         }
     }
@@ -127,7 +132,16 @@ impl FileIO {
     ///
     /// Storage factories are serialized through [`typetag`](https://docs.rs/typetag). Third-party
     /// factories must use `#[typetag::serde]` on their [`StorageFactory`] implementation.
+    /// FileIO instances with a refreshable credential provider cannot be serialized because the
+    /// provider may hold process-local catalog and authentication state.
     pub fn serialize_all(&self) -> Result<Vec<u8>> {
+        if self.credential_provider.is_some() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "FileIO instances with credential providers cannot be serialized",
+            ));
+        }
+
         Ok(serde_json::to_vec(&_serde::SerializableFileIO {
             config: &self.config,
             factory: &self.factory,
@@ -144,6 +158,7 @@ impl FileIO {
         Ok(Self {
             config,
             factory,
+            credential_provider: None,
             storage: Arc::new(OnceLock::new()),
         })
     }
@@ -163,8 +178,11 @@ impl FileIO {
             return Ok(storage.clone());
         }
 
-        // Build the storage
-        let storage = self.factory.build(&self.config)?;
+        // Build the storage, passing any credential provider so backends that
+        // support refreshable credentials can wire it into their operators.
+        let storage = self
+            .factory
+            .build_with_credentials(&self.config, self.credential_provider.clone())?;
 
         // Try to set it (another thread might have set it first)
         let _ = self.storage.set(storage.clone());
@@ -247,6 +265,8 @@ pub struct FileIOBuilder {
     factory: Arc<dyn StorageFactory>,
     /// Storage configuration
     config: StorageConfig,
+    /// Optional provider of refreshable, backend-specific credentials
+    credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
 }
 
 impl FileIOBuilder {
@@ -255,6 +275,7 @@ impl FileIOBuilder {
         Self {
             factory,
             config: StorageConfig::new(),
+            credential_provider: None,
         }
     }
 
@@ -280,11 +301,21 @@ impl FileIOBuilder {
         &self.config
     }
 
+    /// Attach a provider of refreshable, backend-specific credentials.
+    pub fn with_credential_provider(
+        mut self,
+        provider: Arc<dyn StorageCredentialProvider>,
+    ) -> Self {
+        self.credential_provider = Some(provider);
+        self
+    }
+
     /// Builds [`FileIO`].
     pub fn build(self) -> FileIO {
         FileIO {
             config: self.config,
             factory: self.factory,
+            credential_provider: self.credential_provider,
             storage: Arc::new(OnceLock::new()),
         }
     }
@@ -453,7 +484,20 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
-    use crate::io::{LocalFsStorageFactory, MemoryStorageFactory};
+    use crate::io::{
+        LocalFsStorageFactory, MemoryStorageFactory, StorageCredential, StorageCredentialProvider,
+    };
+    use crate::{ErrorKind, Result};
+
+    #[derive(Debug)]
+    struct TestCredentialProvider;
+
+    #[async_trait::async_trait]
+    impl StorageCredentialProvider for TestCredentialProvider {
+        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
+            unreachable!("unsupported factories must reject the provider before loading from it")
+        }
+    }
 
     fn create_local_file_io() -> FileIO {
         FileIO::new_with_fs()
@@ -599,6 +643,26 @@ mod tests {
 
         assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
         assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_file_io_rejects_credentials_for_unsupported_factory() {
+        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+            .with_credential_provider(Arc::new(TestCredentialProvider))
+            .build();
+
+        let err = file_io.exists("memory://file").await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+    }
+
+    #[test]
+    fn test_file_io_with_credential_provider_serialization_fails() {
+        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+            .with_credential_provider(Arc::new(TestCredentialProvider))
+            .build();
+
+        let err = file_io.serialize_all().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
     }
 
     #[tokio::test]
