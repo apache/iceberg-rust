@@ -330,8 +330,12 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(2, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::required(1, "bar", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(2, "foo", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),

@@ -269,11 +269,9 @@ mod tests {
 
     fn create_partition_spec(r#type: PrimitiveType) -> Result<(PartitionSpecRef, SchemaRef)> {
         let schema = Schema::builder()
-            .with_fields(vec![Arc::new(NestedField::optional(
-                1,
-                "a",
-                Type::Primitive(r#type),
-            ))])
+            .with_fields(vec![Arc::new(
+                NestedField::optional(1, "a", Type::Primitive(r#type)).expect("valid nested field"),
+            )])
             .build()?;
 
         let spec = PartitionSpec::builder(schema.clone())

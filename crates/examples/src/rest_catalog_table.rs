@@ -60,9 +60,15 @@ async fn main() {
     // Build the table schema.
     let table_schema = Schema::builder()
         .with_fields(vec![
-            NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
-            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+            NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
+            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
+            NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
+                .expect("valid nested field")
+                .into(),
         ])
         .with_schema_id(1)
         .with_identifier_field_ids(vec![2])

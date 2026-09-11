@@ -87,7 +87,7 @@ impl<'a> Int96CoercionVisitor<'a> {
             .get(PARQUET_FIELD_ID_META_KEY)
             .and_then(|id_str| id_str.parse::<i32>().ok())
             .and_then(|field_id| self.iceberg_schema.field_by_id(field_id))
-            .and_then(|f| match &*f.field_type {
+            .and_then(|f| match f.field_type() {
                 Type::Primitive(PrimitiveType::Timestamp | PrimitiveType::Timestamptz) => {
                     Some(TimeUnit::Microsecond)
                 }
@@ -261,8 +261,12 @@ mod tests {
         Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamp)).into(),
-                NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap()
@@ -295,7 +299,9 @@ mod tests {
         let iceberg = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamptz)).into(),
+                NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamptz))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -321,7 +327,9 @@ mod tests {
         let iceberg = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::TimestampNs)).into(),
+                NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::TimestampNs))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -340,6 +348,7 @@ mod tests {
             .with_schema_id(1)
             .with_fields(vec![
                 NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::TimestamptzNs))
+                    .expect("valid nested field")
                     .into(),
             ])
             .build()
@@ -395,7 +404,9 @@ mod tests {
         let iceberg = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -437,9 +448,11 @@ mod tests {
                     "data",
                     Type::Struct(StructType::new(vec![
                         NestedField::optional(2, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                            .expect("valid nested field")
                             .into(),
                     ])),
                 )
+                .expect("valid nested field")
                 .into(),
             ])
             .build()
@@ -485,9 +498,11 @@ mod tests {
                             "element",
                             Type::Primitive(PrimitiveType::Timestamp),
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
             ])
             .build()
@@ -529,15 +544,18 @@ mod tests {
                             "key",
                             Type::Primitive(PrimitiveType::String),
                         )
+                        .expect("valid nested field")
                         .into(),
                         value_field: NestedField::optional(
                             3,
                             "value",
                             Type::Primitive(PrimitiveType::Timestamp),
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
             ])
             .build()

@@ -65,9 +65,9 @@ impl ArrowReader {
     /// Recursively extract leaf field IDs because Parquet projection works at the leaf column level.
     /// Nested types (struct/list/map) are flattened in Parquet's columnar format.
     fn include_leaf_field_id(field: &NestedField, field_ids: &mut Vec<i32>) {
-        match field.field_type.as_ref() {
+        match field.field_type() {
             Type::Primitive(_) => {
-                field_ids.push(field.id);
+                field_ids.push(field.id());
             }
             Type::Struct(struct_type) => {
                 for nested_field in struct_type.fields() {
@@ -84,7 +84,7 @@ impl ArrowReader {
             // Variant projection is rejected earlier (in `get_arrow_projection_mask`); this
             // arm only keeps the match exhaustive. Treat it as a leaf, like a primitive.
             Type::Variant(_) => {
-                field_ids.push(field.id);
+                field_ids.push(field.id());
             }
         }
     }
@@ -128,7 +128,7 @@ impl ArrowReader {
         // projection that touches a variant, rather than returning a partial/incorrect batch.
         for field_id in field_ids {
             if let Some(field) = iceberg_schema_of_task.field_by_id(*field_id)
-                && type_contains_variant(&field.field_type)
+                && type_contains_variant(field.field_type())
             {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
@@ -208,9 +208,9 @@ impl ArrowReader {
             if !type_promotion_is_valid(
                 parquet_iceberg_field
                     .unwrap()
-                    .field_type
+                    .field_type()
                     .as_primitive_type(),
-                iceberg_field.unwrap().field_type.as_primitive_type(),
+                iceberg_field.unwrap().field_type().as_primitive_type(),
             ) {
                 return false;
             }
@@ -272,11 +272,11 @@ fn type_contains_variant(field_type: &Type) -> bool {
         Type::Struct(s) => s
             .fields()
             .iter()
-            .any(|f| type_contains_variant(&f.field_type)),
-        Type::List(l) => type_contains_variant(&l.element_field.field_type),
+            .any(|f| type_contains_variant(f.field_type())),
+        Type::List(l) => type_contains_variant(l.element_field.field_type()),
         Type::Map(m) => {
-            type_contains_variant(&m.key_field.field_type)
-                || type_contains_variant(&m.value_field.field_type)
+            type_contains_variant(m.key_field.field_type())
+                || type_contains_variant(m.value_field.field_type())
         }
         Type::Primitive(_) => false,
     }
@@ -534,8 +534,12 @@ mod tests {
                 .with_schema_id(1)
                 .with_identifier_field_ids(vec![1])
                 .with_fields(vec![
-                    NestedField::required(1, "c1", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::optional(2, "c2", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "c1", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(2, "c2", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                     NestedField::optional(
                         3,
                         "c3",
@@ -544,6 +548,7 @@ mod tests {
                             scale: 3,
                         }),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -627,26 +632,37 @@ message schema {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(2, "v", Type::Variant(VariantType))
+                        .expect("valid nested field")
+                        .into(),
                     NestedField::required(
                         3,
                         "s",
                         Type::Struct(StructType::new(vec![
-                            NestedField::optional(4, "vv", Type::Variant(VariantType)).into(),
+                            NestedField::optional(4, "vv", Type::Variant(VariantType))
+                                .expect("valid nested field")
+                                .into(),
                         ])),
                     )
+                    .expect("valid nested field")
                     .into(),
                     NestedField::required(
                         5,
                         "m",
-                        Type::Map(crate::spec::MapType::required(
-                            6,
-                            Type::Primitive(PrimitiveType::String),
-                            7,
-                            Type::Variant(VariantType),
-                        )),
+                        Type::Map(
+                            crate::spec::MapType::required(
+                                6,
+                                Type::Primitive(PrimitiveType::String),
+                                7,
+                                Type::Variant(VariantType),
+                            )
+                            .expect("valid nested field"),
+                        ),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -688,8 +704,12 @@ message schema {
             Schema::builder()
                 .with_schema_id(2)
                 .with_fields(vec![
-                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(2, "b", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(2, "b", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -783,8 +803,12 @@ message schema {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "name", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::required(2, "age", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "name", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::required(2, "age", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -883,10 +907,17 @@ message schema {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
-                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::optional(3, "dept", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(3, "dept", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
                     NestedField::optional(4, "subdept", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
                         .into(),
                 ])
                 .build()
@@ -985,10 +1016,17 @@ message schema {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
-                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::optional(3, "dept", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(3, "dept", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
                     NestedField::optional(4, "subdept", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
                         .into(),
                 ])
                 .build()
@@ -1086,10 +1124,18 @@ message schema {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "col1", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::required(3, "col3", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::required(4, "col4", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "col1", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::required(3, "col3", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::required(4, "col4", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1181,9 +1227,15 @@ message schema {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "name", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::required(2, "age", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(3, "city", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::required(1, "name", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::required(2, "age", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(3, "city", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1275,8 +1327,12 @@ message schema {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "name", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::required(2, "value", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "name", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::required(2, "value", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1383,7 +1439,9 @@ message schema {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                     NestedField::required(
                         2,
                         "person",
@@ -1393,11 +1451,14 @@ message schema {
                                 "name",
                                 Type::Primitive(PrimitiveType::String),
                             )
+                            .expect("valid nested field")
                             .into(),
                             NestedField::required(4, "age", Type::Primitive(PrimitiveType::Int))
+                                .expect("valid nested field")
                                 .into(),
                         ])),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -1518,9 +1579,15 @@ message schema {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::optional(1, "col0", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(5, "newCol", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(2, "col1", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(1, "col0", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(5, "newCol", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(2, "col1", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1612,9 +1679,14 @@ message schema {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
                     NestedField::required(3, "value", Type::Primitive(PrimitiveType::Double))
+                        .expect("valid nested field")
                         .into(),
                 ])
                 .build()
@@ -1746,8 +1818,12 @@ message schema {
             Schema::builder()
                 .with_schema_id(0)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1937,11 +2013,14 @@ message schema {
                                 "name",
                                 Type::Primitive(PrimitiveType::String),
                             )
+                            .expect("valid nested field")
                             .into(),
                             NestedField::required(6, "age", Type::Primitive(PrimitiveType::Int))
+                                .expect("valid nested field")
                                 .into(),
                         ])),
                     )
+                    .expect("valid nested field")
                     .into(),
                     NestedField::required(
                         2,
@@ -1956,18 +2035,22 @@ message schema {
                                         "name",
                                         Type::Primitive(PrimitiveType::String),
                                     )
+                                    .expect("valid nested field")
                                     .into(),
                                     NestedField::required(
                                         9,
                                         "age",
                                         Type::Primitive(PrimitiveType::Int),
                                     )
+                                    .expect("valid nested field")
                                     .into(),
                                 ])),
                             )
+                            .expect("valid nested field")
                             .into(),
                         }),
                     )
+                    .expect("valid nested field")
                     .into(),
                     NestedField::required(
                         3,
@@ -1978,17 +2061,22 @@ message schema {
                                 "key",
                                 Type::Primitive(PrimitiveType::String),
                             )
+                            .expect("valid nested field")
                             .into(),
                             value_field: NestedField::required(
                                 11,
                                 "value",
                                 Type::Primitive(PrimitiveType::String),
                             )
+                            .expect("valid nested field")
                             .into(),
                         }),
                     )
+                    .expect("valid nested field")
                     .into(),
-                    NestedField::required(4, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(4, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),

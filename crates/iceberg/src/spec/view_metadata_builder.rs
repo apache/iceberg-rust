@@ -1133,21 +1133,27 @@ mod test {
         let schema_one = Schema::builder()
             .with_schema_id(5)
             .with_fields(vec![
-                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
         let schema_two = Schema::builder()
             .with_schema_id(7)
             .with_fields(vec![
-                NestedField::required(1, "y", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(1, "y", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
         let schema_three = Schema::builder()
             .with_schema_id(9)
             .with_fields(vec![
-                NestedField::required(1, "z", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(1, "z", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();

@@ -75,18 +75,18 @@ impl AddColumn {
             .build()
     }
 
-    fn to_nested_field(&self) -> NestedFieldRef {
-        let mut field = NestedField::new(
-            DEFAULT_FIELD_ID,
-            self.name.clone(),
-            self.field_type.clone(),
-            self.required,
-        );
-
-        field.doc = self.doc.clone();
-        field.initial_default = self.initial_default.clone();
-        field.write_default = self.write_default.clone();
-        Arc::new(field)
+    fn to_nested_field(&self) -> Result<NestedFieldRef> {
+        Ok(Arc::new(
+            NestedField::builder()
+                .id(DEFAULT_FIELD_ID)
+                .name(self.name.clone())
+                .field_type(self.field_type.clone())
+                .required(self.required)
+                .doc_opt(self.doc.clone())
+                .initial_default_opt(self.initial_default.clone())
+                .write_default_opt(self.write_default.clone())
+                .build()?,
+        ))
     }
 }
 
@@ -160,52 +160,44 @@ impl UpdateSchemaAction {
 /// IDs rather than reassigning an existing schema. `ReassignFieldIds` cannot be used
 /// directly here because it rejects duplicate old IDs (all new fields share placeholder
 /// ID `DEFAULT_FIELD_ID`).
-fn assign_fresh_ids(field: &NestedField, next_id: &mut i32) -> NestedFieldRef {
+fn assign_fresh_ids(field: &NestedField, next_id: &mut i32) -> Result<NestedFieldRef> {
     *next_id += 1;
     let new_id = *next_id;
-    let new_type = assign_fresh_ids_to_type(&field.field_type, next_id);
+    let new_type = assign_fresh_ids_to_type(field.field_type(), next_id)?;
 
-    Arc::new(NestedField {
-        id: new_id,
-        name: field.name.clone(),
-        required: field.required,
-        field_type: Box::new(new_type),
-        doc: field.doc.clone(),
-        initial_default: field.initial_default.clone(),
-        write_default: field.write_default.clone(),
-    })
+    Ok(Arc::new(field.rebuild(new_id, new_type)?))
 }
 
 /// Recursively assign fresh field IDs to all nested fields within a `Type`.
-fn assign_fresh_ids_to_type(field_type: &Type, next_id: &mut i32) -> Type {
-    match field_type {
+fn assign_fresh_ids_to_type(field_type: &Type, next_id: &mut i32) -> Result<Type> {
+    Ok(match field_type {
         Type::Primitive(_) => field_type.clone(),
         // Variant carries no nested fields, so there is nothing to reassign
         // (matches id_reassigner.rs).
         Type::Variant(v) => Type::Variant(*v),
         Type::Struct(struct_type) => {
-            let new_fields: Vec<NestedFieldRef> = struct_type
+            let new_fields = struct_type
                 .fields()
                 .iter()
                 .map(|f| assign_fresh_ids(f, next_id))
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
             Type::Struct(StructType::new(new_fields))
         }
         Type::List(list_type) => {
-            let new_element = assign_fresh_ids(&list_type.element_field, next_id);
+            let new_element = assign_fresh_ids(&list_type.element_field, next_id)?;
             Type::List(ListType {
                 element_field: new_element,
             })
         }
         Type::Map(map_type) => {
-            let new_key = assign_fresh_ids(&map_type.key_field, next_id);
-            let new_value = assign_fresh_ids(&map_type.value_field, next_id);
+            let new_key = assign_fresh_ids(&map_type.key_field, next_id)?;
+            let new_value = assign_fresh_ids(&map_type.value_field, next_id)?;
             Type::Map(MapType {
                 key_field: new_key,
                 value_field: new_value,
             })
         }
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -229,17 +221,17 @@ fn resolve_parent_target<'a>(
                 format!("Cannot add column: parent '{parent}' not found"),
             )
         })
-        .and_then(|parent_field| match parent_field.field_type.as_ref() {
-            Type::Struct(s) => Ok((parent_field.id, s)),
-            Type::Map(m) => match m.value_field.field_type.as_ref() {
-                Type::Struct(s) => Ok((m.value_field.id, s)),
+        .and_then(|parent_field| match parent_field.field_type() {
+            Type::Struct(s) => Ok((parent_field.id(), s)),
+            Type::Map(m) => match m.value_field.field_type() {
+                Type::Struct(s) => Ok((m.value_field.id(), s)),
                 _ => Err(Error::new(
                     ErrorKind::PreconditionFailed,
                     format!("Cannot add column: map value of '{parent}' is not a struct"),
                 )),
             },
-            Type::List(l) => match l.element_field.field_type.as_ref() {
-                Type::Struct(s) => Ok((l.element_field.id, s)),
+            Type::List(l) => match l.element_field.field_type() {
+                Type::Struct(s) => Ok((l.element_field.id(), s)),
                 _ => Err(Error::new(
                     ErrorKind::PreconditionFailed,
                     format!("Cannot add column: list element of '{parent}' is not a struct"),
@@ -263,13 +255,14 @@ fn rebuild_fields(
     adds: &HashMap<Option<i32>, Vec<NestedFieldRef>>,
     delete_ids: &HashSet<i32>,
     parent_id: Option<i32>,
-) -> Vec<NestedFieldRef> {
-    fields
+) -> Result<Vec<NestedFieldRef>> {
+    let mut rebuilt = fields
         .iter()
-        .filter(|f| !delete_ids.contains(&f.id))
+        .filter(|f| !delete_ids.contains(&f.id()))
         .map(|f| rebuild_field(f, adds, delete_ids))
-        .chain(adds.get(&parent_id).into_iter().flatten().cloned())
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    rebuilt.extend(adds.get(&parent_id).into_iter().flatten().cloned());
+    Ok(rebuilt)
 }
 
 /// Recursively rebuild a single field. If the field (or any descendant) is a struct
@@ -279,52 +272,34 @@ fn rebuild_field(
     field: &NestedFieldRef,
     adds: &HashMap<Option<i32>, Vec<NestedFieldRef>>,
     delete_ids: &HashSet<i32>,
-) -> NestedFieldRef {
-    match field.field_type.as_ref() {
+) -> Result<NestedFieldRef> {
+    Ok(match field.field_type() {
         Type::Primitive(_) | Type::Variant(_) => field.clone(),
         Type::Struct(s) => {
-            let new_fields = rebuild_fields(s.fields(), adds, delete_ids, Some(field.id));
-            Arc::new(NestedField {
-                id: field.id,
-                name: field.name.clone(),
-                required: field.required,
-                field_type: Box::new(Type::Struct(StructType::new(new_fields))),
-                doc: field.doc.clone(),
-                initial_default: field.initial_default.clone(),
-                write_default: field.write_default.clone(),
-            })
+            let new_fields = rebuild_fields(s.fields(), adds, delete_ids, Some(field.id()))?;
+            Arc::new(field.rebuild(field.id(), Type::Struct(StructType::new(new_fields)))?)
         }
         Type::List(l) => {
-            let new_element = rebuild_field(&l.element_field, adds, delete_ids);
-            Arc::new(NestedField {
-                id: field.id,
-                name: field.name.clone(),
-                required: field.required,
-                field_type: Box::new(Type::List(ListType {
+            let new_element = rebuild_field(&l.element_field, adds, delete_ids)?;
+            Arc::new(field.rebuild(
+                field.id(),
+                Type::List(ListType {
                     element_field: new_element,
-                })),
-                doc: field.doc.clone(),
-                initial_default: field.initial_default.clone(),
-                write_default: field.write_default.clone(),
-            })
+                }),
+            )?)
         }
         Type::Map(m) => {
-            let new_key = rebuild_field(&m.key_field, adds, delete_ids);
-            let new_value = rebuild_field(&m.value_field, adds, delete_ids);
-            Arc::new(NestedField {
-                id: field.id,
-                name: field.name.clone(),
-                required: field.required,
-                field_type: Box::new(Type::Map(MapType {
+            let new_key = rebuild_field(&m.key_field, adds, delete_ids)?;
+            let new_value = rebuild_field(&m.value_field, adds, delete_ids)?;
+            Arc::new(field.rebuild(
+                field.id(),
+                Type::Map(MapType {
                     key_field: new_key,
                     value_field: new_value,
-                })),
-                doc: field.doc.clone(),
-                initial_default: field.initial_default.clone(),
-                write_default: field.write_default.clone(),
-            })
+                }),
+            )?)
         }
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -353,13 +328,13 @@ impl TransactionAction for UpdateSchemaAction {
                     .and_then(|field| {
                         match base_schema
                             .identifier_field_ids()
-                            .find(|id| *id == field.id)
+                            .find(|id| *id == field.id())
                         {
                             Some(_) => Err(Error::new(
                                 ErrorKind::PreconditionFailed,
                                 format!("Cannot delete identifier field: {name}"),
                             )),
-                            None => Ok(field.id),
+                            None => Ok(field.id()),
                         }
                     })
             })
@@ -371,26 +346,26 @@ impl TransactionAction for UpdateSchemaAction {
         let mut additions_by_parent: HashMap<Option<i32>, Vec<NestedFieldRef>> = HashMap::new();
 
         for add in &self.additions {
-            let pending_field = add.to_nested_field();
+            let pending_field = add.to_nested_field()?;
 
             // Check that name does not contain `SCHEMA_NAME_DELIMITER`.
-            if pending_field.name.contains(SCHEMA_NAME_DELIMITER) {
+            if pending_field.name().contains(SCHEMA_NAME_DELIMITER) {
                 return Err(Error::new(
                     ErrorKind::PreconditionFailed,
                     format!(
                         "Cannot add column with ambiguous name: {}. Use `AddColumn::with_parent` to add a column to a nested struct.",
-                        pending_field.name
+                        pending_field.name()
                     ),
                 ));
             }
 
             // Required columns without an initial default need allow_incompatible_changes.
-            if pending_field.required && pending_field.initial_default.is_none() {
+            if pending_field.is_required() && pending_field.initial_default().is_none() {
                 return Err(Error::new(
                     ErrorKind::PreconditionFailed,
                     format!(
                         "Incompatible change: cannot add required column without an initial default: {}",
-                        pending_field.name
+                        pending_field.name()
                     ),
                 ));
             }
@@ -398,14 +373,14 @@ impl TransactionAction for UpdateSchemaAction {
             let parent_id = match &add.parent {
                 None => {
                     // Root-level: check name conflict against root-level fields.
-                    if let Some(existing) = base_schema.field_by_name(&pending_field.name)
-                        && !delete_ids.contains(&existing.id)
+                    if let Some(existing) = base_schema.field_by_name(pending_field.name())
+                        && !delete_ids.contains(&existing.id())
                     {
                         return Err(Error::new(
                             ErrorKind::PreconditionFailed,
                             format!(
                                 "Cannot add column, name already exists: {}",
-                                pending_field.name
+                                pending_field.name()
                             ),
                         ));
                     }
@@ -417,15 +392,16 @@ impl TransactionAction for UpdateSchemaAction {
                         resolve_parent_target(base_schema, parent_path)?;
 
                     if parent_struct.fields().iter().any(|f| {
-                        f.name == pending_field.name
-                            && !delete_ids.contains(&f.id)
+                        f.name() == pending_field.name()
+                            && !delete_ids.contains(&f.id())
                             && !delete_ids.contains(&resolved_parent_id)
                     }) {
                         return Err(Error::new(
                             ErrorKind::PreconditionFailed,
                             format!(
                                 "Cannot add column, name already exists in '{}': {}",
-                                parent_path, pending_field.name
+                                parent_path,
+                                pending_field.name()
                             ),
                         ));
                     }
@@ -435,7 +411,7 @@ impl TransactionAction for UpdateSchemaAction {
             };
 
             // Assign fresh IDs immediately, preserving insertion order.
-            let field = assign_fresh_ids(&pending_field, &mut last_column_id);
+            let field = assign_fresh_ids(&pending_field, &mut last_column_id)?;
 
             additions_by_parent
                 .entry(parent_id)
@@ -449,7 +425,7 @@ impl TransactionAction for UpdateSchemaAction {
             &additions_by_parent,
             &delete_ids,
             None,
-        );
+        )?;
 
         // --- 5. Build the new schema ---
         let schema = Schema::builder()
@@ -600,11 +576,12 @@ mod tests {
         // Variant carries no sub-fields, so fresh-id assignment only renames the field
         // itself and leaves the type untouched.
         let mut next_id = 10;
-        let field = NestedField::optional(1, "data", Type::Variant(VariantType));
-        let assigned = super::assign_fresh_ids(&field, &mut next_id);
+        let field = NestedField::optional(1, "data", Type::Variant(VariantType))
+            .expect("valid nested field");
+        let assigned = super::assign_fresh_ids(&field, &mut next_id).unwrap();
 
-        assert_eq!(assigned.id, 11);
-        assert_eq!(*assigned.field_type, Type::Variant(VariantType));
+        assert_eq!(assigned.id(), 11);
+        assert_eq!(assigned.field_type(), &Type::Variant(VariantType));
         assert_eq!(next_id, 11);
     }
 
@@ -638,7 +615,9 @@ mod tests {
             .into_builder()
             .with_schema_id(DEFAULT_SCHEMA_ID)
             .with_fields([
-                NestedField::optional(4, "new_col", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(4, "new_col", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -677,9 +656,9 @@ mod tests {
         let field = new_schema
             .field_by_name("documented_col")
             .expect("documented_col should exist");
-        assert_eq!(field.id, 4);
-        assert!(!field.required);
-        assert_eq!(field.doc.as_deref(), Some("A documented column"));
+        assert_eq!(field.id(), 4);
+        assert!(!field.is_required());
+        assert_eq!(field.doc(), Some("A documented column"));
     }
 
     #[tokio::test]
@@ -704,10 +683,10 @@ mod tests {
         let field = new_schema
             .field_by_name("req_col")
             .expect("req_col should exist");
-        assert_eq!(field.id, 4);
-        assert!(field.required);
-        assert_eq!(field.initial_default, Some(Literal::int(0)));
-        assert_eq!(field.write_default, Some(Literal::int(0)));
+        assert_eq!(field.id(), 4);
+        assert!(field.is_required());
+        assert_eq!(field.initial_default(), Some(&Literal::int(0)));
+        assert_eq!(field.write_default(), Some(&Literal::int(0)));
     }
 
     #[tokio::test]
@@ -805,8 +784,8 @@ mod tests {
             "z should be deleted"
         );
         let w = new_schema.field_by_name("w").expect("w should exist");
-        assert_eq!(w.id, 4);
-        assert!(!w.required);
+        assert_eq!(w.id(), 4);
+        assert!(!w.is_required());
     }
 
     #[tokio::test]
@@ -834,8 +813,8 @@ mod tests {
         let z = new_schema
             .field_by_name("z")
             .expect("z should exist with new type");
-        assert_eq!(z.id, 4); // new ID, not the old 3
-        assert_eq!(*z.field_type, Type::Primitive(PrimitiveType::Boolean));
+        assert_eq!(z.id(), 4); // new ID, not the old 3
+        assert_eq!(*z.field_type(), Type::Primitive(PrimitiveType::Boolean));
     }
 
     #[test]
@@ -888,9 +867,9 @@ mod tests {
         let email = new_schema
             .field_by_name("person.email")
             .expect("person.email should exist");
-        assert_eq!(email.id, 15);
-        assert!(!email.required);
-        assert_eq!(*email.field_type, Type::Primitive(PrimitiveType::String));
+        assert_eq!(email.id(), 15);
+        assert!(!email.is_required());
+        assert_eq!(*email.field_type(), Type::Primitive(PrimitiveType::String));
 
         // Original nested fields should still be there.
         assert!(new_schema.field_by_name("person.name").is_some());
@@ -922,8 +901,8 @@ mod tests {
         let phone = new_schema
             .field_by_name("person.phone")
             .expect("person.phone should exist");
-        assert_eq!(phone.id, 15);
-        assert_eq!(phone.doc.as_deref(), Some("Phone number"));
+        assert_eq!(phone.id(), 15);
+        assert_eq!(phone.doc(), Some("Phone number"));
     }
 
     #[tokio::test]
@@ -953,8 +932,8 @@ mod tests {
         let score = new_schema
             .field_by_name("tags.element.score")
             .expect("tags.element.score should exist");
-        assert_eq!(score.id, 15);
-        assert!(!score.required);
+        assert_eq!(score.id(), 15);
+        assert!(!score.is_required());
 
         // Existing fields preserved.
         assert!(new_schema.field_by_name("tags.element.key").is_some());
@@ -987,7 +966,7 @@ mod tests {
         let version = new_schema
             .field_by_name("props.value.version")
             .expect("props.value.version should exist");
-        assert_eq!(version.id, 15);
+        assert_eq!(version.id(), 15);
 
         // Existing map value fields preserved.
         assert!(new_schema.field_by_name("props.value.data").is_some());
@@ -1102,13 +1081,13 @@ mod tests {
         let root_col = new_schema
             .field_by_name("root_col")
             .expect("root_col should exist");
-        assert_eq!(root_col.id, 15);
+        assert_eq!(root_col.id(), 15);
 
         // Nested column gets the next ID.
         let email = new_schema
             .field_by_name("person.email")
             .expect("person.email should exist");
-        assert_eq!(email.id, 16);
+        assert_eq!(email.id(), 16);
     }
 
     #[tokio::test]
@@ -1126,12 +1105,14 @@ mod tests {
                     "street",
                     Type::Primitive(PrimitiveType::String),
                 )
+                .expect("valid nested field")
                 .into(),
                 NestedField::optional(
                     DEFAULT_FIELD_ID,
                     "city",
                     Type::Primitive(PrimitiveType::String),
                 )
+                .expect("valid nested field")
                 .into(),
             ])),
         ));
@@ -1148,17 +1129,17 @@ mod tests {
         let address = new_schema
             .field_by_name("address")
             .expect("address should exist");
-        assert_eq!(address.id, 4);
+        assert_eq!(address.id(), 4);
 
         // Sub-fields get IDs 5 and 6.
         let street = new_schema
             .field_by_name("address.street")
             .expect("address.street should exist");
-        assert_eq!(street.id, 5);
+        assert_eq!(street.id(), 5);
 
         let city = new_schema
             .field_by_name("address.city")
             .expect("address.city should exist");
-        assert_eq!(city.id, 6);
+        assert_eq!(city.id(), 6);
     }
 }

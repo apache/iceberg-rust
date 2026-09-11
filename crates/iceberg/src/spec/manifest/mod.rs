@@ -183,69 +183,81 @@ mod tests {
             Schema::builder()
                 .with_fields(vec![
                     // id v_int v_long v_float v_double v_varchar v_bool v_date v_timestamp v_decimal v_ts_ntz
-                    Arc::new(NestedField::optional(
-                        1,
-                        "id",
-                        Type::Primitive(PrimitiveType::Long),
-                    )),
-                    Arc::new(NestedField::optional(
-                        2,
-                        "v_int",
-                        Type::Primitive(PrimitiveType::Int),
-                    )),
-                    Arc::new(NestedField::optional(
-                        3,
-                        "v_long",
-                        Type::Primitive(PrimitiveType::Long),
-                    )),
-                    Arc::new(NestedField::optional(
-                        4,
-                        "v_float",
-                        Type::Primitive(PrimitiveType::Float),
-                    )),
-                    Arc::new(NestedField::optional(
-                        5,
-                        "v_double",
-                        Type::Primitive(PrimitiveType::Double),
-                    )),
-                    Arc::new(NestedField::optional(
-                        6,
-                        "v_varchar",
-                        Type::Primitive(PrimitiveType::String),
-                    )),
-                    Arc::new(NestedField::optional(
-                        7,
-                        "v_bool",
-                        Type::Primitive(PrimitiveType::Boolean),
-                    )),
-                    Arc::new(NestedField::optional(
-                        8,
-                        "v_date",
-                        Type::Primitive(PrimitiveType::Date),
-                    )),
-                    Arc::new(NestedField::optional(
-                        9,
-                        "v_timestamp",
-                        Type::Primitive(PrimitiveType::Timestamptz),
-                    )),
-                    Arc::new(NestedField::optional(
-                        10,
-                        "v_decimal",
-                        Type::Primitive(PrimitiveType::Decimal {
-                            precision: 36,
-                            scale: 10,
-                        }),
-                    )),
-                    Arc::new(NestedField::optional(
-                        11,
-                        "v_ts_ntz",
-                        Type::Primitive(PrimitiveType::Timestamp),
-                    )),
-                    Arc::new(NestedField::optional(
-                        12,
-                        "v_ts_ns_ntz",
-                        Type::Primitive(PrimitiveType::TimestampNs),
-                    )),
+                    Arc::new(
+                        NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(2, "v_int", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(3, "v_long", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(4, "v_float", Type::Primitive(PrimitiveType::Float))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(
+                            5,
+                            "v_double",
+                            Type::Primitive(PrimitiveType::Double),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(
+                            6,
+                            "v_varchar",
+                            Type::Primitive(PrimitiveType::String),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(7, "v_bool", Type::Primitive(PrimitiveType::Boolean))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(8, "v_date", Type::Primitive(PrimitiveType::Date))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(
+                            9,
+                            "v_timestamp",
+                            Type::Primitive(PrimitiveType::Timestamptz),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(
+                            10,
+                            "v_decimal",
+                            Type::Primitive(PrimitiveType::Decimal {
+                                precision: 36,
+                                scale: 10,
+                            }),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(
+                            11,
+                            "v_ts_ntz",
+                            Type::Primitive(PrimitiveType::Timestamp),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(
+                            12,
+                            "v_ts_ns_ntz",
+                            Type::Primitive(PrimitiveType::TimestampNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -300,11 +312,10 @@ mod tests {
     fn test_parse_snappy_manifest_v2() {
         let schema = Arc::new(
             Schema::builder()
-                .with_fields(vec![Arc::new(NestedField::optional(
-                    1,
-                    "id",
-                    Type::Primitive(PrimitiveType::Long),
-                ))])
+                .with_fields(vec![Arc::new(
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field"),
+                )])
                 .build()
                 .unwrap(),
         );
@@ -422,69 +433,81 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::optional(
-                        1,
-                        "id",
-                        Type::Primitive(PrimitiveType::Long),
-                    )),
-                    Arc::new(NestedField::optional(
-                        2,
-                        "v_int",
-                        Type::Primitive(PrimitiveType::Int),
-                    )),
-                    Arc::new(NestedField::optional(
-                        3,
-                        "v_long",
-                        Type::Primitive(PrimitiveType::Long),
-                    )),
-                    Arc::new(NestedField::optional(
-                        4,
-                        "v_float",
-                        Type::Primitive(PrimitiveType::Float),
-                    )),
-                    Arc::new(NestedField::optional(
-                        5,
-                        "v_double",
-                        Type::Primitive(PrimitiveType::Double),
-                    )),
-                    Arc::new(NestedField::optional(
-                        6,
-                        "v_varchar",
-                        Type::Primitive(PrimitiveType::String),
-                    )),
-                    Arc::new(NestedField::optional(
-                        7,
-                        "v_bool",
-                        Type::Primitive(PrimitiveType::Boolean),
-                    )),
-                    Arc::new(NestedField::optional(
-                        8,
-                        "v_date",
-                        Type::Primitive(PrimitiveType::Date),
-                    )),
-                    Arc::new(NestedField::optional(
-                        9,
-                        "v_timestamp",
-                        Type::Primitive(PrimitiveType::Timestamptz),
-                    )),
-                    Arc::new(NestedField::optional(
-                        10,
-                        "v_decimal",
-                        Type::Primitive(PrimitiveType::Decimal {
-                            precision: 36,
-                            scale: 10,
-                        }),
-                    )),
-                    Arc::new(NestedField::optional(
-                        11,
-                        "v_ts_ntz",
-                        Type::Primitive(PrimitiveType::Timestamp),
-                    )),
-                    Arc::new(NestedField::optional(
-                        12,
-                        "v_ts_ns_ntz",
-                        Type::Primitive(PrimitiveType::TimestampNs),
-                    )),
+                    Arc::new(
+                        NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(2, "v_int", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(3, "v_long", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(4, "v_float", Type::Primitive(PrimitiveType::Float))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(
+                            5,
+                            "v_double",
+                            Type::Primitive(PrimitiveType::Double),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(
+                            6,
+                            "v_varchar",
+                            Type::Primitive(PrimitiveType::String),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(7, "v_bool", Type::Primitive(PrimitiveType::Boolean))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(8, "v_date", Type::Primitive(PrimitiveType::Date))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(
+                            9,
+                            "v_timestamp",
+                            Type::Primitive(PrimitiveType::Timestamptz),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(
+                            10,
+                            "v_decimal",
+                            Type::Primitive(PrimitiveType::Decimal {
+                                precision: 36,
+                                scale: 10,
+                            }),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(
+                            11,
+                            "v_ts_ntz",
+                            Type::Primitive(PrimitiveType::Timestamp),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(
+                            12,
+                            "v_ts_ns_ntz",
+                            Type::Primitive(PrimitiveType::TimestampNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -612,21 +635,18 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    Arc::new(NestedField::optional(
-                        1,
-                        "id",
-                        Type::Primitive(PrimitiveType::Int),
-                    )),
-                    Arc::new(NestedField::optional(
-                        2,
-                        "data",
-                        Type::Primitive(PrimitiveType::String),
-                    )),
-                    Arc::new(NestedField::optional(
-                        3,
-                        "comment",
-                        Type::Primitive(PrimitiveType::String),
-                    )),
+                    Arc::new(
+                        NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(2, "data", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(3, "comment", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -702,21 +722,22 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::optional(
-                        1,
-                        "id",
-                        Type::Primitive(PrimitiveType::Long),
-                    )),
-                    Arc::new(NestedField::optional(
-                        2,
-                        "data",
-                        Type::Primitive(PrimitiveType::String),
-                    )),
-                    Arc::new(NestedField::optional(
-                        3,
-                        "category",
-                        Type::Primitive(PrimitiveType::String),
-                    )),
+                    Arc::new(
+                        NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(2, "data", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(
+                            3,
+                            "category",
+                            Type::Primitive(PrimitiveType::String),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -820,16 +841,14 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::optional(
-                        1,
-                        "id",
-                        Type::Primitive(PrimitiveType::Long),
-                    )),
-                    Arc::new(NestedField::optional(
-                        2,
-                        "v_int",
-                        Type::Primitive(PrimitiveType::Int),
-                    )),
+                    Arc::new(
+                        NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(2, "v_int", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -914,16 +933,14 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::optional(
-                        1,
-                        "id",
-                        Type::Primitive(PrimitiveType::Long),
-                    )),
-                    Arc::new(NestedField::optional(
-                        2,
-                        "v_int",
-                        Type::Primitive(PrimitiveType::Int),
-                    )),
+                    Arc::new(
+                        NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(2, "v_int", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -985,21 +1002,22 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::optional(
-                        1,
-                        "time",
-                        Type::Primitive(PrimitiveType::Date),
-                    )),
-                    Arc::new(NestedField::optional(
-                        2,
-                        "v_float",
-                        Type::Primitive(PrimitiveType::Float),
-                    )),
-                    Arc::new(NestedField::optional(
-                        3,
-                        "v_double",
-                        Type::Primitive(PrimitiveType::Double),
-                    )),
+                    Arc::new(
+                        NestedField::optional(1, "time", Type::Primitive(PrimitiveType::Date))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(2, "v_float", Type::Primitive(PrimitiveType::Float))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(
+                            3,
+                            "v_double",
+                            Type::Primitive(PrimitiveType::Double),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -1225,8 +1243,12 @@ mod tests {
             .with_schema_id(1)
             .with_identifier_field_ids(vec![1])
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();

@@ -189,16 +189,14 @@ mod tests {
     fn create_test_table() -> Table {
         let schema = Schema::builder()
             .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "id",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-                Arc::new(NestedField::required(
-                    2,
-                    "data",
-                    Type::Primitive(PrimitiveType::String),
-                )),
+                Arc::new(
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::required(2, "data", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field"),
+                ),
             ])
             .build()
             .unwrap();
@@ -330,16 +328,14 @@ mod tests {
     async fn test_bucket_aware_partitioning() {
         let schema = Schema::builder()
             .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "id",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-                Arc::new(NestedField::required(
-                    2,
-                    "category",
-                    Type::Primitive(PrimitiveType::String),
-                )),
+                Arc::new(
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::required(2, "category", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field"),
+                ),
             ])
             .build()
             .unwrap();
@@ -404,21 +400,18 @@ mod tests {
     async fn test_combined_partition_and_bucket_strategy() {
         let schema = Schema::builder()
             .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "date",
-                    Type::Primitive(PrimitiveType::Date),
-                )),
-                Arc::new(NestedField::required(
-                    2,
-                    "user_id",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-                Arc::new(NestedField::required(
-                    3,
-                    "amount",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
+                Arc::new(
+                    NestedField::required(1, "date", Type::Primitive(PrimitiveType::Date))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::required(2, "user_id", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::required(3, "amount", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field"),
+                ),
             ])
             .build()
             .unwrap();
@@ -504,11 +497,10 @@ mod tests {
     #[tokio::test]
     async fn test_none_distribution_mode_fallback() {
         let schema = Schema::builder()
-            .with_fields(vec![Arc::new(NestedField::required(
-                1,
-                "id",
-                Type::Primitive(PrimitiveType::Long),
-            ))])
+            .with_fields(vec![Arc::new(
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field"),
+            )])
             .build()
             .unwrap();
 
@@ -568,16 +560,14 @@ mod tests {
     async fn test_range_only_partitions_use_round_robin() {
         let schema = Schema::builder()
             .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "date",
-                    Type::Primitive(PrimitiveType::Date),
-                )),
-                Arc::new(NestedField::required(
-                    2,
-                    "amount",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
+                Arc::new(
+                    NestedField::required(1, "date", Type::Primitive(PrimitiveType::Date))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::required(2, "amount", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field"),
+                ),
             ])
             .build()
             .unwrap();
@@ -633,21 +623,18 @@ mod tests {
     async fn test_mixed_transforms_use_hash_partitioning() {
         let schema = Schema::builder()
             .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "date",
-                    Type::Primitive(PrimitiveType::Date),
-                )),
-                Arc::new(NestedField::required(
-                    2,
-                    "user_id",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-                Arc::new(NestedField::required(
-                    3,
-                    "amount",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
+                Arc::new(
+                    NestedField::required(1, "date", Type::Primitive(PrimitiveType::Date))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::required(2, "user_id", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::required(3, "amount", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field"),
+                ),
             ])
             .build()
             .unwrap();
@@ -719,16 +706,18 @@ mod tests {
     async fn test_partition_column_with_temporal_transforms_uses_round_robin() {
         let schema = Schema::builder()
             .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "event_time",
-                    Type::Primitive(PrimitiveType::Timestamp),
-                )),
-                Arc::new(NestedField::required(
-                    2,
-                    "amount",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
+                Arc::new(
+                    NestedField::required(
+                        1,
+                        "event_time",
+                        Type::Primitive(PrimitiveType::Timestamp),
+                    )
+                    .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::required(2, "amount", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field"),
+                ),
             ])
             .build()
             .unwrap();
@@ -789,16 +778,14 @@ mod tests {
     async fn test_partition_column_with_identity_transforms_uses_hash() {
         let schema = Schema::builder()
             .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "user_id",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-                Arc::new(NestedField::required(
-                    2,
-                    "amount",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
+                Arc::new(
+                    NestedField::required(1, "user_id", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::required(2, "amount", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field"),
+                ),
             ])
             .build()
             .unwrap();

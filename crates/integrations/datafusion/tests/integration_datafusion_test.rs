@@ -56,8 +56,12 @@ async fn get_iceberg_catalog() -> MemoryCatalog {
 
 fn get_struct_type() -> StructType {
     StructType::new(vec![
-        NestedField::required(4, "s_foo1", Type::Primitive(PrimitiveType::Int)).into(),
-        NestedField::required(5, "s_foo2", Type::Primitive(PrimitiveType::String)).into(),
+        NestedField::required(4, "s_foo1", Type::Primitive(PrimitiveType::Int))
+            .expect("valid nested field")
+            .into(),
+        NestedField::required(5, "s_foo2", Type::Primitive(PrimitiveType::String))
+            .expect("valid nested field")
+            .into(),
     ])
 }
 
@@ -78,8 +82,12 @@ fn get_table_creation(
         None => Schema::builder()
             .with_schema_id(0)
             .with_fields(vec![
-                NestedField::required(1, "foo1", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "foo2", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "foo1", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "foo2", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()?,
         Some(schema) => schema,
@@ -215,9 +223,15 @@ async fn test_table_projection() -> Result<()> {
     let schema = Schema::builder()
         .with_schema_id(0)
         .with_fields(vec![
-            NestedField::required(1, "foo1", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::required(2, "foo2", Type::Primitive(PrimitiveType::String)).into(),
-            NestedField::optional(3, "foo3", Type::Struct(get_struct_type())).into(),
+            NestedField::required(1, "foo1", Type::Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
+            NestedField::required(2, "foo2", Type::Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
+            NestedField::optional(3, "foo3", Type::Struct(get_struct_type()))
+                .expect("valid nested field")
+                .into(),
         ])
         .build()?;
     let creation = get_table_creation(temp_path(), "t1", Some(schema))?;
@@ -283,8 +297,12 @@ async fn test_table_predict_pushdown() -> Result<()> {
     let schema = Schema::builder()
         .with_schema_id(0)
         .with_fields(vec![
-            NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
+            NestedField::optional(2, "bar", Type::Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
         ])
         .build()?;
     let creation = get_table_creation(temp_path(), "t1", Some(schema))?;
@@ -328,8 +346,12 @@ async fn test_metadata_table() -> Result<()> {
     let schema = Schema::builder()
         .with_schema_id(0)
         .with_fields(vec![
-            NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
+            NestedField::optional(2, "bar", Type::Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
         ])
         .build()?;
     let creation = get_table_creation(temp_path(), "t1", Some(schema))?;
@@ -536,20 +558,32 @@ fn get_nested_struct_type() -> StructType {
             10,
             "address",
             Type::Struct(StructType::new(vec![
-                NestedField::optional(11, "street", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::optional(12, "city", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::optional(13, "zip", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(11, "street", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(12, "city", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(13, "zip", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])),
         )
+        .expect("valid nested field")
         .into(),
         NestedField::optional(
             20,
             "contact",
             Type::Struct(StructType::new(vec![
-                NestedField::optional(21, "email", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::optional(22, "phone", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(21, "email", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(22, "phone", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])),
         )
+        .expect("valid nested field")
         .into(),
     ])
 }
@@ -565,9 +599,15 @@ async fn test_insert_into_nested() -> Result<()> {
     let schema = Schema::builder()
         .with_schema_id(0)
         .with_fields(vec![
-            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-            NestedField::optional(3, "profile", Type::Struct(get_nested_struct_type())).into(),
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
+            NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
+            NestedField::optional(3, "profile", Type::Struct(get_nested_struct_type()))
+                .expect("valid nested field")
+                .into(),
         ])
         .build()?;
 
@@ -820,9 +860,15 @@ async fn test_insert_into_partitioned() -> Result<()> {
     let schema = Schema::builder()
         .with_schema_id(0)
         .with_fields(vec![
-            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::required(2, "category", Type::Primitive(PrimitiveType::String)).into(),
-            NestedField::required(3, "value", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
+            NestedField::required(2, "category", Type::Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
+            NestedField::required(3, "value", Type::Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
         ])
         .build()?;
 

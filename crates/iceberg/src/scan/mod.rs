@@ -56,7 +56,7 @@ fn resolve_field_id(schema: &Schema, column_name: &str, case_sensitive: bool) ->
     } else {
         schema
             .field_by_name_case_insensitive(column_name)
-            .map(|field| field.id)
+            .map(|field| field.id())
     }
 }
 
@@ -66,7 +66,7 @@ fn collect_scan_field_ids(
     case_sensitive: bool,
 ) -> Result<Vec<i32>> {
     let Some(column_names) = column_names else {
-        return Ok(schema.as_struct().fields().iter().map(|f| f.id).collect());
+        return Ok(schema.as_struct().fields().iter().map(|f| f.id()).collect());
     };
 
     column_names
@@ -2097,7 +2097,7 @@ pub mod tests {
                     .as_struct()
                     .fields()
                     .iter()
-                    .filter(|field| field.id != 1)
+                    .filter(|field| field.id() != 1)
                     .cloned(),
             )
             .with_identifier_field_ids(vec![2])
@@ -2633,11 +2633,10 @@ pub mod tests {
     fn file_scan_task_test_schema(primitive_type: PrimitiveType) -> Arc<Schema> {
         Arc::new(
             Schema::builder()
-                .with_fields(vec![Arc::new(NestedField::required(
-                    1,
-                    "x",
-                    Type::Primitive(primitive_type),
-                ))])
+                .with_fields(vec![Arc::new(
+                    NestedField::required(1, "x", Type::Primitive(primitive_type))
+                        .expect("valid nested field"),
+                )])
                 .build()
                 .unwrap(),
         )
@@ -3182,8 +3181,12 @@ pub mod tests {
         let schema = Schema::builder()
             .with_schema_id(0)
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, column_name, Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, column_name, Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();

@@ -122,7 +122,7 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
             ));
         };
 
-        let Some(primitive_type) = field.field_type.as_primitive_type() else {
+        let Some(primitive_type) = field.field_type().as_primitive_type() else {
             return Err(Error::new(
                 ErrorKind::Unexpected,
                 format!(
@@ -158,7 +158,7 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
         cmp_fn: fn(&Datum, &Datum) -> bool,
         use_lower_bound: bool,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if self.contains_nulls_only(field_id) {
             return ROW_GROUP_CANT_MATCH;
@@ -212,7 +212,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
     }
 
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         match self.null_count(field_id) {
             Some(0) => ROW_GROUP_CANT_MATCH,
@@ -226,7 +226,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if self.contains_nulls_only(field_id) {
             return ROW_GROUP_CANT_MATCH;
@@ -291,7 +291,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if self.contains_nulls_only(field_id) {
             return ROW_GROUP_CANT_MATCH;
@@ -338,7 +338,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if self.contains_nulls_only(field_id) {
             return ROW_GROUP_CANT_MATCH;
@@ -396,7 +396,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if self.may_contain_null(field_id) {
             return ROW_GROUP_MIGHT_MATCH;
@@ -465,7 +465,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         if self.contains_nulls_only(field_id) {
             return ROW_GROUP_CANT_MATCH;
@@ -1845,18 +1845,19 @@ mod tests {
     fn build_iceberg_schema_and_field_map() -> Result<(Arc<Schema>, HashMap<i32, usize>)> {
         let iceberg_schema = Schema::builder()
             .with_fields([
-                Arc::new(NestedField::new(
-                    1,
-                    "col_float",
-                    Type::Primitive(PrimitiveType::Float),
-                    false,
-                )),
-                Arc::new(NestedField::new(
-                    2,
-                    "col_string",
-                    Type::Primitive(PrimitiveType::String),
-                    false,
-                )),
+                Arc::new(
+                    NestedField::new(1, "col_float", Type::Primitive(PrimitiveType::Float), false)
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::new(
+                        2,
+                        "col_string",
+                        Type::Primitive(PrimitiveType::String),
+                        false,
+                    )
+                    .expect("valid nested field"),
+                ),
             ])
             .build()?;
         let iceberg_schema_ref = Arc::new(iceberg_schema);

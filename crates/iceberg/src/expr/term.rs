@@ -323,7 +323,7 @@ impl Bind for Reference {
             )
         })?;
 
-        let accessor = schema.accessor_by_field_id(field.id).ok_or_else(|| {
+        let accessor = schema.accessor_by_field_id(field.id()).ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
                 format!("Accessor for Field {} not found", self.name),
@@ -396,9 +396,15 @@ mod tests {
                 .with_schema_id(1)
                 .with_identifier_field_ids(vec![2])
                 .with_fields(vec![
-                    NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+                    NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -413,7 +419,9 @@ mod tests {
         let accessor_ref = Arc::new(StructAccessor::new(1, PrimitiveType::Int));
         let expected_ref = BoundReference::new(
             "bar",
-            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
             accessor_ref.clone(),
         );
 
@@ -428,7 +436,9 @@ mod tests {
         let accessor_ref = Arc::new(StructAccessor::new(1, PrimitiveType::Int));
         let expected_ref = BoundReference::new(
             "BAR",
-            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
             accessor_ref.clone(),
         );
 

@@ -68,7 +68,7 @@ impl StrictProjection {
         reference: &BoundReference,
         predicate: &BoundPredicate,
     ) -> Result<Predicate, Error> {
-        let field_id = reference.field().id;
+        let field_id = reference.field().id();
 
         // This could be made a bit neater if `try_reduce` ever becomes stable
         self.get_parts_for_field_id(field_id).iter().try_fold(
@@ -263,31 +263,38 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::required(
-                        1,
-                        "col1",
-                        Type::Primitive(PrimitiveType::Date),
-                    )),
-                    Arc::new(NestedField::required(
-                        2,
-                        "col2",
-                        Type::Primitive(PrimitiveType::Timestamp),
-                    )),
-                    Arc::new(NestedField::required(
-                        3,
-                        "col3",
-                        Type::Primitive(PrimitiveType::Timestamptz),
-                    )),
-                    Arc::new(NestedField::required(
-                        4,
-                        "col4",
-                        Type::Primitive(PrimitiveType::TimestampNs),
-                    )),
-                    Arc::new(NestedField::required(
-                        5,
-                        "col5",
-                        Type::Primitive(PrimitiveType::TimestamptzNs),
-                    )),
+                    Arc::new(
+                        NestedField::required(1, "col1", Type::Primitive(PrimitiveType::Date))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Timestamp))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            3,
+                            "col3",
+                            Type::Primitive(PrimitiveType::Timestamptz),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            4,
+                            "col4",
+                            Type::Primitive(PrimitiveType::TimestampNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            5,
+                            "col5",
+                            Type::Primitive(PrimitiveType::TimestamptzNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -450,31 +457,38 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::required(
-                        1,
-                        "col1",
-                        Type::Primitive(PrimitiveType::Date),
-                    )),
-                    Arc::new(NestedField::required(
-                        2,
-                        "col2",
-                        Type::Primitive(PrimitiveType::Timestamp),
-                    )),
-                    Arc::new(NestedField::required(
-                        3,
-                        "col3",
-                        Type::Primitive(PrimitiveType::Timestamptz),
-                    )),
-                    Arc::new(NestedField::required(
-                        4,
-                        "col4",
-                        Type::Primitive(PrimitiveType::TimestampNs),
-                    )),
-                    Arc::new(NestedField::required(
-                        5,
-                        "col5",
-                        Type::Primitive(PrimitiveType::TimestamptzNs),
-                    )),
+                    Arc::new(
+                        NestedField::required(1, "col1", Type::Primitive(PrimitiveType::Date))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Timestamp))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            3,
+                            "col3",
+                            Type::Primitive(PrimitiveType::Timestamptz),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            4,
+                            "col4",
+                            Type::Primitive(PrimitiveType::TimestampNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            5,
+                            "col5",
+                            Type::Primitive(PrimitiveType::TimestamptzNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -689,31 +703,38 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::required(
-                        1,
-                        "col1",
-                        Type::Primitive(PrimitiveType::Date),
-                    )),
-                    Arc::new(NestedField::required(
-                        2,
-                        "col2",
-                        Type::Primitive(PrimitiveType::Timestamp),
-                    )),
-                    Arc::new(NestedField::required(
-                        3,
-                        "col3",
-                        Type::Primitive(PrimitiveType::Timestamptz),
-                    )),
-                    Arc::new(NestedField::required(
-                        4,
-                        "col4",
-                        Type::Primitive(PrimitiveType::TimestampNs),
-                    )),
-                    Arc::new(NestedField::required(
-                        5,
-                        "col5",
-                        Type::Primitive(PrimitiveType::TimestamptzNs),
-                    )),
+                    Arc::new(
+                        NestedField::required(1, "col1", Type::Primitive(PrimitiveType::Date))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Timestamp))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            3,
+                            "col3",
+                            Type::Primitive(PrimitiveType::Timestamptz),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            4,
+                            "col4",
+                            Type::Primitive(PrimitiveType::TimestampNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            5,
+                            "col5",
+                            Type::Primitive(PrimitiveType::TimestamptzNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -917,31 +938,38 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::required(
-                        1,
-                        "col1",
-                        Type::Primitive(PrimitiveType::Date),
-                    )),
-                    Arc::new(NestedField::required(
-                        2,
-                        "col2",
-                        Type::Primitive(PrimitiveType::Timestamp),
-                    )),
-                    Arc::new(NestedField::required(
-                        3,
-                        "col3",
-                        Type::Primitive(PrimitiveType::Timestamptz),
-                    )),
-                    Arc::new(NestedField::required(
-                        4,
-                        "col4",
-                        Type::Primitive(PrimitiveType::TimestampNs),
-                    )),
-                    Arc::new(NestedField::required(
-                        5,
-                        "col5",
-                        Type::Primitive(PrimitiveType::TimestamptzNs),
-                    )),
+                    Arc::new(
+                        NestedField::required(1, "col1", Type::Primitive(PrimitiveType::Date))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Timestamp))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            3,
+                            "col3",
+                            Type::Primitive(PrimitiveType::Timestamptz),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            4,
+                            "col4",
+                            Type::Primitive(PrimitiveType::TimestampNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            5,
+                            "col5",
+                            Type::Primitive(PrimitiveType::TimestamptzNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -1145,31 +1173,38 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::required(
-                        1,
-                        "col1",
-                        Type::Primitive(PrimitiveType::Date),
-                    )),
-                    Arc::new(NestedField::required(
-                        2,
-                        "col2",
-                        Type::Primitive(PrimitiveType::Timestamp),
-                    )),
-                    Arc::new(NestedField::required(
-                        3,
-                        "col3",
-                        Type::Primitive(PrimitiveType::Timestamptz),
-                    )),
-                    Arc::new(NestedField::required(
-                        4,
-                        "col4",
-                        Type::Primitive(PrimitiveType::TimestampNs),
-                    )),
-                    Arc::new(NestedField::required(
-                        5,
-                        "col5",
-                        Type::Primitive(PrimitiveType::TimestamptzNs),
-                    )),
+                    Arc::new(
+                        NestedField::required(1, "col1", Type::Primitive(PrimitiveType::Date))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Timestamp))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            3,
+                            "col3",
+                            Type::Primitive(PrimitiveType::Timestamptz),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            4,
+                            "col4",
+                            Type::Primitive(PrimitiveType::TimestampNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            5,
+                            "col5",
+                            Type::Primitive(PrimitiveType::TimestamptzNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -1299,31 +1334,38 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::required(
-                        1,
-                        "col1",
-                        Type::Primitive(PrimitiveType::Date),
-                    )),
-                    Arc::new(NestedField::required(
-                        2,
-                        "col2",
-                        Type::Primitive(PrimitiveType::Timestamp),
-                    )),
-                    Arc::new(NestedField::required(
-                        3,
-                        "col3",
-                        Type::Primitive(PrimitiveType::Timestamptz),
-                    )),
-                    Arc::new(NestedField::required(
-                        4,
-                        "col4",
-                        Type::Primitive(PrimitiveType::TimestampNs),
-                    )),
-                    Arc::new(NestedField::required(
-                        5,
-                        "col5",
-                        Type::Primitive(PrimitiveType::TimestamptzNs),
-                    )),
+                    Arc::new(
+                        NestedField::required(1, "col1", Type::Primitive(PrimitiveType::Date))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Timestamp))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            3,
+                            "col3",
+                            Type::Primitive(PrimitiveType::Timestamptz),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            4,
+                            "col4",
+                            Type::Primitive(PrimitiveType::TimestampNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            5,
+                            "col5",
+                            Type::Primitive(PrimitiveType::TimestamptzNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -1527,31 +1569,38 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::required(
-                        1,
-                        "col1",
-                        Type::Primitive(PrimitiveType::Date),
-                    )),
-                    Arc::new(NestedField::required(
-                        2,
-                        "col2",
-                        Type::Primitive(PrimitiveType::Timestamp),
-                    )),
-                    Arc::new(NestedField::required(
-                        3,
-                        "col3",
-                        Type::Primitive(PrimitiveType::Timestamptz),
-                    )),
-                    Arc::new(NestedField::required(
-                        4,
-                        "col4",
-                        Type::Primitive(PrimitiveType::TimestampNs),
-                    )),
-                    Arc::new(NestedField::required(
-                        5,
-                        "col5",
-                        Type::Primitive(PrimitiveType::TimestamptzNs),
-                    )),
+                    Arc::new(
+                        NestedField::required(1, "col1", Type::Primitive(PrimitiveType::Date))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Timestamp))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            3,
+                            "col3",
+                            Type::Primitive(PrimitiveType::Timestamptz),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            4,
+                            "col4",
+                            Type::Primitive(PrimitiveType::TimestampNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            5,
+                            "col5",
+                            Type::Primitive(PrimitiveType::TimestamptzNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -1755,31 +1804,38 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::required(
-                        1,
-                        "col1",
-                        Type::Primitive(PrimitiveType::Date),
-                    )),
-                    Arc::new(NestedField::required(
-                        2,
-                        "col2",
-                        Type::Primitive(PrimitiveType::Timestamp),
-                    )),
-                    Arc::new(NestedField::required(
-                        3,
-                        "col3",
-                        Type::Primitive(PrimitiveType::Timestamptz),
-                    )),
-                    Arc::new(NestedField::required(
-                        4,
-                        "col4",
-                        Type::Primitive(PrimitiveType::TimestampNs),
-                    )),
-                    Arc::new(NestedField::required(
-                        5,
-                        "col5",
-                        Type::Primitive(PrimitiveType::TimestamptzNs),
-                    )),
+                    Arc::new(
+                        NestedField::required(1, "col1", Type::Primitive(PrimitiveType::Date))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Timestamp))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            3,
+                            "col3",
+                            Type::Primitive(PrimitiveType::Timestamptz),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            4,
+                            "col4",
+                            Type::Primitive(PrimitiveType::TimestampNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            5,
+                            "col5",
+                            Type::Primitive(PrimitiveType::TimestamptzNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -1983,31 +2039,38 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::required(
-                        1,
-                        "col1",
-                        Type::Primitive(PrimitiveType::Date),
-                    )),
-                    Arc::new(NestedField::required(
-                        2,
-                        "col2",
-                        Type::Primitive(PrimitiveType::Timestamp),
-                    )),
-                    Arc::new(NestedField::required(
-                        3,
-                        "col3",
-                        Type::Primitive(PrimitiveType::Timestamptz),
-                    )),
-                    Arc::new(NestedField::required(
-                        4,
-                        "col4",
-                        Type::Primitive(PrimitiveType::TimestampNs),
-                    )),
-                    Arc::new(NestedField::required(
-                        5,
-                        "col5",
-                        Type::Primitive(PrimitiveType::TimestamptzNs),
-                    )),
+                    Arc::new(
+                        NestedField::required(1, "col1", Type::Primitive(PrimitiveType::Date))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Timestamp))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            3,
+                            "col3",
+                            Type::Primitive(PrimitiveType::Timestamptz),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            4,
+                            "col4",
+                            Type::Primitive(PrimitiveType::TimestampNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            5,
+                            "col5",
+                            Type::Primitive(PrimitiveType::TimestamptzNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -2187,31 +2250,38 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::required(
-                        1,
-                        "col1",
-                        Type::Primitive(PrimitiveType::Date),
-                    )),
-                    Arc::new(NestedField::required(
-                        2,
-                        "col2",
-                        Type::Primitive(PrimitiveType::Timestamp),
-                    )),
-                    Arc::new(NestedField::required(
-                        3,
-                        "col3",
-                        Type::Primitive(PrimitiveType::Timestamptz),
-                    )),
-                    Arc::new(NestedField::required(
-                        4,
-                        "col4",
-                        Type::Primitive(PrimitiveType::TimestampNs),
-                    )),
-                    Arc::new(NestedField::required(
-                        5,
-                        "col5",
-                        Type::Primitive(PrimitiveType::TimestamptzNs),
-                    )),
+                    Arc::new(
+                        NestedField::required(1, "col1", Type::Primitive(PrimitiveType::Date))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Timestamp))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            3,
+                            "col3",
+                            Type::Primitive(PrimitiveType::Timestamptz),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            4,
+                            "col4",
+                            Type::Primitive(PrimitiveType::TimestampNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            5,
+                            "col5",
+                            Type::Primitive(PrimitiveType::TimestamptzNs),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -2416,39 +2486,37 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::required(
-                        1,
-                        "col1",
-                        Type::Primitive(PrimitiveType::Int),
-                    )),
-                    Arc::new(NestedField::required(
-                        2,
-                        "col2",
-                        Type::Primitive(PrimitiveType::Long),
-                    )),
-                    Arc::new(NestedField::required(
-                        3,
-                        "col3",
-                        Type::Primitive(PrimitiveType::Decimal {
-                            precision: 9,
-                            scale: 2,
-                        }),
-                    )),
-                    Arc::new(NestedField::required(
-                        4,
-                        "col4",
-                        Type::Primitive(PrimitiveType::String),
-                    )),
-                    Arc::new(NestedField::required(
-                        5,
-                        "col5",
-                        Type::Primitive(PrimitiveType::Binary),
-                    )),
-                    Arc::new(NestedField::required(
-                        6,
-                        "col6",
-                        Type::Primitive(PrimitiveType::Uuid),
-                    )),
+                    Arc::new(
+                        NestedField::required(1, "col1", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            3,
+                            "col3",
+                            Type::Primitive(PrimitiveType::Decimal {
+                                precision: 9,
+                                scale: 2,
+                            }),
+                        )
+                        .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(4, "col4", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(5, "col5", Type::Primitive(PrimitiveType::Binary))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(6, "col6", Type::Primitive(PrimitiveType::Uuid))
+                            .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -2600,11 +2668,10 @@ mod tests {
     async fn test_strict_projection_identity() {
         let schema = Arc::new(
             Schema::builder()
-                .with_fields(vec![Arc::new(NestedField::optional(
-                    1,
-                    "col1",
-                    Type::Primitive(PrimitiveType::Long),
-                ))])
+                .with_fields(vec![Arc::new(
+                    NestedField::optional(1, "col1", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field"),
+                )])
                 .build()
                 .unwrap(),
         );
@@ -2707,24 +2774,25 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::required(
-                        1,
-                        "col1",
-                        Type::Primitive(PrimitiveType::Int),
-                    )),
-                    Arc::new(NestedField::required(
-                        2,
-                        "col2",
-                        Type::Primitive(PrimitiveType::Long),
-                    )),
-                    Arc::new(NestedField::required(
-                        3,
-                        "col3",
-                        Type::Primitive(PrimitiveType::Decimal {
-                            precision: 9,
-                            scale: 2,
-                        }),
-                    )),
+                    Arc::new(
+                        NestedField::required(1, "col1", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            3,
+                            "col3",
+                            Type::Primitive(PrimitiveType::Decimal {
+                                precision: 9,
+                                scale: 2,
+                            }),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -2930,24 +2998,25 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::required(
-                        1,
-                        "col1",
-                        Type::Primitive(PrimitiveType::Int),
-                    )),
-                    Arc::new(NestedField::required(
-                        2,
-                        "col2",
-                        Type::Primitive(PrimitiveType::Long),
-                    )),
-                    Arc::new(NestedField::required(
-                        3,
-                        "col3",
-                        Type::Primitive(PrimitiveType::Decimal {
-                            precision: 9,
-                            scale: 2,
-                        }),
-                    )),
+                    Arc::new(
+                        NestedField::required(1, "col1", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(2, "col2", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::required(
+                            3,
+                            "col3",
+                            Type::Primitive(PrimitiveType::Decimal {
+                                precision: 9,
+                                scale: 2,
+                            }),
+                        )
+                        .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -3152,11 +3221,10 @@ mod tests {
     async fn test_strict_projection_truncate_string() {
         let schema = Arc::new(
             Schema::builder()
-                .with_fields(vec![Arc::new(NestedField::required(
-                    1,
-                    "col1",
-                    Type::Primitive(PrimitiveType::String),
-                ))])
+                .with_fields(vec![Arc::new(
+                    NestedField::required(1, "col1", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field"),
+                )])
                 .build()
                 .unwrap(),
         );

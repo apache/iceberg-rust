@@ -391,21 +391,18 @@ mod tests {
     fn create_test_schema() -> SchemaRef {
         let schema = Schema::builder()
             .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "a",
-                    Type::Primitive(PrimitiveType::Int),
-                )),
-                Arc::new(NestedField::required(
-                    2,
-                    "b",
-                    Type::Primitive(PrimitiveType::Float),
-                )),
-                Arc::new(NestedField::optional(
-                    3,
-                    "c",
-                    Type::Primitive(PrimitiveType::Float),
-                )),
+                Arc::new(
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::required(2, "b", Type::Primitive(PrimitiveType::Float))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(3, "c", Type::Primitive(PrimitiveType::Float))
+                        .expect("valid nested field"),
+                ),
             ])
             .build()
             .unwrap();

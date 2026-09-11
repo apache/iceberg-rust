@@ -56,13 +56,13 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
         value: Vec<Option<Literal>>,
     ) -> Result<Vec<Option<Literal>>> {
         // Make there is no null value if the field is required
-        if field.required && value.iter().any(Option::is_none) {
+        if field.is_required() && value.iter().any(Option::is_none) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "The field is required but has null value",
             )
-            .with_context("field_id", field.id.to_string())
-            .with_context("field_name", &field.name));
+            .with_context("field_id", field.id().to_string())
+            .with_context("field_name", field.name()));
         }
         Ok(value)
     }
@@ -110,7 +110,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
         array: &ArrayRef,
         elements: Vec<Option<Literal>>,
     ) -> Result<Vec<Option<Literal>>> {
-        if list.element_field.required && elements.iter().any(Option::is_none) {
+        if list.element_field.is_required() && elements.iter().any(Option::is_none) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "The list should not have null value",
@@ -458,9 +458,9 @@ impl FieldMatchMode {
     pub fn match_field(&self, arrow_field: &FieldRef, iceberg_field: &NestedField) -> bool {
         match self {
             FieldMatchMode::Id => get_field_id_from_metadata(arrow_field)
-                .map(|id| id == iceberg_field.id)
+                .map(|id| id == iceberg_field.id())
                 .unwrap_or(false),
-            FieldMatchMode::Name => arrow_field.name() == &iceberg_field.name,
+            FieldMatchMode::Name => arrow_field.name() == iceberg_field.name(),
         }
     }
 }
@@ -526,7 +526,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Field id {} not found in struct array", field.id),
+                    format!("Field id {} not found in struct array", field.id()),
                 )
             })?;
 
@@ -1134,69 +1134,69 @@ mod test {
         ])) as ArrayRef;
 
         let iceberg_struct_type = StructType::new(vec![
-            Arc::new(NestedField::optional(
-                0,
-                "bool_field",
-                Type::Primitive(PrimitiveType::Boolean),
-            )),
-            Arc::new(NestedField::optional(
-                2,
-                "int32_field",
-                Type::Primitive(PrimitiveType::Int),
-            )),
-            Arc::new(NestedField::optional(
-                3,
-                "int64_field",
-                Type::Primitive(PrimitiveType::Long),
-            )),
-            Arc::new(NestedField::optional(
-                4,
-                "float32_field",
-                Type::Primitive(PrimitiveType::Float),
-            )),
-            Arc::new(NestedField::optional(
-                5,
-                "float64_field",
-                Type::Primitive(PrimitiveType::Double),
-            )),
-            Arc::new(NestedField::optional(
-                6,
-                "decimal_field",
-                Type::Primitive(PrimitiveType::Decimal {
-                    precision: 10,
-                    scale: 2,
-                }),
-            )),
-            Arc::new(NestedField::optional(
-                7,
-                "date_field",
-                Type::Primitive(PrimitiveType::Date),
-            )),
-            Arc::new(NestedField::optional(
-                8,
-                "time_field",
-                Type::Primitive(PrimitiveType::Time),
-            )),
-            Arc::new(NestedField::optional(
-                9,
-                "timestamp_micro_field",
-                Type::Primitive(PrimitiveType::Timestamp),
-            )),
-            Arc::new(NestedField::optional(
-                10,
-                "timestamp_nao_field",
-                Type::Primitive(PrimitiveType::TimestampNs),
-            )),
-            Arc::new(NestedField::optional(
-                11,
-                "string_field",
-                Type::Primitive(PrimitiveType::String),
-            )),
-            Arc::new(NestedField::optional(
-                12,
-                "binary_field",
-                Type::Primitive(PrimitiveType::Binary),
-            )),
+            Arc::new(
+                NestedField::optional(0, "bool_field", Type::Primitive(PrimitiveType::Boolean))
+                    .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::optional(2, "int32_field", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::optional(3, "int64_field", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::optional(4, "float32_field", Type::Primitive(PrimitiveType::Float))
+                    .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::optional(5, "float64_field", Type::Primitive(PrimitiveType::Double))
+                    .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::optional(
+                    6,
+                    "decimal_field",
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: 10,
+                        scale: 2,
+                    }),
+                )
+                .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::optional(7, "date_field", Type::Primitive(PrimitiveType::Date))
+                    .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::optional(8, "time_field", Type::Primitive(PrimitiveType::Time))
+                    .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::optional(
+                    9,
+                    "timestamp_micro_field",
+                    Type::Primitive(PrimitiveType::Timestamp),
+                )
+                .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::optional(
+                    10,
+                    "timestamp_nao_field",
+                    Type::Primitive(PrimitiveType::TimestampNs),
+                )
+                .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::optional(11, "string_field", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::optional(12, "binary_field", Type::Primitive(PrimitiveType::Binary))
+                    .expect("valid nested field"),
+            ),
         ]);
 
         let result = arrow_struct_to_literal(&struct_array, &iceberg_struct_type).unwrap();
@@ -1292,16 +1292,14 @@ mod test {
         };
 
         let iceberg_struct_type = StructType::new(vec![
-            Arc::new(NestedField::optional(
-                0,
-                "a",
-                Type::Primitive(PrimitiveType::Int),
-            )),
-            Arc::new(NestedField::optional(
-                1,
-                "b",
-                Type::Primitive(PrimitiveType::Int),
-            )),
+            Arc::new(
+                NestedField::optional(0, "a", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::optional(1, "b", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field"),
+            ),
         ]);
 
         let result = arrow_struct_to_literal(&struct_array, &iceberg_struct_type).unwrap();
@@ -1348,7 +1346,9 @@ mod test {
         )])) as ArrayRef;
 
         let ty = StructType::new(vec![
-            NestedField::required(1, "v", Type::Variant(VariantType)).into(),
+            NestedField::required(1, "v", Type::Variant(VariantType))
+                .expect("valid nested field")
+                .into(),
         ]);
 
         let err = arrow_struct_to_literal(&struct_array, &ty).unwrap_err();
@@ -1430,24 +1430,24 @@ mod test {
             3,
             "nested_struct",
             Type::Struct(StructType::new(vec![
-                Arc::new(NestedField::optional(
-                    1,
-                    "field_a",
-                    Type::Primitive(PrimitiveType::Int),
-                )),
-                Arc::new(NestedField::optional(
-                    2,
-                    "field_b",
-                    Type::Primitive(PrimitiveType::String),
-                )),
+                Arc::new(
+                    NestedField::optional(1, "field_a", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(2, "field_b", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field"),
+                ),
             ])),
-        );
+        )
+        .expect("valid nested field");
         let nested_partner = accessor
             .field_partner(&struct_array, &nested_field)
             .unwrap();
 
         // Verify we can access the nested field
-        let field_a = NestedField::optional(1, "field_a", Type::Primitive(PrimitiveType::Int));
+        let field_a = NestedField::optional(1, "field_a", Type::Primitive(PrimitiveType::Int))
+            .expect("valid nested field");
         let field_a_partner = accessor.field_partner(nested_partner, &field_a).unwrap();
 
         // Verify the field has the expected value
@@ -1507,24 +1507,24 @@ mod test {
             3,
             "nested_struct",
             Type::Struct(StructType::new(vec![
-                Arc::new(NestedField::optional(
-                    1,
-                    "field_a",
-                    Type::Primitive(PrimitiveType::Int),
-                )),
-                Arc::new(NestedField::optional(
-                    2,
-                    "field_b",
-                    Type::Primitive(PrimitiveType::String),
-                )),
+                Arc::new(
+                    NestedField::optional(1, "field_a", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(2, "field_b", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field"),
+                ),
             ])),
-        );
+        )
+        .expect("valid nested field");
         let nested_partner = accessor
             .field_partner(&struct_array, &nested_field)
             .unwrap();
 
         // Verify we can access the nested field by name
-        let field_a = NestedField::optional(1, "field_a", Type::Primitive(PrimitiveType::Int));
+        let field_a = NestedField::optional(1, "field_a", Type::Primitive(PrimitiveType::Int))
+            .expect("valid nested field");
         let field_a_partner = accessor.field_partner(nested_partner, &field_a).unwrap();
 
         // Verify the field has the expected value
@@ -1546,53 +1546,90 @@ mod test {
         //   C: list< list<int> >,
         // >
         let struct_type = StructType::new(vec![
-            Arc::new(NestedField::required(
-                0,
-                "A",
-                Type::List(ListType::new(Arc::new(NestedField::required(
-                    1,
-                    "item",
-                    Type::Struct(StructType::new(vec![
-                        Arc::new(NestedField::required(
-                            2,
-                            "a1",
-                            Type::Primitive(PrimitiveType::Int),
-                        )),
-                        Arc::new(NestedField::required(
-                            3,
-                            "a2",
-                            Type::Primitive(PrimitiveType::Int),
-                        )),
-                    ])),
-                )))),
-            )),
-            Arc::new(NestedField::required(
-                4,
-                "B",
-                Type::List(ListType::new(Arc::new(NestedField::required(
-                    5,
-                    "item",
-                    Type::Map(MapType::new(
-                        NestedField::optional(6, "keys", Type::Primitive(PrimitiveType::Int))
-                            .into(),
-                        NestedField::optional(7, "values", Type::Primitive(PrimitiveType::Int))
-                            .into(),
-                    )),
-                )))),
-            )),
-            Arc::new(NestedField::required(
-                8,
-                "C",
-                Type::List(ListType::new(Arc::new(NestedField::required(
-                    9,
-                    "item",
-                    Type::List(ListType::new(Arc::new(NestedField::optional(
-                        10,
-                        "item",
-                        Type::Primitive(PrimitiveType::Int),
-                    )))),
-                )))),
-            )),
+            Arc::new(
+                NestedField::required(
+                    0,
+                    "A",
+                    Type::List(ListType::new(Arc::new(
+                        NestedField::required(
+                            1,
+                            "item",
+                            Type::Struct(StructType::new(vec![
+                                Arc::new(
+                                    NestedField::required(
+                                        2,
+                                        "a1",
+                                        Type::Primitive(PrimitiveType::Int),
+                                    )
+                                    .expect("valid nested field"),
+                                ),
+                                Arc::new(
+                                    NestedField::required(
+                                        3,
+                                        "a2",
+                                        Type::Primitive(PrimitiveType::Int),
+                                    )
+                                    .expect("valid nested field"),
+                                ),
+                            ])),
+                        )
+                        .expect("valid nested field"),
+                    ))),
+                )
+                .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::required(
+                    4,
+                    "B",
+                    Type::List(ListType::new(Arc::new(
+                        NestedField::required(
+                            5,
+                            "item",
+                            Type::Map(MapType::new(
+                                NestedField::optional(
+                                    6,
+                                    "keys",
+                                    Type::Primitive(PrimitiveType::Int),
+                                )
+                                .expect("valid nested field")
+                                .into(),
+                                NestedField::optional(
+                                    7,
+                                    "values",
+                                    Type::Primitive(PrimitiveType::Int),
+                                )
+                                .expect("valid nested field")
+                                .into(),
+                            )),
+                        )
+                        .expect("valid nested field"),
+                    ))),
+                )
+                .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::required(
+                    8,
+                    "C",
+                    Type::List(ListType::new(Arc::new(
+                        NestedField::required(
+                            9,
+                            "item",
+                            Type::List(ListType::new(Arc::new(
+                                NestedField::optional(
+                                    10,
+                                    "item",
+                                    Type::Primitive(PrimitiveType::Int),
+                                )
+                                .expect("valid nested field"),
+                            ))),
+                        )
+                        .expect("valid nested field"),
+                    ))),
+                )
+                .expect("valid nested field"),
+            ),
         ]);
 
         // Generate a complex nested struct array

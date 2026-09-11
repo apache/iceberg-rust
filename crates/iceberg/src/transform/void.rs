@@ -85,10 +85,14 @@ mod test {
                 (Primitive(TimestamptzNs), Some(Primitive(TimestamptzNs))),
                 (
                     Struct(StructType::new(vec![
-                        NestedField::optional(1, "a", Primitive(Timestamp)).into(),
+                        NestedField::optional(1, "a", Primitive(Timestamp))
+                            .expect("valid nested field")
+                            .into(),
                     ])),
                     Some(Struct(StructType::new(vec![
-                        NestedField::optional(1, "a", Primitive(Timestamp)).into(),
+                        NestedField::optional(1, "a", Primitive(Timestamp))
+                            .expect("valid nested field")
+                            .into(),
                     ]))),
                 ),
             ],
@@ -135,7 +139,9 @@ mod test {
                 (Primitive(Timestamptz), Some(Primitive(StringType))),
                 (
                     Struct(StructType::new(vec![
-                        NestedField::optional(1, "a", Primitive(Timestamp)).into(),
+                        NestedField::optional(1, "a", Primitive(Timestamp))
+                            .expect("valid nested field")
+                            .into(),
                     ])),
                     Some(Primitive(StringType)),
                 ),

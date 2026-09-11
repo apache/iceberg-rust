@@ -557,8 +557,8 @@ impl Literal {
                 if let JsonValue::Object(mut object) = value {
                     Ok(Some(Literal::Struct(Struct::from_iter(
                         schema.fields().iter().map(|field| {
-                            object.remove(&field.id.to_string()).and_then(|value| {
-                                Literal::try_from_json(value, &field.field_type)
+                            object.remove(&field.id().to_string()).and_then(|value| {
+                                Literal::try_from_json(value, field.field_type())
                                     .and_then(|value| {
                                         value.ok_or(Error::new(
                                             ErrorKind::DataInvalid,
@@ -582,7 +582,7 @@ impl Literal {
                         array
                             .into_iter()
                             .map(|value| {
-                                Literal::try_from_json(value, &list.element_field.field_type)
+                                Literal::try_from_json(value, list.element_field.field_type())
                             })
                             .collect::<Result<Vec<_>>>()?,
                     )))
@@ -614,14 +614,17 @@ impl Literal {
                                 .zip(values)
                                 .map(|(key, value)| {
                                     Ok((
-                                        Literal::try_from_json(key, &map.key_field.field_type)
+                                        Literal::try_from_json(key, map.key_field.field_type())
                                             .and_then(|value| {
                                                 value.ok_or(Error::new(
                                                     ErrorKind::DataInvalid,
                                                     "Key of map cannot be null",
                                                 ))
                                             })?,
-                                        Literal::try_from_json(value, &map.value_field.field_type)?,
+                                        Literal::try_from_json(
+                                            value,
+                                            map.value_field.field_type(),
+                                        )?,
                                     ))
                                 })
                                 .collect::<Result<Vec<_>>>()?,
@@ -736,17 +739,19 @@ impl Literal {
                 let mut id_and_value = Vec::with_capacity(struct_type.fields().len());
                 for (value, field) in s.into_iter().zip(struct_type.fields()) {
                     let json = match value {
-                        Some(val) => val.try_into_json(&field.field_type)?,
+                        Some(val) => val.try_into_json(field.field_type())?,
                         None => JsonValue::Null,
                     };
-                    id_and_value.push((field.id.to_string(), json));
+                    id_and_value.push((field.id().to_string(), json));
                 }
                 Ok(JsonValue::Object(JsonMap::from_iter(id_and_value)))
             }
             (Literal::List(list), Type::List(list_type)) => Ok(JsonValue::Array(
                 list.into_iter()
                     .map(|opt| match opt {
-                        Some(literal) => literal.try_into_json(&list_type.element_field.field_type),
+                        Some(literal) => {
+                            literal.try_into_json(list_type.element_field.field_type())
+                        }
                         None => Ok(JsonValue::Null),
                     })
                     .collect::<Result<Vec<JsonValue>>>()?,
@@ -756,9 +761,11 @@ impl Literal {
                 let mut json_keys = Vec::with_capacity(map.len());
                 let mut json_values = Vec::with_capacity(map.len());
                 for (key, value) in map.into_iter() {
-                    json_keys.push(key.try_into_json(&map_type.key_field.field_type)?);
+                    json_keys.push(key.try_into_json(map_type.key_field.field_type())?);
                     json_values.push(match value {
-                        Some(literal) => literal.try_into_json(&map_type.value_field.field_type)?,
+                        Some(literal) => {
+                            literal.try_into_json(map_type.value_field.field_type())?
+                        }
                         None => JsonValue::Null,
                     });
                 }

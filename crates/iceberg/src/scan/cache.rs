@@ -279,8 +279,12 @@ mod tests {
     fn dropped_partition_source_column_falls_back_to_always_true() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(2, "part", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "part", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -295,7 +299,9 @@ mod tests {
         // Evolve the schema so that `part` is no longer present, leaving spec 0 unresolvable.
         let evolved_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();

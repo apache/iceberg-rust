@@ -188,17 +188,17 @@ mod tests {
         let result: SchemaV2 = serde_json::from_str(record).unwrap();
         assert_eq!(1, result.schema_id);
         assert_eq!(
-            Box::new(Type::Primitive(PrimitiveType::Uuid)),
-            result.fields[0].field_type
+            &Type::Primitive(PrimitiveType::Uuid),
+            result.fields[0].field_type()
         );
-        assert_eq!(1, result.fields[0].id);
-        assert!(result.fields[0].required);
+        assert_eq!(1, result.fields[0].id());
+        assert!(result.fields[0].is_required());
 
         assert_eq!(
-            Box::new(Type::Primitive(PrimitiveType::Int)),
-            result.fields[1].field_type
+            &Type::Primitive(PrimitiveType::Int),
+            result.fields[1].field_type()
         );
-        assert_eq!(2, result.fields[1].id);
-        assert!(!result.fields[1].required);
+        assert_eq!(2, result.fields[1].id());
+        assert!(!result.fields[1].is_required());
     }
 }
