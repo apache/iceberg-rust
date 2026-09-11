@@ -418,7 +418,7 @@ pub(crate) fn oauth_params_from_props(props: &HashMap<String, String>) -> HashMa
     params
 }
 
-struct RestClient {
+struct RestCatalogClient {
     /// The manager that created `catalog_session`; retained so each request can
     /// derive authentication for its [`SessionContext`].
     auth_manager: Arc<dyn AuthManager>,
@@ -435,11 +435,11 @@ struct RestClient {
     endpoints: HashSet<Endpoint>,
 }
 
-impl Debug for RestClient {
+impl Debug for RestCatalogClient {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         // Auth managers and sessions may contain secrets, so keep them out of
         // the catalog's derived Debug output just as HttpClient does.
-        f.debug_struct("RestClient")
+        f.debug_struct("RestCatalogClient")
             .field("http_client", &self.http_client)
             .field("config", &self.config)
             .field("endpoints", &self.endpoints)
@@ -447,7 +447,7 @@ impl Debug for RestClient {
     }
 }
 
-impl RestClient {
+impl RestCatalogClient {
     /// Initializes the runtime config, advertised endpoints, auth manager, and
     /// catalog authentication session shared by one REST catalog instance.
     async fn init(
@@ -612,7 +612,7 @@ impl RestCatalog {
     }
 
     #[cfg(test)]
-    async fn client(&self) -> Result<&RestClient> {
+    async fn client(&self) -> Result<&RestCatalogClient> {
         self.inner.client().await
     }
 }
@@ -737,7 +737,7 @@ pub struct RestSessionCatalog {
     ///
     /// It could be different from the config fetched from the server and used at runtime.
     user_config: RestCatalogConfig,
-    client: OnceCell<RestClient>,
+    client: OnceCell<RestCatalogClient>,
     /// Storage factory for creating FileIO instances.
     storage_factory: Option<Arc<dyn StorageFactory>>,
     runtime: Runtime,
@@ -851,11 +851,11 @@ impl RestSessionCatalog {
         }
     }
 
-    /// Gets the [`RestClient`] from the catalog.
-    async fn client(&self) -> Result<&RestClient> {
+    /// Gets the [`RestCatalogClient`] from the catalog.
+    async fn client(&self) -> Result<&RestCatalogClient> {
         self.client
             .get_or_try_init(|| async {
-                RestClient::init(&self.user_config, self.resolve_auth_manager()?).await
+                RestCatalogClient::init(&self.user_config, self.resolve_auth_manager()?).await
             })
             .await
     }
@@ -872,7 +872,7 @@ impl RestSessionCatalog {
     async fn check_exists_via_head(
         &self,
         context: &SessionContext,
-        client: &RestClient,
+        client: &RestCatalogClient,
         url: String,
     ) -> Result<bool> {
         let request = HttpRequest::build(client.http_client.request(Method::HEAD, url))?;
