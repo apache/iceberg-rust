@@ -64,6 +64,9 @@ pub const S3_ALLOW_ANONYMOUS: &str = "s3.allow-anonymous";
 pub const S3_DISABLE_EC2_METADATA: &str = "s3.disable-ec2-metadata";
 /// Option to skip loading configuration from config file and the env.
 pub const S3_DISABLE_CONFIG_LOAD: &str = "s3.disable-config-load";
+/// Size in bytes of each part of a multipart upload. Must be at least 5 MiB.
+/// Defaults to 32 MiB, matching Java `S3FileIOProperties.MULTIPART_SIZE`.
+pub const S3_MULTIPART_PART_SIZE_BYTES: &str = "s3.multipart.part-size-bytes";
 
 /// Amazon S3 storage configuration.
 ///
