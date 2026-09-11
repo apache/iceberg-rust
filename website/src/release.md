@@ -195,9 +195,10 @@ For example:
 dev/release/create_rc.sh 0.9.1 2
 ```
 
+The script always archives and tags `HEAD`, so make sure the exact commit to release is checked out before running it.
+
 Useful options include:
 
-- `--release_ref HEAD`: git commit-ish to archive and tag.
 - `--dist_dir dist`: artifact output root.
 - `--create_rc_tag 1`: create the signed annotated RC tag as the final release step.
 - `--check_headers 1`: check Apache license headers against the source archive.
