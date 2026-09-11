@@ -3249,7 +3249,9 @@ pub fn iceberg::transaction::FastAppendAction::with_check_duplicate(self, v: boo
 pub struct iceberg::transaction::ReplaceSortOrderAction
 impl iceberg::transaction::ReplaceSortOrderAction
 pub fn iceberg::transaction::ReplaceSortOrderAction::asc(self, name: &str, null_order: iceberg::spec::NullOrder) -> Self
+pub fn iceberg::transaction::ReplaceSortOrderAction::asc_with_transform(self, name: &str, transform: iceberg::spec::Transform, null_order: iceberg::spec::NullOrder) -> Self
 pub fn iceberg::transaction::ReplaceSortOrderAction::desc(self, name: &str, null_order: iceberg::spec::NullOrder) -> Self
+pub fn iceberg::transaction::ReplaceSortOrderAction::desc_with_transform(self, name: &str, transform: iceberg::spec::Transform, null_order: iceberg::spec::NullOrder) -> Self
 pub struct iceberg::transaction::Transaction
 impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
