@@ -26,6 +26,7 @@ use std::sync::{Arc, OnceLock};
 use async_trait::async_trait;
 use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
+use iceberg::spec::TableProperties;
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, Runtime,
@@ -1137,6 +1138,22 @@ impl SessionCatalog for RestSessionCatalog {
 
         let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
 
+        let mut properties = creation.properties;
+
+        if properties.contains_key(TableProperties::PROPERTY_FORMAT_VERSION) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Table properties should not contain reserved properties, but got: [{}]. Set `TableCreation::format_version` instead",
+                    TableProperties::PROPERTY_FORMAT_VERSION
+                ),
+            ));
+        }
+        properties.insert(
+            TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
+            (creation.format_version as u8).to_string(),
+        );
+
         let request = HttpRequest::build(
             client
                 .http_client
@@ -1148,7 +1165,7 @@ impl SessionCatalog for RestSessionCatalog {
                     partition_spec: creation.partition_spec,
                     write_order: creation.sort_order,
                     stage_create: Some(false),
-                    properties: creation.properties,
+                    properties,
                 }),
         )?;
 
@@ -3938,6 +3955,90 @@ mod tests {
 
         config_mock.assert_async().await;
         create_table_mock.assert_async().await;
+    }
+
+    fn single_column_schema() -> Schema {
+        Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_create_table_sends_the_requested_format_version_as_a_property() {
+        for (format_version, expected) in [
+            (None, r#""format-version":"2""#),
+            (Some(FormatVersion::V1), r#""format-version":"1""#),
+            (Some(FormatVersion::V3), r#""format-version":"3""#),
+        ] {
+            let mut server = Server::new_async().await;
+            let config_mock = create_config_mock(&mut server).await;
+            let create_table_mock = server
+                .mock("POST", "/v1/namespaces/ns1/tables")
+                .match_body(mockito::Matcher::Regex(expected.to_string()))
+                .with_status(200)
+                .with_body_from_file(format!(
+                    "{}/testdata/{}",
+                    env!("CARGO_MANIFEST_DIR"),
+                    "create_table_response.json"
+                ))
+                .create_async()
+                .await;
+
+            let mut creation = TableCreation::builder()
+                .name("test1".to_string())
+                .schema(single_column_schema())
+                .build();
+            if let Some(format_version) = format_version {
+                creation.format_version = format_version;
+            }
+
+            let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+            catalog
+                .create_table(
+                    &SessionContext::empty(),
+                    &NamespaceIdent::from_strs(["ns1"]).unwrap(),
+                    creation,
+                )
+                .await
+                .unwrap();
+
+            config_mock.assert_async().await;
+            create_table_mock.assert_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_table_rejects_a_format_version_property() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let error = catalog
+            .create_table(
+                &SessionContext::empty(),
+                &NamespaceIdent::from_strs(["ns1"]).unwrap(),
+                TableCreation::builder()
+                    .name("test1".to_string())
+                    .schema(single_column_schema())
+                    .properties(HashMap::from([(
+                        "format-version".to_string(),
+                        "3".to_string(),
+                    )]))
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(ErrorKind::DataInvalid, error.kind());
+        assert!(
+            error.message().contains("format-version"),
+            "unexpected message: {}",
+            error.message()
+        );
+        config_mock.assert_async().await;
     }
 
     #[tokio::test]
