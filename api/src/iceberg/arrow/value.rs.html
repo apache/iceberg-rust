@@ -1986,41 +1986,69 @@
 <a href=#1986 id=1986 data-nosnippet>1986</a>    }
 <a href=#1987 id=1987 data-nosnippet>1987</a>
 <a href=#1988 id=1988 data-nosnippet>1988</a>    <span class="attr">#[test]
-<a href=#1989 id=1989 data-nosnippet>1989</a>    </span><span class="kw">fn </span>test_create_string_array_repeated_empty() {
-<a href=#1990 id=1990 data-nosnippet>1990</a>        <span class="comment">// num_rows == 0 must produce an empty (not one-element) array.
-<a href=#1991 id=1991 data-nosnippet>1991</a>        </span><span class="kw">let </span>array = create_primitive_array_repeated(
-<a href=#1992 id=1992 data-nosnippet>1992</a>            <span class="kw-2">&amp;</span>DataType::Utf8,
-<a href=#1993 id=1993 data-nosnippet>1993</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::String(<span class="string">"x"</span>.to_string())),
-<a href=#1994 id=1994 data-nosnippet>1994</a>            <span class="number">0</span>,
-<a href=#1995 id=1995 data-nosnippet>1995</a>        )
-<a href=#1996 id=1996 data-nosnippet>1996</a>        .unwrap();
-<a href=#1997 id=1997 data-nosnippet>1997</a>        <span class="macro">assert_eq!</span>(array.len(), <span class="number">0</span>);
-<a href=#1998 id=1998 data-nosnippet>1998</a>    }
-<a href=#1999 id=1999 data-nosnippet>1999</a>
-<a href=#2000 id=2000 data-nosnippet>2000</a>    <span class="attr">#[test]
-<a href=#2001 id=2001 data-nosnippet>2001</a>    </span><span class="kw">fn </span>test_create_fixed_size_binary_repeated_wrong_width_errors() {
-<a href=#2002 id=2002 data-nosnippet>2002</a>        <span class="comment">// A literal whose length differs from the declared width must error rather
-<a href=#2003 id=2003 data-nosnippet>2003</a>        // than silently producing a FixedSizeBinary array of the literal's width.
-<a href=#2004 id=2004 data-nosnippet>2004</a>        </span><span class="kw">let </span>err = create_primitive_array_repeated(
-<a href=#2005 id=2005 data-nosnippet>2005</a>            <span class="kw-2">&amp;</span>DataType::FixedSizeBinary(<span class="number">4</span>),
-<a href=#2006 id=2006 data-nosnippet>2006</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::Binary(<span class="macro">vec!</span>[<span class="number">0x01</span>, <span class="number">0x02</span>, <span class="number">0x03</span>])),
-<a href=#2007 id=2007 data-nosnippet>2007</a>            <span class="number">2</span>,
-<a href=#2008 id=2008 data-nosnippet>2008</a>        )
-<a href=#2009 id=2009 data-nosnippet>2009</a>        .unwrap_err();
-<a href=#2010 id=2010 data-nosnippet>2010</a>        <span class="macro">assert!</span>(err.to_string().contains(<span class="string">"does not match declared width"</span>));
-<a href=#2011 id=2011 data-nosnippet>2011</a>    }
-<a href=#2012 id=2012 data-nosnippet>2012</a>
-<a href=#2013 id=2013 data-nosnippet>2013</a>    <span class="attr">#[test]
-<a href=#2014 id=2014 data-nosnippet>2014</a>    </span><span class="kw">fn </span>test_create_fixed_size_binary_repeated_empty_errors() {
-<a href=#2015 id=2015 data-nosnippet>2015</a>        <span class="comment">// arrow's try_from_iter cannot infer the fixed width from an empty iterator,
-<a href=#2016 id=2016 data-nosnippet>2016</a>        // so num_rows == 0 over a fixed[n] column surfaces as an error rather than an
-<a href=#2017 id=2017 data-nosnippet>2017</a>        // empty fixed[n] array.
-<a href=#2018 id=2018 data-nosnippet>2018</a>        </span><span class="kw">let </span>result = create_primitive_array_repeated(
-<a href=#2019 id=2019 data-nosnippet>2019</a>            <span class="kw-2">&amp;</span>DataType::FixedSizeBinary(<span class="number">4</span>),
-<a href=#2020 id=2020 data-nosnippet>2020</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::Binary(<span class="macro">vec!</span>[<span class="number">0xDE</span>, <span class="number">0xAD</span>, <span class="number">0xBE</span>, <span class="number">0xEF</span>])),
-<a href=#2021 id=2021 data-nosnippet>2021</a>            <span class="number">0</span>,
-<a href=#2022 id=2022 data-nosnippet>2022</a>        );
-<a href=#2023 id=2023 data-nosnippet>2023</a>        <span class="macro">assert!</span>(result.is_err());
-<a href=#2024 id=2024 data-nosnippet>2024</a>    }
-<a href=#2025 id=2025 data-nosnippet>2025</a>}
+<a href=#1989 id=1989 data-nosnippet>1989</a>    </span><span class="kw">fn </span>test_create_boolean_array_repeated() {
+<a href=#1990 id=1990 data-nosnippet>1990</a>        <span class="kw">let </span>num_rows = <span class="number">4</span>;
+<a href=#1991 id=1991 data-nosnippet>1991</a>
+<a href=#1992 id=1992 data-nosnippet>1992</a>        <span class="kw">for </span>value <span class="kw">in </span>[<span class="bool-val">true</span>, <span class="bool-val">false</span>] {
+<a href=#1993 id=1993 data-nosnippet>1993</a>            <span class="kw">let </span>array = create_primitive_array_repeated(
+<a href=#1994 id=1994 data-nosnippet>1994</a>                <span class="kw-2">&amp;</span>DataType::Boolean,
+<a href=#1995 id=1995 data-nosnippet>1995</a>                <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::Boolean(value)),
+<a href=#1996 id=1996 data-nosnippet>1996</a>                num_rows,
+<a href=#1997 id=1997 data-nosnippet>1997</a>            )
+<a href=#1998 id=1998 data-nosnippet>1998</a>            .unwrap();
+<a href=#1999 id=1999 data-nosnippet>1999</a>            <span class="kw">let </span>array = array.as_any().downcast_ref::&lt;BooleanArray&gt;().unwrap();
+<a href=#2000 id=2000 data-nosnippet>2000</a>            <span class="macro">assert_eq!</span>(array.len(), num_rows);
+<a href=#2001 id=2001 data-nosnippet>2001</a>            <span class="macro">assert_eq!</span>(array.null_count(), <span class="number">0</span>);
+<a href=#2002 id=2002 data-nosnippet>2002</a>            <span class="macro">assert!</span>((<span class="number">0</span>..num_rows).all(|i| array.value(i) == value));
+<a href=#2003 id=2003 data-nosnippet>2003</a>        }
+<a href=#2004 id=2004 data-nosnippet>2004</a>
+<a href=#2005 id=2005 data-nosnippet>2005</a>        <span class="comment">// num_rows == 0 must produce an empty (not one-element) array.
+<a href=#2006 id=2006 data-nosnippet>2006</a>        </span><span class="kw">let </span>empty = create_primitive_array_repeated(
+<a href=#2007 id=2007 data-nosnippet>2007</a>            <span class="kw-2">&amp;</span>DataType::Boolean,
+<a href=#2008 id=2008 data-nosnippet>2008</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::Boolean(<span class="bool-val">true</span>)),
+<a href=#2009 id=2009 data-nosnippet>2009</a>            <span class="number">0</span>,
+<a href=#2010 id=2010 data-nosnippet>2010</a>        )
+<a href=#2011 id=2011 data-nosnippet>2011</a>        .unwrap();
+<a href=#2012 id=2012 data-nosnippet>2012</a>        <span class="macro">assert_eq!</span>(empty.len(), <span class="number">0</span>);
+<a href=#2013 id=2013 data-nosnippet>2013</a>        <span class="macro">assert_eq!</span>(empty.null_count(), <span class="number">0</span>);
+<a href=#2014 id=2014 data-nosnippet>2014</a>    }
+<a href=#2015 id=2015 data-nosnippet>2015</a>
+<a href=#2016 id=2016 data-nosnippet>2016</a>    <span class="attr">#[test]
+<a href=#2017 id=2017 data-nosnippet>2017</a>    </span><span class="kw">fn </span>test_create_string_array_repeated_empty() {
+<a href=#2018 id=2018 data-nosnippet>2018</a>        <span class="comment">// num_rows == 0 must produce an empty (not one-element) array.
+<a href=#2019 id=2019 data-nosnippet>2019</a>        </span><span class="kw">let </span>array = create_primitive_array_repeated(
+<a href=#2020 id=2020 data-nosnippet>2020</a>            <span class="kw-2">&amp;</span>DataType::Utf8,
+<a href=#2021 id=2021 data-nosnippet>2021</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::String(<span class="string">"x"</span>.to_string())),
+<a href=#2022 id=2022 data-nosnippet>2022</a>            <span class="number">0</span>,
+<a href=#2023 id=2023 data-nosnippet>2023</a>        )
+<a href=#2024 id=2024 data-nosnippet>2024</a>        .unwrap();
+<a href=#2025 id=2025 data-nosnippet>2025</a>        <span class="macro">assert_eq!</span>(array.len(), <span class="number">0</span>);
+<a href=#2026 id=2026 data-nosnippet>2026</a>    }
+<a href=#2027 id=2027 data-nosnippet>2027</a>
+<a href=#2028 id=2028 data-nosnippet>2028</a>    <span class="attr">#[test]
+<a href=#2029 id=2029 data-nosnippet>2029</a>    </span><span class="kw">fn </span>test_create_fixed_size_binary_repeated_wrong_width_errors() {
+<a href=#2030 id=2030 data-nosnippet>2030</a>        <span class="comment">// A literal whose length differs from the declared width must error rather
+<a href=#2031 id=2031 data-nosnippet>2031</a>        // than silently producing a FixedSizeBinary array of the literal's width.
+<a href=#2032 id=2032 data-nosnippet>2032</a>        </span><span class="kw">let </span>err = create_primitive_array_repeated(
+<a href=#2033 id=2033 data-nosnippet>2033</a>            <span class="kw-2">&amp;</span>DataType::FixedSizeBinary(<span class="number">4</span>),
+<a href=#2034 id=2034 data-nosnippet>2034</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::Binary(<span class="macro">vec!</span>[<span class="number">0x01</span>, <span class="number">0x02</span>, <span class="number">0x03</span>])),
+<a href=#2035 id=2035 data-nosnippet>2035</a>            <span class="number">2</span>,
+<a href=#2036 id=2036 data-nosnippet>2036</a>        )
+<a href=#2037 id=2037 data-nosnippet>2037</a>        .unwrap_err();
+<a href=#2038 id=2038 data-nosnippet>2038</a>        <span class="macro">assert!</span>(err.to_string().contains(<span class="string">"does not match declared width"</span>));
+<a href=#2039 id=2039 data-nosnippet>2039</a>    }
+<a href=#2040 id=2040 data-nosnippet>2040</a>
+<a href=#2041 id=2041 data-nosnippet>2041</a>    <span class="attr">#[test]
+<a href=#2042 id=2042 data-nosnippet>2042</a>    </span><span class="kw">fn </span>test_create_fixed_size_binary_repeated_empty_errors() {
+<a href=#2043 id=2043 data-nosnippet>2043</a>        <span class="comment">// arrow's try_from_iter cannot infer the fixed width from an empty iterator,
+<a href=#2044 id=2044 data-nosnippet>2044</a>        // so num_rows == 0 over a fixed[n] column surfaces as an error rather than an
+<a href=#2045 id=2045 data-nosnippet>2045</a>        // empty fixed[n] array.
+<a href=#2046 id=2046 data-nosnippet>2046</a>        </span><span class="kw">let </span>result = create_primitive_array_repeated(
+<a href=#2047 id=2047 data-nosnippet>2047</a>            <span class="kw-2">&amp;</span>DataType::FixedSizeBinary(<span class="number">4</span>),
+<a href=#2048 id=2048 data-nosnippet>2048</a>            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>PrimitiveLiteral::Binary(<span class="macro">vec!</span>[<span class="number">0xDE</span>, <span class="number">0xAD</span>, <span class="number">0xBE</span>, <span class="number">0xEF</span>])),
+<a href=#2049 id=2049 data-nosnippet>2049</a>            <span class="number">0</span>,
+<a href=#2050 id=2050 data-nosnippet>2050</a>        );
+<a href=#2051 id=2051 data-nosnippet>2051</a>        <span class="macro">assert!</span>(result.is_err());
+<a href=#2052 id=2052 data-nosnippet>2052</a>    }
+<a href=#2053 id=2053 data-nosnippet>2053</a>}
 </code></pre></div></section></main></body></html>
