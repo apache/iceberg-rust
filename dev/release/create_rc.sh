@@ -69,6 +69,10 @@ Options:
       Whether to run the dependency license check before creating artifacts.
       Default: 1
 
+  --check_publish <0|1>
+      Whether to dry-run publishing every crate to crates.io before creating artifacts.
+      Default: 1
+
   --sign <0|1>
       Whether to create and verify the detached GPG signature for the source archive.
       Default: 1
@@ -227,6 +231,12 @@ parse_args() {
         CHECK_DEPS="$2"
         shift 2
         ;;
+      --check_publish | --check-publish)
+        require_option_value "$1" "${2:-}"
+        validate_bool_option "$1" "$2"
+        CHECK_PUBLISH="$2"
+        shift 2
+        ;;
       --sign)
         require_option_value "$1" "${2:-}"
         validate_bool_option "$1" "$2"
@@ -313,6 +323,13 @@ check_dependency_licenses() {
     cd "${REPO_ROOT}"
     cargo deny check license
   )
+}
+
+# Packages and builds every crate as `cargo publish` would, without uploading,
+# so crates that cannot be published fail RC creation.
+check_crates_publishable() {
+  require_command cargo
+  cargo publish --workspace --all-features --dry-run --manifest-path "${REPO_ROOT}/Cargo.toml"
 }
 
 prepare_output_directory() {
@@ -500,6 +517,7 @@ RELEASE_DIST_DIR="dist"
 CREATE_RC_TAG="1"
 CHECK_HEADERS="1"
 CHECK_DEPS="1"
+CHECK_PUBLISH="1"
 SIGN_ARCHIVE="1"
 UPLOAD_SVN="0"
 SVN_DIST_URL="https://dist.apache.org/repos/dist/dev/iceberg"
@@ -521,6 +539,12 @@ if enabled "${CHECK_DEPS}"; then
   run_step "Check dependency licenses" check_dependency_licenses
 else
   skip_step "Check dependency licenses"
+fi
+
+if enabled "${CHECK_PUBLISH}"; then
+  run_step "Check crates can be published" check_crates_publishable
+else
+  skip_step "Check crates can be published"
 fi
 
 run_step "Prepare output directory ${RC_DIR}" prepare_output_directory
