@@ -338,7 +338,7 @@ fn check_in_bloom_filter(column: &ColumnBloomFilter, datum: &Datum) -> bool {
         PrimitiveLiteral::UInt128(v) => {
             // UUID: stored as FIXED_LEN_BYTE_ARRAY(16), big-endian
             let bytes = v.to_be_bytes();
-            sbbf.check(&ByteArray::from(bytes.to_vec()))
+            sbbf.check(bytes.as_slice())
         }
         PrimitiveLiteral::AboveMax | PrimitiveLiteral::BelowMin => true,
     }
@@ -1144,6 +1144,62 @@ mod tests {
             !result,
             "Decimal FIXED_LEN_BYTE_ARRAY value absent should not match"
         );
+    }
+
+    fn create_uuid_schema() -> Schema {
+        Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "u", Type::Primitive(PrimitiveType::Uuid)).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    /// The probe hands the 16 big-endian bytes to `check` as a slice while the writer
+    /// inserts them as a `ByteArray`; both hash the same bytes, so a present UUID must
+    /// still might-match.
+    #[test]
+    fn test_uuid_fixed_bytes_present() {
+        let uuid = uuid::Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap();
+
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        sbbf.insert(&ByteArray::from(uuid.as_u128().to_be_bytes().to_vec()));
+
+        let bloom_filters = HashMap::from([(
+            1,
+            ColumnBloomFilter::new(sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY, 16),
+        )]);
+
+        let predicate = Reference::new("u")
+            .equal_to(Datum::uuid(uuid))
+            .bind(create_uuid_schema().into(), true)
+            .unwrap();
+
+        let result = BloomFilterEvaluator::eval(&predicate, &bloom_filters).unwrap();
+        assert!(result, "UUID present should might-match");
+    }
+
+    #[test]
+    fn test_uuid_fixed_bytes_absent() {
+        let present = uuid::Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap();
+        let absent = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
+
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        sbbf.insert(&ByteArray::from(present.as_u128().to_be_bytes().to_vec()));
+
+        let bloom_filters = HashMap::from([(
+            1,
+            ColumnBloomFilter::new(sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY, 16),
+        )]);
+
+        let predicate = Reference::new("u")
+            .equal_to(Datum::uuid(absent))
+            .bind(create_uuid_schema().into(), true)
+            .unwrap();
+
+        let result = BloomFilterEvaluator::eval(&predicate, &bloom_filters).unwrap();
+        assert!(!result, "UUID absent should not match");
     }
 
     /// Negative decimal values should also work correctly.
