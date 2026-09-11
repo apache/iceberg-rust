@@ -1679,17 +1679,21 @@ mod tests {
         .await;
     }
 
-    /// `Sbbf` hashes raw IEEE bytes, so `-0.0` and `0.0` are distinct entries, and arrow's
-    /// float `is_eq` is bitwise for the same reason. That agreement is what makes it safe
-    /// to prune a row group holding only the opposite zero: if the row filter ever became
-    /// IEEE-lenient, those pruned rows would be rows it should have returned, and the
-    /// on/off comparison catches the divergence. A probe that canonicalized the sign
-    /// instead only over-keeps, costing pruning rather than correctness.
+    /// `Sbbf` hashes raw IEEE bytes, so `-0.0` and `0.0` are distinct entries. Arrow's
+    /// float equality is bitwise too, for an independent reason: `ArrowNativeTypeOp::is_eq`
+    /// implements total-order (`total_cmp`) semantics as `to_bits() == to_bits()`, so
+    /// `-0.0 != 0.0` and `NaN == NaN` there. That agreement is what makes it safe to prune
+    /// a row group holding only the opposite zero: if `is_eq` ever became IEEE-lenient,
+    /// those pruned rows would be rows the row filter should have returned. A probe that
+    /// canonicalized the sign instead only over-keeps, costing pruning rather than
+    /// correctness — but it would also hide such a change from this test.
     ///
-    /// Each row group pairs its zero with a larger filler value so its min/max range
-    /// spans the other zero. Statistics therefore cannot prune it and the bloom filter
-    /// is what discriminates, without relying on the writer widening a single-value
-    /// group's bounds to `[-0.0, +0.0]`.
+    /// Each row group pairs its zero with a larger filler value so its min/max range spans
+    /// the other zero. Neither statistics path can prune it, so the bloom-off read really
+    /// does evaluate `is_eq` against `ROWS_PER_GROUP - 1` copies of the opposite zero: that
+    /// arm is the control pinning arrow's semantics, and IEEE-lenient equality would double
+    /// the row count it returns. Pairing with a filler also avoids relying on the writer
+    /// widening a single-value group's bounds to `[-0.0, +0.0]`.
     #[tokio::test]
     async fn test_bloom_pushdown_float_signed_zero() {
         const FILLER: f32 = 5.0;
