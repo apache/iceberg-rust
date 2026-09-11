@@ -19,6 +19,11 @@
 
 # Iceberg property macros
 
+This crate contains the property macros used internally by
+[`iceberg`](https://crates.io/crates/iceberg). It is published only because
+`iceberg` depends on it and has no API stability guarantees, so depend on
+`iceberg` rather than on this crate.
+
 ## `Properties` derive macro
 
 `#[derive(Properties)]` parses an owned typed struct from a flat
