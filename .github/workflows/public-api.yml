@@ -18,6 +18,11 @@
 name: Public API
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'crates/**'
   pull_request:
   merge_group:
 
