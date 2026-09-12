@@ -38,9 +38,9 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::spec::decimal_utils::i128_from_be_bytes;
 use crate::spec::{
-    DEFAULT_GEOSPATIAL_CRS, Datum, EdgeInterpolationAlgorithm, FIRST_FIELD_ID, GeographyType,
-    GeometryType, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType,
-    Schema, SchemaVisitor, StructType, Type, VariantType,
+    Datum, EdgeInterpolationAlgorithm, FIRST_FIELD_ID, GeographyType, GeometryType, ListType,
+    MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema, SchemaVisitor,
+    StructType, Type, VariantType,
 };
 use crate::{Error, ErrorKind};
 
@@ -103,7 +103,7 @@ impl ExtensionType for VariantExtensionType {
     }
 }
 
-fn edge_interpolation_algorithm_to_wkb_edges(algorithm: EdgeInterpolationAlgorithm) -> WkbEdges {
+fn wkb_edges_from_edge_interpolation_algorithm(algorithm: EdgeInterpolationAlgorithm) -> WkbEdges {
     match algorithm {
         EdgeInterpolationAlgorithm::Spherical => WkbEdges::Spherical,
         EdgeInterpolationAlgorithm::Vincenty => WkbEdges::Vincenty,
@@ -113,13 +113,15 @@ fn edge_interpolation_algorithm_to_wkb_edges(algorithm: EdgeInterpolationAlgorit
     }
 }
 
-fn wkb_edges_to_edge_interpolation_algorithm(edges: WkbEdges) -> EdgeInterpolationAlgorithm {
-    match edges {
-        WkbEdges::Spherical => EdgeInterpolationAlgorithm::Spherical,
-        WkbEdges::Vincenty => EdgeInterpolationAlgorithm::Vincenty,
-        WkbEdges::Thomas => EdgeInterpolationAlgorithm::Thomas,
-        WkbEdges::Andoyer => EdgeInterpolationAlgorithm::Andoyer,
-        WkbEdges::Karney => EdgeInterpolationAlgorithm::Karney,
+impl From<WkbEdges> for EdgeInterpolationAlgorithm {
+    fn from(edges: WkbEdges) -> Self {
+        match edges {
+            WkbEdges::Spherical => Self::Spherical,
+            WkbEdges::Vincenty => Self::Vincenty,
+            WkbEdges::Thomas => Self::Thomas,
+            WkbEdges::Andoyer => Self::Andoyer,
+            WkbEdges::Karney => Self::Karney,
+        }
     }
 }
 
@@ -492,9 +494,11 @@ impl ArrowSchemaConverter {
             WkbTypeHint::Geography => Ok(Type::Primitive(PrimitiveType::Geography(
                 GeographyType::new(
                     crs,
-                    wkb_edges_to_edge_interpolation_algorithm(
-                        wkb_type.metadata().algorithm.unwrap_or_default(),
-                    ),
+                    wkb_type
+                        .metadata()
+                        .algorithm
+                        .unwrap_or(WkbEdges::Spherical)
+                        .into(),
                 )?,
             ))),
         }
@@ -725,17 +729,16 @@ impl SchemaVisitor for ToArrowSchemaConverter {
             Type::Variant(_) => {
                 // A variant column's storage is a struct; tag the field with the canonical
                 // `arrow.parquet.variant` extension type so consumers read it as a Variant, not a struct.
-                arrow_field = arrow_field.with_extension_type(VariantExtensionType);
+                arrow_field.try_with_extension_type(VariantExtensionType)?;
             }
             Type::Primitive(PrimitiveType::Geometry(geometry)) => {
-                let metadata =
-                    WkbMetadata::new(Some(geometry.crs().unwrap_or(DEFAULT_GEOSPATIAL_CRS)), None);
+                let metadata = WkbMetadata::new(Some(geometry.crs()), None);
                 arrow_field.try_with_extension_type(WkbType::new(Some(metadata)))?;
             }
             Type::Primitive(PrimitiveType::Geography(geography)) => {
                 let metadata = WkbMetadata::new(
-                    Some(geography.crs().unwrap_or(DEFAULT_GEOSPATIAL_CRS)),
-                    Some(edge_interpolation_algorithm_to_wkb_edges(
+                    Some(geography.crs()),
+                    Some(wkb_edges_from_edge_interpolation_algorithm(
                         geography.algorithm(),
                     )),
                 );
@@ -1516,7 +1519,8 @@ mod tests {
     use super::*;
     use crate::spec::decimal_utils::decimal_new;
     use crate::spec::{
-        EdgeInterpolationAlgorithm as IcebergEdgeInterpolationAlgorithm, Literal, Schema,
+        DEFAULT_GEOSPATIAL_CRS, EdgeInterpolationAlgorithm as IcebergEdgeInterpolationAlgorithm,
+        Literal, Schema,
     };
 
     /// Create a simple field with metadata.

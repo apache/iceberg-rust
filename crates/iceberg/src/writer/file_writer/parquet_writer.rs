@@ -2591,8 +2591,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(data_file.record_count(), 1);
-        assert!(data_file.lower_bounds().is_empty());
-        assert!(data_file.upper_bounds().is_empty());
+        // Geospatial bounds are intentionally omitted until zonemap statistics are implemented.
+        assert!(
+            data_file.lower_bounds().is_empty(),
+            "geospatial lower bounds should be omitted"
+        );
+        assert!(
+            data_file.upper_bounds().is_empty(),
+            "geospatial upper bounds should be omitted"
+        );
 
         let input_file = file_io.new_input(data_file.file_path())?;
         let file_metadata = input_file.metadata().await?;

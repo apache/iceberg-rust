@@ -1474,6 +1474,8 @@ pub fn iceberg::spec::EdgeInterpolationAlgorithm::clone(&self) -> iceberg::spec:
 impl core::cmp::Eq for iceberg::spec::EdgeInterpolationAlgorithm
 impl core::cmp::PartialEq for iceberg::spec::EdgeInterpolationAlgorithm
 pub fn iceberg::spec::EdgeInterpolationAlgorithm::eq(&self, other: &iceberg::spec::EdgeInterpolationAlgorithm) -> bool
+impl core::convert::From<parquet_geospatial::types::Edges> for iceberg::spec::EdgeInterpolationAlgorithm
+pub fn iceberg::spec::EdgeInterpolationAlgorithm::from(edges: parquet_geospatial::types::Edges) -> Self
 impl core::default::Default for iceberg::spec::EdgeInterpolationAlgorithm
 pub fn iceberg::spec::EdgeInterpolationAlgorithm::default() -> iceberg::spec::EdgeInterpolationAlgorithm
 impl core::fmt::Debug for iceberg::spec::EdgeInterpolationAlgorithm
@@ -2056,7 +2058,7 @@ pub fn iceberg::spec::FieldSummary::deserialize<__D>(__deserializer: __D) -> cor
 pub struct iceberg::spec::GeographyType
 impl iceberg::spec::GeographyType
 pub fn iceberg::spec::GeographyType::algorithm(&self) -> iceberg::spec::EdgeInterpolationAlgorithm
-pub fn iceberg::spec::GeographyType::crs(&self) -> core::option::Option<&str>
+pub fn iceberg::spec::GeographyType::crs(&self) -> &str
 pub fn iceberg::spec::GeographyType::new(crs: core::option::Option<alloc::string::String>, algorithm: iceberg::spec::EdgeInterpolationAlgorithm) -> iceberg::Result<Self>
 impl core::clone::Clone for iceberg::spec::GeographyType
 pub fn iceberg::spec::GeographyType::clone(&self) -> iceberg::spec::GeographyType
@@ -2076,7 +2078,7 @@ impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::GeographyType
 pub fn iceberg::spec::GeographyType::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::spec::GeometryType
 impl iceberg::spec::GeometryType
-pub fn iceberg::spec::GeometryType::crs(&self) -> core::option::Option<&str>
+pub fn iceberg::spec::GeometryType::crs(&self) -> &str
 pub fn iceberg::spec::GeometryType::new(crs: core::option::Option<alloc::string::String>) -> iceberg::Result<Self>
 impl core::clone::Clone for iceberg::spec::GeometryType
 pub fn iceberg::spec::GeometryType::clone(&self) -> iceberg::spec::GeometryType
