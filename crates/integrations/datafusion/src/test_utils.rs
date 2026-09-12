@@ -253,13 +253,13 @@ pub(crate) async fn create_recording_catalog() -> (
     )
 }
 
-pub(crate) fn iceberg_options() -> Arc<IcebergOptions> {
-    Arc::new(IcebergOptions {
+pub(crate) fn iceberg_options() -> IcebergOptions {
+    IcebergOptions {
         identity: Some("test-user".to_string()),
         properties: HashMap::from([("test-property".to_string(), "test-value".to_string())]),
         credentials: HashMap::from([(
             "test-token".to_string(),
             SensitiveString::from("test-secret".to_string()),
         )]),
-    })
+    }
 }

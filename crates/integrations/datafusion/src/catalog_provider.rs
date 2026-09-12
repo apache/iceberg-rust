@@ -172,7 +172,7 @@ mod tests {
         let table = schema.table(&table_name).await.unwrap().unwrap();
 
         let first_options = test_utils::iceberg_options();
-        let config = SessionConfig::new().with_extension(Arc::clone(&first_options));
+        let config = SessionConfig::new().with_option_extension(first_options.clone());
         let first_df_context = DFSessionContext::new_with_config(config);
 
         table
@@ -180,7 +180,7 @@ mod tests {
             .await
             .unwrap();
 
-        let second_options = Arc::new(IcebergOptions {
+        let second_options = IcebergOptions {
             identity: Some("another-user".to_string()),
             properties: HashMap::from([(
                 "another-property".to_string(),
@@ -190,8 +190,8 @@ mod tests {
                 "another-token".to_string(),
                 SensitiveString::from("another-secret".to_string()),
             )]),
-        });
-        let config = SessionConfig::new().with_extension(Arc::clone(&second_options));
+        };
+        let config = SessionConfig::new().with_option_extension(second_options.clone());
         let second_df_context = DFSessionContext::new_with_config(config);
 
         table
@@ -255,7 +255,7 @@ mod tests {
         let table = schema.table(&table_name).await.unwrap().unwrap();
         session_catalog.clear_calls();
 
-        let config = SessionConfig::new().with_extension(test_utils::iceberg_options());
+        let config = SessionConfig::new().with_option_extension(test_utils::iceberg_options());
         let df_context = DFSessionContext::new_with_config(config);
         df_context.register_table("test_table", table).unwrap();
         df_context

@@ -111,6 +111,14 @@ impl core::default::Default for iceberg_datafusion::IcebergOptions
 pub fn iceberg_datafusion::IcebergOptions::default() -> iceberg_datafusion::IcebergOptions
 impl core::fmt::Debug for iceberg_datafusion::IcebergOptions
 pub fn iceberg_datafusion::IcebergOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_common::config::ConfigExtension for iceberg_datafusion::IcebergOptions
+pub const iceberg_datafusion::IcebergOptions::PREFIX: &'static str
+impl datafusion_common::config::ExtensionOptions for iceberg_datafusion::IcebergOptions
+pub fn iceberg_datafusion::IcebergOptions::as_any(&self) -> &dyn core::any::Any
+pub fn iceberg_datafusion::IcebergOptions::as_any_mut(&mut self) -> &mut dyn core::any::Any
+pub fn iceberg_datafusion::IcebergOptions::cloned(&self) -> alloc::boxed::Box<dyn datafusion_common::config::ExtensionOptions>
+pub fn iceberg_datafusion::IcebergOptions::entries(&self) -> alloc::vec::Vec<datafusion_common::config::ConfigEntry>
+pub fn iceberg_datafusion::IcebergOptions::set(&mut self, key: &str, value: &str) -> datafusion_common::error::Result<()>
 pub struct iceberg_datafusion::IcebergStaticTableProvider
 impl iceberg_datafusion::IcebergStaticTableProvider
 pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table(table: iceberg::table::Table) -> iceberg::error::Result<Self>

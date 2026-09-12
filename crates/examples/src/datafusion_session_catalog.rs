@@ -56,7 +56,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
 
-    let config = SessionConfig::new().with_extension(Arc::new(iceberg_options));
+    let config = SessionConfig::new().with_option_extension(iceberg_options);
     let datafusion = DataFusionSessionContext::new_with_config(config);
     datafusion.register_catalog("iceberg", Arc::new(provider));
 
