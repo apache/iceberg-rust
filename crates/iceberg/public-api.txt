@@ -72,6 +72,7 @@ impl iceberg::arrow::ArrowReaderBuilder
 pub fn iceberg::arrow::ArrowReaderBuilder::build(self) -> iceberg::arrow::ArrowReader
 pub fn iceberg::arrow::ArrowReaderBuilder::new(file_io: iceberg::io::FileIO, runtime: iceberg::Runtime) -> Self
 pub fn iceberg::arrow::ArrowReaderBuilder::with_batch_size(self, batch_size: usize) -> Self
+pub fn iceberg::arrow::ArrowReaderBuilder::with_bloom_filter_enabled(self, bloom_filter_enabled: bool) -> Self
 pub fn iceberg::arrow::ArrowReaderBuilder::with_data_file_concurrency_limit(self, val: usize) -> Self
 pub fn iceberg::arrow::ArrowReaderBuilder::with_metadata_size_hint(self, metadata_size_hint: usize) -> Self
 pub fn iceberg::arrow::ArrowReaderBuilder::with_range_coalesce_bytes(self, range_coalesce_bytes: u64) -> Self
@@ -1361,6 +1362,7 @@ pub fn iceberg::scan::TableScanBuilder<'a>::select_all(self) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::select_empty(self) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::snapshot_id(self, snapshot_id: i64) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_batch_size(self, batch_size: core::option::Option<usize>) -> Self
+pub fn iceberg::scan::TableScanBuilder<'a>::with_bloom_filter_enabled(self, bloom_filter_enabled: bool) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_case_sensitive(self, case_sensitive: bool) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_concurrency_limit(self, limit: usize) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_data_file_concurrency_limit(self, limit: usize) -> Self
