@@ -22,13 +22,18 @@ on:
     branches:
       - main
     paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - "**/rust-toolchain"
-      - "**/rust-toolchain.toml"
-      - ".cargo/config.toml"
-      - ".github/actions/setup-builder/**"
-      - ".github/workflows/ci.yml"
+      # Artifacts that must be included in releases, such as LICENSE and NOTICE, are deliberately not excluded so we can verify they will be bundled.
+      # Include all files and directories, then filter out files and directories that don't impact code, tests, or release artifacts.
+      - '**'
+      - '!.github/ISSUE_TEMPLATE/**'
+      - '!dev/release/**'
+      - '!website/**'
+      - '!.asf.yml'
+      - '!.gitattributes'
+      - '!.gitignore'
+      - '!CONTRIBUTING.md'
+      - '!CHANGELOG.md'
+      - '!README.md'
   pull_request:
   merge_group:
 
