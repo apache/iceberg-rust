@@ -19,11 +19,37 @@ use std::collections::HashMap;
 
 use iceberg_property_macro::properties_view;
 
-use crate::compression::CompressionCodec;
+use crate::compression::{CompressionCodec, TABLE_METADATA_SUPPORTED_COMPRESSION};
 use crate::encryption::AesKeySize;
 use crate::error::{Error, ErrorKind, Result};
 use crate::spec::NameMapping;
 use crate::util::location::strip_trailing_slash;
+
+fn supported_metadata_compression_names() -> String {
+    let names = TABLE_METADATA_SUPPORTED_COMPRESSION
+        .iter()
+        .map(|codec| format!("'{}'", codec.name()))
+        .collect::<Vec<_>>();
+    let (last, rest) = names
+        .split_last()
+        .expect("metadata compression codec list must not be empty");
+
+    if rest.is_empty() {
+        last.clone()
+    } else {
+        format!("{}, and {last}", rest.join(", "))
+    }
+}
+
+fn invalid_metadata_compression_codec(value: &str) -> Error {
+    Error::new(
+        ErrorKind::DataInvalid,
+        format!(
+            "Invalid metadata compression codec: {value}. Only {} are supported for metadata files.",
+            supported_metadata_compression_names()
+        ),
+    )
+}
 
 fn parse_location_property(path: &str) -> Result<String> {
     if path.is_empty() {
@@ -43,31 +69,14 @@ fn parse_metadata_compression(value: &str) -> Result<CompressionCodec> {
     let lowercase_value = value.to_lowercase();
 
     // Use serde to parse the codec (which has rename_all = "lowercase")
-    let codec: CompressionCodec = serde_json::from_value(serde_json::Value::String(
-        lowercase_value,
-    ))
-    .map_err(|_| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported.",
-                CompressionCodec::None.name(),
-                CompressionCodec::gzip_default().name()
-            ),
-        )
-    })?;
+    let codec: CompressionCodec =
+        serde_json::from_value(serde_json::Value::String(lowercase_value))
+            .map_err(|_| invalid_metadata_compression_codec(value))?;
 
-    // Validate that only None and Gzip are used for metadata
-    match codec {
-        CompressionCodec::None | CompressionCodec::Gzip(_) => Ok(codec),
-        _ => Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported for metadata files.",
-                CompressionCodec::None.name(),
-                CompressionCodec::gzip_default().name()
-            ),
-        )),
+    if TABLE_METADATA_SUPPORTED_COMPRESSION.contains(&codec) {
+        Ok(codec)
+    } else {
+        Err(invalid_metadata_compression_codec(value))
     }
 }
 
@@ -701,15 +710,20 @@ mod tests {
 
     #[test]
     fn test_table_properties_compression() {
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "gzip".to_string(),
-        )]);
-        let table_properties = TableProperties::new(&props);
-        assert_eq!(
-            table_properties.metadata_compression_codec().unwrap(),
-            CompressionCodec::gzip_default()
-        );
+        for (value, expected) in [
+            ("gzip", CompressionCodec::gzip_default()),
+            ("zstd", CompressionCodec::zstd_default()),
+        ] {
+            let props = HashMap::from([(
+                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+                value.to_string(),
+            )]);
+            let table_properties = TableProperties::new(&props);
+            assert_eq!(
+                table_properties.metadata_compression_codec().unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]
@@ -727,38 +741,23 @@ mod tests {
 
     #[test]
     fn test_table_properties_compression_case_insensitive() {
-        // Test uppercase
-        let props_upper = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "GZIP".to_string(),
-        )]);
-        let table_properties = TableProperties::new(&props_upper);
-        assert_eq!(
-            table_properties.metadata_compression_codec().unwrap(),
-            CompressionCodec::gzip_default()
-        );
-
-        // Test mixed case
-        let props_mixed = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "GzIp".to_string(),
-        )]);
-        let table_properties = TableProperties::new(&props_mixed);
-        assert_eq!(
-            table_properties.metadata_compression_codec().unwrap(),
-            CompressionCodec::gzip_default()
-        );
-
-        // Test "NONE" should also be case-insensitive
-        let props_none_upper = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "NONE".to_string(),
-        )]);
-        let table_properties = TableProperties::new(&props_none_upper);
-        assert_eq!(
-            table_properties.metadata_compression_codec().unwrap(),
-            CompressionCodec::None
-        );
+        for (value, expected) in [
+            ("GZIP", CompressionCodec::gzip_default()),
+            ("GzIp", CompressionCodec::gzip_default()),
+            ("ZSTD", CompressionCodec::zstd_default()),
+            ("ZsTd", CompressionCodec::zstd_default()),
+            ("NONE", CompressionCodec::None),
+        ] {
+            let props = HashMap::from([(
+                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+                value.to_string(),
+            )]);
+            let table_properties = TableProperties::new(&props);
+            assert_eq!(
+                table_properties.metadata_compression_codec().unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]
@@ -859,7 +858,7 @@ mod tests {
 
     #[test]
     fn test_table_properties_compression_invalid_rejected() {
-        let invalid_codecs = ["lz4", "zstd", "snappy"];
+        let invalid_codecs = ["lz4", "snappy"];
 
         for codec in invalid_codecs {
             let props = HashMap::from([(
@@ -875,7 +874,7 @@ mod tests {
                 "Expected error message to contain codec '{codec}', got: {err_msg}"
             );
             assert!(
-                err_msg.contains("Only 'none' and 'gzip' are supported"),
+                err_msg.contains("Only 'none', 'gzip', and 'zstd' are supported"),
                 "Expected error message to contain supported codecs, got: {err_msg}"
             );
         }
