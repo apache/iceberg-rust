@@ -1234,19 +1234,16 @@ mod tests {
             .with_schema(iceberg_schema.clone())
             .with_project_field_ids(vec![1, 2])
             .with_predicate(Some(predicate_sub2))
-            .with_deletes(vec![FileScanTaskDeleteFile {
-                file_path: pos_del_path.clone(),
-                file_type: DataContentType::PositionDeletes,
-                file_format: DataFileFormat::Parquet,
-                partition_spec_id: 0,
-                equality_ids: None,
-                file_size_in_bytes: std::fs::metadata(&pos_del_path).unwrap().len(),
-                referenced_data_file: None,
-                content_offset: None,
-                content_size_in_bytes: None,
-                record_count: None,
-                key_metadata: None,
-            }])
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_path(pos_del_path.clone())
+                    .with_file_type(DataContentType::PositionDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
+                    .with_partition_spec_id(0)
+                    .with_file_size_in_bytes(std::fs::metadata(&pos_del_path).unwrap().len())
+                    .build()
+                    .unwrap(),
+            ])
             .with_case_sensitive(false)
             .build()
             .unwrap();
