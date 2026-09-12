@@ -64,6 +64,8 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Build
         run: make build
@@ -80,6 +82,8 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Check each crate standalone
         run: |
@@ -110,6 +114,8 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Build
         run: cargo build -p iceberg --no-default-features
@@ -138,6 +144,7 @@ jobs:
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.test-suite.name }}
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Compile tests
         if: matrix.test-suite.name == 'default'
@@ -159,6 +166,8 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-public-api
         run: cargo install --locked cargo-public-api@0.51.0
@@ -189,7 +198,8 @@ jobs:
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: bindings-python
+          key: bindings-python-${{ hashFiles('bindings/python/pyproject.toml') }}
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
