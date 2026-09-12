@@ -127,7 +127,7 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.9.3"
-          enable-cache: false
+          enable-cache: true
       # Verify the wheel is abi3-compatible and installable without building from source.
       # Skipped for cross-compiled targets since they share the same maturin config;
       # if abi3 is broken, the native target build will catch it.

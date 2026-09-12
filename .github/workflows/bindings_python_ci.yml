@@ -29,7 +29,6 @@ on:
       - ".cargo/config.toml"
       - ".github/actions/setup-builder/**"
       - ".github/workflows/bindings_python_ci.yml"
-      - "bindings/python/pyproject.toml"
   pull_request:
   merge_group:
 
@@ -50,7 +49,7 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.9.3"
-          enable-cache: false
+          enable-cache: true
       - name: Install tools
         run: |
           uv tool install ruff@0.15.22
@@ -87,7 +86,7 @@ jobs:
         if: runner.os != 'Linux'
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: bindings-python-${{ hashFiles('bindings/python/pyproject.toml') }}
+          key: bindings-python
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -97,7 +96,7 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.9.3"
-          enable-cache: false
+          enable-cache: true
       - name: Sync dependencies
         working-directory: "bindings/python"
         shell: bash
