@@ -1226,9 +1226,9 @@ The release branch should be used as the base for the pull request.</p>
 <p>For example:</p>
 <pre><code class="language-shell">dev/release/create_rc.sh 0.9.1 2
 </code></pre>
+<p>The script always archives and tags <code>HEAD</code>, so make sure the exact commit to release is checked out before running it.</p>
 <p>Useful options include:</p>
 <ul>
-<li><code>--release_ref HEAD</code>: git commit-ish to archive and tag.</li>
 <li><code>--dist_dir dist</code>: artifact output root.</li>
 <li><code>--create_rc_tag 1</code>: create the signed annotated RC tag as the final release step.</li>
 <li><code>--check_headers 1</code>: check Apache license headers against the source archive.</li>
