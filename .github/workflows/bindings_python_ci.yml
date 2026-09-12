@@ -18,6 +18,18 @@
 name: Bindings Python CI
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "**/rust-toolchain"
+      - "**/rust-toolchain.toml"
+      - ".cargo/config.toml"
+      - ".github/actions/setup-builder/**"
+      - ".github/workflows/bindings_python_ci.yml"
+      - "bindings/python/pyproject.toml"
   pull_request:
   merge_group:
 
