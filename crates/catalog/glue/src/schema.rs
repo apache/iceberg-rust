@@ -25,8 +25,8 @@ pub(crate) const ICEBERG_FIELD_CURRENT: &str = "iceberg.field.current";
 use std::collections::HashMap;
 
 use aws_sdk_glue::types::Column;
+use iceberg::Result;
 use iceberg::spec::{PrimitiveType, SchemaVisitor, TableMetadata, VariantType, visit_schema};
-use iceberg::{Error, ErrorKind, Result};
 
 use crate::error::from_aws_build_error;
 
@@ -157,12 +157,10 @@ impl SchemaVisitor for GlueSchemaBuilder {
             PrimitiveType::Date => "date".to_string(),
             PrimitiveType::Timestamp => "timestamp".to_string(),
             PrimitiveType::TimestampNs => "timestamp_ns".to_string(),
-            PrimitiveType::Timestamptz | PrimitiveType::TimestamptzNs => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!("Conversion from {p:?} is not supported"),
-                ));
-            }
+            // Glue has no timezone-aware timestamp type; map to the equivalent non-tz type,
+            // matching the behavior of the AWS Glue catalog module in apache/iceberg.
+            PrimitiveType::Timestamptz => "timestamp".to_string(),
+            PrimitiveType::TimestamptzNs => "timestamp_ns".to_string(),
             PrimitiveType::Time | PrimitiveType::String | PrimitiveType::Uuid => {
                 "string".to_string()
             }
@@ -312,6 +310,12 @@ mod tests {
                     "name": "c13",
                     "required": true,
                     "type": "binary"
+                },
+                {
+                    "id": 14,
+                    "name": "c14",
+                    "required": true,
+                    "type": "timestamptz"
                 }
             ]
         }"#;
@@ -335,6 +339,44 @@ mod tests {
             create_column("c11", "string", "11", false)?,
             create_column("c12", "binary", "12", false)?,
             create_column("c13", "binary", "13", false)?,
+            create_column("c14", "timestamp", "14", false)?,
+        ];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_with_nanosecond_timestamps() -> Result<()> {
+        let record = r#"{
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [
+                {
+                    "id": 1,
+                    "name": "c1",
+                    "required": true,
+                    "type": "timestamp_ns"
+                },
+                {
+                    "id": 2,
+                    "name": "c2",
+                    "required": true,
+                    "type": "timestamptz_ns"
+                }
+            ]
+        }"#;
+
+        let schema = serde_json::from_str::<Schema>(record)?;
+        // Nanosecond timestamps are only valid from format version 3 onwards.
+        let metadata = create_metadata_with_format_version(schema, FormatVersion::V3)?;
+
+        let result = GlueSchemaBuilder::from_iceberg(&metadata)?.build();
+
+        let expected = vec![
+            create_column("c1", "timestamp_ns", "1", false)?,
+            create_column("c2", "timestamp_ns", "2", false)?,
         ];
 
         assert_eq!(result, expected);
