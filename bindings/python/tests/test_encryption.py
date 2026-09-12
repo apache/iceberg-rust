@@ -45,7 +45,11 @@ def test_encoded_wire_format():
 def test_encode_accepts_aes_key_lengths(key_length):
     encoded = encryption.encode_standard_key_metadata(bytes(key_length))
 
-    assert encryption.decode_standard_key_metadata(encoded) == (bytes(key_length), None, None)
+    assert encryption.decode_standard_key_metadata(encoded) == (
+        bytes(key_length),
+        None,
+        None,
+    )
 
 
 @pytest.mark.parametrize("key_length", [0, 4, 15, 20, 33])
