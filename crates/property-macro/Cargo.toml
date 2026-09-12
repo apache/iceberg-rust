@@ -28,7 +28,7 @@ license = { workspace = true }
 repository = { workspace = true }
 
 categories = ["database"]
-description = "Property derive macro for Apache Iceberg Rust"
+description = "Apache Iceberg Rust property macros, internal to the iceberg crate"
 keywords = ["iceberg"]
 
 [lib]
@@ -40,7 +40,9 @@ quote = { workspace = true }
 syn = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
-iceberg = { workspace = true }
+# Path-only so cargo strips it when packaging; a versioned dev-dependency would
+# create a publish cycle, since `iceberg` depends on this crate.
+iceberg = { path = "../iceberg" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 trybuild = { workspace = true }

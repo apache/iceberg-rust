@@ -23,7 +23,7 @@ use arrow_array::{
     LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
     Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray, new_null_array,
 };
-use arrow_buffer::NullBuffer;
+use arrow_buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::{DataType, FieldRef, TimeUnit};
 use uuid::Uuid;
 
@@ -822,7 +822,12 @@ pub(crate) fn create_primitive_array_repeated(
     Ok(match (data_type, prim_lit) {
         // --- Primitive Some arms ---
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(value))) => {
-            Arc::new(BooleanArray::from(vec![*value; num_rows]))
+            let buffer = if *value {
+                BooleanBuffer::new_set(num_rows)
+            } else {
+                BooleanBuffer::new_unset(num_rows)
+            };
+            Arc::new(BooleanArray::new(buffer, None))
         }
         (DataType::Int32, Some(PrimitiveLiteral::Int(value))) => {
             Arc::new(Int32Array::from(vec![*value; num_rows]))
@@ -1978,6 +1983,34 @@ mod test {
             .unwrap();
         assert_eq!(fixed.len(), num_rows);
         assert!((0..num_rows).all(|i| fixed.value(i) == bytes.as_slice()));
+    }
+
+    #[test]
+    fn test_create_boolean_array_repeated() {
+        let num_rows = 4;
+
+        for value in [true, false] {
+            let array = create_primitive_array_repeated(
+                &DataType::Boolean,
+                Some(&PrimitiveLiteral::Boolean(value)),
+                num_rows,
+            )
+            .unwrap();
+            let array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+            assert_eq!(array.len(), num_rows);
+            assert_eq!(array.null_count(), 0);
+            assert!((0..num_rows).all(|i| array.value(i) == value));
+        }
+
+        // num_rows == 0 must produce an empty (not one-element) array.
+        let empty = create_primitive_array_repeated(
+            &DataType::Boolean,
+            Some(&PrimitiveLiteral::Boolean(true)),
+            0,
+        )
+        .unwrap();
+        assert_eq!(empty.len(), 0);
+        assert_eq!(empty.null_count(), 0);
     }
 
     #[test]

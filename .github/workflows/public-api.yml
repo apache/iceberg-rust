@@ -21,9 +21,10 @@ on:
   push:
     branches:
       - main
-  pull_request:
     paths:
       - 'crates/**'
+  pull_request:
+  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
