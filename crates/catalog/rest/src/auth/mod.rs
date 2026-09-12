@@ -25,7 +25,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use iceberg::Result;
+use iceberg::{Result, SessionContext};
 pub use oauth2::OAuth2Manager;
 
 use crate::client::HttpClient;
@@ -44,11 +44,13 @@ pub const AUTH_TYPE_OAUTH2: &str = "oauth2";
 /// [`RestCatalogBuilder::with_auth_manager`](crate::RestCatalogBuilder::with_auth_manager) or
 /// [`RestSessionCatalogBuilder::with_auth_manager`](crate::RestSessionCatalogBuilder::with_auth_manager).
 /// Catalog initialization calls [`AuthManager::catalog_session`] exactly once;
-/// later sessions may rely on the state established by that call.
+/// the context-specific sessions that [`AuthManager::contextual_session`]
+/// derives from it may rely on the state established by that call.
 ///
-/// Both methods are handed the catalog's [`HttpClient`], which an
-/// implementation may reuse for its own requests (e.g. a token exchange) so
-/// that they share the catalog's connection pool and configuration.
+/// [`Self::init_session`] and [`Self::catalog_session`] are handed the
+/// catalog's [`HttpClient`], which an implementation may reuse for its own
+/// requests (e.g. a token exchange) so that they share the catalog's
+/// connection pool and configuration.
 #[async_trait]
 pub trait AuthManager: Debug + Send + Sync {
     /// Session used for the initial `/v1/config` handshake, given the
@@ -73,6 +75,26 @@ pub trait AuthManager: Debug + Send + Sync {
         client: &HttpClient,
         props: &HashMap<String, String>,
     ) -> Result<Arc<dyn AuthSession>>;
+
+    /// Returns the authentication session for a specific context.
+    ///
+    /// The catalog calls this method only after [`Self::catalog_session`] has
+    /// succeeded. `catalog_session` is the catalog session returned by this
+    /// manager. If the context does not require different authentication,
+    /// implementations should return `catalog_session` unchanged.
+    ///
+    /// The catalog does not cache the returned session. Implementations should
+    /// cache context-specific sessions internally using
+    /// [`SessionContext::session_id`] and are responsible for eviction and
+    /// releasing any associated resources. Reusing a session ID with different
+    /// context may therefore return the previously cached session.
+    async fn contextual_session(
+        &self,
+        _context: &SessionContext,
+        catalog_session: Arc<dyn AuthSession>,
+    ) -> Result<Arc<dyn AuthSession>> {
+        Ok(catalog_session)
+    }
 }
 
 /// Authenticates outgoing REST catalog requests.
