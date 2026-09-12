@@ -343,6 +343,23 @@ fn json_fixed() {
 }
 
 #[test]
+fn json_unknown_only_accepts_null() {
+    let unknown = Primitive(PrimitiveType::Unknown);
+
+    assert_eq!(
+        Literal::try_from_json(JsonValue::Null, &unknown).unwrap(),
+        None
+    );
+    let error = Literal::try_from_json(serde_json::json!(1), &unknown).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::DataInvalid);
+    assert!(
+        error
+            .message()
+            .contains("Unknown type only supports null default values")
+    );
+}
+
+#[test]
 fn test_should_parse_json_binary_if_hex_uses_uppercase_digits() {
     let result = Literal::try_from_json(
         serde_json::json!("00010FFF"),

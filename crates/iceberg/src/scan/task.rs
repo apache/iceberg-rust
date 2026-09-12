@@ -253,7 +253,16 @@ impl FileScanTask {
                 ))
             }
             (Some(_), Some(partition_spec)) => {
-                partition_spec.partition_type(&self.schema)?;
+                // A historical partition spec may reference source columns that were later
+                // dropped from the current schema. This is valid in v2+ tables, so only
+                // validate transforms whose source columns are still present.
+                for partition_field in partition_spec.fields() {
+                    if let Some(source_field) = self.schema.field_by_id(partition_field.source_id) {
+                        partition_field
+                            .transform
+                            .result_type(&source_field.field_type)?;
+                    }
+                }
                 Ok(())
             }
         }
@@ -647,7 +656,7 @@ mod tests {
     }
 
     #[test]
-    fn test_file_scan_task_builder_rejects_dropped_partition_source_column() {
+    fn test_file_scan_task_builder_accepts_dropped_partition_source_column() {
         let (_historical_schema, partition_spec) =
             schema_and_spec(PrimitiveType::Long, Transform::Identity);
         let current_schema = Arc::new(
@@ -661,15 +670,12 @@ mod tests {
                 .unwrap(),
         );
 
-        let err = build_file_scan_task(
+        build_file_scan_task(
             current_schema,
             Some(Struct::from_iter([Some(Literal::long(42))])),
             Some(partition_spec),
         )
-        .unwrap_err();
-
-        assert_eq!(err.kind(), ErrorKind::Unexpected);
-        assert!(err.message().contains("No column with source column id 1"));
+        .unwrap();
     }
 
     #[test]
