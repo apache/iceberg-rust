@@ -20,6 +20,7 @@
  */
 use std::collections::HashMap;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::ops::Index;
 use std::sync::{Arc, OnceLock};
 
@@ -43,6 +44,9 @@ pub const MAP_VALUE_FIELD_NAME: &str = "value";
 
 pub(crate) const MAX_DECIMAL_BYTES: u32 = 24;
 pub(crate) const MAX_DECIMAL_PRECISION: u32 = 38;
+pub(crate) const DEFAULT_GEOSPATIAL_CRS: &str = "OGC:CRS84";
+const EQUIVALENT_DEFAULT_GEOSPATIAL_CRS: &str = "EPSG:4326";
+const MAX_GEOSPATIAL_CRS_BYTES: usize = 128;
 
 mod _decimal {
     use once_cell::sync::Lazy;
@@ -230,6 +234,211 @@ impl From<MapType> for Type {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct Crs(String);
+
+impl Crs {
+    fn new(crs: Option<String>) -> Result<Self> {
+        let crs = crs.unwrap_or_else(|| DEFAULT_GEOSPATIAL_CRS.to_string());
+        let crs = crs.trim().to_string();
+        if crs.len() > MAX_GEOSPATIAL_CRS_BYTES {
+            return Err(crate::Error::new(
+                crate::ErrorKind::DataInvalid,
+                format!("Geospatial CRS must be at most {MAX_GEOSPATIAL_CRS_BYTES} bytes"),
+            ));
+        }
+        if crs.is_empty() || crs.contains([',', ')']) {
+            return Err(crate::Error::new(
+                crate::ErrorKind::DataInvalid,
+                "Geospatial CRS must be non-empty and must not contain ',' or ')'",
+            ));
+        }
+
+        let crs = match crs.as_str() {
+            DEFAULT_GEOSPATIAL_CRS | EQUIVALENT_DEFAULT_GEOSPATIAL_CRS => {
+                DEFAULT_GEOSPATIAL_CRS.to_string()
+            }
+            _ => crs,
+        };
+        Ok(Self(crs))
+    }
+}
+
+impl Default for Crs {
+    fn default() -> Self {
+        Self(DEFAULT_GEOSPATIAL_CRS.to_string())
+    }
+}
+
+impl PartialEq for Crs {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq_ignore_ascii_case(&other.0)
+    }
+}
+
+impl Eq for Crs {}
+
+impl Hash for Crs {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for byte in self.0.bytes() {
+            state.write_u8(byte.to_ascii_lowercase());
+        }
+    }
+}
+
+/// Iceberg geometry type.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Hash, Default)]
+pub struct GeometryType {
+    crs: Crs,
+}
+
+impl GeometryType {
+    /// Creates a geometry type with an optional coordinate reference system.
+    pub fn new(crs: Option<String>) -> Result<Self> {
+        Ok(Self {
+            crs: Crs::new(crs)?,
+        })
+    }
+
+    /// Returns the coordinate reference system.
+    pub fn crs(&self) -> &str {
+        &self.crs.0
+    }
+}
+
+/// Iceberg geography edge interpolation algorithm.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EdgeInterpolationAlgorithm {
+    /// Spherical edge interpolation.
+    #[default]
+    Spherical,
+    /// Vincenty edge interpolation.
+    Vincenty,
+    /// Thomas edge interpolation.
+    Thomas,
+    /// Andoyer edge interpolation.
+    Andoyer,
+    /// Karney edge interpolation.
+    Karney,
+}
+
+impl EdgeInterpolationAlgorithm {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Spherical => "spherical",
+            Self::Vincenty => "vincenty",
+            Self::Thomas => "thomas",
+            Self::Andoyer => "andoyer",
+            Self::Karney => "karney",
+        }
+    }
+
+    fn parse(value: &str) -> std::result::Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "spherical" => Ok(Self::Spherical),
+            "vincenty" => Ok(Self::Vincenty),
+            "thomas" => Ok(Self::Thomas),
+            "andoyer" => Ok(Self::Andoyer),
+            "karney" => Ok(Self::Karney),
+            _ => Err(format!(
+                "Unknown geography edge interpolation algorithm: {value}"
+            )),
+        }
+    }
+}
+
+/// Iceberg geography type.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
+pub struct GeographyType {
+    crs: Crs,
+    algorithm: EdgeInterpolationAlgorithm,
+}
+
+impl Default for GeographyType {
+    fn default() -> Self {
+        Self {
+            crs: Crs::default(),
+            algorithm: EdgeInterpolationAlgorithm::Spherical,
+        }
+    }
+}
+
+impl GeographyType {
+    /// Creates a geography type with an optional coordinate reference system and edge interpolation algorithm.
+    pub fn new(crs: Option<String>, algorithm: EdgeInterpolationAlgorithm) -> Result<Self> {
+        Ok(Self {
+            crs: Crs::new(crs)?,
+            algorithm,
+        })
+    }
+
+    /// Returns the coordinate reference system.
+    pub fn crs(&self) -> &str {
+        &self.crs.0
+    }
+
+    /// Returns the edge interpolation algorithm.
+    pub fn algorithm(&self) -> EdgeInterpolationAlgorithm {
+        self.algorithm
+    }
+}
+
+fn parse_geospatial_params<'a>(
+    value: &'a str,
+    type_name: &str,
+) -> std::result::Result<Vec<&'a str>, String> {
+    if value == type_name {
+        return Ok(vec![]);
+    }
+
+    let params = value
+        .strip_prefix(type_name)
+        .map(str::trim_start)
+        .and_then(|s| s.strip_prefix('('))
+        .and_then(|s| s.strip_suffix(')'))
+        .ok_or_else(|| format!("Invalid {type_name} type: {value}"))?;
+
+    if params.trim().is_empty() {
+        return Err(format!("{type_name} requires a non-empty CRS"));
+    }
+
+    Ok(params.split(',').map(str::trim).collect())
+}
+
+fn parse_geometry(value: &str) -> std::result::Result<PrimitiveType, String> {
+    let params = parse_geospatial_params(value.trim(), "geometry")?;
+    let geometry = match params.as_slice() {
+        [] => GeometryType::default(),
+        [crs] if !crs.is_empty() => {
+            GeometryType::new(Some((*crs).to_string())).map_err(|err| err.to_string())?
+        }
+        _ => return Err(format!("Invalid geometry type: {value}")),
+    };
+
+    Ok(PrimitiveType::Geometry(geometry))
+}
+
+fn parse_geography(value: &str) -> std::result::Result<PrimitiveType, String> {
+    let params = parse_geospatial_params(value.trim(), "geography")?;
+    let geography = match params.as_slice() {
+        [] => GeographyType::default(),
+        [crs] if !crs.is_empty() => GeographyType::new(
+            Some((*crs).to_string()),
+            EdgeInterpolationAlgorithm::Spherical,
+        )
+        .map_err(|err| err.to_string())?,
+        [crs, algorithm] if !crs.is_empty() && !algorithm.is_empty() => GeographyType::new(
+            Some((*crs).to_string()),
+            EdgeInterpolationAlgorithm::parse(algorithm)?,
+        )
+        .map_err(|err| err.to_string())?,
+        _ => return Err(format!("Invalid geography type: {value}")),
+    };
+
+    Ok(PrimitiveType::Geography(geography))
+}
+
 /// Primitive data types
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
 #[serde(rename_all = "lowercase", remote = "Self")]
@@ -273,6 +482,10 @@ pub enum PrimitiveType {
     Fixed(u64),
     /// Arbitrary-length byte array.
     Binary,
+    /// Geometry values encoded as well-known binary.
+    Geometry(GeometryType),
+    /// Geography values encoded as well-known binary.
+    Geography(GeographyType),
 }
 
 impl PrimitiveType {
@@ -296,6 +509,8 @@ impl PrimitiveType {
                 | (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(_))
                 | (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(_))
                 | (PrimitiveType::Binary, PrimitiveLiteral::Binary(_))
+                | (PrimitiveType::Geometry(_), PrimitiveLiteral::Binary(_))
+                | (PrimitiveType::Geography(_), PrimitiveLiteral::Binary(_))
         )
     }
 }
@@ -324,6 +539,10 @@ impl<'de> Deserialize<'de> for PrimitiveType {
             deserialize_decimal(s.into_deserializer())
         } else if s.starts_with("fixed") {
             deserialize_fixed(s.into_deserializer())
+        } else if s.starts_with("geometry") {
+            parse_geometry(&s).map_err(D::Error::custom)
+        } else if s.starts_with("geography") {
+            parse_geography(&s).map_err(D::Error::custom)
         } else {
             PrimitiveType::deserialize(s.into_deserializer())
         }
@@ -338,6 +557,9 @@ impl Serialize for PrimitiveType {
                 serialize_decimal(precision, scale, serializer)
             }
             PrimitiveType::Fixed(l) => serialize_fixed(l, serializer),
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+                serializer.serialize_str(&self.to_string())
+            }
             _ => PrimitiveType::serialize(self, serializer),
         }
     }
@@ -408,6 +630,13 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Uuid => write!(f, "uuid"),
             PrimitiveType::Fixed(size) => write!(f, "fixed({size})"),
             PrimitiveType::Binary => write!(f, "binary"),
+            PrimitiveType::Geometry(geometry) => write!(f, "geometry({})", geometry.crs()),
+            PrimitiveType::Geography(geography) => write!(
+                f,
+                "geography({}, {})",
+                geography.crs(),
+                geography.algorithm().as_str()
+            ),
         }
     }
 }
@@ -1043,6 +1272,69 @@ mod tests {
     }
 
     #[test]
+    fn primitive_type_geospatial() {
+        let cases = vec![
+            (
+                r#""geometry""#,
+                PrimitiveType::Geometry(GeometryType::default()),
+                "geometry(OGC:CRS84)",
+            ),
+            (
+                r#""geometry ( EPSG:3857 )""#,
+                PrimitiveType::Geometry(GeometryType::new(Some("EPSG:3857".to_string())).unwrap()),
+                "geometry(EPSG:3857)",
+            ),
+            (
+                r#""geography""#,
+                PrimitiveType::Geography(GeographyType::default()),
+                "geography(OGC:CRS84, spherical)",
+            ),
+            (
+                r#""geography ( OGC:CRS27 , karney )""#,
+                PrimitiveType::Geography(
+                    GeographyType::new(
+                        Some("OGC:CRS27".to_string()),
+                        EdgeInterpolationAlgorithm::Karney,
+                    )
+                    .unwrap(),
+                ),
+                "geography(OGC:CRS27, karney)",
+            ),
+        ];
+
+        for (json, expected, display) in cases {
+            let actual: PrimitiveType = serde_json::from_str(json).unwrap();
+            assert_eq!(
+                actual, expected,
+                "parsed primitive type did not match expectation"
+            );
+            assert_eq!(actual.to_string(), display, "display impl did not match");
+            assert_eq!(
+                serde_json::to_string(&actual).unwrap(),
+                format!(r#""{display}""#),
+                "JSON serialization did not match expectation"
+            );
+        }
+
+        assert_eq!(
+            GeometryType::new(Some(EQUIVALENT_DEFAULT_GEOSPATIAL_CRS.to_string())).unwrap(),
+            GeometryType::default()
+        );
+        let lowercase_default =
+            GeometryType::new(Some(DEFAULT_GEOSPATIAL_CRS.to_ascii_lowercase())).unwrap();
+        assert_eq!(lowercase_default, GeometryType::default());
+        let mut lowercase_hash = std::collections::hash_map::DefaultHasher::new();
+        lowercase_default.hash(&mut lowercase_hash);
+        let mut default_hash = std::collections::hash_map::DefaultHasher::new();
+        GeometryType::default().hash(&mut default_hash);
+        assert_eq!(lowercase_hash.finish(), default_hash.finish());
+        assert!(
+            serde_json::from_str::<PrimitiveType>(r#""geography(OGC:CRS27,unknown)""#).is_err()
+        );
+        assert!(GeometryType::new(Some("x".repeat(MAX_GEOSPATIAL_CRS_BYTES + 1))).is_err());
+    }
+
+    #[test]
     fn struct_type() {
         let record = r#"
         {
@@ -1341,6 +1633,14 @@ mod tests {
             ),
             (PrimitiveType::Fixed(8), PrimitiveLiteral::Binary(vec![1])),
             (PrimitiveType::Binary, PrimitiveLiteral::Binary(vec![1])),
+            (
+                PrimitiveType::Geometry(GeometryType::default()),
+                PrimitiveLiteral::Binary(vec![1]),
+            ),
+            (
+                PrimitiveType::Geography(GeographyType::default()),
+                PrimitiveLiteral::Binary(vec![1]),
+            ),
         ];
         for (ty, literal) in pairs {
             assert!(ty.compatible(&literal));

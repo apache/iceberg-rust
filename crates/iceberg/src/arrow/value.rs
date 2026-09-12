@@ -406,7 +406,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                     .map(|v| v.map(|v| Literal::fixed(v.iter().cloned())))
                     .collect())
             }
-            PrimitiveType::Binary => {
+            PrimitiveType::Binary | PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
                 if let Some(array) = partner.as_any().downcast_ref::<LargeBinaryArray>() {
                     Ok(array
                         .iter()
@@ -702,6 +702,12 @@ pub(crate) fn create_primitive_array_single_element(
         (DataType::Binary, None) => Ok(Arc::new(BinaryArray::from_opt_vec(vec![
             Option::<&[u8]>::None,
         ]))),
+        (DataType::LargeBinary, Some(PrimitiveLiteral::Binary(v))) => {
+            Ok(Arc::new(LargeBinaryArray::from_vec(vec![v.as_slice()])))
+        }
+        (DataType::LargeBinary, None) => Ok(Arc::new(LargeBinaryArray::from_opt_vec(vec![
+            Option::<&[u8]>::None,
+        ]))),
         (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::Int128(v))) => {
             let array = Decimal128Array::from(vec![{ *v }])
                 .with_precision_and_scale(*precision, *scale)
@@ -788,6 +794,13 @@ pub(crate) fn create_primitive_array_single_element(
                             Ok(
                                 Arc::new(BinaryArray::from_opt_vec(vec![Option::<&[u8]>::None]))
                                     as ArrayRef,
+                            )
+                        }
+                        DataType::LargeBinary => {
+                            Ok(
+                                Arc::new(LargeBinaryArray::from_opt_vec(vec![
+                                    Option::<&[u8]>::None,
+                                ])) as ArrayRef,
                             )
                         }
                         _ => Err(Error::new(
