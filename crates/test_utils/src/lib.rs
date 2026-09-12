@@ -42,6 +42,7 @@ mod common {
     pub const ENV_HMS_ENDPOINT: &str = "ICEBERG_TEST_HMS_ENDPOINT";
     pub const ENV_GLUE_ENDPOINT: &str = "ICEBERG_TEST_GLUE_ENDPOINT";
     pub const ENV_GCS_ENDPOINT: &str = "ICEBERG_TEST_GCS_ENDPOINT";
+    pub const ENV_HDFS_ENDPOINT: &str = "ICEBERG_TEST_HDFS_ENDPOINT";
 
     // Default ports matching dev/docker-compose.yaml
     pub const DEFAULT_MINIO_PORT: u16 = 9000;
@@ -49,6 +50,7 @@ mod common {
     pub const DEFAULT_HMS_PORT: u16 = 9083;
     pub const DEFAULT_GLUE_PORT: u16 = 5001;
     pub const DEFAULT_GCS_PORT: u16 = 4443;
+    pub const DEFAULT_HDFS_NN_PORT: u16 = 8020;
 
     /// Returns the MinIO S3-compatible endpoint.
     /// Checks ICEBERG_TEST_MINIO_ENDPOINT env var, otherwise returns localhost default.
@@ -82,6 +84,13 @@ mod common {
     pub fn get_gcs_endpoint() -> String {
         std::env::var(ENV_GCS_ENDPOINT)
             .unwrap_or_else(|_| format!("http://localhost:{DEFAULT_GCS_PORT}"))
+    }
+
+    /// Returns the HDFS NameNode endpoint (e.g. `hdfs://localhost:8020`).
+    /// Checks ICEBERG_TEST_HDFS_ENDPOINT env var, otherwise returns localhost default.
+    pub fn get_hdfs_endpoint() -> String {
+        std::env::var(ENV_HDFS_ENDPOINT)
+            .unwrap_or_else(|_| format!("hdfs://localhost:{DEFAULT_HDFS_NN_PORT}"))
     }
 
     /// Helper to clean up a namespace and its tables before a test runs.
