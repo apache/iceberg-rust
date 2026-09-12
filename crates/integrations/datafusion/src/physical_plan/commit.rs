@@ -43,6 +43,7 @@ use crate::to_datafusion_error;
 #[derive(Debug)]
 pub(crate) struct IcebergCommitExec {
     table: Table,
+    /// Catalog already bound to the session resolved during insert planning.
     catalog: Arc<dyn Catalog>,
     input: Arc<dyn ExecutionPlan>,
     schema: ArrowSchemaRef,
@@ -51,7 +52,7 @@ pub(crate) struct IcebergCommitExec {
 }
 
 impl IcebergCommitExec {
-    pub fn new(
+    pub(crate) fn new(
         table: Table,
         catalog: Arc<dyn Catalog>,
         input: Arc<dyn ExecutionPlan>,
@@ -295,6 +296,7 @@ mod tests {
     use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
 
     use super::*;
+    use crate::catalog_adapter::SessionBindingCatalogAdapter;
     use crate::physical_plan::DATA_FILES_COL_NAME;
     use crate::table::IcebergTableProvider;
 
@@ -673,8 +675,9 @@ mod tests {
         let source_table = Arc::new(MemTable::try_new(Arc::clone(&arrow_schema), partitions)?);
         ctx.register_table("source_table", source_table)?;
 
+        let session_binding_catalog = SessionBindingCatalogAdapter::new_without_context(catalog);
         let iceberg_table_provider = IcebergTableProvider::try_new(
-            catalog.clone(),
+            Arc::new(session_binding_catalog),
             namespace.clone(),
             table_name.to_string(),
         )

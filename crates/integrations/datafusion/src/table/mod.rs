@@ -48,6 +48,7 @@ use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
 
+use crate::catalog_adapter::SessionBindingCatalogAdapter;
 use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::project::project_with_partition;
@@ -58,16 +59,18 @@ use crate::physical_plan::write::IcebergWriteExec;
 
 /// Catalog-backed table provider with automatic metadata refresh.
 ///
-/// This provider loads fresh table metadata from the catalog on every scan and write
-/// operation, ensuring you always see the latest table state. Use this when you need
-/// write operations or want to see the most up-to-date data.
+/// This provider loads fresh table metadata from the catalog on every scan and
+/// write operation, ensuring you always see the latest table state. A
+/// session-aware provider binds the current DataFusion session for those
+/// operations. Initial schema loading and metadata-table lookup do not receive
+/// a DataFusion session and use the provider's shared anonymous context.
 ///
 /// For read-only access to a specific snapshot without catalog overhead, use
 /// [`IcebergStaticTableProvider`] instead.
 #[derive(Debug, Clone)]
 pub struct IcebergTableProvider {
-    /// The catalog that manages this table
-    catalog: Arc<dyn Catalog>,
+    /// Access to the catalog that manages this table
+    catalog: Arc<SessionBindingCatalogAdapter>,
     /// The table identifier (namespace + name)
     table_ident: TableIdent,
     /// A reference-counted arrow `Schema` (cached at construction)
@@ -80,7 +83,7 @@ impl IcebergTableProvider {
     /// Loads the table once to get the initial schema, then stores the catalog
     /// reference for future metadata refreshes on each operation.
     pub(crate) async fn try_new(
-        catalog: Arc<dyn Catalog>,
+        catalog: Arc<SessionBindingCatalogAdapter>,
         namespace: NamespaceIdent,
         name: impl Into<String>,
     ) -> Result<Self> {
@@ -119,7 +122,7 @@ impl TableProvider for IcebergTableProvider {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        session: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -127,6 +130,7 @@ impl TableProvider for IcebergTableProvider {
         // Load fresh table metadata from catalog
         let table = self
             .catalog
+            .with_session(session)
             .load_table(&self.table_ident)
             .await
             .map_err(to_datafusion_error)?;
@@ -152,7 +156,7 @@ impl TableProvider for IcebergTableProvider {
 
     async fn insert_into(
         &self,
-        state: &dyn Session,
+        session: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
         _insert_op: InsertOp,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
@@ -162,9 +166,10 @@ impl TableProvider for IcebergTableProvider {
             )));
         }
 
+        let catalog = self.catalog.with_session(session);
+
         // Load fresh table metadata from catalog
-        let table = self
-            .catalog
+        let table = catalog
             .load_table(&self.table_ident)
             .await
             .map_err(to_datafusion_error)?;
@@ -179,8 +184,8 @@ impl TableProvider for IcebergTableProvider {
         };
 
         // Step 2: Repartition for parallel processing
-        let target_partitions =
-            NonZeroUsize::new(state.config().target_partitions()).ok_or_else(|| {
+        let target_partitions = NonZeroUsize::new(session.config().target_partitions())
+            .ok_or_else(|| {
                 DataFusionError::Configuration(
                     "target_partitions must be greater than 0".to_string(),
                 )
@@ -225,7 +230,7 @@ impl TableProvider for IcebergTableProvider {
 
         Ok(Arc::new(IcebergCommitExec::new(
             table,
-            self.catalog.clone(),
+            catalog,
             coalesce_partitions,
             self.schema.clone(),
         )))
@@ -348,7 +353,7 @@ mod tests {
 
     use datafusion::common::Column;
     use datafusion::physical_plan::ExecutionPlan;
-    use datafusion::prelude::SessionContext;
+    use datafusion::prelude::SessionContext as DFSessionContext;
     use iceberg::io::FileIO;
     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
     use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
@@ -374,7 +379,12 @@ mod tests {
         static_table.into_table()
     }
 
-    async fn get_test_catalog_and_table() -> (Arc<dyn Catalog>, NamespaceIdent, String, TempDir) {
+    async fn get_test_catalog_and_table() -> (
+        Arc<SessionBindingCatalogAdapter>,
+        NamespaceIdent,
+        String,
+        TempDir,
+    ) {
         let temp_dir = TempDir::new().unwrap();
         let warehouse_path = temp_dir.path().to_str().unwrap().to_string();
 
@@ -413,8 +423,11 @@ mod tests {
             .await
             .unwrap();
 
+        let session_bound_catalog =
+            SessionBindingCatalogAdapter::new_without_context(Arc::new(catalog));
+
         (
-            Arc::new(catalog),
+            Arc::new(session_bound_catalog),
             namespace,
             "test_table".to_string(),
             temp_dir,
@@ -429,7 +442,7 @@ mod tests {
         let table_provider = IcebergStaticTableProvider::try_new_from_table(table.clone())
             .await
             .unwrap();
-        let ctx = SessionContext::new();
+        let ctx = DFSessionContext::new();
         ctx.register_table("mytable", Arc::new(table_provider))
             .unwrap();
         let df = ctx.sql("SELECT * FROM mytable").await.unwrap();
@@ -455,7 +468,7 @@ mod tests {
             IcebergStaticTableProvider::try_new_from_table_snapshot(table.clone(), snapshot_id)
                 .await
                 .unwrap();
-        let ctx = SessionContext::new();
+        let ctx = DFSessionContext::new();
         ctx.register_table("mytable", Arc::new(table_provider))
             .unwrap();
         let df = ctx.sql("SELECT * FROM mytable").await.unwrap();
@@ -479,7 +492,7 @@ mod tests {
         let table_provider = IcebergStaticTableProvider::try_new_from_table(table.clone())
             .await
             .unwrap();
-        let ctx = SessionContext::new();
+        let ctx = DFSessionContext::new();
         ctx.register_table("mytable", Arc::new(table_provider))
             .unwrap();
 
@@ -502,7 +515,7 @@ mod tests {
         let table_provider = IcebergStaticTableProvider::try_new_from_table(table.clone())
             .await
             .unwrap();
-        let ctx = SessionContext::new();
+        let ctx = DFSessionContext::new();
         ctx.register_table("mytable", Arc::new(table_provider))
             .unwrap();
 
@@ -540,7 +553,7 @@ mod tests {
                 .await
                 .unwrap();
 
-        let ctx = SessionContext::new();
+        let ctx = DFSessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
             .unwrap();
 
@@ -566,7 +579,7 @@ mod tests {
                 .await
                 .unwrap();
 
-        let ctx = SessionContext::new();
+        let ctx = DFSessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
             .unwrap();
 
@@ -593,7 +606,7 @@ mod tests {
                 .await
                 .unwrap();
 
-        let ctx = SessionContext::new();
+        let ctx = DFSessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
             .unwrap();
 
@@ -625,7 +638,12 @@ mod tests {
 
     async fn get_partitioned_test_catalog_and_table(
         fanout_enabled: Option<bool>,
-    ) -> (Arc<dyn Catalog>, NamespaceIdent, String, TempDir) {
+    ) -> (
+        Arc<SessionBindingCatalogAdapter>,
+        NamespaceIdent,
+        String,
+        TempDir,
+    ) {
         use iceberg::spec::{Transform, UnboundPartitionSpec};
 
         let temp_dir = TempDir::new().unwrap();
@@ -681,8 +699,11 @@ mod tests {
             .await
             .unwrap();
 
+        let session_binding_catalog =
+            SessionBindingCatalogAdapter::new_without_context(Arc::new(catalog));
+
         (
-            Arc::new(catalog),
+            Arc::new(session_binding_catalog),
             namespace,
             "partitioned_table".to_string(),
             temp_dir,
@@ -710,7 +731,7 @@ mod tests {
         let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
             .await
             .unwrap();
-        let ctx = SessionContext::new();
+        let ctx = DFSessionContext::new();
 
         for (insert_op, expected_message) in [
             (
@@ -753,7 +774,7 @@ mod tests {
                 .await
                 .unwrap();
 
-        let ctx = SessionContext::new();
+        let ctx = DFSessionContext::new();
         let input_schema = provider.schema();
         let input = Arc::new(EmptyExec::new(input_schema)) as Arc<dyn ExecutionPlan>;
 
@@ -785,7 +806,7 @@ mod tests {
                 .await
                 .unwrap();
 
-        let ctx = SessionContext::new();
+        let ctx = DFSessionContext::new();
         let input_schema = provider.schema();
         let input = Arc::new(EmptyExec::new(input_schema)) as Arc<dyn ExecutionPlan>;
 
@@ -811,7 +832,7 @@ mod tests {
             .await
             .unwrap();
 
-        let ctx = SessionContext::new();
+        let ctx = DFSessionContext::new();
         let state = ctx.state();
 
         // Test scan with limit
@@ -844,7 +865,7 @@ mod tests {
                 .await
                 .unwrap();
 
-        let ctx = SessionContext::new();
+        let ctx = DFSessionContext::new();
         let state = ctx.state();
 
         // Test scan with limit
@@ -872,7 +893,7 @@ mod tests {
             .await
             .unwrap();
 
-        let ctx = SessionContext::new();
+        let ctx = DFSessionContext::new();
         let state = ctx.state();
 
         // Test scan without limit
