@@ -121,6 +121,20 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// Creates a builder for modifying this snapshot, preserving fields that are not replaced.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use iceberg::spec::{Snapshot, Summary};
+    /// # fn replace_summary(snapshot: Snapshot, summary: Summary) -> Snapshot {
+    /// snapshot.into_builder().with_summary(summary).build()
+    /// # }
+    /// ```
+    pub fn into_builder(self) -> SnapshotUpdateBuilder {
+        SnapshotUpdateBuilder { snapshot: self }
+    }
+
     /// Get the id of the snapshot
     #[inline]
     pub fn snapshot_id(&self) -> i64 {
@@ -221,6 +235,84 @@ impl Snapshot {
     /// Get encryption key id, if available.
     pub fn encryption_key_id(&self) -> Option<&str> {
         self.encryption_key_id.as_deref()
+    }
+}
+
+/// A builder for modifying an existing [`Snapshot`].
+///
+/// Created by [`Snapshot::into_builder`]. Unlike [`Snapshot::builder`], all fields
+/// are already populated and setters replace their existing values.
+#[derive(Debug, Clone)]
+pub struct SnapshotUpdateBuilder {
+    snapshot: Snapshot,
+}
+
+impl SnapshotUpdateBuilder {
+    /// Sets the snapshot ID.
+    pub fn with_snapshot_id(mut self, snapshot_id: i64) -> Self {
+        self.snapshot.snapshot_id = snapshot_id;
+        self
+    }
+
+    /// Sets or clears the parent snapshot ID.
+    pub fn with_parent_snapshot_id(mut self, parent_snapshot_id: Option<i64>) -> Self {
+        self.snapshot.parent_snapshot_id = parent_snapshot_id;
+        self
+    }
+
+    /// Sets the sequence number.
+    pub fn with_sequence_number(mut self, sequence_number: i64) -> Self {
+        self.snapshot.sequence_number = sequence_number;
+        self
+    }
+
+    /// Sets the timestamp in milliseconds.
+    pub fn with_timestamp_ms(mut self, timestamp_ms: i64) -> Self {
+        self.snapshot.timestamp_ms = timestamp_ms;
+        self
+    }
+
+    /// Sets the manifest list location.
+    pub fn with_manifest_list(mut self, manifest_list: impl Into<String>) -> Self {
+        self.snapshot.manifest_list = manifest_list.into();
+        self
+    }
+
+    /// Sets the snapshot summary.
+    pub fn with_summary(mut self, summary: Summary) -> Self {
+        self.snapshot.summary = summary;
+        self
+    }
+
+    /// Sets the schema ID.
+    pub fn with_schema_id(self, schema_id: SchemaId) -> Self {
+        self.schema_id_opt(Some(schema_id))
+    }
+
+    /// Sets or clears the schema ID.
+    pub fn schema_id_opt(mut self, schema_id: Option<SchemaId>) -> Self {
+        self.snapshot.schema_id = schema_id;
+        self
+    }
+
+    /// Sets or clears the encryption key ID.
+    pub fn with_encryption_key_id(mut self, encryption_key_id: Option<String>) -> Self {
+        self.snapshot.encryption_key_id = encryption_key_id;
+        self
+    }
+
+    /// Sets the row range.
+    pub fn with_row_range(mut self, first_row_id: u64, added_rows: u64) -> Self {
+        self.snapshot.row_range = Some(SnapshotRowRange {
+            first_row_id,
+            added_rows,
+        });
+        self
+    }
+
+    /// Builds the modified snapshot.
+    pub fn build(self) -> Snapshot {
+        self.snapshot
     }
 }
 
@@ -502,6 +594,76 @@ mod tests {
     use crate::spec::TableMetadata;
     use crate::spec::snapshot::_serde::SnapshotV1;
     use crate::spec::snapshot::{Operation, Snapshot, Summary};
+
+    #[test]
+    fn test_into_builder() {
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(2)
+            .with_parent_snapshot_id(Some(1))
+            .with_sequence_number(3)
+            .with_timestamp_ms(1515100955770)
+            .with_manifest_list("s3://bucket/manifest-list.avro")
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_schema_id(4)
+            .with_encryption_key_id(Some("key".to_string()))
+            .with_row_range(5, 6)
+            .build();
+        assert_eq!(snapshot.clone().into_builder().build(), snapshot);
+
+        let summary = Summary {
+            operation: Operation::Append,
+            additional_properties: HashMap::from([("total-files-size".into(), "100".into())]),
+        };
+        assert_eq!(
+            snapshot
+                .clone()
+                .into_builder()
+                .with_summary(summary.clone())
+                .build(),
+            Snapshot {
+                summary,
+                ..snapshot.clone()
+            }
+        );
+
+        let updated = snapshot
+            .clone()
+            .into_builder()
+            .with_snapshot_id(3)
+            .with_parent_snapshot_id(None)
+            .with_sequence_number(4)
+            .with_timestamp_ms(1515100955771)
+            .with_manifest_list("s3://bucket/updated.avro")
+            .with_schema_id(5)
+            .with_encryption_key_id(None)
+            .with_row_range(7, 8)
+            .build();
+        assert_eq!(updated, Snapshot {
+            snapshot_id: 3,
+            parent_snapshot_id: None,
+            sequence_number: 4,
+            timestamp_ms: 1515100955771,
+            manifest_list: "s3://bucket/updated.avro".into(),
+            schema_id: Some(5),
+            encryption_key_id: None,
+            row_range: Some(super::SnapshotRowRange {
+                first_row_id: 7,
+                added_rows: 8
+            }),
+            ..snapshot
+        });
+        assert_eq!(
+            updated
+                .into_builder()
+                .schema_id_opt(None)
+                .build()
+                .schema_id(),
+            None
+        );
+    }
 
     #[test]
     fn schema() {

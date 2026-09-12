@@ -2454,6 +2454,7 @@ impl iceberg::spec::Snapshot
 pub fn iceberg::spec::Snapshot::added_rows_count(&self) -> core::option::Option<u64>
 pub fn iceberg::spec::Snapshot::encryption_key_id(&self) -> core::option::Option<&str>
 pub fn iceberg::spec::Snapshot::first_row_id(&self) -> core::option::Option<u64>
+pub fn iceberg::spec::Snapshot::into_builder(self) -> iceberg::spec::SnapshotUpdateBuilder
 pub fn iceberg::spec::Snapshot::manifest_list(&self) -> &str
 pub fn iceberg::spec::Snapshot::parent_snapshot_id(&self) -> core::option::Option<i64>
 pub fn iceberg::spec::Snapshot::row_range(&self) -> core::option::Option<(u64, u64)>
@@ -2534,6 +2535,23 @@ pub fn iceberg::spec::SnapshotSummaryCollector::set_partition_summary_limit(&mut
 pub fn iceberg::spec::SnapshotSummaryCollector::update_partition_metrics(&mut self, schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpecRef, data_file: &iceberg::spec::DataFile, is_add_file: bool)
 impl core::default::Default for iceberg::spec::SnapshotSummaryCollector
 pub fn iceberg::spec::SnapshotSummaryCollector::default() -> iceberg::spec::SnapshotSummaryCollector
+pub struct iceberg::spec::SnapshotUpdateBuilder
+impl iceberg::spec::SnapshotUpdateBuilder
+pub fn iceberg::spec::SnapshotUpdateBuilder::build(self) -> iceberg::spec::Snapshot
+pub fn iceberg::spec::SnapshotUpdateBuilder::schema_id_opt(self, schema_id: core::option::Option<iceberg::spec::SchemaId>) -> Self
+pub fn iceberg::spec::SnapshotUpdateBuilder::with_encryption_key_id(self, encryption_key_id: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::SnapshotUpdateBuilder::with_manifest_list(self, manifest_list: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::spec::SnapshotUpdateBuilder::with_parent_snapshot_id(self, parent_snapshot_id: core::option::Option<i64>) -> Self
+pub fn iceberg::spec::SnapshotUpdateBuilder::with_row_range(self, first_row_id: u64, added_rows: u64) -> Self
+pub fn iceberg::spec::SnapshotUpdateBuilder::with_schema_id(self, schema_id: iceberg::spec::SchemaId) -> Self
+pub fn iceberg::spec::SnapshotUpdateBuilder::with_sequence_number(self, sequence_number: i64) -> Self
+pub fn iceberg::spec::SnapshotUpdateBuilder::with_snapshot_id(self, snapshot_id: i64) -> Self
+pub fn iceberg::spec::SnapshotUpdateBuilder::with_summary(self, summary: iceberg::spec::Summary) -> Self
+pub fn iceberg::spec::SnapshotUpdateBuilder::with_timestamp_ms(self, timestamp_ms: i64) -> Self
+impl core::clone::Clone for iceberg::spec::SnapshotUpdateBuilder
+pub fn iceberg::spec::SnapshotUpdateBuilder::clone(&self) -> iceberg::spec::SnapshotUpdateBuilder
+impl core::fmt::Debug for iceberg::spec::SnapshotUpdateBuilder
+pub fn iceberg::spec::SnapshotUpdateBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::spec::SortField
 pub iceberg::spec::SortField::direction: iceberg::spec::SortDirection
 pub iceberg::spec::SortField::null_order: iceberg::spec::NullOrder
