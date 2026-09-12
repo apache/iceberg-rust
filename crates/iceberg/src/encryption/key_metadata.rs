@@ -206,7 +206,7 @@ mod _serde {
             if version != V1 {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
-                    format!("Cannot resolve schema for version: {version}"),
+                    format!("Unsupported key metadata version: {version} (supported: {V1})"),
                 ));
             }
 
@@ -302,6 +302,10 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert_eq!(
+            err.message(),
+            "Unsupported key metadata version: 2 (supported: 1)"
+        );
     }
 
     #[test]

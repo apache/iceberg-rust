@@ -58,9 +58,10 @@ def test_encode_rejects_invalid_key_length(key_length):
         encryption.encode_standard_key_metadata(bytes(key_length))
 
 
-def test_decode_rejects_unsupported_version():
-    with pytest.raises(ValueError):
-        encryption.decode_standard_key_metadata(b"\x02")
+@pytest.mark.parametrize("data", [b"\x02", b"\x02\x20" + AES128_KEY + b"\x00\x00"])
+def test_decode_rejects_unsupported_version(data):
+    with pytest.raises(ValueError, match="Unsupported key metadata version: 2"):
+        encryption.decode_standard_key_metadata(data)
 
 
 def test_decode_rejects_empty_buffer():
