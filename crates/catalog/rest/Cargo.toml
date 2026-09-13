@@ -35,14 +35,15 @@ chrono = { workspace = true }
 http = { workspace = true }
 iceberg = { workspace = true }
 itertools = { workspace = true }
+rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }
 typed-builder = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
+uuid = { workspace = true, features = ["v4", "v7"] }
 
 [dev-dependencies]
 bytes = { workspace = true }
