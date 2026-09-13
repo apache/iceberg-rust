@@ -121,6 +121,16 @@ For details on how to run a release, please refer to: https://rust.iceberg.apach
 
 The following steps should be followed once the release is ready to begin.
 
+### Update dependencies
+
+Dependabot runs monthly to reduce update noise, so dependencies may be out of date by the time of a release.
+Before cutting a release candidate, open the repository's [Dependabot page](https://github.com/apache/iceberg-rust/network/updates) and trigger a manual check for each configured ecosystem: `cargo` and `github-actions` at `/`, and `uv` at `/bindings/python`.
+Review and merge the applicable dependency update PRs before creating the release branch and regenerating the dependency lists.
+For an existing release branch, backport the applicable updates to that branch before regenerating its dependency lists and cutting the release candidate.
+
+Only a committer with write access to the repository can trigger Dependabot manually.
+Work with a committer if you do not have write access.
+
 ### Create a minor version release branch, if it doesn't already exist
 
 A committer must ensure that a release branch exists for each minor version.
