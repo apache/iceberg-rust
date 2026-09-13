@@ -30,6 +30,7 @@
 //! - [`OssConfig`]: Alibaba Cloud OSS specific configuration
 //! - [`AzdlsConfig`]: Azure Data Lake Storage specific configuration
 
+mod azblob;
 mod azdls;
 mod gcs;
 mod hf;
@@ -38,6 +39,7 @@ mod s3;
 
 use std::collections::HashMap;
 
+pub use azblob::*;
 pub use azdls::*;
 pub use gcs::*;
 pub use hf::*;
