@@ -805,7 +805,7 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
         }
         (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(value)) => {
             let array = FixedSizeBinaryArray::try_from_iter(std::iter::once(value.as_slice()))
-                .map_err(|e| invalid_data!("{e}").with_source(e))?;
+                .map_err(|e| invalid_data!("FixedSizeBinary conversion failed").with_source(e))?;
             Ok(Arc::new(Scalar::new(array)))
         }
 
