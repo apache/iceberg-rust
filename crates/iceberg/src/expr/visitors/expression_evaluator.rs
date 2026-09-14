@@ -206,10 +206,21 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
             return Ok(false);
         };
 
-        match (datum.literal(), literal.literal()) {
-            (PrimitiveLiteral::String(d), PrimitiveLiteral::String(l)) => Ok(d.starts_with(l)),
-            _ => Ok(false),
-        }
+        let PrimitiveLiteral::String(literal) = literal.literal() else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Cannot use StartsWith operator on non-string values",
+            ));
+        };
+
+        let PrimitiveLiteral::String(datum) = datum.literal() else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Cannot use StartsWith operator on non-string partition value",
+            ));
+        };
+
+        Ok(datum.starts_with(literal))
     }
 
     fn not_starts_with(
@@ -255,7 +266,6 @@ mod tests {
     use predicate::SetExpression;
 
     use super::ExpressionEvaluator;
-    use crate::Result;
     use crate::expr::visitors::inclusive_projection::InclusiveProjection;
     use crate::expr::{
         BinaryExpression, Bind, BoundPredicate, Predicate, PredicateOperator, Reference,
@@ -266,6 +276,7 @@ mod tests {
         PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Struct, Transform, Type,
         UnboundPartitionField,
     };
+    use crate::{ErrorKind, Result};
 
     fn create_partition_spec(r#type: PrimitiveType) -> Result<(PartitionSpecRef, SchemaRef)> {
         let schema = Schema::builder()
@@ -354,6 +365,13 @@ mod tests {
             referenced_data_file: None,
             content_offset: None,
             content_size_in_bytes: None,
+        }
+    }
+
+    fn create_data_file_binary(value: &[u8]) -> DataFile {
+        DataFile {
+            partition: Struct::from_iter([Some(Literal::binary(value.to_vec()))]),
+            ..create_data_file_string()
         }
     }
 
@@ -543,6 +561,45 @@ mod tests {
         let result = expression_evaluator.eval(&data_file)?;
 
         assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_starts_with_non_string_errors() -> Result<()> {
+        let case_sensitive = true;
+        let (partition_spec, schema) = create_partition_spec(PrimitiveType::Binary)?;
+
+        for op in [
+            PredicateOperator::StartsWith,
+            PredicateOperator::NotStartsWith,
+        ] {
+            let predicate = Predicate::Binary(BinaryExpression::new(
+                op,
+                Reference::new("a"),
+                Datum::binary(b"ab".to_vec()),
+            ))
+            .bind(schema.clone(), case_sensitive)?;
+
+            let expression_evaluator = create_expression_evaluator(
+                partition_spec.clone(),
+                &schema,
+                &predicate,
+                case_sensitive,
+            )?;
+
+            // The partition value does start with the prefix, so answering `false`
+            // here would prune a file that contains matching rows.
+            let err = expression_evaluator
+                .eval(&create_data_file_binary(b"abc"))
+                .expect_err("expected an error for a non-string StartsWith operand");
+
+            assert_eq!(err.kind(), ErrorKind::Unexpected);
+            assert!(
+                err.message().contains("non-string"),
+                "unexpected message: {err}"
+            );
+        }
 
         Ok(())
     }
