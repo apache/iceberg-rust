@@ -253,16 +253,7 @@ impl FileScanTask {
                 ))
             }
             (Some(_), Some(partition_spec)) => {
-                // A historical partition spec may reference source columns that were later
-                // dropped from the current schema. This is valid in v2+ tables, so only
-                // validate transforms whose source columns are still present.
-                for partition_field in partition_spec.fields() {
-                    if let Some(source_field) = self.schema.field_by_id(partition_field.source_id) {
-                        partition_field
-                            .transform
-                            .result_type(&source_field.field_type)?;
-                    }
-                }
+                partition_spec.partition_type(&self.schema)?;
                 Ok(())
             }
         }
