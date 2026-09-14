@@ -182,8 +182,12 @@ mod tests {
         let table_schema = Schema::builder()
             .with_schema_id(0)
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -198,7 +202,10 @@ mod tests {
 
         // Verify partition type
         assert_eq!(calculator.partition_type().fields().len(), 1);
-        assert_eq!(calculator.partition_type().fields()[0].name, "id_partition");
+        assert_eq!(
+            calculator.partition_type().fields()[0].name(),
+            "id_partition"
+        );
 
         // Create test batch
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
@@ -233,7 +240,9 @@ mod tests {
         let table_schema = Schema::builder()
             .with_schema_id(0)
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();

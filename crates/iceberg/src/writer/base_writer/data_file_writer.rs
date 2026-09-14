@@ -173,8 +173,12 @@ mod test {
         let schema = Schema::builder()
             .with_schema_id(3)
             .with_fields(vec![
-                NestedField::required(3, "foo", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(4, "bar", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(3, "foo", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(4, "bar", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()?;
 
@@ -250,8 +254,12 @@ mod test {
         let schema = Schema::builder()
             .with_schema_id(5)
             .with_fields(vec![
-                NestedField::required(5, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(6, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(5, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(6, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()?;
         let schema_ref = Arc::new(schema);

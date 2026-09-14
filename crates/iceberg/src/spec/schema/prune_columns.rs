@@ -65,36 +65,26 @@ impl PruneColumn {
         }
     }
     fn project_list(list: &ListType, element_result: Type) -> Result<ListType> {
-        if *list.element_field.field_type == element_result {
+        if *list.element_field.field_type() == element_result {
             return Ok(list.clone());
         }
         Ok(ListType {
-            element_field: Arc::new(NestedField {
-                id: list.element_field.id,
-                name: list.element_field.name.clone(),
-                required: list.element_field.required,
-                field_type: Box::new(element_result),
-                doc: list.element_field.doc.clone(),
-                initial_default: list.element_field.initial_default.clone(),
-                write_default: list.element_field.write_default.clone(),
-            }),
+            element_field: Arc::new(
+                list.element_field
+                    .rebuild(list.element_field.id(), element_result)?,
+            ),
         })
     }
     fn project_map(map: &MapType, value_result: Type) -> Result<MapType> {
-        if *map.value_field.field_type == value_result {
+        if *map.value_field.field_type() == value_result {
             return Ok(map.clone());
         }
         Ok(MapType {
             key_field: map.key_field.clone(),
-            value_field: Arc::new(NestedField {
-                id: map.value_field.id,
-                name: map.value_field.name.clone(),
-                required: map.value_field.required,
-                field_type: Box::new(value_result),
-                doc: map.value_field.doc.clone(),
-                initial_default: map.value_field.initial_default.clone(),
-                write_default: map.value_field.write_default.clone(),
-            }),
+            value_field: Arc::new(
+                map.value_field
+                    .rebuild(map.value_field.id(), value_result)?,
+            ),
         })
     }
 }
@@ -107,23 +97,23 @@ impl SchemaVisitor for PruneColumn {
     }
 
     fn field(&mut self, field: &NestedFieldRef, value: Option<Type>) -> Result<Option<Type>> {
-        if self.selected.contains(&field.id) {
+        if self.selected.contains(&field.id()) {
             if self.select_full_types {
-                Ok(Some(*field.field_type.clone()))
-            } else if field.field_type.is_struct() {
+                Ok(Some(field.field_type().clone()))
+            } else if field.field_type().is_struct() {
                 Ok(Some(Type::Struct(PruneColumn::project_selected_struct(
                     value,
                 )?)))
-            } else if !field.field_type.is_nested() {
-                Ok(Some(*field.field_type.clone()))
+            } else if !field.field_type().is_nested() {
+                Ok(Some(field.field_type().clone()))
             } else {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Can't project list or map field directly when not selecting full type."
                         .to_string(),
                 )
-                .with_context("field_id", field.id.to_string())
-                .with_context("field_type", field.field_type.to_string()))
+                .with_context("field_id", field.id().to_string())
+                .with_context("field_type", field.field_type().to_string()))
             }
         } else {
             Ok(value)
@@ -141,19 +131,11 @@ impl SchemaVisitor for PruneColumn {
 
         for (field, projected_type) in zip_eq(fields.iter(), results.iter()) {
             if let Some(projected_type) = projected_type {
-                if *field.field_type == *projected_type {
+                if *field.field_type() == *projected_type {
                     selected_field.push(field.clone());
                 } else {
                     same_type = false;
-                    let new_field = NestedField {
-                        id: field.id,
-                        name: field.name.clone(),
-                        required: field.required,
-                        field_type: Box::new(projected_type.clone()),
-                        doc: field.doc.clone(),
-                        initial_default: field.initial_default.clone(),
-                        write_default: field.write_default.clone(),
-                    };
+                    let new_field = field.rebuild(field.id(), projected_type.clone())?;
                     selected_field.push(Arc::new(new_field));
                 }
             }
@@ -170,23 +152,24 @@ impl SchemaVisitor for PruneColumn {
     }
 
     fn list(&mut self, list: &ListType, value: Option<Type>) -> Result<Option<Type>> {
-        if self.selected.contains(&list.element_field.id) {
+        if self.selected.contains(&list.element_field.id()) {
             if self.select_full_types {
                 Ok(Some(Type::List(list.clone())))
-            } else if list.element_field.field_type.is_struct() {
+            } else if list.element_field.field_type().is_struct() {
                 let projected_struct = PruneColumn::project_selected_struct(value).unwrap();
                 Ok(Some(Type::List(PruneColumn::project_list(
                     list,
                     Type::Struct(projected_struct),
                 )?)))
-            } else if list.element_field.field_type.is_primitive() {
+            } else if list.element_field.field_type().is_primitive() {
                 Ok(Some(Type::List(list.clone())))
             } else {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "Cannot explicitly project List or Map types, List element {} of type {} was selected",
-                        list.element_field.id, list.element_field.field_type
+                        list.element_field.id(),
+                        list.element_field.field_type()
                     ),
                 ))
             }
@@ -203,24 +186,25 @@ impl SchemaVisitor for PruneColumn {
         _key_value: Option<Type>,
         value: Option<Type>,
     ) -> Result<Option<Type>> {
-        if self.selected.contains(&map.value_field.id) {
+        if self.selected.contains(&map.value_field.id()) {
             if self.select_full_types {
                 Ok(Some(Type::Map(map.clone())))
-            } else if map.value_field.field_type.is_struct() {
+            } else if map.value_field.field_type().is_struct() {
                 let projected_struct =
                     PruneColumn::project_selected_struct(Some(value.unwrap())).unwrap();
                 Ok(Some(Type::Map(PruneColumn::project_map(
                     map,
                     Type::Struct(projected_struct),
                 )?)))
-            } else if map.value_field.field_type.is_primitive() {
+            } else if map.value_field.field_type().is_primitive() {
                 Ok(Some(Type::Map(map.clone())))
             } else {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "Cannot explicitly project List or Map types, Map value {} of type {} was selected",
-                        map.value_field.id, map.value_field.field_type
+                        map.value_field.id(),
+                        map.value_field.field_type()
                     ),
                 ))
             }
@@ -229,7 +213,7 @@ impl SchemaVisitor for PruneColumn {
                 map,
                 value_result,
             )?)))
-        } else if self.selected.contains(&map.key_field.id) {
+        } else if self.selected.contains(&map.key_field.id()) {
             Ok(Some(Type::Map(map.clone())))
         } else {
             Ok(None)
@@ -257,7 +241,9 @@ mod tests {
         let expected_type = Type::from(
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::optional(1, "foo", Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(1, "foo", Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap()
@@ -276,7 +262,9 @@ mod tests {
         let expected_type = Type::from(
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::optional(1, "foo", Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(1, "foo", Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap()
@@ -304,9 +292,11 @@ mod tests {
                                 Primitive(PrimitiveType::String),
                                 true,
                             )
+                            .expect("valid nested field")
                             .into(),
                         }),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -343,9 +333,11 @@ mod tests {
                                 Primitive(PrimitiveType::String),
                                 true,
                             )
+                            .expect("valid nested field")
                             .into(),
                         }),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -373,6 +365,7 @@ mod tests {
                                 7,
                                 Primitive(PrimitiveType::String),
                             )
+                            .expect("valid nested field")
                             .into(),
                             value_field: NestedField::map_value_element(
                                 8,
@@ -381,19 +374,23 @@ mod tests {
                                         9,
                                         Primitive(PrimitiveType::String),
                                     )
+                                    .expect("valid nested field")
                                     .into(),
                                     value_field: NestedField::map_value_element(
                                         10,
                                         Primitive(PrimitiveType::Int),
                                         true,
                                     )
+                                    .expect("valid nested field")
                                     .into(),
                                 }),
                                 true,
                             )
+                            .expect("valid nested field")
                             .into(),
                         }),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -429,6 +426,7 @@ mod tests {
                                 7,
                                 Primitive(PrimitiveType::String),
                             )
+                            .expect("valid nested field")
                             .into(),
                             value_field: NestedField::map_value_element(
                                 8,
@@ -437,19 +435,23 @@ mod tests {
                                         9,
                                         Primitive(PrimitiveType::String),
                                     )
+                                    .expect("valid nested field")
                                     .into(),
                                     value_field: NestedField::map_value_element(
                                         10,
                                         Primitive(PrimitiveType::Int),
                                         true,
                                     )
+                                    .expect("valid nested field")
                                     .into(),
                                 }),
                                 true,
                             )
+                            .expect("valid nested field")
                             .into(),
                         }),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -477,6 +479,7 @@ mod tests {
                                 7,
                                 Primitive(PrimitiveType::String),
                             )
+                            .expect("valid nested field")
                             .into(),
                             value_field: NestedField::map_value_element(
                                 8,
@@ -485,19 +488,23 @@ mod tests {
                                         9,
                                         Primitive(PrimitiveType::String),
                                     )
+                                    .expect("valid nested field")
                                     .into(),
                                     value_field: NestedField::map_value_element(
                                         10,
                                         Primitive(PrimitiveType::Int),
                                         true,
                                     )
+                                    .expect("valid nested field")
                                     .into(),
                                 }),
                                 true,
                             )
+                            .expect("valid nested field")
                             .into(),
                         }),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -522,9 +529,11 @@ mod tests {
                         "person",
                         Type::Struct(StructType::new(vec![
                             NestedField::optional(16, "name", Primitive(PrimitiveType::String))
+                                .expect("valid nested field")
                                 .into(),
                         ])),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -549,9 +558,11 @@ mod tests {
                         "person",
                         Type::Struct(StructType::new(vec![
                             NestedField::optional(16, "name", Primitive(PrimitiveType::String))
+                                .expect("valid nested field")
                                 .into(),
                         ])),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -570,7 +581,9 @@ mod tests {
     fn test_prune_columns_empty_struct() {
         let schema_with_empty_struct_field = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(15, "person", Type::Struct(StructType::new(vec![]))).into(),
+                NestedField::optional(15, "person", Type::Struct(StructType::new(vec![])))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -578,6 +591,7 @@ mod tests {
             Schema::builder()
                 .with_fields(vec![
                     NestedField::optional(15, "person", Type::Struct(StructType::new(vec![])))
+                        .expect("valid nested field")
                         .into(),
                 ])
                 .build()
@@ -595,7 +609,9 @@ mod tests {
     fn test_prune_columns_empty_struct_full() {
         let schema_with_empty_struct_field = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(15, "person", Type::Struct(StructType::new(vec![]))).into(),
+                NestedField::optional(15, "person", Type::Struct(StructType::new(vec![])))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -603,6 +619,7 @@ mod tests {
             Schema::builder()
                 .with_fields(vec![
                     NestedField::optional(15, "person", Type::Struct(StructType::new(vec![])))
+                        .expect("valid nested field")
                         .into(),
                 ])
                 .build()
@@ -626,20 +643,25 @@ mod tests {
                     "id_to_person",
                     Type::Map(MapType {
                         key_field: NestedField::map_key_element(7, Primitive(PrimitiveType::Int))
+                            .expect("valid nested field")
                             .into(),
                         value_field: NestedField::map_value_element(
                             8,
                             Type::Struct(StructType::new(vec![
                                 NestedField::optional(10, "name", Primitive(PrimitiveType::String))
+                                    .expect("valid nested field")
                                     .into(),
                                 NestedField::required(11, "age", Primitive(PrimitiveType::Int))
+                                    .expect("valid nested field")
                                     .into(),
                             ])),
                             true,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
             ])
             .build()
@@ -655,18 +677,22 @@ mod tests {
                                 7,
                                 Primitive(PrimitiveType::Int),
                             )
+                            .expect("valid nested field")
                             .into(),
                             value_field: NestedField::map_value_element(
                                 8,
                                 Type::Struct(StructType::new(vec![
                                     NestedField::required(11, "age", Primitive(PrimitiveType::Int))
+                                        .expect("valid nested field")
                                         .into(),
                                 ])),
                                 true,
                             )
+                            .expect("valid nested field")
                             .into(),
                         }),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -689,20 +715,25 @@ mod tests {
                     "id_to_person",
                     Type::Map(MapType {
                         key_field: NestedField::map_key_element(7, Primitive(PrimitiveType::Int))
+                            .expect("valid nested field")
                             .into(),
                         value_field: NestedField::map_value_element(
                             8,
                             Type::Struct(StructType::new(vec![
                                 NestedField::optional(10, "name", Primitive(PrimitiveType::String))
+                                    .expect("valid nested field")
                                     .into(),
                                 NestedField::required(11, "age", Primitive(PrimitiveType::Int))
+                                    .expect("valid nested field")
                                     .into(),
                             ])),
                             true,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
             ])
             .build()
@@ -718,18 +749,22 @@ mod tests {
                                 7,
                                 Primitive(PrimitiveType::Int),
                             )
+                            .expect("valid nested field")
                             .into(),
                             value_field: NestedField::map_value_element(
                                 8,
                                 Type::Struct(StructType::new(vec![
                                     NestedField::required(11, "age", Primitive(PrimitiveType::Int))
+                                        .expect("valid nested field")
                                         .into(),
                                 ])),
                                 true,
                             )
+                            .expect("valid nested field")
                             .into(),
                         }),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -757,8 +792,12 @@ mod tests {
         // foo (String, id=1) + v (Variant, id=2).
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "foo", Primitive(PrimitiveType::String)).into(),
-                NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+                NestedField::optional(1, "foo", Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(2, "v", Type::Variant(VariantType))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -766,7 +805,9 @@ mod tests {
         // A variant is a leaf (like a primitive): selecting it keeps it, the same way
         // for select_full_types true and false.
         let only_variant = Type::Struct(StructType::new(vec![
-            NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+            NestedField::optional(2, "v", Type::Variant(VariantType))
+                .expect("valid nested field")
+                .into(),
         ]));
         for full in [false, true] {
             let result = prune_columns(&schema, HashSet::from([2]), full).unwrap();
@@ -775,7 +816,9 @@ mod tests {
 
         // Selecting a sibling prunes the variant out.
         let only_foo = Type::Struct(StructType::new(vec![
-            NestedField::optional(1, "foo", Primitive(PrimitiveType::String)).into(),
+            NestedField::optional(1, "foo", Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
         ]));
         let result = prune_columns(&schema, HashSet::from([1]), false).unwrap();
         assert_eq!(result, only_foo);

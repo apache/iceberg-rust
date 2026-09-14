@@ -51,26 +51,35 @@ impl<'a> SnapshotsTable<'a> {
                 1,
                 "committed_at",
                 Type::Primitive(PrimitiveType::Timestamptz),
-            ),
-            NestedField::required(2, "snapshot_id", Type::Primitive(PrimitiveType::Long)),
-            NestedField::optional(3, "parent_id", Type::Primitive(PrimitiveType::Long)),
-            NestedField::optional(4, "operation", Type::Primitive(PrimitiveType::String)),
-            NestedField::optional(5, "manifest_list", Type::Primitive(PrimitiveType::String)),
+            )
+            .expect("valid nested field"),
+            NestedField::required(2, "snapshot_id", Type::Primitive(PrimitiveType::Long))
+                .expect("valid nested field"),
+            NestedField::optional(3, "parent_id", Type::Primitive(PrimitiveType::Long))
+                .expect("valid nested field"),
+            NestedField::optional(4, "operation", Type::Primitive(PrimitiveType::String))
+                .expect("valid nested field"),
+            NestedField::optional(5, "manifest_list", Type::Primitive(PrimitiveType::String))
+                .expect("valid nested field"),
             NestedField::optional(
                 6,
                 "summary",
                 Type::Map(MapType {
-                    key_field: Arc::new(NestedField::map_key_element(
-                        7,
-                        Type::Primitive(PrimitiveType::String),
-                    )),
-                    value_field: Arc::new(NestedField::map_value_element(
-                        8,
-                        Type::Primitive(PrimitiveType::String),
-                        false,
-                    )),
+                    key_field: Arc::new(
+                        NestedField::map_key_element(7, Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field"),
+                    ),
+                    value_field: Arc::new(
+                        NestedField::map_value_element(
+                            8,
+                            Type::Primitive(PrimitiveType::String),
+                            false,
+                        )
+                        .expect("valid nested field"),
+                    ),
                 }),
-            ),
+            )
+            .expect("valid nested field"),
         ];
         crate::spec::Schema::builder()
             .with_fields(fields.into_iter().map(|f| f.into()))

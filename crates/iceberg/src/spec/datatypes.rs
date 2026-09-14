@@ -27,6 +27,7 @@ use ::serde::de::{MapAccess, Visitor};
 use serde::de::{Error, IntoDeserializer};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
+use typed_builder::TypedBuilder;
 
 use super::values::Literal;
 use crate::ensure_data_valid;
@@ -312,7 +313,7 @@ impl<'de> Deserialize<'de> for Type {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where D: Deserializer<'de> {
         let type_serde = _serde::SerdeType::deserialize(deserializer)?;
-        Ok(Type::from(type_serde))
+        Type::try_from(type_serde).map_err(D::Error::custom)
     }
 }
 
@@ -552,26 +553,32 @@ impl fmt::Display for StructType {
     }
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone, TypedBuilder)]
 #[serde(try_from = "SerdeNestedField", into = "SerdeNestedField")]
+#[builder(build_method(into = Result<NestedField>))]
 /// A struct is a tuple of typed values. Each field in the tuple is named and has an integer id that is unique in the table schema.
 /// Each field can be either optional or required, meaning that values can (or cannot) be null. Fields may be any type.
 /// Fields may have an optional comment or doc string. Fields can have default values.
 pub struct NestedField {
     /// Id unique in table schema
-    pub id: i32,
+    id: i32,
     /// Field Name
-    pub name: String,
+    #[builder(setter(into))]
+    name: String,
     /// Optional or required
-    pub required: bool,
+    required: bool,
     /// Datatype
-    pub field_type: Box<Type>,
+    #[builder(setter(transform = |field_type: Type| Box::new(field_type)))]
+    field_type: Box<Type>,
     /// Fields may have an optional comment or doc string.
-    pub doc: Option<String>,
+    #[builder(default, setter(strip_option(fallback = doc_opt), into))]
+    doc: Option<String>,
     /// Used to populate the field’s value for all records that were written before the field was added to the schema
-    pub initial_default: Option<Literal>,
+    #[builder(default, setter(strip_option(fallback = initial_default_opt)))]
+    initial_default: Option<Literal>,
     /// Used to populate the field’s value for any records written after the field was added to the schema, if the writer does not supply the field’s value
-    pub write_default: Option<Literal>,
+    #[builder(default, setter(strip_option(fallback = write_default_opt)))]
+    write_default: Option<Literal>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -605,22 +612,28 @@ impl TryFrom<SerdeNestedField> for NestedField {
             .transpose()?
             .flatten();
 
-        Ok(NestedField {
-            id: value.id,
-            name: value.name,
-            required: value.required,
-            initial_default,
-            write_default,
-            field_type: value.field_type,
-            doc: value.doc,
-        })
+        NestedField::builder()
+            .id(value.id)
+            .name(value.name)
+            .required(value.required)
+            .field_type(*value.field_type)
+            .doc_opt(value.doc)
+            .initial_default_opt(initial_default)
+            .write_default_opt(write_default)
+            .build()
     }
 }
 
 impl From<NestedField> for SerdeNestedField {
     fn from(value: NestedField) -> Self {
-        let initial_default = value.initial_default.map(|x| x.try_into_json(&value.field_type).expect("We should have checked this in NestedField::with_initial_default, it can't be converted to json value"));
-        let write_default = value.write_default.map(|x| x.try_into_json(&value.field_type).expect("We should have checked this in NestedField::with_write_default, it can't be converted to json value"));
+        let initial_default = value.initial_default.map(|x| {
+            x.try_into_json(&value.field_type)
+                .expect("NestedFieldBuilder validates initial defaults")
+        });
+        let write_default = value.write_default.map(|x| {
+            x.try_into_json(&value.field_type)
+                .expect("NestedFieldBuilder validates write defaults")
+        });
         SerdeNestedField {
             id: value.id,
             name: value.name,
@@ -637,66 +650,113 @@ impl From<NestedField> for SerdeNestedField {
 pub type NestedFieldRef = Arc<NestedField>;
 
 impl NestedField {
+    /// Get the id unique in the table schema.
+    pub fn id(&self) -> i32 {
+        self.id
+    }
+
+    /// Get the field name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Get whether the field is required.
+    pub fn is_required(&self) -> bool {
+        self.required
+    }
+
+    /// Get the field's data type.
+    pub fn field_type(&self) -> &Type {
+        &self.field_type
+    }
+
+    /// Get the field's documentation string.
+    pub fn doc(&self) -> Option<&str> {
+        self.doc.as_deref()
+    }
+
+    /// Get the field's initial default value.
+    pub fn initial_default(&self) -> Option<&Literal> {
+        self.initial_default.as_ref()
+    }
+
+    /// Get the field's write default value.
+    pub fn write_default(&self) -> Option<&Literal> {
+        self.write_default.as_ref()
+    }
+
     /// Construct a new field.
-    pub fn new(id: i32, name: impl ToString, field_type: Type, required: bool) -> Self {
-        Self {
-            id,
-            name: name.to_string(),
-            required,
-            field_type: Box::new(field_type),
-            doc: None,
-            initial_default: None,
-            write_default: None,
-        }
+    pub fn new(id: i32, name: impl ToString, field_type: Type, required: bool) -> Result<Self> {
+        Self::builder()
+            .id(id)
+            .name(name.to_string())
+            .required(required)
+            .field_type(field_type)
+            .build()
     }
 
     /// Construct a required field.
-    pub fn required(id: i32, name: impl ToString, field_type: Type) -> Self {
+    pub fn required(id: i32, name: impl ToString, field_type: Type) -> Result<Self> {
         Self::new(id, name, field_type, true)
     }
 
     /// Construct an optional field.
-    pub fn optional(id: i32, name: impl ToString, field_type: Type) -> Self {
+    pub fn optional(id: i32, name: impl ToString, field_type: Type) -> Result<Self> {
         Self::new(id, name, field_type, false)
     }
 
     /// Construct list type's element field.
-    pub fn list_element(id: i32, field_type: Type, required: bool) -> Self {
+    pub fn list_element(id: i32, field_type: Type, required: bool) -> Result<Self> {
         Self::new(id, LIST_FIELD_NAME, field_type, required)
     }
 
     /// Construct map type's key field.
-    pub fn map_key_element(id: i32, field_type: Type) -> Self {
+    pub fn map_key_element(id: i32, field_type: Type) -> Result<Self> {
         Self::required(id, MAP_KEY_FIELD_NAME, field_type)
     }
 
     /// Construct map type's value field.
-    pub fn map_value_element(id: i32, field_type: Type, required: bool) -> Self {
+    pub fn map_value_element(id: i32, field_type: Type, required: bool) -> Result<Self> {
         Self::new(id, MAP_VALUE_FIELD_NAME, field_type, required)
     }
 
-    /// Set the field's doc.
-    pub fn with_doc(mut self, doc: impl ToString) -> Self {
-        self.doc = Some(doc.to_string());
-        self
+    pub(crate) fn rebuild(&self, id: i32, field_type: Type) -> Result<Self> {
+        Self::builder()
+            .id(id)
+            .name(self.name.clone())
+            .required(self.required)
+            .field_type(field_type)
+            .doc_opt(self.doc.clone())
+            .initial_default_opt(self.initial_default.clone())
+            .write_default_opt(self.write_default.clone())
+            .build()
     }
 
-    /// Set the field's initial default value.
-    pub fn with_initial_default(mut self, value: Literal) -> Self {
-        self.initial_default = Some(value);
-        self
-    }
+    fn validate(&self) -> Result<()> {
+        for (default_name, default_value) in [
+            ("initial-default", self.initial_default.as_ref()),
+            ("write-default", self.write_default.as_ref()),
+        ] {
+            if let Some(default_value) = default_value {
+                default_value
+                    .clone()
+                    .try_into_json(&self.field_type)
+                    .map_err(|error| {
+                        error
+                            .with_context("field", self.name.clone())
+                            .with_context("default", default_name)
+                    })?;
+            }
+        }
 
-    /// Set the field's initial default value.
-    pub fn with_write_default(mut self, value: Literal) -> Self {
-        self.write_default = Some(value);
-        self
+        Ok(())
     }
+}
 
-    /// Set the id of the field.
-    pub(crate) fn with_id(mut self, id: i32) -> Self {
-        self.id = id;
-        self
+impl From<NestedField> for Result<NestedField> {
+    fn from(field: NestedField) -> Self {
+        field.validate()?;
+        Ok(field)
     }
 }
 
@@ -738,6 +798,7 @@ pub(super) mod _serde {
 
     use serde_derive::{Deserialize, Serialize};
 
+    use crate::Result;
     use crate::spec::datatypes::Type::Map;
     use crate::spec::datatypes::{
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
@@ -772,9 +833,11 @@ pub(super) mod _serde {
         Variant(VariantType),
     }
 
-    impl From<SerdeType<'_>> for Type {
-        fn from(value: SerdeType) -> Self {
-            match value {
+    impl TryFrom<SerdeType<'_>> for Type {
+        type Error = crate::Error;
+
+        fn try_from(value: SerdeType) -> Result<Self> {
+            Ok(match value {
                 SerdeType::List {
                     r#type: _,
                     element_id,
@@ -785,7 +848,7 @@ pub(super) mod _serde {
                         element_id,
                         element.into_owned(),
                         element_required,
-                    )
+                    )?
                     .into(),
                 }),
                 SerdeType::Map {
@@ -796,12 +859,12 @@ pub(super) mod _serde {
                     value_required,
                     value,
                 } => Map(MapType {
-                    key_field: NestedField::map_key_element(key_id, key.into_owned()).into(),
+                    key_field: NestedField::map_key_element(key_id, key.into_owned())?.into(),
                     value_field: NestedField::map_value_element(
                         value_id,
                         value.into_owned(),
                         value_required,
-                    )
+                    )?
                     .into(),
                 }),
                 SerdeType::Struct { r#type: _, fields } => {
@@ -809,7 +872,7 @@ pub(super) mod _serde {
                 }
                 SerdeType::Primitive(p) => Self::Primitive(p),
                 SerdeType::Variant(v) => Self::Variant(v),
-            }
+            })
         }
     }
 
@@ -863,19 +926,19 @@ impl MapType {
     }
 
     /// Construct an optional map type with the given key and value fields.
-    pub fn optional(key_id: i32, key_type: Type, value_id: i32, value_type: Type) -> Self {
-        Self {
-            key_field: NestedField::map_key_element(key_id, key_type).into(),
-            value_field: NestedField::map_value_element(value_id, value_type, false).into(),
-        }
+    pub fn optional(key_id: i32, key_type: Type, value_id: i32, value_type: Type) -> Result<Self> {
+        Ok(Self {
+            key_field: NestedField::map_key_element(key_id, key_type)?.into(),
+            value_field: NestedField::map_value_element(value_id, value_type, false)?.into(),
+        })
     }
 
     /// Construct a required map type with the given key and value fields.
-    pub fn required(key_id: i32, key_type: Type, value_id: i32, value_type: Type) -> Self {
-        Self {
-            key_field: NestedField::map_key_element(key_id, key_type).into(),
-            value_field: NestedField::map_value_element(value_id, value_type, true).into(),
-        }
+    pub fn required(key_id: i32, key_type: Type, value_id: i32, value_type: Type) -> Result<Self> {
+        Ok(Self {
+            key_field: NestedField::map_key_element(key_id, key_type)?.into(),
+            value_field: NestedField::map_value_element(value_id, value_type, true)?.into(),
+        })
     }
 }
 
@@ -921,7 +984,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::spec::values::PrimitiveLiteral;
+    use crate::ErrorKind;
+    use crate::spec::values::{Map, PrimitiveLiteral, Struct};
 
     fn check_type_serde(json: &str, expected_type: Type) {
         let desered_type: Type = serde_json::from_str(json).unwrap();
@@ -965,18 +1029,23 @@ mod tests {
             Type::Struct(StructType {
                 fields: vec![
                     NestedField::required(1, "bool_field", Type::Primitive(PrimitiveType::Boolean))
+                        .expect("valid nested field")
                         .into(),
                     NestedField::required(2, "int_field", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
                         .into(),
                     NestedField::required(3, "long_field", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field")
                         .into(),
                     NestedField::required(4, "float_field", Type::Primitive(PrimitiveType::Float))
+                        .expect("valid nested field")
                         .into(),
                     NestedField::required(
                         5,
                         "double_field",
                         Type::Primitive(PrimitiveType::Double),
                     )
+                    .expect("valid nested field")
                     .into(),
                     NestedField::required(
                         6,
@@ -986,54 +1055,65 @@ mod tests {
                             scale: 2,
                         }),
                     )
+                    .expect("valid nested field")
                     .into(),
                     NestedField::required(7, "date_field", Type::Primitive(PrimitiveType::Date))
+                        .expect("valid nested field")
                         .into(),
                     NestedField::required(8, "time_field", Type::Primitive(PrimitiveType::Time))
+                        .expect("valid nested field")
                         .into(),
                     NestedField::required(
                         9,
                         "timestamp_field",
                         Type::Primitive(PrimitiveType::Timestamp),
                     )
+                    .expect("valid nested field")
                     .into(),
                     NestedField::required(
                         10,
                         "timestamptz_field",
                         Type::Primitive(PrimitiveType::Timestamptz),
                     )
+                    .expect("valid nested field")
                     .into(),
                     NestedField::required(
                         11,
                         "timestamp_ns_field",
                         Type::Primitive(PrimitiveType::TimestampNs),
                     )
+                    .expect("valid nested field")
                     .into(),
                     NestedField::required(
                         12,
                         "timestamptz_ns_field",
                         Type::Primitive(PrimitiveType::TimestamptzNs),
                     )
+                    .expect("valid nested field")
                     .into(),
                     NestedField::required(13, "uuid_field", Type::Primitive(PrimitiveType::Uuid))
+                        .expect("valid nested field")
                         .into(),
                     NestedField::required(
                         14,
                         "fixed_field",
                         Type::Primitive(PrimitiveType::Fixed(10)),
                     )
+                    .expect("valid nested field")
                     .into(),
                     NestedField::required(
                         15,
                         "binary_field",
                         Type::Primitive(PrimitiveType::Binary),
                     )
+                    .expect("valid nested field")
                     .into(),
                     NestedField::required(
                         16,
                         "string_field",
                         Type::Primitive(PrimitiveType::String),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ],
                 id_lookup: OnceLock::default(),
@@ -1069,19 +1149,27 @@ mod tests {
             record,
             Type::Struct(StructType {
                 fields: vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Uuid))
-                        .with_initial_default(Literal::Primitive(PrimitiveLiteral::UInt128(
+                    NestedField::builder()
+                        .id(1)
+                        .name("id")
+                        .required(true)
+                        .field_type(Type::Primitive(PrimitiveType::Uuid))
+                        .initial_default(Literal::Primitive(PrimitiveLiteral::UInt128(
                             Uuid::parse_str("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb")
                                 .unwrap()
                                 .as_u128(),
                         )))
-                        .with_write_default(Literal::Primitive(PrimitiveLiteral::UInt128(
+                        .write_default(Literal::Primitive(PrimitiveLiteral::UInt128(
                             Uuid::parse_str("ec5911be-b0a7-458c-8438-c9a3e53cffae")
                                 .unwrap()
                                 .as_u128(),
                         )))
+                        .build()
+                        .unwrap()
                         .into(),
-                    NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ],
                 id_lookup: HashMap::from([(1, 0), (2, 1)]).into(),
                 name_lookup: HashMap::from([("id".to_string(), 0), ("data".to_string(), 1)]).into(),
@@ -1142,30 +1230,43 @@ mod tests {
 "#;
 
         let struct_type = Type::Struct(StructType::new(vec![
-            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Uuid))
-                .with_initial_default(Literal::Primitive(PrimitiveLiteral::UInt128(
+            NestedField::builder()
+                .id(1)
+                .name("id")
+                .required(true)
+                .field_type(Type::Primitive(PrimitiveType::Uuid))
+                .initial_default(Literal::Primitive(PrimitiveLiteral::UInt128(
                     Uuid::parse_str("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb")
                         .unwrap()
                         .as_u128(),
                 )))
-                .with_write_default(Literal::Primitive(PrimitiveLiteral::UInt128(
+                .write_default(Literal::Primitive(PrimitiveLiteral::UInt128(
                     Uuid::parse_str("ec5911be-b0a7-458c-8438-c9a3e53cffae")
                         .unwrap()
                         .as_u128(),
                 )))
+                .build()
+                .unwrap()
                 .into(),
-            NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
             NestedField::required(
                 3,
                 "address",
                 Type::Struct(StructType::new(vec![
                     NestedField::required(4, "street", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
                         .into(),
                     NestedField::optional(5, "province", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
                         .into(),
-                    NestedField::required(6, "zip", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(6, "zip", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])),
             )
+            .expect("valid nested field")
             .into(),
         ]));
 
@@ -1191,6 +1292,7 @@ mod tests {
                     Type::Primitive(PrimitiveType::String),
                     true,
                 )
+                .expect("valid nested field")
                 .into(),
             }),
         );
@@ -1213,24 +1315,29 @@ mod tests {
             record,
             Type::Map(MapType {
                 key_field: NestedField::map_key_element(4, Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
                     .into(),
                 value_field: NestedField::map_value_element(
                     5,
                     Type::Primitive(PrimitiveType::Double),
                     false,
                 )
+                .expect("valid nested field")
                 .into(),
             }),
         );
 
         check_type_serde(
             record,
-            Type::Map(MapType::optional(
-                4,
-                Type::Primitive(PrimitiveType::String),
-                5,
-                Type::Primitive(PrimitiveType::Double),
-            )),
+            Type::Map(
+                MapType::optional(
+                    4,
+                    Type::Primitive(PrimitiveType::String),
+                    5,
+                    Type::Primitive(PrimitiveType::Double),
+                )
+                .expect("valid nested field"),
+            ),
         );
     }
 
@@ -1251,24 +1358,29 @@ mod tests {
             record,
             Type::Map(MapType {
                 key_field: NestedField::map_key_element(4, Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
                     .into(),
                 value_field: NestedField::map_value_element(
                     5,
                     Type::Primitive(PrimitiveType::String),
                     false,
                 )
+                .expect("valid nested field")
                 .into(),
             }),
         );
 
         check_type_serde(
             record,
-            Type::Map(MapType::optional(
-                4,
-                Type::Primitive(PrimitiveType::Int),
-                5,
-                Type::Primitive(PrimitiveType::String),
-            )),
+            Type::Map(
+                MapType::optional(
+                    4,
+                    Type::Primitive(PrimitiveType::Int),
+                    5,
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .expect("valid nested field"),
+            ),
         );
     }
 
@@ -1287,12 +1399,15 @@ mod tests {
 
         check_type_serde(
             record,
-            Type::Map(MapType::required(
-                4,
-                Type::Primitive(PrimitiveType::Int),
-                5,
-                Type::Primitive(PrimitiveType::String),
-            )),
+            Type::Map(
+                MapType::required(
+                    4,
+                    Type::Primitive(PrimitiveType::Int),
+                    5,
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .expect("valid nested field"),
+            ),
         );
     }
 
@@ -1381,6 +1496,91 @@ mod tests {
             let error = serde_json::from_str::<NestedField>(&json).unwrap_err();
             assert!(error.to_string().contains("must have the same length"));
         }
+    }
+
+    #[test]
+    fn nested_field_builder_sets_fields() {
+        let field = NestedField::builder()
+            .id(1)
+            .name("count")
+            .required(true)
+            .field_type(Type::Primitive(PrimitiveType::Int))
+            .doc("number of items")
+            .initial_default(Literal::int(1))
+            .write_default(Literal::int(2))
+            .build()
+            .unwrap();
+
+        assert_eq!(field.id(), 1);
+        assert_eq!(field.name(), "count");
+        assert!(field.is_required());
+        assert_eq!(field.field_type(), &Type::Primitive(PrimitiveType::Int));
+        assert_eq!(field.doc(), Some("number of items"));
+        assert_eq!(field.initial_default(), Some(&Literal::int(1)));
+        assert_eq!(field.write_default(), Some(&Literal::int(2)));
+    }
+
+    #[test]
+    fn nested_field_builder_rejects_incompatible_defaults() {
+        let struct_type = Type::Struct(StructType::new(vec![Arc::new(
+            NestedField::required(2, "value", Type::Primitive(PrimitiveType::String)).unwrap(),
+        )]));
+        let list_type = Type::List(ListType::new(
+            NestedField::list_element(3, Type::Primitive(PrimitiveType::Int), false)
+                .unwrap()
+                .into(),
+        ));
+        let map_type = Type::Map(
+            MapType::optional(
+                4,
+                Type::Primitive(PrimitiveType::String),
+                5,
+                Type::Primitive(PrimitiveType::Int),
+            )
+            .unwrap(),
+        );
+
+        let cases = [
+            (Type::Primitive(PrimitiveType::String), Literal::int(1)),
+            (
+                Type::Primitive(PrimitiveType::Fixed(2)),
+                Literal::binary([1]),
+            ),
+            (
+                struct_type,
+                Literal::Struct(Struct::from_iter([Some(Literal::int(1))])),
+            ),
+            (list_type, Literal::List(vec![Some(Literal::string("one"))])),
+            (
+                map_type,
+                Literal::Map(Map::from([(Literal::int(1), Some(Literal::int(2)))])),
+            ),
+        ];
+
+        for (field_type, default) in cases {
+            let error = NestedField::builder()
+                .id(1)
+                .name("invalid")
+                .required(false)
+                .field_type(field_type)
+                .initial_default(default)
+                .build()
+                .unwrap_err();
+
+            assert_eq!(error.kind(), ErrorKind::DataInvalid);
+            assert!(error.to_string().contains("field: invalid"));
+            assert!(error.to_string().contains("default: initial-default"));
+        }
+
+        let error = NestedField::builder()
+            .id(1)
+            .name("invalid")
+            .required(false)
+            .field_type(Type::Primitive(PrimitiveType::String))
+            .write_default(Literal::int(1))
+            .build()
+            .unwrap_err();
+        assert!(error.to_string().contains("default: write-default"));
     }
 
     #[test]

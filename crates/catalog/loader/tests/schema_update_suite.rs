@@ -33,9 +33,15 @@ use rstest::rstest;
 fn base_schema() -> Schema {
     Schema::builder()
         .with_fields(vec![
-            NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
-            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+            NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
+            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
+            NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
+                .expect("valid nested field")
+                .into(),
         ])
         .with_identifier_field_ids(vec![2])
         .build()
@@ -88,8 +94,8 @@ async fn test_catalog_schema_add_column(#[case] kind: CatalogKind) -> Result<()>
 
     let schema = updated.metadata().current_schema();
     let field_a = schema.field_by_name("a").expect("field 'a' should exist");
-    assert_eq!(field_a.id, 4);
-    assert_eq!(*field_a.field_type, Type::Primitive(PrimitiveType::Int));
+    assert_eq!(field_a.id(), 4);
+    assert_eq!(field_a.field_type(), &Type::Primitive(PrimitiveType::Int));
 
     Ok(())
 }
@@ -139,7 +145,9 @@ async fn test_catalog_schema_add_nested_and_delete_column(#[case] kind: CatalogK
         .add_column(AddColumn::optional(
             "info",
             Type::Struct(StructType::new(vec![
-                NestedField::optional(0, "city", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(0, "city", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])),
         ))
         .apply(tx)?;

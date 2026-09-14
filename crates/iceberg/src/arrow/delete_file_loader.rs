@@ -218,12 +218,14 @@ mod tests {
                         "file_path",
                         crate::spec::Type::Primitive(crate::spec::PrimitiveType::String),
                     )
+                    .expect("valid nested field")
                     .into(),
                     crate::spec::NestedField::required(
                         2147483545,
                         "pos",
                         crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -303,6 +305,7 @@ mod tests {
                         "id",
                         crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()

@@ -253,7 +253,7 @@ impl ManifestWriter {
         let mut field_stats: Vec<_> = partition_type
             .fields()
             .iter()
-            .map(|f| PartitionFieldStats::new(f.field_type.as_primitive_type().unwrap().clone()))
+            .map(|f| PartitionFieldStats::new(f.field_type().as_primitive_type().unwrap().clone()))
             .collect();
         for partition in self.manifest_entries.iter().map(|e| &e.data_file.partition) {
             for (literal, stat) in partition.iter().zip_eq(field_stats.iter_mut()) {
@@ -615,16 +615,14 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::optional(
-                        1,
-                        "id",
-                        Type::Primitive(PrimitiveType::Int),
-                    )),
-                    Arc::new(NestedField::optional(
-                        2,
-                        "name",
-                        Type::Primitive(PrimitiveType::String),
-                    )),
+                    Arc::new(
+                        NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -764,16 +762,14 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::optional(
-                        1,
-                        "id",
-                        Type::Primitive(PrimitiveType::Long),
-                    )),
-                    Arc::new(NestedField::optional(
-                        2,
-                        "data",
-                        Type::Primitive(PrimitiveType::String),
-                    )),
+                    Arc::new(
+                        NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(2, "data", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),

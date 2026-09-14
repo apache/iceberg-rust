@@ -3696,8 +3696,11 @@ mod tests {
             vec![&Arc::new(
                 Schema::builder()
                     .with_fields(vec![
-                        NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                        NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field")
+                            .into(),
                         NestedField::optional(2, "data", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field")
                             .into(),
                     ])
                     .build()
@@ -3819,9 +3822,13 @@ mod tests {
                 Schema::builder()
                     .with_fields(vec![
                         NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field")
                             .into(),
-                        NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                        NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field")
+                            .into(),
                         NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
+                            .expect("valid nested field")
                             .into(),
                     ])
                     .with_schema_id(1)
@@ -3893,9 +3900,13 @@ mod tests {
                 Schema::builder()
                     .with_fields(vec![
                         NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field")
                             .into(),
-                        NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                        NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field")
+                            .into(),
                         NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
+                            .expect("valid nested field")
                             .into(),
                     ])
                     .with_schema_id(0)
@@ -3969,9 +3980,13 @@ mod tests {
                 Schema::builder()
                     .with_fields(vec![
                         NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field")
                             .into(),
-                        NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                        NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field")
+                            .into(),
                         NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
+                            .expect("valid nested field")
                             .into(),
                     ])
                     .with_schema_id(1)
@@ -4097,9 +4112,13 @@ mod tests {
                 Schema::builder()
                     .with_fields(vec![
                         NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field")
                             .into(),
-                        NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                        NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field")
+                            .into(),
                         NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
+                            .expect("valid nested field")
                             .into(),
                     ])
                     .with_schema_id(0)

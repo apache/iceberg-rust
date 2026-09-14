@@ -103,14 +103,14 @@ impl SchemaVisitor for GlueSchemaBuilder {
 
     fn field(&mut self, field: &iceberg::spec::NestedFieldRef, value: String) -> Result<String> {
         if self.is_inside_struct() {
-            return Ok(format!("{}:{}", field.name, value));
+            return Ok(format!("{}:{}", field.name(), value));
         }
 
         let parameters = HashMap::from([
-            (ICEBERG_FIELD_ID.to_string(), format!("{}", field.id)),
+            (ICEBERG_FIELD_ID.to_string(), format!("{}", field.id())),
             (
                 ICEBERG_FIELD_OPTIONAL.to_string(),
-                format!("{}", !field.required).to_lowercase(),
+                format!("{}", !field.is_required()).to_lowercase(),
             ),
             (
                 ICEBERG_FIELD_CURRENT.to_string(),
@@ -119,11 +119,11 @@ impl SchemaVisitor for GlueSchemaBuilder {
         ]);
 
         let mut builder = Column::builder()
-            .name(field.name.clone())
+            .name(field.name().to_string())
             .r#type(&value)
             .set_parameters(Some(parameters));
 
-        if let Some(comment) = field.doc.as_ref() {
+        if let Some(comment) = field.doc() {
             builder = builder.comment(comment);
         }
 

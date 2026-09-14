@@ -31,7 +31,7 @@ pub fn index_by_id(r#struct: &StructType) -> Result<HashMap<i32, NestedFieldRef>
         }
 
         fn field(&mut self, field: &NestedFieldRef, _value: ()) -> Result<()> {
-            try_insert_field(&mut self.0, field.id, field.clone())
+            try_insert_field(&mut self.0, field.id(), field.clone())
         }
 
         fn r#struct(&mut self, _struct: &StructType, _results: Vec<Self::T>) -> Result<Self::T> {
@@ -41,14 +41,14 @@ pub fn index_by_id(r#struct: &StructType) -> Result<HashMap<i32, NestedFieldRef>
         fn list(&mut self, list: &ListType, _value: Self::T) -> Result<Self::T> {
             try_insert_field(
                 &mut self.0,
-                list.element_field.id,
+                list.element_field.id(),
                 list.element_field.clone(),
             )
         }
 
         fn map(&mut self, map: &MapType, _key_value: Self::T, _value: Self::T) -> Result<Self::T> {
-            try_insert_field(&mut self.0, map.key_field.id, map.key_field.clone())?;
-            try_insert_field(&mut self.0, map.value_field.id, map.value_field.clone())
+            try_insert_field(&mut self.0, map.key_field.id(), map.key_field.clone())?;
+            try_insert_field(&mut self.0, map.value_field.id(), map.value_field.clone())
         }
 
         fn primitive(&mut self, _: &PrimitiveType) -> Result<Self::T> {
@@ -77,9 +77,9 @@ pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
 
         fn before_struct_field(&mut self, field: &NestedFieldRef) -> Result<()> {
             if let Some(parent) = self.parents.last().copied() {
-                self.result.insert(field.id, parent);
+                self.result.insert(field.id(), parent);
             }
-            self.parents.push(field.id);
+            self.parents.push(field.id());
             Ok(())
         }
 
@@ -90,9 +90,9 @@ pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
 
         fn before_list_element(&mut self, field: &NestedFieldRef) -> Result<()> {
             if let Some(parent) = self.parents.last().copied() {
-                self.result.insert(field.id, parent);
+                self.result.insert(field.id(), parent);
             }
-            self.parents.push(field.id);
+            self.parents.push(field.id());
             Ok(())
         }
 
@@ -103,9 +103,9 @@ pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
 
         fn before_map_key(&mut self, field: &NestedFieldRef) -> Result<()> {
             if let Some(parent) = self.parents.last().copied() {
-                self.result.insert(field.id, parent);
+                self.result.insert(field.id(), parent);
             }
-            self.parents.push(field.id);
+            self.parents.push(field.id());
             Ok(())
         }
 
@@ -116,9 +116,9 @@ pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
 
         fn before_map_value(&mut self, field: &NestedFieldRef) -> Result<()> {
             if let Some(parent) = self.parents.last().copied() {
-                self.result.insert(field.id, parent);
+                self.result.insert(field.id(), parent);
             }
-            self.parents.push(field.id);
+            self.parents.push(field.id());
             Ok(())
         }
 
@@ -224,8 +224,8 @@ impl SchemaVisitor for IndexByName {
     type T = ();
 
     fn before_struct_field(&mut self, field: &NestedFieldRef) -> Result<()> {
-        self.field_names.push(field.name.to_string());
-        self.short_field_names.push(field.name.to_string());
+        self.field_names.push(field.name().to_string());
+        self.short_field_names.push(field.name().to_string());
         Ok(())
     }
 
@@ -236,9 +236,9 @@ impl SchemaVisitor for IndexByName {
     }
 
     fn before_list_element(&mut self, field: &NestedFieldRef) -> Result<()> {
-        self.field_names.push(field.name.clone());
-        if !field.field_type.is_struct() {
-            self.short_field_names.push(field.name.to_string());
+        self.field_names.push(field.name().to_string());
+        if !field.field_type().is_struct() {
+            self.short_field_names.push(field.name().to_string());
         }
 
         Ok(())
@@ -246,7 +246,7 @@ impl SchemaVisitor for IndexByName {
 
     fn after_list_element(&mut self, field: &NestedFieldRef) -> Result<()> {
         self.field_names.pop();
-        if !field.field_type.is_struct() {
+        if !field.field_type().is_struct() {
             self.short_field_names.pop();
         }
 
@@ -262,16 +262,16 @@ impl SchemaVisitor for IndexByName {
     }
 
     fn before_map_value(&mut self, field: &NestedFieldRef) -> Result<()> {
-        self.field_names.push(field.name.to_string());
-        if !field.field_type.is_struct() {
-            self.short_field_names.push(field.name.to_string());
+        self.field_names.push(field.name().to_string());
+        if !field.field_type().is_struct() {
+            self.short_field_names.push(field.name().to_string());
         }
         Ok(())
     }
 
     fn after_map_value(&mut self, field: &NestedFieldRef) -> Result<()> {
         self.field_names.pop();
-        if !field.field_type.is_struct() {
+        if !field.field_type().is_struct() {
             self.short_field_names.pop();
         }
 
@@ -283,7 +283,7 @@ impl SchemaVisitor for IndexByName {
     }
 
     fn field(&mut self, field: &NestedFieldRef, _value: Self::T) -> Result<Self::T> {
-        self.add_field(field.name.as_str(), field.id)
+        self.add_field(field.name(), field.id())
     }
 
     fn r#struct(&mut self, _struct: &StructType, _results: Vec<Self::T>) -> Result<Self::T> {
@@ -291,12 +291,12 @@ impl SchemaVisitor for IndexByName {
     }
 
     fn list(&mut self, list: &ListType, _value: Self::T) -> Result<Self::T> {
-        self.add_field(LIST_FIELD_NAME, list.element_field.id)
+        self.add_field(LIST_FIELD_NAME, list.element_field.id())
     }
 
     fn map(&mut self, map: &MapType, _key_value: Self::T, _value: Self::T) -> Result<Self::T> {
-        self.add_field(MAP_KEY_FIELD_NAME, map.key_field.id)?;
-        self.add_field(MAP_VALUE_FIELD_NAME, map.value_field.id)
+        self.add_field(MAP_KEY_FIELD_NAME, map.key_field.id())?;
+        self.add_field(MAP_VALUE_FIELD_NAME, map.value_field.id())
     }
 
     fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
@@ -335,23 +335,30 @@ mod tests {
         // top level and nested inside a struct. Mirrors Java's TestTypeUtil index-by-id /
         // index-name-by-id coverage for variant.
         let s = StructType::new(vec![
-            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
+            NestedField::optional(2, "v", Type::Variant(VariantType))
+                .expect("valid nested field")
+                .into(),
             NestedField::required(
                 3,
                 "nested",
                 Type::Struct(StructType::new(vec![
-                    NestedField::optional(4, "inner_v", Type::Variant(VariantType)).into(),
+                    NestedField::optional(4, "inner_v", Type::Variant(VariantType))
+                        .expect("valid nested field")
+                        .into(),
                 ])),
             )
+            .expect("valid nested field")
             .into(),
         ]);
 
         let by_id = index_by_id(&s).unwrap();
         // All four fields (id, v, nested, nested.inner_v) are indexed exactly once.
         assert_eq!(by_id.len(), 4);
-        assert!(by_id[&2].field_type.is_variant());
-        assert!(by_id[&4].field_type.is_variant());
+        assert!(by_id[&2].field_type().is_variant());
+        assert!(by_id[&4].field_type().is_variant());
 
         let (name_to_id, id_to_name) = {
             let mut index = IndexByName::default();

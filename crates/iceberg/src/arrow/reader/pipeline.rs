@@ -985,7 +985,9 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1065,7 +1067,9 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1163,7 +1167,9 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1405,7 +1411,9 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1556,7 +1564,9 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1911,7 +1921,9 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -2000,7 +2012,9 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -2160,7 +2174,9 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -2484,7 +2500,9 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -2550,8 +2568,11 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                     NestedField::required(2, "file_num", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
                         .into(),
                 ])
                 .build()
@@ -2708,8 +2729,11 @@ mod tests {
                 .with_schema_id(1)
                 .with_fields(vec![
                     NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                        .expect("valid nested field")
                         .into(),
-                    NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -2730,8 +2754,11 @@ mod tests {
                 .with_schema_id(1)
                 .with_fields(vec![
                     NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                        .expect("valid nested field")
                         .into(),
-                    NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -2807,9 +2834,11 @@ mod tests {
                                 "ts",
                                 Type::Primitive(PrimitiveType::Timestamp),
                             )
+                            .expect("valid nested field")
                             .into(),
                         ])),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -2914,9 +2943,11 @@ mod tests {
                                 "element",
                                 Type::Primitive(PrimitiveType::Timestamp),
                             )
+                            .expect("valid nested field")
                             .into(),
                         }),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -3041,15 +3072,18 @@ mod tests {
                                 "key",
                                 Type::Primitive(PrimitiveType::String),
                             )
+                            .expect("valid nested field")
                             .into(),
                             value_field: NestedField::optional(
                                 3,
                                 "value",
                                 Type::Primitive(PrimitiveType::Timestamp),
                             )
+                            .expect("valid nested field")
                             .into(),
                         }),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])
                 .build()
@@ -3118,8 +3152,12 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::required(2, "wide", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::required(2, "wide", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -3215,7 +3253,9 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -3616,7 +3656,9 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),

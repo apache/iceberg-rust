@@ -182,330 +182,350 @@ use super::DataFileFormat;
 
 static STATUS: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::required(
-            0,
-            "status",
-            Type::Primitive(PrimitiveType::Int),
-        ))
+        Arc::new(
+            NestedField::required(0, "status", Type::Primitive(PrimitiveType::Int))
+                .expect("valid nested field"),
+        )
     })
 };
 
 static SNAPSHOT_ID_V1: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::required(
-            1,
-            "snapshot_id",
-            Type::Primitive(PrimitiveType::Long),
-        ))
+        Arc::new(
+            NestedField::required(1, "snapshot_id", Type::Primitive(PrimitiveType::Long))
+                .expect("valid nested field"),
+        )
     })
 };
 
 static SNAPSHOT_ID_V2: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            1,
-            "snapshot_id",
-            Type::Primitive(PrimitiveType::Long),
-        ))
+        Arc::new(
+            NestedField::optional(1, "snapshot_id", Type::Primitive(PrimitiveType::Long))
+                .expect("valid nested field"),
+        )
     })
 };
 
 static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            3,
-            "sequence_number",
-            Type::Primitive(PrimitiveType::Long),
-        ))
+        Arc::new(
+            NestedField::optional(3, "sequence_number", Type::Primitive(PrimitiveType::Long))
+                .expect("valid nested field"),
+        )
     })
 };
 
 static FILE_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            4,
-            "file_sequence_number",
-            Type::Primitive(PrimitiveType::Long),
-        ))
+        Arc::new(
+            NestedField::optional(
+                4,
+                "file_sequence_number",
+                Type::Primitive(PrimitiveType::Long),
+            )
+            .expect("valid nested field"),
+        )
     })
 };
 
 static CONTENT: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
         Arc::new(
-            NestedField::required(134, "content", Type::Primitive(PrimitiveType::Int))
+            NestedField::builder()
+                .id(134)
+                .name("content")
+                .required(true)
+                .field_type(Type::Primitive(PrimitiveType::Int))
                 // 0 refers to DataContentType::DATA
-                .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(0))),
+                .initial_default(Literal::Primitive(PrimitiveLiteral::Int(0)))
+                .build()
+                .expect("valid content field"),
         )
     })
 };
 
 static FILE_PATH: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::required(
-            100,
-            "file_path",
-            Type::Primitive(PrimitiveType::String),
-        ))
+        Arc::new(
+            NestedField::required(100, "file_path", Type::Primitive(PrimitiveType::String))
+                .expect("valid nested field"),
+        )
     })
 };
 
 static FILE_FORMAT: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::required(
-            101,
-            "file_format",
-            Type::Primitive(PrimitiveType::String),
-        ))
+        Arc::new(
+            NestedField::required(101, "file_format", Type::Primitive(PrimitiveType::String))
+                .expect("valid nested field"),
+        )
     })
 };
 
 static RECORD_COUNT: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::required(
-            103,
-            "record_count",
-            Type::Primitive(PrimitiveType::Long),
-        ))
+        Arc::new(
+            NestedField::required(103, "record_count", Type::Primitive(PrimitiveType::Long))
+                .expect("valid nested field"),
+        )
     })
 };
 
 static FILE_SIZE_IN_BYTES: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::required(
-            104,
-            "file_size_in_bytes",
-            Type::Primitive(PrimitiveType::Long),
-        ))
+        Arc::new(
+            NestedField::required(
+                104,
+                "file_size_in_bytes",
+                Type::Primitive(PrimitiveType::Long),
+            )
+            .expect("valid nested field"),
+        )
     })
 };
 
 // Deprecated. Always write a default in v1. Do not write in v2.
 static BLOCK_SIZE_IN_BYTES: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::required(
-            105,
-            "block_size_in_bytes",
-            Type::Primitive(PrimitiveType::Long),
-        ))
+        Arc::new(
+            NestedField::required(
+                105,
+                "block_size_in_bytes",
+                Type::Primitive(PrimitiveType::Long),
+            )
+            .expect("valid nested field"),
+        )
     })
 };
 
 static COLUMN_SIZES: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            108,
-            "column_sizes",
-            Type::Map(MapType {
-                key_field: Arc::new(NestedField::required(
-                    117,
-                    "key",
-                    Type::Primitive(PrimitiveType::Int),
-                )),
-                value_field: Arc::new(NestedField::required(
-                    118,
-                    "value",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-            }),
-        ))
+        Arc::new(
+            NestedField::optional(
+                108,
+                "column_sizes",
+                Type::Map(MapType {
+                    key_field: Arc::new(
+                        NestedField::required(117, "key", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                    value_field: Arc::new(
+                        NestedField::required(118, "value", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                }),
+            )
+            .expect("valid nested field"),
+        )
     })
 };
 
 static VALUE_COUNTS: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            109,
-            "value_counts",
-            Type::Map(MapType {
-                key_field: Arc::new(NestedField::required(
-                    119,
-                    "key",
-                    Type::Primitive(PrimitiveType::Int),
-                )),
-                value_field: Arc::new(NestedField::required(
-                    120,
-                    "value",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-            }),
-        ))
+        Arc::new(
+            NestedField::optional(
+                109,
+                "value_counts",
+                Type::Map(MapType {
+                    key_field: Arc::new(
+                        NestedField::required(119, "key", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                    value_field: Arc::new(
+                        NestedField::required(120, "value", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                }),
+            )
+            .expect("valid nested field"),
+        )
     })
 };
 
 static NULL_VALUE_COUNTS: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            110,
-            "null_value_counts",
-            Type::Map(MapType {
-                key_field: Arc::new(NestedField::required(
-                    121,
-                    "key",
-                    Type::Primitive(PrimitiveType::Int),
-                )),
-                value_field: Arc::new(NestedField::required(
-                    122,
-                    "value",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-            }),
-        ))
+        Arc::new(
+            NestedField::optional(
+                110,
+                "null_value_counts",
+                Type::Map(MapType {
+                    key_field: Arc::new(
+                        NestedField::required(121, "key", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                    value_field: Arc::new(
+                        NestedField::required(122, "value", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                }),
+            )
+            .expect("valid nested field"),
+        )
     })
 };
 
 static NAN_VALUE_COUNTS: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            137,
-            "nan_value_counts",
-            Type::Map(MapType {
-                key_field: Arc::new(NestedField::required(
-                    138,
-                    "key",
-                    Type::Primitive(PrimitiveType::Int),
-                )),
-                value_field: Arc::new(NestedField::required(
-                    139,
-                    "value",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-            }),
-        ))
+        Arc::new(
+            NestedField::optional(
+                137,
+                "nan_value_counts",
+                Type::Map(MapType {
+                    key_field: Arc::new(
+                        NestedField::required(138, "key", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                    value_field: Arc::new(
+                        NestedField::required(139, "value", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                }),
+            )
+            .expect("valid nested field"),
+        )
     })
 };
 
 static LOWER_BOUNDS: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            125,
-            "lower_bounds",
-            Type::Map(MapType {
-                key_field: Arc::new(NestedField::required(
-                    126,
-                    "key",
-                    Type::Primitive(PrimitiveType::Int),
-                )),
-                value_field: Arc::new(NestedField::required(
-                    127,
-                    "value",
-                    Type::Primitive(PrimitiveType::Binary),
-                )),
-            }),
-        ))
+        Arc::new(
+            NestedField::optional(
+                125,
+                "lower_bounds",
+                Type::Map(MapType {
+                    key_field: Arc::new(
+                        NestedField::required(126, "key", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                    value_field: Arc::new(
+                        NestedField::required(127, "value", Type::Primitive(PrimitiveType::Binary))
+                            .expect("valid nested field"),
+                    ),
+                }),
+            )
+            .expect("valid nested field"),
+        )
     })
 };
 
 static UPPER_BOUNDS: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            128,
-            "upper_bounds",
-            Type::Map(MapType {
-                key_field: Arc::new(NestedField::required(
-                    129,
-                    "key",
-                    Type::Primitive(PrimitiveType::Int),
-                )),
-                value_field: Arc::new(NestedField::required(
-                    130,
-                    "value",
-                    Type::Primitive(PrimitiveType::Binary),
-                )),
-            }),
-        ))
+        Arc::new(
+            NestedField::optional(
+                128,
+                "upper_bounds",
+                Type::Map(MapType {
+                    key_field: Arc::new(
+                        NestedField::required(129, "key", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                    value_field: Arc::new(
+                        NestedField::required(130, "value", Type::Primitive(PrimitiveType::Binary))
+                            .expect("valid nested field"),
+                    ),
+                }),
+            )
+            .expect("valid nested field"),
+        )
     })
 };
 
 static KEY_METADATA: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            131,
-            "key_metadata",
-            Type::Primitive(PrimitiveType::Binary),
-        ))
+        Arc::new(
+            NestedField::optional(131, "key_metadata", Type::Primitive(PrimitiveType::Binary))
+                .expect("valid nested field"),
+        )
     })
 };
 
 static SPLIT_OFFSETS: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            132,
-            "split_offsets",
-            Type::List(ListType {
-                element_field: Arc::new(NestedField::required(
-                    133,
-                    "element",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-            }),
-        ))
+        Arc::new(
+            NestedField::optional(
+                132,
+                "split_offsets",
+                Type::List(ListType {
+                    element_field: Arc::new(
+                        NestedField::required(133, "element", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field"),
+                    ),
+                }),
+            )
+            .expect("valid nested field"),
+        )
     })
 };
 
 static EQUALITY_IDS: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            135,
-            "equality_ids",
-            Type::List(ListType {
-                element_field: Arc::new(NestedField::required(
-                    136,
-                    "element",
-                    Type::Primitive(PrimitiveType::Int),
-                )),
-            }),
-        ))
+        Arc::new(
+            NestedField::optional(
+                135,
+                "equality_ids",
+                Type::List(ListType {
+                    element_field: Arc::new(
+                        NestedField::required(136, "element", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                }),
+            )
+            .expect("valid nested field"),
+        )
     })
 };
 
 static SORT_ORDER_ID: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            140,
-            "sort_order_id",
-            Type::Primitive(PrimitiveType::Int),
-        ))
+        Arc::new(
+            NestedField::optional(140, "sort_order_id", Type::Primitive(PrimitiveType::Int))
+                .expect("valid nested field"),
+        )
     })
 };
 
 static FIRST_ROW_ID: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            142,
-            "first_row_id",
-            Type::Primitive(PrimitiveType::Long),
-        ))
+        Arc::new(
+            NestedField::optional(142, "first_row_id", Type::Primitive(PrimitiveType::Long))
+                .expect("valid nested field"),
+        )
     })
 };
 
 static REFERENCE_DATA_FILE: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            143,
-            "referenced_data_file",
-            Type::Primitive(PrimitiveType::String),
-        ))
+        Arc::new(
+            NestedField::optional(
+                143,
+                "referenced_data_file",
+                Type::Primitive(PrimitiveType::String),
+            )
+            .expect("valid nested field"),
+        )
     })
 };
 
 static CONTENT_OFFSET: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            144,
-            "content_offset",
-            Type::Primitive(PrimitiveType::Long),
-        ))
+        Arc::new(
+            NestedField::optional(144, "content_offset", Type::Primitive(PrimitiveType::Long))
+                .expect("valid nested field"),
+        )
     })
 };
 
 static CONTENT_SIZE_IN_BYTES: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
-        Arc::new(NestedField::optional(
-            145,
-            "content_size_in_bytes",
-            Type::Primitive(PrimitiveType::Long),
-        ))
+        Arc::new(
+            NestedField::optional(
+                145,
+                "content_size_in_bytes",
+                Type::Primitive(PrimitiveType::Long),
+            )
+            .expect("valid nested field"),
+        )
     })
 };
 
@@ -514,11 +534,10 @@ fn data_file_fields_v3(partition_type: &StructType) -> Vec<NestedFieldRef> {
         CONTENT.clone(),
         FILE_PATH.clone(),
         FILE_FORMAT.clone(),
-        Arc::new(NestedField::required(
-            102,
-            "partition",
-            Type::Struct(partition_type.clone()),
-        )),
+        Arc::new(
+            NestedField::required(102, "partition", Type::Struct(partition_type.clone()))
+                .expect("valid nested field"),
+        ),
         RECORD_COUNT.clone(),
         FILE_SIZE_IN_BYTES.clone(),
         COLUMN_SIZES.clone(),
@@ -550,11 +569,10 @@ fn data_file_fields_v2(partition_type: &StructType) -> Vec<NestedFieldRef> {
         CONTENT.clone(),
         FILE_PATH.clone(),
         FILE_FORMAT.clone(),
-        Arc::new(NestedField::required(
-            102,
-            "partition",
-            Type::Struct(partition_type.clone()),
-        )),
+        Arc::new(
+            NestedField::required(102, "partition", Type::Struct(partition_type.clone()))
+                .expect("valid nested field"),
+        ),
         RECORD_COUNT.clone(),
         FILE_SIZE_IN_BYTES.clone(),
         COLUMN_SIZES.clone(),
@@ -589,11 +607,14 @@ pub(super) fn manifest_schema_v2(partition_type: &StructType) -> Result<AvroSche
         SNAPSHOT_ID_V2.clone(),
         SEQUENCE_NUMBER.clone(),
         FILE_SEQUENCE_NUMBER.clone(),
-        Arc::new(NestedField::required(
-            2,
-            "data_file",
-            Type::Struct(StructType::new(data_file_fields_v2(partition_type))),
-        )),
+        Arc::new(
+            NestedField::required(
+                2,
+                "data_file",
+                Type::Struct(StructType::new(data_file_fields_v2(partition_type))),
+            )
+            .expect("valid nested field"),
+        ),
     ];
     let schema = Schema::builder().with_fields(fields).build()?;
     schema_to_avro_schema("manifest_entry", &schema)
@@ -603,11 +624,10 @@ fn data_file_fields_v1(partition_type: &StructType) -> Vec<NestedFieldRef> {
     vec![
         FILE_PATH.clone(),
         FILE_FORMAT.clone(),
-        Arc::new(NestedField::required(
-            102,
-            "partition",
-            Type::Struct(partition_type.clone()),
-        )),
+        Arc::new(
+            NestedField::required(102, "partition", Type::Struct(partition_type.clone()))
+                .expect("valid nested field"),
+        ),
         RECORD_COUNT.clone(),
         FILE_SIZE_IN_BYTES.clone(),
         BLOCK_SIZE_IN_BYTES.clone(),
@@ -634,11 +654,14 @@ pub(super) fn manifest_schema_v1(partition_type: &StructType) -> Result<AvroSche
     let fields = vec![
         STATUS.clone(),
         SNAPSHOT_ID_V1.clone(),
-        Arc::new(NestedField::required(
-            2,
-            "data_file",
-            Type::Struct(StructType::new(data_file_fields_v1(partition_type))),
-        )),
+        Arc::new(
+            NestedField::required(
+                2,
+                "data_file",
+                Type::Struct(StructType::new(data_file_fields_v1(partition_type))),
+            )
+            .expect("valid nested field"),
+        ),
     ];
     let schema = Schema::builder().with_fields(fields).build()?;
     schema_to_avro_schema("manifest_entry", &schema)

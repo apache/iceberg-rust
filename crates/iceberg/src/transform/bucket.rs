@@ -343,7 +343,9 @@ mod test {
                 (Primitive(TimestamptzNs), Some(Primitive(Int))),
                 (
                     Struct(StructType::new(vec![
-                        NestedField::optional(1, "a", Primitive(Timestamp)).into(),
+                        NestedField::optional(1, "a", Primitive(Timestamp))
+                            .expect("valid nested field")
+                            .into(),
                     ])),
                     None,
                 ),
@@ -361,7 +363,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Bucket(10),
             "name",
-            NestedField::required(1, "value", Primitive(Uuid)),
+            NestedField::required(1, "value", Primitive(Uuid)).expect("valid nested field"),
         );
 
         fixture.assert_projection(
@@ -421,7 +423,8 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Bucket(10),
             "name",
-            NestedField::required(1, "value", Primitive(Fixed(value.len() as u64))),
+            NestedField::required(1, "value", Primitive(Fixed(value.len() as u64)))
+                .expect("valid nested field"),
         );
 
         fixture.assert_projection(
@@ -484,7 +487,8 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Bucket(10),
             "name",
-            NestedField::required(1, "value", Primitive(PrimitiveType::String)),
+            NestedField::required(1, "value", Primitive(PrimitiveType::String))
+                .expect("valid nested field"),
         );
 
         fixture.assert_projection(
@@ -552,7 +556,8 @@ mod test {
                     precision: 9,
                     scale: 2,
                 }),
-            ),
+            )
+            .expect("valid nested field"),
         );
 
         fixture.assert_projection(
@@ -620,7 +625,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Bucket(10),
             "name",
-            NestedField::required(1, "value", Primitive(Long)),
+            NestedField::required(1, "value", Primitive(Long)).expect("valid nested field"),
         );
 
         fixture.assert_projection(
@@ -680,7 +685,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Bucket(10),
             "name",
-            NestedField::required(1, "value", Primitive(Int)),
+            NestedField::required(1, "value", Primitive(Int)).expect("valid nested field"),
         );
 
         fixture.assert_projection(

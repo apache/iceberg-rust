@@ -89,7 +89,7 @@ pub fn compute_unified_partition_type<'a>(
 
             match field_map.get(&field_id) {
                 None => {
-                    let res_type = field.transform.result_type(&source_field.field_type)?;
+                    let res_type = field.transform.result_type(source_field.field_type())?;
                     field_map.insert(field_id, field);
                     type_map.insert(field_id, res_type);
                     name_map.insert(field_id, field.name.clone());
@@ -112,7 +112,7 @@ pub fn compute_unified_partition_type<'a>(
                     // newer spec voided the field but an older spec has a real transform,
                     // keep the older spec's type.
                     if is_void_transform(existing) && !is_void_transform(field) {
-                        let res_type = field.transform.result_type(&source_field.field_type)?;
+                        let res_type = field.transform.result_type(source_field.field_type())?;
                         field_map.insert(field_id, field);
                         type_map.insert(field_id, res_type);
                     }
@@ -139,7 +139,9 @@ pub fn compute_unified_partition_type<'a>(
                     format!("Missing type for partition field {fid}"),
                 )
             })?;
-            Ok(NestedField::optional(fid, name, ty).into())
+            Ok(NestedField::optional(fid, name, ty)
+                .expect("valid nested field")
+                .into())
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -186,10 +188,18 @@ mod tests {
     fn test_schema() -> Schema {
         Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(3, "ts", Type::Primitive(PrimitiveType::Timestamp)).into(),
-                NestedField::required(4, "category", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(3, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(4, "category", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap()
@@ -216,9 +226,9 @@ mod tests {
 
         let result = compute_unified_partition_type([&spec].into_iter(), &schema).unwrap();
         assert_eq!(result.fields().len(), 1);
-        assert_eq!(result.fields()[0].name, "category");
+        assert_eq!(result.fields()[0].name(), "category");
         assert_eq!(
-            *result.fields()[0].field_type,
+            *result.fields()[0].field_type(),
             Type::Primitive(PrimitiveType::String)
         );
     }
@@ -230,9 +240,9 @@ mod tests {
 
         let result = compute_unified_partition_type([&spec].into_iter(), &schema).unwrap();
         assert_eq!(result.fields().len(), 1);
-        assert_eq!(result.fields()[0].name, "ts_year");
+        assert_eq!(result.fields()[0].name(), "ts_year");
         assert_eq!(
-            *result.fields()[0].field_type,
+            *result.fields()[0].field_type(),
             Type::Primitive(PrimitiveType::Int)
         );
     }
@@ -255,7 +265,7 @@ mod tests {
 
         let result = compute_unified_partition_type([&spec].into_iter(), &schema).unwrap();
         assert_eq!(result.fields().len(), 2);
-        assert!(result.fields()[0].id < result.fields()[1].id);
+        assert!(result.fields()[0].id() < result.fields()[1].id());
     }
 
     #[test]
@@ -291,7 +301,7 @@ mod tests {
         let result =
             compute_unified_partition_type([&spec_v0, &spec_v1].into_iter(), &schema).unwrap();
         assert_eq!(result.fields().len(), 1);
-        assert_eq!(result.fields()[0].name, "cat_new");
+        assert_eq!(result.fields()[0].name(), "cat_new");
     }
 
     #[test]
@@ -329,10 +339,10 @@ mod tests {
 
         assert_eq!(result.fields().len(), 1);
         // Name from newer spec
-        assert_eq!(result.fields()[0].name, "category_v2");
+        assert_eq!(result.fields()[0].name(), "category_v2");
         // Type from older non-void spec
         assert_eq!(
-            *result.fields()[0].field_type,
+            *result.fields()[0].field_type(),
             Type::Primitive(PrimitiveType::String)
         );
     }
@@ -342,8 +352,12 @@ mod tests {
         // Schema without field 4 (category was dropped)
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();

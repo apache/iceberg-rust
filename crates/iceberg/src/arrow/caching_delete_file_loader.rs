@@ -760,11 +760,13 @@ impl SchemaWithPartnerVisitor<ArrayRef> for EqDelColumnProcessor<'_> {
     }
 
     fn field(&mut self, field: &NestedFieldRef, partner: &ArrayRef, _value: ()) -> Result<()> {
-        if self.equality_ids.contains(&field.id) && field.field_type.as_primitive_type().is_some() {
+        if self.equality_ids.contains(&field.id())
+            && field.field_type().as_primitive_type().is_some()
+        {
             self.collected_columns.push((
                 partner.clone(),
-                field.name.clone(),
-                field.field_type.as_ref().clone(),
+                field.name().to_string(),
+                field.field_type().clone(),
             ));
         }
         Ok(())
@@ -823,14 +825,14 @@ impl PartnerAccessor<ArrayRef> for EqDelRecordBatchPartnerAccessor {
 
         // Find the field by name within the struct
         for (i, field_def) in struct_array.fields().iter().enumerate() {
-            if field_def.name() == &field.name {
+            if field_def.name() == field.name() {
                 return Ok(struct_array.column(i));
             }
         }
 
         Err(Error::new(
             ErrorKind::Unexpected,
-            format!("Field {} not found in parent struct", field.name),
+            format!("Field {} not found in parent struct", field.name()),
         ))
     }
 
@@ -1290,8 +1292,12 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::required(2, "data", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::required(2, "data", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1380,8 +1386,12 @@ mod tests {
         let data_file_schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::optional(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
-                    NestedField::optional(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "y", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(3, "z", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1619,7 +1629,9 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::optional(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(1, "x", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1672,7 +1684,9 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::optional(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(1, "x", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1714,7 +1728,9 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::optional(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(1, "x", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),

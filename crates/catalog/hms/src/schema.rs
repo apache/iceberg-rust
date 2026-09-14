@@ -73,13 +73,13 @@ impl SchemaVisitor for HiveSchemaBuilder {
 
     fn field(&mut self, field: &iceberg::spec::NestedFieldRef, value: String) -> Result<String> {
         if self.is_inside_struct() {
-            return Ok(format!("{}:{}", field.name, value));
+            return Ok(format!("{}:{}", field.name(), value));
         }
 
         self.schema.push(FieldSchema {
-            name: Some(field.name.clone().into()),
+            name: Some(field.name().to_string().into()),
             r#type: Some(value.clone().into()),
-            comment: field.doc.clone().map(|doc| doc.into()),
+            comment: field.doc().map(|doc| doc.to_string().into()),
         });
 
         Ok(value)

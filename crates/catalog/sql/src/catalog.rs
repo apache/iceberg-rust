@@ -1309,7 +1309,9 @@ mod tests {
     fn simple_table_schema() -> Schema {
         Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap()

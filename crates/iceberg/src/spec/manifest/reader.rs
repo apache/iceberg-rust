@@ -237,11 +237,10 @@ mod tests {
     fn test_schema() -> Arc<Schema> {
         Arc::new(
             Schema::builder()
-                .with_fields(vec![Arc::new(NestedField::optional(
-                    1,
-                    "id",
-                    Type::Primitive(PrimitiveType::Long),
-                ))])
+                .with_fields(vec![Arc::new(
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field"),
+                )])
                 .build()
                 .unwrap(),
         )

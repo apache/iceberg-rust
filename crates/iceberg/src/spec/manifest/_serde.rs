@@ -249,12 +249,12 @@ fn parse_bytes_entry(v: Vec<BytesEntry>, schema: &Schema) -> Result<HashMap<i32,
 
         if let Some(field) = field {
             let data_type = field
-                .field_type
+                .field_type()
                 .as_primitive_type()
                 .ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("field {} is not a primitive type", field.name),
+                        format!("field {} is not a primitive type", field.name()),
                     )
                 })?
                 .clone();
@@ -346,21 +346,18 @@ mod tests {
         Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    Arc::new(NestedField::optional(
-                        1,
-                        "v1",
-                        Type::Primitive(PrimitiveType::Int),
-                    )),
-                    Arc::new(NestedField::optional(
-                        2,
-                        "v2",
-                        Type::Primitive(PrimitiveType::String),
-                    )),
-                    Arc::new(NestedField::optional(
-                        3,
-                        "v3",
-                        Type::Primitive(PrimitiveType::String),
-                    )),
+                    Arc::new(
+                        NestedField::optional(1, "v1", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(2, "v2", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field"),
+                    ),
+                    Arc::new(
+                        NestedField::optional(3, "v3", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field"),
+                    ),
                 ])
                 .build()
                 .unwrap(),

@@ -60,14 +60,18 @@ impl<'a> HistoryTable<'a> {
                 1,
                 "made_current_at",
                 Type::Primitive(PrimitiveType::Timestamptz),
-            ),
-            NestedField::required(2, "snapshot_id", Type::Primitive(PrimitiveType::Long)),
-            NestedField::optional(3, "parent_id", Type::Primitive(PrimitiveType::Long)),
+            )
+            .expect("valid nested field"),
+            NestedField::required(2, "snapshot_id", Type::Primitive(PrimitiveType::Long))
+                .expect("valid nested field"),
+            NestedField::optional(3, "parent_id", Type::Primitive(PrimitiveType::Long))
+                .expect("valid nested field"),
             NestedField::required(
                 4,
                 "is_current_ancestor",
                 Type::Primitive(PrimitiveType::Boolean),
-            ),
+            )
+            .expect("valid nested field"),
         ];
         crate::spec::Schema::builder()
             .with_fields(fields.into_iter().map(|f| f.into()))

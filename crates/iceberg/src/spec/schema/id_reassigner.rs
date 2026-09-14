@@ -41,8 +41,9 @@ impl ReassignFieldIds {
         let outer_fields = fields
             .into_iter()
             .map(|field| {
-                try_insert_field(&mut self.old_to_new_id, field.id, self.next_field_id)?;
-                let new_field = Arc::unwrap_or_clone(field).with_id(self.next_field_id);
+                try_insert_field(&mut self.old_to_new_id, field.id(), self.next_field_id)?;
+                let field = Arc::unwrap_or_clone(field);
+                let new_field = field.rebuild(self.next_field_id, field.field_type().clone())?;
                 self.increase_next_field_id()?;
                 Ok(Arc::new(new_field))
             })
@@ -52,12 +53,12 @@ impl ReassignFieldIds {
         outer_fields
             .into_iter()
             .map(|field| {
-                if field.field_type.is_primitive() {
+                if field.field_type().is_primitive() {
                     Ok(field)
                 } else {
-                    let mut new_field = Arc::unwrap_or_clone(field);
-                    *new_field.field_type = self.reassign_ids_visit_type(*new_field.field_type)?;
-                    Ok(Arc::new(new_field))
+                    let field = Arc::unwrap_or_clone(field);
+                    let field_type = self.reassign_ids_visit_type(field.field_type().clone())?;
+                    Ok(Arc::new(field.rebuild(field.id(), field_type)?))
                 }
             })
             .collect()
@@ -72,34 +73,34 @@ impl ReassignFieldIds {
             }
             Type::List(l) => {
                 self.old_to_new_id
-                    .insert(l.element_field.id, self.next_field_id);
-                let mut element_field = Arc::unwrap_or_clone(l.element_field);
-                element_field.id = self.next_field_id;
+                    .insert(l.element_field.id(), self.next_field_id);
+                let element_field = Arc::unwrap_or_clone(l.element_field);
+                let new_id = self.next_field_id;
                 self.increase_next_field_id()?;
-                *element_field.field_type =
-                    self.reassign_ids_visit_type(*element_field.field_type)?;
+                let field_type =
+                    self.reassign_ids_visit_type(element_field.field_type().clone())?;
                 Ok(Type::List(ListType {
-                    element_field: Arc::new(element_field),
+                    element_field: Arc::new(element_field.rebuild(new_id, field_type)?),
                 }))
             }
             Type::Map(m) => {
                 self.old_to_new_id
-                    .insert(m.key_field.id, self.next_field_id);
-                let mut key_field = Arc::unwrap_or_clone(m.key_field);
-                key_field.id = self.next_field_id;
+                    .insert(m.key_field.id(), self.next_field_id);
+                let key_field = Arc::unwrap_or_clone(m.key_field);
+                let new_key_id = self.next_field_id;
                 self.increase_next_field_id()?;
-                *key_field.field_type = self.reassign_ids_visit_type(*key_field.field_type)?;
+                let key_type = self.reassign_ids_visit_type(key_field.field_type().clone())?;
 
                 self.old_to_new_id
-                    .insert(m.value_field.id, self.next_field_id);
-                let mut value_field = Arc::unwrap_or_clone(m.value_field);
-                value_field.id = self.next_field_id;
+                    .insert(m.value_field.id(), self.next_field_id);
+                let value_field = Arc::unwrap_or_clone(m.value_field);
+                let new_value_id = self.next_field_id;
                 self.increase_next_field_id()?;
-                *value_field.field_type = self.reassign_ids_visit_type(*value_field.field_type)?;
+                let value_type = self.reassign_ids_visit_type(value_field.field_type().clone())?;
 
                 Ok(Type::Map(MapType {
-                    key_field: Arc::new(key_field),
-                    value_field: Arc::new(value_field),
+                    key_field: Arc::new(key_field.rebuild(new_key_id, key_type)?),
+                    value_field: Arc::new(value_field.rebuild(new_value_id, value_type)?),
                 }))
             }
             Type::Variant(v) => Ok(Type::Variant(v)),
@@ -164,9 +165,15 @@ mod tests {
             .with_identifier_field_ids(vec![3])
             .with_alias(BiHashMap::from_iter(vec![("bar_alias".to_string(), 3)]))
             .with_fields(vec![
-                NestedField::optional(5, "foo", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(3, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(4, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::optional(5, "foo", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(3, "bar", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(4, "baz", Type::Primitive(PrimitiveType::Boolean))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -182,9 +189,15 @@ mod tests {
             .with_identifier_field_ids(vec![1])
             .with_alias(BiHashMap::from_iter(vec![("bar_alias".to_string(), 1)]))
             .with_fields(vec![
-                NestedField::optional(0, "foo", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(1, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::optional(0, "foo", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(1, "bar", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(2, "baz", Type::Primitive(PrimitiveType::Boolean))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -199,8 +212,12 @@ mod tests {
 
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(5, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(3, "data", Type::Variant(VariantType)).into(),
+                NestedField::required(5, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(3, "data", Type::Variant(VariantType))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -215,8 +232,12 @@ mod tests {
         // top-level field ids shift (id → 0, data → 1).
         let expected = Schema::builder()
             .with_fields(vec![
-                NestedField::required(0, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(1, "data", Type::Variant(VariantType)).into(),
+                NestedField::required(0, "id", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(1, "data", Type::Variant(VariantType))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -239,9 +260,15 @@ mod tests {
             .with_identifier_field_ids(vec![1])
             .with_alias(BiHashMap::from_iter(vec![("bar_alias".to_string(), 1)]))
             .with_fields(vec![
-                NestedField::optional(0, "foo", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(1, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::optional(0, "foo", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(1, "bar", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(2, "baz", Type::Primitive(PrimitiveType::Boolean))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::required(
                     3,
                     "qux",
@@ -251,9 +278,11 @@ mod tests {
                             Type::Primitive(PrimitiveType::String),
                             true,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
                 NestedField::required(
                     4,
@@ -263,6 +292,7 @@ mod tests {
                             8,
                             Type::Primitive(PrimitiveType::String),
                         )
+                        .expect("valid nested field")
                         .into(),
                         value_field: NestedField::map_value_element(
                             9,
@@ -271,19 +301,23 @@ mod tests {
                                     10,
                                     Type::Primitive(PrimitiveType::String),
                                 )
+                                .expect("valid nested field")
                                 .into(),
                                 value_field: NestedField::map_value_element(
                                     11,
                                     Type::Primitive(PrimitiveType::Int),
                                     true,
                                 )
+                                .expect("valid nested field")
                                 .into(),
                             }),
                             true,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
                 NestedField::required(
                     5,
@@ -297,30 +331,37 @@ mod tests {
                                     "latitude",
                                     Type::Primitive(PrimitiveType::Float),
                                 )
+                                .expect("valid nested field")
                                 .into(),
                                 NestedField::optional(
                                     14,
                                     "longitude",
                                     Type::Primitive(PrimitiveType::Float),
                                 )
+                                .expect("valid nested field")
                                 .into(),
                             ])),
                             true,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
                 NestedField::optional(
                     6,
                     "person",
                     Type::Struct(StructType::new(vec![
                         NestedField::optional(15, "name", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field")
                             .into(),
                         NestedField::required(16, "age", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field")
                             .into(),
                     ])),
                 )
+                .expect("valid nested field")
                 .into(),
             ])
             .build()
@@ -328,8 +369,8 @@ mod tests {
 
         pretty_assertions::assert_eq!(expected, reassigned_schema);
         assert_eq!(reassigned_schema.highest_field_id(), 16);
-        assert_eq!(reassigned_schema.field_by_id(6).unwrap().name, "person");
-        assert_eq!(reassigned_schema.field_by_id(16).unwrap().name, "age");
+        assert_eq!(reassigned_schema.field_by_id(6).unwrap().name(), "person");
+        assert_eq!(reassigned_schema.field_by_id(16).unwrap().name(), "age");
     }
 
     #[test]
@@ -339,9 +380,15 @@ mod tests {
             .with_identifier_field_ids(vec![5])
             .with_alias(BiHashMap::from_iter(vec![("bar_alias".to_string(), 3)]))
             .with_fields(vec![
-                NestedField::required(5, "foo", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::optional(3, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::required(5, "foo", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(3, "bar", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .with_reassigned_field_ids(0)
             .build()

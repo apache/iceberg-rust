@@ -101,148 +101,154 @@ pub const RESERVED_COL_NAME_ROW_ID: &str = "_row_id";
 /// Reserved column name for the last updated sequence number metadata column
 pub const RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER: &str = "_last_updated_sequence_number";
 
+fn metadata_field(
+    id: i32,
+    name: &str,
+    field_type: Type,
+    required: bool,
+    doc: &str,
+) -> NestedFieldRef {
+    Arc::new(
+        NestedField::builder()
+            .id(id)
+            .name(name)
+            .field_type(field_type)
+            .required(required)
+            .doc(doc)
+            .build()
+            .expect("metadata fields must be valid"),
+    )
+}
+
 /// Lazy-initialized Iceberg field definition for the _file metadata column.
 /// This field represents the file path as a required string field.
 static FILE_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
-    Arc::new(
-        NestedField::required(
-            RESERVED_FIELD_ID_FILE,
-            RESERVED_COL_NAME_FILE,
-            Type::Primitive(PrimitiveType::String),
-        )
-        .with_doc("Path of the file in which a row is stored"),
+    metadata_field(
+        RESERVED_FIELD_ID_FILE,
+        RESERVED_COL_NAME_FILE,
+        Type::Primitive(PrimitiveType::String),
+        true,
+        "Path of the file in which a row is stored",
     )
 });
 
 /// Lazy-initialized Iceberg field definition for the _pos metadata column.
 /// This field represents the ordinal position of a row in the source data file.
 static POS_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
-    Arc::new(
-        NestedField::required(
-            RESERVED_FIELD_ID_POS,
-            RESERVED_COL_NAME_POS,
-            Type::Primitive(PrimitiveType::Long),
-        )
-        .with_doc("Ordinal position of a row in the source data file"),
+    metadata_field(
+        RESERVED_FIELD_ID_POS,
+        RESERVED_COL_NAME_POS,
+        Type::Primitive(PrimitiveType::Long),
+        true,
+        "Ordinal position of a row in the source data file",
     )
 });
 
 /// Lazy-initialized Iceberg field definition for the _deleted metadata column.
 /// This field indicates whether a row has been deleted.
 static DELETED_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
-    Arc::new(
-        NestedField::required(
-            RESERVED_FIELD_ID_DELETED,
-            RESERVED_COL_NAME_DELETED,
-            Type::Primitive(PrimitiveType::Boolean),
-        )
-        .with_doc("Whether the row has been deleted"),
+    metadata_field(
+        RESERVED_FIELD_ID_DELETED,
+        RESERVED_COL_NAME_DELETED,
+        Type::Primitive(PrimitiveType::Boolean),
+        true,
+        "Whether the row has been deleted",
     )
 });
 
 /// Lazy-initialized Iceberg field definition for the _spec_id metadata column.
 /// This field represents the spec ID used to track the file containing a row.
 static SPEC_ID_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
-    Arc::new(
-        NestedField::required(
-            RESERVED_FIELD_ID_SPEC_ID,
-            RESERVED_COL_NAME_SPEC_ID,
-            Type::Primitive(PrimitiveType::Int),
-        )
-        .with_doc("Spec ID used to track the file containing a row"),
+    metadata_field(
+        RESERVED_FIELD_ID_SPEC_ID,
+        RESERVED_COL_NAME_SPEC_ID,
+        Type::Primitive(PrimitiveType::Int),
+        true,
+        "Spec ID used to track the file containing a row",
     )
 });
 
 /// Lazy-initialized Iceberg field definition for the file_path column in position delete files.
 /// This field represents the path of a file in position-based delete files.
 static DELETE_FILE_PATH_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
-    Arc::new(
-        NestedField::required(
-            RESERVED_FIELD_ID_DELETE_FILE_PATH,
-            RESERVED_COL_NAME_DELETE_FILE_PATH,
-            Type::Primitive(PrimitiveType::String),
-        )
-        .with_doc("Path of a file, used in position-based delete files"),
+    metadata_field(
+        RESERVED_FIELD_ID_DELETE_FILE_PATH,
+        RESERVED_COL_NAME_DELETE_FILE_PATH,
+        Type::Primitive(PrimitiveType::String),
+        true,
+        "Path of a file, used in position-based delete files",
     )
 });
 
 /// Lazy-initialized Iceberg field definition for the pos column in position delete files.
 /// This field represents the ordinal position of a row in position-based delete files.
 static DELETE_FILE_POS_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
-    Arc::new(
-        NestedField::required(
-            RESERVED_FIELD_ID_DELETE_FILE_POS,
-            RESERVED_COL_NAME_DELETE_FILE_POS,
-            Type::Primitive(PrimitiveType::Long),
-        )
-        .with_doc("Ordinal position of a row, used in position-based delete files"),
+    metadata_field(
+        RESERVED_FIELD_ID_DELETE_FILE_POS,
+        RESERVED_COL_NAME_DELETE_FILE_POS,
+        Type::Primitive(PrimitiveType::Long),
+        true,
+        "Ordinal position of a row, used in position-based delete files",
     )
 });
 
 /// Lazy-initialized Iceberg field definition for the _change_type metadata column.
 /// This field represents the record type in the changelog.
 static CHANGE_TYPE_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
-    Arc::new(
-        NestedField::required(
-            RESERVED_FIELD_ID_CHANGE_TYPE,
-            RESERVED_COL_NAME_CHANGE_TYPE,
-            Type::Primitive(PrimitiveType::String),
-        )
-        .with_doc(
-            "The record type in the changelog (INSERT, DELETE, UPDATE_BEFORE, or UPDATE_AFTER)",
-        ),
+    metadata_field(
+        RESERVED_FIELD_ID_CHANGE_TYPE,
+        RESERVED_COL_NAME_CHANGE_TYPE,
+        Type::Primitive(PrimitiveType::String),
+        true,
+        "The record type in the changelog (INSERT, DELETE, UPDATE_BEFORE, or UPDATE_AFTER)",
     )
 });
 
 /// Lazy-initialized Iceberg field definition for the _change_ordinal metadata column.
 /// This field represents the order of the change.
 static CHANGE_ORDINAL_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
-    Arc::new(
-        NestedField::required(
-            RESERVED_FIELD_ID_CHANGE_ORDINAL,
-            RESERVED_COL_NAME_CHANGE_ORDINAL,
-            Type::Primitive(PrimitiveType::Int),
-        )
-        .with_doc("The order of the change"),
+    metadata_field(
+        RESERVED_FIELD_ID_CHANGE_ORDINAL,
+        RESERVED_COL_NAME_CHANGE_ORDINAL,
+        Type::Primitive(PrimitiveType::Int),
+        true,
+        "The order of the change",
     )
 });
 
 /// Lazy-initialized Iceberg field definition for the _commit_snapshot_id metadata column.
 /// This field represents the snapshot ID in which the change occurred.
 static COMMIT_SNAPSHOT_ID_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
-    Arc::new(
-        NestedField::required(
-            RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID,
-            RESERVED_COL_NAME_COMMIT_SNAPSHOT_ID,
-            Type::Primitive(PrimitiveType::Long),
-        )
-        .with_doc("The snapshot ID in which the change occurred"),
+    metadata_field(
+        RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID,
+        RESERVED_COL_NAME_COMMIT_SNAPSHOT_ID,
+        Type::Primitive(PrimitiveType::Long),
+        true,
+        "The snapshot ID in which the change occurred",
     )
 });
 
 /// Lazy-initialized Iceberg field definition for the _row_id metadata column.
 /// This field represents a unique long assigned for row lineage.
 static ROW_ID_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
-    Arc::new(
-        NestedField::optional(
-            RESERVED_FIELD_ID_ROW_ID,
-            RESERVED_COL_NAME_ROW_ID,
-            Type::Primitive(PrimitiveType::Long),
-        )
-        .with_doc("A unique long assigned for row lineage"),
+    metadata_field(
+        RESERVED_FIELD_ID_ROW_ID,
+        RESERVED_COL_NAME_ROW_ID,
+        Type::Primitive(PrimitiveType::Long),
+        false,
+        "A unique long assigned for row lineage",
     )
 });
 
 /// Lazy-initialized Iceberg field definition for the _last_updated_sequence_number metadata column.
 /// This field represents the sequence number which last updated this row.
 static LAST_UPDATED_SEQUENCE_NUMBER_FIELD: Lazy<NestedFieldRef> = Lazy::new(|| {
-    Arc::new(
-        NestedField::optional(
-            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
-            RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
-            Type::Primitive(PrimitiveType::Long),
-        )
-        .with_doc("The sequence number which last updated this row"),
+    metadata_field(
+        RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+        RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
+        Type::Primitive(PrimitiveType::Long),
+        false,
+        "The sequence number which last updated this row",
     )
 });
 
@@ -353,29 +359,26 @@ pub fn last_updated_sequence_number_field() -> &'static NestedFieldRef {
 /// use iceberg::spec::{NestedField, PrimitiveType, Type};
 ///
 /// let fields = vec![
-///     Arc::new(NestedField::required(
-///         1,
-///         "year",
-///         Type::Primitive(PrimitiveType::Int),
-///     )),
-///     Arc::new(NestedField::required(
-///         2,
-///         "month",
-///         Type::Primitive(PrimitiveType::Int),
-///     )),
+///     Arc::new(
+///         NestedField::required(1, "year", Type::Primitive(PrimitiveType::Int))
+///             .expect("valid nested field"),
+///     ),
+///     Arc::new(
+///         NestedField::required(2, "month", Type::Primitive(PrimitiveType::Int))
+///             .expect("valid nested field"),
+///     ),
 /// ];
 /// let partition_field = partition_field(fields);
 /// ```
 pub fn partition_field(partition_fields: Vec<NestedFieldRef>) -> NestedFieldRef {
     use crate::spec::StructType;
 
-    Arc::new(
-        NestedField::required(
-            RESERVED_FIELD_ID_PARTITION,
-            RESERVED_COL_NAME_PARTITION,
-            Type::Struct(StructType::new(partition_fields)),
-        )
-        .with_doc("Partition to which a row belongs"),
+    metadata_field(
+        RESERVED_FIELD_ID_PARTITION,
+        RESERVED_COL_NAME_PARTITION,
+        Type::Struct(StructType::new(partition_fields)),
+        true,
+        "Partition to which a row belongs",
     )
 }
 
@@ -529,31 +532,29 @@ mod tests {
     fn test_partition_field_creation() {
         // Create partition fields for a hypothetical year/month partition
         let partition_fields = vec![
-            Arc::new(NestedField::required(
-                1000,
-                "year",
-                Type::Primitive(PrimitiveType::Int),
-            )),
-            Arc::new(NestedField::required(
-                1001,
-                "month",
-                Type::Primitive(PrimitiveType::Int),
-            )),
+            Arc::new(
+                NestedField::required(1000, "year", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field"),
+            ),
+            Arc::new(
+                NestedField::required(1001, "month", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field"),
+            ),
         ];
 
         // Create the _partition metadata field
         let partition = partition_field(partition_fields);
 
         // Verify field properties
-        assert_eq!(partition.id, RESERVED_FIELD_ID_PARTITION);
-        assert_eq!(partition.name, RESERVED_COL_NAME_PARTITION);
-        assert!(partition.required);
+        assert_eq!(partition.id(), RESERVED_FIELD_ID_PARTITION);
+        assert_eq!(partition.name(), RESERVED_COL_NAME_PARTITION);
+        assert!(partition.is_required());
 
         // Verify it's a struct type with correct fields
-        if let Type::Struct(struct_type) = partition.field_type.as_ref() {
+        if let Type::Struct(struct_type) = partition.field_type() {
             assert_eq!(struct_type.fields().len(), 2);
-            assert_eq!(struct_type.fields()[0].name, "year");
-            assert_eq!(struct_type.fields()[1].name, "month");
+            assert_eq!(struct_type.fields()[0].name(), "year");
+            assert_eq!(struct_type.fields()[1].name(), "month");
         } else {
             panic!("Expected struct type for _partition field");
         }
@@ -606,8 +607,8 @@ mod tests {
         // The spec requires readers to produce null for these columns in
         // legitimate cases (e.g. a data file with a null first_row_id), so the
         // fields must be optional rather than required.
-        assert!(!row_id_field().required);
-        assert!(!last_updated_sequence_number_field().required);
+        assert!(!row_id_field().is_required());
+        assert!(!last_updated_sequence_number_field().is_required());
     }
 
     #[test]

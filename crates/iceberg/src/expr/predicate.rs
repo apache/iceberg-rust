@@ -387,22 +387,22 @@ impl Bind for Predicate {
 
                 match &bound_expr.op {
                     &PredicateOperator::IsNull => {
-                        if bound_expr.term.field().required {
+                        if bound_expr.term.field().is_required() {
                             return Ok(BoundPredicate::AlwaysFalse);
                         }
                     }
                     &PredicateOperator::NotNull => {
-                        if bound_expr.term.field().required {
+                        if bound_expr.term.field().is_required() {
                             return Ok(BoundPredicate::AlwaysTrue);
                         }
                     }
                     &PredicateOperator::IsNan | &PredicateOperator::NotNan => {
-                        if !bound_expr.term.field().field_type.is_floating_type() {
+                        if !bound_expr.term.field().field_type().is_floating_type() {
                             return Err(Error::new(
                                 ErrorKind::DataInvalid,
                                 format!(
                                     "Expecting floating point type, but found {}",
-                                    bound_expr.term.field().field_type
+                                    bound_expr.term.field().field_type()
                                 ),
                             ));
                         }
@@ -419,7 +419,9 @@ impl Bind for Predicate {
             }
             Predicate::Binary(expr) => {
                 let bound_expr = expr.bind(schema, case_sensitive)?;
-                let bound_literal = bound_expr.literal.to(&bound_expr.term.field().field_type)?;
+                let bound_literal = bound_expr
+                    .literal
+                    .to(bound_expr.term.field().field_type())?;
 
                 match bound_literal.literal() {
                     PrimitiveLiteral::AboveMax => match &bound_expr.op {
@@ -462,7 +464,7 @@ impl Bind for Predicate {
                 let bound_literals = bound_expr
                     .literals
                     .into_iter()
-                    .map(|l| l.to(&bound_expr.term.field().field_type))
+                    .map(|l| l.to(bound_expr.term.field().field_type()))
                     .collect::<Result<FnvHashSet<Datum>>>()?;
 
                 match &bound_expr.op {
@@ -1011,10 +1013,18 @@ mod tests {
                 .with_schema_id(1)
                 .with_identifier_field_ids(vec![2])
                 .with_fields(vec![
-                    NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
-                    NestedField::optional(4, "qux", Type::Primitive(PrimitiveType::Float)).into(),
+                    NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
+                        .expect("valid nested field")
+                        .into(),
+                    NestedField::optional(4, "qux", Type::Primitive(PrimitiveType::Float))
+                        .expect("valid nested field")
+                        .into(),
                 ])
                 .build()
                 .unwrap(),

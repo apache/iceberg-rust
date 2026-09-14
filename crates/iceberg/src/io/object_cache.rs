@@ -453,7 +453,9 @@ mod tests {
 
         let schema: SchemaRef = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap()

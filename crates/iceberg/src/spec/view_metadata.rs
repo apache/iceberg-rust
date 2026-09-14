@@ -480,8 +480,14 @@ pub(crate) mod tests {
         let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![Arc::new(
-                NestedField::optional(1, "event_count", Type::Primitive(PrimitiveType::Int))
-                    .with_doc("Count of events"),
+                NestedField::builder()
+                    .id(1)
+                    .name("event_count")
+                    .required(false)
+                    .field_type(Type::Primitive(PrimitiveType::Int))
+                    .doc("Count of events")
+                    .build()
+                    .unwrap(),
             )])
             .build()
             .unwrap();
@@ -580,14 +586,19 @@ pub(crate) mod tests {
             .with_schema_id(1)
             .with_fields(vec![
                 Arc::new(
-                    NestedField::optional(1, "event_count", Type::Primitive(PrimitiveType::Int))
-                        .with_doc("Count of events"),
+                    NestedField::builder()
+                        .id(1)
+                        .name("event_count")
+                        .required(false)
+                        .field_type(Type::Primitive(PrimitiveType::Int))
+                        .doc("Count of events")
+                        .build()
+                        .unwrap(),
                 ),
-                Arc::new(NestedField::optional(
-                    2,
-                    "event_date",
-                    Type::Primitive(PrimitiveType::Date),
-                )),
+                Arc::new(
+                    NestedField::optional(2, "event_date", Type::Primitive(PrimitiveType::Date))
+                        .expect("valid nested field"),
+                ),
             ])
             .build()
             .unwrap();

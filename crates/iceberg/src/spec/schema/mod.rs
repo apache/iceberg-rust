@@ -194,11 +194,11 @@ impl SchemaBuilder {
         let mut map = HashMap::new();
 
         for (pos, field) in self.fields.iter().enumerate() {
-            match field.field_type.as_ref() {
+            match field.field_type() {
                 Type::Primitive(prim_type) => {
                     // add an accessor for this field
                     let accessor = Arc::new(StructAccessor::new(pos, prim_type.clone()));
-                    map.insert(field.id, accessor.clone());
+                    map.insert(field.id(), accessor.clone());
                 }
 
                 Type::Struct(nested) => {
@@ -220,10 +220,10 @@ impl SchemaBuilder {
     fn build_accessors_nested(fields: &[NestedFieldRef]) -> Vec<(i32, Box<StructAccessor>)> {
         let mut results = vec![];
         for (pos, field) in fields.iter().enumerate() {
-            match field.field_type.as_ref() {
+            match field.field_type() {
                 Type::Primitive(prim_type) => {
                     let accessor = Box::new(StructAccessor::new(pos, prim_type.clone()));
-                    results.push((field.id, accessor));
+                    results.push((field.id(), accessor));
                 }
                 Type::Struct(nested) => {
                     let nested_accessors = Self::build_accessors_nested(nested.fields());
@@ -266,22 +266,22 @@ impl SchemaBuilder {
                 )
             })?;
             ensure_data_valid!(
-                field.required,
+                field.is_required(),
                 "Cannot add identifier field: {} is an optional field",
-                field.name
+                field.name()
             );
-            if let Type::Primitive(p) = field.field_type.as_ref() {
+            if let Type::Primitive(p) = field.field_type() {
                 ensure_data_valid!(
                     !matches!(p, PrimitiveType::Double | PrimitiveType::Float),
                     "Cannot add identifier field {}: cannot be a float or double type",
-                    field.name
+                    field.name()
                 );
             } else {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "Cannot add field {} as an identifier field: not a primitive type field",
-                        field.name
+                        field.name()
                     ),
                 ));
             }
@@ -292,15 +292,15 @@ impl SchemaBuilder {
                     .get(parent)
                     .expect("Field id should not disappear.");
                 ensure_data_valid!(
-                    parent_field.field_type.is_struct(),
+                    parent_field.field_type().is_struct(),
                     "Cannot add field {} as an identifier field: must not be nested in {:?}",
-                    field.name,
+                    field.name(),
                     parent_field
                 );
                 ensure_data_valid!(
-                    parent_field.required,
+                    parent_field.is_required(),
                     "Cannot add field {} as an identifier field: must not be nested in an optional field {}",
-                    field.name,
+                    field.name(),
                     parent_field
                 );
                 cur_field_id = *parent;
@@ -435,7 +435,7 @@ impl Schema {
         // `id_to_field` is flattened, so the max over all fields covers nested ones too.
         self.id_to_field
             .values()
-            .map(|f| f.field_type.min_format_version())
+            .map(|f| f.field_type().min_format_version())
             .max()
             .unwrap_or(FormatVersion::V1)
     }
@@ -455,39 +455,39 @@ impl Schema {
         // `id_to_field` is flattened, so checking each field by its own type keeps the
         // blame on the offending leaf, not its container (mirrors Java's `lazyIdToField`).
         for field in self.id_to_field.values() {
-            let min_version = field.field_type.min_format_version();
+            let min_version = field.field_type().min_format_version();
             if format_version < min_version {
                 // Every id in `id_to_field` is also indexed in `id_to_name`; a miss means
                 // the schema's indexes are inconsistent (a bug), so surface it rather than
                 // guessing an unqualified name.
-                let name = self.name_by_field_id(field.id).ok_or_else(|| {
+                let name = self.name_by_field_id(field.id()).ok_or_else(|| {
                     Error::new(
                         ErrorKind::Unexpected,
                         format!(
                             "Field id {} is missing from the schema's name index",
-                            field.id
+                            field.id()
                         ),
                     )
                 })?;
-                problems.push((field.id, format!(
+                problems.push((field.id(), format!(
                     "Invalid type for {name}: {} is not supported until {min_version} but format version is {format_version}.",
-                    field.field_type,
+                    field.field_type(),
                 )));
             }
 
-            if let Some(default) = &field.initial_default
+            if let Some(default) = &field.initial_default()
                 && format_version < DEFAULT_VALUES_MIN_FORMAT_VERSION
             {
-                let name = self.name_by_field_id(field.id).ok_or_else(|| {
+                let name = self.name_by_field_id(field.id()).ok_or_else(|| {
                     Error::new(
                         ErrorKind::Unexpected,
                         format!(
                             "Field id {} is missing from the schema's name index",
-                            field.id
+                            field.id()
                         ),
                     )
                 })?;
-                problems.push((field.id, format!(
+                problems.push((field.id(), format!(
                     "Invalid initial default for {name}: non-null default ({default:?}) is not supported until {DEFAULT_VALUES_MIN_FORMAT_VERSION} but format version is {format_version}."
                 )));
             }
@@ -545,7 +545,9 @@ mod tests {
 
         // Variant type requires v3.
         let variant = schema_with(vec![
-            NestedField::optional(1, "v", Variant(VariantType)).into(),
+            NestedField::optional(1, "v", Variant(VariantType))
+                .expect("valid nested field")
+                .into(),
         ]);
         assert!(
             variant
@@ -560,8 +562,14 @@ mod tests {
 
         // A non-null initial default requires v3, even for a v1-compatible type.
         let with_default = schema_with(vec![
-            NestedField::optional(1, "a", Primitive(PrimitiveType::Int))
-                .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(1)))
+            NestedField::builder()
+                .id(1)
+                .name("a")
+                .required(false)
+                .field_type(Primitive(PrimitiveType::Int))
+                .initial_default(Literal::Primitive(PrimitiveLiteral::Int(1)))
+                .build()
+                .unwrap()
                 .into(),
         ]);
         let err = with_default
@@ -579,7 +587,9 @@ mod tests {
 
         // No default is fine at any version (an absent/null default never trips).
         let no_default = schema_with(vec![
-            NestedField::optional(1, "a", Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(1, "a", Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
         ]);
         assert!(
             no_default
@@ -593,11 +603,18 @@ mod tests {
                 1,
                 "s",
                 Struct(StructType::new(vec![
-                    NestedField::optional(2, "inner", Primitive(PrimitiveType::Long))
-                        .with_initial_default(Literal::Primitive(PrimitiveLiteral::Long(7)))
+                    NestedField::builder()
+                        .id(2)
+                        .name("inner")
+                        .required(false)
+                        .field_type(Primitive(PrimitiveType::Long))
+                        .initial_default(Literal::Primitive(PrimitiveLiteral::Long(7)))
+                        .build()
+                        .unwrap()
                         .into(),
                 ])),
             )
+            .expect("valid nested field")
             .into(),
         ]);
         let err = nested
@@ -611,9 +628,12 @@ mod tests {
                 1,
                 "container",
                 Struct(StructType::new(vec![
-                    NestedField::optional(2, "v", Variant(VariantType)).into(),
+                    NestedField::optional(2, "v", Variant(VariantType))
+                        .expect("valid nested field")
+                        .into(),
                 ])),
             )
+            .expect("valid nested field")
             .into(),
         ]);
         let err = nested_variant
@@ -636,14 +656,20 @@ mod tests {
 
         // All v1-compatible types → V1.
         let v1 = schema_with(vec![
-            NestedField::required(1, "a", Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(2, "b", Primitive(PrimitiveType::String)).into(),
+            NestedField::required(1, "a", Primitive(PrimitiveType::Int))
+                .expect("valid nested field")
+                .into(),
+            NestedField::optional(2, "b", Primitive(PrimitiveType::String))
+                .expect("valid nested field")
+                .into(),
         ]);
         assert_eq!(v1.calc_min_compatible_format(), FormatVersion::V1);
 
         // A top-level variant → V3.
         let variant = schema_with(vec![
-            NestedField::optional(1, "v", Variant(VariantType)).into(),
+            NestedField::optional(1, "v", Variant(VariantType))
+                .expect("valid nested field")
+                .into(),
         ]);
         assert_eq!(variant.calc_min_compatible_format(), FormatVersion::V3);
 
@@ -662,12 +688,15 @@ mod tests {
                                 "element",
                                 Primitive(PrimitiveType::TimestampNs),
                             )
+                            .expect("valid nested field")
                             .into(),
                         )),
                     )
+                    .expect("valid nested field")
                     .into(),
                 ])),
             )
+            .expect("valid nested field")
             .into(),
         ]);
         assert_eq!(nested.calc_min_compatible_format(), FormatVersion::V3);
@@ -682,11 +711,21 @@ mod tests {
         // with the type problem before the initial-default problem for field 2.
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(3, "c", Variant(VariantType)).into(),
-                NestedField::optional(2, "b", Primitive(PrimitiveType::TimestampNs))
-                    .with_initial_default(Literal::Primitive(PrimitiveLiteral::Long(0)))
+                NestedField::optional(3, "c", Variant(VariantType))
+                    .expect("valid nested field")
                     .into(),
-                NestedField::required(1, "a", Primitive(PrimitiveType::Int)).into(),
+                NestedField::builder()
+                    .id(2)
+                    .name("b")
+                    .required(false)
+                    .field_type(Primitive(PrimitiveType::TimestampNs))
+                    .initial_default(Literal::Primitive(PrimitiveLiteral::Long(0)))
+                    .build()
+                    .unwrap()
+                    .into(),
+                NestedField::required(1, "a", Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -712,9 +751,12 @@ mod tests {
     #[test]
     fn test_construct_schema() {
         let field1: NestedFieldRef =
-            NestedField::required(1, "f1", Primitive(PrimitiveType::Boolean)).into();
-        let field2: NestedFieldRef =
-            NestedField::optional(2, "f2", Primitive(PrimitiveType::Int)).into();
+            NestedField::required(1, "f1", Primitive(PrimitiveType::Boolean))
+                .expect("valid nested field")
+                .into();
+        let field2: NestedFieldRef = NestedField::optional(2, "f2", Primitive(PrimitiveType::Int))
+            .expect("valid nested field")
+            .into();
 
         let schema = Schema::builder()
             .with_fields(vec![field1.clone()])
@@ -735,9 +777,15 @@ mod tests {
             .with_schema_id(1)
             .with_identifier_field_ids(vec![2])
             .with_fields(vec![
-                NestedField::optional(1, "foo", Primitive(PrimitiveType::String)).into(),
-                NestedField::required(2, "bar", Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(3, "baz", Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::optional(1, "foo", Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "bar", Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(3, "baz", Primitive(PrimitiveType::Boolean))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -774,9 +822,15 @@ mod tests {
             .with_schema_id(1)
             .with_identifier_field_ids(vec![2])
             .with_fields(vec![
-                NestedField::optional(1, "foo", Primitive(PrimitiveType::String)).into(),
-                NestedField::required(2, "bar", Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(3, "baz", Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::optional(1, "foo", Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "bar", Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(3, "baz", Primitive(PrimitiveType::Boolean))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::required(
                     4,
                     "qux",
@@ -786,9 +840,11 @@ mod tests {
                             Primitive(PrimitiveType::String),
                             true,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
                 NestedField::required(
                     6,
@@ -798,6 +854,7 @@ mod tests {
                             7,
                             Primitive(PrimitiveType::String),
                         )
+                        .expect("valid nested field")
                         .into(),
                         value_field: NestedField::map_value_element(
                             8,
@@ -806,19 +863,23 @@ mod tests {
                                     9,
                                     Primitive(PrimitiveType::String),
                                 )
+                                .expect("valid nested field")
                                 .into(),
                                 value_field: NestedField::map_value_element(
                                     10,
                                     Primitive(PrimitiveType::Int),
                                     true,
                                 )
+                                .expect("valid nested field")
                                 .into(),
                             }),
                             true,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
                 NestedField::required(
                     11,
@@ -832,28 +893,37 @@ mod tests {
                                     "latitude",
                                     Primitive(PrimitiveType::Float),
                                 )
+                                .expect("valid nested field")
                                 .into(),
                                 NestedField::optional(
                                     14,
                                     "longitude",
                                     Primitive(PrimitiveType::Float),
                                 )
+                                .expect("valid nested field")
                                 .into(),
                             ])),
                             true,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
                 NestedField::optional(
                     15,
                     "person",
                     Struct(StructType::new(vec![
-                        NestedField::optional(16, "name", Primitive(PrimitiveType::String)).into(),
-                        NestedField::required(17, "age", Primitive(PrimitiveType::Int)).into(),
+                        NestedField::optional(16, "name", Primitive(PrimitiveType::String))
+                            .expect("valid nested field")
+                            .into(),
+                        NestedField::required(17, "age", Primitive(PrimitiveType::Int))
+                            .expect("valid nested field")
+                            .into(),
                     ])),
                 )
+                .expect("valid nested field")
                 .into(),
             ])
             .build()
@@ -879,10 +949,18 @@ table {
             .with_schema_id(1)
             .with_identifier_field_ids(vec![1])
             .with_fields(vec![
-                NestedField::required(1, "foo", Primitive(PrimitiveType::String)).into(),
-                NestedField::required(2, "bar", Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(3, "baz", Primitive(PrimitiveType::Boolean)).into(),
-                NestedField::optional(4, "baz", Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::required(1, "foo", Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "bar", Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(3, "baz", Primitive(PrimitiveType::Boolean))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(4, "baz", Primitive(PrimitiveType::Boolean))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build();
 
@@ -964,7 +1042,7 @@ table {
         for (name, id) in expected_name_to_id {
             assert_eq!(
                 Some(id),
-                schema.field_by_name_case_insensitive(&name).map(|f| f.id)
+                schema.field_by_name_case_insensitive(&name).map(|f| f.id())
             );
         }
     }
@@ -1046,15 +1124,18 @@ table {
         let expected_id_to_field: HashMap<i32, NestedField> = HashMap::from([
             (
                 1,
-                NestedField::optional(1, "foo", Primitive(PrimitiveType::String)),
+                NestedField::optional(1, "foo", Primitive(PrimitiveType::String))
+                    .expect("valid nested field"),
             ),
             (
                 2,
-                NestedField::required(2, "bar", Primitive(PrimitiveType::Int)),
+                NestedField::required(2, "bar", Primitive(PrimitiveType::Int))
+                    .expect("valid nested field"),
             ),
             (
                 3,
-                NestedField::optional(3, "baz", Primitive(PrimitiveType::Boolean)),
+                NestedField::optional(3, "baz", Primitive(PrimitiveType::Boolean))
+                    .expect("valid nested field"),
             ),
             (
                 4,
@@ -1067,13 +1148,16 @@ table {
                             Primitive(PrimitiveType::String),
                             true,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
-                ),
+                )
+                .expect("valid nested field"),
             ),
             (
                 5,
-                NestedField::required(5, "element", Primitive(PrimitiveType::String)),
+                NestedField::required(5, "element", Primitive(PrimitiveType::String))
+                    .expect("valid nested field"),
             ),
             (
                 6,
@@ -1085,6 +1169,7 @@ table {
                             7,
                             Primitive(PrimitiveType::String),
                         )
+                        .expect("valid nested field")
                         .into(),
                         value_field: NestedField::map_value_element(
                             8,
@@ -1093,23 +1178,28 @@ table {
                                     9,
                                     Primitive(PrimitiveType::String),
                                 )
+                                .expect("valid nested field")
                                 .into(),
                                 value_field: NestedField::map_value_element(
                                     10,
                                     Primitive(PrimitiveType::Int),
                                     true,
                                 )
+                                .expect("valid nested field")
                                 .into(),
                             }),
                             true,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
-                ),
+                )
+                .expect("valid nested field"),
             ),
             (
                 7,
-                NestedField::required(7, "key", Primitive(PrimitiveType::String)),
+                NestedField::required(7, "key", Primitive(PrimitiveType::String))
+                    .expect("valid nested field"),
             ),
             (
                 8,
@@ -1121,23 +1211,28 @@ table {
                             9,
                             Primitive(PrimitiveType::String),
                         )
+                        .expect("valid nested field")
                         .into(),
                         value_field: NestedField::map_value_element(
                             10,
                             Primitive(PrimitiveType::Int),
                             true,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
-                ),
+                )
+                .expect("valid nested field"),
             ),
             (
                 9,
-                NestedField::required(9, "key", Primitive(PrimitiveType::String)),
+                NestedField::required(9, "key", Primitive(PrimitiveType::String))
+                    .expect("valid nested field"),
             ),
             (
                 10,
-                NestedField::required(10, "value", Primitive(PrimitiveType::Int)),
+                NestedField::required(10, "value", Primitive(PrimitiveType::Int))
+                    .expect("valid nested field"),
             ),
             (
                 11,
@@ -1153,19 +1248,23 @@ table {
                                     "latitude",
                                     Primitive(PrimitiveType::Float),
                                 )
+                                .expect("valid nested field")
                                 .into(),
                                 NestedField::optional(
                                     14,
                                     "longitude",
                                     Primitive(PrimitiveType::Float),
                                 )
+                                .expect("valid nested field")
                                 .into(),
                             ])),
                             true,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
-                ),
+                )
+                .expect("valid nested field"),
             ),
             (
                 12,
@@ -1173,20 +1272,25 @@ table {
                     12,
                     Struct(StructType::new(vec![
                         NestedField::optional(13, "latitude", Primitive(PrimitiveType::Float))
+                            .expect("valid nested field")
                             .into(),
                         NestedField::optional(14, "longitude", Primitive(PrimitiveType::Float))
+                            .expect("valid nested field")
                             .into(),
                     ])),
                     true,
-                ),
+                )
+                .expect("valid nested field"),
             ),
             (
                 13,
-                NestedField::optional(13, "latitude", Primitive(PrimitiveType::Float)),
+                NestedField::optional(13, "latitude", Primitive(PrimitiveType::Float))
+                    .expect("valid nested field"),
             ),
             (
                 14,
-                NestedField::optional(14, "longitude", Primitive(PrimitiveType::Float)),
+                NestedField::optional(14, "longitude", Primitive(PrimitiveType::Float))
+                    .expect("valid nested field"),
             ),
             (
                 15,
@@ -1194,18 +1298,25 @@ table {
                     15,
                     "person",
                     Struct(StructType::new(vec![
-                        NestedField::optional(16, "name", Primitive(PrimitiveType::String)).into(),
-                        NestedField::required(17, "age", Primitive(PrimitiveType::Int)).into(),
+                        NestedField::optional(16, "name", Primitive(PrimitiveType::String))
+                            .expect("valid nested field")
+                            .into(),
+                        NestedField::required(17, "age", Primitive(PrimitiveType::Int))
+                            .expect("valid nested field")
+                            .into(),
                     ])),
-                ),
+                )
+                .expect("valid nested field"),
             ),
             (
                 16,
-                NestedField::optional(16, "name", Primitive(PrimitiveType::String)),
+                NestedField::optional(16, "name", Primitive(PrimitiveType::String))
+                    .expect("valid nested field"),
             ),
             (
                 17,
-                NestedField::required(17, "age", Primitive(PrimitiveType::Int)),
+                NestedField::required(17, "age", Primitive(PrimitiveType::Int))
+                    .expect("valid nested field"),
             ),
         ]);
 
@@ -1314,9 +1425,15 @@ table {
             .with_identifier_field_ids(vec![5])
             .with_alias(BiHashMap::from_iter(vec![("bar_alias".to_string(), 3)]))
             .with_fields(vec![
-                NestedField::required(5, "foo", Primitive(PrimitiveType::String)).into(),
-                NestedField::optional(3, "bar", Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(3, "baz", Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::required(5, "foo", Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(3, "bar", Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(3, "baz", Primitive(PrimitiveType::Boolean))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap_err();
@@ -1351,15 +1468,18 @@ table {
                         "Map",
                         Map(MapType::new(
                             NestedField::map_key_element(2, Primitive(PrimitiveType::String))
+                                .expect("valid nested field")
                                 .into(),
                             NestedField::map_value_element(
                                 3,
                                 Primitive(PrimitiveType::Boolean),
                                 true,
                             )
+                            .expect("valid nested field")
                             .into(),
                         )),
                     )
+                    .expect("valid nested field")
                     .into()
                 ])
                 .build()
@@ -1375,15 +1495,18 @@ table {
                         "Map",
                         Map(MapType::new(
                             NestedField::map_key_element(2, Primitive(PrimitiveType::String))
+                                .expect("valid nested field")
                                 .into(),
                             NestedField::map_value_element(
                                 3,
                                 Primitive(PrimitiveType::Boolean),
                                 true,
                             )
+                            .expect("valid nested field")
                             .into(),
                         )),
                     )
+                    .expect("valid nested field")
                     .into()
                 ])
                 .build()
@@ -1401,9 +1524,11 @@ table {
                         "List",
                         List(ListType::new(
                             NestedField::list_element(2, Primitive(PrimitiveType::String), true)
+                                .expect("valid nested field")
                                 .into(),
                         )),
                     )
+                    .expect("valid nested field")
                     .into()
                 ])
                 .build()
@@ -1421,10 +1546,14 @@ table {
                         "Struct",
                         Struct(StructType::new(vec![
                             NestedField::required(2, "name", Primitive(PrimitiveType::String))
+                                .expect("valid nested field")
                                 .into(),
-                            NestedField::optional(3, "age", Primitive(PrimitiveType::Int)).into(),
+                            NestedField::optional(3, "age", Primitive(PrimitiveType::Int))
+                                .expect("valid nested field")
+                                .into(),
                         ])),
                     )
+                    .expect("valid nested field")
                     .into()
                 ])
                 .build()
@@ -1437,7 +1566,9 @@ table {
                 .with_schema_id(1)
                 .with_identifier_field_ids(vec![1])
                 .with_fields(vec![
-                    NestedField::required(1, "Float", Primitive(PrimitiveType::Float),).into()
+                    NestedField::required(1, "Float", Primitive(PrimitiveType::Float),)
+                        .expect("valid nested field")
+                        .into()
                 ])
                 .build()
                 .is_err()
@@ -1447,7 +1578,9 @@ table {
                 .with_schema_id(1)
                 .with_identifier_field_ids(vec![1])
                 .with_fields(vec![
-                    NestedField::required(1, "Double", Primitive(PrimitiveType::Double),).into()
+                    NestedField::required(1, "Double", Primitive(PrimitiveType::Double),)
+                        .expect("valid nested field")
+                        .into()
                 ])
                 .build()
                 .is_err()
@@ -1459,7 +1592,9 @@ table {
                 .with_schema_id(1)
                 .with_identifier_field_ids(vec![1])
                 .with_fields(vec![
-                    NestedField::required(1, "Required", Primitive(PrimitiveType::String),).into()
+                    NestedField::required(1, "Required", Primitive(PrimitiveType::String),)
+                        .expect("valid nested field")
+                        .into()
                 ])
                 .build()
                 .is_ok()
@@ -1469,7 +1604,9 @@ table {
                 .with_schema_id(1)
                 .with_identifier_field_ids(vec![1])
                 .with_fields(vec![
-                    NestedField::optional(1, "Optional", Primitive(PrimitiveType::String),).into()
+                    NestedField::optional(1, "Optional", Primitive(PrimitiveType::String),)
+                        .expect("valid nested field")
+                        .into()
                 ])
                 .build()
                 .is_err()

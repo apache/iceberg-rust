@@ -46,95 +46,122 @@ impl<'a> ManifestsTable<'a> {
     /// Returns the iceberg schema of the manifests table.
     pub fn schema(&self) -> crate::spec::Schema {
         let fields = vec![
-            NestedField::new(14, "content", Type::Primitive(PrimitiveType::Int), true),
-            NestedField::new(1, "path", Type::Primitive(PrimitiveType::String), true),
-            NestedField::new(2, "length", Type::Primitive(PrimitiveType::Long), true),
+            NestedField::new(14, "content", Type::Primitive(PrimitiveType::Int), true)
+                .expect("valid nested field"),
+            NestedField::new(1, "path", Type::Primitive(PrimitiveType::String), true)
+                .expect("valid nested field"),
+            NestedField::new(2, "length", Type::Primitive(PrimitiveType::Long), true)
+                .expect("valid nested field"),
             NestedField::new(
                 3,
                 "partition_spec_id",
                 Type::Primitive(PrimitiveType::Int),
                 true,
-            ),
+            )
+            .expect("valid nested field"),
             NestedField::new(
                 4,
                 "added_snapshot_id",
                 Type::Primitive(PrimitiveType::Long),
                 true,
-            ),
+            )
+            .expect("valid nested field"),
             NestedField::new(
                 5,
                 "added_data_files_count",
                 Type::Primitive(PrimitiveType::Int),
                 true,
-            ),
+            )
+            .expect("valid nested field"),
             NestedField::new(
                 6,
                 "existing_data_files_count",
                 Type::Primitive(PrimitiveType::Int),
                 true,
-            ),
+            )
+            .expect("valid nested field"),
             NestedField::new(
                 7,
                 "deleted_data_files_count",
                 Type::Primitive(PrimitiveType::Int),
                 true,
-            ),
+            )
+            .expect("valid nested field"),
             NestedField::new(
                 15,
                 "added_delete_files_count",
                 Type::Primitive(PrimitiveType::Int),
                 true,
-            ),
+            )
+            .expect("valid nested field"),
             NestedField::new(
                 16,
                 "existing_delete_files_count",
                 Type::Primitive(PrimitiveType::Int),
                 true,
-            ),
+            )
+            .expect("valid nested field"),
             NestedField::new(
                 17,
                 "deleted_delete_files_count",
                 Type::Primitive(PrimitiveType::Int),
                 true,
-            ),
+            )
+            .expect("valid nested field"),
             NestedField::new(
                 8,
                 "partition_summaries",
                 Type::List(ListType {
-                    element_field: Arc::new(NestedField::new(
-                        9,
-                        "item",
-                        Type::Struct(StructType::new(vec![
-                            Arc::new(NestedField::new(
-                                10,
-                                "contains_null",
-                                Type::Primitive(PrimitiveType::Boolean),
-                                true,
-                            )),
-                            Arc::new(NestedField::new(
-                                11,
-                                "contains_nan",
-                                Type::Primitive(PrimitiveType::Boolean),
-                                false,
-                            )),
-                            Arc::new(NestedField::new(
-                                12,
-                                "lower_bound",
-                                Type::Primitive(PrimitiveType::String),
-                                false,
-                            )),
-                            Arc::new(NestedField::new(
-                                13,
-                                "upper_bound",
-                                Type::Primitive(PrimitiveType::String),
-                                false,
-                            )),
-                        ])),
-                        true,
-                    )),
+                    element_field: Arc::new(
+                        NestedField::new(
+                            9,
+                            "item",
+                            Type::Struct(StructType::new(vec![
+                                Arc::new(
+                                    NestedField::new(
+                                        10,
+                                        "contains_null",
+                                        Type::Primitive(PrimitiveType::Boolean),
+                                        true,
+                                    )
+                                    .expect("valid nested field"),
+                                ),
+                                Arc::new(
+                                    NestedField::new(
+                                        11,
+                                        "contains_nan",
+                                        Type::Primitive(PrimitiveType::Boolean),
+                                        false,
+                                    )
+                                    .expect("valid nested field"),
+                                ),
+                                Arc::new(
+                                    NestedField::new(
+                                        12,
+                                        "lower_bound",
+                                        Type::Primitive(PrimitiveType::String),
+                                        false,
+                                    )
+                                    .expect("valid nested field"),
+                                ),
+                                Arc::new(
+                                    NestedField::new(
+                                        13,
+                                        "upper_bound",
+                                        Type::Primitive(PrimitiveType::String),
+                                        false,
+                                    )
+                                    .expect("valid nested field"),
+                                ),
+                            ])),
+                            true,
+                        )
+                        .expect("valid nested field"),
+                    ),
                 }),
                 true,
-            ),
+            )
+            .expect("valid nested field"),
         ];
 
         crate::spec::Schema::builder()
@@ -264,17 +291,23 @@ impl<'a> ManifestsTable<'a> {
                 .field_builder::<StringBuilder>(2)
                 .unwrap()
                 .append_option(summary.lower_bound.as_ref().map(|v| {
-                    Datum::try_from_bytes(v, field.field_type.as_primitive_type().unwrap().clone())
-                        .unwrap()
-                        .to_string()
+                    Datum::try_from_bytes(
+                        v,
+                        field.field_type().as_primitive_type().unwrap().clone(),
+                    )
+                    .unwrap()
+                    .to_string()
                 }));
             partition_summaries_builder
                 .field_builder::<StringBuilder>(3)
                 .unwrap()
                 .append_option(summary.upper_bound.as_ref().map(|v| {
-                    Datum::try_from_bytes(v, field.field_type.as_primitive_type().unwrap().clone())
-                        .unwrap()
-                        .to_string()
+                    Datum::try_from_bytes(
+                        v,
+                        field.field_type().as_primitive_type().unwrap().clone(),
+                    )
+                    .unwrap()
+                    .to_string()
                 }));
             partition_summaries_builder.append(true);
         }

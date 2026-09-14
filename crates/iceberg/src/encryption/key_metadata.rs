@@ -143,21 +143,22 @@ mod _serde {
     pub(super) static AVRO_SCHEMA_V1: LazyLock<AvroSchema> = LazyLock::new(|| {
         let schema = Schema::builder()
             .with_fields(vec![
-                Arc::new(NestedField::required(
-                    0,
-                    "encryption_key",
-                    Type::Primitive(PrimitiveType::Binary),
-                )),
-                Arc::new(NestedField::optional(
-                    1,
-                    "aad_prefix",
-                    Type::Primitive(PrimitiveType::Binary),
-                )),
-                Arc::new(NestedField::optional(
-                    2,
-                    "file_length",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
+                Arc::new(
+                    NestedField::required(
+                        0,
+                        "encryption_key",
+                        Type::Primitive(PrimitiveType::Binary),
+                    )
+                    .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(1, "aad_prefix", Type::Primitive(PrimitiveType::Binary))
+                        .expect("valid nested field"),
+                ),
+                Arc::new(
+                    NestedField::optional(2, "file_length", Type::Primitive(PrimitiveType::Long))
+                        .expect("valid nested field"),
+                ),
             ])
             .build()
             .expect("Failed to build StandardKeyMetadata Iceberg schema");

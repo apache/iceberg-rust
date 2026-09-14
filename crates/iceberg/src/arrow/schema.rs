@@ -399,15 +399,13 @@ impl ArrowSchemaConverter {
             let field_type = &field_results[i];
             let id = self.get_field_id(field)?;
             let doc = get_field_doc(field);
-            let nested_field = NestedField {
-                id,
-                doc,
-                name: field.name().clone(),
-                required: !field.is_nullable(),
-                field_type: Box::new(field_type.clone()),
-                initial_default: None,
-                write_default: None,
-            };
+            let nested_field = NestedField::builder()
+                .id(id)
+                .doc_opt(doc)
+                .name(field.name())
+                .required(!field.is_nullable())
+                .field_type(field_type.clone())
+                .build()?;
             results.push(Arc::new(nested_field));
         }
         Ok(results)
@@ -447,11 +445,13 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
 
         let id = self.get_field_id(element_field)?;
         let doc = get_field_doc(element_field);
-        let mut element_field =
-            NestedField::list_element(id, value.clone(), !element_field.is_nullable());
-        if let Some(doc) = doc {
-            element_field = element_field.with_doc(doc);
-        }
+        let element_field = NestedField::builder()
+            .id(id)
+            .name(crate::spec::LIST_FIELD_NAME)
+            .field_type(value.clone())
+            .required(!element_field.is_nullable())
+            .doc_opt(doc)
+            .build()?;
         let element_field = Arc::new(element_field);
         Ok(Type::List(ListType { element_field }))
     }
@@ -472,22 +472,24 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
 
                     let key_id = self.get_field_id(key_field)?;
                     let key_doc = get_field_doc(key_field);
-                    let mut key_field = NestedField::map_key_element(key_id, key_value.clone());
-                    if let Some(doc) = key_doc {
-                        key_field = key_field.with_doc(doc);
-                    }
+                    let key_field = NestedField::builder()
+                        .id(key_id)
+                        .name(crate::spec::MAP_KEY_FIELD_NAME)
+                        .field_type(key_value.clone())
+                        .required(true)
+                        .doc_opt(key_doc)
+                        .build()?;
                     let key_field = Arc::new(key_field);
 
                     let value_id = self.get_field_id(value_field)?;
                     let value_doc = get_field_doc(value_field);
-                    let mut value_field = NestedField::map_value_element(
-                        value_id,
-                        value.clone(),
-                        !value_field.is_nullable(),
-                    );
-                    if let Some(doc) = value_doc {
-                        value_field = value_field.with_doc(doc);
-                    }
+                    let value_field = NestedField::builder()
+                        .id(value_id)
+                        .name(crate::spec::MAP_VALUE_FIELD_NAME)
+                        .field_type(value.clone())
+                        .required(!value_field.is_nullable())
+                        .doc_opt(value_doc)
+                        .build()?;
                     let value_field = Arc::new(value_field);
 
                     Ok(Type::Map(MapType {
@@ -620,19 +622,25 @@ impl SchemaVisitor for ToArrowSchemaConverter {
             ArrowSchemaOrFieldOrType::Type(ty) => ty,
             _ => unreachable!(),
         };
-        let metadata = if let Some(doc) = &field.doc {
+        let metadata = if let Some(doc) = field.doc() {
             HashMap::from([
-                (PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string()),
-                (ARROW_FIELD_DOC_KEY.to_string(), doc.clone()),
+                (
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    field.id().to_string(),
+                ),
+                (ARROW_FIELD_DOC_KEY.to_string(), doc.to_string()),
             ])
         } else {
-            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string())])
+            HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                field.id().to_string(),
+            )])
         };
         let arrow_field =
-            Field::new(field.name.clone(), ty, !field.required).with_metadata(metadata);
+            Field::new(field.name().to_string(), ty, !field.is_required()).with_metadata(metadata);
         // A variant column's storage is a struct; tag the field with the canonical
         // `arrow.parquet.variant` extension type so consumers read it as a Variant, not a struct.
-        let arrow_field = if field.field_type.is_variant() {
+        let arrow_field = if field.field_type().is_variant() {
             arrow_field.with_extension_type(VariantExtensionType)
         } else {
             arrow_field
@@ -2039,7 +2047,9 @@ mod tests {
         // canonical `arrow.parquet.variant` extension type (the struct storage stays as-is).
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+                NestedField::optional(1, "v", Type::Variant(VariantType))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -2073,19 +2083,26 @@ mod tests {
                     1,
                     "l",
                     Type::List(ListType::new(
-                        NestedField::optional(2, "element", Type::Variant(VariantType)).into(),
+                        NestedField::optional(2, "element", Type::Variant(VariantType))
+                            .expect("valid nested field")
+                            .into(),
                     )),
                 )
+                .expect("valid nested field")
                 .into(),
                 NestedField::optional(
                     3,
                     "m",
                     Type::Map(MapType::new(
                         NestedField::map_key_element(4, Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field")
                             .into(),
-                        NestedField::map_value_element(5, Type::Variant(VariantType), false).into(),
+                        NestedField::map_value_element(5, Type::Variant(VariantType), false)
+                            .expect("valid nested field")
+                            .into(),
                     )),
                 )
+                .expect("valid nested field")
                 .into(),
             ])
             .build()
@@ -2130,7 +2147,9 @@ mod tests {
         let converted = arrow_schema_to_schema(&arrow_schema).unwrap();
         let expected = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+                NestedField::optional(1, "v", Type::Variant(VariantType))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -2143,32 +2162,44 @@ mod tests {
         // top-level, nested in a struct, as a list element, and as a map value.
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+                NestedField::optional(1, "v", Type::Variant(VariantType))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::optional(
                     2,
                     "s",
                     Type::Struct(StructType::new(vec![
-                        NestedField::optional(3, "sv", Type::Variant(VariantType)).into(),
+                        NestedField::optional(3, "sv", Type::Variant(VariantType))
+                            .expect("valid nested field")
+                            .into(),
                     ])),
                 )
+                .expect("valid nested field")
                 .into(),
                 NestedField::optional(
                     4,
                     "l",
                     Type::List(ListType::new(
-                        NestedField::optional(5, "element", Type::Variant(VariantType)).into(),
+                        NestedField::optional(5, "element", Type::Variant(VariantType))
+                            .expect("valid nested field")
+                            .into(),
                     )),
                 )
+                .expect("valid nested field")
                 .into(),
                 NestedField::optional(
                     6,
                     "m",
                     Type::Map(MapType::new(
                         NestedField::map_key_element(7, Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field")
                             .into(),
-                        NestedField::map_value_element(8, Type::Variant(VariantType), false).into(),
+                        NestedField::map_value_element(8, Type::Variant(VariantType), false)
+                            .expect("valid nested field")
+                            .into(),
                     )),
                 )
+                .expect("valid nested field")
                 .into(),
             ])
             .build()
@@ -2190,7 +2221,9 @@ mod tests {
         let converted = arrow_schema_to_schema_auto_assign_ids(&arrow_schema).unwrap();
         let expected = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+                NestedField::optional(1, "v", Type::Variant(VariantType))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -2250,54 +2283,38 @@ mod tests {
                 )])),
             ]));
             let iceberg_type = Type::Struct(StructType::new(vec![
-                NestedField {
-                    id: 1,
-                    doc: None,
-                    name: "a".to_string(),
-                    required: true,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::Long)),
-                    initial_default: None,
-                    write_default: None,
-                }
-                .into(),
-                NestedField {
-                    id: 2,
-                    doc: None,
-                    name: "b".to_string(),
-                    required: false,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::String)),
-                    initial_default: None,
-                    write_default: None,
-                }
-                .into(),
+                NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long))
+                    .unwrap()
+                    .into(),
+                NestedField::optional(2, "b", Type::Primitive(PrimitiveType::String))
+                    .unwrap()
+                    .into(),
             ]));
             assert_eq!(iceberg_type, arrow_type_to_type(&arrow_type).unwrap());
             assert_eq!(arrow_type, type_to_arrow_type(&iceberg_type).unwrap());
 
             // initial_default and write_default is ignored
             let iceberg_type = Type::Struct(StructType::new(vec![
-                NestedField {
-                    id: 1,
-                    doc: None,
-                    name: "a".to_string(),
-                    required: true,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::Long)),
-                    initial_default: Some(Literal::Primitive(PrimitiveLiteral::Int(114514))),
-                    write_default: None,
-                }
-                .into(),
-                NestedField {
-                    id: 2,
-                    doc: None,
-                    name: "b".to_string(),
-                    required: false,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::String)),
-                    initial_default: None,
-                    write_default: Some(Literal::Primitive(PrimitiveLiteral::String(
+                NestedField::builder()
+                    .id(1)
+                    .name("a")
+                    .required(true)
+                    .field_type(Type::Primitive(PrimitiveType::Long))
+                    .initial_default(Literal::Primitive(PrimitiveLiteral::Long(114514)))
+                    .build()
+                    .unwrap()
+                    .into(),
+                NestedField::builder()
+                    .id(2)
+                    .name("b")
+                    .required(false)
+                    .field_type(Type::Primitive(PrimitiveType::String))
+                    .write_default(Literal::Primitive(PrimitiveLiteral::String(
                         "514".to_string(),
-                    ))),
-                }
-                .into(),
+                    )))
+                    .build()
+                    .unwrap()
+                    .into(),
             ]));
             assert_eq!(arrow_type, type_to_arrow_type(&iceberg_type).unwrap());
         }
@@ -2338,7 +2355,7 @@ mod tests {
             let iceberg_field = iceberg_schema.as_struct().fields().first().unwrap();
 
             assert!(
-                matches!(iceberg_field.field_type.as_ref(), Type::Primitive(t) if *t == expected_iceberg_type),
+                matches!(iceberg_field.field_type(), Type::Primitive(t) if *t == expected_iceberg_type),
                 "Expected {arrow_type:?} to map to {expected_iceberg_type:?}"
             );
         }
@@ -2549,8 +2566,12 @@ mod tests {
         // Level 2: orders.element.{order_id=16,amount=17}
         let expected = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::required(
                     3,
                     "price",
@@ -2559,8 +2580,10 @@ mod tests {
                         scale: 2,
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
                 NestedField::optional(4, "created_at", Type::Primitive(PrimitiveType::Timestamptz))
+                    .expect("valid nested field")
                     .into(),
                 NestedField::optional(
                     5,
@@ -2571,22 +2594,28 @@ mod tests {
                             Type::Primitive(PrimitiveType::String),
                             false,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
                 NestedField::optional(
                     6,
                     "address",
                     Type::Struct(StructType::new(vec![
                         NestedField::optional(10, "street", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field")
                             .into(),
                         NestedField::required(11, "city", Type::Primitive(PrimitiveType::String))
+                            .expect("valid nested field")
                             .into(),
                         NestedField::optional(12, "zip", Type::Primitive(PrimitiveType::Int))
+                            .expect("valid nested field")
                             .into(),
                     ])),
                 )
+                .expect("valid nested field")
                 .into(),
                 NestedField::optional(
                     7,
@@ -2596,15 +2625,18 @@ mod tests {
                             13,
                             Type::Primitive(PrimitiveType::String),
                         )
+                        .expect("valid nested field")
                         .into(),
                         value_field: NestedField::map_value_element(
                             14,
                             Type::Primitive(PrimitiveType::String),
                             false,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
                 NestedField::optional(
                     8,
@@ -2618,19 +2650,23 @@ mod tests {
                                     "order_id",
                                     Type::Primitive(PrimitiveType::Long),
                                 )
+                                .expect("valid nested field")
                                 .into(),
                                 NestedField::required(
                                     17,
                                     "amount",
                                     Type::Primitive(PrimitiveType::Double),
                                 )
+                                .expect("valid nested field")
                                 .into(),
                             ])),
                             false,
                         )
+                        .expect("valid nested field")
                         .into(),
                     }),
                 )
+                .expect("valid nested field")
                 .into(),
             ])
             .build()

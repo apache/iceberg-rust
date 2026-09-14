@@ -288,7 +288,7 @@ impl<'a> SnapshotProducer<'a> {
         }
 
         for (value, field) in partition_value.fields().iter().zip(partition_type.fields()) {
-            let field = field.field_type.as_primitive_type().ok_or_else(|| {
+            let field = field.field_type().as_primitive_type().ok_or_else(|| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Partition field should only be primitive type.",

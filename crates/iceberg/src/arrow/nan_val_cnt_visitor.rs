@@ -127,25 +127,25 @@ impl SchemaWithPartnerVisitor<ArrayRef> for NanValueCountVisitor {
     }
 
     fn after_struct_field(&mut self, field: &NestedFieldRef, partner: &ArrayRef) -> Result<()> {
-        let field_id = field.id;
+        let field_id = field.id();
         count_float_nans!(partner, self, field_id);
         Ok(())
     }
 
     fn after_list_element(&mut self, field: &NestedFieldRef, partner: &ArrayRef) -> Result<()> {
-        let field_id = field.id;
+        let field_id = field.id();
         count_float_nans!(partner, self, field_id);
         Ok(())
     }
 
     fn after_map_key(&mut self, field: &NestedFieldRef, partner: &ArrayRef) -> Result<()> {
-        let field_id = field.id;
+        let field_id = field.id();
         count_float_nans!(partner, self, field_id);
         Ok(())
     }
 
     fn after_map_value(&mut self, field: &NestedFieldRef, partner: &ArrayRef) -> Result<()> {
-        let field_id = field.id;
+        let field_id = field.id();
         count_float_nans!(partner, self, field_id);
         Ok(())
     }

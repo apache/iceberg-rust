@@ -791,7 +791,7 @@ impl TableMetadataBuilder {
             if let Some(schema_field) = current_schema.field_by_name(&partition_field.name) {
                 let is_identity_transform =
                     partition_field.transform == crate::spec::Transform::Identity;
-                let has_matching_source_id = schema_field.id == partition_field.source_id;
+                let has_matching_source_id = schema_field.id() == partition_field.source_id;
 
                 if !is_identity_transform {
                     return Err(Error::new(
@@ -809,7 +809,9 @@ impl TableMetadataBuilder {
                         format!(
                             "Cannot create identity partition sourced from different field in schema. \
                              Field name '{}' has id `{}` in schema but partition source id is `{}`",
-                            partition_field.name, schema_field.id, partition_field.source_id
+                            partition_field.name,
+                            schema_field.id(),
+                            partition_field.source_id
                         ),
                     ));
                 }
@@ -1323,7 +1325,7 @@ impl TableMetadataBuilder {
                                    "Cannot find source column with name {source_field_name} for sort column in re-assigned schema."
                                ),
                            )
-                       })?.id;
+                       })?.id();
             field.source_id = new_field_id;
             fresh_order.with_sort_field(field);
         }
@@ -1481,9 +1483,15 @@ mod tests {
     fn schema() -> Schema {
         Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap()
@@ -1613,18 +1621,26 @@ mod tests {
         let schema = Schema::builder()
             .with_schema_id(10)
             .with_fields(vec![
-                NestedField::required(11, "a", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(12, "b", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(11, "a", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(12, "b", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::required(
                     13,
                     "struct",
                     Type::Struct(StructType::new(vec![
                         NestedField::required(14, "nested", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field")
                             .into(),
                     ])),
                 )
+                .expect("valid nested field")
                 .into(),
-                NestedField::required(15, "c", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(15, "c", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -1652,18 +1668,26 @@ mod tests {
 
         let expected_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(2, "b", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "b", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::required(
                     3,
                     "struct",
                     Type::Struct(StructType::new(vec![
                         NestedField::required(5, "nested", Type::Primitive(PrimitiveType::Long))
+                            .expect("valid nested field")
                             .into(),
                     ])),
                 )
+                .expect("valid nested field")
                 .into(),
-                NestedField::required(4, "c", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(4, "c", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -2021,10 +2045,18 @@ mod tests {
         let added_schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(4, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(4, "a", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -2056,10 +2088,18 @@ mod tests {
         let added_schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(4, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(4, "a", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -2804,7 +2844,9 @@ mod tests {
     fn test_schema_evolution_now_correctly_validates_partition_field_name_conflicts() {
         let initial_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -2838,9 +2880,13 @@ mod tests {
 
         let evolved_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
                 // Adding a schema field with the same name as an existing partition field
-                NestedField::required(2, "bucket_data", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "bucket_data", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -2863,7 +2909,9 @@ mod tests {
     fn test_schema_evolution_should_validate_on_schema_add_not_metadata_build() {
         let initial_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -2889,8 +2937,12 @@ mod tests {
 
         let non_conflicting_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(2, "new_field", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "new_field", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -2910,8 +2962,11 @@ mod tests {
     fn test_partition_spec_evolution_validates_schema_field_name_conflicts() {
         let initial_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::required(2, "existing_field", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
                     .into(),
             ])
             .build()
@@ -2963,8 +3018,11 @@ mod tests {
         // Create a table with an initial schema that has a field "existing_field"
         let initial_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::required(2, "existing_field", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
                     .into(),
             ])
             .build()
@@ -2992,8 +3050,11 @@ mod tests {
         // Add a second schema that removes the existing_field but keeps the data field
         let second_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::required(3, "new_field", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
                     .into(),
             ])
             .build()
@@ -3012,10 +3073,14 @@ mod tests {
         // even though there's a partition field named "bucket_data"
         let third_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::required(3, "new_field", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
                     .into(),
                 NestedField::required(4, "existing_field", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
                     .into(),
             ])
             .build()
@@ -3033,12 +3098,17 @@ mod tests {
         // and doesn't exist in any historical schema should fail
         let conflicting_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::required(3, "new_field", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
                     .into(),
                 NestedField::required(4, "existing_field", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
                     .into(),
                 NestedField::required(5, "bucket_data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
                     .into(), // conflicts with partition field
             ])
             .build()
@@ -3059,8 +3129,11 @@ mod tests {
         // Create initial schema with a field
         let initial_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::required(2, "partition_data", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
                     .into(),
             ])
             .build()
@@ -3088,10 +3161,14 @@ mod tests {
         // Add a new schema that still contains the partition_data field
         let evolved_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::required(2, "partition_data", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
                     .into(),
                 NestedField::required(3, "new_field", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
                     .into(),
             ])
             .build()
@@ -3110,7 +3187,9 @@ mod tests {
         // Create initial schema WITHOUT the conflicting field
         let initial_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -3137,9 +3216,13 @@ mod tests {
         // Try to add a schema with a field that conflicts with partition field name
         let conflicting_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
                 // This field name conflicts with the partition field "bucket_data"
-                NestedField::required(2, "bucket_data", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "bucket_data", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
+                    .into(),
             ])
             .build()
             .unwrap();
@@ -3158,8 +3241,11 @@ mod tests {
     fn test_partition_spec_evolution_allows_non_conflicting_names() {
         let initial_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::required(2, "existing_field", Type::Primitive(PrimitiveType::Int))
+                    .expect("valid nested field")
                     .into(),
             ])
             .build()
@@ -3582,9 +3668,14 @@ mod tests {
     fn test_partition_field_id_reuse_across_specs() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long))
+                    .expect("valid nested field")
+                    .into(),
+                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String))
+                    .expect("valid nested field")
+                    .into(),
                 NestedField::required(3, "timestamp", Type::Primitive(PrimitiveType::Timestamp))
+                    .expect("valid nested field")
                     .into(),
             ])
             .build()
