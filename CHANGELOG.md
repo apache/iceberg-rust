@@ -229,6 +229,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * fix(ci): keep .github/actions in the source archive by @xanderbailey in https://github.com/apache/iceberg-rust/pull/3193
 * fix: break dev-dependency cycle that blocks publishing iceberg-property-macro by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/3184
 * ci: check new crates are reserved on crates.io before merge by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/3185
+* ci: pull MinIO images from Quay by @smaheshwar-pltr in https://github.com/apache/iceberg-rust/pull/3202
 
 ## [v0.10.1] - 2026-07-28
 
