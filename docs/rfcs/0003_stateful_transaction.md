@@ -19,48 +19,39 @@
 
 # RFC: Stateful Transaction
 
-**Status:** Draft  
+**Status:** Draft
 **Target:** Apache Iceberg Rust (`iceberg-rust`)
 
-**Scope:** Transaction/action lifecycle, retry-persistent state, retry and rebase semantics, conflict validation, incremental metadata reuse, snapshot-producing execution, and generated-metadata cleanup.
+**Scope:** The transaction/action lifecycle, retry-persistent action state, and
+the snapshot producers that carry that state for snapshot-producing actions.
 
 ---
 
 # 1. Motivation
 
-The current transaction implementation replays actions after a catalog conflict, but an action has no persistent mutable state across attempts. This is sufficient for simple metadata updates, but merging snapshot operations such as rewrite-files, overwrite, delete, row-delta, and replace-partitions need to retain state across replay.
+The current transaction implementation replays actions after a catalog
+conflict, but an action has no state that survives the replay. Every retry
+starts from nothing. This is fine for simple metadata updates, but merging
+snapshot operations (rewrite-files, overwrite, delete-files, row-delta,
+replace-partitions) need to retain work across attempts:
 
-Without persistent action state, a retry cannot safely or efficiently retain:
+- a stable snapshot identity, so one logical operation produces one snapshot;
+- already-materialized immutable metadata, so retries do not re-read and
+  re-decode the same committed manifests;
+- already-completed deterministic work (filtered manifests, generated added
+  manifests), so retries do not rewrite identical files;
+- ownership of generated metadata, so uncommitted files can be cleaned up.
 
-- stable snapshot identity;
-- already-processed immutable metadata;
-- already-completed validation and manifest work;
-- generated metadata that may be reusable;
-- ownership information required to clean up uncommitted metadata.
+This RFC defines where that state lives, how it is initialized, how it
+survives catalog retries, and how each retry combines it with a refreshed
+table. It intentionally does **not** specify cache layouts, conflict-detection
+predicates, or per-operation semantics; those are follow-up work (§8).
 
-This RFC introduces explicit per-action retry state and defines how snapshot-producing actions use it during retry and rebase.
+## Non-goals
 
-## 1.1 Goals
-
-This RFC aims to provide:
-
-- persistent state owned by each applied transaction action;
-- stable snapshot identity across retries;
-- clear retry and rebase semantics;
-- incremental validation and metadata reuse;
-- a common execution path for merging snapshot actions;
-- explicit ownership and cleanup of generated metadata.
-
-## 1.2 Non-goals
-
-The initial design does not require:
-
-- whole-attempt caching;
-- cross-process retry state;
-- aggressive manifest-merge caching;
-- a specific cache eviction policy beyond requiring bounded behavior where needed;
-- advanced recovery from ambiguous catalog commit outcomes;
-- a particular implementation for future Iceberg table formats.
+Cross-process retry state, whole-attempt caching, cache eviction policy,
+automatic recovery from ambiguous catalog outcomes, and the concrete conflict
+validation predicates (to be covered separately).
 
 ---
 
@@ -68,1062 +59,491 @@ The initial design does not require:
 
 The design separates three lifetimes:
 
-1. **Transaction lifetime** — refreshes the catalog, replays actions in order, and submits the final `TableCommit`.
-2. **Action lifetime** — owns immutable action intent and retry-persistent state.
-3. **Attempt lifetime** — executes one action against one refreshed transaction-local table.
+1. **Transaction lifetime** — owns refresh, retry, action ordering, replay,
+   and the terminal outcome.
+2. **Action lifetime** — owns immutable action intent plus retry-persistent
+   state. Spans all attempts of one logical execution.
+3. **Attempt lifetime** — one execution of one action against one refreshed
+   transaction-local table.
 
 ```text
 Transaction
+│   owns refresh / retry / replay ordering / terminal outcome
 │
-│ owns refresh / replay / action ordering
+├── ActionEntry
+│      ├── immutable action intent            (shared with clones)
+│      └── retry-persistent state             (never shared)
 │
-├── ActionEntry<A>
-│      ├── immutable Action A
-│      └── retry-persistent State A::State
+├── ActionEntry
+│      └── ...
 │
-├── ActionEntry<B>
-│      ├── immutable Action B
-│      └── retry-persistent State B::State
-│
-└── ...
-
-                     one action attempt
-                            │
-                            ▼
-                  MergingSnapshotProducer
-                  ├── validate
-                  ├── filter manifests
-                  ├── add manifests
-                  ├── organize
-                  └── summarize
-                            │
-                            ▼
-                    SnapshotProducer
-                  ├── manifest list
-                  ├── Snapshot
-                  ├── TableUpdates
-                  └── TableRequirements
+retry attempt:
+    refreshed transaction-local Table  +  same persistent state
+                        │
+                        ▼
+        reuse still-valid work + recompute base-dependent work
+                        │
+                        ▼
+                  new ActionCommit
 ```
 
-The key ownership rule is:
+For snapshot-producing actions, the retry-persistent state **is a persistent
+snapshot producer**: a `SimpleSnapshotProducer` for append-shaped operations
+or a `MergingSnapshotProducer` for operations that also remove files (§5).
+The producer's fields are the retry-persistent data; the values derived from
+one particular base are locals of one attempt.
 
-> **`ActionEntry` owns retry-persistent state. `MergingSnapshotProducer` is attempt-scoped and only borrows that state.**
+## 2.1 Core reuse rule
 
-This keeps retry lifetime explicit without requiring a long-lived producer object.
+> **Retry-persistent work may be reused when the semantic inputs that produced
+> it are still valid. Base-dependent final state must be recomputed after
+> rebasing.**
 
-## 2.1 Retry state at a glance
-
-Merging actions use a retry state with four responsibilities:
-
-```text
-MergeRetryState
-│
-├── SnapshotActionState
-│      stable logical identity
-│
-├── SourceCache
-│      immutable committed inputs already materialized
-│
-├── DerivedCache
-│      reusable deterministic work
-│
-└── ArtifactTracker
-       physical metadata created by this action
-```
-
-The four components answer different questions:
-
-- **SnapshotActionState:** Which logical snapshot-producing action is this?
-- **SourceCache:** What immutable committed state have I already read?
-- **DerivedCache:** What deterministic work have I already completed and can still reuse?
-- **ArtifactTracker:** What physical metadata files did this action create?
-
-## 2.2 Core reuse rule
-
-Retry state is reusable based on semantic dependencies, not simply on whether it was created in a previous attempt.
-
-> **A completed result can survive retry or rebase if every semantic dependency that produced it remains unchanged.**
-
-At a high level:
+Concretely:
 
 | State | Retry / rebase behavior |
 | --- | --- |
 | Action intent | preserve |
 | `snapshot_id` / `commit_uuid` | preserve |
-| Immutable snapshot/manifest metadata already read | preserve |
-| Historical validation result | preserve if validation context is unchanged |
-| Per-manifest filter result | preserve if source manifest and action intent are unchanged |
-| Added-file manifest | preserve if its content is independent of the refreshed base |
-| Current parent / sequence / row-ID allocation | rebuild |
-| Complete resulting manifest set | rebuild |
-| Manifest list / `TableCommit` | rebuild on a new base |
+| Immutable committed metadata already read | preserve |
+| Deterministic derived work (filtered manifests, added manifests) | preserve while its inputs are unchanged |
+| Parent snapshot, sequence number, row-ID allocation | recompute |
+| Complete resulting manifest set | recompute |
+| Manifest list / `ActionCommit` / `TableCommit` | recompute |
 
-A rebase therefore re-executes the action, but does not discard all previous work.
-
----
-
-# 3. End-to-End Retry Flow
-
-## 3.1 First attempt
-
-The transaction refreshes the table and replays actions in order. Each entry initializes its state lazily on first use.
-
-```text
-refresh catalog table
-        │
-        ▼
-transaction-local table
-        │
-        ▼
-for action entry in order
-        │
-        ├── initialize state if needed
-        ├── execute action against current transaction-local table
-        └── apply ActionCommit locally
-        │
-        ▼
-build final TableCommit
-        │
-        ▼
-catalog.update_table(...)
-```
-
-Action B always observes the transaction-local result of Action A.
-
-## 3.2 Catalog conflict and rebase
-
-If catalog submission fails because the base became stale:
-
-```text
-catalog conflict
-      │
-      ▼
-refresh newer table
-      │
-      ▼
-replay actions in order
-      │
-      ├── keep retry-persistent state
-      ├── extend validation to new history
-      ├── reuse safe previous work
-      └── rebuild state tied to the old base
-      │
-      ▼
-submit again
-```
-
-The transaction owns refresh and replay. Individual actions never refresh the catalog independently.
-
-## 3.3 Example: RewriteFiles across a concurrent append
-
-Assume:
-
-```text
-S10
-├── M1 = [A, B]
-└── M2 = [C]
-
-RewriteFiles:
-  remove A
-  add D
-```
-
-Attempt 1 computes:
-
-```text
-SourceCache:
-  M1, M2
-
-DerivedCache:
-  M1 -> Rewritten(M1')
-  M2 -> Unchanged
-  add D -> M3
-
-Artifacts written:
-  M1'
-  M3
-  manifest-list L1
-```
-
-Before catalog commit succeeds, another writer appends `M4` and advances the table to `S11`.
-
-On retry:
-
-```text
-reuse:
-  previously processed history
-  M1 -> M1'
-  M2 -> Unchanged
-  added manifest M3
-
-new work:
-  process S11 / M4
-  validate newly introduced history
-  filter M4
-
-rebuild:
-  complete manifest set for S11
-  manifest-list L2
-  TableCommit
-```
-
-If attempt 2 commits, cleanup keeps artifacts reachable from the committed snapshot and removes stale attempt artifacts such as `L1`.
-
-This example captures the central behavior of the RFC: **reuse immutable work, rebuild base-dependent work.**
+A rebase therefore re-executes the action but does not discard all previous
+work.
 
 ---
 
-# 4. Transaction Action State Model
+# 3. Transaction Action Model
 
-## 4.1 TransactionAction interface
+## 3.1 The `TransactionAction` trait
 
-Each action declares its own retry-persistent state:
+Each action declares its own retry-persistent state as an associated type:
 
 ```rust
-pub(crate) trait TransactionActionState: Send + 'static {
-    fn snapshot_id(&self) -> Option<i64> {
-        None
-    }
-}
-
 #[async_trait]
-pub(crate) trait TransactionAction: Sync + Send + 'static {
-    type State: TransactionActionState;
+pub(crate) trait TransactionAction: Send + Sync + 'static {
+    /// Retry-persistent state for one logical execution of this action.
+    type State: Send + Sync + 'static;
 
-    fn new_state(&self, table: &Table) -> Result<Self::State>;
+    /// Creates fresh state. Infallible and table-independent; called once
+    /// when the action is applied to a transaction (and again for clones).
+    fn new_state(&self) -> Self::State;
 
-    async fn commit(
-        &self,
-        state: &mut Self::State,
-        table: &Table,
-    ) -> Result<ActionCommit>;
+    /// Executes one attempt: immutable intent + persistent state +
+    /// the refreshed transaction-local table.
+    async fn commit(&self, state: &mut Self::State, table: &Table) -> Result<ActionCommit>;
+
+    /// Called exactly once, after the transaction reaches a terminal
+    /// outcome (§6). Default: nothing to clean up.
+    async fn finish(&self, _state: &mut Self::State, _outcome: TerminalOutcome<'_>) {}
 }
 ```
 
-`new_state` is called once for one logical execution of the action. `commit` may be called multiple times as the transaction retries.
+The signature encodes the ownership model directly: the action is immutable
+(`&self`), the state is mutable and survives attempts (`&mut Self::State`),
+and the table is borrowed per attempt. Stateless actions use `State = ()`.
 
-The action and its state are paired before type erasure:
+`new_state` is deliberately infallible and table-independent. Anything
+table-dependent — most importantly the generated `snapshot_id` — is resolved
+*lazily inside the state* on the first attempt and kept stable afterwards.
+This keeps state construction and `Transaction::clone` trivially infallible
+while still guaranteeing stable identity (§5.1).
 
-```text
-Action A + A::State
-        │
-        ▼
-TransactionActionEntry<A>
-        │
-        ▼
-dyn DynTransactionActionEntry
-```
+`TransactionAction` and everything in this section is `pub(crate)`. External
+crates cannot define actions; the erasure machinery below is not public API.
 
-This preserves the `Action -> State` relationship statically and avoids independently erased action/state values that must be reconnected through runtime downcasts.
+## 3.2 `ActionEntry` and ownership
 
-## 4.2 Lazy state initialization and cloning
-
-State is initialized on the first commit attempt against the refreshed transaction-local table, rather than when the action is added to the transaction.
-
-This keeps `Transaction::clone` infallible and avoids sharing retry state between independent logical executions.
-
-A cloned transaction copies the action plan but not its execution state:
+The transaction stores one entry per applied action:
 
 ```rust
-pub(crate) trait DynTransactionActionEntry: Send {
-    async fn commit(&mut self, table: &Table) -> Result<ActionCommit>;
+struct ActionEntry<A: TransactionAction> {
+    action: Arc<A>,   // immutable intent, may be shared with cloned transactions
+    state: A::State,  // retry-persistent, owned exclusively by this transaction
+}
 
-    fn snapshot_id(&self) -> Option<i64>;
-
-    fn clone_without_state(&self) -> Box<dyn DynTransactionActionEntry>;
-
-    async fn cleanup(&mut self, outcome: TerminalOutcome<'_>) -> Result<()>;
+pub struct Transaction {
+    table: Table,                            // transaction-local base
+    actions: Vec<Box<dyn DynActionEntry>>,   // entries, in application order
 }
 ```
 
-Conceptually:
+Entries are heterogeneous, so they are type-erased behind one object-safe
+trait:
+
+```rust
+#[async_trait]
+trait DynActionEntry: Send + Sync {
+    async fn commit(&mut self, table: &Table) -> Result<ActionCommit>;
+    async fn finish(&mut self, outcome: TerminalOutcome<'_>);
+    fn fork(&self) -> Box<dyn DynActionEntry>;   // same action, fresh state
+}
+```
+
+Because the action and its state are paired *before* erasure, the
+`Action -> State` relationship is fixed by construction and no runtime
+downcast can be wrong. An equivalent implementation that erases the action
+and the state as separate objects and reconnects them with a checked downcast
+is also acceptable; the pairing invariant is what matters, not the mechanism.
+**The erasure mechanism is an internal, reversible implementation choice.**
+
+## 3.3 Clone semantics
+
+Retry state belongs to one logical execution. A cloned transaction is a new
+logical execution of the same action plan:
 
 ```text
 Transaction::clone()
-      │
-      ├── clone immutable actions
-      └── discard retry state
-              │
-              ▼
-       fresh execution identity
+      ├── shares immutable actions (Arc)
+      └── forks fresh state via new_state()
 ```
 
-The exact type-erasure and clone implementation is shown in Appendix A.
-
-## 4.3 Snapshot identity
-
-Snapshot-producing actions keep a small stable identity state:
-
-```rust
-pub(crate) struct SnapshotActionState {
-    snapshot_id: i64,
-    commit_uuid: Uuid,
-    producer_attempt: u32,
-}
-```
-
-### `snapshot_id`
-
-Identifies the logical snapshot being produced. It is generated once when the action state is initialized and remains stable across retries and rebases.
-
-### `commit_uuid`
-
-Namespaces metadata artifacts generated by this logical action. It is also stable across attempts so generated manifests may be reused.
-
-### `producer_attempt`
-
-Counts executions of this snapshot-producing action. It is **action-scoped**, not the transaction replay iteration.
-
-It is used to make artifact paths unique across attempts:
-
-```text
-manifest:       {commit_uuid}-{producer_attempt}-m{n}.avro
-manifest list:  snap-{snapshot_id}-{producer_attempt}-{commit_uuid}.avro
-```
-
-Reused artifacts retain their original paths; they are referenced, not rewritten.
+Two transactions therefore never observe each other's retry state, and a
+clone that commits produces its own snapshot identity. Since `new_state` is
+infallible, `Clone` needs no `Option<State>` or lazy-initialization plumbing.
 
 ---
 
-# 5. Retry State Model
+# 4. Retry Lifecycle
 
-## 5.1 MergeRetryState
-
-Merging actions compose snapshot identity, reusable caches, and artifact ownership:
-
-```rust
-pub(crate) struct MergeRetryState {
-    snapshot: SnapshotActionState,
-    source: SourceCache,
-    derived: DerivedCache,
-    artifacts: ArtifactTracker,
-}
-```
-
-The separation is intentional:
+`Transaction::commit` owns the retry loop (backoff configured from table
+properties, as today):
 
 ```text
-SourceCache      = reusable inputs
-DerivedCache     = reusable work
-ArtifactTracker  = cleanup ownership
-```
-
-## 5.2 SourceCache
-
-`SourceCache` contains immutable committed metadata already materialized by this action.
-
-Conceptually:
-
-```rust
-struct SourceCache {
-    processed_snapshots: ...,
-    manifests: ...,
-}
-```
-
-Two kinds of source caching are useful.
-
-### Snapshot history cache
-
-Validation repeatedly walks history from a starting snapshot to the current parent. Previously processed committed snapshots are immutable and may remain cached.
-
-```text
-attempt 1:
-S1 -> S2 -> S3
-
-retry:
-S1 -> S2 -> S3 -> S4 -> S5
-
-reuse S1/S2/S3
-process only S4/S5
-```
-
-The cache must detect inconsistent reuse of the same snapshot identity. The exact integrity guard is an implementation detail described in Appendix B.
-
-### Manifest source cache
-
-A parsed manifest may also be reused because committed manifest files are immutable.
-
-```text
-manifest path
-     │
-     ▼
-object-store read + decode
-     │
-     ▼
-SourceCache
-```
-
-Decoded manifest caching can consume significant memory and therefore must be bounded. The cache representation and eviction strategy are implementation details; the architecture only requires that reusable immutable source metadata can be retained safely.
-
-## 5.3 DerivedCache
-
-`DerivedCache` contains deterministic results computed from stable action intent and source metadata.
-
-Conceptually:
-
-```rust
-struct DerivedCache {
-    validation: ValidationCache,
-    filtering: ManifestFilterCache,
-    added_manifests: AddedManifestCache,
-}
-```
-
-Not every derived result creates a physical artifact.
-
-```text
-M1 -> Rewritten(M1')   reusable result + physical artifact
-M2 -> Unchanged        reusable result only
-```
-
-This is why derived work and artifact ownership are represented separately.
-
-### 5.3.1 Validation cache
-
-Conflict validation is naturally incremental over immutable history.
-
-Suppose attempt 1 validates:
-
-```text
-S1 PASS
-S2 PASS
-S3 PASS
-```
-
-After refresh, history becomes:
-
-```text
-S1 S2 S3 S4 S5
-```
-
-If the validation context is unchanged, attempt 2 may reuse validation of `S1` through `S3` and validate only `S4` and `S5`.
-
-The important correctness rule is:
-
-> **Every attempt must establish validation coverage through the refreshed parent. This does not require recomputing validation for immutable history that has already been validated under the same context.**
-
-Validation context includes operation-specific semantics such as the conflict filter and referenced files, and may also depend on schema or partition-spec binding. If that context changes, cached validation is invalidated.
-
-### 5.3.2 Manifest filter cache
-
-Manifest filtering is reusable at the granularity of an immutable source manifest.
-
-For example:
-
-```text
-M1 + remove A -> Rewritten(M1')
-M2 + remove A -> Unchanged
-```
-
-After a concurrent append introduces `M4`, a retry may do:
-
-```text
-M1 -> reuse M1'
-M2 -> reuse Unchanged
-M4 -> evaluate now
-```
-
-If a source manifest disappears from the refreshed base, its old cache entry does not require eager invalidation. The new attempt starts from the refreshed base's current manifest set, so the old result simply becomes unreachable.
-
-### 5.3.3 Added-manifest cache
-
-Added data/delete files are immutable action intent. A manifest generated from them may be reused across attempts when its content does not depend on refreshed attempt context.
-
-```text
-added files
-    │
-    ├── cached manifest exists -> reuse
-    │
-    └── otherwise -> write manifest and cache it
-```
-
-Whether this reuse is valid is table-format-dependent; Appendix C documents the inheritance assumptions used by current formats.
-
-## 5.4 ArtifactTracker
-
-`ArtifactTracker` records physical metadata created by the action:
-
-```rust
-struct ArtifactTracker {
-    written: HashSet<String>,
-}
-```
-
-It is independent from cache reuse.
-
-For example:
-
-```text
-M1'   reusable + owned
-M3    reusable + owned
-L1    attempt-only + owned
-```
-
-A successful metadata write is recorded after the write completes. Failed writes are not recorded.
-
-This gives cleanup one uniform ownership boundary without requiring cleanup logic to understand every cache's internal representation.
-
----
-
-# 6. Snapshot-Producing Execution
-
-`MergingSnapshotProducer` executes one action attempt against one refreshed transaction-local table. It borrows `MergeRetryState` but does not own retry-persistent state.
-
-Its logical pipeline is:
-
-```text
-refreshed table + action intent + RetryState
-                    │
-                    ▼
-            derive attempt context
-                    │
-                    ▼
-                validate
-                    │
-                    ▼
-          process current manifests
-                    │
-                    ▼
-          apply removals / additions
-                    │
-                    ▼
-          organize + summarize
-                    │
-                    ▼
-         SnapshotProducer::finalize
-                    │
-                    ▼
-               ActionCommit
-```
-
-## 6.1 Attempt context
-
-Each execution derives base-dependent values from the refreshed table, such as:
-
-- parent snapshot;
-- sequence number;
-- row-ID allocation.
-
-These values are attempt-local and must be rebuilt after a rebase.
-
-## 6.2 Validation phase
-
-Validation occurs before the attempt writes new snapshot metadata.
-
-```text
-starting snapshot
-      │
-      ▼
-discover required history through current parent
-      │
-      ├── SourceCache: reuse already materialized history
-      │
-      └── DerivedCache: reuse valid historical validation
-      │
-      ▼
-validate newly introduced history
-      │
-      ├── conflict -> fail
-      └── pass -> continue
-```
-
-A cache therefore reduces repeated work but never reduces required validation coverage.
-
-## 6.3 Manifest processing
-
-After validation passes, the producer processes the current base's manifests.
-
-For each current source manifest:
-
-```text
-source manifest
-      │
-      ├── filter cache hit -> reuse result
-      │
-      └── cache miss
-             │
-             ├── load/decode from SourceCache or storage
-             ├── evaluate removal logic
-             └── cache Unchanged or Rewritten(...)
-```
-
-Added manifests are handled similarly through the added-manifest cache.
-
-The complete resulting manifest set is still rebuilt for the refreshed base.
-
-## 6.4 Manifest organization
-
-Manifest grouping and merge decisions depend on the complete current manifest set. A rebase may add or replace source manifests, so organization is attempt-local in the initial design.
-
-Deterministic merge outputs may be cached later if their dependency set can be represented safely.
-
-## 6.5 Snapshot finalization
-
-`SnapshotProducer` remains a thin generic finalization layer.
-
-```rust
-struct ProducedSnapshot {
-    operation: Operation,
-    manifests: Vec<ManifestFile>,
-    summary: SnapshotSummary,
-}
-```
-
-It is responsible for:
-
-- writing the manifest list / snapshot metadata root;
-- building the `Snapshot`;
-- producing `TableUpdate`s;
-- producing `TableRequirement`s.
-
-It receives stable identity from the action state and current base-dependent values from the attempt. It does not understand rewrite, overwrite, row-delta, or replace-partitions semantics.
-
-## 6.6 Execution abstraction
-
-This RFC uses `MergingSnapshotProducer` as the common execution abstraction for merging actions:
-
-```text
-Action
-  ↓
-MergingSnapshotProducer
-  ↓
-SnapshotProducer::finalize
-```
-
-A `SnapshotChanges -> SnapshotCommitBuilder` representation is a viable alternative for normalizing mutations. The retry-state model is intentionally independent of this choice: `SnapshotActionState`, `SourceCache`, `DerivedCache`, and `ArtifactTracker` remain useful with either execution representation.
-
----
-
-# 7. Artifact Lifecycle
-
-Snapshot-producing actions create metadata before the final catalog commit. Those artifacts must survive retry safely and must eventually be cleaned up if they do not become reachable from committed metadata.
-
-```text
-metadata write succeeds
+attempt N:
+    refresh table from catalog; if stale, rebase transaction-local table
         │
         ▼
- ArtifactTracker records it
+    for each entry, in application order:
+        entry.commit(&mut state, &current_table)
+        apply ActionCommit to the transaction-local table
+        (action B always observes the local result of action A)
         │
-        ├──────── retry / rebase ────────┐
-        │                                │
-        │                                ▼
-        │                           keep for reuse
+        ▼
+    build TableCommit; catalog.update_table(...)
         │
-        ├──────── confirmed success
-        │              │
-        │              ▼
-        │       reachability cleanup
+        ├── success            → terminal: Committed
+        ├── retryable conflict → attempt N+1 (state retained, nothing deleted)
+        └── non-retryable or retries exhausted
+                               → terminal: Failed, or Ambiguous if the
+                                 catalog outcome is unknown
         │
-        ├──────── confirmed failure
-        │              │
-        │              ▼
-        │         delete all owned
-        │
-        └──────── unknown outcome
-                       │
-                       ▼
-                  delete nothing
+        ▼
+terminal: entry.finish(outcome) for every entry (§6)
 ```
 
-## 7.1 Ownership and tracking
+The transaction owns refresh and replay; individual actions never refresh the
+catalog themselves. Each retry calls `commit` with the **same** `&mut state`
+and a **refreshed** table. Inside the state, work is reused or recomputed
+according to the rule in §2.1.
 
-Automatic cleanup applies only to metadata owned by the snapshot-producing layer, such as:
+## 4.1 What the persistent state may contain
 
-- generated manifests;
-- rewritten manifests;
-- delete manifests;
-- manifest lists.
+Every retry-persistent field must fall into one of four categories:
 
-A caller-provided `DataFile` or `DeleteFile` is not automatically owned by the transaction merely because it is staged for addition.
+1. **Stable identity** — `snapshot_id`, `commit_uuid`, attempt counters.
+2. **Cache of immutable committed metadata** — already-read snapshots,
+   manifest lists, decoded manifests. Safe because committed metadata never
+   changes; entries are keyed by the metadata's own identity.
+3. **Derived deterministic work** — results computed from stable action
+   intent plus immutable inputs (a filtered manifest, a generated added
+   manifest), keyed by those inputs. A rebase that changes an input is a
+   cache miss, never stale reuse.
+4. **Artifact ownership** — the set of metadata files this state has written,
+   used only for terminal cleanup (§6).
 
-Every successfully completed action-owned metadata write is recorded in `ArtifactTracker`.
+A base-dependent value stored as a bare field is a bug by definition: it
+would silently survive a rebase. Base-dependent values are either locals of
+one attempt or cache entries guarded by a key that changes with the base
+(for example, cached current-snapshot manifests keyed by snapshot equality).
 
-## 7.2 Cleanup rules
-
-### Retryable catalog conflict
-
-Do not eagerly delete artifacts. Some may be reused by the next attempt, while attempt-local artifacts may simply remain tracked until the transaction reaches a terminal outcome.
-
-### Confirmed success
-
-Cleanup is based on reachability from committed metadata:
-
-```text
-all action-owned artifacts written
-        -
-artifacts reachable from committed transaction snapshots
-        =
-safe-to-delete artifacts
-```
-
-For a multi-action transaction, reachability must include all snapshots committed by the transaction, not only the final current snapshot.
-
-### Confirmed terminal failure
-
-If the transaction definitively did not commit and will not retry, all action-owned generated metadata may be deleted.
-
-### Unknown outcome
-
-If the catalog response is ambiguous, the generated metadata may already be live.
-
-> **Unknown outcome deletes nothing.**
-
-Stable `snapshot_id` provides a durable identity that may help later determine whether the snapshot landed, but richer automatic ambiguity resolution is future work.
-
-## 7.3 Transaction-level cleanup
-
-The transaction determines when a terminal outcome has been reached and drives cleanup across every action entry.
-
-This matters because an earlier action may have written artifacts successfully before a later action fails validation during replay.
-
-Process crashes or abandoned transactions may still leave orphan metadata; ordinary orphan-file cleanup tooling remains the final safety net.
+This classification is a design rule, not a struct layout. Earlier drafts
+named these categories as concrete types (`SourceCache`, `DerivedCache`,
+`ArtifactTracker`); this RFC intentionally does not, because the right
+representations — including whether some caching moves into lower-level types
+such as `Snapshot` — are reversible implementation decisions.
 
 ---
 
-# 8. Correctness Rules
+# 5. Snapshot Producers
 
-The design is governed by a small set of rules:
+Snapshot-producing actions share two concrete, persistent producer types used
+as their `State`. Neither is a trait hierarchy; Java's
+`SnapshotProducer <- MergingSnapshotProducer <- operation` inheritance chain
+is replaced by two sibling structs plus shared pieces by composition:
+
+```text
+SimpleSnapshotProducer          MergingSnapshotProducer
+  (append-shaped ops)             (ops that also remove files)
+        │                                │
+        ├── embeds CommitIdentity ───────┤   shared stateful core (§5.1)
+        └── calls snapshot helpers ──────┘   shared stateless utilities (§5.2)
+```
+
+Each producer exposes an `apply(&mut self, table, …) -> Result<ActionCommit>`
+that executes one attempt, and a terminal cleanup hook driven through
+`TransactionAction::finish`. The existing attempt-scoped `SnapshotProducer`
+and its `SnapshotProduceOperation`/`ManifestProcess` hook traits are removed:
+those hooks existed to let Java-style subclasses inject behavior into a base
+class pipeline, and with concrete producers whose `apply` owns the pipeline
+and takes operation-specific inputs as arguments, they have no remaining job.
+
+## 5.1 `CommitIdentity` — shared identity and artifact ownership
+
+Both producers embed one small shared component that owns identity, path
+allocation, and artifact ownership:
+
+```rust
+struct CommitIdentity {
+    commit_uuid: Option<Uuid>,   // resolved once, first attempt; then stable
+    snapshot_id: Option<i64>,    // resolved once, against the first table seen
+    attempt: u64,                // makes each attempt's manifest list unique
+    manifest_counter: u64,       // monotonic: generated paths are write-once
+    owned_artifacts: HashSet<String>,   // every metadata file this state wrote
+}
+```
+
+Its guarantees:
+
+- **Stable identity.** `snapshot_id` and `commit_uuid` identify one logical
+  snapshot-producing execution and never change across retries or rebases.
+- **Write-once paths.** Generated metadata paths embed `commit_uuid` and a
+  monotonic counter (manifests) or attempt number (manifest lists), so no
+  path is ever written twice. A retry can never overwrite metadata that an
+  earlier, ambiguously-completed attempt may have made live. Reused artifacts
+  keep their original paths; they are referenced, not rewritten.
+- **Complete ownership.** Every successful producer-owned metadata write is
+  recorded before it can need cleanup; failed writes are not recorded.
+  Caller-provided data files are never owned by the producer.
+
+## 5.2 Stateless snapshot helpers
+
+Generic snapshot production that both producers need — snapshot-ID
+generation, summary construction, manifest-list writing, snapshot/
+`TableUpdate`/`TableRequirement` assembly — lives in stateless free
+functions that translate explicit inputs into metadata. They hold no mutable
+state and understand no operation semantics. This replaces the generic
+`SnapshotProducer` finalization layer with plain functions, and gives a
+simple boundary rule: **logic that touches persistent fields is a method on
+the owning producer; pure functions of explicit inputs are free helpers.**
+Format-version specifics concentrate here and in the manifest writers, which
+keeps the architecture above this line stable across format evolution.
+
+## 5.3 `SimpleSnapshotProducer`
+
+The persistent state for append-shaped operations (`FastAppend`). Besides
+`CommitIdentity`, it retains across retries:
+
+- **Current-snapshot manifest cache** — the manifest list of the base
+  snapshot, keyed by snapshot equality. A rebase to a new base is a cache
+  miss and reloads; a retry on the same base reuses.
+- **Added-manifest cache** — the manifest generated from the action's added
+  data files. Reusable across attempts because its content does not depend
+  on the base under current formats (Appendix A).
+
+An attempt validates the added files against the refreshed table, assembles
+the complete manifest set (recomputed), and writes a new manifest list at an
+attempt-unique path.
+
+## 5.4 `MergingSnapshotProducer`
+
+The persistent state for operations that remove and/or add files (rewrite,
+overwrite, delete-files, row-delta, replace-partitions). Its internals are
+sketched here as black boxes: the RFC fixes what each component does and how
+it behaves across retries, not its representation.
+
+- **Current-snapshot manifest cache** — as in §5.3.
+- **Added-manifest caches** (data and delete) — manifests generated from the
+  action's added files, grouped as needed (for example by partition spec),
+  reused across attempts.
+- **Manifest filter managers** (data and delete) — apply the operation's
+  removals to the base's manifests. For each source manifest they produce
+  either *unchanged* or *rewritten-without-the-removed-entries*, and detect
+  files that were requested for removal but are no longer live. Results are
+  reusable per source manifest: a source manifest is immutable, so its
+  filter result remains valid as long as the removal intent is unchanged; a
+  rebase only evaluates manifests it has not seen. Rewritten manifests
+  preserve the source manifest's partition spec. Missing-file handling
+  (fail vs ignore) is operation policy supplied by the action.
+- **Validation history cache** — records which committed snapshots this
+  execution has already processed for conflict validation, so a retry
+  validates only newly introduced history. Caching reduces repeated work but
+  never reduces coverage: every attempt must establish validation coverage
+  through the refreshed parent. The conflict predicates themselves are out
+  of scope for this RFC.
+
+One attempt runs a fixed pipeline owned by `apply`:
+
+```text
+refreshed table + operation inputs
+        │
+        ▼
+resolve identity (first attempt only)
+        │
+        ▼
+validate against refreshed base          (reuse processed history)
+        │
+        ▼
+filter current manifests for removals    (reuse per-manifest results)
+add generated manifests for additions    (reuse added manifests)
+        │
+        ▼
+recompute: parent, sequence number, complete manifest set,
+           summary (reflecting adds AND removes)
+        │
+        ▼
+write manifest list at attempt-unique path; record artifacts
+        │
+        ▼
+ActionCommit
+```
+
+Everything above the last two steps may hit caches; the last two steps are
+always recomputed for the current base.
+
+---
+
+# 6. Terminal Outcomes and Artifact Lifecycle
+
+Producers write metadata before the catalog commit succeeds, so generated
+artifacts must survive retries and be cleaned up if they never become
+reachable. The transaction classifies the end of the retry loop into exactly
+one terminal outcome and reports it to every entry once:
+
+```rust
+pub(crate) enum TerminalOutcome<'a> {
+    /// The transaction committed. `table` reflects committed metadata.
+    Committed(&'a Table),
+    /// The transaction definitively did not commit and will not retry.
+    Failed(&'a Table),
+    /// The catalog outcome is unknown; committed metadata may exist.
+    Ambiguous,
+}
+```
+
+Cleanup semantics:
+
+| Outcome | Behavior |
+| --- | --- |
+| Retryable conflict (not terminal) | delete nothing; work may be reused |
+| `Committed` | keep artifacts reachable from this execution's committed snapshot(s); delete the rest (e.g. stale attempt manifest lists) |
+| `Failed` | delete all owned artifacts |
+| `Ambiguous` | **delete nothing** |
+
+Classifying errors into outcomes happens in one place, in the transaction —
+not in producers pattern-matching on error kinds. For a multi-action
+transaction, an earlier action may have written artifacts before a later
+action failed; running `finish` on every entry with the same outcome covers
+this. Reachability must consider all snapshots the transaction committed,
+not only the final current snapshot.
+
+Process crashes and abandoned transactions can still leave orphans; ordinary
+orphan-file cleanup remains the final safety net. Richer resolution of
+ambiguous outcomes (e.g. discovering after refresh that our stable
+`snapshot_id` did land) is future work; the write-once path rule (§5.1)
+already guarantees retries cannot corrupt an ambiguously committed attempt.
+
+---
+
+# 7. Correctness Rules
 
 | Area | Rule |
 | --- | --- |
-| Action state | action intent does not change across attempts |
-| Identity | `snapshot_id` and `commit_uuid` remain stable for one logical action execution |
-| Reuse | cached work is reused only while all semantic dependencies remain unchanged |
+| Intent | action intent never changes across attempts |
+| Identity | `snapshot_id` / `commit_uuid` are stable for one logical execution; clones get fresh identity |
+| State isolation | retry state is never shared between transactions |
+| Reuse | cached work is reused only while all of its semantic inputs are unchanged |
+| Fields | every persistent field is identity, immutable-source cache, keyed derived work, or artifact ownership (§4.1) |
 | Validation | every attempt establishes coverage through the refreshed parent |
-| New history | newly introduced history is validated before new snapshot metadata is written |
-| Base-derived state | parent, sequence, row IDs, complete manifest set, manifest list, and `TableCommit` are rebuilt for a new base |
-| Ordering | actions replay in their original transaction order |
-| Artifact ownership | every successful action-owned metadata write is tracked |
-| Artifact paths | generated paths are write-once across action attempts |
-| Cleanup | confirmed success uses reachability; confirmed failure deletes owned artifacts; unknown outcome deletes nothing |
-
-Three rules are especially important.
-
-## 8.1 Reuse is dependency-based
-
-The system does not classify all retry state as either globally persistent or globally invalidated. Reuse is decided at the granularity of the semantic dependency that produced a result.
-
-## 8.2 Validation coverage is complete but incremental
-
-Cached validation may avoid recomputation, but the refreshed parent must always be covered. A retry that moves from `S3` to `S5` cannot stop at the cached result through `S3`.
-
-## 8.3 Attempt-local output never crosses a new base
-
-Anything representing the complete result against one base — such as the manifest list or `TableCommit` — must be rebuilt after rebasing to another base.
+| Base-derived output | parent, sequence numbers, complete manifest set, manifest list, `ActionCommit`, `TableCommit` are recomputed per attempt |
+| Ordering | actions replay in application order; later actions observe earlier actions' local results |
+| Artifacts | every successful owned metadata write is recorded; generated paths are write-once |
+| Cleanup | `Committed` = reachability; `Failed` = delete owned; `Ambiguous` = delete nothing |
 
 ---
 
-# 9. Design Decisions and Alternatives
+# 8. Design Decisions and Alternatives
 
-## 9.1 Explicit RetryState versus a long-lived producer
+**Persistent producer as state vs a passive retry-state struct borrowed by an
+attempt-scoped producer.** An earlier draft kept the producer attempt-scoped
+and had it borrow a long-lived `RetryState`. Field-for-field, that state
+converges on exactly what a persistent producer holds, while adding a borrow
+split and a second struct. The persistent producer expresses the same
+boundary more simply: struct fields are retry-persistent, locals of `apply`
+are attempt-local. The residual risk — accidentally persisting a
+base-dependent value — is handled by the field classification rule (§4.1)
+rather than by structure.
 
-Java naturally retains retry state because one long-lived producer object survives repeated `apply()` calls and owns stateful manifest managers.
+**Generic `State` vs a producer-typed association.** `TransactionAction`
+could have tied its state to a snapshot-producer trait. But many actions are
+stateless or not snapshot-producing, and no transaction-level code needs to
+know a state is a producer — replay calls `commit`, cleanup calls `finish`,
+both on the action. The producers are simply the shared `State` types that
+snapshot-producing actions choose.
 
-This RFC separates the lifetimes explicitly:
+**Erasing action and state together vs separately.** Pairing them in a typed
+entry before erasure makes a mismatched pair unrepresentable and avoids
+downcasts; erasing them separately with a checked downcast also works and
+keeps two independent trait objects. Both preserve the required invariant;
+the choice is internal and reversible (§3.2).
 
-```text
-ActionEntry owns RetryState
-        │
-        ▼
-each attempt creates a new MergingSnapshotProducer
-        │
-        └── borrows RetryState
-```
+**Sibling producers + composition vs inheritance.** Java reuses snapshot
+production through a class hierarchy. Rust gets the same reuse from two
+concrete siblings sharing `CommitIdentity` (stateful, by composition) and the
+stateless helpers — without base classes, hook traits, or the lock that an
+internally-shared producer would need. `MergingSnapshotProducer` deliberately
+does not contain `SimpleSnapshotProducer`.
 
-This fits Rust ownership naturally while preserving the same ability to reuse work across retries.
-
-## 9.2 Typed ActionEntry versus independently erased action/state
-
-The action and state are type-erased together as `TransactionActionEntry<A>` rather than separately erasing `Action` and `State` and reconnecting them with runtime downcasts.
-
-This keeps the `Action -> State` relationship compile-time checked.
-
-## 9.3 MergingSnapshotProducer versus SnapshotChanges
-
-`SnapshotChanges` can normalize actions into a generic mutation representation and is a reasonable execution alternative.
-
-This RFC chooses `MergingSnapshotProducer` because rewrite, overwrite, delete, row-delta, and replace-partitions share a natural execution pipeline: validate, process current manifests, remove/add files, organize, summarize, finalize.
-
-The retry-state architecture is independent of this choice.
-
-## 9.4 Dependency-based reuse versus recompute-all
-
-Recomputing everything after every catalog conflict is simpler, but repeatedly loads immutable metadata, re-runs the same validation/filtering, and rewrites identical manifests.
-
-Because committed metadata and action intent are immutable, deterministic sub-results can be retained safely when their dependencies remain unchanged.
+**Eager infallible state vs lazy fallible state.** Creating state when the
+action is applied — with table-dependent identity resolved lazily inside it —
+removes the `Option<State>` and initialization branch that a lazy, fallible
+`new_state(&Table)` would force, while providing the same identity stability.
 
 ---
 
-# 10. Implementation Plan
+# 9. Deferred Work
 
-## Phase 1 — Stateful Transaction Actions
+Deliberately not fixed by this RFC, because they are reversible or separable:
 
-Introduce the state lifecycle:
-
-- `TransactionAction::State` and `new_state`;
-- typed `TransactionActionEntry<A>`;
-- lazy state initialization;
-- `clone_without_state()` for transaction cloning;
-- stable `SnapshotActionState`;
-- `MergeRetryState` skeleton;
-- `SourceCache`, `DerivedCache`, and `ArtifactTracker` skeletons.
-
-Migrate existing transaction actions to the new interface and preserve current replay ordering.
-
-**Success criterion:** action state survives retries but is not shared by independent cloned transactions.
-
-## Phase 2 — Correct Retry-Aware Snapshot Execution
-
-Implement the correctness-complete snapshot-producing path:
-
-- attempt-scoped `MergingSnapshotProducer`;
-- attempt context;
-- baseline conflict validation;
-- baseline manifest filtering and additions;
-- snapshot finalization;
-- unique attempt-qualified artifact paths;
-- `ArtifactTracker` wiring for every metadata write;
-- transaction-driven terminal cleanup.
-
-At this stage, most work may still be recomputed on every retry.
-
-**Success criterion:** retry/rebase, validation, snapshot generation, artifact ownership, and cleanup are correct without relying on cache optimization.
-
-## Phase 3 — Incremental Retry Caching
-
-Enable reuse through `SourceCache` and `DerivedCache`:
-
-- incremental snapshot-history processing;
-- bounded source-manifest caching;
-- incremental validation reuse;
-- manifest-filter result caching;
-- added data/delete manifest reuse.
-
-**Success criterion:** a non-conflicting rebase processes only newly introduced history/manifests while producing the same result as recompute-all execution.
-
-## Phase 4 — RewriteFiles End to End
-
-Implement `RewriteFilesAction` as the first full consumer of the architecture.
-
-RewriteFiles exercises:
-
-- explicit additions/removals;
-- file-existence and concurrent-delete validation;
-- manifest filtering;
-- generated-manifest reuse;
-- retry/rebase;
-- cleanup.
-
-**Success criterion:** RewriteFiles requires no transaction-specific retry special cases outside the abstractions introduced in Phases 1–3.
-
-## Phase 5 — Remaining Merging Actions
-
-Add:
-
-- DeleteFiles;
-- OverwriteFiles;
-- RowDelta;
-- ReplacePartitions.
-
-Each action should primarily define immutable intent, validation policy, and operation-specific removal/addition semantics.
-
-**Success criterion:** new actions do not require redesigning transaction replay, retry-state ownership, cache layers, or artifact tracking.
+- concrete cache representations, keys, bounds, and eviction (including
+  whether snapshot→manifest caching moves into `Snapshot` or other
+  lower-level types, as in Java);
+- conflict-validation predicates and isolation levels (companion document);
+- manifest merge/organization and its cacheability;
+- filter-manager internals, including per-spec bookkeeping;
+- ambiguous-outcome resolution beyond "delete nothing";
+- whole-attempt caching (`TableCommit` reuse on an unchanged base);
+- REST idempotency integration and cross-process retry state.
 
 ---
 
-# 11. Future Work
+# 10. Suggested Sequencing
 
-The following optimizations and extensions are intentionally outside the initial implementation:
-
-- same-base whole-attempt caching (`ProducedSnapshot` / `TableCommit` reuse);
-- caching deterministic manifest-merge outputs;
-- more aggressive predicate-evaluation caching;
-- cache eviction policy refinement and instrumentation;
-- advanced ambiguous-commit resolution and REST `Idempotency-Key` integration;
-- parallel action replay where dependencies permit;
-- cross-process retry state;
-- table-format-specific cache implementations.
-
----
-
-# 12. Summary
-
-The proposal adds an explicit retry-state lifecycle to transaction actions.
-
-```text
-Transaction
-    owns refresh / replay / ordering / terminal outcome
-
-ActionEntry
-    owns immutable action intent + RetryState
-
-MergeRetryState
-    ├── SnapshotActionState  stable identity
-    ├── SourceCache          reusable immutable inputs
-    ├── DerivedCache         reusable deterministic work
-    └── ArtifactTracker      physical metadata ownership
-
-MergingSnapshotProducer
-    executes one attempt
-
-SnapshotProducer
-    finalizes generic snapshot metadata
-```
-
-The central rule is:
-
-> **Completed work survives retry or rebase exactly when the semantic dependencies that produced it remain unchanged.**
-
-A rebase therefore does not mean starting over. It means re-validating and rebuilding what depends on the new base while retaining safe, immutable work from previous attempts.
+1. `TransactionAction::State`, `ActionEntry`, fork-on-clone; migrate existing
+   actions with `State = ()`.
+2. Stateless snapshot helpers and `CommitIdentity`.
+3. `SimpleSnapshotProducer`; migrate `FastAppend`; remove the old
+   `SnapshotProducer`/`SnapshotProduceOperation`/`ManifestProcess`.
+4. `TerminalOutcome`, `finish`, artifact cleanup.
+5. `MergingSnapshotProducer` core (added manifests, current-snapshot cache).
+6. Manifest filter managers; validation history cache.
+7. First merging action end-to-end (e.g. `RowDelta` or `RewriteFiles`), then
+   the remaining merging actions.
 
 ---
 
-# Appendix A — Type-Erased Entry and Clone Semantics
+# Appendix A — Format-Specific Manifest Reuse
 
-The detailed entry shape is conceptually:
-
-```rust
-struct TransactionActionEntry<A: TransactionAction> {
-    action: Arc<A>,
-    state: Option<A::State>,
-}
-
-#[async_trait]
-pub(crate) trait DynTransactionActionEntry: Send {
-    async fn commit(&mut self, table: &Table) -> Result<ActionCommit>;
-
-    fn snapshot_id(&self) -> Option<i64>;
-
-    fn clone_without_state(&self) -> Box<dyn DynTransactionActionEntry>;
-
-    async fn cleanup(&mut self, outcome: TerminalOutcome<'_>) -> Result<()>;
-}
-```
-
-`clone_without_state()` clones immutable action configuration but deliberately leaves retry state uninitialized:
-
-```rust
-fn clone_without_state(&self) -> Box<dyn DynTransactionActionEntry> {
-    Box::new(TransactionActionEntry::<A> {
-        action: Arc::clone(&self.action),
-        state: None,
-    })
-}
-```
-
-`Transaction::clone()` uses this method for every entry. The cloned transaction is therefore a fresh logical execution of the same action plan and receives fresh snapshot identity on its first commit attempt.
-
-State initialization remains lazy because `new_state` is fallible and table-dependent, while `Clone` must remain infallible.
-
----
-
-# Appendix B — Source Cache Integrity and Memory
-
-Committed snapshot metadata and manifests are immutable, which makes them safe retry-cache inputs. An implementation should still guard against accidentally reusing inconsistent metadata under the same logical key.
-
-For processed snapshot history, one possible integrity guard is a compact snapshot fingerprint such as:
-
-```rust
-struct SnapshotFingerprint {
-    parent_snapshot_id: Option<i64>,
-    sequence_number: i64,
-    manifest_list: String,
-}
-```
-
-A mismatch should fail rather than silently reuse stale cached contents.
-
-Decoded manifests can be large. A manifest source cache must therefore have an explicit bound, whether by entry count, estimated memory, or another suitable policy. The exact policy is not part of the core architecture.
-
----
-
-# Appendix C — Format-Specific Manifest Reuse
-
-Added-manifest reuse is valid only while manifest content does not embed attempt-specific values that change on rebase.
-
-For current Iceberg formats, several values are inheritance-based rather than fixed directly in the reusable manifest. For example, depending on format version, snapshot ID, data sequence number, and first-row-id may be resolved through manifest-list metadata.
-
-A future format that embeds refreshed attempt-specific values directly into manifests would change the dependency set and may disable this reuse. This is a table-format implementation seam, not a reason to change retry-state ownership.
-
----
-
-# Appendix D — Detailed Retry Example
-
-Assume:
-
-```text
-S10
-├── M1 = [A, B]
-└── M2 = [C]
-
-RewriteFiles:
-  remove A
-  add D
-```
-
-On first execution, action state initializes once:
-
-```text
-snapshot_id      = Snew
-commit_uuid      = U
-producer_attempt = 1
-```
-
-The producer validates the required history, reads `M1` and `M2`, rewrites `M1` as `M1'`, records `M2` as unchanged, and writes an added-file manifest `M3` for `D`.
-
-Retry state becomes approximately:
-
-```text
-SourceCache:
-  history through S10
-  M1
-  M2
-
-DerivedCache:
-  validation through S10
-  M1 -> Rewritten(M1')
-  M2 -> Unchanged
-  added D -> M3
-
-ArtifactTracker:
-  M1'
-  M3
-  L1
-```
-
-The catalog rejects the commit because a concurrent writer appended `M4` and advanced the table to `S11`.
-
-On the second execution:
-
-```text
-snapshot_id      = Snew   unchanged
-commit_uuid      = U      unchanged
-producer_attempt = 2
-```
-
-The producer reuses cached history through `S10`, processes only newly introduced history for `S11`, and extends validation through the refreshed parent.
-
-Current manifests are now `M1`, `M2`, and `M4`:
-
-```text
-M1 -> reuse Rewritten(M1')
-M2 -> reuse Unchanged
-M4 -> evaluate now
-```
-
-The added manifest `M3` is reused. The complete result is rebuilt for `S11`, and the producer writes a new manifest list `L2`.
-
-If the catalog commit succeeds, reachability cleanup keeps the artifacts referenced by the committed snapshot and deletes stale attempt-only artifacts:
-
-```text
-keep:
-  M1'
-  M3
-  L2
-
-delete:
-  L1
-```
-
-If instead validation fails before new metadata is written, the transaction reaches confirmed failure and cleans all action-owned artifacts. If catalog outcome is ambiguous, cleanup does not run.
+Added-manifest reuse across attempts is valid only while manifest content
+does not embed attempt-specific values that change on rebase. In current
+formats this holds because snapshot ID, data sequence number, and
+first-row-id are (depending on format version) inherited through
+manifest-list metadata rather than fixed in the manifest file. A future
+format that embeds base-dependent values directly into manifests would
+shrink this reuse to nothing — which would change what the added-manifest
+cache may return, but not the ownership or lifecycle architecture. This is a
+table-format seam inside the producers and helpers, not a reason to change
+the transaction model.
