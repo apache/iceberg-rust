@@ -1292,6 +1292,8 @@ pub fn iceberg::scan::FileScanTask::project_field_ids(&self) -> &[i32]
 pub fn iceberg::scan::FileScanTask::record_count(&self) -> core::option::Option<u64>
 pub fn iceberg::scan::FileScanTask::schema(&self) -> &iceberg::spec::Schema
 pub fn iceberg::scan::FileScanTask::schema_ref(&self) -> iceberg::spec::SchemaRef
+pub fn iceberg::scan::FileScanTask::sort_order(&self) -> core::option::Option<&iceberg::spec::SortOrderRef>
+pub fn iceberg::scan::FileScanTask::sort_order_id(&self) -> core::option::Option<i32>
 pub fn iceberg::scan::FileScanTask::start(&self) -> u64
 pub fn iceberg::scan::FileScanTask::unified_partition_type(&self) -> core::option::Option<&alloc::sync::Arc<iceberg::spec::StructType>>
 impl core::clone::Clone for iceberg::scan::FileScanTask
@@ -1304,7 +1306,7 @@ impl core::fmt::Debug for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTask
 impl iceberg::scan::FileScanTask
-pub fn iceberg::scan::FileScanTask::builder() -> FileScanTaskBuilder<((), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), ())>
+pub fn iceberg::scan::FileScanTask::builder() -> FileScanTaskBuilder<((), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTask
