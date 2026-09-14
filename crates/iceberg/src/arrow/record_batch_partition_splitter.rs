@@ -179,10 +179,10 @@ impl RecordBatchPartitionSplitter {
         // Group the batch by row value.
         let mut group_ids = HashMap::new();
         partition_structs
-            .iter()
+            .into_iter()
             .enumerate()
             .for_each(|(row_id, row)| {
-                group_ids.entry(row.clone()).or_insert(vec![]).push(row_id);
+                group_ids.entry(row).or_insert(vec![]).push(row_id);
             });
 
         // Partition the batch with same partition partition_values

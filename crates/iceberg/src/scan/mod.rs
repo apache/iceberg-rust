@@ -660,12 +660,13 @@ pub mod tests {
         RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_DELETE_FILE_PATH,
         RESERVED_FIELD_ID_DELETE_FILE_POS, RESERVED_FIELD_ID_POS,
     };
-    use crate::scan::FileScanTask;
+    use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, FormatVersion, Literal,
         MAIN_BRANCH, ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
-        NestedField, Operation, PartitionSpec, PrimitiveType, Schema, Snapshot, Struct, StructType,
-        Summary, TableMetadata, TableMetadataBuilder, TableProperties, Type, UnboundPartitionSpec,
+        MappedField, NameMapping, NestedField, Operation, PartitionSpec, PrimitiveType, Schema,
+        Snapshot, Struct, StructType, Summary, TableMetadata, TableMetadataBuilder,
+        TableProperties, Transform, Type, UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -2629,33 +2630,64 @@ pub mod tests {
         assert_eq!(string_arr.value(0), "Apache");
     }
 
-    #[test]
-    fn test_file_scan_task_serialize_deserialize() {
-        let test_fn = |task: FileScanTask| {
-            let serialized = serde_json::to_string(&task).unwrap();
-            let deserialized: FileScanTask = serde_json::from_str(&serialized).unwrap();
-
-            assert_eq!(task, deserialized);
-        };
-
-        // without predicate
-        let schema = Arc::new(
+    fn file_scan_task_test_schema(primitive_type: PrimitiveType) -> Arc<Schema> {
+        Arc::new(
             Schema::builder()
                 .with_fields(vec![Arc::new(NestedField::required(
                     1,
                     "x",
-                    Type::Primitive(PrimitiveType::Binary),
+                    Type::Primitive(primitive_type),
                 ))])
                 .build()
                 .unwrap(),
+        )
+    }
+
+    fn assert_file_scan_task_serde_round_trip(task: FileScanTask) {
+        // Regression test for https://github.com/apache/iceberg-rust/issues/3089.
+        let serialized = serde_json::to_string(&task).unwrap();
+        let deserialized: FileScanTask = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(task, deserialized);
+    }
+
+    fn file_scan_task_with_partition(
+        primitive_type: PrimitiveType,
+        transform: Transform,
+        partition_value: Literal,
+    ) -> FileScanTask {
+        let schema = file_scan_task_test_schema(primitive_type);
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_partition_field("x", "x_partition", transform)
+                .unwrap()
+                .build()
+                .unwrap(),
         );
+        FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(123)
+            .with_start(10)
+            .with_length(100)
+            .with_project_field_ids(vec![1])
+            .with_schema(schema)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_partition(Some(Struct::from_iter([Some(partition_value)])))
+            .with_partition_spec(Some(partition_spec))
+            .with_case_sensitive(true)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_without_predicate() {
         let task = FileScanTask::builder()
             .with_data_file_path("data_file_path".to_string())
             .with_file_size_in_bytes(0)
             .with_start(0)
             .with_length(100)
             .with_project_field_ids(vec![1, 2, 3])
-            .with_schema(schema.clone())
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
             .with_record_count(Some(100))
             .with_first_row_id(Some(1000))
             .with_data_sequence_number(Some(5))
@@ -2663,9 +2695,11 @@ pub mod tests {
             .with_case_sensitive(false)
             .build()
             .unwrap();
-        test_fn(task);
+        assert_file_scan_task_serde_round_trip(task);
+    }
 
-        // with predicate
+    #[test]
+    fn test_file_scan_task_serde_with_predicate() {
         let task = FileScanTask::builder()
             .with_data_file_path("data_file_path".to_string())
             .with_file_size_in_bytes(0)
@@ -2673,12 +2707,154 @@ pub mod tests {
             .with_length(100)
             .with_project_field_ids(vec![1, 2, 3])
             .with_predicate(Some(BoundPredicate::AlwaysTrue))
-            .with_schema(schema)
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
             .with_data_file_format(DataFileFormat::Avro)
             .with_case_sensitive(false)
             .build()
             .unwrap();
-        test_fn(task);
+
+        let serialized = serde_json::to_value(&task).unwrap();
+        assert!(serialized.get("record_count").is_none());
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_unpartitioned_file_scan_task_serde() {
+        let task = FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(0)
+            .with_start(0)
+            .with_length(100)
+            .with_project_field_ids(vec![1, 2, 3])
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_partition(Some(Struct::empty()))
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_all_optional_fields() {
+        let schema = file_scan_task_test_schema(PrimitiveType::Long);
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_partition_field("x", "x", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+        let unified_partition_type = Arc::new(partition_spec.partition_type(&schema).unwrap());
+        let task = FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(123)
+            .with_start(10)
+            .with_length(100)
+            .with_project_field_ids(vec![1])
+            .with_schema(schema)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_path("delete_file_path".to_string())
+                    .with_file_size_in_bytes(23)
+                    .with_file_type(DataContentType::EqualityDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
+                    .with_partition_spec_id(0)
+                    .with_equality_ids(Some(vec![1]))
+                    .with_referenced_data_file(Some("data_file_path".to_string()))
+                    .with_content_offset(Some(12))
+                    .with_content_size_in_bytes(Some(34))
+                    .with_record_count(Some(5))
+                    .with_key_metadata(Some(vec![4, 5, 6].into_boxed_slice()))
+                    .build(),
+            ])
+            .with_partition(Some(Struct::from_iter([Some(Literal::long(42))])))
+            .with_partition_spec(Some(partition_spec))
+            .with_name_mapping(Some(Arc::new(NameMapping::new(vec![MappedField::new(
+                Some(1),
+                vec!["x".to_string()],
+                vec![],
+            )]))))
+            .with_unified_partition_type(Some(unified_partition_type))
+            .with_case_sensitive(true)
+            .with_key_metadata(Some(vec![1, 2, 3].into_boxed_slice()))
+            .build()
+            .unwrap();
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_date_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Date,
+            Transform::Identity,
+            Literal::date(19_000),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_timestamp_ns_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::TimestampNs,
+            Transform::Identity,
+            Literal::timestamp_nano(1_510_871_468_123_456_789),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_timestamptz_ns_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::TimestamptzNs,
+            Transform::Identity,
+            Literal::timestamptz_nano(1_510_871_468_123_456_789),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_decimal_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Decimal {
+                precision: 9,
+                scale: 2,
+            },
+            Transform::Identity,
+            Literal::decimal(12_345),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_uuid_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Uuid,
+            Transform::Identity,
+            Literal::uuid(Uuid::from_u128(0x12345678_90ab_cdef_1234_567890abcdef)),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_fixed_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Fixed(4),
+            Transform::Identity,
+            Literal::fixed([1, 2, 3, 4]),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_bucket_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::String,
+            Transform::Bucket(4),
+            Literal::int(2),
+        );
+        assert_file_scan_task_serde_round_trip(task);
     }
 
     #[tokio::test]

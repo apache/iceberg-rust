@@ -360,7 +360,7 @@ impl MinMaxColAggregator {
     }
 
     /// Update statistics
-    fn update(&mut self, field_id: i32, value: Statistics) -> Result<()> {
+    fn update(&mut self, field_id: i32, value: &Statistics) -> Result<()> {
         let Some(ty) = self
             .schema
             .field_by_id(field_id)
@@ -378,7 +378,7 @@ impl MinMaxColAggregator {
         };
 
         if value.min_is_exact() {
-            let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, &value)? else {
+            let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("Statistics {value} is not match with field type {ty}."),
@@ -389,7 +389,7 @@ impl MinMaxColAggregator {
         }
 
         if value.max_is_exact() {
-            let Some(max_datum) = get_parquet_stat_max_as_datum(&ty, &value)? else {
+            let Some(max_datum) = get_parquet_stat_max_as_datum(&ty, value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("Statistics {value} is not match with field type {ty}."),
@@ -488,7 +488,7 @@ impl ParquetWriter {
                             *per_col_null_val_num.entry(field_id).or_insert(0) += null_count;
                         }
 
-                        min_max_agg.update(field_id, statistics.clone())?;
+                        min_max_agg.update(field_id, statistics)?;
                     }
                 }
             }
@@ -2523,16 +2523,16 @@ mod tests {
         let create_statistics =
             |min, max| Statistics::Int32(ValueStatistics::new(min, max, None, None, false));
         min_max_agg
-            .update(0, create_statistics(None, Some(42)))
+            .update(0, &create_statistics(None, Some(42)))
             .unwrap();
         min_max_agg
-            .update(0, create_statistics(Some(0), Some(i32::MAX)))
+            .update(0, &create_statistics(Some(0), Some(i32::MAX)))
             .unwrap();
         min_max_agg
-            .update(0, create_statistics(Some(i32::MIN), None))
+            .update(0, &create_statistics(Some(i32::MIN), None))
             .unwrap();
         min_max_agg
-            .update(0, create_statistics(None, None))
+            .update(0, &create_statistics(None, None))
             .unwrap();
 
         let (lower_bounds, upper_bounds) = min_max_agg.produce();

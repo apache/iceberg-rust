@@ -45,6 +45,17 @@ fn check_json_serde(json: &str, expected_literal: Literal, expected_type: &Type)
     assert_eq!(parsed_json_value, raw_json_value);
 }
 
+fn check_raw_literal_json_serde(expected_literal: Literal, expected_type: &Type) {
+    let raw_literal = RawLiteral::try_from(expected_literal.clone(), expected_type).unwrap();
+    let serialized = serde_json::to_string(&raw_literal).unwrap();
+    let deserialized: RawLiteral = serde_json::from_str(&serialized).unwrap();
+
+    assert_eq!(
+        deserialized.try_into(expected_type).unwrap(),
+        Some(expected_literal)
+    );
+}
+
 fn check_avro_bytes_serde(input: Vec<u8>, expected_datum: Datum, expected_type: &PrimitiveType) {
     let raw_schema = r#""bytes""#;
     let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
@@ -231,6 +242,18 @@ fn json_timestamptz_ns() {
     check_json_serde(
         record,
         Literal::Primitive(PrimitiveLiteral::Long(1510871468123456789)),
+        &Primitive(PrimitiveType::TimestamptzNs),
+    );
+}
+
+#[test]
+fn raw_literal_json_serde_nanosecond_timestamps() {
+    check_raw_literal_json_serde(
+        Literal::timestamp_nano(1510871468123456789),
+        &Primitive(PrimitiveType::TimestampNs),
+    );
+    check_raw_literal_json_serde(
+        Literal::timestamptz_nano(1510871468123456789),
         &Primitive(PrimitiveType::TimestamptzNs),
     );
 }
