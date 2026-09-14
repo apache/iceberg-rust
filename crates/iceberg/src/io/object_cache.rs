@@ -22,7 +22,7 @@ use crate::encryption::EncryptionManager;
 use crate::io::FileIO;
 use crate::spec::{
     FormatVersion, Manifest, ManifestFile, ManifestList, ManifestListReader, ManifestReader,
-    SchemaId, SnapshotRef, TableMetadataRef,
+    SnapshotRef, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -36,7 +36,7 @@ pub(crate) enum CachedItem {
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub(crate) enum CachedObjectKey {
-    ManifestList((String, FormatVersion, SchemaId)),
+    ManifestList((String, FormatVersion)),
     // The manifest-level `first_row_id` is part of the key because the parsed
     // manifest inherits it onto its entries: the same physical manifest can be
     // referenced with different offsets across snapshots and branches, so it
@@ -159,7 +159,6 @@ impl ObjectCache {
         let key = CachedObjectKey::ManifestList((
             snapshot.manifest_list().to_string(),
             table_metadata.format_version,
-            snapshot.schema_id().unwrap(),
         ));
         let cache_entry = self
             .cache
@@ -442,6 +441,43 @@ mod tests {
                 .unwrap(),
             "1.parquet"
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_manifest_list_with_no_schema_id() {
+        use std::collections::HashMap;
+
+        use crate::spec::{Operation, Snapshot, Summary};
+
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let current_snapshot = fixture.table.metadata().current_snapshot().unwrap();
+
+        // The spec marks `schema-id` optional in every version (v1-v3), so a
+        // snapshot may omit it; fetching its manifest list must not depend on the
+        // schema-id being present.
+        let snapshot: SnapshotRef = Snapshot::builder()
+            .with_snapshot_id(current_snapshot.snapshot_id())
+            .with_sequence_number(current_snapshot.sequence_number())
+            .with_timestamp_ms(current_snapshot.timestamp_ms())
+            .with_manifest_list(current_snapshot.manifest_list())
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .build()
+            .into();
+        assert!(snapshot.schema_id().is_none());
+
+        let object_cache = ObjectCache::new(fixture.table.file_io().clone(), None);
+
+        let result_manifest_list = object_cache
+            .get_manifest_list(&snapshot, &fixture.table.metadata_ref())
+            .await
+            .unwrap();
+
+        assert_eq!(result_manifest_list.entries().len(), 1);
     }
 
     #[tokio::test]
