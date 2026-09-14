@@ -1181,6 +1181,13 @@ For details on how to run a release, please refer to: https://rust.iceberg.apach
 </code></pre>
 <h2 id="github-side"><a class="header" href="#github-side">GitHub Side</a></h2>
 <p>The following steps should be followed once the release is ready to begin.</p>
+<h3 id="update-dependencies"><a class="header" href="#update-dependencies">Update dependencies</a></h3>
+<p>Dependabot runs monthly to reduce update noise, so dependencies may be out of date by the time of a release.
+Before cutting a release candidate, open the repository's <a href="https://github.com/apache/iceberg-rust/network/updates">Dependabot page</a> and trigger a manual check for each configured ecosystem: <code>cargo</code> and <code>github-actions</code> at <code>/</code>, and <code>uv</code> at <code>/bindings/python</code>.
+Review and merge the applicable dependency update PRs before creating the release branch and regenerating the dependency lists.
+For an existing release branch, backport the applicable updates to that branch before regenerating its dependency lists and cutting the release candidate.</p>
+<p>Only a committer with write access to the repository can trigger Dependabot manually.
+Work with a committer if you do not have write access.</p>
 <h3 id="create-a-minor-version-release-branch-if-it-doesnt-already-exist"><a class="header" href="#create-a-minor-version-release-branch-if-it-doesnt-already-exist">Create a minor version release branch, if it doesn't already exist</a></h3>
 <p>A committer must ensure that a release branch exists for each minor version.</p>
 <p>If the release is for an existing minor version (such as the <code>.1</code> patch release in <code>v0.10.1</code>), the release branch should already exist with the name <code>v0.10.x</code>.</p>
