@@ -765,12 +765,13 @@ impl TableMetadataBuilder {
     /// Validate partition field names against schema field names across all historical schemas.
     ///
     /// Due to Iceberg's multi-version property, partition fields can share names with schema fields
-    /// if they meet specific requirements (identity transform + matching source field ID).
+    /// if they meet specific requirements (identity or void transform + matching source field ID).
     /// This validation enforces those rules across all historical schema versions.
     ///
     /// # Errors
-    /// - Partition field name conflicts with schema field name but doesn't use identity transform.
-    /// - Partition field uses identity transform but references wrong source field ID.
+    /// - Partition field name conflicts with schema field name but uses neither an identity nor a
+    ///   void transform.
+    /// - Partition field uses an identity or void transform but references wrong source field ID.
     fn validate_partition_field_names(&self, unbound_spec: &UnboundPartitionSpec) -> Result<()> {
         if self.metadata.schemas.is_empty() {
             return Ok(());
@@ -789,15 +790,19 @@ impl TableMetadataBuilder {
 
             // If name exists in schemas, validate against current schema rules
             if let Some(schema_field) = current_schema.field_by_name(&partition_field.name) {
-                let is_identity_transform =
-                    partition_field.transform == crate::spec::Transform::Identity;
+                // A void transform always produces null, so like identity it cannot carry a
+                // value that disagrees with the schema column it shares a name with.
+                let is_allowed_transform = matches!(
+                    partition_field.transform,
+                    crate::spec::Transform::Identity | crate::spec::Transform::Void
+                );
                 let has_matching_source_id = schema_field.id == partition_field.source_id;
 
-                if !is_identity_transform {
+                if !is_allowed_transform {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!(
-                            "Cannot create partition with name '{}' that conflicts with schema field and is not an identity transform.",
+                            "Cannot create partition with name '{}' that conflicts with schema field and is not an identity or void transform.",
                             partition_field.name
                         ),
                     ));
@@ -807,7 +812,7 @@ impl TableMetadataBuilder {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!(
-                            "Cannot create identity partition sourced from different field in schema. \
+                            "Cannot create partition sourced from different field in schema. \
                              Field name '{}' has id `{}` in schema but partition source id is `{}`",
                             partition_field.name, schema_field.id, partition_field.source_id
                         ),
@@ -2955,7 +2960,7 @@ mod tests {
         assert!(error_message.contains(
             "Cannot create partition with name 'existing_field' that conflicts with schema field"
         ));
-        assert!(error_message.contains("and is not an identity transform"));
+        assert!(error_message.contains("and is not an identity or void transform"));
     }
 
     #[test]
@@ -3152,6 +3157,66 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(error.message().contains("Cannot add schema field 'bucket_data' because it conflicts with existing partition field name"));
+    }
+
+    #[test]
+    fn test_partition_spec_evolution_allows_void_reusing_its_source_column_name() {
+        let initial_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "region", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        // The partition field id is pinned so the v1 sequential-id rule is not what decides
+        // these cases; the name-collision rule is what is under test.
+        let spec = |source_id: i32, transform: Transform| {
+            UnboundPartitionSpec::builder()
+                .with_spec_id(1)
+                .add_partition_fields(vec![UnboundPartitionField {
+                    source_id,
+                    field_id: Some(1000),
+                    name: "id".to_string(),
+                    transform,
+                }])
+                .unwrap()
+                .build()
+        };
+
+        let metadata = TableMetadataBuilder::new(
+            initial_schema,
+            spec(1, Transform::Identity),
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V1,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        let builder = || {
+            metadata.clone().into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata1.json".to_string(),
+            ))
+        };
+
+        // Rewriting the identity field to void is how a v1 table drops a partition field.
+        builder()
+            .add_partition_spec(spec(1, Transform::Void))
+            .unwrap();
+
+        // The source must still match the column the field is named after.
+        builder()
+            .add_partition_spec(spec(2, Transform::Void))
+            .unwrap_err();
+
+        // Other transforms are still rejected on a name collision.
+        builder()
+            .add_partition_spec(spec(1, Transform::Bucket(4)))
+            .unwrap_err();
     }
 
     #[test]
