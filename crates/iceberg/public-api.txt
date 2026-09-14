@@ -1031,6 +1031,7 @@ pub const iceberg::io::S3_ASSUME_ROLE_SESSION_NAME: &str
 pub const iceberg::io::S3_DISABLE_CONFIG_LOAD: &str
 pub const iceberg::io::S3_DISABLE_EC2_METADATA: &str
 pub const iceberg::io::S3_ENDPOINT: &str
+pub const iceberg::io::S3_MULTIPART_PART_SIZE_BYTES: &str
 pub const iceberg::io::S3_PATH_STYLE_ACCESS: &str
 pub const iceberg::io::S3_REGION: &str
 pub const iceberg::io::S3_SECRET_ACCESS_KEY: &str
