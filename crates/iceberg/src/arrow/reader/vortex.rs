@@ -17,22 +17,29 @@
 
 //! Read path for vortex data files, producing the same transformed arrow
 //! record batch stream as the parquet read path.
+//!
+//! Field IDs are restored from the embedded Iceberg schema, or resolved through
+//! name mapping / positional fallback for imported files. Filters, deletes,
+//! partition constants, and metadata columns use the same Iceberg semantics as
+//! Parquet. Vortex's own layouts provide pruning; Parquet page indexes, INT96
+//! coercion and modular encryption do not apply here. Byte splits are mapped
+//! proportionally to row ranges using the file size and exact row count.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
-use arrow_schema::{Field as ArrowField, Schema as ArrowSchema};
+use arrow_schema::{DataType, Field as ArrowField};
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use vortex::VortexSessionDefault;
 use vortex::array::VortexSessionExecute;
-use vortex::arrow::ArrowSessionExt;
 use vortex::array::buffer::BufferHandle;
 use vortex::array::stream::ArrayStream;
-use vortex::buffer::{Alignment, Buffer, ByteBuffer};
+use vortex::arrow::ArrowSessionExt;
+use vortex::buffer::{Alignment, ByteBuffer};
 use vortex::dtype::extension::Matcher;
 use vortex::dtype::{DType, DecimalDType, Nullability, PType};
 use vortex::error::{VortexResult, vortex_err};
@@ -52,10 +59,15 @@ use super::DEFAULT_RANGE_FETCH_CONCURRENCY;
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::scan_metrics::CountingFileRead;
+use crate::arrow::vortex_util::{VORTEX_SCHEMA_KEY, attach_field_id_metadata};
 use crate::arrow::{convert_temporal_value, to_iceberg_error};
 use crate::expr::{BoundPredicate, BoundReference, PredicateOperator};
 use crate::io::{FileIO, FileRead};
-use crate::metadata_columns::RESERVED_FIELD_ID_FILE;
+use crate::metadata_columns::{
+    RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+    RESERVED_FIELD_ID_PARTITION, RESERVED_FIELD_ID_POS, RESERVED_FIELD_ID_ROW_ID,
+    RESERVED_FIELD_ID_SPEC_ID, is_metadata_field,
+};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask};
 use crate::spec::{Datum, NestedField, PrimitiveLiteral, PrimitiveType, Schema, Type};
 use crate::{Error, ErrorKind, Result};
@@ -76,49 +88,67 @@ pub(super) async fn read_vortex_task(
     // time, so it is created here, inside the runtime driving the scan.
     let session = VortexSession::default();
 
-    // Open the vortex file through iceberg's FileIO.
-    let input_file = file_io.new_input(task.data_file_path())?;
-    let file_size = if task.file_size_in_bytes() > 0 {
-        task.file_size_in_bytes()
+    let (vortex_file, file_size) = open_vortex_file(
+        task.data_file_path(),
+        task.file_size_in_bytes(),
+        task.key_metadata(),
+        file_io,
+        bytes_read_counter,
+        &session,
+    )
+    .await?;
+    let row_range = if task.start() == 0 && task.length() == 0 {
+        0..vortex_file.row_count()
     } else {
-        input_file.metadata().await?.size
+        byte_range_to_rows(
+            task.start(),
+            task.length(),
+            file_size,
+            vortex_file.row_count(),
+        )
     };
-    let reader = CountingFileRead::new(input_file.reader().await?, bytes_read_counter);
-    let source = Arc::new(FileReadVortexSource {
-        reader: Arc::new(reader),
-        size: file_size,
-        uri: Arc::from(task.data_file_path()),
-    });
-
-    let vortex_file = session
-        .open_options()
-        .with_file_size(file_size)
-        .open(source)
-        .await
-        .map_err(to_iceberg_error)?;
-
-    // Vortex files do not record iceberg field ids, so columns are matched by
-    // name. Fields that were added to the table schema after the file was
-    // written are filled in by the RecordBatchTransformer below.
-    let file_field_names: Vec<&str> = vortex_file
-        .dtype()
-        .as_struct_fields_opt()
-        .ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Vortex data file does not contain a struct dtype",
-            )
-        })?
-        .names()
+    if row_range.is_empty() {
+        return Ok(Box::pin(futures::stream::empty()));
+    }
+    let file_schema = match vortex_file.metadata_segment(VORTEX_SCHEMA_KEY) {
+        Some(bytes) => Arc::new(serde_json::from_slice::<Schema>(bytes.as_slice())?),
+        None => {
+            let arrow_schema = Arc::new(
+                session
+                    .arrow()
+                    .to_arrow_schema(vortex_file.dtype())
+                    .map_err(to_iceberg_error)?,
+            );
+            let arrow_schema = if let Some(mapping) = task.name_mapping() {
+                super::apply_name_mapping_to_arrow_schema(arrow_schema, mapping)?
+            } else {
+                super::add_fallback_field_ids_to_arrow_schema(&arrow_schema)
+            };
+            Arc::new(Schema::try_from(arrow_schema.as_ref())?)
+        }
+    };
+    let project_pos = task.project_field_ids().contains(&RESERVED_FIELD_ID_POS);
+    let project_row_id = task.project_field_ids().contains(&RESERVED_FIELD_ID_ROW_ID);
+    let need_pos = project_pos || (project_row_id && task.first_row_id().is_some());
+    let projected_names: Vec<_> = file_schema
+        .as_struct()
+        .fields()
         .iter()
-        .map(|name| name.as_ref())
-        .collect();
-    let projected_names: Vec<String> = task
-        .project_field_ids()
-        .iter()
-        .filter_map(|id| task.schema().name_by_field_id(*id))
-        .filter(|name| file_field_names.contains(name))
-        .map(|name| name.to_string())
+        .filter(|field| {
+            task.project_field_ids().iter().any(|id| {
+                *id == field.id
+                    || file_schema
+                        .name_by_field_id(*id)
+                        .is_some_and(|name| name.starts_with(&format!("{}.", field.name)))
+            })
+        })
+        .filter(|field| {
+            !is_metadata_field(field.id)
+                || (field.id == RESERVED_FIELD_ID_ROW_ID && task.first_row_id().is_some())
+                || (field.id == RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER
+                    && task.first_row_id().is_some())
+        })
+        .map(|f| f.name.clone())
         .collect();
 
     let delete_filter = delete_filter_rx.await.unwrap()?;
@@ -138,20 +168,50 @@ pub(super) async fn read_vortex_task(
     };
     let filter = final_predicate
         .as_ref()
-        .map(|predicate| convert_predicate_to_vortex(predicate, task.schema(), vortex_file.dtype())?.bind(vortex_file.dtype()).map_err(to_iceberg_error))
+        .map(|predicate| {
+            convert_predicate_to_vortex(predicate, &file_schema, vortex_file.dtype())?
+                .bind(vortex_file.dtype())
+                .map_err(to_iceberg_error)
+        })
         .transpose()?;
 
+    let mut projection = select(
+        projected_names
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        root(),
+    );
+    // Keep the virtual position separate from user columns with the same name.
+    let mut position_name = RESERVED_COL_NAME_POS.to_string();
+    while projected_names.contains(&position_name) {
+        position_name.push('_');
+    }
+    if need_pos {
+        projection = vortex::expr::merge([
+            projection,
+            vortex::expr::pack(
+                [(
+                    position_name.as_str(),
+                    vortex::expr::cast(
+                        vortex::layout::layouts::row_idx::row_idx(),
+                        DType::Primitive(PType::I64, Nullability::NonNullable),
+                    ),
+                )],
+                Nullability::NonNullable,
+            ),
+        ]);
+    }
     let mut scan_builder = vortex_file
         .scan()
         .map_err(to_iceberg_error)?
-        .with_projection(select(
-            projected_names
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>(),
-            root(),
-        ).bind(vortex_file.dtype()).map_err(to_iceberg_error)?)
-        .with_some_filter(filter);
+        .with_projection(
+            projection
+                .bind(vortex_file.dtype())
+                .map_err(to_iceberg_error)?,
+        )
+        .with_some_filter(filter)
+        .with_row_range(row_range);
     if let Some(batch_size) = batch_size {
         scan_builder = scan_builder.with_split_by(SplitBy::RowCount(batch_size));
     }
@@ -159,11 +219,9 @@ pub(super) async fn read_vortex_task(
     // Positional deletes are applied by excluding the deleted row ordinals
     // from the scan. Vortex selections compose with the filter expression.
     if let Some(positional_deletes) = delete_filter.get_delete_vector(&task) {
-        let deleted_rows: Buffer<u64> = {
-            let guard = positional_deletes.lock().unwrap();
-            guard.iter().collect()
-        };
-        scan_builder = scan_builder.with_selection(Selection::ExcludeByIndex(vortex::scan::StrictSortedBuffer::try_from(deleted_rows).map_err(to_iceberg_error)?));
+        scan_builder = scan_builder.with_selection(Selection::ExcludeRoaring(
+            positional_deletes.lock().unwrap().iter().collect(),
+        ));
     }
 
     let array_stream = scan_builder.into_array_stream().map_err(to_iceberg_error)?;
@@ -183,6 +241,82 @@ pub(super) async fn read_vortex_task(
         record_batch_transformer_builder =
             record_batch_transformer_builder.with_partition(partition_spec, partition_data)?;
     }
+    if task
+        .project_field_ids()
+        .contains(&RESERVED_FIELD_ID_SPEC_ID)
+    {
+        let spec = task
+            .partition_spec()
+            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Partition spec is missing"))?;
+        record_batch_transformer_builder = record_batch_transformer_builder
+            .with_constant(RESERVED_FIELD_ID_SPEC_ID, Datum::int(spec.spec_id()));
+    }
+    if project_pos {
+        record_batch_transformer_builder =
+            record_batch_transformer_builder.with_virtual_field(RESERVED_FIELD_ID_POS);
+    }
+    if project_row_id {
+        record_batch_transformer_builder =
+            record_batch_transformer_builder.with_virtual_field(RESERVED_FIELD_ID_ROW_ID);
+    }
+    if task
+        .project_field_ids()
+        .contains(&RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER)
+    {
+        record_batch_transformer_builder = match (task.first_row_id(), task.data_sequence_number())
+        {
+            (None, _) => record_batch_transformer_builder
+                .with_null_metadata_column(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER)?,
+            (Some(_), Some(seq)) => {
+                if file_schema
+                    .field_by_id(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER)
+                    .is_some()
+                {
+                    record_batch_transformer_builder.with_coalesced_last_updated_seq_column(
+                        RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+                        Datum::long(seq),
+                    )
+                } else {
+                    record_batch_transformer_builder.with_constant(
+                        RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+                        Datum::long(seq),
+                    )
+                }
+            }
+            (Some(_), None) => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Data file {} has a first_row_id but no data sequence number",
+                        task.data_file_path()
+                    ),
+                ));
+            }
+        };
+    }
+    if task
+        .project_field_ids()
+        .contains(&RESERVED_FIELD_ID_PARTITION)
+        && let Some(unified_type) = task.unified_partition_type()
+    {
+        let (spec, data) = match (task.partition_spec(), task.partition()) {
+            (Some(spec), Some(data)) => (Arc::clone(spec), data.clone()),
+            _ if unified_type.fields().is_empty() => (
+                Arc::new(crate::spec::PartitionSpec::unpartition_spec()),
+                crate::spec::Struct::empty(),
+            ),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "cannot build _partition column: unified partition type has fields but the scan task is missing its partition spec or data",
+                ));
+            }
+        };
+        record_batch_transformer_builder =
+            record_batch_transformer_builder.with_partition_constant(
+                crate::arrow::build_partition_constant(unified_type, &spec, &data)?,
+            );
+    }
     let mut record_batch_transformer = record_batch_transformer_builder.build();
 
     let arrow_field = session
@@ -190,6 +324,7 @@ pub(super) async fn read_vortex_task(
         .to_arrow_field("", array_stream.dtype())
         .map_err(to_iceberg_error)?;
     let mut execution_ctx = session.create_execution_ctx();
+    let first_row_id = task.first_row_id();
     let task_schema = task.schema_ref();
 
     let record_batch_stream = array_stream.map(move |chunk| {
@@ -199,41 +334,146 @@ pub(super) async fn read_vortex_task(
             .execute_arrow(chunk, Some(&arrow_field), &mut execution_ctx)
             .map_err(to_iceberg_error)?;
         let batch = RecordBatch::from(arrow_array.as_struct());
-        let batch = attach_field_id_metadata(batch, &task_schema)?;
-        record_batch_transformer.process_record_batch(batch)
+        let mut batch = attach_field_id_metadata(batch, &file_schema)?;
+        if need_pos {
+            let schema = batch.schema();
+            let fields: Vec<_> = schema
+                .fields()
+                .iter()
+                .map(|f| {
+                    if f.name() == &position_name {
+                        Arc::new(
+                            ArrowField::new(RESERVED_COL_NAME_POS, DataType::Int64, false)
+                                .with_metadata(std::collections::HashMap::from([(
+                                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                                    RESERVED_FIELD_ID_POS.to_string(),
+                                )])),
+                        )
+                    } else {
+                        f.clone()
+                    }
+                })
+                .collect();
+            batch = RecordBatch::try_new(
+                Arc::new(arrow_schema::Schema::new(fields)),
+                batch.columns().to_vec(),
+            )?;
+        }
+        if project_row_id {
+            batch = super::row_lineage::synthesize_row_id_column(batch, first_row_id)?;
+        }
+        record_batch_transformer.process_record_batch(crate::arrow::evolve_nested_fields(
+            batch,
+            &task_schema,
+            &session,
+        )?)
     });
 
     Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
 }
 
-/// Tags every top-level column of `batch` that exists in `schema` with its
-/// iceberg field id, so that the [`RecordBatchTransformer`] can match columns
-/// by id like it does for parquet files.
-fn attach_field_id_metadata(batch: RecordBatch, schema: &Schema) -> Result<RecordBatch> {
-    let fields: Vec<ArrowField> = batch
-        .schema()
-        .fields()
-        .iter()
-        .map(|field| {
-            let field = field.as_ref().clone();
-            match schema.field_id_by_name(field.name()) {
-                Some(field_id) => {
-                    let mut metadata = field.metadata().clone();
-                    metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
-                    field.with_metadata(metadata)
-                }
-                None => field,
+/// Open Vortex files through the same counted FileIO used by data and delete scans.
+async fn open_vortex_file(
+    path: &str,
+    file_size: u64,
+    key_metadata: Option<&[u8]>,
+    file_io: &FileIO,
+    bytes_read_counter: Arc<AtomicU64>,
+    session: &VortexSession,
+) -> Result<(vortex::file::VortexFile, u64)> {
+    if key_metadata.is_some() {
+        return Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Encrypted Vortex files are not supported",
+        ));
+    }
+    let input_file = file_io.new_input(path)?;
+    let file_size = if file_size > 0 {
+        file_size
+    } else {
+        input_file.metadata().await?.size
+    };
+    let reader = CountingFileRead::new(input_file.reader().await?, bytes_read_counter);
+    let source = Arc::new(FileReadVortexSource {
+        reader: Arc::new(reader),
+        size: file_size,
+        uri: Arc::from(path),
+    });
+    let file = session
+        .open_options()
+        .with_file_size(file_size)
+        .with_include_metadata(true)
+        .open(source)
+        .await
+        .map_err(to_iceberg_error)?;
+    Ok((file, file_size))
+}
+
+/// Read unfiltered batches for delete files without recursively loading deletes.
+pub(crate) async fn vortex_to_batch_stream(
+    path: &str,
+    file_size: u64,
+    key_metadata: Option<&[u8]>,
+    file_io: &FileIO,
+    bytes_read_counter: Arc<AtomicU64>,
+) -> Result<ArrowRecordBatchStream> {
+    let session = VortexSession::default();
+    let (file, _) = open_vortex_file(
+        path,
+        file_size,
+        key_metadata,
+        file_io,
+        bytes_read_counter,
+        &session,
+    )
+    .await?;
+    let schema = file
+        .metadata_segment(VORTEX_SCHEMA_KEY)
+        .map(|bytes| serde_json::from_slice::<Schema>(bytes.as_slice()))
+        .transpose()?;
+    let stream = file
+        .scan()
+        .map_err(to_iceberg_error)?
+        .into_array_stream()
+        .map_err(to_iceberg_error)?;
+    let target_schema = schema
+        .as_ref()
+        .map(arrow_schema::Schema::try_from)
+        .transpose()?
+        .map(Arc::new);
+    let field = session
+        .arrow()
+        .to_arrow_field("", stream.dtype())
+        .map_err(to_iceberg_error)?;
+    let mut ctx = session.create_execution_ctx();
+    Ok(Box::pin(stream.map(move |chunk| {
+        let array = session
+            .arrow()
+            .execute_arrow(chunk.map_err(to_iceberg_error)?, Some(&field), &mut ctx)
+            .map_err(to_iceberg_error)?;
+        let batch = RecordBatch::from(array.as_struct());
+        match &schema {
+            Some(schema) => {
+                let batch = attach_field_id_metadata(batch, schema)?;
+                let batch = crate::arrow::evolve_nested_fields(batch, schema, &session)?;
+                let target_schema = target_schema.as_ref().expect("schema converted above");
+                let columns = batch
+                    .columns()
+                    .iter()
+                    .zip(target_schema.fields())
+                    .map(|(array, field)| arrow_cast::cast(array, field.data_type()))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(RecordBatch::try_new_with_options(
+                    target_schema.clone(),
+                    columns,
+                    &arrow_array::RecordBatchOptions::new()
+                        .with_row_count(Some(batch.num_rows()))
+                        .with_match_field_names(false),
+                )?)
             }
-        })
-        .collect();
-    let schema = Arc::new(ArrowSchema::new(fields));
-    RecordBatch::try_new(schema, batch.columns().to_vec()).map_err(|err| {
-        Error::new(
-            ErrorKind::Unexpected,
-            "Failed to attach field id metadata to record batch",
-        )
-        .with_source(err)
-    })
+            None => Ok(batch),
+        }
+    })))
 }
 
 /// A [`VortexReadAt`] source backed by iceberg's [`FileRead`].
@@ -406,7 +646,10 @@ fn column_expr(
     // column's name path.
     let mut names: Vec<String> = Vec::new();
     let mut current_struct = Some(schema.as_struct());
-    let mut accessor = Some(reference.accessor());
+    let Some(file_accessor) = schema.accessor_by_field_id(reference.field().id) else {
+        return Ok(None);
+    };
+    let mut accessor = Some(file_accessor.as_ref());
     while let Some(acc) = accessor {
         let field = current_struct
             .and_then(|struct_type| struct_type.fields().get(acc.position()))
@@ -440,9 +683,33 @@ fn column_expr(
         dtype = field_dtype;
     }
 
-    let expr = names
+    let mut expr = names
         .iter()
         .fold(root(), |child, name| get_item(name.as_str(), child));
+    // Promote the column instead of narrowing the literal: out-of-range literals
+    // must remain valid filters after int/float/decimal schema evolution.
+    let promoted = match (&dtype, reference.field().field_type.as_ref()) {
+        (DType::Primitive(PType::I32, nullability), Type::Primitive(PrimitiveType::Long)) => {
+            Some(DType::Primitive(PType::I64, *nullability))
+        }
+        (DType::Primitive(PType::F32, nullability), Type::Primitive(PrimitiveType::Double)) => {
+            Some(DType::Primitive(PType::F64, *nullability))
+        }
+        (
+            DType::Decimal(_, nullability),
+            Type::Primitive(PrimitiveType::Decimal { precision, scale }),
+        ) => Some(DType::Decimal(
+            DecimalDType::new(u8::try_from(*precision)?, i8::try_from(*scale)?),
+            *nullability,
+        )),
+        _ => None,
+    };
+    if let Some(promoted) = promoted
+        && promoted != dtype
+    {
+        expr = vortex::expr::cast(expr, promoted.clone());
+        dtype = promoted;
+    }
     Ok(Some(FileColumn { expr, dtype }))
 }
 
@@ -507,6 +774,26 @@ fn datum_to_vortex_scalar(datum: &Datum, file_dtype: &DType) -> Result<Scalar> {
         (PrimitiveType::Double, PrimitiveLiteral::Double(v)) => Ok(v.0.into()),
         (PrimitiveType::String, PrimitiveLiteral::String(v)) => Ok(v.as_str().into()),
         (PrimitiveType::Binary, PrimitiveLiteral::Binary(v)) => Ok(v.as_slice().into()),
+        (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(value)) => {
+            let DType::Extension(ext) = file_dtype else {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("Cannot compare UUID to Vortex column of type {file_dtype}"),
+                ));
+            };
+            if !ext.is::<vortex::extension::uuid::Uuid>() {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("Cannot compare UUID to Vortex extension {ext}"),
+                ));
+            }
+            let storage = Scalar::fixed_size_list(
+                DType::Primitive(PType::U8, Nullability::NonNullable),
+                value.to_be_bytes().into_iter().map(Scalar::from).collect(),
+                ext.storage_dtype().nullability(),
+            );
+            Ok(Scalar::extension_ref(ext.clone(), storage))
+        }
         (PrimitiveType::Decimal { precision, scale }, PrimitiveLiteral::Int128(v)) => {
             let precision = u8::try_from(*precision).map_err(|err| {
                 Error::new(
@@ -546,6 +833,20 @@ fn datum_to_vortex_scalar(datum: &Datum, file_dtype: &DType) -> Result<Scalar> {
             format!("Predicate literals of type {ty} are not yet supported for vortex data files"),
         )),
     }
+}
+
+/// Map byte boundaries using average row size, as in Iceberg Java. Using the
+/// same floor operation at each boundary makes adjacent splits disjoint and
+/// exhaustive. Widening the product avoids overflow and floating-point rounding.
+fn byte_range_to_rows(start: u64, length: u64, file_size: u64, rows: u64) -> std::ops::Range<u64> {
+    let row_at = |offset: u64| {
+        if offset >= file_size {
+            rows
+        } else {
+            ((u128::from(offset) * u128::from(rows)) / u128::from(file_size)) as u64
+        }
+    };
+    row_at(start)..row_at(start.saturating_add(length))
 }
 
 /// Builds a literal scalar for comparing against a temporal column.
@@ -771,6 +1072,16 @@ mod tests {
     }
 
     fn test_scan_task(file_path: &str, schema: SchemaRef, file_size: u64) -> FileScanTask {
+        test_scan_task_filtered(file_path, schema, file_size, None, vec![])
+    }
+
+    fn test_scan_task_filtered(
+        file_path: &str,
+        schema: SchemaRef,
+        file_size: u64,
+        predicate: Option<crate::expr::BoundPredicate>,
+        deletes: Vec<FileScanTaskDeleteFile>,
+    ) -> FileScanTask {
         FileScanTask::builder()
             .with_file_size_in_bytes(file_size)
             .with_start(0)
@@ -780,7 +1091,10 @@ mod tests {
             .with_schema(schema.clone())
             .with_project_field_ids(schema.as_struct().fields().iter().map(|f| f.id).collect())
             .with_case_sensitive(false)
+            .with_predicate(predicate)
+            .with_deletes(deletes)
             .build()
+            .unwrap()
     }
 
     #[tokio::test]
@@ -825,6 +1139,8 @@ mod tests {
         );
         assert!(!data_file.lower_bounds().contains_key(&6));
         assert!(!data_file.lower_bounds().contains_key(&7));
+        assert!(!data_file.upper_bounds().contains_key(&7));
+        assert!(!data_file.value_counts().contains_key(&7));
 
         let file_size = std::fs::metadata(&file_path).unwrap().len();
         assert_eq!(data_file.file_size_in_bytes(), file_size);
@@ -889,8 +1205,7 @@ mod tests {
             .greater_than(Datum::long(3))
             .bind(schema.clone(), true)
             .unwrap();
-        let mut task = test_scan_task(&file_path, schema, file_size);
-        task.predicate = Some(predicate);
+        let task = test_scan_task_filtered(&file_path, schema, file_size, Some(predicate), vec![]);
 
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -1014,6 +1329,7 @@ mod tests {
             .with_file_path(path.to_string())
             .with_file_size_in_bytes(std::fs::metadata(path).unwrap().len())
             .with_file_type(file_type)
+            .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
             .with_equality_ids(equality_ids)
             .build()
@@ -1056,11 +1372,9 @@ mod tests {
         // Delete row ordinals 0 and 3 (ids 1 and 4).
         write_positional_delete_file(&delete_path, &file_path, &[0, 3]);
 
-        let mut task = test_scan_task(&file_path, test_schema(), file_size);
-        task.deletes = vec![delete_file_entry(
-            &delete_path,
-            DataContentType::PositionDeletes,
-        )];
+        let task = test_scan_task_filtered(&file_path, test_schema(), file_size, None, vec![
+            delete_file_entry(&delete_path, DataContentType::PositionDeletes),
+        ]);
 
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
         assert_eq!(collect_ids(&reader, task).await, vec![2, 3, 5]);
@@ -1077,11 +1391,9 @@ mod tests {
 
         write_equality_delete_file(&delete_path, &[2, 5]);
 
-        let mut task = test_scan_task(&file_path, test_schema(), file_size);
-        task.deletes = vec![delete_file_entry(
-            &delete_path,
-            DataContentType::EqualityDeletes,
-        )];
+        let task = test_scan_task_filtered(&file_path, test_schema(), file_size, None, vec![
+            delete_file_entry(&delete_path, DataContentType::EqualityDeletes),
+        ]);
 
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
         assert_eq!(collect_ids(&reader, task).await, vec![1, 3, 4]);
@@ -1103,16 +1415,20 @@ mod tests {
         write_equality_delete_file(&eq_delete_path, &[3]);
 
         let schema = test_schema();
-        let mut task = test_scan_task(&file_path, schema.clone(), file_size);
-        task.deletes = vec![
-            delete_file_entry(&pos_delete_path, DataContentType::PositionDeletes),
-            delete_file_entry(&eq_delete_path, DataContentType::EqualityDeletes),
-        ];
-        task.predicate = Some(
-            Reference::new("id")
-                .greater_than(Datum::long(1))
-                .bind(schema, true)
-                .unwrap(),
+        let task = test_scan_task_filtered(
+            &file_path,
+            schema.clone(),
+            file_size,
+            Some(
+                Reference::new("id")
+                    .greater_than(Datum::long(1))
+                    .bind(schema.clone(), true)
+                    .unwrap(),
+            ),
+            vec![
+                delete_file_entry(&pos_delete_path, DataContentType::PositionDeletes),
+                delete_file_entry(&eq_delete_path, DataContentType::EqualityDeletes),
+            ],
         );
 
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
@@ -1127,8 +1443,13 @@ mod tests {
         let file_size = std::fs::metadata(&file_path).unwrap().len();
 
         let schema = test_schema();
-        let mut task = test_scan_task(&file_path, schema.clone(), file_size);
-        task.predicate = Some(predicate.bind(schema, true).unwrap());
+        let task = test_scan_task_filtered(
+            &file_path,
+            schema.clone(),
+            file_size,
+            Some(predicate.bind(schema.clone(), true).unwrap()),
+            vec![],
+        );
 
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
         collect_ids(&reader, task).await
@@ -1227,10 +1548,1118 @@ mod tests {
             .equal_to(Datum::string("x"))
             .and(Reference::new("id").greater_than(Datum::long(3)));
 
-        let mut task = test_scan_task(&file_path, evolved_schema.clone(), file_size);
-        task.predicate = Some(predicate.bind(evolved_schema, true).unwrap());
+        let task = test_scan_task_filtered(
+            &file_path,
+            evolved_schema.clone(),
+            file_size,
+            Some(predicate.bind(evolved_schema.clone(), true).unwrap()),
+            vec![],
+        );
 
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
         assert_eq!(collect_ids(&reader, task).await, vec![4, 5]);
+    }
+    async fn scan_batches(file_io: FileIO, task: FileScanTask) -> Vec<RecordBatch> {
+        ArrowReaderBuilder::new(file_io, Runtime::current())
+            .with_batch_size(2)
+            .build()
+            .read(Box::pin(futures::stream::iter([Ok(task)])))
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_vortex_metadata_after_filter_and_deletes() {
+        use crate::metadata_columns::*;
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("data.vortex").to_str().unwrap().to_string();
+        let delete_path = tmp
+            .path()
+            .join("delete.parquet")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let io = FileIO::new_with_fs();
+        let file = write_test_file(&path, &io).await;
+        write_positional_delete_file(&delete_path, &path, &[3]);
+        let schema = test_schema();
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(file.file_size_in_bytes())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(path.clone())
+            .with_data_file_format(DataFileFormat::Vortex)
+            .with_schema(schema.clone())
+            .with_case_sensitive(true)
+            .with_project_field_ids(vec![
+                RESERVED_FIELD_ID_POS,
+                RESERVED_FIELD_ID_ROW_ID,
+                RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+                RESERVED_FIELD_ID_FILE,
+                RESERVED_FIELD_ID_SPEC_ID,
+            ])
+            .with_partition_spec(Some(Arc::new(
+                crate::spec::PartitionSpec::unpartition_spec(),
+            )))
+            .with_first_row_id(Some(100))
+            .with_data_sequence_number(Some(7))
+            .with_predicate(Some(
+                Reference::new("id")
+                    .greater_than(Datum::long(1))
+                    .bind(schema, true)
+                    .unwrap(),
+            ))
+            .with_deletes(vec![delete_file_entry(
+                &delete_path,
+                DataContentType::PositionDeletes,
+            )])
+            .build()
+            .unwrap();
+        let batches = scan_batches(io, task).await;
+        let longs = |name: &str| -> Vec<i64> {
+            batches
+                .iter()
+                .flat_map(|b| {
+                    arrow_cast::cast(b.column_by_name(name).unwrap(), &DataType::Int64)
+                        .unwrap()
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .to_vec()
+                })
+                .collect()
+        };
+        assert_eq!(longs(RESERVED_COL_NAME_POS), vec![1, 2, 4]);
+        assert_eq!(longs(RESERVED_COL_NAME_ROW_ID), vec![101, 102, 104]);
+        assert_eq!(longs(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER), vec![
+            7, 7, 7
+        ]);
+        for batch in batches {
+            assert_eq!(batch.num_columns(), 5);
+            let paths = arrow_cast::cast(
+                batch.column_by_name(RESERVED_COL_NAME_FILE).unwrap(),
+                &DataType::Utf8,
+            )
+            .unwrap();
+            let paths = paths.as_any().downcast_ref::<StringArray>().unwrap();
+            assert!(paths.iter().all(|v| v == Some(path.as_str())));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_vortex_renamed_nested_fields_and_reused_name() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("data.vortex").to_str().unwrap().to_string();
+        let io = FileIO::new_with_fs();
+        let file = write_test_file(&path, &io).await;
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "renamed_id", Type::Primitive(PrimitiveType::Long))
+                        .into(),
+                    NestedField::optional(20, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(
+                        6,
+                        "renamed_info",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::optional(
+                                7,
+                                "renamed_points",
+                                Type::Primitive(PrimitiveType::Long),
+                            )
+                            .into(),
+                            NestedField::optional(
+                                21,
+                                "added",
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let predicate = Reference::new("renamed_info.renamed_points")
+            .greater_than(Datum::long(200))
+            .bind(schema.clone(), true)
+            .unwrap();
+        let task = test_scan_task_filtered(
+            &path,
+            schema,
+            file.file_size_in_bytes(),
+            Some(predicate),
+            vec![],
+        );
+        let batches = scan_batches(io, task).await;
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+        let ids: Vec<i64> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column_by_name("renamed_id")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(ids, vec![3, 4, 5]);
+        let points: Vec<i64> = batches
+            .iter()
+            .flat_map(|b| {
+                let info = b
+                    .column_by_name("renamed_info")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .unwrap();
+                info.column_by_name("renamed_points")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .iter()
+                    .map(Option::unwrap)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(points, vec![300, 400, 500]);
+        for b in batches {
+            assert_eq!(
+                b.column_by_name("id").unwrap().logical_null_count(),
+                b.num_rows()
+            );
+            let info = b
+                .column_by_name("renamed_info")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .unwrap();
+            assert!(info.column_by_name("renamed_points").is_some());
+            assert_eq!(
+                info.column_by_name("added").unwrap().logical_null_count(),
+                b.num_rows()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_vortex_empty_projection_and_null_lineage() {
+        use crate::metadata_columns::*;
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("data.vortex").to_str().unwrap().to_string();
+        let io = FileIO::new_with_fs();
+        let file = write_test_file(&path, &io).await;
+        for ids in [vec![], vec![
+            RESERVED_FIELD_ID_ROW_ID,
+            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+        ]] {
+            let task = FileScanTask::builder()
+                .with_file_size_in_bytes(file.file_size_in_bytes())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(path.clone())
+                .with_data_file_format(DataFileFormat::Vortex)
+                .with_schema(test_schema())
+                .with_project_field_ids(ids.clone())
+                .with_case_sensitive(true)
+                .build()
+                .unwrap();
+            let batches = scan_batches(io.clone(), task).await;
+            assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 5);
+            for batch in batches {
+                assert_eq!(batch.num_columns(), ids.len());
+                for col in batch.columns() {
+                    assert_eq!(col.logical_null_count(), batch.num_rows());
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_vortex_delete_files() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("data.vortex").to_str().unwrap().to_string();
+        let io = FileIO::new_with_fs();
+        let file = write_test_file(&path, &io).await;
+        let eq_path = tmp.path().join("eq.vortex").to_str().unwrap().to_string();
+        let pos_path = tmp.path().join("pos.vortex").to_str().unwrap().to_string();
+        let eq_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let pos_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(
+                        2147483546,
+                        "file_path",
+                        Type::Primitive(PrimitiveType::String),
+                    )
+                    .into(),
+                    NestedField::required(2147483545, "pos", Type::Primitive(PrimitiveType::Long))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let mut deletes = vec![];
+        for (path, schema, columns, content) in [
+            (
+                &eq_path,
+                eq_schema,
+                vec![Arc::new(Int64Array::from(vec![2])) as arrow_array::ArrayRef],
+                DataContentType::EqualityDeletes,
+            ),
+            (
+                &pos_path,
+                pos_schema,
+                vec![
+                    Arc::new(StringArray::from(vec![path.as_str()])) as arrow_array::ArrayRef,
+                    Arc::new(Int64Array::from(vec![3])),
+                ],
+                DataContentType::PositionDeletes,
+            ),
+        ] {
+            let batch =
+                RecordBatch::try_new(Arc::new(schema.as_ref().try_into().unwrap()), columns)
+                    .unwrap();
+            let mut writer = VortexWriterBuilder::new(schema, VortexSession::default())
+                .build(io.new_output(path).unwrap())
+                .await
+                .unwrap();
+            writer.write(&batch).await.unwrap();
+            writer.close().await.unwrap();
+            let mut entry = delete_file_entry(path, content);
+            entry.file_format = DataFileFormat::Vortex;
+            deletes.push(entry);
+        }
+        let task = test_scan_task_filtered(
+            &path,
+            test_schema(),
+            file.file_size_in_bytes(),
+            None,
+            deletes,
+        );
+        let reader = ArrowReaderBuilder::new(io, Runtime::current()).build();
+        assert_eq!(collect_ids(&reader, task).await, vec![1, 3, 5]);
+    }
+    async fn write_batch_file(
+        path: &str,
+        io: &FileIO,
+        schema: SchemaRef,
+        batch: &RecordBatch,
+    ) -> crate::spec::DataFile {
+        let mut writer = VortexWriterBuilder::new(schema, VortexSession::default())
+            .build(io.new_output(path).unwrap())
+            .await
+            .unwrap();
+        writer.write(batch).await.unwrap();
+        writer
+            .close()
+            .await
+            .unwrap()
+            .pop()
+            .unwrap()
+            .partition_spec_id(0)
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_vortex_list_roundtrip() {
+        use arrow_array::ListArray;
+        use arrow_array::types::Int64Type;
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("list.vortex").to_str().unwrap().to_string();
+        let io = FileIO::new_with_fs();
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(
+                        3,
+                        "items",
+                        Type::List(crate::spec::ListType::new(Arc::new(NestedField::optional(
+                            4,
+                            "element",
+                            Type::Primitive(PrimitiveType::Long),
+                        )))),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let list = ListArray::from_iter_primitive::<Int64Type, _, _>([
+            Some(vec![Some(1), None, Some(3)]),
+            Some(vec![]),
+            None,
+        ]);
+        let arrow_schema: ArrowSchema = schema.as_ref().try_into().unwrap();
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(arrow_schema),
+            vec![Arc::new(list)],
+            &arrow_array::RecordBatchOptions::new().with_match_field_names(false),
+        )
+        .unwrap();
+        let file = write_batch_file(&path, &io, schema.clone(), &batch).await;
+        assert!(!file.value_counts().contains_key(&4));
+        assert!(!file.null_value_counts().contains_key(&4));
+        assert!(!file.lower_bounds().contains_key(&4));
+        assert!(!file.upper_bounds().contains_key(&4));
+        let batches =
+            scan_batches(io, test_scan_task(&path, schema, file.file_size_in_bytes())).await;
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_vortex_map_roundtrip() {
+        use arrow_array::builder::{Int64Builder, MapBuilder, StringBuilder};
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("map.vortex").to_str().unwrap().to_string();
+        let io = FileIO::new_with_fs();
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(
+                        1,
+                        "map",
+                        Type::Map(crate::spec::MapType::new(
+                            Arc::new(NestedField::required(
+                                2,
+                                "key",
+                                Type::Primitive(PrimitiveType::String),
+                            )),
+                            Arc::new(NestedField::optional(
+                                3,
+                                "value",
+                                Type::Primitive(PrimitiveType::Long),
+                            )),
+                        )),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let mut builder = MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+        builder.keys().append_value("a");
+        builder.values().append_value(42);
+        builder.keys().append_value("b");
+        builder.values().append_null();
+        builder.append(true).unwrap();
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
+        let values = Arc::new(builder.finish());
+        let arrow_schema: ArrowSchema = schema.as_ref().try_into().unwrap();
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(arrow_schema),
+            vec![values],
+            &arrow_array::RecordBatchOptions::new().with_match_field_names(false),
+        )
+        .unwrap();
+        let file = write_batch_file(&path, &io, schema.clone(), &batch).await;
+        assert!(!file.value_counts().contains_key(&3));
+        assert!(!file.null_value_counts().contains_key(&3));
+        assert!(!file.lower_bounds().contains_key(&3));
+        let batches =
+            scan_batches(io, test_scan_task(&path, schema, file.file_size_in_bytes())).await;
+        let combined =
+            arrow_select::concat::concat_batches(&batches[0].schema(), &batches).unwrap();
+        let expected = arrow_cast::cast(batch.column(0), combined.column(0).data_type()).unwrap();
+        assert_eq!(combined.column(0).to_data(), expected.to_data());
+    }
+
+    #[tokio::test]
+    async fn test_vortex_variant_roundtrip() {
+        use arrow_array::BinaryArray;
+        use vortex::array::VortexSessionExecute;
+        use vortex::arrow::ArrowSessionExt;
+        use vortex::dtype::{DType, Nullability, PType};
+        let tmp = TempDir::new().unwrap();
+        let io = FileIO::new_with_fs();
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "variant", Type::Variant(crate::spec::VariantType))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let fields: arrow_schema::Fields = vec![
+            Field::new("metadata", DataType::Binary, false),
+            Field::new("typed_value", DataType::Int64, true),
+        ]
+        .into();
+        let storage = Arc::new(StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(BinaryArray::from_vec(vec![&[1, 0, 0]; 3])),
+                Arc::new(Int64Array::from(vec![Some(42), None, Some(-7)])),
+            ],
+            Some(arrow_buffer::NullBuffer::from(vec![true, false, true])),
+        ));
+        let field = Field::new("variant", DataType::Struct(fields), true)
+            .with_extension_type(crate::arrow::schema::VariantExtensionType);
+        let mut batch =
+            RecordBatch::try_new(Arc::new(ArrowSchema::new(vec![field])), vec![storage]).unwrap();
+        // First write shredded input, then rewrite the serialized output.
+        for name in ["shredded", "serialized"] {
+            let path = tmp
+                .path()
+                .join(format!("{name}.vortex"))
+                .to_str()
+                .unwrap()
+                .to_string();
+            let file = write_batch_file(&path, &io, schema.clone(), &batch).await;
+            let session = VortexSession::default();
+            let (opened, _) = super::open_vortex_file(
+                &path,
+                file.file_size_in_bytes(),
+                None,
+                &io,
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                &session,
+            )
+            .await
+            .unwrap();
+            let physical = session.arrow().to_arrow_schema(opened.dtype()).unwrap();
+            assert_eq!(
+                physical.field(0).extension_type_name(),
+                Some("arrow.parquet.variant")
+            );
+            assert_eq!(file.value_counts().get(&1), Some(&3));
+            assert!(!file.null_value_counts().contains_key(&1));
+            assert!(!file.lower_bounds().contains_key(&1));
+            assert!(!file.upper_bounds().contains_key(&1));
+            let batches = scan_batches(
+                io.clone(),
+                test_scan_task(&path, schema.clone(), file.file_size_in_bytes()),
+            )
+            .await;
+            batch = arrow_select::concat::concat_batches(&batches[0].schema(), &batches).unwrap();
+            assert_eq!(batch.num_rows(), 3);
+            let native = session
+                .arrow()
+                .from_arrow_array(batch.column(0).clone(), batch.schema().field(0))
+                .unwrap();
+            assert!(native.dtype().is_variant());
+            let mut ctx = session.create_execution_ctx();
+            for (row, expected) in [Some(42_i64), None, Some(-7)].into_iter().enumerate() {
+                let scalar = native.execute_scalar(row, &mut ctx).unwrap();
+                let actual = scalar.as_variant().value().map(|value| {
+                    value
+                        .cast(&DType::Primitive(PType::I64, Nullability::NonNullable))
+                        .unwrap()
+                        .as_primitive()
+                        .typed_value::<i64>()
+                        .unwrap()
+                });
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_vortex_native_uuid() {
+        use arrow_array::FixedSizeBinaryArray;
+        use vortex::arrow::ArrowSessionExt;
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("uuid.vortex").to_str().unwrap().to_string();
+        let io = FileIO::new_with_fs();
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "uuid", Type::Primitive(PrimitiveType::Uuid)).into(),
+                    NestedField::optional(
+                        2,
+                        "nested",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::optional(3, "uuid", Type::Primitive(PrimitiveType::Uuid))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let uuids = [uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(u128::MAX)];
+        let values = Arc::new(
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                [Some(uuids[0].as_bytes()), None, Some(uuids[1].as_bytes())].into_iter(),
+                16,
+            )
+            .unwrap(),
+        );
+        let arrow_schema: ArrowSchema = schema.as_ref().try_into().unwrap();
+        let DataType::Struct(fields) = arrow_schema.field(1).data_type() else {
+            panic!()
+        };
+        let nested = Arc::new(StructArray::new(fields.clone(), vec![values.clone()], None));
+        let batch =
+            RecordBatch::try_new(Arc::new(arrow_schema), vec![values.clone(), nested]).unwrap();
+        let file = write_batch_file(&path, &io, schema.clone(), &batch).await;
+        assert_eq!(file.null_value_counts().get(&1), Some(&1));
+        assert!(!file.null_value_counts().contains_key(&3));
+        for id in [1, 3] {
+            assert!(!file.lower_bounds().contains_key(&id));
+            assert!(!file.upper_bounds().contains_key(&id));
+        }
+        let session = VortexSession::default();
+        let (opened, _) = super::open_vortex_file(
+            &path,
+            file.file_size_in_bytes(),
+            None,
+            &io,
+            Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            &session,
+        )
+        .await
+        .unwrap();
+        let physical = session.arrow().to_arrow_schema(opened.dtype()).unwrap();
+        assert_eq!(physical.field(0).extension_type_name(), Some("arrow.uuid"));
+        assert!(
+            !physical
+                .field(0)
+                .metadata()
+                .contains_key("ARROW:extension:metadata")
+        );
+        let DataType::Struct(fields) = physical.field(1).data_type() else {
+            panic!()
+        };
+        assert_eq!(fields[0].extension_type_name(), Some("arrow.uuid"));
+        let batches = scan_batches(
+            io.clone(),
+            test_scan_task(&path, schema.clone(), file.file_size_in_bytes()),
+        )
+        .await;
+        let actual: Vec<_> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.map(|v| v.to_vec()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            values
+                .iter()
+                .map(|v| v.map(|v| v.to_vec()))
+                .collect::<Vec<_>>()
+        );
+        for name in ["uuid", "nested.uuid"] {
+            for (predicate, expected) in [
+                (Reference::new(name).equal_to(Datum::uuid(uuids[1])), 1),
+                (
+                    Reference::new(name).is_in([Datum::uuid(uuids[0]), Datum::uuid(uuids[1])]),
+                    2,
+                ),
+                (Reference::new(name).is_null(), 1),
+            ] {
+                let task = test_scan_task_filtered(
+                    &path,
+                    schema.clone(),
+                    file.file_size_in_bytes(),
+                    Some(predicate.bind(schema.clone(), true).unwrap()),
+                    vec![],
+                );
+                let batches = scan_batches(io.clone(), task).await;
+                assert_eq!(
+                    batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_vortex_byte_range_boundaries() {
+        use super::byte_range_to_rows;
+        assert_eq!(byte_range_to_rows(0, 1, 100, 1), 0..0);
+        assert_eq!(byte_range_to_rows(50, 50, 100, 1), 0..1);
+        assert_eq!(byte_range_to_rows(100, 1, 100, 5), 5..5);
+        assert_eq!(byte_range_to_rows(0, 100, 100, 0), 0..0);
+        assert_eq!(byte_range_to_rows(0, 1, 0, 0), 0..0);
+        assert_eq!(
+            byte_range_to_rows(u64::MAX - 1, 10, u64::MAX, u64::MAX),
+            (u64::MAX - 1)..u64::MAX
+        );
+    }
+
+    #[tokio::test]
+    async fn test_vortex_byte_range_splits() {
+        use crate::metadata_columns::*;
+        let tmp = TempDir::new().unwrap();
+        let path = tmp
+            .path()
+            .join("split.vortex")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let delete_path = tmp
+            .path()
+            .join("delete.parquet")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let io = FileIO::new_with_fs();
+        let file = write_test_file(&path, &io).await;
+        let size = file.file_size_in_bytes();
+        write_positional_delete_file(&delete_path, &path, &[3]);
+        for filtered in [false, true] {
+            let mut positions = Vec::new();
+            let mut row_ids = Vec::new();
+            // More splits than rows exercises empty ranges as well as adjacency.
+            for split in 0..11 {
+                let start = size * split / 11;
+                let end = size * (split + 1) / 11;
+                let task = FileScanTask::builder()
+                    .with_file_size_in_bytes(size)
+                    .with_start(start)
+                    .with_length(end - start)
+                    .with_data_file_path(path.clone())
+                    .with_data_file_format(DataFileFormat::Vortex)
+                    .with_schema(test_schema())
+                    .with_case_sensitive(true)
+                    .with_project_field_ids(vec![RESERVED_FIELD_ID_POS, RESERVED_FIELD_ID_ROW_ID])
+                    .with_first_row_id(Some(100))
+                    .with_predicate(filtered.then(|| {
+                        Reference::new("id")
+                            .greater_than(Datum::long(1))
+                            .bind(test_schema(), true)
+                            .unwrap()
+                    }))
+                    .with_deletes(if filtered {
+                        vec![delete_file_entry(
+                            &delete_path,
+                            DataContentType::PositionDeletes,
+                        )]
+                    } else {
+                        vec![]
+                    })
+                    .build()
+                    .unwrap();
+                for batch in scan_batches(io.clone(), task).await {
+                    for (name, values) in [
+                        (RESERVED_COL_NAME_POS, &mut positions),
+                        (RESERVED_COL_NAME_ROW_ID, &mut row_ids),
+                    ] {
+                        let array =
+                            arrow_cast::cast(batch.column_by_name(name).unwrap(), &DataType::Int64)
+                                .unwrap();
+                        values.extend_from_slice(
+                            array
+                                .as_any()
+                                .downcast_ref::<Int64Array>()
+                                .unwrap()
+                                .values(),
+                        );
+                    }
+                }
+            }
+            let expected = if filtered {
+                vec![1, 2, 4]
+            } else {
+                vec![0, 1, 2, 3, 4]
+            };
+            assert_eq!(positions, expected);
+            assert_eq!(
+                row_ids,
+                expected.iter().map(|v| v + 100).collect::<Vec<_>>()
+            );
+        }
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(size)
+            .with_start(size)
+            .with_length(1)
+            .with_data_file_path(path)
+            .with_data_file_format(DataFileFormat::Vortex)
+            .with_schema(test_schema())
+            .with_case_sensitive(true)
+            .with_project_field_ids(vec![1])
+            .build()
+            .unwrap();
+        assert!(scan_batches(io, task).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_vortex_rejects_fixed_width_writer_schemas() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp
+            .path()
+            .join("unsupported.vortex")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let io = FileIO::new_with_fs();
+        let primitive = PrimitiveType::Fixed(3);
+        let leaf = Arc::new(NestedField::optional(
+            2,
+            "element",
+            Type::Primitive(primitive.clone()),
+        ));
+        let types = [
+            Type::Primitive(primitive),
+            Type::Struct(crate::spec::StructType::new(vec![leaf.clone()])),
+            Type::List(crate::spec::ListType::new(leaf.clone())),
+            Type::Map(crate::spec::MapType::new(
+                Arc::new(NestedField::required(
+                    3,
+                    "key",
+                    Type::Primitive(PrimitiveType::String),
+                )),
+                leaf,
+            )),
+        ];
+        for ty in types {
+            let schema = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![NestedField::optional(1, "value", ty).into()])
+                    .build()
+                    .unwrap(),
+            );
+            let error = VortexWriterBuilder::new(schema, VortexSession::default())
+                .build(io.new_output(&path).unwrap())
+                .await
+                .err()
+                .expect("unsupported schema must fail");
+            assert_eq!(error.kind(), crate::ErrorKind::FeatureUnsupported);
+            assert!(!std::path::Path::new(&path).exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_vortex_rejects_binary_as_fixed_width() {
+        for (primitive, datum) in [
+            (PrimitiveType::Fixed(3), Datum::fixed(*b"abc")),
+            (PrimitiveType::Uuid, Datum::uuid(uuid::Uuid::nil())),
+        ] {
+            let schema = Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "value", Type::Primitive(primitive)).into(),
+                ])
+                .build()
+                .unwrap();
+            let field = Field::new("value", DataType::Binary, true).with_metadata(
+                std::collections::HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "1".to_string(),
+                )]),
+            );
+            let batch =
+                RecordBatch::try_new(Arc::new(ArrowSchema::new(vec![field])), vec![Arc::new(
+                    arrow_array::BinaryArray::from(vec![b"abc".as_slice()]),
+                )])
+                .unwrap();
+            assert_eq!(
+                crate::arrow::evolve_nested_fields(batch, &schema, &VortexSession::default())
+                    .unwrap_err()
+                    .kind(),
+                crate::ErrorKind::FeatureUnsupported
+            );
+            assert_eq!(
+                super::datum_to_vortex_scalar(
+                    &datum,
+                    &vortex::dtype::DType::Binary(vortex::dtype::Nullability::Nullable)
+                )
+                .unwrap_err()
+                .kind(),
+                crate::ErrorKind::FeatureUnsupported
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_vortex_physical_lineage_coalesces() {
+        use crate::metadata_columns::*;
+        let tmp = TempDir::new().unwrap();
+        let path = tmp
+            .path()
+            .join("lineage.vortex")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let io = FileIO::new_with_fs();
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(
+                        RESERVED_FIELD_ID_ROW_ID,
+                        RESERVED_COL_NAME_ROW_ID,
+                        Type::Primitive(PrimitiveType::Long),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+                        RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
+                        Type::Primitive(PrimitiveType::Long),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let batch = RecordBatch::try_new(Arc::new(schema.as_ref().try_into().unwrap()), vec![
+            Arc::new(Int64Array::from(vec![1, 2, 3])),
+            Arc::new(Int64Array::from(vec![Some(50), None, Some(70)])),
+            Arc::new(Int64Array::from(vec![Some(2), None, Some(3)])),
+        ])
+        .unwrap();
+        let file = write_batch_file(&path, &io, schema.clone(), &batch).await;
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(file.file_size_in_bytes())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(path)
+            .with_data_file_format(DataFileFormat::Vortex)
+            .with_schema(schema)
+            .with_project_field_ids(vec![
+                RESERVED_FIELD_ID_ROW_ID,
+                RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+            ])
+            .with_first_row_id(Some(100))
+            .with_data_sequence_number(Some(9))
+            .with_case_sensitive(true)
+            .build()
+            .unwrap();
+        let batches = scan_batches(io, task).await;
+        let values = |name: &str| -> Vec<i64> {
+            batches
+                .iter()
+                .flat_map(|b| {
+                    arrow_cast::cast(b.column_by_name(name).unwrap(), &DataType::Int64)
+                        .unwrap()
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .to_vec()
+                })
+                .collect()
+        };
+        assert_eq!(values(RESERVED_COL_NAME_ROW_ID), vec![50, 101, 70]);
+        assert_eq!(
+            values(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER),
+            vec![2, 9, 3]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_vortex_name_mapping_without_embedded_schema() {
+        use vortex::array::stream::ArrayStreamAdapter;
+        use vortex::arrow::ArrowSessionExt;
+        use vortex::file::WriteOptionsSessionExt;
+        let tmp = TempDir::new().unwrap();
+        let path = tmp
+            .path()
+            .join("external.vortex")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let io = FileIO::new_with_fs();
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "old",
+                DataType::Int64,
+                false,
+            )])),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        let session = VortexSession::default();
+        let array = session
+            .arrow()
+            .from_arrow_record_batch(batch.clone(), batch.schema_ref())
+            .unwrap();
+        let stream =
+            ArrayStreamAdapter::new(array.dtype().clone(), futures::stream::iter([Ok(array)]));
+        session
+            .write_options()
+            .write(tokio::fs::File::create(&path).await.unwrap(), stream)
+            .await
+            .unwrap();
+        for (id, mapping) in [
+            (1, None),
+            (
+                42,
+                Some(Arc::new(crate::spec::NameMapping::new(vec![
+                    crate::spec::MappedField::new(Some(42), vec!["old".to_string()], vec![]),
+                ]))),
+            ),
+        ] {
+            let schema = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::required(id, "renamed", Type::Primitive(PrimitiveType::Long))
+                            .into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let task = FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(path.clone())
+                .with_data_file_format(DataFileFormat::Vortex)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![id])
+                .with_name_mapping(mapping)
+                .with_predicate(Some(
+                    Reference::new("renamed")
+                        .greater_than(Datum::long(1))
+                        .bind(schema, true)
+                        .unwrap(),
+                ))
+                .with_case_sensitive(true)
+                .build()
+                .unwrap();
+            let batches = scan_batches(io.clone(), task).await;
+            assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+            assert_eq!(batches[0].schema().field(0).name(), "renamed");
+        }
+    }
+    #[tokio::test]
+    async fn test_vortex_promoted_predicate_and_partition_metadata() {
+        use crate::metadata_columns::*;
+        use crate::spec::{Literal, PartitionSpec, Struct, Transform};
+        let tmp = TempDir::new().unwrap();
+        let path = tmp
+            .path()
+            .join("promoted.vortex")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let io = FileIO::new_with_fs();
+        let old_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let batch = RecordBatch::try_new(Arc::new(old_schema.as_ref().try_into().unwrap()), vec![
+            Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3])),
+        ])
+        .unwrap();
+        let file = write_batch_file(&path, &io, old_schema, &batch).await;
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::required(2, "region", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .with_spec_id(7)
+                .add_partition_field("region", "region", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+        let unified = Arc::new(spec.partition_type(&schema).unwrap());
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(file.file_size_in_bytes())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(path)
+            .with_data_file_format(DataFileFormat::Vortex)
+            .with_schema(schema.clone())
+            .with_project_field_ids(vec![1, 2, RESERVED_FIELD_ID_PARTITION])
+            .with_partition_spec(Some(spec))
+            .with_partition(Some(Struct::from_iter([Some(Literal::int(42))])))
+            .with_unified_partition_type(Some(unified))
+            .with_predicate(Some(
+                Reference::new("id")
+                    .greater_than(Datum::long(1))
+                    .bind(schema, true)
+                    .unwrap(),
+            ))
+            .with_case_sensitive(true)
+            .build()
+            .unwrap();
+        let batches = scan_batches(io, task).await;
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+        for batch in batches {
+            assert_eq!(batch.column(0).data_type(), &DataType::Int64);
+            let region = arrow_cast::cast(batch.column(1), &DataType::Int32).unwrap();
+            assert!(
+                region
+                    .as_any()
+                    .downcast_ref::<arrow_array::Int32Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .all(|v| *v == 42)
+            );
+            let partition = batch
+                .column_by_name(RESERVED_COL_NAME_PARTITION)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .unwrap();
+            let region = arrow_cast::cast(partition.column(0), &DataType::Int32).unwrap();
+            assert!(
+                region
+                    .as_any()
+                    .downcast_ref::<arrow_array::Int32Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .all(|v| *v == 42)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_vortex_rejects_encryption() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("data.vortex").to_str().unwrap().to_string();
+        let io = FileIO::new_with_fs();
+        let file = write_test_file(&path, &io).await;
+        let (start, length, key) = (0, 0, Some(vec![1].into_boxed_slice()));
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(file.file_size_in_bytes())
+            .with_start(start)
+            .with_length(length)
+            .with_data_file_path(path.clone())
+            .with_data_file_format(DataFileFormat::Vortex)
+            .with_schema(test_schema())
+            .with_project_field_ids(vec![1])
+            .with_key_metadata(key)
+            .with_case_sensitive(true)
+            .build()
+            .unwrap();
+        let result = ArrowReaderBuilder::new(io.clone(), Runtime::current())
+            .build()
+            .read(Box::pin(futures::stream::iter([Ok(task)])))
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<_>>()
+            .await;
+        assert!(result.is_err());
     }
 }

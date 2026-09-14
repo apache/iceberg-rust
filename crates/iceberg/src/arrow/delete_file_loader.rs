@@ -93,6 +93,37 @@ impl BasicDeleteFileLoader {
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
     }
 
+    /// Loads either supported columnar format for equality and positional deletes.
+    pub(crate) async fn to_batch_stream(
+        &self,
+        task: &FileScanTaskDeleteFile,
+    ) -> Result<ArrowRecordBatchStream> {
+        match task.file_format {
+            crate::spec::DataFileFormat::Parquet => {
+                self.parquet_to_batch_stream(
+                    &task.file_path,
+                    task.file_size_in_bytes,
+                    task.key_metadata.as_deref(),
+                )
+                .await
+            }
+            crate::spec::DataFileFormat::Vortex => {
+                crate::arrow::reader::vortex::vortex_to_batch_stream(
+                    &task.file_path,
+                    task.file_size_in_bytes,
+                    task.key_metadata.as_deref(),
+                    &self.file_io,
+                    self.scan_metrics.bytes_read_counter().clone(),
+                )
+                .await
+            }
+            format => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!("Unsupported delete file format: {format}"),
+            )),
+        }
+    }
+
     /// Evolves the schema of the RecordBatches from an equality delete file.
     ///
     /// Per the [Iceberg spec](https://iceberg.apache.org/spec/#equality-delete-files),
@@ -122,13 +153,7 @@ impl DeleteFileLoader for BasicDeleteFileLoader {
         task: &FileScanTaskDeleteFile,
         schema: SchemaRef,
     ) -> Result<ArrowRecordBatchStream> {
-        let raw_batch_stream = self
-            .parquet_to_batch_stream(
-                &task.file_path,
-                task.file_size_in_bytes,
-                task.key_metadata.as_deref(),
-            )
-            .await?;
+        let raw_batch_stream = self.to_batch_stream(task).await?;
 
         // For equality deletes, only evolve the equality_ids columns.
         // For positional deletes (equality_ids is None), use all field IDs.

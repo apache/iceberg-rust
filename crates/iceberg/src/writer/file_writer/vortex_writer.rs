@@ -27,17 +27,16 @@ use bytes::Bytes;
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
 use vortex::array::ArrayRef;
-use vortex::arrow::FromArrowArray;
 use vortex::array::stats::TypedStatsSetRef;
 use vortex::array::stream::ArrayStreamAdapter;
-use vortex::arrow::FromArrowType;
+use vortex::arrow::ArrowSessionExt;
 use vortex::dtype::extension::Matcher;
 use vortex::dtype::{DType, PType};
 use vortex::expr::stats::{Stat, StatsProvider, StatsProviderExt};
 use vortex::extension::datetime::{AnyTemporal, TimeUnit};
 use vortex::file::{WriteOptionsSessionExt, WriteStrategyBuilder, WriteSummary};
 use vortex::io::{IoBuf, VortexWrite};
-use vortex::layout::LayoutStrategy;
+use vortex::layout::BufferedBytesTracker;
 use vortex::scalar::Scalar;
 use vortex::session::VortexSession;
 
@@ -51,6 +50,9 @@ use crate::spec::{
 use crate::{Error, ErrorKind, Result};
 
 /// VortexWriterBuilder is used to build a [`VortexWriter`].
+///
+/// Building a writer rejects schemas containing `fixed` fields,
+/// including nested fields, because this integration has no native mapping for them.
 #[derive(Clone, Debug)]
 pub struct VortexWriterBuilder {
     schema: SchemaRef,
@@ -72,6 +74,26 @@ impl FileWriterBuilder for VortexWriterBuilder {
     type R = VortexWriter;
 
     async fn build(&self, output_file: OutputFile) -> Result<Self::R> {
+        if let Some(field) = self
+            .schema
+            .field_id_to_name_map()
+            .keys()
+            .filter_map(|id| self.schema.field_by_id(*id))
+            .find(|field| {
+                matches!(
+                    field.field_type.as_ref(),
+                    Type::Primitive(PrimitiveType::Fixed(_))
+                )
+            })
+        {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "Writing Iceberg {} field {} to Vortex is not supported",
+                    field.field_type, field.name,
+                ),
+            ));
+        }
         Ok(VortexWriter {
             schema: self.schema.clone(),
             session: self.session.clone(),
@@ -107,7 +129,7 @@ struct StreamingWriter {
     batches: mpsc::Sender<ArrayRef>,
     task: tokio::task::JoinHandle<Result<WriteSummary>>,
     bytes_written: Arc<AtomicU64>,
-    strategy: Arc<dyn LayoutStrategy>,
+    buffered_bytes: BufferedBytesTracker,
 }
 
 impl StreamingWriter {
@@ -128,7 +150,11 @@ impl StreamingWriter {
 
 impl VortexWriter {
     async fn start(&self, arrow_schema: ArrowSchemaRef) -> Result<StreamingWriter> {
-        let dtype = DType::from_arrow(arrow_schema.clone());
+        let dtype = self
+            .session
+            .arrow()
+            .from_arrow_schema(&arrow_schema)
+            .map_err(to_iceberg_error)?;
         let file = self.output_file.writer().await?;
         let bytes_written = Arc::new(AtomicU64::new(0));
         let strategy = WriteStrategyBuilder::default().build();
@@ -138,7 +164,12 @@ impl VortexWriter {
         let write_options = self
             .session
             .write_options()
-            .with_strategy(Arc::clone(&strategy));
+            .with_strategy(strategy)
+            .with_metadata_segment(
+                crate::arrow::VORTEX_SCHEMA_KEY,
+                serde_json::to_vec(self.schema.as_ref())?,
+            );
+        let buffered_bytes = write_options.buffered_bytes_tracker();
 
         let mut sink = FileWriteSink {
             file,
@@ -160,7 +191,7 @@ impl VortexWriter {
             batches,
             task,
             bytes_written,
-            strategy,
+            buffered_bytes,
         })
     }
 
@@ -171,10 +202,8 @@ impl VortexWriter {
     ) -> Result<DataFileBuilder> {
         let record_count = summary.row_count();
 
-        // Take value/null/NaN counts and min/max bounds for top-level
-        // primitive fields from the statistics collected by the vortex writer.
-        // Nested fields are left unset; metrics evaluators treat missing
-        // entries as "rows might match".
+        // Use Vortex's top-level footer statistics. Nested value counts and
+        // bounds remain unimplemented until Vortex provides them.
         let mut value_counts: HashMap<i32, u64> = HashMap::new();
         let mut null_value_counts: HashMap<i32, u64> = HashMap::new();
         let mut nan_value_counts: HashMap<i32, u64> = HashMap::new();
@@ -185,8 +214,10 @@ impl VortexWriter {
             let Some(iceberg_field) = self.schema.field_by_name(field.name()) else {
                 continue;
             };
-            let Type::Primitive(primitive_type) = iceberg_field.field_type.as_ref() else {
-                continue;
+            let primitive_type = match iceberg_field.field_type.as_ref() {
+                Type::Primitive(primitive_type) => Some(primitive_type),
+                Type::Variant(_) => None,
+                _ => continue,
             };
             // Top-level columns hold exactly one value per row.
             value_counts.insert(iceberg_field.id, record_count);
@@ -198,19 +229,52 @@ impl VortexWriter {
             if let Some(null_count) = typed_stats.get_as::<u64>(Stat::NullCount).as_exact() {
                 null_value_counts.insert(iceberg_field.id, null_count);
             }
-            if matches!(primitive_type, PrimitiveType::Float | PrimitiveType::Double)
-                && let Some(nan_count) = typed_stats.get_as::<u64>(Stat::NaNCount).as_exact()
+            if matches!(
+                primitive_type,
+                Some(PrimitiveType::Float | PrimitiveType::Double)
+            ) && let Some(nan_count) = typed_stats.get_as::<u64>(Stat::NaNCount).as_exact()
             {
                 nan_value_counts.insert(iceberg_field.id, nan_count);
             }
-            if let Some(min) = stat_bound(&typed_stats, Stat::Min, primitive_type) {
-                lower_bounds.insert(iceberg_field.id, min);
-            }
-            if let Some(max) = stat_bound(&typed_stats, Stat::Max, primitive_type) {
-                upper_bounds.insert(iceberg_field.id, max);
+            if let Some(primitive_type) = primitive_type {
+                if let Some(min) = stat_bound(&typed_stats, Stat::Min, primitive_type) {
+                    lower_bounds.insert(iceberg_field.id, min);
+                }
+                if let Some(max) = stat_bound(&typed_stats, Stat::Max, primitive_type) {
+                    upper_bounds.insert(iceberg_field.id, max);
+                }
             }
         }
 
+        let sizes = summary
+            .footer()
+            .compressed_field_sizes()
+            .map_err(to_iceberg_error)?;
+        let mut column_sizes = HashMap::new();
+        fn collect_sizes(
+            fields: &[crate::spec::NestedFieldRef],
+            path: vortex::dtype::FieldPath,
+            sizes: &vortex::file::CompressedFieldSizes,
+            output: &mut HashMap<i32, u64>,
+        ) {
+            for field in fields {
+                let path = path.clone().push(field.name.as_str());
+                match field.field_type.as_ref() {
+                    Type::Struct(children) => collect_sizes(children.fields(), path, sizes, output),
+                    _ => {
+                        if let Some(size) = sizes.get(&path) {
+                            output.insert(field.id, size);
+                        }
+                    }
+                }
+            }
+        }
+        collect_sizes(
+            self.schema.as_struct().fields(),
+            vortex::dtype::FieldPath::root(),
+            &sizes,
+            &mut column_sizes,
+        );
         let mut builder = DataFileBuilder::default();
         builder
             .content(DataContentType::Data)
@@ -219,6 +283,7 @@ impl VortexWriter {
             .partition(Struct::empty())
             .record_count(record_count)
             .file_size_in_bytes(summary.size())
+            .column_sizes(column_sizes)
             .value_counts(value_counts)
             .null_value_counts(null_value_counts)
             .nan_value_counts(nan_value_counts)
@@ -249,8 +314,7 @@ fn stat_bound(
 /// primitive type.
 ///
 /// Returns `None` for null scalars, NaN float values (excluded from bounds by
-/// the iceberg spec; NaN counts are tracked separately), and types whose
-/// bounds are not computed (`Uuid`, `Fixed`).
+/// the iceberg spec; NaN counts are tracked separately).
 fn vortex_scalar_to_datum(scalar: Scalar, primitive_type: &PrimitiveType) -> Option<Datum> {
     match primitive_type {
         PrimitiveType::Boolean => Some(Datum::bool(scalar.as_bool_opt()?.value()?)),
@@ -300,8 +364,20 @@ fn vortex_scalar_to_datum(scalar: Scalar, primitive_type: &PrimitiveType) -> Opt
                 PrimitiveLiteral::Int128(value),
             ))
         }
-        // Uuid and Fixed bounds are not computed.
-        _ => None,
+        PrimitiveType::Uuid => {
+            let ext = scalar.as_extension_opt()?;
+            if !ext.ext_dtype().is::<vortex::extension::uuid::Uuid>() {
+                return None;
+            }
+            let storage = ext.to_storage_scalar();
+            let elements = storage.as_list_opt()?.elements()?;
+            let bytes = elements
+                .iter()
+                .map(|v| v.as_primitive_opt()?.typed_value::<u8>())
+                .collect::<Option<Vec<_>>>()?;
+            Some(Datum::uuid(uuid::Uuid::from_slice(&bytes).ok()?))
+        }
+        PrimitiveType::Fixed(_) => None,
     }
 }
 
@@ -366,12 +442,35 @@ impl FileWriter for VortexWriter {
             return Ok(());
         }
 
+        let batch = crate::arrow::attach_field_id_metadata(batch.clone(), &self.schema)?;
+        let batch = crate::arrow::evolve_nested_fields(batch, &self.schema, &self.session)?;
+        let ids: Vec<_> = self
+            .schema
+            .as_struct()
+            .fields()
+            .iter()
+            .map(|f| f.id)
+            .collect();
+        let batch = crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder::new(
+            self.schema.clone(),
+            &ids,
+        )
+        .build()
+        .process_record_batch(batch)?;
+
+        // The Iceberg Arrow schema uses FixedSizeBinary(16) for UUID. Mark it
+        // with the canonical extension so Vortex retains UUID semantics.
+        let batch = crate::arrow::attach_field_id_metadata(batch, &self.schema)?;
         if self.inner.is_none() {
             self.inner = Some(self.start(batch.schema()).await?);
         }
         let inner = self.inner.as_mut().expect("writer started above");
 
-        let array = ArrayRef::from_arrow(batch.clone(), false).map_err(to_iceberg_error)?;
+        let array = self
+            .session
+            .arrow()
+            .from_arrow_record_batch(batch.clone(), batch.schema_ref())
+            .map_err(to_iceberg_error)?;
         if inner.batches.send(array).await.is_err() {
             // The background task exited early; surface its error.
             let inner = self.inner.take().expect("writer started above");
@@ -419,8 +518,8 @@ impl super::super::CurrentFileStatus for VortexWriter {
         self.inner
             .as_ref()
             .map(|inner| {
-                (inner.bytes_written.load(Ordering::Relaxed))
-                    as usize
+                (inner.bytes_written.load(Ordering::Relaxed)
+                    + inner.buffered_bytes.buffered_bytes()) as usize
             })
             .unwrap_or(0)
     }

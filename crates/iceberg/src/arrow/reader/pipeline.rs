@@ -149,8 +149,8 @@ impl FileScanTaskReader {
     }
 
     async fn process_parquet(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
-        let should_load_page_index =
-            (self.row_selection_enabled && task.predicate().is_some()) || !task.deletes().is_empty();
+        let should_load_page_index = (self.row_selection_enabled && task.predicate().is_some())
+            || !task.deletes().is_empty();
         let mut parquet_read_options = self.parquet_read_options;
         parquet_read_options.preload_page_index = should_load_page_index;
 
