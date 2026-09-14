@@ -222,7 +222,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * refactor(auth) Emphasize AuthManagers aren't shared between catalogs by @DerGut in https://github.com/apache/iceberg-rust/pull/3086
 * fix(partition): Align DateTime Transform to Java's Implementation by @Kurtiscwright in https://github.com/apache/iceberg-rust/pull/3022
 * feat(scan): [3/N] read and apply V3 deletion vectors by @mbutrovich in https://github.com/apache/iceberg-rust/pull/3035
-* fix: Address merge conflicts raising Clippy issues (#3137) by @dannycjones in https://github.com/apache/iceberg-rust/pull#3146
+* fix: Address merge conflicts raising Clippy issues (#3137) by @dannycjones in https://github.com/apache/iceberg-rust/pull/3146
+* chore: Bump version to 0.11.0, update changelog by @dannycjones in https://github.com/apache/iceberg-rust/pull/3138
+* fix: Fix CI failure due to integration test's Hive install by @DerGut in https://github.com/apache/iceberg-rust/pull/3174
+* chore: exclude repo-only files from the source archive by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/3189
+* fix(ci): keep .github/actions in the source archive by @xanderbailey in https://github.com/apache/iceberg-rust/pull/3193
+* fix: break dev-dependency cycle that blocks publishing iceberg-property-macro by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/3184
+* ci: check new crates are reserved on crates.io before merge by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/3185
+* ci: pull MinIO images from Quay by @smaheshwar-pltr in https://github.com/apache/iceberg-rust/pull/3202
 
 ## [v0.10.1] - 2026-07-28
 
