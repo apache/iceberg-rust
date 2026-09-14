@@ -35,6 +35,7 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 hive_metastore = { workspace = true }
 iceberg = { workspace = true }
+iceberg-property-macro = { workspace = true }
 pilota = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
