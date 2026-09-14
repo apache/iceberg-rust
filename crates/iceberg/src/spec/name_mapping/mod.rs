@@ -66,6 +66,7 @@ impl FromStr for NameMapping {
 pub struct MappedField {
     #[serde(skip_serializing_if = "Option::is_none")]
     field_id: Option<i32>,
+    #[serde(default)]
     names: Vec<String>,
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -161,6 +162,46 @@ mod tests {
         let mapped_field_with_null_fields: MappedField =
             serde_json::from_str(mapped_field_with_null_fields).unwrap();
         assert_eq!(mapped_field_with_null_fields, expected);
+    }
+
+    #[test]
+    fn test_json_mapped_field_omitted_names_deserialization() {
+        let mapped_field: MappedField = serde_json::from_str(
+            r#"
+            {
+                "field-id": 1
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(mapped_field, MappedField {
+            field_id: Some(1),
+            names: vec![],
+            fields: vec![],
+        });
+    }
+
+    #[test]
+    fn test_json_name_mapping_with_omitted_names_round_trip() {
+        let json = r#"[{"field-id":1},{"field-id":2,"names":["data"]}]"#;
+        let expected = NameMapping::new(vec![
+            MappedField::new(Some(1), vec![], vec![]),
+            MappedField::new(Some(2), vec!["data".to_string()], vec![]),
+        ]);
+
+        let name_mapping: NameMapping = serde_json::from_str(json).unwrap();
+        assert_eq!(name_mapping, expected);
+
+        let serialized = serde_json::to_string(&name_mapping).unwrap();
+        assert_eq!(
+            serialized,
+            r#"[{"field-id":1,"names":[]},{"field-id":2,"names":["data"]}]"#
+        );
+        assert_eq!(
+            serde_json::from_str::<NameMapping>(&serialized).unwrap(),
+            expected
+        );
     }
 
     #[test]
