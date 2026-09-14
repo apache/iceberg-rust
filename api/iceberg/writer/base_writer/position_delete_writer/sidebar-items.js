@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["position_delete_schema"],"struct":["PositionDeleteFileWriter","PositionDeleteFileWriterBuilder"]};
