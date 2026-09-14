@@ -19,6 +19,8 @@
 
 use http::{HeaderMap, Method};
 use iceberg::Result;
+#[cfg(feature = "sigv4")]
+use reqwest::Url;
 use reqwest::{Request, RequestBuilder};
 
 /// An outgoing REST request being authenticated by an
@@ -46,6 +48,19 @@ impl HttpRequest {
     /// The wrapped request, for the client that sends it.
     pub(crate) fn into_inner(self) -> Request {
         self.inner
+    }
+
+    /// The request URL.
+    #[cfg(feature = "sigv4")]
+    pub(crate) fn url(&self) -> &Url {
+        self.inner.url()
+    }
+
+    /// The mutable request URL, for signers that must rewrite it before
+    /// canonicalizing, e.g. to drop userinfo the wire `Host` never carries.
+    #[cfg(feature = "sigv4")]
+    pub(crate) fn url_mut(&mut self) -> &mut Url {
+        self.inner.url_mut()
     }
 
     /// The request method.
