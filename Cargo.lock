@@ -3859,6 +3859,7 @@ dependencies = [
  "aws-sdk-s3tables",
  "futures",
  "iceberg",
+ "iceberg-property-macro",
  "iceberg-storage-opendal",
  "iceberg_test_utils",
  "itertools 0.13.0",
