@@ -328,6 +328,7 @@ opendal-layer-concurrent-limit@0.57.0		X
 opendal-layer-logging@0.57.0		X															
 opendal-layer-retry@0.57.0		X															
 opendal-layer-timeout@0.57.0		X															
+opendal-service-azblob@0.57.0		X															
 opendal-service-azdls@0.57.0		X															
 opendal-service-azure-common@0.57.0		X															
 opendal-service-fs@0.57.0		X															

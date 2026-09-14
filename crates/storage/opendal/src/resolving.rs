@@ -46,6 +46,7 @@ pub const SCHEME_S3N: &str = "s3n";
 pub const SCHEME_GS: &str = "gs";
 pub const SCHEME_GCS: &str = "gcs";
 pub const SCHEME_OSS: &str = "oss";
+pub const SCHEME_AZBLOB: &str = "azblob";
 pub const SCHEME_ABFSS: &str = "abfss";
 pub const SCHEME_ABFS: &str = "abfs";
 pub const SCHEME_WASBS: &str = "wasbs";
@@ -60,6 +61,7 @@ fn parse_scheme(scheme: &str) -> Result<&'static str> {
         SCHEME_S3 | SCHEME_S3A | SCHEME_S3N => Ok("s3"),
         SCHEME_GS | SCHEME_GCS => Ok("gcs"),
         SCHEME_OSS => Ok("oss"),
+        SCHEME_AZBLOB => Ok("azblob"),
         SCHEME_ABFSS | SCHEME_ABFS | SCHEME_WASBS | SCHEME_WASB => Ok("azdls"),
         SCHEME_HF => Ok("hf"),
         s => Err(Error::new(
@@ -106,6 +108,13 @@ fn build_storage_for_scheme(
         "oss" => {
             let config = crate::oss::oss_config_parse(props.clone())?;
             Ok(OpenDalStorage::Oss {
+                config: Arc::new(config),
+            })
+        }
+        #[cfg(feature = "opendal-azblob")]
+        "azblob" => {
+            let config = crate::azblob::azblob_config_parse(props.clone())?;
+            Ok(OpenDalStorage::Azblob {
                 config: Arc::new(config),
             })
         }
@@ -410,5 +419,14 @@ mod tests {
             Arc::ptr_eq(&abfss, &abfs),
             "abfss and abfs should share one instance"
         );
+    }
+
+    #[cfg(feature = "opendal-azblob")]
+    #[test]
+    fn test_resolve_azblob() {
+        let storage = empty_resolving_storage();
+
+        let azblob = storage.resolve("azblob://container/path").unwrap();
+        assert!(matches!(azblob.as_ref(), OpenDalStorage::Azblob { .. }));
     }
 }

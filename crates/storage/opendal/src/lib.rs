@@ -44,6 +44,14 @@ use serde::{Deserialize, Serialize};
 use utils::from_opendal_error;
 
 cfg_if! {
+    if #[cfg(feature = "opendal-azblob")] {
+        mod azblob;
+        use azblob::*;
+        use opendal::services::AzblobConfig;
+    }
+}
+
+cfg_if! {
     if #[cfg(feature = "opendal-azdls")] {
         mod azdls;
         use azdls::*;
@@ -138,6 +146,9 @@ pub enum OpenDalStorageFactory {
     /// OSS storage factory.
     #[cfg(feature = "opendal-oss")]
     Oss,
+    /// Azure Blob Storage factory.
+    #[cfg(feature = "opendal-azblob")]
+    Azblob,
     /// Azure Data Lake Storage factory.
     #[cfg(feature = "opendal-azdls")]
     Azdls,
@@ -185,6 +196,10 @@ impl StorageFactory for OpenDalStorageFactory {
             OpenDalStorageFactory::Oss => Ok(Arc::new(OpenDalStorage::Oss {
                 config: oss_config_parse(config.props().clone())?.into(),
             })),
+            #[cfg(feature = "opendal-azblob")]
+            OpenDalStorageFactory::Azblob => Ok(Arc::new(OpenDalStorage::Azblob {
+                config: azblob_config_parse(config.props().clone())?.into(),
+            })),
             #[cfg(feature = "opendal-azdls")]
             OpenDalStorageFactory::Azdls => Ok(Arc::new(OpenDalStorage::Azdls {
                 config: azdls_config_parse(config.props().clone())?.into(),
@@ -199,6 +214,7 @@ impl StorageFactory for OpenDalStorageFactory {
                 not(feature = "opendal-s3"),
                 not(feature = "opendal-gcs"),
                 not(feature = "opendal-oss"),
+                not(feature = "opendal-azblob"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
             ))]
@@ -248,6 +264,14 @@ pub enum OpenDalStorage {
     Oss {
         /// OSS configuration.
         config: Arc<OssConfig>,
+    },
+    /// Azure Blob Storage variant.
+    ///
+    /// Accepts paths of the form `azblob://<container>/<path>`.
+    #[cfg(feature = "opendal-azblob")]
+    Azblob {
+        /// Azure Blob Storage configuration.
+        config: Arc<AzblobConfig>,
     },
     /// Azure Data Lake Storage variant.
     ///
@@ -361,6 +385,8 @@ impl OpenDalStorage {
                     ));
                 }
             }
+            #[cfg(feature = "opendal-azblob")]
+            OpenDalStorage::Azblob { config } => azblob_create_operator(path, config)?,
             #[cfg(feature = "opendal-azdls")]
             OpenDalStorage::Azdls { config } => azdls_create_operator(path, config)?,
             #[cfg(feature = "opendal-hf")]
@@ -370,6 +396,7 @@ impl OpenDalStorage {
                 not(feature = "opendal-fs"),
                 not(feature = "opendal-gcs"),
                 not(feature = "opendal-oss"),
+                not(feature = "opendal-azblob"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
             ))]
@@ -479,6 +506,8 @@ impl OpenDalStorage {
                     ))
                 }
             }
+            #[cfg(feature = "opendal-azblob")]
+            OpenDalStorage::Azblob { .. } => azblob_relative_path(path),
             #[cfg(feature = "opendal-azdls")]
             OpenDalStorage::Azdls { config } => {
                 let azure_path = path.parse::<AzureStoragePath>()?;
@@ -498,6 +527,7 @@ impl OpenDalStorage {
                 not(feature = "opendal-fs"),
                 not(feature = "opendal-gcs"),
                 not(feature = "opendal-oss"),
+                not(feature = "opendal-azblob"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
             ))]
@@ -804,6 +834,21 @@ mod tests {
             storage
                 .relativize_path("s3://my-bucket/path/to/file.parquet")
                 .is_err()
+        );
+    }
+
+    #[cfg(feature = "opendal-azblob")]
+    #[test]
+    fn test_relativize_path_azblob() {
+        let storage = OpenDalStorage::Azblob {
+            config: Arc::new(AzblobConfig::default()),
+        };
+
+        assert_eq!(
+            storage
+                .relativize_path("azblob://container/path/to/file.parquet")
+                .unwrap(),
+            "path/to/file.parquet"
         );
     }
 
