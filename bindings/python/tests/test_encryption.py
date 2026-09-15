@@ -19,24 +19,35 @@ import pytest
 from pyiceberg_core import encryption
 
 AES128_KEY = b"0123456789012345"
+# A version byte, then the Avro-encoded encryption_key: zigzag length 16, then the key.
+ENCODED_PREFIX = b"\x01\x20" + AES128_KEY
 
 
 def fields(metadata):
     return (metadata.encryption_key, metadata.aad_prefix, metadata.file_length)
 
 
-def test_encode_decode_round_trip():
-    encoded = encryption.encode_standard_key_metadata(AES128_KEY, b"ad", 1024)
-    metadata = encryption.decode_standard_key_metadata(encoded)
-
-    assert fields(metadata) == (AES128_KEY, b"ad", 1024)
-
-
-def test_encode_decode_without_optional_fields():
-    encoded = encryption.encode_standard_key_metadata(AES128_KEY)
-    metadata = encryption.decode_standard_key_metadata(encoded)
-
-    assert fields(metadata) == (AES128_KEY, None, None)
+# Pinned in both directions so the encoding stays compatible with the Java and Python
+# implementations, including the null union tags written for absent optional fields.
+@pytest.mark.parametrize(
+    "aad_prefix, file_length, encoded",
+    [
+        (None, None, ENCODED_PREFIX + b"\x00\x00"),
+        (b"ad", None, ENCODED_PREFIX + b"\x02\x04ad\x00"),
+        (b"ad", 1024, ENCODED_PREFIX + b"\x02\x04ad\x02\x80\x10"),
+        (b"", None, ENCODED_PREFIX + b"\x02\x00\x00"),
+    ],
+)
+def test_wire_format(aad_prefix, file_length, encoded):
+    assert fields(encryption.decode_standard_key_metadata(encoded)) == (
+        AES128_KEY,
+        aad_prefix,
+        file_length,
+    )
+    assert (
+        encryption.encode_standard_key_metadata(AES128_KEY, aad_prefix, file_length)
+        == encoded
+    )
 
 
 def test_repr_redacts_encryption_key():
@@ -51,14 +62,6 @@ def test_repr_redacts_encryption_key():
     )
 
 
-def test_encoded_wire_format():
-    # A version byte, then the Avro datum. Pinned so the encoding stays compatible
-    # with the Java and Python implementations.
-    assert encryption.encode_standard_key_metadata(AES128_KEY, b"ad", 1024) == (
-        b"\x01\x20" + AES128_KEY + b"\x02\x04ad\x02\x80\x10"
-    )
-
-
 @pytest.mark.parametrize("key_length", [16, 24, 32])
 def test_encode_accepts_aes_key_lengths(key_length):
     encoded = encryption.encode_standard_key_metadata(bytes(key_length))
@@ -69,8 +72,18 @@ def test_encode_accepts_aes_key_lengths(key_length):
 
 @pytest.mark.parametrize("key_length", [0, 4, 15, 20, 33])
 def test_encode_rejects_invalid_key_length(key_length):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="key length"):
         encryption.encode_standard_key_metadata(bytes(key_length))
+
+
+@pytest.mark.parametrize("key_length", [0, 4, 15, 20, 33])
+def test_decode_rejects_invalid_key_length(key_length):
+    # Key length is validated on decode too, not only on encode. The Avro zigzag length
+    # is 2 * key_length, a single byte for every length here.
+    data = b"\x01" + bytes([key_length * 2]) + bytes(key_length) + b"\x00\x00"
+
+    with pytest.raises(ValueError, match="Invalid encryption key in key metadata"):
+        encryption.decode_standard_key_metadata(data)
 
 
 @pytest.mark.parametrize("data", [b"\x02", b"\x02\x20" + AES128_KEY + b"\x00\x00"])
@@ -80,5 +93,16 @@ def test_decode_rejects_unsupported_version(data):
 
 
 def test_decode_rejects_empty_buffer():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Empty key metadata"):
         encryption.decode_standard_key_metadata(b"")
+
+
+@pytest.mark.xfail(
+    reason="apache/avro-rs#664: a missing union tag decodes as null; fixed upstream in 0.23",
+    strict=True,
+)
+def test_decode_rejects_truncated_union_tags():
+    # Version and key, with both union tags omitted, currently decodes as if the
+    # optional fields were absent rather than erroring.
+    with pytest.raises(ValueError):
+        encryption.decode_standard_key_metadata(ENCODED_PREFIX)
