@@ -20,7 +20,7 @@ use std::str::FromStr;
 
 use uuid::Uuid;
 
-use crate::compression::{CompressionCodec, TABLE_METADATA_SUFFIX_TO_COMPRESSION};
+use crate::compression::CompressionCodec;
 use crate::spec::TableMetadata;
 use crate::{Error, ErrorKind, Result};
 
@@ -97,10 +97,12 @@ impl MetadataLocation {
     /// Parses a file name of the format `<version>-<uuid>.metadata.json`
     /// or with compression before or after `.metadata.json`.
     fn parse_file_name(file_name: &str) -> Result<(i32, Uuid, CompressionCodec)> {
-        let (stripped, compression_codec) = TABLE_METADATA_SUFFIX_TO_COMPRESSION
-            .iter()
-            .find_map(|(suffix, codec)| {
-                strip_metadata_suffix(file_name, suffix).map(|stripped| (stripped, *codec))
+        let (stripped, compression_codec) = CompressionCodec::table_metadata_codecs()
+            .into_iter()
+            .filter(|codec| !codec.is_none())
+            .find_map(|codec| {
+                strip_metadata_suffix(file_name, codec.table_metadata_suffix()?)
+                    .map(|stripped| (stripped, codec))
             })
             .or_else(|| {
                 file_name

@@ -19,15 +19,15 @@ use std::collections::HashMap;
 
 use iceberg_property_macro::properties_view;
 
-use crate::compression::{CompressionCodec, TABLE_METADATA_SUPPORTED_COMPRESSION};
+use crate::compression::CompressionCodec;
 use crate::encryption::AesKeySize;
 use crate::error::{Error, ErrorKind, Result};
 use crate::spec::NameMapping;
 use crate::util::location::strip_trailing_slash;
 
 fn supported_metadata_compression_names() -> String {
-    let names = TABLE_METADATA_SUPPORTED_COMPRESSION
-        .iter()
+    let names = CompressionCodec::table_metadata_codecs()
+        .into_iter()
         .map(|codec| format!("'{}'", codec.name()))
         .collect::<Vec<_>>();
     let (last, rest) = names
@@ -73,7 +73,7 @@ fn parse_metadata_compression(value: &str) -> Result<CompressionCodec> {
         serde_json::from_value(serde_json::Value::String(lowercase_value))
             .map_err(|_| invalid_metadata_compression_codec(value))?;
 
-    if TABLE_METADATA_SUPPORTED_COMPRESSION.contains(&codec) {
+    if codec.is_supported_for_table_metadata() {
         Ok(codec)
     } else {
         Err(invalid_metadata_compression_codec(value))

@@ -66,22 +66,6 @@ pub enum CompressionCodec {
     Snappy,
 }
 
-pub(crate) const TABLE_METADATA_SUPPORTED_COMPRESSION: &[CompressionCodec] = &[
-    CompressionCodec::None,
-    CompressionCodec::Gzip(GZIP_DEFAULT_LEVEL),
-    CompressionCodec::Zstd(ZSTD_DEFAULT_LEVEL),
-];
-
-pub(crate) const TABLE_METADATA_SUFFIX_TO_COMPRESSION: &[(&str, CompressionCodec)] = &[
-    (ZSTD_SUFFIX, CompressionCodec::Zstd(ZSTD_DEFAULT_LEVEL)),
-    (GZIP_SUFFIX, CompressionCodec::Gzip(GZIP_DEFAULT_LEVEL)),
-];
-
-pub(crate) const TABLE_METADATA_MAGIC_TO_COMPRESSION: &[(&[u8], CompressionCodec)] = &[
-    (GZIP_MAGIC, CompressionCodec::Gzip(GZIP_DEFAULT_LEVEL)),
-    (ZSTD_MAGIC, CompressionCodec::Zstd(ZSTD_DEFAULT_LEVEL)),
-];
-
 impl CompressionCodec {
     /// Returns a Zstd codec with the default compression level.
     pub const fn zstd_default() -> Self {
@@ -96,6 +80,38 @@ impl CompressionCodec {
     /// Returns a Brotli codec with the default compression level.
     pub const fn brotli_default() -> Self {
         CompressionCodec::Brotli(BROTLI_DEFAULT_LEVEL)
+    }
+
+    pub(crate) const fn table_metadata_codecs() -> [Self; 3] {
+        [
+            CompressionCodec::None,
+            CompressionCodec::Gzip(GZIP_DEFAULT_LEVEL),
+            CompressionCodec::Zstd(ZSTD_DEFAULT_LEVEL),
+        ]
+    }
+
+    pub(crate) const fn is_supported_for_table_metadata(&self) -> bool {
+        matches!(
+            self,
+            CompressionCodec::None | CompressionCodec::Gzip(_) | CompressionCodec::Zstd(_)
+        )
+    }
+
+    pub(crate) const fn table_metadata_suffix(&self) -> Option<&'static str> {
+        match self {
+            CompressionCodec::None => Some(""),
+            CompressionCodec::Zstd(_) => Some(ZSTD_SUFFIX),
+            CompressionCodec::Gzip(_) => Some(GZIP_SUFFIX),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn table_metadata_magic(&self) -> Option<&'static [u8]> {
+        match self {
+            CompressionCodec::Zstd(_) => Some(ZSTD_MAGIC),
+            CompressionCodec::Gzip(_) => Some(GZIP_MAGIC),
+            _ => None,
+        }
     }
 
     /// Returns the codec name as used in serialization and error messages.
@@ -250,19 +266,12 @@ impl CompressionCodec {
     ///
     /// Returns an error for codecs without a metadata file suffix.
     pub fn suffix(&self) -> Result<&'static str> {
-        match self {
-            CompressionCodec::None => Ok(""),
-            CompressionCodec::Zstd(_) => Ok(ZSTD_SUFFIX),
-            CompressionCodec::Gzip(_) => Ok(GZIP_SUFFIX),
-            codec @ (CompressionCodec::Lz4
-            | CompressionCodec::Lz4Raw
-            | CompressionCodec::Brotli(_)
-            | CompressionCodec::Lzo
-            | CompressionCodec::Snappy) => Err(Error::new(
+        self.table_metadata_suffix().ok_or_else(|| {
+            Error::new(
                 ErrorKind::FeatureUnsupported,
-                format!("suffix not defined for {codec:?}"),
-            )),
-        }
+                format!("suffix not defined for {self:?}"),
+            )
+        })
     }
 }
 
@@ -323,13 +332,23 @@ mod tests {
     fn test_suffix() {
         assert_eq!(CompressionCodec::None.suffix().unwrap(), "");
         assert_eq!(CompressionCodec::zstd_default().suffix().unwrap(), ".zstd");
+        assert_eq!(CompressionCodec::Zstd(5).suffix().unwrap(), ".zstd");
         assert_eq!(CompressionCodec::gzip_default().suffix().unwrap(), ".gz");
+        assert_eq!(CompressionCodec::Gzip(9).suffix().unwrap(), ".gz");
 
         assert!(CompressionCodec::Lz4.suffix().is_err());
         assert!(CompressionCodec::Snappy.suffix().is_err());
 
         let lz4_err = CompressionCodec::Lz4.suffix().unwrap_err();
         assert!(lz4_err.to_string().contains("suffix not defined for Lz4"));
+    }
+
+    #[test]
+    fn test_table_metadata_compression_support_ignores_level() {
+        assert!(CompressionCodec::None.is_supported_for_table_metadata());
+        assert!(CompressionCodec::Gzip(9).is_supported_for_table_metadata());
+        assert!(CompressionCodec::Zstd(5).is_supported_for_table_metadata());
+        assert!(!CompressionCodec::Lz4.is_supported_for_table_metadata());
     }
 
     #[test]

@@ -38,7 +38,7 @@ use super::{
     TableProperties,
 };
 use crate::catalog::{METADATA_FOLDER_NAME, MetadataLocation};
-use crate::compression::{CompressionCodec, TABLE_METADATA_MAGIC_TO_COMPRESSION};
+use crate::compression::CompressionCodec;
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
 use crate::partitioning::compute_unified_partition_type;
@@ -479,9 +479,14 @@ impl TableMetadata {
         let input_file = file_io.new_input(metadata_location)?;
         let metadata_content = input_file.read().await?;
 
-        let compression_codec = TABLE_METADATA_MAGIC_TO_COMPRESSION
-            .iter()
-            .find_map(|(magic, codec)| metadata_content.starts_with(magic).then_some(*codec));
+        let compression_codec =
+            CompressionCodec::table_metadata_codecs()
+                .into_iter()
+                .find(|codec| {
+                    codec
+                        .table_metadata_magic()
+                        .is_some_and(|magic| metadata_content.starts_with(magic))
+                });
 
         let metadata = if let Some(codec) = compression_codec {
             let decompressed_data = codec.decompress(metadata_content.to_vec()).map_err(|e| {
@@ -1632,7 +1637,7 @@ mod tests {
 
     use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
     use crate::catalog::MetadataLocation;
-    use crate::compression::{CompressionCodec, TABLE_METADATA_MAGIC_TO_COMPRESSION};
+    use crate::compression::CompressionCodec;
     use crate::io::FileIO;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
@@ -1661,10 +1666,7 @@ mod tests {
     }
 
     fn table_metadata_magic(codec: CompressionCodec) -> &'static [u8] {
-        TABLE_METADATA_MAGIC_TO_COMPRESSION
-            .iter()
-            .find_map(|(magic, mapped_codec)| (*mapped_codec == codec).then_some(*magic))
-            .unwrap()
+        codec.table_metadata_magic().unwrap()
     }
 
     /// Loads a test table metadata and relocates it to `location`, so that derived
