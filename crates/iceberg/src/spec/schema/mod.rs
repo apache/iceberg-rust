@@ -647,6 +647,17 @@ mod tests {
         ]);
         assert_eq!(variant.calc_min_compatible_format(), FormatVersion::V3);
 
+        // Unknown is a v3-only primitive type.
+        let unknown = schema_with(vec![
+            NestedField::optional(1, "u", Primitive(PrimitiveType::Unknown)).into(),
+        ]);
+        assert_eq!(unknown.calc_min_compatible_format(), FormatVersion::V3);
+        assert!(
+            unknown
+                .check_format_compatibility(FormatVersion::V2)
+                .is_err()
+        );
+
         // A v3-only type nested inside a list inside a struct → V3 (flattened fields).
         let nested = schema_with(vec![
             NestedField::required(
@@ -1474,5 +1485,154 @@ table {
                 .build()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_unknown_type_deserialization_rejects_non_null_default() {
+        let field_json = serde_json::json!({
+            "id": 1,
+            "name": "empty",
+            "required": false,
+            "type": "unknown",
+            "initial-default": 1
+        });
+
+        let error = serde_json::from_value::<NestedField>(field_json.clone()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Unknown type only supports null default values"),
+            "unexpected error: {error}"
+        );
+
+        let schema_json = serde_json::json!({
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [field_json]
+        });
+        assert!(serde_json::from_value::<Schema>(schema_json).is_err());
+    }
+
+    #[test]
+    fn test_unknown_type_deserialization_accepts_null_defaults() {
+        let schema_json = serde_json::json!({
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [
+                {
+                    "id": 1,
+                    "name": "empty",
+                    "required": false,
+                    "type": "unknown",
+                    "initial-default": null,
+                    "write-default": null
+                }
+            ]
+        });
+
+        serde_json::from_value::<Schema>(schema_json).unwrap();
+    }
+
+    #[test]
+    fn test_unknown_type_accepts_null_container_defaults() {
+        let cases = [
+            (
+                "struct",
+                Struct(StructType::new(vec![
+                    NestedField::optional(2, "empty", Primitive(PrimitiveType::Unknown)).into(),
+                ])),
+                Literal::Struct(crate::spec::Struct::from_iter([None])),
+            ),
+            (
+                "list",
+                List(ListType::new(
+                    NestedField::list_element(2, Primitive(PrimitiveType::Unknown), false).into(),
+                )),
+                Literal::List(vec![None]),
+            ),
+            (
+                "map",
+                Map(MapType::optional(
+                    2,
+                    Primitive(PrimitiveType::String),
+                    3,
+                    Primitive(PrimitiveType::Unknown),
+                )),
+                Literal::Map(MapValue::from([(Literal::string("key"), None)])),
+            ),
+        ];
+
+        for (name, field_type, default) in cases {
+            let schema = Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, name, field_type)
+                        .with_write_default(default)
+                        .into(),
+                ])
+                .build()
+                .unwrap();
+            serde_json::to_value(schema).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_unknown_type_deserialization_rejects_non_null_container_defaults() {
+        let cases = [
+            (
+                "struct",
+                serde_json::json!({
+                    "type": "struct",
+                    "fields": [{
+                        "id": 2,
+                        "name": "empty",
+                        "required": false,
+                        "type": "unknown"
+                    }]
+                }),
+                serde_json::json!({"2": 1}),
+            ),
+            (
+                "list",
+                serde_json::json!({
+                    "type": "list",
+                    "element-id": 2,
+                    "element-required": false,
+                    "element": "unknown"
+                }),
+                serde_json::json!([1]),
+            ),
+            (
+                "map",
+                serde_json::json!({
+                    "type": "map",
+                    "key-id": 2,
+                    "key": "string",
+                    "value-id": 3,
+                    "value-required": false,
+                    "value": "unknown"
+                }),
+                serde_json::json!({"keys": ["key"], "values": [1]}),
+            ),
+        ];
+
+        for (name, field_type, default) in cases {
+            let schema_json = serde_json::json!({
+                "type": "struct",
+                "schema-id": 1,
+                "fields": [{
+                    "id": 1,
+                    "name": name,
+                    "required": false,
+                    "type": field_type,
+                    "initial-default": default
+                }]
+            });
+
+            assert!(
+                serde_json::from_value::<Schema>(schema_json).is_err(),
+                "non-null unknown default in {name} should be rejected"
+            );
+        }
     }
 }
