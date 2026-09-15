@@ -205,9 +205,12 @@ mod tests {
         let plaintext = b"Hello from EncryptedInputFile/EncryptedOutputFile!";
 
         let output = EncryptedOutputFile::new(fileio.new_output(path).unwrap(), key_metadata());
-        output.write(Bytes::from(plaintext.to_vec())).await.unwrap();
+        let file_metadata = output.write(Bytes::from(plaintext.to_vec())).await.unwrap();
 
-        let input = EncryptedInputFile::new(fileio.new_input(path).unwrap(), key_metadata());
+        let input = EncryptedInputFile::new(
+            fileio.new_input(path).unwrap(),
+            key_metadata().with_file_length(file_metadata.size),
+        );
         let content = input.read().await.unwrap();
         assert_eq!(&content[..], plaintext);
     }
