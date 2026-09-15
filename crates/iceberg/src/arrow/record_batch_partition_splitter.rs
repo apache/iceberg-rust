@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, RecordBatch, StructArray};
+use arrow_buffer::BooleanBufferBuilder;
 use arrow_select::filter::filter_record_batch;
 
 use super::arrow_struct_to_literal;
@@ -190,11 +191,12 @@ impl RecordBatchPartitionSplitter {
         for (row, row_ids) in group_ids.into_iter() {
             // generate the bool filter array from column_ids
             let filter_array: BooleanArray = {
-                let mut filter = vec![false; batch.num_rows()];
-                row_ids.into_iter().for_each(|row_id| {
-                    filter[row_id] = true;
-                });
-                filter.into()
+                let mut builder = BooleanBufferBuilder::new(batch.num_rows());
+                builder.append_n(batch.num_rows(), false);
+                for row_id in row_ids {
+                    builder.set_bit(row_id, true);
+                }
+                BooleanArray::new(builder.finish(), None)
             };
 
             // Create PartitionKey from the partition struct
