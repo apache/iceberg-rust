@@ -1,0 +1,23 @@
+pub mod iceberg_kms_aws
+pub struct iceberg_kms_aws::AwsKmsClientFactory
+impl iceberg_kms_aws::AwsKmsClientFactory
+pub fn iceberg_kms_aws::AwsKmsClientFactory::new() -> Self
+pub fn iceberg_kms_aws::AwsKmsClientFactory::with_sdk_config(self, sdk_config: aws_types::sdk_config::SdkConfig) -> Self
+impl core::clone::Clone for iceberg_kms_aws::AwsKmsClientFactory
+pub fn iceberg_kms_aws::AwsKmsClientFactory::clone(&self) -> iceberg_kms_aws::AwsKmsClientFactory
+impl core::default::Default for iceberg_kms_aws::AwsKmsClientFactory
+pub fn iceberg_kms_aws::AwsKmsClientFactory::default() -> iceberg_kms_aws::AwsKmsClientFactory
+impl core::fmt::Debug for iceberg_kms_aws::AwsKmsClientFactory
+pub fn iceberg_kms_aws::AwsKmsClientFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::encryption::kms::factory::KmsClientFactory for iceberg_kms_aws::AwsKmsClientFactory
+pub fn iceberg_kms_aws::AwsKmsClientFactory::create_kms_client<'life0, 'life1, 'async_trait>(&'life0 self, properties: &'life1 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg::encryption::kms::client::KeyManagementClient>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub const iceberg_kms_aws::AWS_ACCESS_KEY_ID: &str
+pub const iceberg_kms_aws::AWS_PROFILE_NAME: &str
+pub const iceberg_kms_aws::AWS_REGION_NAME: &str
+pub const iceberg_kms_aws::AWS_SECRET_ACCESS_KEY: &str
+pub const iceberg_kms_aws::AWS_SESSION_TOKEN: &str
+pub const iceberg_kms_aws::KMS_DATA_KEY_SPEC: &str
+pub const iceberg_kms_aws::KMS_DATA_KEY_SPEC_DEFAULT: &str
+pub const iceberg_kms_aws::KMS_ENCRYPTION_ALGORITHM_SPEC: &str
+pub const iceberg_kms_aws::KMS_ENCRYPTION_ALGORITHM_SPEC_DEFAULT: &str
+pub const iceberg_kms_aws::KMS_ENDPOINT: &str

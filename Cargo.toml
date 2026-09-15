@@ -23,6 +23,7 @@ members = [
   "crates/iceberg",
   "crates/integration_tests",
   "crates/integrations/*",
+  "crates/kms/*",
   "crates/property-macro",
   "crates/sqllogictest",
   "crates/storage/*",
@@ -60,8 +61,12 @@ arrow-select = "59.2"
 arrow-string = "59.2"
 as-any = "0.3.2"
 async-trait = "0.1.89"
-aws-config = "1.8.7"
+aws-config = "1.12"
 aws-sdk-glue = { version = "1.85", default-features = false, features = [
+  "default-https-client",
+  "rt-tokio",
+] }
+aws-sdk-kms = { version = "1.118", default-features = false, features = [
   "default-https-client",
   "rt-tokio",
 ] }
@@ -106,6 +111,7 @@ iceberg-catalog-rest = { version = "0.10.0", path = "./crates/catalog/rest" }
 iceberg-catalog-s3tables = { version = "0.10.0", path = "./crates/catalog/s3tables" }
 iceberg-catalog-sql = { version = "0.10.0", path = "./crates/catalog/sql" }
 iceberg-datafusion = { version = "0.10.0", path = "./crates/integrations/datafusion" }
+iceberg-kms-aws = { version = "0.10.0", path = "./crates/kms/aws" }
 iceberg-property-macro = { version = "0.10.0", path = "./crates/property-macro" }
 iceberg-storage-opendal = { version = "0.10.0", path = "./crates/storage/opendal" }
 indicatif = "0.18"
