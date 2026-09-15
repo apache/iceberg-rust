@@ -1647,13 +1647,18 @@ mod tests {
         let key_metadata = StandardKeyMetadata::try_new(b"0123456789abcdef")
             .unwrap()
             .with_aad_prefix(b"test-aad-prefix!");
-        let encoded_key_metadata = key_metadata.encode().unwrap();
 
         let blob = encode_dv_blob([2u64, 4]);
         let plaintext_size = blob.len() as i64;
         let dv_path = format!("{table_location}/deletes.puffin");
         let output = EncryptedOutputFile::new(file_io.new_output(&dv_path).unwrap(), key_metadata);
-        output.write(Bytes::from(blob)).await.unwrap();
+        let file_metadata = output.write(Bytes::from(blob)).await.unwrap();
+        let encoded_key_metadata = output
+            .key_metadata()
+            .clone()
+            .with_file_length(file_metadata.size)
+            .encode()
+            .unwrap();
 
         // content_offset / content_size_in_bytes are in the plaintext coordinate space, distinct
         // from the ciphertext's on-disk size (header, nonce, and tag overhead).

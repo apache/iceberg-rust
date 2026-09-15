@@ -746,6 +746,7 @@ impl ArrowAsyncFileWriter for AsyncFileWriter {
             self.0
                 .close()
                 .await
+                .map(|_| ())
                 .map_err(|err| parquet::errors::ParquetError::External(Box::new(err)))
         })
     }

@@ -28,7 +28,7 @@ use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
-use crate::encryption::EncryptedOutputFile;
+use crate::encryption::{EncryptedOutputFile, StandardKeyMetadata};
 use crate::error::Result;
 use crate::io::{FileWrite, OutputFile};
 use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
@@ -50,7 +50,7 @@ pub struct ManifestWriterBuilder {
     writer_future: WriterFuture,
     location: String,
     snapshot_id: Option<i64>,
-    key_metadata: Option<Vec<u8>>,
+    key_metadata: Option<StandardKeyMetadata>,
     schema: SchemaRef,
     partition_spec: PartitionSpec,
 }
@@ -84,7 +84,7 @@ impl ManifestWriterBuilder {
         partition_spec: PartitionSpec,
     ) -> Result<Self> {
         let location = encrypted_output.location().to_owned();
-        let key_metadata = Some(encrypted_output.key_metadata().encode()?.to_vec());
+        let key_metadata = Some(encrypted_output.key_metadata().clone());
         Ok(Self {
             writer_future: Box::pin(async move { encrypted_output.writer().await }),
             location,
@@ -211,7 +211,7 @@ pub struct ManifestWriter {
 
     min_seq_num: Option<i64>,
 
-    key_metadata: Option<Vec<u8>>,
+    key_metadata: Option<StandardKeyMetadata>,
 
     manifest_entries: Vec<ManifestEntry>,
 
@@ -224,7 +224,7 @@ impl ManifestWriter {
         writer_future: WriterFuture,
         location: String,
         snapshot_id: Option<i64>,
-        key_metadata: Option<Vec<u8>>,
+        key_metadata: Option<StandardKeyMetadata>,
         metadata: ManifestMetadata,
         first_row_id: Option<u64>,
     ) -> Self {
@@ -508,14 +508,22 @@ impl ManifestWriter {
         }
 
         let content = avro_writer.into_inner()?;
-        let length = content.len();
         let mut writer = self.writer_future.await?;
         writer.write(Bytes::from(content)).await?;
-        writer.close().await?;
+        let file_metadata = writer.close().await?;
+        let key_metadata = self
+            .key_metadata
+            .map(|metadata| {
+                metadata
+                    .with_file_length(file_metadata.size)
+                    .encode()
+                    .map(|bytes| bytes.into_vec())
+            })
+            .transpose()?;
 
         Ok(ManifestFile {
             manifest_path: self.location,
-            manifest_length: length as i64,
+            manifest_length: file_metadata.size.try_into()?,
             partition_spec_id: self.metadata.partition_spec.spec_id(),
             content: self.metadata.content,
             // sequence_number and min_sequence_number with UNASSIGNED_SEQUENCE_NUMBER will be replace with
@@ -530,7 +538,7 @@ impl ManifestWriter {
             existing_rows_count: Some(self.existing_rows),
             deleted_rows_count: Some(self.deleted_rows),
             partitions: Some(partition_summary),
-            key_metadata: self.key_metadata,
+            key_metadata,
             first_row_id: self.first_row_id,
         })
     }

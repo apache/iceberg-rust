@@ -451,13 +451,13 @@ impl<'a> SnapshotProducer<'a> {
             .file_io()
             .new_output(manifest_list_path.clone())?;
 
-        let (writer, encryption_key_id) = match self.table.encryption_manager() {
+        let (writer, key_metadata) = match self.table.encryption_manager() {
             Some(em) => {
                 let encrypted_output = em.encrypt(raw_output);
-                let key_id = em
-                    .encrypt_manifest_list_key_metadata(encrypted_output.key_metadata())
-                    .await?;
-                (encrypted_output.writer().await?, Some(key_id))
+                (
+                    encrypted_output.writer().await?,
+                    Some(encrypted_output.key_metadata().clone()),
+                )
             }
             None => (raw_output.writer().await?, None),
         };
@@ -492,7 +492,20 @@ impl<'a> SnapshotProducer<'a> {
 
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
         let writer_next_row_id = manifest_list_writer.next_row_id();
-        manifest_list_writer.close().await?;
+        let file_metadata = manifest_list_writer.close().await?;
+        let encryption_key_id = if let Some(key_metadata) = key_metadata {
+            Some(
+                self.table
+                    .encryption_manager()
+                    .unwrap()
+                    .encrypt_manifest_list_key_metadata(
+                        &key_metadata.with_file_length(file_metadata.size),
+                    )
+                    .await?,
+            )
+        } else {
+            None
+        };
 
         let commit_ts = chrono::Utc::now().timestamp_millis();
         let new_snapshot = Snapshot::builder()

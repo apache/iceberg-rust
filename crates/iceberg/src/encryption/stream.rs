@@ -49,7 +49,7 @@ use std::sync::Arc;
 use bytes::{Bytes, BytesMut};
 
 use super::AesGcmCipher;
-use crate::io::{FileRead, FileWrite};
+use crate::io::{FileMetadata, FileRead, FileWrite};
 use crate::{Error, ErrorKind, Result};
 
 /// Default plaintext block size (1 MiB), matching Java's `Ciphers.PLAIN_BLOCK_SIZE`.
@@ -71,8 +71,7 @@ pub const GCM_STREAM_MAGIC: [u8; 4] = *b"AGS1";
 pub const GCM_STREAM_HEADER_LENGTH: u32 = 8;
 
 /// Minimum valid AGS1 stream length (header + one empty block).
-#[cfg(test)]
-pub const MIN_STREAM_LENGTH: u32 = GCM_STREAM_HEADER_LENGTH + NONCE_LENGTH + GCM_TAG_LENGTH;
+pub(crate) const MIN_STREAM_LENGTH: u32 = GCM_STREAM_HEADER_LENGTH + NONCE_LENGTH + GCM_TAG_LENGTH;
 
 /// Constructs the per-block AAD for AGS1 stream encryption.
 ///
@@ -288,7 +287,7 @@ impl FileRead for AesGcmFileRead {
     /// file. GCM authentication is verified per-block, so any tampering is detected
     /// at the granularity of individual blocks.
     async fn read(&self, range: Range<u64>) -> Result<Bytes> {
-        if range.start == range.end {
+        if range.start == range.end && self.plain_stream_size != 0 {
             return Ok(Bytes::new());
         }
 
@@ -317,7 +316,7 @@ impl FileRead for AesGcmFileRead {
         }
 
         let first_block = range.start / PLAIN_BLOCK_SIZE as u64;
-        let last_block = (range.end - 1) / PLAIN_BLOCK_SIZE as u64;
+        let last_block = range.end.saturating_sub(1) / PLAIN_BLOCK_SIZE as u64;
 
         // Read all needed encrypted blocks in a single I/O call
         let encrypted_start = Self::encrypted_block_offset(first_block);
@@ -325,6 +324,16 @@ impl FileRead for AesGcmFileRead {
             Self::encrypted_block_offset(last_block) + self.cipher_block_size(last_block) as u64;
 
         let all_encrypted = self.inner.read(encrypted_start..encrypted_end).await?;
+        if all_encrypted.len() as u64 != encrypted_end - encrypted_start {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid encrypted read length: expected {} bytes, got {}",
+                    encrypted_end - encrypted_start,
+                    all_encrypted.len()
+                ),
+            ));
+        }
 
         // Decrypt each block and extract the requested plaintext range
         let result_len = (range.end - range.start) as usize;
@@ -502,7 +511,7 @@ impl FileWrite for AesGcmFileWrite {
         Ok(())
     }
 
-    async fn close(&mut self) -> Result<()> {
+    async fn close(&mut self) -> Result<FileMetadata> {
         if self.closed {
             return Err(Error::new(
                 ErrorKind::Unexpected,
@@ -638,6 +647,29 @@ mod tests {
         // Reading empty range should return empty bytes
         let result = reader.read(0..0).await.unwrap();
         assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_short_ciphertext_read_is_rejected() {
+        struct ShortRead;
+
+        #[async_trait::async_trait]
+        impl FileRead for ShortRead {
+            async fn read(&self, range: Range<u64>) -> Result<Bytes> {
+                Ok(Bytes::from(vec![0; (range.end - range.start - 1) as usize]))
+            }
+        }
+
+        let reader = AesGcmFileRead::new(
+            Box::new(ShortRead),
+            Arc::new(make_cipher(b"0123456789abcdef")),
+            Box::default(),
+            u64::from(MIN_STREAM_LENGTH) + 10,
+        )
+        .unwrap();
+        let err = reader.read(0..10).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.to_string().contains("Invalid encrypted read length"));
     }
 
     #[tokio::test]
@@ -990,8 +1022,8 @@ mod tests {
             Ok(())
         }
 
-        async fn close(&mut self) -> Result<()> {
-            Ok(())
+        async fn close(&mut self) -> Result<FileMetadata> {
+            unreachable!()
         }
     }
 
@@ -1002,8 +1034,10 @@ mod tests {
             Ok(())
         }
 
-        async fn close(&mut self) -> Result<()> {
-            Ok(())
+        async fn close(&mut self) -> Result<FileMetadata> {
+            Ok(FileMetadata {
+                size: self.buffer.lock().unwrap().len() as u64,
+            })
         }
     }
 

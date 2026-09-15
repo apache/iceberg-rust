@@ -645,11 +645,13 @@ impl FileWrite for OpenDalWriter {
             .map_err(from_opendal_error)?)
     }
 
-    async fn close(&mut self) -> Result<()> {
-        let _ = opendal::Writer::close(&mut self.0)
+    async fn close(&mut self) -> Result<FileMetadata> {
+        let metadata = opendal::Writer::close(&mut self.0)
             .await
             .map_err(from_opendal_error)?;
-        Ok(())
+        Ok(FileMetadata {
+            size: metadata.content_length(),
+        })
     }
 }
 
@@ -693,6 +695,30 @@ mod tests {
     fn test_default_memory_operator() {
         let op = default_memory_operator();
         assert_eq!(op.info().scheme().to_string(), "memory");
+    }
+
+    #[cfg(feature = "opendal-memory")]
+    #[tokio::test]
+    async fn test_writer_close_returns_stored_size() {
+        use iceberg::encryption::{EncryptedOutputFile, StandardKeyMetadata};
+
+        let storage = Arc::new(OpenDalStorage::Memory(default_memory_operator()));
+        let path = "memory:///stored-size";
+        for plaintext in [Bytes::new(), Bytes::from_static(b"test data")] {
+            let mut writer = storage.writer(path).await.unwrap();
+            writer.write(plaintext.clone()).await.unwrap();
+            let metadata = writer.close().await.unwrap();
+            assert_eq!(metadata.size, plaintext.len() as u64);
+            assert_eq!(metadata.size, storage.metadata(path).await.unwrap().size);
+
+            let output = EncryptedOutputFile::new(
+                OutputFile::new(storage.clone(), path.to_string()),
+                StandardKeyMetadata::try_new(b"0123456789abcdef").unwrap(),
+            );
+            let metadata = output.write(plaintext.clone()).await.unwrap();
+            assert!(metadata.size > plaintext.len() as u64);
+            assert_eq!(metadata.size, storage.metadata(path).await.unwrap().size);
+        }
     }
 
     #[cfg(feature = "opendal-memory")]
