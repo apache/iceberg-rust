@@ -17,5 +17,15 @@
   ~ under the License.
 -->
 
-Example usage codes for `iceberg-rust`. Currently, these examples can't run directly since it requires setting up of 
-environments for catalogs, for example, rest catalog server.  
+Example usage code for `iceberg-rust`.
+
+The [`datafusion-session-catalog` example](src/datafusion_session_catalog.rs) is
+self-contained. It demonstrates how to attach application-specific request metadata to a
+DataFusion session, resolve it into an Iceberg `SessionContext`, and query a
+session-catalog-backed `IcebergCatalogProvider`:
+
+```shell
+cargo run -p iceberg-examples --example datafusion-session-catalog
+```
+
+The REST catalog examples require a catalog server and its supporting environment.

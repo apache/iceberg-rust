@@ -15,16 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod catalog;
-pub use catalog::*;
-
 mod error;
 pub use error::*;
+mod catalog_adapter;
 
+mod catalog_provider;
+pub use options::IcebergOptions;
+mod options;
+pub use catalog_provider::*;
 pub mod physical_plan;
-mod schema;
+mod schema_provider;
 pub mod table;
 pub use table::table_provider_factory::IcebergTableProviderFactory;
 pub use table::*;
 
 pub(crate) mod task_writer;
+#[cfg(test)]
+mod test_utils;
