@@ -146,7 +146,11 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
                 // can create erroneous predicates.
                 return TransformedResult::NotTransformed;
             }
-            to_iceberg_predicate(&c.expr)
+            match to_iceberg_predicate(&c.expr) {
+                // Comparing the uncast column is not equivalent; leave it to DataFusion.
+                TransformedResult::Column(_) => TransformedResult::NotTransformed,
+                other => other,
+            }
         }
         Expr::Like(Like {
             negated,
@@ -643,6 +647,19 @@ mod tests {
         let expected_predicate =
             Reference::new("ts").greater_than_or_equal_to(Datum::string("2023-01-05T00:00:00"));
         assert_eq!(predicate, expected_predicate);
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_column_cast() {
+        assert_eq!(
+            convert_to_iceberg_predicate("CAST(qux AS REAL) = 1.0"),
+            None
+        );
+        assert_eq!(
+            convert_to_iceberg_predicate("CAST(foo AS BIGINT) > 1"),
+            None
+        );
+        assert_eq!(convert_to_iceberg_predicate("CAST(qux AS INT) = 1"), None);
     }
 
     #[test]
