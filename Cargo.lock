@@ -3986,6 +3986,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "iceberg-storage-object_store"
+version = "0.10.1"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "dashmap",
+ "futures",
+ "iceberg",
+ "object_store",
+ "serde",
+ "serde_json",
+ "tokio",
+ "typetag",
+ "url",
+]
+
+[[package]]
 name = "iceberg-storage-opendal"
 version = "0.10.1"
 dependencies = [
