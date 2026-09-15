@@ -21,28 +21,69 @@ use pyo3::types::PyBytes;
 
 use crate::error::to_py_err;
 
-/// The encryption key, AAD prefix and file length held by `StandardKeyMetadata`.
-type DecodedKeyMetadata<'py> = (
-    Bound<'py, PyBytes>,
-    Option<Bound<'py, PyBytes>>,
-    Option<u64>,
-);
+/// The encryption key, AAD prefix and file length needed to decrypt a single file.
+#[pyclass(
+    frozen,
+    name = "StandardKeyMetadata",
+    module = "pyiceberg_core.encryption"
+)]
+pub struct PyStandardKeyMetadata {
+    // Python objects, so attribute access increfs rather than copying the key on every read.
+    encryption_key: Py<PyBytes>,
+    aad_prefix: Option<Py<PyBytes>>,
+    file_length: Option<u64>,
+}
+
+#[pymethods]
+impl PyStandardKeyMetadata {
+    #[getter]
+    fn encryption_key(&self, py: Python<'_>) -> Py<PyBytes> {
+        self.encryption_key.clone_ref(py)
+    }
+
+    #[getter]
+    fn aad_prefix(&self, py: Python<'_>) -> Option<Py<PyBytes>> {
+        self.aad_prefix.as_ref().map(|prefix| prefix.clone_ref(py))
+    }
+
+    #[getter]
+    fn file_length(&self) -> Option<u64> {
+        self.file_length
+    }
+
+    /// Redacts the key, so logging an instance cannot leak key material.
+    fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
+        let key_length = self.encryption_key.bind(py).as_bytes().len();
+        let aad_prefix = match &self.aad_prefix {
+            Some(prefix) => prefix.bind(py).repr()?.to_string(),
+            None => "None".to_string(),
+        };
+        let file_length = match self.file_length {
+            Some(file_length) => file_length.to_string(),
+            None => "None".to_string(),
+        };
+
+        Ok(format!(
+            "StandardKeyMetadata(encryption_key=<redacted, {key_length} bytes>, aad_prefix={aad_prefix}, file_length={file_length})"
+        ))
+    }
+}
 
 /// Decode `StandardKeyMetadata` from its wire format.
 #[pyfunction]
-pub fn decode_standard_key_metadata<'py>(
-    py: Python<'py>,
+pub fn decode_standard_key_metadata(
+    py: Python<'_>,
     data: &[u8],
-) -> PyResult<DecodedKeyMetadata<'py>> {
+) -> PyResult<PyStandardKeyMetadata> {
     let metadata = StandardKeyMetadata::decode(data).map_err(to_py_err)?;
 
-    Ok((
-        PyBytes::new(py, metadata.encryption_key().as_bytes()),
-        metadata
+    Ok(PyStandardKeyMetadata {
+        encryption_key: PyBytes::new(py, metadata.encryption_key().as_bytes()).unbind(),
+        aad_prefix: metadata
             .aad_prefix()
-            .map(|aad_prefix| PyBytes::new(py, aad_prefix)),
-        metadata.file_length(),
-    ))
+            .map(|aad_prefix| PyBytes::new(py, aad_prefix).unbind()),
+        file_length: metadata.file_length(),
+    })
 }
 
 /// Encode `StandardKeyMetadata` to its wire format.
@@ -69,6 +110,7 @@ pub fn encode_standard_key_metadata<'py>(
 pub fn register_module(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let this = PyModule::new(py, "encryption")?;
 
+    this.add_class::<PyStandardKeyMetadata>()?;
     this.add_function(wrap_pyfunction!(decode_standard_key_metadata, &this)?)?;
     this.add_function(wrap_pyfunction!(encode_standard_key_metadata, &this)?)?;
 

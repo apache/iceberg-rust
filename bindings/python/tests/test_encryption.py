@@ -21,16 +21,34 @@ from pyiceberg_core import encryption
 AES128_KEY = b"0123456789012345"
 
 
+def fields(metadata):
+    return (metadata.encryption_key, metadata.aad_prefix, metadata.file_length)
+
+
 def test_encode_decode_round_trip():
     encoded = encryption.encode_standard_key_metadata(AES128_KEY, b"ad", 1024)
+    metadata = encryption.decode_standard_key_metadata(encoded)
 
-    assert encryption.decode_standard_key_metadata(encoded) == (AES128_KEY, b"ad", 1024)
+    assert fields(metadata) == (AES128_KEY, b"ad", 1024)
 
 
 def test_encode_decode_without_optional_fields():
     encoded = encryption.encode_standard_key_metadata(AES128_KEY)
+    metadata = encryption.decode_standard_key_metadata(encoded)
 
-    assert encryption.decode_standard_key_metadata(encoded) == (AES128_KEY, None, None)
+    assert fields(metadata) == (AES128_KEY, None, None)
+
+
+def test_repr_redacts_encryption_key():
+    encoded = encryption.encode_standard_key_metadata(AES128_KEY, b"ad", 1024)
+
+    rendered = repr(encryption.decode_standard_key_metadata(encoded))
+
+    assert AES128_KEY not in rendered.encode()
+    assert rendered == (
+        "StandardKeyMetadata(encryption_key=<redacted, 16 bytes>, "
+        "aad_prefix=b'ad', file_length=1024)"
+    )
 
 
 def test_encoded_wire_format():
@@ -44,12 +62,9 @@ def test_encoded_wire_format():
 @pytest.mark.parametrize("key_length", [16, 24, 32])
 def test_encode_accepts_aes_key_lengths(key_length):
     encoded = encryption.encode_standard_key_metadata(bytes(key_length))
+    metadata = encryption.decode_standard_key_metadata(encoded)
 
-    assert encryption.decode_standard_key_metadata(encoded) == (
-        bytes(key_length),
-        None,
-        None,
-    )
+    assert fields(metadata) == (bytes(key_length), None, None)
 
 
 @pytest.mark.parametrize("key_length", [0, 4, 15, 20, 33])
