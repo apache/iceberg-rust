@@ -23,7 +23,6 @@ mod manifest_file;
 mod reader;
 mod writer;
 
-use apache_avro::types::Value;
 use apache_avro::{Reader, from_value};
 pub use manifest_file::*;
 pub use reader::*;
@@ -58,22 +57,39 @@ pub struct ManifestList {
 
 impl ManifestList {
     /// Parse manifest list from bytes.
+    /// Convert each Avro value immediately, retaining only the final typed entries.
+    /// A decoding or conversion error still discards the entire result.
     pub fn parse_with_version(bs: &[u8], version: FormatVersion) -> Result<ManifestList> {
         match version {
             FormatVersion::V1 => {
                 let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V1, bs)?;
-                let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
-                from_value::<_serde::ManifestListV1>(&values)?.try_into()
+                let entries = reader
+                    .map(|value| {
+                        let value = value?;
+                        from_value::<_serde::ManifestFileV1>(&value)?.try_into()
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(ManifestList { entries })
             }
             FormatVersion::V2 => {
                 let reader = Reader::new(bs)?;
-                let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
-                from_value::<_serde::ManifestListV2>(&values)?.try_into()
+                let entries = reader
+                    .map(|value| {
+                        let value = value?;
+                        from_value::<_serde::ManifestFileV2>(&value)?.try_into()
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(ManifestList { entries })
             }
             FormatVersion::V3 => {
                 let reader = Reader::new(bs)?;
-                let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
-                from_value::<_serde::ManifestListV3>(&values)?.try_into()
+                let entries = reader
+                    .map(|value| {
+                        let value = value?;
+                        from_value::<_serde::ManifestFileV3>(&value)?.try_into()
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(ManifestList { entries })
             }
         }
     }
