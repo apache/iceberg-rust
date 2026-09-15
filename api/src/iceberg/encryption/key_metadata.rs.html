@@ -206,7 +206,7 @@
 <a href=#206 id=206 data-nosnippet>206</a>            <span class="kw">if </span>version != V1 {
 <a href=#207 id=207 data-nosnippet>207</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#208 id=208 data-nosnippet>208</a>                    ErrorKind::FeatureUnsupported,
-<a href=#209 id=209 data-nosnippet>209</a>                    <span class="macro">format!</span>(<span class="string">"Cannot resolve schema for version: {version}"</span>),
+<a href=#209 id=209 data-nosnippet>209</a>                    <span class="macro">format!</span>(<span class="string">"Unsupported key metadata version: {version} (supported: {V1})"</span>),
 <a href=#210 id=210 data-nosnippet>210</a>                ));
 <a href=#211 id=211 data-nosnippet>211</a>            }
 <a href=#212 id=212 data-nosnippet>212</a>
@@ -302,61 +302,96 @@
 <a href=#302 id=302 data-nosnippet>302</a>        <span class="macro">assert!</span>(result.is_err());
 <a href=#303 id=303 data-nosnippet>303</a>        <span class="kw">let </span>err = result.unwrap_err();
 <a href=#304 id=304 data-nosnippet>304</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::FeatureUnsupported);
-<a href=#305 id=305 data-nosnippet>305</a>    }
-<a href=#306 id=306 data-nosnippet>306</a>
-<a href=#307 id=307 data-nosnippet>307</a>    <span class="attr">#[test]
-<a href=#308 id=308 data-nosnippet>308</a>    </span><span class="kw">fn </span>test_empty_buffer() {
-<a href=#309 id=309 data-nosnippet>309</a>        <span class="kw">let </span>result = StandardKeyMetadata::decode(<span class="kw-2">&amp;</span>[]);
-<a href=#310 id=310 data-nosnippet>310</a>        <span class="macro">assert!</span>(result.is_err());
-<a href=#311 id=311 data-nosnippet>311</a>        <span class="macro">assert_eq!</span>(result.unwrap_err().kind(), ErrorKind::DataInvalid);
-<a href=#312 id=312 data-nosnippet>312</a>    }
-<a href=#313 id=313 data-nosnippet>313</a>
-<a href=#314 id=314 data-nosnippet>314</a>    <span class="attr">#[test]
-<a href=#315 id=315 data-nosnippet>315</a>    </span><span class="kw">fn </span>test_roundtrip_without_aad() {
-<a href=#316 id=316 data-nosnippet>316</a>        <span class="kw">let </span>key = <span class="string">b"0123456789012345"</span>;
-<a href=#317 id=317 data-nosnippet>317</a>        <span class="kw">let </span>metadata = StandardKeyMetadata::try_new(key).unwrap();
-<a href=#318 id=318 data-nosnippet>318</a>        <span class="kw">let </span>serialized = metadata.encode().unwrap();
-<a href=#319 id=319 data-nosnippet>319</a>        <span class="kw">let </span>parsed = StandardKeyMetadata::decode(<span class="kw-2">&amp;</span>serialized).unwrap();
-<a href=#320 id=320 data-nosnippet>320</a>
-<a href=#321 id=321 data-nosnippet>321</a>        <span class="macro">assert_eq!</span>(parsed.encryption_key().as_bytes(), key);
-<a href=#322 id=322 data-nosnippet>322</a>        <span class="macro">assert_eq!</span>(parsed.aad_prefix(), <span class="prelude-val">None</span>);
-<a href=#323 id=323 data-nosnippet>323</a>    }
+<a href=#305 id=305 data-nosnippet>305</a>        <span class="macro">assert_eq!</span>(
+<a href=#306 id=306 data-nosnippet>306</a>            err.message(),
+<a href=#307 id=307 data-nosnippet>307</a>            <span class="string">"Unsupported key metadata version: 2 (supported: 1)"
+<a href=#308 id=308 data-nosnippet>308</a>        </span>);
+<a href=#309 id=309 data-nosnippet>309</a>    }
+<a href=#310 id=310 data-nosnippet>310</a>
+<a href=#311 id=311 data-nosnippet>311</a>    <span class="attr">#[test]
+<a href=#312 id=312 data-nosnippet>312</a>    </span><span class="kw">fn </span>test_empty_buffer() {
+<a href=#313 id=313 data-nosnippet>313</a>        <span class="kw">let </span>result = StandardKeyMetadata::decode(<span class="kw-2">&amp;</span>[]);
+<a href=#314 id=314 data-nosnippet>314</a>        <span class="macro">assert!</span>(result.is_err());
+<a href=#315 id=315 data-nosnippet>315</a>        <span class="macro">assert_eq!</span>(result.unwrap_err().kind(), ErrorKind::DataInvalid);
+<a href=#316 id=316 data-nosnippet>316</a>    }
+<a href=#317 id=317 data-nosnippet>317</a>
+<a href=#318 id=318 data-nosnippet>318</a>    <span class="attr">#[test]
+<a href=#319 id=319 data-nosnippet>319</a>    </span><span class="kw">fn </span>test_roundtrip_without_aad() {
+<a href=#320 id=320 data-nosnippet>320</a>        <span class="kw">let </span>key = <span class="string">b"0123456789012345"</span>;
+<a href=#321 id=321 data-nosnippet>321</a>        <span class="kw">let </span>metadata = StandardKeyMetadata::try_new(key).unwrap();
+<a href=#322 id=322 data-nosnippet>322</a>        <span class="kw">let </span>serialized = metadata.encode().unwrap();
+<a href=#323 id=323 data-nosnippet>323</a>        <span class="kw">let </span>parsed = StandardKeyMetadata::decode(<span class="kw-2">&amp;</span>serialized).unwrap();
 <a href=#324 id=324 data-nosnippet>324</a>
-<a href=#325 id=325 data-nosnippet>325</a>    <span class="attr">#[test]
-<a href=#326 id=326 data-nosnippet>326</a>    </span><span class="kw">fn </span>test_new_rejects_invalid_key_length() {
-<a href=#327 id=327 data-nosnippet>327</a>        <span class="comment">// 24-byte (AES-192) and 32-byte (AES-256) keys are accepted.
-<a href=#328 id=328 data-nosnippet>328</a>        </span><span class="kw">for </span>len <span class="kw">in </span>[<span class="number">16usize</span>, <span class="number">24</span>, <span class="number">32</span>] {
-<a href=#329 id=329 data-nosnippet>329</a>            <span class="macro">assert!</span>(StandardKeyMetadata::try_new(<span class="kw-2">&amp;</span><span class="macro">vec!</span>[<span class="number">0u8</span>; len]).is_ok());
-<a href=#330 id=330 data-nosnippet>330</a>        }
-<a href=#331 id=331 data-nosnippet>331</a>
-<a href=#332 id=332 data-nosnippet>332</a>        <span class="comment">// Invalid lengths are rejected at construction, so an invalid
-<a href=#333 id=333 data-nosnippet>333</a>        // `StandardKeyMetadata` can never exist.
-<a href=#334 id=334 data-nosnippet>334</a>        </span><span class="kw">for </span>len <span class="kw">in </span>[<span class="number">0usize</span>, <span class="number">4</span>, <span class="number">15</span>, <span class="number">20</span>, <span class="number">33</span>] {
-<a href=#335 id=335 data-nosnippet>335</a>            <span class="macro">assert!</span>(StandardKeyMetadata::try_new(<span class="kw-2">&amp;</span><span class="macro">vec!</span>[<span class="number">0u8</span>; len]).is_err());
-<a href=#336 id=336 data-nosnippet>336</a>        }
-<a href=#337 id=337 data-nosnippet>337</a>    }
-<a href=#338 id=338 data-nosnippet>338</a>
-<a href=#339 id=339 data-nosnippet>339</a>    <span class="attr">#[test]
-<a href=#340 id=340 data-nosnippet>340</a>    </span><span class="kw">fn </span>test_decode_rejects_invalid_key_length() {
-<a href=#341 id=341 data-nosnippet>341</a>        <span class="comment">// Craft wire bytes carrying an invalid-length DEK directly via the
-<a href=#342 id=342 data-nosnippet>342</a>        // serde struct (bypassing the validated public constructors) to prove
-<a href=#343 id=343 data-nosnippet>343</a>        // `decode` still rejects malformed key material off the wire.
-<a href=#344 id=344 data-nosnippet>344</a>        </span><span class="kw">for </span>len <span class="kw">in </span>[<span class="number">0usize</span>, <span class="number">4</span>, <span class="number">15</span>, <span class="number">20</span>, <span class="number">33</span>] {
-<a href=#345 id=345 data-nosnippet>345</a>            <span class="kw">let </span>serialized = _serde::StandardKeyMetadataV1 {
-<a href=#346 id=346 data-nosnippet>346</a>                encryption_key: serde_bytes::ByteBuf::from(<span class="macro">vec!</span>[<span class="number">0u8</span>; len]),
-<a href=#347 id=347 data-nosnippet>347</a>                aad_prefix: <span class="prelude-val">None</span>,
-<a href=#348 id=348 data-nosnippet>348</a>                file_length: <span class="prelude-val">None</span>,
-<a href=#349 id=349 data-nosnippet>349</a>            }
-<a href=#350 id=350 data-nosnippet>350</a>            .encode()
-<a href=#351 id=351 data-nosnippet>351</a>            .unwrap();
-<a href=#352 id=352 data-nosnippet>352</a>
-<a href=#353 id=353 data-nosnippet>353</a>            <span class="kw">let </span>err = StandardKeyMetadata::decode(<span class="kw-2">&amp;</span>serialized).unwrap_err();
-<a href=#354 id=354 data-nosnippet>354</a>            <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
-<a href=#355 id=355 data-nosnippet>355</a>            <span class="macro">assert!</span>(
-<a href=#356 id=356 data-nosnippet>356</a>                err.to_string()
-<a href=#357 id=357 data-nosnippet>357</a>                    .contains(<span class="string">"Invalid encryption key in key metadata"</span>)
-<a href=#358 id=358 data-nosnippet>358</a>            );
-<a href=#359 id=359 data-nosnippet>359</a>        }
-<a href=#360 id=360 data-nosnippet>360</a>    }
-<a href=#361 id=361 data-nosnippet>361</a>}
+<a href=#325 id=325 data-nosnippet>325</a>        <span class="macro">assert_eq!</span>(parsed.encryption_key().as_bytes(), key);
+<a href=#326 id=326 data-nosnippet>326</a>        <span class="macro">assert_eq!</span>(parsed.aad_prefix(), <span class="prelude-val">None</span>);
+<a href=#327 id=327 data-nosnippet>327</a>    }
+<a href=#328 id=328 data-nosnippet>328</a>
+<a href=#329 id=329 data-nosnippet>329</a>    <span class="attr">#[test]
+<a href=#330 id=330 data-nosnippet>330</a>    </span><span class="kw">fn </span>test_new_rejects_invalid_key_length() {
+<a href=#331 id=331 data-nosnippet>331</a>        <span class="comment">// 24-byte (AES-192) and 32-byte (AES-256) keys are accepted.
+<a href=#332 id=332 data-nosnippet>332</a>        </span><span class="kw">for </span>len <span class="kw">in </span>[<span class="number">16usize</span>, <span class="number">24</span>, <span class="number">32</span>] {
+<a href=#333 id=333 data-nosnippet>333</a>            <span class="macro">assert!</span>(StandardKeyMetadata::try_new(<span class="kw-2">&amp;</span><span class="macro">vec!</span>[<span class="number">0u8</span>; len]).is_ok());
+<a href=#334 id=334 data-nosnippet>334</a>        }
+<a href=#335 id=335 data-nosnippet>335</a>
+<a href=#336 id=336 data-nosnippet>336</a>        <span class="comment">// Invalid lengths are rejected at construction, so an invalid
+<a href=#337 id=337 data-nosnippet>337</a>        // `StandardKeyMetadata` can never exist.
+<a href=#338 id=338 data-nosnippet>338</a>        </span><span class="kw">for </span>len <span class="kw">in </span>[<span class="number">0usize</span>, <span class="number">4</span>, <span class="number">15</span>, <span class="number">20</span>, <span class="number">33</span>] {
+<a href=#339 id=339 data-nosnippet>339</a>            <span class="macro">assert!</span>(StandardKeyMetadata::try_new(<span class="kw-2">&amp;</span><span class="macro">vec!</span>[<span class="number">0u8</span>; len]).is_err());
+<a href=#340 id=340 data-nosnippet>340</a>        }
+<a href=#341 id=341 data-nosnippet>341</a>    }
+<a href=#342 id=342 data-nosnippet>342</a>
+<a href=#343 id=343 data-nosnippet>343</a>    <span class="attr">#[test]
+<a href=#344 id=344 data-nosnippet>344</a>    </span><span class="kw">fn </span>test_decode_rejects_invalid_key_length() {
+<a href=#345 id=345 data-nosnippet>345</a>        <span class="comment">// Craft wire bytes carrying an invalid-length DEK directly via the
+<a href=#346 id=346 data-nosnippet>346</a>        // serde struct (bypassing the validated public constructors) to prove
+<a href=#347 id=347 data-nosnippet>347</a>        // `decode` still rejects malformed key material off the wire.
+<a href=#348 id=348 data-nosnippet>348</a>        </span><span class="kw">for </span>len <span class="kw">in </span>[<span class="number">0usize</span>, <span class="number">4</span>, <span class="number">15</span>, <span class="number">20</span>, <span class="number">33</span>] {
+<a href=#349 id=349 data-nosnippet>349</a>            <span class="kw">let </span>serialized = _serde::StandardKeyMetadataV1 {
+<a href=#350 id=350 data-nosnippet>350</a>                encryption_key: serde_bytes::ByteBuf::from(<span class="macro">vec!</span>[<span class="number">0u8</span>; len]),
+<a href=#351 id=351 data-nosnippet>351</a>                aad_prefix: <span class="prelude-val">None</span>,
+<a href=#352 id=352 data-nosnippet>352</a>                file_length: <span class="prelude-val">None</span>,
+<a href=#353 id=353 data-nosnippet>353</a>            }
+<a href=#354 id=354 data-nosnippet>354</a>            .encode()
+<a href=#355 id=355 data-nosnippet>355</a>            .unwrap();
+<a href=#356 id=356 data-nosnippet>356</a>
+<a href=#357 id=357 data-nosnippet>357</a>            <span class="kw">let </span>err = StandardKeyMetadata::decode(<span class="kw-2">&amp;</span>serialized).unwrap_err();
+<a href=#358 id=358 data-nosnippet>358</a>            <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
+<a href=#359 id=359 data-nosnippet>359</a>            <span class="macro">assert!</span>(
+<a href=#360 id=360 data-nosnippet>360</a>                err.to_string()
+<a href=#361 id=361 data-nosnippet>361</a>                    .contains(<span class="string">"Invalid encryption key in key metadata"</span>)
+<a href=#362 id=362 data-nosnippet>362</a>            );
+<a href=#363 id=363 data-nosnippet>363</a>        }
+<a href=#364 id=364 data-nosnippet>364</a>    }
+<a href=#365 id=365 data-nosnippet>365</a>
+<a href=#366 id=366 data-nosnippet>366</a>    <span class="attr">#[test]
+<a href=#367 id=367 data-nosnippet>367</a>    </span><span class="kw">fn </span>test_decode_tolerates_trailing_bytes() {
+<a href=#368 id=368 data-nosnippet>368</a>        <span class="comment">// Deliberate, not an oversight: Java's RawDecoder reads a single datum without
+<a href=#369 id=369 data-nosnippet>369</a>        // checking for EOF, and Iceberg depends on that leniency — `file_length` was
+<a href=#370 id=370 data-nosnippet>370</a>        // appended to SCHEMA_V1 without bumping the version byte. Requiring EOF here
+<a href=#371 id=371 data-nosnippet>371</a>        // would stop older readers tolerating fields a newer writer appended.
+<a href=#372 id=372 data-nosnippet>372</a>        </span><span class="kw">let </span>key = <span class="string">b"0123456789012345"</span>;
+<a href=#373 id=373 data-nosnippet>373</a>        <span class="kw">let </span>aad = <span class="string">b"1234567890123456"</span>;
+<a href=#374 id=374 data-nosnippet>374</a>        <span class="kw">let </span>file_length = <span class="number">1024</span>;
+<a href=#375 id=375 data-nosnippet>375</a>
+<a href=#376 id=376 data-nosnippet>376</a>        <span class="kw">let </span>serialized = StandardKeyMetadata::try_new(key)
+<a href=#377 id=377 data-nosnippet>377</a>            .unwrap()
+<a href=#378 id=378 data-nosnippet>378</a>            .with_aad_prefix(aad)
+<a href=#379 id=379 data-nosnippet>379</a>            .with_file_length(file_length)
+<a href=#380 id=380 data-nosnippet>380</a>            .encode()
+<a href=#381 id=381 data-nosnippet>381</a>            .unwrap();
+<a href=#382 id=382 data-nosnippet>382</a>
+<a href=#383 id=383 data-nosnippet>383</a>        <span class="comment">// Arbitrary junk, then bytes shaped like a further optional field appended by a
+<a href=#384 id=384 data-nosnippet>384</a>        // newer writer (union tag "present", then a 4-byte value).
+<a href=#385 id=385 data-nosnippet>385</a>        </span><span class="kw">for </span>trailing <span class="kw">in </span>[<span class="string">b"\xde\xad\xbe\xef"</span>.as_slice(), <span class="string">b"\x02\x08more"</span>.as_slice()] {
+<a href=#386 id=386 data-nosnippet>386</a>            <span class="kw">let </span><span class="kw-2">mut </span>extended = serialized.to_vec();
+<a href=#387 id=387 data-nosnippet>387</a>            extended.extend_from_slice(trailing);
+<a href=#388 id=388 data-nosnippet>388</a>
+<a href=#389 id=389 data-nosnippet>389</a>            <span class="kw">let </span>parsed = StandardKeyMetadata::decode(<span class="kw-2">&amp;</span>extended).unwrap();
+<a href=#390 id=390 data-nosnippet>390</a>
+<a href=#391 id=391 data-nosnippet>391</a>            <span class="macro">assert_eq!</span>(parsed.encryption_key().as_bytes(), key);
+<a href=#392 id=392 data-nosnippet>392</a>            <span class="macro">assert_eq!</span>(parsed.aad_prefix(), <span class="prelude-val">Some</span>(aad.as_slice()));
+<a href=#393 id=393 data-nosnippet>393</a>            <span class="macro">assert_eq!</span>(parsed.file_length(), <span class="prelude-val">Some</span>(file_length));
+<a href=#394 id=394 data-nosnippet>394</a>        }
+<a href=#395 id=395 data-nosnippet>395</a>    }
+<a href=#396 id=396 data-nosnippet>396</a>}
 </code></pre></div></section></main></body></html>
