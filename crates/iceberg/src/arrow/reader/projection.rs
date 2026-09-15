@@ -29,7 +29,7 @@ use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
 use super::{ArrowReader, CollectFieldIdVisitor};
 use crate::arrow::arrow_schema_to_schema;
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::expr::BoundPredicate;
 use crate::expr::visitors::bound_predicate_visitor::visit;
 use crate::spec::{NameMapping, NestedField, PrimitiveType, Schema, Type};
@@ -299,11 +299,8 @@ pub(super) fn build_field_id_map(
                 column_map.insert(basic_info.id(), idx);
             }
             ParquetType::GroupType { .. } => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Leaf column in schema should be primitive type but got {field_type:?}"
-                    ),
+                return Err(invalid_data!(
+                    "Leaf column in schema should be primitive type but got {field_type:?}"
                 ));
             }
         };

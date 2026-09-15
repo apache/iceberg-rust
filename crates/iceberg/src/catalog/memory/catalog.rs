@@ -28,13 +28,14 @@ use itertools::Itertools;
 
 use super::namespace_state::NamespaceState;
 use crate::encryption::kms::{KeyManagementClient, KmsClientFactory};
+use crate::error::invalid_data;
 use crate::io::{FileIO, FileIOBuilder, MemoryStorageFactory, StorageFactory};
 use crate::runtime::Runtime;
 use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
 use crate::{
-    Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    Catalog, CatalogBuilder, MetadataLocation, Namespace, NamespaceIdent, Result, TableCommit,
+    TableCreation, TableIdent,
 };
 
 /// Memory catalog warehouse location
@@ -79,10 +80,7 @@ impl CatalogBuilder for MemoryCatalogBuilder {
         async move {
             let catalog_properties = MemoryCatalogProperties::from_properties(&props)?;
             if catalog_properties.warehouse.is_empty() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog warehouse is required",
-                ));
+                return Err(invalid_data!("Catalog warehouse is required"));
             }
 
             let runtime = self.runtime.unwrap_or_else(Runtime::current);
@@ -438,6 +436,7 @@ pub(crate) mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::ErrorKind;
     use crate::encryption::kms::MemoryKmsClientFactory;
     use crate::io::{FileIO, LocalFsStorageFactory};
     use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};

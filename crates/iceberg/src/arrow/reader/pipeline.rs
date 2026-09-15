@@ -43,7 +43,7 @@ use crate::arrow::int96::coerce_int96_timestamps;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
 use crate::encryption::StandardKeyMetadata;
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::metadata_columns::{
     RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER, RESERVED_COL_NAME_POS,
@@ -469,12 +469,9 @@ impl FileScanTaskReader {
                     // inheritance a committed entry always has one, so this is a malformed
                     // manifest rather than a legitimate null.
                     (Some(_), None) => {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Data file {} has a first_row_id but no data sequence number",
-                                task.data_file_path()
-                            ),
+                        return Err(invalid_data!(
+                            "Data file {} has a first_row_id but no data sequence number",
+                            task.data_file_path()
                         ));
                     }
                 };
