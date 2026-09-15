@@ -362,4 +362,35 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_decode_tolerates_trailing_bytes() {
+        // Deliberate, not an oversight: Java's RawDecoder reads a single datum without
+        // checking for EOF, and Iceberg depends on that leniency — `file_length` was
+        // appended to SCHEMA_V1 without bumping the version byte. Requiring EOF here
+        // would stop older readers tolerating fields a newer writer appended.
+        let key = b"0123456789012345";
+        let aad = b"1234567890123456";
+        let file_length = 1024;
+
+        let serialized = StandardKeyMetadata::try_new(key)
+            .unwrap()
+            .with_aad_prefix(aad)
+            .with_file_length(file_length)
+            .encode()
+            .unwrap();
+
+        // Arbitrary junk, then bytes shaped like a further optional field appended by a
+        // newer writer (union tag "present", then a 4-byte value).
+        for trailing in [b"\xde\xad\xbe\xef".as_slice(), b"\x02\x08more".as_slice()] {
+            let mut extended = serialized.to_vec();
+            extended.extend_from_slice(trailing);
+
+            let parsed = StandardKeyMetadata::decode(&extended).unwrap();
+
+            assert_eq!(parsed.encryption_key().as_bytes(), key);
+            assert_eq!(parsed.aad_prefix(), Some(aad.as_slice()));
+            assert_eq!(parsed.file_length(), Some(file_length));
+        }
+    }
 }

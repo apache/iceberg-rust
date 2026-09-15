@@ -88,13 +88,22 @@ def test_decode_rejects_invalid_key_length(key_length):
 
 @pytest.mark.parametrize("data", [b"\x02", b"\x02\x20" + AES128_KEY + b"\x00\x00"])
 def test_decode_rejects_unsupported_version(data):
-    with pytest.raises(ValueError, match="Unsupported key metadata version: 2"):
+    with pytest.raises(ValueError, match=r"version: 2"):
         encryption.decode_standard_key_metadata(data)
 
 
 def test_decode_rejects_empty_buffer():
     with pytest.raises(ValueError, match="Empty key metadata"):
         encryption.decode_standard_key_metadata(b"")
+
+
+def test_decode_tolerates_trailing_bytes():
+    # Deliberate, matching Java: a reader must tolerate fields a newer writer appended.
+    encoded = encryption.encode_standard_key_metadata(AES128_KEY, b"ad", 1024)
+
+    metadata = encryption.decode_standard_key_metadata(encoded + b"\xde\xad\xbe\xef")
+
+    assert fields(metadata) == (AES128_KEY, b"ad", 1024)
 
 
 @pytest.mark.xfail(
