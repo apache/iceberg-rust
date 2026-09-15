@@ -57,107 +57,126 @@
 <a href=#57 id=57 data-nosnippet>57</a>    concurrency_limit_data_files: usize,
 <a href=#58 id=58 data-nosnippet>58</a>    row_group_filtering_enabled: bool,
 <a href=#59 id=59 data-nosnippet>59</a>    row_selection_enabled: bool,
-<a href=#60 id=60 data-nosnippet>60</a>    parquet_read_options: ParquetReadOptions,
-<a href=#61 id=61 data-nosnippet>61</a>    runtime: Runtime,
-<a href=#62 id=62 data-nosnippet>62</a>}
-<a href=#63 id=63 data-nosnippet>63</a>
-<a href=#64 id=64 data-nosnippet>64</a><span class="kw">impl </span>ArrowReaderBuilder {
-<a href=#65 id=65 data-nosnippet>65</a>    <span class="doccomment">/// Create a new ArrowReaderBuilder
-<a href=#66 id=66 data-nosnippet>66</a>    </span><span class="kw">pub fn </span>new(file_io: FileIO, runtime: Runtime) -&gt; <span class="self">Self </span>{
-<a href=#67 id=67 data-nosnippet>67</a>        <span class="kw">let </span>num_cpus = available_parallelism().get();
-<a href=#68 id=68 data-nosnippet>68</a>
-<a href=#69 id=69 data-nosnippet>69</a>        ArrowReaderBuilder {
-<a href=#70 id=70 data-nosnippet>70</a>            batch_size: <span class="prelude-val">None</span>,
-<a href=#71 id=71 data-nosnippet>71</a>            file_io,
-<a href=#72 id=72 data-nosnippet>72</a>            concurrency_limit_data_files: num_cpus,
-<a href=#73 id=73 data-nosnippet>73</a>            row_group_filtering_enabled: <span class="bool-val">true</span>,
-<a href=#74 id=74 data-nosnippet>74</a>            row_selection_enabled: <span class="bool-val">false</span>,
-<a href=#75 id=75 data-nosnippet>75</a>            parquet_read_options: ParquetReadOptions::builder().build(),
-<a href=#76 id=76 data-nosnippet>76</a>            runtime,
-<a href=#77 id=77 data-nosnippet>77</a>        }
-<a href=#78 id=78 data-nosnippet>78</a>    }
-<a href=#79 id=79 data-nosnippet>79</a>
-<a href=#80 id=80 data-nosnippet>80</a>    <span class="doccomment">/// Sets the max number of in flight data files that are being fetched
-<a href=#81 id=81 data-nosnippet>81</a>    </span><span class="kw">pub fn </span>with_data_file_concurrency_limit(<span class="kw-2">mut </span><span class="self">self</span>, val: usize) -&gt; <span class="self">Self </span>{
-<a href=#82 id=82 data-nosnippet>82</a>        <span class="self">self</span>.concurrency_limit_data_files = val;
-<a href=#83 id=83 data-nosnippet>83</a>        <span class="self">self
-<a href=#84 id=84 data-nosnippet>84</a>    </span>}
-<a href=#85 id=85 data-nosnippet>85</a>
-<a href=#86 id=86 data-nosnippet>86</a>    <span class="doccomment">/// Sets the desired size of batches in the response
-<a href=#87 id=87 data-nosnippet>87</a>    /// to something other than the default
-<a href=#88 id=88 data-nosnippet>88</a>    </span><span class="kw">pub fn </span>with_batch_size(<span class="kw-2">mut </span><span class="self">self</span>, batch_size: usize) -&gt; <span class="self">Self </span>{
-<a href=#89 id=89 data-nosnippet>89</a>        <span class="self">self</span>.batch_size = <span class="prelude-val">Some</span>(batch_size);
-<a href=#90 id=90 data-nosnippet>90</a>        <span class="self">self
-<a href=#91 id=91 data-nosnippet>91</a>    </span>}
-<a href=#92 id=92 data-nosnippet>92</a>
-<a href=#93 id=93 data-nosnippet>93</a>    <span class="doccomment">/// Determines whether to enable row group filtering.
-<a href=#94 id=94 data-nosnippet>94</a>    </span><span class="kw">pub fn </span>with_row_group_filtering_enabled(<span class="kw-2">mut </span><span class="self">self</span>, row_group_filtering_enabled: bool) -&gt; <span class="self">Self </span>{
-<a href=#95 id=95 data-nosnippet>95</a>        <span class="self">self</span>.row_group_filtering_enabled = row_group_filtering_enabled;
-<a href=#96 id=96 data-nosnippet>96</a>        <span class="self">self
-<a href=#97 id=97 data-nosnippet>97</a>    </span>}
-<a href=#98 id=98 data-nosnippet>98</a>
-<a href=#99 id=99 data-nosnippet>99</a>    <span class="doccomment">/// Determines whether to enable row selection.
-<a href=#100 id=100 data-nosnippet>100</a>    </span><span class="kw">pub fn </span>with_row_selection_enabled(<span class="kw-2">mut </span><span class="self">self</span>, row_selection_enabled: bool) -&gt; <span class="self">Self </span>{
-<a href=#101 id=101 data-nosnippet>101</a>        <span class="self">self</span>.row_selection_enabled = row_selection_enabled;
-<a href=#102 id=102 data-nosnippet>102</a>        <span class="self">self
-<a href=#103 id=103 data-nosnippet>103</a>    </span>}
-<a href=#104 id=104 data-nosnippet>104</a>
-<a href=#105 id=105 data-nosnippet>105</a>    <span class="doccomment">/// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
-<a href=#106 id=106 data-nosnippet>106</a>    ///
-<a href=#107 id=107 data-nosnippet>107</a>    /// This hint can help reduce the number of fetch requests. For more details see the
-<a href=#108 id=108 data-nosnippet>108</a>    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
-<a href=#109 id=109 data-nosnippet>109</a>    </span><span class="kw">pub fn </span>with_metadata_size_hint(<span class="kw-2">mut </span><span class="self">self</span>, metadata_size_hint: usize) -&gt; <span class="self">Self </span>{
-<a href=#110 id=110 data-nosnippet>110</a>        <span class="self">self</span>.parquet_read_options.metadata_size_hint = <span class="prelude-val">Some</span>(metadata_size_hint);
-<a href=#111 id=111 data-nosnippet>111</a>        <span class="self">self
-<a href=#112 id=112 data-nosnippet>112</a>    </span>}
-<a href=#113 id=113 data-nosnippet>113</a>
-<a href=#114 id=114 data-nosnippet>114</a>    <span class="doccomment">/// Sets the gap threshold for merging nearby byte ranges into a single request.
-<a href=#115 id=115 data-nosnippet>115</a>    /// Ranges with gaps smaller than this value will be coalesced.
-<a href=#116 id=116 data-nosnippet>116</a>    ///
-<a href=#117 id=117 data-nosnippet>117</a>    /// Defaults to 1 MiB, matching object_store's OBJECT_STORE_COALESCE_DEFAULT.
-<a href=#118 id=118 data-nosnippet>118</a>    </span><span class="kw">pub fn </span>with_range_coalesce_bytes(<span class="kw-2">mut </span><span class="self">self</span>, range_coalesce_bytes: u64) -&gt; <span class="self">Self </span>{
-<a href=#119 id=119 data-nosnippet>119</a>        <span class="self">self</span>.parquet_read_options.range_coalesce_bytes = range_coalesce_bytes;
-<a href=#120 id=120 data-nosnippet>120</a>        <span class="self">self
-<a href=#121 id=121 data-nosnippet>121</a>    </span>}
-<a href=#122 id=122 data-nosnippet>122</a>
-<a href=#123 id=123 data-nosnippet>123</a>    <span class="doccomment">/// Sets the maximum number of merged byte ranges to fetch concurrently.
-<a href=#124 id=124 data-nosnippet>124</a>    ///
-<a href=#125 id=125 data-nosnippet>125</a>    /// Defaults to 10, matching object_store's OBJECT_STORE_COALESCE_PARALLEL.
-<a href=#126 id=126 data-nosnippet>126</a>    </span><span class="kw">pub fn </span>with_range_fetch_concurrency(<span class="kw-2">mut </span><span class="self">self</span>, range_fetch_concurrency: usize) -&gt; <span class="self">Self </span>{
-<a href=#127 id=127 data-nosnippet>127</a>        <span class="self">self</span>.parquet_read_options.range_fetch_concurrency = range_fetch_concurrency;
+<a href=#60 id=60 data-nosnippet>60</a>    bloom_filter_enabled: bool,
+<a href=#61 id=61 data-nosnippet>61</a>    parquet_read_options: ParquetReadOptions,
+<a href=#62 id=62 data-nosnippet>62</a>    runtime: Runtime,
+<a href=#63 id=63 data-nosnippet>63</a>}
+<a href=#64 id=64 data-nosnippet>64</a>
+<a href=#65 id=65 data-nosnippet>65</a><span class="kw">impl </span>ArrowReaderBuilder {
+<a href=#66 id=66 data-nosnippet>66</a>    <span class="doccomment">/// Create a new ArrowReaderBuilder
+<a href=#67 id=67 data-nosnippet>67</a>    </span><span class="kw">pub fn </span>new(file_io: FileIO, runtime: Runtime) -&gt; <span class="self">Self </span>{
+<a href=#68 id=68 data-nosnippet>68</a>        <span class="kw">let </span>num_cpus = available_parallelism().get();
+<a href=#69 id=69 data-nosnippet>69</a>
+<a href=#70 id=70 data-nosnippet>70</a>        ArrowReaderBuilder {
+<a href=#71 id=71 data-nosnippet>71</a>            batch_size: <span class="prelude-val">None</span>,
+<a href=#72 id=72 data-nosnippet>72</a>            file_io,
+<a href=#73 id=73 data-nosnippet>73</a>            concurrency_limit_data_files: num_cpus,
+<a href=#74 id=74 data-nosnippet>74</a>            row_group_filtering_enabled: <span class="bool-val">true</span>,
+<a href=#75 id=75 data-nosnippet>75</a>            row_selection_enabled: <span class="bool-val">false</span>,
+<a href=#76 id=76 data-nosnippet>76</a>            bloom_filter_enabled: <span class="bool-val">false</span>,
+<a href=#77 id=77 data-nosnippet>77</a>            parquet_read_options: ParquetReadOptions::builder().build(),
+<a href=#78 id=78 data-nosnippet>78</a>            runtime,
+<a href=#79 id=79 data-nosnippet>79</a>        }
+<a href=#80 id=80 data-nosnippet>80</a>    }
+<a href=#81 id=81 data-nosnippet>81</a>
+<a href=#82 id=82 data-nosnippet>82</a>    <span class="doccomment">/// Sets the max number of in flight data files that are being fetched
+<a href=#83 id=83 data-nosnippet>83</a>    </span><span class="kw">pub fn </span>with_data_file_concurrency_limit(<span class="kw-2">mut </span><span class="self">self</span>, val: usize) -&gt; <span class="self">Self </span>{
+<a href=#84 id=84 data-nosnippet>84</a>        <span class="self">self</span>.concurrency_limit_data_files = val;
+<a href=#85 id=85 data-nosnippet>85</a>        <span class="self">self
+<a href=#86 id=86 data-nosnippet>86</a>    </span>}
+<a href=#87 id=87 data-nosnippet>87</a>
+<a href=#88 id=88 data-nosnippet>88</a>    <span class="doccomment">/// Sets the desired size of batches in the response
+<a href=#89 id=89 data-nosnippet>89</a>    /// to something other than the default
+<a href=#90 id=90 data-nosnippet>90</a>    </span><span class="kw">pub fn </span>with_batch_size(<span class="kw-2">mut </span><span class="self">self</span>, batch_size: usize) -&gt; <span class="self">Self </span>{
+<a href=#91 id=91 data-nosnippet>91</a>        <span class="self">self</span>.batch_size = <span class="prelude-val">Some</span>(batch_size);
+<a href=#92 id=92 data-nosnippet>92</a>        <span class="self">self
+<a href=#93 id=93 data-nosnippet>93</a>    </span>}
+<a href=#94 id=94 data-nosnippet>94</a>
+<a href=#95 id=95 data-nosnippet>95</a>    <span class="doccomment">/// Determines whether to enable row group filtering.
+<a href=#96 id=96 data-nosnippet>96</a>    </span><span class="kw">pub fn </span>with_row_group_filtering_enabled(<span class="kw-2">mut </span><span class="self">self</span>, row_group_filtering_enabled: bool) -&gt; <span class="self">Self </span>{
+<a href=#97 id=97 data-nosnippet>97</a>        <span class="self">self</span>.row_group_filtering_enabled = row_group_filtering_enabled;
+<a href=#98 id=98 data-nosnippet>98</a>        <span class="self">self
+<a href=#99 id=99 data-nosnippet>99</a>    </span>}
+<a href=#100 id=100 data-nosnippet>100</a>
+<a href=#101 id=101 data-nosnippet>101</a>    <span class="doccomment">/// Determines whether to enable row selection.
+<a href=#102 id=102 data-nosnippet>102</a>    </span><span class="kw">pub fn </span>with_row_selection_enabled(<span class="kw-2">mut </span><span class="self">self</span>, row_selection_enabled: bool) -&gt; <span class="self">Self </span>{
+<a href=#103 id=103 data-nosnippet>103</a>        <span class="self">self</span>.row_selection_enabled = row_selection_enabled;
+<a href=#104 id=104 data-nosnippet>104</a>        <span class="self">self
+<a href=#105 id=105 data-nosnippet>105</a>    </span>}
+<a href=#106 id=106 data-nosnippet>106</a>
+<a href=#107 id=107 data-nosnippet>107</a>    <span class="doccomment">/// Determines whether to enable bloom filter-based row group filtering.
+<a href=#108 id=108 data-nosnippet>108</a>    ///
+<a href=#109 id=109 data-nosnippet>109</a>    /// When enabled, if a read is performed with an equality or IN predicate,
+<a href=#110 id=110 data-nosnippet>110</a>    /// the bloom filter for relevant columns in each row group is read and
+<a href=#111 id=111 data-nosnippet>111</a>    /// checked. Row groups where the bloom filter proves the value is absent
+<a href=#112 id=112 data-nosnippet>112</a>    /// are skipped entirely.
+<a href=#113 id=113 data-nosnippet>113</a>    ///
+<a href=#114 id=114 data-nosnippet>114</a>    /// Defaults to disabled. Each bloom filter is a separate read, and they are
+<a href=#115 id=115 data-nosnippet>115</a>    /// issued serially — one round trip per relevant column per row group, before
+<a href=#116 id=116 data-nosnippet>116</a>    /// any data is read. TODO(#3191)
+<a href=#117 id=117 data-nosnippet>117</a>    </span><span class="kw">pub fn </span>with_bloom_filter_enabled(<span class="kw-2">mut </span><span class="self">self</span>, bloom_filter_enabled: bool) -&gt; <span class="self">Self </span>{
+<a href=#118 id=118 data-nosnippet>118</a>        <span class="self">self</span>.bloom_filter_enabled = bloom_filter_enabled;
+<a href=#119 id=119 data-nosnippet>119</a>        <span class="self">self
+<a href=#120 id=120 data-nosnippet>120</a>    </span>}
+<a href=#121 id=121 data-nosnippet>121</a>
+<a href=#122 id=122 data-nosnippet>122</a>    <span class="doccomment">/// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
+<a href=#123 id=123 data-nosnippet>123</a>    ///
+<a href=#124 id=124 data-nosnippet>124</a>    /// This hint can help reduce the number of fetch requests. For more details see the
+<a href=#125 id=125 data-nosnippet>125</a>    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
+<a href=#126 id=126 data-nosnippet>126</a>    </span><span class="kw">pub fn </span>with_metadata_size_hint(<span class="kw-2">mut </span><span class="self">self</span>, metadata_size_hint: usize) -&gt; <span class="self">Self </span>{
+<a href=#127 id=127 data-nosnippet>127</a>        <span class="self">self</span>.parquet_read_options.metadata_size_hint = <span class="prelude-val">Some</span>(metadata_size_hint);
 <a href=#128 id=128 data-nosnippet>128</a>        <span class="self">self
 <a href=#129 id=129 data-nosnippet>129</a>    </span>}
 <a href=#130 id=130 data-nosnippet>130</a>
-<a href=#131 id=131 data-nosnippet>131</a>    <span class="doccomment">/// Build the ArrowReader.
-<a href=#132 id=132 data-nosnippet>132</a>    </span><span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; ArrowReader {
-<a href=#133 id=133 data-nosnippet>133</a>        ArrowReader {
-<a href=#134 id=134 data-nosnippet>134</a>            batch_size: <span class="self">self</span>.batch_size,
-<a href=#135 id=135 data-nosnippet>135</a>            file_io: <span class="self">self</span>.file_io.clone(),
-<a href=#136 id=136 data-nosnippet>136</a>            delete_file_loader: CachingDeleteFileLoader::new(
-<a href=#137 id=137 data-nosnippet>137</a>                <span class="self">self</span>.file_io.clone(),
-<a href=#138 id=138 data-nosnippet>138</a>                <span class="self">self</span>.concurrency_limit_data_files,
-<a href=#139 id=139 data-nosnippet>139</a>                <span class="self">self</span>.runtime.clone(),
-<a href=#140 id=140 data-nosnippet>140</a>            ),
-<a href=#141 id=141 data-nosnippet>141</a>            concurrency_limit_data_files: <span class="self">self</span>.concurrency_limit_data_files,
-<a href=#142 id=142 data-nosnippet>142</a>            row_group_filtering_enabled: <span class="self">self</span>.row_group_filtering_enabled,
-<a href=#143 id=143 data-nosnippet>143</a>            row_selection_enabled: <span class="self">self</span>.row_selection_enabled,
-<a href=#144 id=144 data-nosnippet>144</a>            parquet_read_options: <span class="self">self</span>.parquet_read_options,
-<a href=#145 id=145 data-nosnippet>145</a>        }
-<a href=#146 id=146 data-nosnippet>146</a>    }
-<a href=#147 id=147 data-nosnippet>147</a>}
-<a href=#148 id=148 data-nosnippet>148</a>
-<a href=#149 id=149 data-nosnippet>149</a><span class="doccomment">/// Reads data from Parquet files
-<a href=#150 id=150 data-nosnippet>150</a></span><span class="attr">#[derive(Clone)]
-<a href=#151 id=151 data-nosnippet>151</a></span><span class="kw">pub struct </span>ArrowReader {
-<a href=#152 id=152 data-nosnippet>152</a>    batch_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#153 id=153 data-nosnippet>153</a>    file_io: FileIO,
-<a href=#154 id=154 data-nosnippet>154</a>    delete_file_loader: CachingDeleteFileLoader,
-<a href=#155 id=155 data-nosnippet>155</a>
-<a href=#156 id=156 data-nosnippet>156</a>    <span class="doccomment">/// the maximum number of data files that can be fetched at the same time
-<a href=#157 id=157 data-nosnippet>157</a>    </span>concurrency_limit_data_files: usize,
-<a href=#158 id=158 data-nosnippet>158</a>
-<a href=#159 id=159 data-nosnippet>159</a>    row_group_filtering_enabled: bool,
-<a href=#160 id=160 data-nosnippet>160</a>    row_selection_enabled: bool,
-<a href=#161 id=161 data-nosnippet>161</a>    parquet_read_options: ParquetReadOptions,
-<a href=#162 id=162 data-nosnippet>162</a>}
+<a href=#131 id=131 data-nosnippet>131</a>    <span class="doccomment">/// Sets the gap threshold for merging nearby byte ranges into a single request.
+<a href=#132 id=132 data-nosnippet>132</a>    /// Ranges with gaps smaller than this value will be coalesced.
+<a href=#133 id=133 data-nosnippet>133</a>    ///
+<a href=#134 id=134 data-nosnippet>134</a>    /// Defaults to 1 MiB, matching object_store's OBJECT_STORE_COALESCE_DEFAULT.
+<a href=#135 id=135 data-nosnippet>135</a>    </span><span class="kw">pub fn </span>with_range_coalesce_bytes(<span class="kw-2">mut </span><span class="self">self</span>, range_coalesce_bytes: u64) -&gt; <span class="self">Self </span>{
+<a href=#136 id=136 data-nosnippet>136</a>        <span class="self">self</span>.parquet_read_options.range_coalesce_bytes = range_coalesce_bytes;
+<a href=#137 id=137 data-nosnippet>137</a>        <span class="self">self
+<a href=#138 id=138 data-nosnippet>138</a>    </span>}
+<a href=#139 id=139 data-nosnippet>139</a>
+<a href=#140 id=140 data-nosnippet>140</a>    <span class="doccomment">/// Sets the maximum number of merged byte ranges to fetch concurrently.
+<a href=#141 id=141 data-nosnippet>141</a>    ///
+<a href=#142 id=142 data-nosnippet>142</a>    /// Defaults to 10, matching object_store's OBJECT_STORE_COALESCE_PARALLEL.
+<a href=#143 id=143 data-nosnippet>143</a>    </span><span class="kw">pub fn </span>with_range_fetch_concurrency(<span class="kw-2">mut </span><span class="self">self</span>, range_fetch_concurrency: usize) -&gt; <span class="self">Self </span>{
+<a href=#144 id=144 data-nosnippet>144</a>        <span class="self">self</span>.parquet_read_options.range_fetch_concurrency = range_fetch_concurrency;
+<a href=#145 id=145 data-nosnippet>145</a>        <span class="self">self
+<a href=#146 id=146 data-nosnippet>146</a>    </span>}
+<a href=#147 id=147 data-nosnippet>147</a>
+<a href=#148 id=148 data-nosnippet>148</a>    <span class="doccomment">/// Build the ArrowReader.
+<a href=#149 id=149 data-nosnippet>149</a>    </span><span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; ArrowReader {
+<a href=#150 id=150 data-nosnippet>150</a>        ArrowReader {
+<a href=#151 id=151 data-nosnippet>151</a>            batch_size: <span class="self">self</span>.batch_size,
+<a href=#152 id=152 data-nosnippet>152</a>            file_io: <span class="self">self</span>.file_io.clone(),
+<a href=#153 id=153 data-nosnippet>153</a>            delete_file_loader: CachingDeleteFileLoader::new(
+<a href=#154 id=154 data-nosnippet>154</a>                <span class="self">self</span>.file_io.clone(),
+<a href=#155 id=155 data-nosnippet>155</a>                <span class="self">self</span>.concurrency_limit_data_files,
+<a href=#156 id=156 data-nosnippet>156</a>                <span class="self">self</span>.runtime.clone(),
+<a href=#157 id=157 data-nosnippet>157</a>            ),
+<a href=#158 id=158 data-nosnippet>158</a>            concurrency_limit_data_files: <span class="self">self</span>.concurrency_limit_data_files,
+<a href=#159 id=159 data-nosnippet>159</a>            row_group_filtering_enabled: <span class="self">self</span>.row_group_filtering_enabled,
+<a href=#160 id=160 data-nosnippet>160</a>            row_selection_enabled: <span class="self">self</span>.row_selection_enabled,
+<a href=#161 id=161 data-nosnippet>161</a>            bloom_filter_enabled: <span class="self">self</span>.bloom_filter_enabled,
+<a href=#162 id=162 data-nosnippet>162</a>            parquet_read_options: <span class="self">self</span>.parquet_read_options,
+<a href=#163 id=163 data-nosnippet>163</a>        }
+<a href=#164 id=164 data-nosnippet>164</a>    }
+<a href=#165 id=165 data-nosnippet>165</a>}
+<a href=#166 id=166 data-nosnippet>166</a>
+<a href=#167 id=167 data-nosnippet>167</a><span class="doccomment">/// Reads data from Parquet files
+<a href=#168 id=168 data-nosnippet>168</a></span><span class="attr">#[derive(Clone)]
+<a href=#169 id=169 data-nosnippet>169</a></span><span class="kw">pub struct </span>ArrowReader {
+<a href=#170 id=170 data-nosnippet>170</a>    batch_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#171 id=171 data-nosnippet>171</a>    file_io: FileIO,
+<a href=#172 id=172 data-nosnippet>172</a>    delete_file_loader: CachingDeleteFileLoader,
+<a href=#173 id=173 data-nosnippet>173</a>
+<a href=#174 id=174 data-nosnippet>174</a>    <span class="doccomment">/// the maximum number of data files that can be fetched at the same time
+<a href=#175 id=175 data-nosnippet>175</a>    </span>concurrency_limit_data_files: usize,
+<a href=#176 id=176 data-nosnippet>176</a>
+<a href=#177 id=177 data-nosnippet>177</a>    row_group_filtering_enabled: bool,
+<a href=#178 id=178 data-nosnippet>178</a>    row_selection_enabled: bool,
+<a href=#179 id=179 data-nosnippet>179</a>    bloom_filter_enabled: bool,
+<a href=#180 id=180 data-nosnippet>180</a>    parquet_read_options: ParquetReadOptions,
+<a href=#181 id=181 data-nosnippet>181</a>}
 </code></pre></div></section></main></body></html>
