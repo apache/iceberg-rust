@@ -23,7 +23,7 @@ use arrow_array::{
     LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
     Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray, new_null_array,
 };
-use arrow_buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::BooleanBuffer;
 use arrow_schema::{DataType, FieldRef, TimeUnit};
 use uuid::Uuid;
 
@@ -635,33 +635,26 @@ pub(crate) fn create_primitive_array_single_element(
     data_type: &DataType,
     prim_lit: Option<&PrimitiveLiteral>,
 ) -> Result<ArrayRef> {
+    // No value: a single NULL of any (possibly nested) type (#2618). The `1` is
+    // `new_null_array`'s row count.
+    if prim_lit.is_none() {
+        return Ok(new_null_array(data_type, 1));
+    }
     match (data_type, prim_lit) {
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(v))) => {
             Ok(Arc::new(BooleanArray::from(vec![*v])))
         }
-        (DataType::Boolean, None) => Ok(Arc::new(BooleanArray::from(vec![Option::<bool>::None]))),
         (DataType::Int32, Some(PrimitiveLiteral::Int(v))) => {
             Ok(Arc::new(Int32Array::from(vec![*v])))
         }
-        (DataType::Int32, None) => Ok(Arc::new(Int32Array::from(vec![Option::<i32>::None]))),
         (DataType::Date32, Some(PrimitiveLiteral::Int(v))) => {
             Ok(Arc::new(Date32Array::from(vec![*v])))
         }
-        (DataType::Date32, None) => Ok(Arc::new(Date32Array::from(vec![Option::<i32>::None]))),
         (DataType::Int64, Some(PrimitiveLiteral::Long(v))) => {
             Ok(Arc::new(Int64Array::from(vec![*v])))
         }
-        (DataType::Int64, None) => Ok(Arc::new(Int64Array::from(vec![Option::<i64>::None]))),
         (DataType::Timestamp(TimeUnit::Microsecond, timezone), Some(PrimitiveLiteral::Long(v))) => {
             let array = TimestampMicrosecondArray::from(vec![*v]);
-            if let Some(timezone) = timezone {
-                Ok(Arc::new(array.with_timezone(timezone.clone())))
-            } else {
-                Ok(Arc::new(array))
-            }
-        }
-        (DataType::Timestamp(TimeUnit::Microsecond, timezone), None) => {
-            let array = TimestampMicrosecondArray::from(vec![Option::<i64>::None]);
             if let Some(timezone) = timezone {
                 Ok(Arc::new(array.with_timezone(timezone.clone())))
             } else {
@@ -676,32 +669,18 @@ pub(crate) fn create_primitive_array_single_element(
                 Ok(Arc::new(array))
             }
         }
-        (DataType::Timestamp(TimeUnit::Nanosecond, timezone), None) => {
-            let array = TimestampNanosecondArray::from(vec![Option::<i64>::None]);
-            if let Some(timezone) = timezone {
-                Ok(Arc::new(array.with_timezone(timezone.clone())))
-            } else {
-                Ok(Arc::new(array))
-            }
-        }
         (DataType::Float32, Some(PrimitiveLiteral::Float(v))) => {
             Ok(Arc::new(Float32Array::from(vec![v.0])))
         }
-        (DataType::Float32, None) => Ok(Arc::new(Float32Array::from(vec![Option::<f32>::None]))),
         (DataType::Float64, Some(PrimitiveLiteral::Double(v))) => {
             Ok(Arc::new(Float64Array::from(vec![v.0])))
         }
-        (DataType::Float64, None) => Ok(Arc::new(Float64Array::from(vec![Option::<f64>::None]))),
         (DataType::Utf8, Some(PrimitiveLiteral::String(v))) => {
             Ok(Arc::new(StringArray::from(vec![v.as_str()])))
         }
-        (DataType::Utf8, None) => Ok(Arc::new(StringArray::from(vec![Option::<&str>::None]))),
         (DataType::Binary, Some(PrimitiveLiteral::Binary(v))) => {
             Ok(Arc::new(BinaryArray::from_vec(vec![v.as_slice()])))
         }
-        (DataType::Binary, None) => Ok(Arc::new(BinaryArray::from_opt_vec(vec![
-            Option::<&[u8]>::None,
-        ]))),
         (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::Int128(v))) => {
             let array = Decimal128Array::from(vec![{ *v }])
                 .with_precision_and_scale(*precision, *scale)
@@ -728,81 +707,6 @@ pub(crate) fn create_primitive_array_single_element(
                 })?;
             Ok(Arc::new(array))
         }
-        (DataType::Decimal128(precision, scale), None) => {
-            let array = Decimal128Array::from(vec![Option::<i128>::None])
-                .with_precision_and_scale(*precision, *scale)
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                        ),
-                    )
-                })?;
-            Ok(Arc::new(array))
-        }
-        (DataType::Struct(fields), None) => {
-            // Create a single-element StructArray with nulls
-            let null_arrays: Vec<ArrayRef> = fields
-                .iter()
-                .map(|f| {
-                    // Recursively create null arrays for struct fields
-                    // For primitive fields in structs, use simple null arrays (not REE within struct)
-                    match f.data_type() {
-                        DataType::Boolean => {
-                            Ok(Arc::new(BooleanArray::from(vec![Option::<bool>::None]))
-                                as ArrayRef)
-                        }
-                        DataType::Int32 | DataType::Date32 => {
-                            Ok(Arc::new(Int32Array::from(vec![Option::<i32>::None])) as ArrayRef)
-                        }
-                        DataType::Int64 => {
-                            Ok(Arc::new(Int64Array::from(vec![Option::<i64>::None])) as ArrayRef)
-                        }
-                        DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
-                            let array = TimestampMicrosecondArray::from(vec![Option::<i64>::None]);
-                            if let Some(timezone) = timezone {
-                                Ok(Arc::new(array.with_timezone(timezone.clone())) as ArrayRef)
-                            } else {
-                                Ok(Arc::new(array) as ArrayRef)
-                            }
-                        }
-                        DataType::Timestamp(TimeUnit::Nanosecond, timezone) => {
-                            let array = TimestampNanosecondArray::from(vec![Option::<i64>::None]);
-                            if let Some(timezone) = timezone {
-                                Ok(Arc::new(array.with_timezone(timezone.clone())) as ArrayRef)
-                            } else {
-                                Ok(Arc::new(array) as ArrayRef)
-                            }
-                        }
-                        DataType::Float32 => {
-                            Ok(Arc::new(Float32Array::from(vec![Option::<f32>::None])) as ArrayRef)
-                        }
-                        DataType::Float64 => {
-                            Ok(Arc::new(Float64Array::from(vec![Option::<f64>::None])) as ArrayRef)
-                        }
-                        DataType::Utf8 => {
-                            Ok(Arc::new(StringArray::from(vec![Option::<&str>::None])) as ArrayRef)
-                        }
-                        DataType::Binary => {
-                            Ok(
-                                Arc::new(BinaryArray::from_opt_vec(vec![Option::<&[u8]>::None]))
-                                    as ArrayRef,
-                            )
-                        }
-                        _ => Err(Error::new(
-                            ErrorKind::Unexpected,
-                            format!("Unsupported struct field type: {:?}", f.data_type()),
-                        )),
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(Arc::new(StructArray::new(
-                fields.clone(),
-                null_arrays,
-                Some(NullBuffer::new_null(1)),
-            )))
-        }
         _ => Err(Error::new(
             ErrorKind::Unexpected,
             format!("Unsupported constant type combination: {data_type:?} with {prim_lit:?}"),
@@ -819,6 +723,10 @@ pub(crate) fn create_primitive_array_repeated(
     prim_lit: Option<&PrimitiveLiteral>,
     num_rows: usize,
 ) -> Result<ArrayRef> {
+    // No value to repeat: an all-NULL column of any (possibly nested) type (#2618).
+    if prim_lit.is_none() {
+        return Ok(new_null_array(data_type, num_rows));
+    }
     Ok(match (data_type, prim_lit) {
         // --- Primitive Some arms ---
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(value))) => {
@@ -933,40 +841,7 @@ pub(crate) fn create_primitive_array_repeated(
                     })?,
             )
         }
-
-        // --- Special-case None arms ---
-        (DataType::Decimal128(precision, scale), None) => {
-            let vals: Vec<Option<i128>> = vec![None; num_rows];
-            Arc::new(
-                Decimal128Array::from(vals)
-                    .with_precision_and_scale(*precision, *scale)
-                    .map_err(|e| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                            ),
-                        )
-                    })?,
-            )
-        }
-        (DataType::Struct(fields), None) => {
-            // Create a StructArray filled with nulls, recursively creating null children
-            let null_arrays: Vec<ArrayRef> = fields
-                .iter()
-                .map(|field| create_primitive_array_repeated(field.data_type(), None, num_rows))
-                .collect::<Result<Vec<_>>>()?;
-
-            Arc::new(StructArray::new(
-                fields.clone(),
-                null_arrays,
-                Some(NullBuffer::new_null(num_rows)),
-            ))
-        }
-        (DataType::Null, _) => Arc::new(arrow_array::NullArray::new(num_rows)),
-
-        // --- Catch-all null arm: use arrow-rs new_null_array for any remaining DataType ---
-        (dt, None) => new_null_array(dt, num_rows),
+        (DataType::Null, Some(_)) => Arc::new(arrow_array::NullArray::new(num_rows)),
 
         (dt, _) => {
             return Err(Error::new(
