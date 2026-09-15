@@ -210,10 +210,23 @@ mod _serde {
                 ));
             }
 
-            let mut reader = Cursor::new(&bytes[1..]);
+            let datum = &bytes[1..];
+            let mut reader = Cursor::new(datum);
             let value = from_avro_datum(&AVRO_SCHEMA_V1, &mut reader, None).map_err(|e| {
                 Error::new(ErrorKind::DataInvalid, "Failed to decode key metadata").with_source(e)
             })?;
+
+            // `from_avro_datum` reads a single datum and ignores whatever follows it.
+            let consumed = reader.position();
+            if consumed != datum.len() as u64 {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Trailing bytes after key metadata: decoded {consumed} of {} bytes",
+                        datum.len()
+                    ),
+                ));
+            }
 
             from_value(&value).map_err(|e| {
                 Error::new(
@@ -309,6 +322,26 @@ mod tests {
         let result = StandardKeyMetadata::decode(&[]);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::DataInvalid);
+    }
+
+    #[test]
+    fn test_trailing_bytes() {
+        let key = b"0123456789012345";
+        let mut serialized = StandardKeyMetadata::try_new(key)
+            .unwrap()
+            .encode()
+            .unwrap()
+            .to_vec();
+        serialized.extend_from_slice(b"trailing");
+
+        let err = StandardKeyMetadata::decode(&serialized).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message()
+                .starts_with("Trailing bytes after key metadata"),
+            "unexpected message: {}",
+            err.message()
+        );
     }
 
     #[test]
