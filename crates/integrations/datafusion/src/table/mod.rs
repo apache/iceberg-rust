@@ -79,7 +79,7 @@ impl IcebergTableProvider {
     ///
     /// Loads the table once to get the initial schema, then stores the catalog
     /// reference for future metadata refreshes on each operation.
-    pub(crate) async fn try_new(
+    pub async fn try_new(
         catalog: Arc<dyn Catalog>,
         namespace: NamespaceIdent,
         name: impl Into<String>,
@@ -97,7 +97,7 @@ impl IcebergTableProvider {
         })
     }
 
-    pub(crate) async fn metadata_table(
+    pub async fn metadata_table(
         &self,
         r#type: MetadataTableType,
     ) -> Result<IcebergMetadataTableProvider> {

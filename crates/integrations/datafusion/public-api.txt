@@ -71,6 +71,9 @@ pub fn iceberg_datafusion::IcebergStaticTableProvider::schema(&self) -> arrow_sc
 pub fn iceberg_datafusion::IcebergStaticTableProvider::supports_filters_pushdown(&self, filters: &[&datafusion_expr::expr::Expr]) -> datafusion_common::error::Result<alloc::vec::Vec<datafusion_expr::table_source::TableProviderFilterPushDown>>
 pub fn iceberg_datafusion::IcebergStaticTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
 pub struct iceberg_datafusion::table::IcebergTableProvider
+impl iceberg_datafusion::IcebergTableProvider
+pub async fn iceberg_datafusion::IcebergTableProvider::metadata_table(&self, type: iceberg::inspect::metadata_table::MetadataTableType) -> iceberg::error::Result<iceberg_datafusion::metadata_table::IcebergMetadataTableProvider>
+pub async fn iceberg_datafusion::IcebergTableProvider::try_new(catalog: alloc::sync::Arc<dyn iceberg::catalog::Catalog>, namespace: iceberg::catalog::NamespaceIdent, name: impl core::convert::Into<alloc::string::String>) -> iceberg::error::Result<Self>
 impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider
@@ -115,6 +118,9 @@ pub fn iceberg_datafusion::IcebergStaticTableProvider::schema(&self) -> arrow_sc
 pub fn iceberg_datafusion::IcebergStaticTableProvider::supports_filters_pushdown(&self, filters: &[&datafusion_expr::expr::Expr]) -> datafusion_common::error::Result<alloc::vec::Vec<datafusion_expr::table_source::TableProviderFilterPushDown>>
 pub fn iceberg_datafusion::IcebergStaticTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
 pub struct iceberg_datafusion::IcebergTableProvider
+impl iceberg_datafusion::IcebergTableProvider
+pub async fn iceberg_datafusion::IcebergTableProvider::metadata_table(&self, type: iceberg::inspect::metadata_table::MetadataTableType) -> iceberg::error::Result<iceberg_datafusion::metadata_table::IcebergMetadataTableProvider>
+pub async fn iceberg_datafusion::IcebergTableProvider::try_new(catalog: alloc::sync::Arc<dyn iceberg::catalog::Catalog>, namespace: iceberg::catalog::NamespaceIdent, name: impl core::convert::Into<alloc::string::String>) -> iceberg::error::Result<Self>
 impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider
