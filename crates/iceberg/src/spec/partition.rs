@@ -106,30 +106,9 @@ impl PartitionSpec {
     /// If a source column is absent, preserves fixed transform result types and uses
     /// unknown for result types that depend on the source type.
     pub fn partition_type(&self, schema: &Schema) -> Result<StructType> {
-        self.partition_type_with_schema_history(schema, &[])
-    }
-
-    /// Resolves dropped sources from the newest retained schema containing their field ID.
-    /// Sources present in the supplied schema always take precedence over historical types.
-    pub(crate) fn partition_type_with_schema_history(
-        &self,
-        schema: &Schema,
-        historical_schemas: &[&Schema],
-    ) -> Result<StructType> {
         let mut struct_fields = Vec::with_capacity(self.fields.len());
         for partition_field in &self.fields {
-            let source_field = schema.field_by_id(partition_field.source_id).or_else(|| {
-                historical_schemas
-                    .iter()
-                    .filter_map(|schema| {
-                        schema
-                            .field_by_id(partition_field.source_id)
-                            .map(|field| (schema.schema_id(), field))
-                    })
-                    .max_by_key(|(schema_id, _)| *schema_id)
-                    .map(|(_, field)| field)
-            });
-            let res_type = match source_field {
+            let res_type = match schema.field_by_id(partition_field.source_id) {
                 Some(field) => partition_field.transform.result_type(&field.field_type)?,
                 // Historical specs may reference dropped source columns. Retain every
                 // field's position and any result type that is independent of its source.
@@ -1170,57 +1149,6 @@ mod tests {
                 spec.partition_type(&schema).unwrap(),
                 StructType::new(vec![
                     NestedField::optional(1000, "partition", expected_type.into()).into(),
-                ])
-            );
-        }
-    }
-
-    #[test]
-    fn test_partition_type_with_schema_history() {
-        let old_schema = Schema::builder()
-            .with_schema_id(1)
-            .with_fields(vec![
-                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
-            ])
-            .build()
-            .unwrap();
-        let promoted_schema = Schema::builder()
-            .with_schema_id(3)
-            .with_fields(vec![
-                NestedField::optional(1, "id", PrimitiveType::Long.into()).into(),
-                NestedField::optional(2, "data", PrimitiveType::Int.into()).into(),
-            ])
-            .build()
-            .unwrap();
-        let current_schema = Schema::builder()
-            .with_schema_id(4)
-            .with_fields(vec![
-                NestedField::optional(2, "data", PrimitiveType::Long.into()).into(),
-                NestedField::optional(3, "id", PrimitiveType::Boolean.into()).into(),
-            ])
-            .build()
-            .unwrap();
-        let spec = PartitionSpec::builder(promoted_schema.clone())
-            .add_partition_field("id", "id_partition", Transform::Identity)
-            .unwrap()
-            .add_partition_field("data", "data_partition", Transform::Truncate(4))
-            .unwrap()
-            .build()
-            .unwrap();
-
-        // Resolve by field ID, prefer the newest historical type, and keep current
-        // source types instead of replacing them with historical types.
-        for history in [[&old_schema, &promoted_schema], [
-            &promoted_schema,
-            &old_schema,
-        ]] {
-            assert_eq!(
-                spec.partition_type_with_schema_history(&current_schema, &history)
-                    .unwrap(),
-                StructType::new(vec![
-                    NestedField::optional(1000, "id_partition", PrimitiveType::Long.into()).into(),
-                    NestedField::optional(1001, "data_partition", PrimitiveType::Long.into())
-                        .into(),
                 ])
             );
         }

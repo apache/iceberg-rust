@@ -162,12 +162,6 @@ impl<'a> ManifestsTable<'a> {
 
         if let Some(snapshot) = self.table.metadata().current_snapshot() {
             let manifest_list = self.table.manifest_list_reader(snapshot).load().await?;
-            let historical_schemas: Vec<_> = self
-                .table
-                .metadata()
-                .schemas_iter()
-                .map(AsRef::as_ref)
-                .collect();
             for manifest in manifest_list.entries() {
                 content.append_value(manifest.content as i32);
                 path.append_value(manifest.manifest_path.clone());
@@ -199,10 +193,7 @@ impl<'a> ManifestsTable<'a> {
                             ),
                         )
                     })?;
-                let spec_struct = spec.partition_type_with_schema_history(
-                    self.table.metadata().current_schema(),
-                    &historical_schemas,
-                )?;
+                let spec_struct = spec.partition_type(self.table.metadata().current_schema())?;
                 self.append_partition_summaries(
                     &mut partition_summaries,
                     manifest.partitions.as_deref().unwrap_or(&[]),
@@ -401,27 +392,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_manifests_table_with_dropped_partition_source_column() {
-        check_manifests_table_with_dropped_partition_source_column(true).await;
-    }
-
-    #[tokio::test]
-    async fn test_manifests_table_without_historical_partition_source_type() {
-        check_manifests_table_with_dropped_partition_source_column(false).await;
-    }
-
-    async fn check_manifests_table_with_dropped_partition_source_column(retain_history: bool) {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
-        let expected_batches: Vec<_> = fixture
-            .table
-            .inspect()
-            .manifests()
-            .scan()
-            .await
-            .unwrap()
-            .try_collect()
-            .await
-            .unwrap();
 
         // Evolve the table so that the manifests reference a historical spec whose source
         // column is no longer in the current schema: add an unpartitioned default spec, then
@@ -429,31 +401,14 @@ mod tests {
         let mut metadata = serde_json::to_value(fixture.table.metadata()).unwrap();
         let current_schema_id = metadata["current-schema-id"].clone();
         let schemas = metadata["schemas"].as_array_mut().unwrap();
-        let mut new_schema = schemas
-            .iter()
-            .find(|schema| schema["schema-id"] == current_schema_id)
-            .unwrap()
-            .clone();
-        let new_schema_id = schemas
-            .iter()
-            .map(|schema| schema["schema-id"].as_i64().unwrap())
-            .max()
-            .unwrap()
-            + 1;
-        new_schema["schema-id"] = serde_json::json!(new_schema_id);
-        new_schema["fields"]
-            .as_array_mut()
-            .unwrap()
-            .retain(|field| field["id"] != 1);
-        new_schema["identifier-field-ids"]
-            .as_array_mut()
-            .unwrap()
-            .retain(|id| *id != 1);
-        if !retain_history {
-            schemas.clear();
+        for schema in schemas {
+            if schema["schema-id"] == current_schema_id {
+                let fields = schema["fields"].as_array_mut().unwrap();
+                fields.retain(|field| field["id"] != 1);
+                let identifier_ids = schema["identifier-field-ids"].as_array_mut().unwrap();
+                identifier_ids.retain(|id| *id != 1);
+            }
         }
-        schemas.push(new_schema);
-        metadata["current-schema-id"] = serde_json::json!(new_schema_id);
 
         metadata["partition-specs"]
             .as_array_mut()
@@ -486,13 +441,7 @@ mod tests {
         assert_eq!(summary.len(), 1);
         assert!(summary.column_by_name("contains_null").unwrap().is_valid(0));
         assert!(summary.column_by_name("contains_nan").unwrap().is_valid(0));
-        if retain_history {
-            assert!(summary.column_by_name("lower_bound").unwrap().is_valid(0));
-            assert!(summary.column_by_name("upper_bound").unwrap().is_valid(0));
-            assert_eq!(batches, expected_batches);
-        } else {
-            assert!(summary.column_by_name("lower_bound").unwrap().is_null(0));
-            assert!(summary.column_by_name("upper_bound").unwrap().is_null(0));
-        }
+        assert!(summary.column_by_name("lower_bound").unwrap().is_null(0));
+        assert!(summary.column_by_name("upper_bound").unwrap().is_null(0));
     }
 }
