@@ -417,8 +417,10 @@ impl Datum {
             PrimitiveType::Uuid => {
                 PrimitiveLiteral::UInt128(u128::from_be_bytes(bytes.try_into()?))
             }
-            PrimitiveType::Fixed(_) => PrimitiveLiteral::Binary(Vec::from(bytes)),
-            PrimitiveType::Binary => PrimitiveLiteral::Binary(Vec::from(bytes)),
+            PrimitiveType::Fixed(_)
+            | PrimitiveType::Binary
+            | PrimitiveType::Geometry(_)
+            | PrimitiveType::Geography(_) => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Decimal { .. } => {
                 PrimitiveLiteral::Int128(i128_from_be_bytes(bytes).ok_or_else(|| {
                     Error::new(
