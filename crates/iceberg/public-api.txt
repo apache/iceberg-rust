@@ -1017,6 +1017,8 @@ pub const iceberg::io::GCS_PROJECT_ID: &str
 pub const iceberg::io::GCS_SERVICE_HOST: &str
 pub const iceberg::io::GCS_TOKEN: &str
 pub const iceberg::io::GCS_USER_PROJECT: &str
+pub const iceberg::io::HDFS_HADOOP_CONF_PREFIX: &str
+pub const iceberg::io::HDFS_NAME_NODE: &str
 pub const iceberg::io::HF_ENDPOINT: &str
 pub const iceberg::io::HF_REVISION: &str
 pub const iceberg::io::HF_TOKEN: &str

@@ -6,6 +6,9 @@ pub iceberg_storage_opendal::OpenDalStorage::Azdls
 pub iceberg_storage_opendal::OpenDalStorage::Azdls::config: alloc::sync::Arc<opendal_service_azdls::config::AzdlsConfig>
 pub iceberg_storage_opendal::OpenDalStorage::Gcs
 pub iceberg_storage_opendal::OpenDalStorage::Gcs::config: alloc::sync::Arc<opendal_service_gcs::config::GcsConfig>
+pub iceberg_storage_opendal::OpenDalStorage::HdfsNative
+pub iceberg_storage_opendal::OpenDalStorage::HdfsNative::config: alloc::sync::Arc<opendal_service_hdfs_native::config::HdfsNativeConfig>
+pub iceberg_storage_opendal::OpenDalStorage::HdfsNative::operators: alloc::sync::Arc<std::sync::poison::rwlock::RwLock<std::collections::hash::map::HashMap<alloc::string::String, opendal_core::types::operator::operator::Operator>>>
 pub iceberg_storage_opendal::OpenDalStorage::Hf
 pub iceberg_storage_opendal::OpenDalStorage::Hf::config: alloc::sync::Arc<opendal_service_hf::config::HfConfig>
 pub iceberg_storage_opendal::OpenDalStorage::LocalFs
@@ -39,6 +42,7 @@ pub enum iceberg_storage_opendal::OpenDalStorageFactory
 pub iceberg_storage_opendal::OpenDalStorageFactory::Azdls
 pub iceberg_storage_opendal::OpenDalStorageFactory::Fs
 pub iceberg_storage_opendal::OpenDalStorageFactory::Gcs
+pub iceberg_storage_opendal::OpenDalStorageFactory::HdfsNative
 pub iceberg_storage_opendal::OpenDalStorageFactory::Hf
 pub iceberg_storage_opendal::OpenDalStorageFactory::Memory
 pub iceberg_storage_opendal::OpenDalStorageFactory::Oss
