@@ -1273,10 +1273,9 @@ mod tests {
         );
 
         // Close should also be rejected
-        let result = writer.close().await;
-        assert!(result.is_err());
+        let err = writer.close().await.err().expect("close should fail");
         assert!(
-            result.unwrap_err().to_string().contains("poisoned"),
+            err.to_string().contains("poisoned"),
             "expected poisoned error on close"
         );
     }

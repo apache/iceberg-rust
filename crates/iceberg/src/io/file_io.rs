@@ -293,7 +293,6 @@ impl FileIOBuilder {
 /// The struct the represents the metadata of a file.
 ///
 /// TODO: we can add last modified time, content type, etc. in the future.
-#[derive(Debug)]
 pub struct FileMetadata {
     /// The size of the file.
     pub size: u64,

@@ -755,8 +755,6 @@ impl core::fmt::Debug for iceberg::io::FileIOBuilder
 pub fn iceberg::io::FileIOBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::io::FileMetadata
 pub iceberg::io::FileMetadata::size: u64
-impl core::fmt::Debug for iceberg::io::FileMetadata
-pub fn iceberg::io::FileMetadata::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::io::GcsConfig
 pub iceberg::io::GcsConfig::allow_anonymous: bool
 pub iceberg::io::GcsConfig::credential: core::option::Option<alloc::string::String>
