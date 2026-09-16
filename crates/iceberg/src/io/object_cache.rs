@@ -455,7 +455,7 @@ mod tests {
         // The spec marks `schema-id` optional in every version (v1-v3), so a
         // snapshot may omit it; fetching its manifest list must not depend on the
         // schema-id being present.
-        let snapshot: SnapshotRef = Snapshot::builder()
+        let snapshot_without_schema_id: SnapshotRef = Snapshot::builder()
             .with_snapshot_id(current_snapshot.snapshot_id())
             .with_sequence_number(current_snapshot.sequence_number())
             .with_timestamp_ms(current_snapshot.timestamp_ms())
@@ -466,16 +466,28 @@ mod tests {
             })
             .build()
             .into();
-        assert!(snapshot.schema_id().is_none());
+        assert!(snapshot_without_schema_id.schema_id().is_none());
+        assert!(current_snapshot.schema_id().is_some());
 
         let object_cache = ObjectCache::new(fixture.table.file_io().clone(), None);
 
-        let result_manifest_list = object_cache
-            .get_manifest_list(&snapshot, &fixture.table.metadata_ref())
+        // Cold miss: the schema-id-less snapshot populates the cache.
+        let inserted = object_cache
+            .get_manifest_list(&snapshot_without_schema_id, &fixture.table.metadata_ref())
             .await
             .unwrap();
+        assert_eq!(inserted.entries().len(), 1);
 
-        assert_eq!(result_manifest_list.entries().len(), 1);
+        // Warm hit: the original snapshot carries a schema-id but points at the same
+        // manifest-list location, so it returns the same cached entry.
+        let cached = object_cache
+            .get_manifest_list(current_snapshot, &fixture.table.metadata_ref())
+            .await
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(&inserted, &cached),
+            "snapshots with and without schema-id at one location must share a cache entry"
+        );
     }
 
     #[tokio::test]
