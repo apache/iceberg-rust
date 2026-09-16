@@ -23,7 +23,7 @@ use super::validate_puffin_compression;
 use crate::Result;
 use crate::compression::CompressionCodec;
 use crate::encryption::EncryptedOutputFile;
-use crate::io::{self, FileWrite, OutputFile};
+use crate::io::{FileMetadata as IoFileMetadata, FileWrite, OutputFile};
 use crate::puffin::blob::Blob;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata, Flag};
 
@@ -118,7 +118,7 @@ impl PuffinWriter {
     }
 
     /// Finalizes the Puffin file and returns its stored size.
-    pub async fn close(mut self) -> Result<io::FileMetadata> {
+    pub async fn close(mut self) -> Result<IoFileMetadata> {
         self.write_header_once().await?;
         self.write_footer().await?;
         self.writer.close().await
