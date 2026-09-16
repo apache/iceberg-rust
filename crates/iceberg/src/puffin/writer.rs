@@ -303,13 +303,60 @@ mod tests {
         let blobs = vec![blob_0(), blob_1()];
         let blobs_with_compression = blobs_with_compression(blobs.clone(), CompressionCodec::Lz4);
 
-        assert_eq!(
-            write_puffin_file(&temp_dir, blobs_with_compression, file_properties())
-                .await
-                .unwrap_err()
-                .to_string(),
-            "FeatureUnsupported => LZ4 compression is not supported currently"
-        );
+        let input_file = write_puffin_file(&temp_dir, blobs_with_compression, file_properties())
+            .await
+            .unwrap()
+            .to_input_file();
+
+        assert_eq!(read_all_blobs_from_puffin_file(input_file).await, blobs);
+    }
+
+    #[tokio::test]
+    async fn test_compress_footer_lz4_round_trips() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let path = temp_dir.path().join("compressed_footer.bin");
+        let output_file = file_io.new_output(path.to_str().unwrap()).unwrap();
+
+        let mut writer = PuffinWriter::new(&output_file, file_properties(), true)
+            .await
+            .unwrap();
+        writer.add(blob_0(), CompressionCodec::None).await.unwrap();
+        writer.close().await.unwrap();
+
+        let input_file = output_file.to_input_file();
+        let bytes = input_file.read().await.unwrap();
+        let footer_payload_offset = FileMetadata::MAGIC_LENGTH as usize
+            + blob_0().data.len()
+            + FileMetadata::MAGIC_LENGTH as usize;
+        assert_eq!(&bytes[footer_payload_offset..footer_payload_offset + 4], &[
+            0x04, 0x22, 0x4D, 0x18
+        ]);
+
+        let metadata = read_file_metadata(&input_file).await.unwrap();
+        assert_eq!(metadata.properties, file_properties());
+        assert_eq!(metadata.blobs.len(), 1);
+        assert_eq!(read_all_blobs_from_puffin_file(input_file).await, vec![
+            blob_0()
+        ]);
+    }
+
+    #[tokio::test]
+    async fn test_compress_empty_footer_lz4_succeeds() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let path = temp_dir.path().join("compressed_empty_footer.bin");
+        let output_file = file_io.new_output(path.to_str().unwrap()).unwrap();
+
+        let writer = PuffinWriter::new(&output_file, HashMap::new(), true)
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+
+        let input_file = output_file.to_input_file();
+        let metadata = read_file_metadata(&input_file).await.unwrap();
+        assert!(metadata.blobs.is_empty());
+        assert!(metadata.properties.is_empty());
     }
 
     async fn get_file_as_byte_vec(input_file: InputFile) -> Vec<u8> {
