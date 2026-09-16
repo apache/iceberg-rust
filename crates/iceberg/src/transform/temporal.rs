@@ -41,6 +41,29 @@ const MICROS_PER_SECOND: i64 = 1_000_000;
 /// One second in nanos.
 const NANOS_PER_SECOND: i64 = 1_000_000_000;
 
+/// Re-tag timestamp arrays as UTC so calendar fields match Iceberg's
+/// epoch-based computation. `date_part` converts into the array's timezone
+/// tag before reading year/month; Iceberg always uses UTC.
+fn timestamp_array_in_utc(input: ArrayRef) -> ArrayRef {
+    match input.data_type() {
+        DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
+            let arr = input
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .unwrap();
+            Arc::new(arr.clone().with_timezone("+00:00"))
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(_)) => {
+            let arr = input
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .unwrap();
+            Arc::new(arr.clone().with_timezone("+00:00"))
+        }
+        _ => input,
+    }
+}
+
 /// Extract a date or timestamp year, as years from 1970
 #[derive(Debug)]
 pub struct Year;
@@ -67,6 +90,7 @@ impl Year {
 
 impl TransformFunction for Year {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
+        let input = timestamp_array_in_utc(input);
         let array = date_part(&input, DatePart::Year)
             .map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
         Ok(Arc::<Int32Array>::new(
@@ -155,6 +179,7 @@ impl Month {
 
 impl TransformFunction for Month {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
+        let input = timestamp_array_in_utc(input);
         let year_array = date_part(&input, DatePart::Year)
             .map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
         let year_array: Int32Array = year_array
@@ -2372,6 +2397,21 @@ mod test {
         assert_eq!(res.value(2), 60);
         assert_eq!(res.value(3), 90);
         assert_eq!(res.value(4), -1);
+    }
+
+    #[test]
+    fn test_year_and_month_ignore_non_utc_timezone_tag() {
+        // -1 micros is 1969-12-31T23:59:59.999999Z. A non-UTC tag must not
+        // shift that into 1970 when computing Iceberg year/month values.
+        let tagged: ArrayRef =
+            Arc::new(TimestampMicrosecondArray::from(vec![-1i64]).with_timezone("Asia/Kathmandu"));
+        let years = super::Year.transform(tagged.clone()).unwrap();
+        let years = years.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(years.value(0), -1);
+
+        let months = super::Month.transform(tagged).unwrap();
+        let months = months.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(months.value(0), -1);
     }
 
     fn test_timestamp_and_tz_transform(
