@@ -36,15 +36,51 @@ github:
   protected_branches:
     main:
       required_status_checks:
-        # strict means "Require branches to be up to date before merging".
-        strict: true
+        # Check context names (job names, not workflow files) that Merge Queue
+        # waits for. Every producer workflow must run on both `pull_request`
+        # and `merge_group`, without path filters, so each context always
+        # reports. `strict` is omitted: Merge Queue validates every entry
+        # against an up-to-date main, and ASF defaults it to false.
+        contexts:
+          # Repository policy and security checks.
+          - Analyze Actions
+          - Run zizmor 🌈
+          - asf-allowlist-check
+
+          # Rust workflow gates.
+          - ci-required
+          - check-public-api
+
+          # Python bindings workflow gates.
+          - bindings-python-ci-required
 
       required_pull_request_reviews:
         required_approving_review_count: 1
         dismiss_stale_reviews: false
 
       required_linear_history: true
+  rulesets:
+    - name: Merge Queue
+      target: branch
+      enforcement: active
+      conditions:
+        ref_name:
+          include:
+            - "~DEFAULT_BRANCH"
+          exclude: []
+      rules:
+        - type: merge_queue
+          parameters:
+            check_response_timeout_minutes: 90
+            grouping_strategy: ALLGREEN
+            max_entries_to_build: 1
+            max_entries_to_merge: 1
+            merge_method: SQUASH
+            min_entries_to_merge: 1
+            min_entries_to_merge_wait_minutes: 0
   pull_requests:
+    # allow pull requests to merge automatically once all requirements are met
+    allow_auto_merge: true
     # auto-delete head branches after being merged
     del_branch_on_merge: true
   features:
