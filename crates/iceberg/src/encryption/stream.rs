@@ -287,6 +287,8 @@ impl FileRead for AesGcmFileRead {
     /// file. GCM authentication is verified per-block, so any tampering is detected
     /// at the granularity of individual blocks.
     async fn read(&self, range: Range<u64>) -> Result<Bytes> {
+        // An empty stream still has one block whose GCM tag must be verified, so an empty read
+        // cannot short-circuit there: that is what detects a file truncated to just its header.
         if range.start == range.end && self.plain_stream_size != 0 {
             return Ok(Bytes::new());
         }

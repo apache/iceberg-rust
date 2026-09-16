@@ -236,6 +236,7 @@ mod tests {
             "encrypted file should be larger than plaintext (header + nonce + tag)"
         );
 
+        // A missing path proves the size comes from the key metadata rather than a stat call.
         let input = EncryptedInputFile::new(
             fileio.new_input("memory:///does-not-exist").unwrap(),
             key_metadata().with_file_length(file_metadata.size),
