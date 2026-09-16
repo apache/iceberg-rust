@@ -1063,8 +1063,14 @@ mod tests {
             Ok(())
         }
 
+        // A poisoned AesGcmFileWrite must reject close() before delegating, so reaching this is a
+        // bug. Returning an error rather than panicking surfaces it as a failed assertion on the
+        // expected "poisoned" message.
         async fn close(&mut self) -> Result<FileMetadata> {
-            unreachable!()
+            Err(Error::new(
+                ErrorKind::Unexpected,
+                "FailingFileWrite::close called unexpectedly",
+            ))
         }
     }
 
