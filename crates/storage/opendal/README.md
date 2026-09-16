@@ -31,6 +31,7 @@ OpenDAL-based storage backend implementations for [Apache Iceberg Rust](https://
 | Google Cloud Storage | `opendal-gcs`    | ✅ Stable       | Google Cloud Storage                          |
 | Hugging Face         | `opendal-hf`     | ✅ Stable       | Hugging Face buckets and repositories         |
 | Alibaba Cloud OSS    | `opendal-oss`    | 🧪 Experimental | Alibaba Cloud Object Storage Service          |
+| Azure Blob Storage   | `opendal-azblob` | 🧪 Experimental | Azure Blob Storage without requiring HNS      |
 | Azure Datalake       | `opendal-azdls`  | 🧪 Experimental | Azure Datalake Storage v2                     |
 
 You can enable all stable storage backends at once using the `opendal-all` feature flag.
