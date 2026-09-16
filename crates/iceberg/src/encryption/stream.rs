@@ -1098,9 +1098,15 @@ mod tests {
         let mut writer = AesGcmFileWrite::new(inner, cipher, aad_prefix.to_vec());
 
         writer.write(Bytes::from(plaintext.to_vec())).await.unwrap();
-        writer.close().await.unwrap();
+        let metadata = writer.close().await.unwrap();
 
-        buffer.lock().unwrap().clone()
+        let encrypted = buffer.lock().unwrap().clone();
+        assert_eq!(
+            metadata.size,
+            encrypted.len() as u64,
+            "close() must report the full ciphertext length"
+        );
+        encrypted
     }
 
     #[tokio::test]
