@@ -36,6 +36,7 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     Runtime, TableCommit, TableCreation, TableIdent,
 };
+use iceberg_property_macro::Properties;
 use iceberg_storage_opendal::OpenDalStorageFactory;
 
 use crate::error::{from_aws_build_error, from_aws_sdk_error};
@@ -57,22 +58,15 @@ pub const GLUE_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 /// Builder for [`GlueCatalog`].
 #[derive(Debug)]
 pub struct GlueCatalogBuilder {
-    config: GlueCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
     kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for GlueCatalogBuilder {
     fn default() -> Self {
         Self {
-            config: GlueCatalogConfig {
-                name: None,
-                uri: None,
-                catalog_id: None,
-                warehouse: "".to_string(),
-                props: HashMap::new(),
-            },
             storage_factory: None,
             kms_client_factory: None,
             runtime: None,
@@ -99,45 +93,15 @@ impl CatalogBuilder for GlueCatalogBuilder {
     }
 
     fn load(
-        mut self,
+        self,
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.config.name = Some(name.into());
-
-        if props.contains_key(GLUE_CATALOG_PROP_URI) {
-            self.config.uri = props.get(GLUE_CATALOG_PROP_URI).cloned()
-        }
-
-        if props.contains_key(GLUE_CATALOG_PROP_CATALOG_ID) {
-            self.config.catalog_id = props.get(GLUE_CATALOG_PROP_CATALOG_ID).cloned()
-        }
-
-        if props.contains_key(GLUE_CATALOG_PROP_WAREHOUSE) {
-            self.config.warehouse = props
-                .get(GLUE_CATALOG_PROP_WAREHOUSE)
-                .cloned()
-                .unwrap_or_default();
-        }
-
-        // Collect other remaining properties
-        self.config.props = props
-            .into_iter()
-            .filter(|(k, _)| {
-                k != GLUE_CATALOG_PROP_URI
-                    && k != GLUE_CATALOG_PROP_CATALOG_ID
-                    && k != GLUE_CATALOG_PROP_WAREHOUSE
-            })
-            .collect();
+        let name = name.into();
 
         async move {
-            if self.config.name.is_none() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog name is required",
-                ));
-            }
-            if self.config.warehouse.is_empty() {
+            let catalog_properties = GlueCatalogProperties::from_properties(&props)?;
+            if catalog_properties.warehouse.is_empty() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog warehouse is required",
@@ -149,29 +113,38 @@ impl CatalogBuilder for GlueCatalogBuilder {
                 None => Runtime::try_current()?,
             };
             let kms_client = match self.kms_client_factory {
-                Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
+                Some(factory) => Some(factory.create_kms_client(&props).await?),
                 None => None,
             };
-            GlueCatalog::new(self.config, self.storage_factory, runtime, kms_client).await
+            GlueCatalog::new(
+                name,
+                catalog_properties,
+                props,
+                self.storage_factory,
+                runtime,
+                kms_client,
+            )
+            .await
         }
     }
 }
 
-#[derive(Debug)]
-/// Glue Catalog configuration
-pub(crate) struct GlueCatalogConfig {
-    name: Option<String>,
+#[derive(Debug, Properties)]
+pub(crate) struct GlueCatalogProperties {
+    #[property(key = GLUE_CATALOG_PROP_URI, default = None)]
     uri: Option<String>,
+    #[property(key = GLUE_CATALOG_PROP_CATALOG_ID, default = None)]
     catalog_id: Option<String>,
+    #[property(key = GLUE_CATALOG_PROP_WAREHOUSE, default = "")]
     warehouse: String,
-    props: HashMap<String, String>,
 }
 
 struct GlueClient(aws_sdk_glue::Client);
 
 /// Glue Catalog
 pub struct GlueCatalog {
-    config: GlueCatalogConfig,
+    name: String,
+    properties: GlueCatalogProperties,
     client: GlueClient,
     file_io: FileIO,
     runtime: Runtime,
@@ -181,7 +154,8 @@ pub struct GlueCatalog {
 impl Debug for GlueCatalog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GlueCatalog")
-            .field("config", &self.config)
+            .field("name", &self.name)
+            .field("properties", &self.properties)
             .finish_non_exhaustive()
     }
 }
@@ -189,13 +163,15 @@ impl Debug for GlueCatalog {
 impl GlueCatalog {
     /// Create a new glue catalog
     async fn new(
-        config: GlueCatalogConfig,
+        name: String,
+        properties: GlueCatalogProperties,
+        props: HashMap<String, String>,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
         kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
-        let sdk_config = create_sdk_config(&config.props, config.uri.as_ref()).await;
-        let mut file_io_props = config.props.clone();
+        let sdk_config = create_sdk_config(&props, properties.uri.as_ref()).await;
+        let mut file_io_props = props;
         if !file_io_props.contains_key(S3_ACCESS_KEY_ID)
             && let Some(access_key_id) = file_io_props.get(AWS_ACCESS_KEY_ID)
         {
@@ -220,7 +196,7 @@ impl GlueCatalog {
             file_io_props.insert(S3_SESSION_TOKEN.to_string(), session_token.to_string());
         }
         if !file_io_props.contains_key(S3_ENDPOINT)
-            && let Some(aws_endpoint) = config.uri.as_ref()
+            && let Some(aws_endpoint) = properties.uri.as_ref()
         {
             file_io_props.insert(S3_ENDPOINT.to_string(), aws_endpoint.to_string());
         }
@@ -238,7 +214,8 @@ impl GlueCatalog {
             .build();
 
         Ok(GlueCatalog {
-            config,
+            name,
+            properties,
             client: GlueClient(client),
             file_io,
             runtime,
@@ -275,7 +252,7 @@ impl GlueCatalog {
             .get_table()
             .database_name(&db_name)
             .name(table_name);
-        let builder = with_catalog_id!(builder, self.config);
+        let builder = with_catalog_id!(builder, self.properties);
 
         let glue_table_output = builder.send().await.map_err(from_aws_sdk_error)?;
 
@@ -333,7 +310,7 @@ impl Catalog for GlueCatalog {
                 Some(token) => self.client.0.get_databases().next_token(token),
                 None => self.client.0.get_databases(),
             };
-            let builder = with_catalog_id!(builder, self.config);
+            let builder = with_catalog_id!(builder, self.properties);
             let resp = builder.send().await.map_err(from_aws_sdk_error)?;
 
             let dbs: Vec<NamespaceIdent> = resp
@@ -381,7 +358,7 @@ impl Catalog for GlueCatalog {
         let db_input = convert_to_database(namespace, &properties)?;
 
         let builder = self.client.0.create_database().database_input(db_input);
-        let builder = with_catalog_id!(builder, self.config);
+        let builder = with_catalog_id!(builder, self.properties);
 
         builder.send().await.map_err(from_aws_sdk_error)?;
 
@@ -402,7 +379,7 @@ impl Catalog for GlueCatalog {
         let db_name = validate_namespace(namespace)?;
 
         let builder = self.client.0.get_database().name(&db_name);
-        let builder = with_catalog_id!(builder, self.config);
+        let builder = with_catalog_id!(builder, self.properties);
 
         let resp = builder.send().await.map_err(|err| {
             if err
@@ -446,7 +423,7 @@ impl Catalog for GlueCatalog {
         let db_name = validate_namespace(namespace)?;
 
         let builder = self.client.0.get_database().name(&db_name);
-        let builder = with_catalog_id!(builder, self.config);
+        let builder = with_catalog_id!(builder, self.properties);
 
         let resp = builder.send().await;
 
@@ -496,7 +473,7 @@ impl Catalog for GlueCatalog {
             .update_database()
             .name(&db_name)
             .database_input(db_input);
-        let builder = with_catalog_id!(builder, self.config);
+        let builder = with_catalog_id!(builder, self.properties);
 
         builder.send().await.map_err(from_aws_sdk_error)?;
 
@@ -533,7 +510,7 @@ impl Catalog for GlueCatalog {
             .get_tables()
             .database_name(&db_name)
             .max_results(1);
-        let builder = with_catalog_id!(builder, self.config);
+        let builder = with_catalog_id!(builder, self.properties);
         let resp = builder.send().await.map_err(from_aws_sdk_error)?;
 
         if !resp.table_list().is_empty() {
@@ -544,7 +521,7 @@ impl Catalog for GlueCatalog {
         }
 
         let builder = self.client.0.delete_database().name(db_name);
-        let builder = with_catalog_id!(builder, self.config);
+        let builder = with_catalog_id!(builder, self.properties);
 
         builder.send().await.map_err(from_aws_sdk_error)?;
 
@@ -579,7 +556,7 @@ impl Catalog for GlueCatalog {
                     .next_token(token),
                 None => self.client.0.get_tables().database_name(&db_name),
             };
-            let builder = with_catalog_id!(builder, self.config);
+            let builder = with_catalog_id!(builder, self.properties);
             let resp = builder.send().await.map_err(from_aws_sdk_error)?;
 
             let tables: Vec<_> = resp
@@ -623,7 +600,7 @@ impl Catalog for GlueCatalog {
         if creation.location.is_none() {
             let ns = self.get_namespace(namespace).await?;
             let location =
-                get_default_table_location(&ns, &db_name, &table_name, &self.config.warehouse);
+                get_default_table_location(&ns, &db_name, &table_name, &self.properties.warehouse);
             creation.location = Some(location);
         }
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
@@ -648,7 +625,7 @@ impl Catalog for GlueCatalog {
             .create_table()
             .database_name(&db_name)
             .table_input(glue_table);
-        let builder = with_catalog_id!(builder, self.config);
+        let builder = with_catalog_id!(builder, self.properties);
 
         builder.send().await.map_err(from_aws_sdk_error)?;
 
@@ -701,7 +678,7 @@ impl Catalog for GlueCatalog {
             .delete_table()
             .database_name(&db_name)
             .name(table_name);
-        let builder = with_catalog_id!(builder, self.config);
+        let builder = with_catalog_id!(builder, self.properties);
 
         builder.send().await.map_err(from_aws_sdk_error)?;
 
@@ -731,7 +708,7 @@ impl Catalog for GlueCatalog {
             .get_table()
             .database_name(&db_name)
             .name(table_name);
-        let builder = with_catalog_id!(builder, self.config);
+        let builder = with_catalog_id!(builder, self.properties);
 
         let resp = builder.send().await;
 
@@ -769,7 +746,7 @@ impl Catalog for GlueCatalog {
             .get_table()
             .database_name(&src_db_name)
             .name(src_table_name);
-        let builder = with_catalog_id!(builder, self.config);
+        let builder = with_catalog_id!(builder, self.properties);
 
         let glue_table_output = builder.send().await.map_err(from_aws_sdk_error)?;
 
@@ -796,7 +773,7 @@ impl Catalog for GlueCatalog {
                     .create_table()
                     .database_name(&dest_db_name)
                     .table_input(rename_table_input);
-                let builder = with_catalog_id!(builder, self.config);
+                let builder = with_catalog_id!(builder, self.properties);
 
                 builder.send().await.map_err(from_aws_sdk_error)?;
 
@@ -864,7 +841,7 @@ impl Catalog for GlueCatalog {
             .create_table()
             .database_name(&db_name)
             .table_input(table_input);
-        let builder = with_catalog_id!(builder, self.config);
+        let builder = with_catalog_id!(builder, self.properties);
 
         builder.send().await.map_err(|e| {
             let error = e.into_service_error();
@@ -935,7 +912,7 @@ impl Catalog for GlueCatalog {
             builder = builder.version_id(version_id);
         }
 
-        let builder = with_catalog_id!(builder, self.config);
+        let builder = with_catalog_id!(builder, self.properties);
         let _ = builder.send().await.map_err(|e| {
             let error = e.into_service_error();
             match error {
@@ -957,5 +934,91 @@ impl Catalog for GlueCatalog {
         })?;
 
         Ok(staged_table)
+    }
+}
+
+#[cfg(test)]
+mod catalog_properties_tests {
+    use iceberg::io::MemoryStorageFactory;
+
+    use super::*;
+
+    #[test]
+    fn test_catalog_properties() {
+        let properties = GlueCatalogProperties::from_properties(&HashMap::from([
+            (
+                GLUE_CATALOG_PROP_URI.to_string(),
+                "http://localhost".to_string(),
+            ),
+            (
+                GLUE_CATALOG_PROP_CATALOG_ID.to_string(),
+                "catalog".to_string(),
+            ),
+            (
+                GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
+                "s3://warehouse".to_string(),
+            ),
+        ]))
+        .unwrap();
+
+        assert_eq!(properties.uri.as_deref(), Some("http://localhost"));
+        assert_eq!(properties.catalog_id.as_deref(), Some("catalog"));
+        assert_eq!(properties.warehouse, "s3://warehouse");
+    }
+
+    #[test]
+    fn test_catalog_properties_defaults() {
+        let properties = GlueCatalogProperties::from_properties(&HashMap::new()).unwrap();
+
+        assert_eq!(properties.uri, None);
+        assert_eq!(properties.catalog_id, None);
+        assert_eq!(properties.warehouse, "");
+    }
+
+    #[tokio::test]
+    async fn test_load_rejects_missing_or_empty_warehouse() {
+        for props in [
+            HashMap::new(),
+            HashMap::from([(GLUE_CATALOG_PROP_WAREHOUSE.to_string(), String::new())]),
+        ] {
+            let error = GlueCatalogBuilder::default()
+                .load("glue", props)
+                .await
+                .unwrap_err();
+
+            assert_eq!(error.kind(), ErrorKind::DataInvalid);
+            assert_eq!(error.message(), "Catalog warehouse is required");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_catalog_forwards_properties_to_file_io() {
+        let catalog = GlueCatalogBuilder::default()
+            .with_storage_factory(Arc::new(MemoryStorageFactory))
+            .load(
+                "glue",
+                HashMap::from([
+                    (
+                        GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
+                        "s3://warehouse".to_string(),
+                    ),
+                    ("custom.property".to_string(), "value".to_string()),
+                    (AWS_ACCESS_KEY_ID.to_string(), "access-key".to_string()),
+                    (AWS_SECRET_ACCESS_KEY.to_string(), "secret-key".to_string()),
+                    (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
+                ]),
+            )
+            .await
+            .unwrap();
+        let file_io_props = catalog.file_io.config().props();
+
+        assert_eq!(
+            file_io_props.get("custom.property"),
+            Some(&"value".to_string())
+        );
+        assert_eq!(
+            file_io_props.get(GLUE_CATALOG_PROP_WAREHOUSE),
+            Some(&"s3://warehouse".to_string())
+        );
     }
 }
