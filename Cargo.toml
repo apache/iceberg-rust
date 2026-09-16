@@ -136,6 +136,10 @@ regex = "1.11.3"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
 roaring = { version = "0.11" }
 rstest = "0.26"
+rustls = "0.23.45"
+rustls-native-certs = "0.8"
+rustls-pki-types = "1.15"
+rustls-webpki = "0.103.15"
 serde = { version = "1.0.219", features = ["rc"] }
 serde_bytes = "0.11.17"
 serde_derive = "1.0.219"
