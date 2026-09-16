@@ -22,10 +22,13 @@ use crate::spec::DataFile;
 
 /// A data file selected for COW rewrite.
 ///
-/// The planning entry points that produce candidates are crate-internal and
-/// reached through [`crate::cow_rewrite::CowRewriteBuilder`]; the type itself
-/// is public so follow-up commit-adapter work (overwrite and row-delta
-/// actions) can consume planned candidates directly.
+/// This is a read-only output type: the planning entry points that produce
+/// candidates are crate-internal and reached through
+/// [`crate::cow_rewrite::CowRewriteBuilder`], and the fields are exposed
+/// through accessors only. Follow-up commit-adapter work (overwrite and
+/// row-delta actions) consumes planned candidates through those accessors;
+/// construction from outside the crate is intentionally not exposed yet and
+/// can be added when an adapter actually needs it.
 #[derive(Debug, Clone)]
 pub struct CowRewriteFile {
     /// Original data file from the manifest entry.

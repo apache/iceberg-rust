@@ -28,7 +28,8 @@ use crate::writer::IcebergWriterBuilder;
 use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use crate::writer::file_writer::ParquetWriterBuilder;
 use crate::writer::file_writer::location_generator::{
-    DefaultFileNameGenerator, DefaultLocationGenerator,
+    DefaultFileNameGenerator, DefaultLocationGenerator, LocationGenerator,
+    ObjectStorageLocationGenerator,
 };
 use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 
@@ -42,17 +43,15 @@ use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 /// Building the writer is cheap: no physical file is opened until the first
 /// batch is written, so it is safe to construct one optimistically and only
 /// write to it once a source file is known to have changed.
+///
+/// The location layout follows `write.object-storage.enabled`: tables that opt
+/// into the object-storage layout get hash-entropy paths from
+/// [`ObjectStorageLocationGenerator`], everything else gets the default layout.
 pub(crate) async fn build_replacement_writer(
     table: &Table,
     write_schema: SchemaRef,
     partition_key: Option<PartitionKey>,
 ) -> Result<Box<dyn crate::writer::IcebergWriter>> {
-    let location_generator = DefaultLocationGenerator::new(table.metadata())?;
-    let file_name_generator = DefaultFileNameGenerator::new(
-        format!("cow-rewrite-{}", Uuid::now_v7()),
-        None,
-        DataFileFormat::Parquet,
-    );
     let table_props = table.metadata().table_properties();
     // The replacement writer only produces parquet today; refuse to run on a
     // table configured for another format instead of silently writing parquet
@@ -72,6 +71,28 @@ pub(crate) async fn build_replacement_writer(
     if let Some(encryption_manager) = table.encryption_manager() {
         parquet_builder = parquet_builder.with_encryption_manager(encryption_manager.clone());
     }
+
+    if table_props.write_object_storage_enabled()? {
+        let location_generator = ObjectStorageLocationGenerator::new(table.metadata())?;
+        build_data_file_writer(table, parquet_builder, location_generator, partition_key).await
+    } else {
+        let location_generator = DefaultLocationGenerator::new(table.metadata())?;
+        build_data_file_writer(table, parquet_builder, location_generator, partition_key).await
+    }
+}
+
+async fn build_data_file_writer<L: LocationGenerator>(
+    table: &Table,
+    parquet_builder: ParquetWriterBuilder,
+    location_generator: L,
+    partition_key: Option<PartitionKey>,
+) -> Result<Box<dyn crate::writer::IcebergWriter>> {
+    let file_name_generator = DefaultFileNameGenerator::new(
+        format!("cow-rewrite-{}", Uuid::now_v7()),
+        None,
+        DataFileFormat::Parquet,
+    );
+    let table_props = table.metadata().table_properties();
     let rolling_builder = RollingFileWriterBuilder::new(
         parquet_builder,
         table_props.write_target_file_size_bytes()?,
@@ -281,6 +302,79 @@ mod tests {
         .await?;
 
         assert!(data_files.is_empty());
+
+        Ok(())
+    }
+
+    /// With `write.object-storage.enabled` the replacement file must land in
+    /// the hash-entropy object storage layout instead of the flat default one.
+    #[tokio::test]
+    async fn cow_replacement_writer_honors_object_storage_layout() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let warehouse = format!("file://{}", temp_dir.path().join("warehouse").display());
+        let catalog = MemoryCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load(
+                "memory",
+                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse)]),
+            )
+            .await?;
+        let namespace = NamespaceIdent::new("ns".to_string());
+        catalog.create_namespace(&namespace, HashMap::new()).await?;
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()?;
+        let table = catalog
+            .create_table(
+                &namespace,
+                TableCreation::builder()
+                    .name("cow_object_storage_writer".to_string())
+                    .schema(schema)
+                    .properties(HashMap::from([(
+                        crate::spec::TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_ENABLED
+                            .to_string(),
+                        "true".to_string(),
+                    )]))
+                    .build(),
+            )
+            .await?;
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+        let batch = RecordBatch::try_new(arrow_schema, vec![Arc::new(Int32Array::from(vec![
+            1, 2, 3,
+        ])) as ArrayRef])?;
+
+        let data_files = write_replacement_batches(
+            &table,
+            table.metadata().current_schema().clone(),
+            None,
+            futures::stream::iter(vec![Ok(batch)]),
+        )
+        .await?;
+
+        assert_eq!(data_files.len(), 1);
+        // Object storage layout: `{data_location}/{entropy dirs}/{file name}`,
+        // where the entropy dirs are binary strings of 4, 4, 4, and 8 chars.
+        let path = data_files[0].file_path();
+        let after_data = path
+            .split("/data/")
+            .nth(1)
+            .unwrap_or_else(|| panic!("expected /data/ in {path}"));
+        let segments = after_data.split('/').collect::<Vec<_>>();
+        assert_eq!(segments.len(), 5, "{path}");
+        for (segment, len) in segments[..4].iter().zip([4, 4, 4, 8]) {
+            assert_eq!(segment.len(), len, "{path}");
+            assert!(segment.chars().all(|c| c == '0' || c == '1'), "{path}");
+        }
+        assert!(segments[4].starts_with("cow-rewrite-"), "{path}");
 
         Ok(())
     }
