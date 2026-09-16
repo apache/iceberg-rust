@@ -292,6 +292,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_oversized_file_length_is_rejected() {
+        let fileio = FileIO::new_with_memory();
+        let path = "memory:///test/oversized_length.bin";
+        let plaintext = Bytes::from_static(b"some bytes to measure");
+        let output = EncryptedOutputFile::new(fileio.new_output(path).unwrap(), key_metadata());
+        let file_metadata = output.write(plaintext.clone()).await.unwrap();
+
+        // A declared length is trusted without a stat, so an inflated one is only caught once a
+        // read runs off the end of the real file. Both a minimal overstatement and one spanning a
+        // whole extra block must fail rather than silently return short plaintext.
+        for excess in [1, u64::from(CIPHER_BLOCK_SIZE)] {
+            let input = EncryptedInputFile::new(
+                fileio.new_input(path).unwrap(),
+                key_metadata().with_file_length(file_metadata.size + excess),
+            );
+
+            let inflated_size = input.metadata().await.unwrap().size;
+            assert!(inflated_size > plaintext.len() as u64);
+
+            assert_eq!(
+                input.read().await.unwrap_err().kind(),
+                ErrorKind::DataInvalid
+            );
+
+            // Not even the bytes that genuinely are on disk can be read back.
+            let reader = input.reader().await.unwrap();
+            assert_eq!(
+                reader
+                    .read(0..plaintext.len() as u64)
+                    .await
+                    .unwrap_err()
+                    .kind(),
+                ErrorKind::DataInvalid
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn test_truncated_file_is_rejected() {
         let fileio = FileIO::new_with_memory();
         let path = "memory:///test/truncated.bin";

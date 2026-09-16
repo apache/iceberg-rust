@@ -675,6 +675,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_oversized_declared_length_is_rejected() {
+        // Object stores clamp reads at EOF rather than failing, unlike the in-memory FileIO.
+        struct ClampingRead(Bytes);
+
+        #[async_trait::async_trait]
+        impl FileRead for ClampingRead {
+            async fn read(&self, range: Range<u64>) -> Result<Bytes> {
+                let start = (range.start as usize).min(self.0.len());
+                let end = (range.end as usize).min(self.0.len());
+                Ok(self.0.slice(start..end))
+            }
+        }
+
+        let key = b"0123456789abcdef";
+        let aad_prefix = b"test-aad-prefix!";
+        let plaintext = b"some bytes to measure";
+        let encrypted = write_through_ags1(plaintext, key, aad_prefix).await;
+
+        // A declared length larger than the real file must be rejected rather than yielding
+        // truncated plaintext, whether it overstates by one byte or by a whole extra block.
+        for excess in [1, u64::from(CIPHER_BLOCK_SIZE)] {
+            let reader = AesGcmFileRead::new(
+                Box::new(ClampingRead(Bytes::from(encrypted.clone()))),
+                Arc::new(make_cipher(key)),
+                aad_prefix.to_vec().into_boxed_slice(),
+                encrypted.len() as u64 + excess,
+            )
+            .unwrap();
+
+            let err = reader
+                .read(0..plaintext.len() as u64)
+                .await
+                .expect_err("an inflated declared length must not read back as plaintext");
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.to_string().contains("Invalid encrypted read length"));
+        }
+    }
+
+    #[tokio::test]
     async fn test_small_file_roundtrip() {
         let key = b"0123456789abcdef";
         let aad_prefix = b"test-aad-prefix!";
