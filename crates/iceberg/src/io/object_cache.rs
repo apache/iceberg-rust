@@ -213,6 +213,7 @@ impl ObjectCache {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::fs;
 
     use minijinja::value::Value;
@@ -225,7 +226,8 @@ mod tests {
     use crate::io::{FileIO, OutputFile};
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestEntry,
-        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Struct, TableMetadata,
+        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Operation, Snapshot, Struct,
+        Summary, TableMetadata,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -445,10 +447,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_manifest_list_with_no_schema_id() {
-        use std::collections::HashMap;
-
-        use crate::spec::{Operation, Snapshot, Summary};
-
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
