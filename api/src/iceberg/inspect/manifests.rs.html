@@ -260,22 +260,22 @@
 <a href=#260 id=260 data-nosnippet>260</a>                .unwrap()
 <a href=#261 id=261 data-nosnippet>261</a>                .append_option(summary.contains_nan);
 <a href=#262 id=262 data-nosnippet>262</a>
-<a href=#263 id=263 data-nosnippet>263</a>            partition_summaries_builder
-<a href=#264 id=264 data-nosnippet>264</a>                .field_builder::&lt;StringBuilder&gt;(<span class="number">2</span>)
-<a href=#265 id=265 data-nosnippet>265</a>                .unwrap()
-<a href=#266 id=266 data-nosnippet>266</a>                .append_option(summary.lower_bound.as_ref().map(|v| {
-<a href=#267 id=267 data-nosnippet>267</a>                    Datum::try_from_bytes(v, field.field_type.as_primitive_type().unwrap().clone())
-<a href=#268 id=268 data-nosnippet>268</a>                        .unwrap()
-<a href=#269 id=269 data-nosnippet>269</a>                        .to_string()
-<a href=#270 id=270 data-nosnippet>270</a>                }));
-<a href=#271 id=271 data-nosnippet>271</a>            partition_summaries_builder
-<a href=#272 id=272 data-nosnippet>272</a>                .field_builder::&lt;StringBuilder&gt;(<span class="number">3</span>)
-<a href=#273 id=273 data-nosnippet>273</a>                .unwrap()
-<a href=#274 id=274 data-nosnippet>274</a>                .append_option(summary.upper_bound.as_ref().map(|v| {
-<a href=#275 id=275 data-nosnippet>275</a>                    Datum::try_from_bytes(v, field.field_type.as_primitive_type().unwrap().clone())
-<a href=#276 id=276 data-nosnippet>276</a>                        .unwrap()
-<a href=#277 id=277 data-nosnippet>277</a>                        .to_string()
-<a href=#278 id=278 data-nosnippet>278</a>                }));
+<a href=#263 id=263 data-nosnippet>263</a>            <span class="kw">let </span>field_type = field.field_type.as_primitive_type().unwrap();
+<a href=#264 id=264 data-nosnippet>264</a>            <span class="kw">for </span>(index, bound) <span class="kw">in </span>[(<span class="number">2</span>, <span class="kw-2">&amp;</span>summary.lower_bound), (<span class="number">3</span>, <span class="kw-2">&amp;</span>summary.upper_bound)] {
+<a href=#265 id=265 data-nosnippet>265</a>                <span class="comment">// Bounds cannot be decoded when the source column's type is unknown.
+<a href=#266 id=266 data-nosnippet>266</a>                </span><span class="kw">let </span>bound = bound
+<a href=#267 id=267 data-nosnippet>267</a>                    .as_ref()
+<a href=#268 id=268 data-nosnippet>268</a>                    .filter(|<span class="kw">_</span>| <span class="kw-2">*</span>field_type != PrimitiveType::Unknown)
+<a href=#269 id=269 data-nosnippet>269</a>                    .map(|v| {
+<a href=#270 id=270 data-nosnippet>270</a>                        Datum::try_from_bytes(v, field_type.clone())
+<a href=#271 id=271 data-nosnippet>271</a>                            .unwrap()
+<a href=#272 id=272 data-nosnippet>272</a>                            .to_string()
+<a href=#273 id=273 data-nosnippet>273</a>                    });
+<a href=#274 id=274 data-nosnippet>274</a>                partition_summaries_builder
+<a href=#275 id=275 data-nosnippet>275</a>                    .field_builder::&lt;StringBuilder&gt;(index)
+<a href=#276 id=276 data-nosnippet>276</a>                    .unwrap()
+<a href=#277 id=277 data-nosnippet>277</a>                    .append_option(bound);
+<a href=#278 id=278 data-nosnippet>278</a>            }
 <a href=#279 id=279 data-nosnippet>279</a>            partition_summaries_builder.append(<span class="bool-val">true</span>);
 <a href=#280 id=280 data-nosnippet>280</a>        }
 <a href=#281 id=281 data-nosnippet>281</a>        builder.append(<span class="bool-val">true</span>);
@@ -286,142 +286,163 @@
 <a href=#286 id=286 data-nosnippet>286</a></span><span class="kw">mod </span>tests {
 <a href=#287 id=287 data-nosnippet>287</a>    <span class="kw">use </span>std::sync::Arc;
 <a href=#288 id=288 data-nosnippet>288</a>
-<a href=#289 id=289 data-nosnippet>289</a>    <span class="kw">use </span>expect_test::expect;
-<a href=#290 id=290 data-nosnippet>290</a>    <span class="kw">use </span>futures::TryStreamExt;
-<a href=#291 id=291 data-nosnippet>291</a>
-<a href=#292 id=292 data-nosnippet>292</a>    <span class="kw">use </span><span class="kw">crate</span>::scan::tests::TableTestFixture;
-<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::TableMetadata;
-<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">use </span><span class="kw">crate</span>::test_utils::check_record_batches;
-<a href=#295 id=295 data-nosnippet>295</a>
-<a href=#296 id=296 data-nosnippet>296</a>    <span class="attr">#[tokio::test]
-<a href=#297 id=297 data-nosnippet>297</a>    </span><span class="kw">async fn </span>test_manifests_table() {
-<a href=#298 id=298 data-nosnippet>298</a>        <span class="kw">let </span><span class="kw-2">mut </span>fixture = TableTestFixture::new();
-<a href=#299 id=299 data-nosnippet>299</a>        fixture.setup_manifest_files().<span class="kw">await</span>;
-<a href=#300 id=300 data-nosnippet>300</a>
-<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">let </span>record_batch = fixture.table.inspect().manifests().scan().<span class="kw">await</span>.unwrap();
-<a href=#302 id=302 data-nosnippet>302</a>
-<a href=#303 id=303 data-nosnippet>303</a>        check_record_batches(
-<a href=#304 id=304 data-nosnippet>304</a>            record_batch.try_collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().<span class="kw">await</span>.unwrap(),
-<a href=#305 id=305 data-nosnippet>305</a>            <span class="macro">expect!</span>[[<span class="string">r#"
-<a href=#306 id=306 data-nosnippet>306</a>                Field { "content": Int32, metadata: {"PARQUET:field_id": "14"} },
-<a href=#307 id=307 data-nosnippet>307</a>                Field { "path": Utf8, metadata: {"PARQUET:field_id": "1"} },
-<a href=#308 id=308 data-nosnippet>308</a>                Field { "length": Int64, metadata: {"PARQUET:field_id": "2"} },
-<a href=#309 id=309 data-nosnippet>309</a>                Field { "partition_spec_id": Int32, metadata: {"PARQUET:field_id": "3"} },
-<a href=#310 id=310 data-nosnippet>310</a>                Field { "added_snapshot_id": Int64, metadata: {"PARQUET:field_id": "4"} },
-<a href=#311 id=311 data-nosnippet>311</a>                Field { "added_data_files_count": Int32, metadata: {"PARQUET:field_id": "5"} },
-<a href=#312 id=312 data-nosnippet>312</a>                Field { "existing_data_files_count": Int32, metadata: {"PARQUET:field_id": "6"} },
-<a href=#313 id=313 data-nosnippet>313</a>                Field { "deleted_data_files_count": Int32, metadata: {"PARQUET:field_id": "7"} },
-<a href=#314 id=314 data-nosnippet>314</a>                Field { "added_delete_files_count": Int32, metadata: {"PARQUET:field_id": "15"} },
-<a href=#315 id=315 data-nosnippet>315</a>                Field { "existing_delete_files_count": Int32, metadata: {"PARQUET:field_id": "16"} },
-<a href=#316 id=316 data-nosnippet>316</a>                Field { "deleted_delete_files_count": Int32, metadata: {"PARQUET:field_id": "17"} },
-<a href=#317 id=317 data-nosnippet>317</a>                Field { "partition_summaries": List(non-null Struct("contains_null": non-null Boolean, metadata: {"PARQUET:field_id": "10"}, "contains_nan": Boolean, metadata: {"PARQUET:field_id": "11"}, "lower_bound": Utf8, metadata: {"PARQUET:field_id": "12"}, "upper_bound": Utf8, metadata: {"PARQUET:field_id": "13"}), metadata: {"PARQUET:field_id": "9"}), metadata: {"PARQUET:field_id": "8"} }"#</span>]],
-<a href=#318 id=318 data-nosnippet>318</a>            <span class="macro">expect!</span>[[<span class="string">r#"
-<a href=#319 id=319 data-nosnippet>319</a>                content: PrimitiveArray&lt;Int32&gt;
-<a href=#320 id=320 data-nosnippet>320</a>                [
-<a href=#321 id=321 data-nosnippet>321</a>                  0,
-<a href=#322 id=322 data-nosnippet>322</a>                ],
-<a href=#323 id=323 data-nosnippet>323</a>                path: (skipped),
-<a href=#324 id=324 data-nosnippet>324</a>                length: (skipped),
-<a href=#325 id=325 data-nosnippet>325</a>                partition_spec_id: PrimitiveArray&lt;Int32&gt;
-<a href=#326 id=326 data-nosnippet>326</a>                [
-<a href=#327 id=327 data-nosnippet>327</a>                  0,
-<a href=#328 id=328 data-nosnippet>328</a>                ],
-<a href=#329 id=329 data-nosnippet>329</a>                added_snapshot_id: PrimitiveArray&lt;Int64&gt;
-<a href=#330 id=330 data-nosnippet>330</a>                [
-<a href=#331 id=331 data-nosnippet>331</a>                  3055729675574597004,
-<a href=#332 id=332 data-nosnippet>332</a>                ],
-<a href=#333 id=333 data-nosnippet>333</a>                added_data_files_count: PrimitiveArray&lt;Int32&gt;
-<a href=#334 id=334 data-nosnippet>334</a>                [
-<a href=#335 id=335 data-nosnippet>335</a>                  1,
-<a href=#336 id=336 data-nosnippet>336</a>                ],
-<a href=#337 id=337 data-nosnippet>337</a>                existing_data_files_count: PrimitiveArray&lt;Int32&gt;
-<a href=#338 id=338 data-nosnippet>338</a>                [
-<a href=#339 id=339 data-nosnippet>339</a>                  1,
-<a href=#340 id=340 data-nosnippet>340</a>                ],
-<a href=#341 id=341 data-nosnippet>341</a>                deleted_data_files_count: PrimitiveArray&lt;Int32&gt;
-<a href=#342 id=342 data-nosnippet>342</a>                [
-<a href=#343 id=343 data-nosnippet>343</a>                  1,
-<a href=#344 id=344 data-nosnippet>344</a>                ],
-<a href=#345 id=345 data-nosnippet>345</a>                added_delete_files_count: PrimitiveArray&lt;Int32&gt;
-<a href=#346 id=346 data-nosnippet>346</a>                [
-<a href=#347 id=347 data-nosnippet>347</a>                  1,
-<a href=#348 id=348 data-nosnippet>348</a>                ],
-<a href=#349 id=349 data-nosnippet>349</a>                existing_delete_files_count: PrimitiveArray&lt;Int32&gt;
-<a href=#350 id=350 data-nosnippet>350</a>                [
-<a href=#351 id=351 data-nosnippet>351</a>                  1,
-<a href=#352 id=352 data-nosnippet>352</a>                ],
-<a href=#353 id=353 data-nosnippet>353</a>                deleted_delete_files_count: PrimitiveArray&lt;Int32&gt;
-<a href=#354 id=354 data-nosnippet>354</a>                [
-<a href=#355 id=355 data-nosnippet>355</a>                  1,
-<a href=#356 id=356 data-nosnippet>356</a>                ],
-<a href=#357 id=357 data-nosnippet>357</a>                partition_summaries: ListArray
-<a href=#358 id=358 data-nosnippet>358</a>                [
-<a href=#359 id=359 data-nosnippet>359</a>                  StructArray
-<a href=#360 id=360 data-nosnippet>360</a>                -- validity:
-<a href=#361 id=361 data-nosnippet>361</a>                [
-<a href=#362 id=362 data-nosnippet>362</a>                  valid,
-<a href=#363 id=363 data-nosnippet>363</a>                ]
-<a href=#364 id=364 data-nosnippet>364</a>                [
-<a href=#365 id=365 data-nosnippet>365</a>                -- child 0: "contains_null" (Boolean)
-<a href=#366 id=366 data-nosnippet>366</a>                BooleanArray
-<a href=#367 id=367 data-nosnippet>367</a>                [
-<a href=#368 id=368 data-nosnippet>368</a>                  false,
-<a href=#369 id=369 data-nosnippet>369</a>                ]
-<a href=#370 id=370 data-nosnippet>370</a>                -- child 1: "contains_nan" (Boolean)
-<a href=#371 id=371 data-nosnippet>371</a>                BooleanArray
-<a href=#372 id=372 data-nosnippet>372</a>                [
-<a href=#373 id=373 data-nosnippet>373</a>                  false,
-<a href=#374 id=374 data-nosnippet>374</a>                ]
-<a href=#375 id=375 data-nosnippet>375</a>                -- child 2: "lower_bound" (Utf8)
-<a href=#376 id=376 data-nosnippet>376</a>                StringArray
-<a href=#377 id=377 data-nosnippet>377</a>                [
-<a href=#378 id=378 data-nosnippet>378</a>                  "100",
-<a href=#379 id=379 data-nosnippet>379</a>                ]
-<a href=#380 id=380 data-nosnippet>380</a>                -- child 3: "upper_bound" (Utf8)
-<a href=#381 id=381 data-nosnippet>381</a>                StringArray
-<a href=#382 id=382 data-nosnippet>382</a>                [
-<a href=#383 id=383 data-nosnippet>383</a>                  "300",
-<a href=#384 id=384 data-nosnippet>384</a>                ]
-<a href=#385 id=385 data-nosnippet>385</a>                ],
-<a href=#386 id=386 data-nosnippet>386</a>                ]"#</span>]],
-<a href=#387 id=387 data-nosnippet>387</a>            <span class="kw-2">&amp;</span>[<span class="string">"path"</span>, <span class="string">"length"</span>],
-<a href=#388 id=388 data-nosnippet>388</a>            <span class="prelude-val">Some</span>(<span class="string">"path"</span>),
-<a href=#389 id=389 data-nosnippet>389</a>        );
-<a href=#390 id=390 data-nosnippet>390</a>    }
-<a href=#391 id=391 data-nosnippet>391</a>
-<a href=#392 id=392 data-nosnippet>392</a>    <span class="attr">#[tokio::test]
-<a href=#393 id=393 data-nosnippet>393</a>    </span><span class="kw">async fn </span>test_manifests_table_with_dropped_partition_source_column() {
-<a href=#394 id=394 data-nosnippet>394</a>        <span class="kw">let </span><span class="kw-2">mut </span>fixture = TableTestFixture::new();
-<a href=#395 id=395 data-nosnippet>395</a>        fixture.setup_manifest_files().<span class="kw">await</span>;
-<a href=#396 id=396 data-nosnippet>396</a>
-<a href=#397 id=397 data-nosnippet>397</a>        <span class="comment">// Evolve the table so that the manifests reference a historical spec whose source
-<a href=#398 id=398 data-nosnippet>398</a>        // column is no longer in the current schema: add an unpartitioned default spec, then
-<a href=#399 id=399 data-nosnippet>399</a>        // drop the source column of the original spec.
-<a href=#400 id=400 data-nosnippet>400</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>metadata = serde_json::to_value(fixture.table.metadata()).unwrap();
-<a href=#401 id=401 data-nosnippet>401</a>        <span class="kw">let </span>current_schema_id = metadata[<span class="string">"current-schema-id"</span>].clone();
-<a href=#402 id=402 data-nosnippet>402</a>        <span class="kw">let </span>schemas = metadata[<span class="string">"schemas"</span>].as_array_mut().unwrap();
-<a href=#403 id=403 data-nosnippet>403</a>        <span class="kw">for </span>schema <span class="kw">in </span>schemas {
-<a href=#404 id=404 data-nosnippet>404</a>            <span class="kw">if </span>schema[<span class="string">"schema-id"</span>] == current_schema_id {
-<a href=#405 id=405 data-nosnippet>405</a>                <span class="kw">let </span>fields = schema[<span class="string">"fields"</span>].as_array_mut().unwrap();
-<a href=#406 id=406 data-nosnippet>406</a>                fields.retain(|field| field[<span class="string">"id"</span>] != <span class="number">1</span>);
-<a href=#407 id=407 data-nosnippet>407</a>                <span class="kw">let </span>identifier_ids = schema[<span class="string">"identifier-field-ids"</span>].as_array_mut().unwrap();
-<a href=#408 id=408 data-nosnippet>408</a>                identifier_ids.retain(|id| <span class="kw-2">*</span>id != <span class="number">1</span>);
-<a href=#409 id=409 data-nosnippet>409</a>            }
-<a href=#410 id=410 data-nosnippet>410</a>        }
-<a href=#411 id=411 data-nosnippet>411</a>
-<a href=#412 id=412 data-nosnippet>412</a>        metadata[<span class="string">"partition-specs"</span>]
-<a href=#413 id=413 data-nosnippet>413</a>            .as_array_mut()
-<a href=#414 id=414 data-nosnippet>414</a>            .unwrap()
-<a href=#415 id=415 data-nosnippet>415</a>            .push(<span class="macro">serde_json::json!</span>({<span class="string">"spec-id"</span>: <span class="number">1</span>, <span class="string">"fields"</span>: []}));
-<a href=#416 id=416 data-nosnippet>416</a>        metadata[<span class="string">"default-spec-id"</span>] = <span class="macro">serde_json::json!</span>(<span class="number">1</span>);
-<a href=#417 id=417 data-nosnippet>417</a>
-<a href=#418 id=418 data-nosnippet>418</a>        <span class="kw">let </span>metadata: TableMetadata = serde_json::from_value(metadata).unwrap();
-<a href=#419 id=419 data-nosnippet>419</a>        <span class="kw">let </span>table = fixture.table.clone().with_metadata(Arc::new(metadata));
-<a href=#420 id=420 data-nosnippet>420</a>
-<a href=#421 id=421 data-nosnippet>421</a>        <span class="kw">match </span>table.inspect().manifests().scan().<span class="kw">await </span>{
-<a href=#422 id=422 data-nosnippet>422</a>            <span class="prelude-val">Err</span>(err) =&gt; <span class="macro">assert!</span>(err.to_string().contains(<span class="string">"No column with source column id"</span>)),
-<a href=#423 id=423 data-nosnippet>423</a>            <span class="prelude-val">Ok</span>(<span class="kw">_</span>) =&gt; <span class="macro">panic!</span>(<span class="string">"expected scan to fail for a dropped partition source column"</span>),
-<a href=#424 id=424 data-nosnippet>424</a>        }
-<a href=#425 id=425 data-nosnippet>425</a>    }
-<a href=#426 id=426 data-nosnippet>426</a>}
+<a href=#289 id=289 data-nosnippet>289</a>    <span class="kw">use </span>arrow_array::{Array, ListArray, StructArray};
+<a href=#290 id=290 data-nosnippet>290</a>    <span class="kw">use </span>expect_test::expect;
+<a href=#291 id=291 data-nosnippet>291</a>    <span class="kw">use </span>futures::TryStreamExt;
+<a href=#292 id=292 data-nosnippet>292</a>
+<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">use </span><span class="kw">crate</span>::scan::tests::TableTestFixture;
+<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::TableMetadata;
+<a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">use </span><span class="kw">crate</span>::test_utils::check_record_batches;
+<a href=#296 id=296 data-nosnippet>296</a>
+<a href=#297 id=297 data-nosnippet>297</a>    <span class="attr">#[tokio::test]
+<a href=#298 id=298 data-nosnippet>298</a>    </span><span class="kw">async fn </span>test_manifests_table() {
+<a href=#299 id=299 data-nosnippet>299</a>        <span class="kw">let </span><span class="kw-2">mut </span>fixture = TableTestFixture::new();
+<a href=#300 id=300 data-nosnippet>300</a>        fixture.setup_manifest_files().<span class="kw">await</span>;
+<a href=#301 id=301 data-nosnippet>301</a>
+<a href=#302 id=302 data-nosnippet>302</a>        <span class="kw">let </span>record_batch = fixture.table.inspect().manifests().scan().<span class="kw">await</span>.unwrap();
+<a href=#303 id=303 data-nosnippet>303</a>
+<a href=#304 id=304 data-nosnippet>304</a>        check_record_batches(
+<a href=#305 id=305 data-nosnippet>305</a>            record_batch.try_collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().<span class="kw">await</span>.unwrap(),
+<a href=#306 id=306 data-nosnippet>306</a>            <span class="macro">expect!</span>[[<span class="string">r#"
+<a href=#307 id=307 data-nosnippet>307</a>                Field { "content": Int32, metadata: {"PARQUET:field_id": "14"} },
+<a href=#308 id=308 data-nosnippet>308</a>                Field { "path": Utf8, metadata: {"PARQUET:field_id": "1"} },
+<a href=#309 id=309 data-nosnippet>309</a>                Field { "length": Int64, metadata: {"PARQUET:field_id": "2"} },
+<a href=#310 id=310 data-nosnippet>310</a>                Field { "partition_spec_id": Int32, metadata: {"PARQUET:field_id": "3"} },
+<a href=#311 id=311 data-nosnippet>311</a>                Field { "added_snapshot_id": Int64, metadata: {"PARQUET:field_id": "4"} },
+<a href=#312 id=312 data-nosnippet>312</a>                Field { "added_data_files_count": Int32, metadata: {"PARQUET:field_id": "5"} },
+<a href=#313 id=313 data-nosnippet>313</a>                Field { "existing_data_files_count": Int32, metadata: {"PARQUET:field_id": "6"} },
+<a href=#314 id=314 data-nosnippet>314</a>                Field { "deleted_data_files_count": Int32, metadata: {"PARQUET:field_id": "7"} },
+<a href=#315 id=315 data-nosnippet>315</a>                Field { "added_delete_files_count": Int32, metadata: {"PARQUET:field_id": "15"} },
+<a href=#316 id=316 data-nosnippet>316</a>                Field { "existing_delete_files_count": Int32, metadata: {"PARQUET:field_id": "16"} },
+<a href=#317 id=317 data-nosnippet>317</a>                Field { "deleted_delete_files_count": Int32, metadata: {"PARQUET:field_id": "17"} },
+<a href=#318 id=318 data-nosnippet>318</a>                Field { "partition_summaries": List(non-null Struct("contains_null": non-null Boolean, metadata: {"PARQUET:field_id": "10"}, "contains_nan": Boolean, metadata: {"PARQUET:field_id": "11"}, "lower_bound": Utf8, metadata: {"PARQUET:field_id": "12"}, "upper_bound": Utf8, metadata: {"PARQUET:field_id": "13"}), metadata: {"PARQUET:field_id": "9"}), metadata: {"PARQUET:field_id": "8"} }"#</span>]],
+<a href=#319 id=319 data-nosnippet>319</a>            <span class="macro">expect!</span>[[<span class="string">r#"
+<a href=#320 id=320 data-nosnippet>320</a>                content: PrimitiveArray&lt;Int32&gt;
+<a href=#321 id=321 data-nosnippet>321</a>                [
+<a href=#322 id=322 data-nosnippet>322</a>                  0,
+<a href=#323 id=323 data-nosnippet>323</a>                ],
+<a href=#324 id=324 data-nosnippet>324</a>                path: (skipped),
+<a href=#325 id=325 data-nosnippet>325</a>                length: (skipped),
+<a href=#326 id=326 data-nosnippet>326</a>                partition_spec_id: PrimitiveArray&lt;Int32&gt;
+<a href=#327 id=327 data-nosnippet>327</a>                [
+<a href=#328 id=328 data-nosnippet>328</a>                  0,
+<a href=#329 id=329 data-nosnippet>329</a>                ],
+<a href=#330 id=330 data-nosnippet>330</a>                added_snapshot_id: PrimitiveArray&lt;Int64&gt;
+<a href=#331 id=331 data-nosnippet>331</a>                [
+<a href=#332 id=332 data-nosnippet>332</a>                  3055729675574597004,
+<a href=#333 id=333 data-nosnippet>333</a>                ],
+<a href=#334 id=334 data-nosnippet>334</a>                added_data_files_count: PrimitiveArray&lt;Int32&gt;
+<a href=#335 id=335 data-nosnippet>335</a>                [
+<a href=#336 id=336 data-nosnippet>336</a>                  1,
+<a href=#337 id=337 data-nosnippet>337</a>                ],
+<a href=#338 id=338 data-nosnippet>338</a>                existing_data_files_count: PrimitiveArray&lt;Int32&gt;
+<a href=#339 id=339 data-nosnippet>339</a>                [
+<a href=#340 id=340 data-nosnippet>340</a>                  1,
+<a href=#341 id=341 data-nosnippet>341</a>                ],
+<a href=#342 id=342 data-nosnippet>342</a>                deleted_data_files_count: PrimitiveArray&lt;Int32&gt;
+<a href=#343 id=343 data-nosnippet>343</a>                [
+<a href=#344 id=344 data-nosnippet>344</a>                  1,
+<a href=#345 id=345 data-nosnippet>345</a>                ],
+<a href=#346 id=346 data-nosnippet>346</a>                added_delete_files_count: PrimitiveArray&lt;Int32&gt;
+<a href=#347 id=347 data-nosnippet>347</a>                [
+<a href=#348 id=348 data-nosnippet>348</a>                  1,
+<a href=#349 id=349 data-nosnippet>349</a>                ],
+<a href=#350 id=350 data-nosnippet>350</a>                existing_delete_files_count: PrimitiveArray&lt;Int32&gt;
+<a href=#351 id=351 data-nosnippet>351</a>                [
+<a href=#352 id=352 data-nosnippet>352</a>                  1,
+<a href=#353 id=353 data-nosnippet>353</a>                ],
+<a href=#354 id=354 data-nosnippet>354</a>                deleted_delete_files_count: PrimitiveArray&lt;Int32&gt;
+<a href=#355 id=355 data-nosnippet>355</a>                [
+<a href=#356 id=356 data-nosnippet>356</a>                  1,
+<a href=#357 id=357 data-nosnippet>357</a>                ],
+<a href=#358 id=358 data-nosnippet>358</a>                partition_summaries: ListArray
+<a href=#359 id=359 data-nosnippet>359</a>                [
+<a href=#360 id=360 data-nosnippet>360</a>                  StructArray
+<a href=#361 id=361 data-nosnippet>361</a>                -- validity:
+<a href=#362 id=362 data-nosnippet>362</a>                [
+<a href=#363 id=363 data-nosnippet>363</a>                  valid,
+<a href=#364 id=364 data-nosnippet>364</a>                ]
+<a href=#365 id=365 data-nosnippet>365</a>                [
+<a href=#366 id=366 data-nosnippet>366</a>                -- child 0: "contains_null" (Boolean)
+<a href=#367 id=367 data-nosnippet>367</a>                BooleanArray
+<a href=#368 id=368 data-nosnippet>368</a>                [
+<a href=#369 id=369 data-nosnippet>369</a>                  false,
+<a href=#370 id=370 data-nosnippet>370</a>                ]
+<a href=#371 id=371 data-nosnippet>371</a>                -- child 1: "contains_nan" (Boolean)
+<a href=#372 id=372 data-nosnippet>372</a>                BooleanArray
+<a href=#373 id=373 data-nosnippet>373</a>                [
+<a href=#374 id=374 data-nosnippet>374</a>                  false,
+<a href=#375 id=375 data-nosnippet>375</a>                ]
+<a href=#376 id=376 data-nosnippet>376</a>                -- child 2: "lower_bound" (Utf8)
+<a href=#377 id=377 data-nosnippet>377</a>                StringArray
+<a href=#378 id=378 data-nosnippet>378</a>                [
+<a href=#379 id=379 data-nosnippet>379</a>                  "100",
+<a href=#380 id=380 data-nosnippet>380</a>                ]
+<a href=#381 id=381 data-nosnippet>381</a>                -- child 3: "upper_bound" (Utf8)
+<a href=#382 id=382 data-nosnippet>382</a>                StringArray
+<a href=#383 id=383 data-nosnippet>383</a>                [
+<a href=#384 id=384 data-nosnippet>384</a>                  "300",
+<a href=#385 id=385 data-nosnippet>385</a>                ]
+<a href=#386 id=386 data-nosnippet>386</a>                ],
+<a href=#387 id=387 data-nosnippet>387</a>                ]"#</span>]],
+<a href=#388 id=388 data-nosnippet>388</a>            <span class="kw-2">&amp;</span>[<span class="string">"path"</span>, <span class="string">"length"</span>],
+<a href=#389 id=389 data-nosnippet>389</a>            <span class="prelude-val">Some</span>(<span class="string">"path"</span>),
+<a href=#390 id=390 data-nosnippet>390</a>        );
+<a href=#391 id=391 data-nosnippet>391</a>    }
+<a href=#392 id=392 data-nosnippet>392</a>
+<a href=#393 id=393 data-nosnippet>393</a>    <span class="attr">#[tokio::test]
+<a href=#394 id=394 data-nosnippet>394</a>    </span><span class="kw">async fn </span>test_manifests_table_with_dropped_partition_source_column() {
+<a href=#395 id=395 data-nosnippet>395</a>        <span class="kw">let </span><span class="kw-2">mut </span>fixture = TableTestFixture::new();
+<a href=#396 id=396 data-nosnippet>396</a>        fixture.setup_manifest_files().<span class="kw">await</span>;
+<a href=#397 id=397 data-nosnippet>397</a>
+<a href=#398 id=398 data-nosnippet>398</a>        <span class="comment">// Evolve the table so that the manifests reference a historical spec whose source
+<a href=#399 id=399 data-nosnippet>399</a>        // column is no longer in the current schema: add an unpartitioned default spec, then
+<a href=#400 id=400 data-nosnippet>400</a>        // drop the source column of the original spec.
+<a href=#401 id=401 data-nosnippet>401</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>metadata = serde_json::to_value(fixture.table.metadata()).unwrap();
+<a href=#402 id=402 data-nosnippet>402</a>        <span class="kw">let </span>current_schema_id = metadata[<span class="string">"current-schema-id"</span>].clone();
+<a href=#403 id=403 data-nosnippet>403</a>        <span class="kw">let </span>schemas = metadata[<span class="string">"schemas"</span>].as_array_mut().unwrap();
+<a href=#404 id=404 data-nosnippet>404</a>        <span class="kw">for </span>schema <span class="kw">in </span>schemas {
+<a href=#405 id=405 data-nosnippet>405</a>            <span class="kw">if </span>schema[<span class="string">"schema-id"</span>] == current_schema_id {
+<a href=#406 id=406 data-nosnippet>406</a>                <span class="kw">let </span>fields = schema[<span class="string">"fields"</span>].as_array_mut().unwrap();
+<a href=#407 id=407 data-nosnippet>407</a>                fields.retain(|field| field[<span class="string">"id"</span>] != <span class="number">1</span>);
+<a href=#408 id=408 data-nosnippet>408</a>                <span class="kw">let </span>identifier_ids = schema[<span class="string">"identifier-field-ids"</span>].as_array_mut().unwrap();
+<a href=#409 id=409 data-nosnippet>409</a>                identifier_ids.retain(|id| <span class="kw-2">*</span>id != <span class="number">1</span>);
+<a href=#410 id=410 data-nosnippet>410</a>            }
+<a href=#411 id=411 data-nosnippet>411</a>        }
+<a href=#412 id=412 data-nosnippet>412</a>
+<a href=#413 id=413 data-nosnippet>413</a>        metadata[<span class="string">"partition-specs"</span>]
+<a href=#414 id=414 data-nosnippet>414</a>            .as_array_mut()
+<a href=#415 id=415 data-nosnippet>415</a>            .unwrap()
+<a href=#416 id=416 data-nosnippet>416</a>            .push(<span class="macro">serde_json::json!</span>({<span class="string">"spec-id"</span>: <span class="number">1</span>, <span class="string">"fields"</span>: []}));
+<a href=#417 id=417 data-nosnippet>417</a>        metadata[<span class="string">"default-spec-id"</span>] = <span class="macro">serde_json::json!</span>(<span class="number">1</span>);
+<a href=#418 id=418 data-nosnippet>418</a>
+<a href=#419 id=419 data-nosnippet>419</a>        <span class="kw">let </span>metadata: TableMetadata = serde_json::from_value(metadata).unwrap();
+<a href=#420 id=420 data-nosnippet>420</a>        <span class="kw">let </span>table = fixture.table.clone().with_metadata(Arc::new(metadata));
+<a href=#421 id=421 data-nosnippet>421</a>
+<a href=#422 id=422 data-nosnippet>422</a>        <span class="kw">let </span>batches: Vec&lt;<span class="kw">_</span>&gt; = table
+<a href=#423 id=423 data-nosnippet>423</a>            .inspect()
+<a href=#424 id=424 data-nosnippet>424</a>            .manifests()
+<a href=#425 id=425 data-nosnippet>425</a>            .scan()
+<a href=#426 id=426 data-nosnippet>426</a>            .<span class="kw">await
+<a href=#427 id=427 data-nosnippet>427</a>            </span>.unwrap()
+<a href=#428 id=428 data-nosnippet>428</a>            .try_collect()
+<a href=#429 id=429 data-nosnippet>429</a>            .<span class="kw">await
+<a href=#430 id=430 data-nosnippet>430</a>            </span>.unwrap();
+<a href=#431 id=431 data-nosnippet>431</a>        <span class="macro">assert_eq!</span>(batches.len(), <span class="number">1</span>);
+<a href=#432 id=432 data-nosnippet>432</a>        <span class="macro">assert_eq!</span>(batches[<span class="number">0</span>].num_rows(), <span class="number">1</span>);
+<a href=#433 id=433 data-nosnippet>433</a>        <span class="kw">let </span>summaries = batches[<span class="number">0</span>]
+<a href=#434 id=434 data-nosnippet>434</a>            .column_by_name(<span class="string">"partition_summaries"</span>)
+<a href=#435 id=435 data-nosnippet>435</a>            .unwrap()
+<a href=#436 id=436 data-nosnippet>436</a>            .as_any()
+<a href=#437 id=437 data-nosnippet>437</a>            .downcast_ref::&lt;ListArray&gt;()
+<a href=#438 id=438 data-nosnippet>438</a>            .unwrap();
+<a href=#439 id=439 data-nosnippet>439</a>        <span class="kw">let </span>summary = summaries.value(<span class="number">0</span>);
+<a href=#440 id=440 data-nosnippet>440</a>        <span class="kw">let </span>summary = summary.as_any().downcast_ref::&lt;StructArray&gt;().unwrap();
+<a href=#441 id=441 data-nosnippet>441</a>        <span class="macro">assert_eq!</span>(summary.len(), <span class="number">1</span>);
+<a href=#442 id=442 data-nosnippet>442</a>        <span class="macro">assert!</span>(summary.column_by_name(<span class="string">"contains_null"</span>).unwrap().is_valid(<span class="number">0</span>));
+<a href=#443 id=443 data-nosnippet>443</a>        <span class="macro">assert!</span>(summary.column_by_name(<span class="string">"contains_nan"</span>).unwrap().is_valid(<span class="number">0</span>));
+<a href=#444 id=444 data-nosnippet>444</a>        <span class="macro">assert!</span>(summary.column_by_name(<span class="string">"lower_bound"</span>).unwrap().is_null(<span class="number">0</span>));
+<a href=#445 id=445 data-nosnippet>445</a>        <span class="macro">assert!</span>(summary.column_by_name(<span class="string">"upper_bound"</span>).unwrap().is_null(<span class="number">0</span>));
+<a href=#446 id=446 data-nosnippet>446</a>    }
+<a href=#447 id=447 data-nosnippet>447</a>}
 </code></pre></div></section></main></body></html>
