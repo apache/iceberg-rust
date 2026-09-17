@@ -281,13 +281,7 @@ impl CachingDeleteFileLoader {
                     }
                     PosDelLoadAction::Load => Ok(DeleteFileContext::PosDels {
                         file_path: task.file_path.clone(),
-                        stream: basic_delete_file_loader
-                            .parquet_to_batch_stream(
-                                &task.file_path,
-                                task.file_size_in_bytes,
-                                task.key_metadata.as_deref(),
-                            )
-                            .await?,
+                        stream: basic_delete_file_loader.to_batch_stream(task).await?,
                     }),
                 }
             }
@@ -304,13 +298,7 @@ impl CachingDeleteFileLoader {
                 // equality_ids columns, not all table columns.
                 let equality_ids_vec = task.equality_ids.clone().unwrap();
                 let evolved_stream = BasicDeleteFileLoader::evolve_schema(
-                    basic_delete_file_loader
-                        .parquet_to_batch_stream(
-                            &task.file_path,
-                            task.file_size_in_bytes,
-                            task.key_metadata.as_deref(),
-                        )
-                        .await?,
+                    basic_delete_file_loader.to_batch_stream(task).await?,
                     schema,
                     &equality_ids_vec,
                 )

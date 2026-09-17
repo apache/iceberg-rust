@@ -29,6 +29,8 @@ pub(crate) mod delete_filter;
 
 mod int96;
 mod reader;
+mod vortex_util;
+pub(crate) use vortex_util::*;
 /// RecordBatch projection utilities
 pub mod record_batch_projector;
 pub(crate) mod record_batch_transformer;
