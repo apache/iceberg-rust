@@ -45,6 +45,11 @@ impl IcebergCatalogProvider {
     /// This method retrieves the list of namespace names
     /// attempts to create a schema provider for each namespace, and
     /// collects these providers into a `HashMap`.
+    ///
+    /// Listing pagination is handled by the supplied catalog. For a REST catalog,
+    /// configure `rest-page-size` (or its builder's `with_page_size` method) before
+    /// passing it here. All namespace and table pages are loaded regardless of
+    /// the configured page size.
     pub async fn try_new(client: Arc<dyn Catalog>) -> Result<Self> {
         // TODO:
         // Schemas and providers should be cached and evicted based on time
