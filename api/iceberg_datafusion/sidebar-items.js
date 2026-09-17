@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["from_datafusion_error","to_datafusion_error"],"mod":["physical_plan","table"],"struct":["IcebergCatalogProvider"]};

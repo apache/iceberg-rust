@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["ICEBERG_PLAYGROUND_VERSION"],"struct":["IcebergCatalogList"]};
