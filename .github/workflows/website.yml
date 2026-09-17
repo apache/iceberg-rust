@@ -22,9 +22,7 @@ on:
     branches:
       - main
   pull_request:
-    paths:
-      - ".github/workflows/website.yml"
-      - "website/**"
+  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
@@ -34,7 +32,35 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      website: ${{ steps.filter.outputs.website }}
+    steps:
+      - name: Checkout repository
+        if: github.event_name != 'push'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check for website changes
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            echo "website=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BASE_SHA" HEAD -- .github/workflows/website.yml website; then
+            echo "website=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "website=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: changes
+    if: needs.changes.outputs.website == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -67,3 +93,21 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: website/book
           publish_branch: gh-pages
+
+  website-required:
+    if: ${{ always() }}
+    needs: [changes, build]
+    runs-on: ubuntu-slim
+    steps:
+      - name: Verify website checks succeeded
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          WEBSITE_CHANGED: ${{ needs.changes.outputs.website }}
+        run: |
+          test "$CHANGES_RESULT" = "success"
+          if [[ "$WEBSITE_CHANGED" == "true" ]]; then
+            test "$BUILD_RESULT" = "success"
+          else
+            test "$WEBSITE_CHANGED" = "false"
+          fi

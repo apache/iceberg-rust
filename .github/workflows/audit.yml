@@ -30,10 +30,7 @@ on:
       - "**/Cargo.lock"
 
   pull_request:
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - ".github/workflows/audit.yml"
+  merge_group:
 
   schedule:
     - cron: '0 0 * * *'
