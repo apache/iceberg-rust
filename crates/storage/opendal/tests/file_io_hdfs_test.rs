@@ -17,9 +17,16 @@
 
 //! Integration tests for HDFS FileIO via OpenDAL `services-hdfs-native`.
 //!
-//! These tests need the `hdfs-namenode`/`hdfs-datanode` services from
-//! `dev/docker-compose.yaml` (started by `make docker-up`); the fixture
-//! uses host networking, which needs Linux or a recent Docker runtime.
+//! These tests need the HDFS fixture in `dev/docker-compose.yaml` and are
+//! skipped when `ICEBERG_TEST_HDFS_ENDPOINT` is not set. The fixture uses
+//! host networking (Linux, or a Docker runtime that supports it), so it sits
+//! behind a compose profile:
+//!
+//! ```text
+//! COMPOSE_PROFILES=hdfs make docker-up
+//! ICEBERG_TEST_HDFS_ENDPOINT=hdfs://localhost:8020 cargo test -p iceberg-storage-opendal \
+//!     --features opendal-hdfs-native --test file_io_hdfs_test
+//! ```
 
 #[cfg(feature = "opendal-hdfs-native")]
 mod tests {
@@ -29,7 +36,23 @@ mod tests {
     use futures::StreamExt;
     use iceberg::io::{FileIO, FileIOBuilder, HDFS_NAME_NODE};
     use iceberg_storage_opendal::{OpenDalResolvingStorageFactory, OpenDalStorageFactory};
-    use iceberg_test_utils::{get_hdfs_endpoint, normalize_test_name_with_parts, set_up};
+    use iceberg_test_utils::{
+        ENV_HDFS_ENDPOINT, get_hdfs_endpoint, normalize_test_name_with_parts, set_up,
+    };
+
+    /// Skips the calling test unless the HDFS fixture endpoint is configured;
+    /// an unset *or* empty variable means "not provided" (see the HF tests).
+    macro_rules! require_hdfs {
+        () => {
+            match std::env::var(ENV_HDFS_ENDPOINT) {
+                Ok(v) if !v.is_empty() => {}
+                _ => {
+                    eprintln!("Skipping HDFS test: {} not set", ENV_HDFS_ENDPOINT);
+                    return;
+                }
+            }
+        };
+    }
 
     fn get_file_io() -> FileIO {
         set_up();
@@ -46,6 +69,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_io_hdfs_exists() {
+        require_hdfs!();
         let file_io = get_file_io();
 
         let absent = test_path("test_file_io_hdfs_exists_absent");
@@ -54,6 +78,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_io_hdfs_write_and_read() {
+        require_hdfs!();
         let file_io = get_file_io();
         let path = test_path("test_file_io_hdfs_write_and_read");
         let _ = file_io.delete(&path).await;
@@ -76,6 +101,7 @@ mod tests {
     /// `hdfs.name-node` carries the (comma-separated) endpoints; it wins.
     #[tokio::test]
     async fn test_file_io_hdfs_configured_name_node() {
+        require_hdfs!();
         set_up();
         let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::HdfsNative))
             .with_prop(HDFS_NAME_NODE, get_hdfs_endpoint())
@@ -104,6 +130,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_io_hdfs_overwrite() {
+        require_hdfs!();
         let file_io = get_file_io();
         let path = test_path("test_file_io_hdfs_overwrite");
         let _ = file_io.delete(&path).await;
@@ -125,6 +152,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_io_hdfs_delete_stream() {
+        require_hdfs!();
         let file_io = get_file_io();
 
         let paths: Vec<String> = (0..5)
@@ -151,6 +179,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_io_hdfs_delete_stream_empty() {
+        require_hdfs!();
         let file_io = get_file_io();
         let stream = futures::stream::empty().boxed();
         file_io.delete_stream(stream).await.unwrap();
@@ -158,6 +187,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_io_hdfs_resolving_storage() {
+        require_hdfs!();
         set_up();
         let file_io = FileIOBuilder::new(Arc::new(OpenDalResolvingStorageFactory::new())).build();
         let path = test_path("test_file_io_hdfs_resolving_storage");
@@ -180,6 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_io_hdfs_metadata() {
+        require_hdfs!();
         let file_io = get_file_io();
         let path = test_path("test_file_io_hdfs_metadata");
         let _ = file_io.delete(&path).await;
@@ -198,6 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_io_hdfs_delete() {
+        require_hdfs!();
         let file_io = get_file_io();
         let path = test_path("test_file_io_hdfs_delete");
 
@@ -215,6 +247,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_io_hdfs_delete_prefix() {
+        require_hdfs!();
         let file_io = get_file_io();
         let dir = test_path("test_file_io_hdfs_delete_prefix");
         let _ = file_io.delete_prefix(&dir).await;
@@ -239,6 +272,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_io_hdfs_reader_range() {
+        require_hdfs!();
         let file_io = get_file_io();
         let path = test_path("test_file_io_hdfs_reader_range");
         let _ = file_io.delete(&path).await;
@@ -264,6 +298,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_io_hdfs_streaming_writer() {
+        require_hdfs!();
         let file_io = get_file_io();
         let path = test_path("test_file_io_hdfs_streaming_writer");
         let _ = file_io.delete(&path).await;

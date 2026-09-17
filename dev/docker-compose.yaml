@@ -152,8 +152,10 @@ services:
   # =============================================================================
   # hdfs-native connects to DataNodes by their registered IP — unroutable on
   # a docker bridge, hence host networking (needs Linux or a recent runtime).
+  # Opt-in: `COMPOSE_PROFILES=hdfs make docker-up`.
   hdfs-namenode:
     image: apache/hadoop:3.5.0
+    profiles: [hdfs]
     network_mode: "host"
     command: ["hdfs", "namenode"]
     environment:
@@ -172,6 +174,7 @@ services:
 
   hdfs-datanode:
     image: apache/hadoop:3.5.0
+    profiles: [hdfs]
     network_mode: "host"
     command: ["hdfs", "datanode"]
     depends_on:

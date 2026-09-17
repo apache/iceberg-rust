@@ -134,7 +134,7 @@ fn build_storage_for_scheme(
             let config = crate::hdfs_native::hdfs_native_config_parse(props.clone())?;
             Ok(OpenDalStorage::HdfsNative {
                 config: Arc::new(config),
-                operators: Arc::new(RwLock::new(HashMap::new())),
+                operators: crate::HdfsNativeOperatorCache::default(),
             })
         }
         unsupported => Err(Error::new(

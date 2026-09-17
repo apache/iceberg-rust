@@ -77,9 +77,8 @@ cfg_if! {
 cfg_if! {
     if #[cfg(feature = "opendal-hdfs-native")] {
         mod hdfs_native;
-        use std::sync::RwLock;
-
         use hdfs_native::*;
+        pub use hdfs_native::HdfsNativeOperatorCache;
         use opendal::services::HdfsNativeConfig;
     }
 }
@@ -197,7 +196,7 @@ impl StorageFactory for OpenDalStorageFactory {
             #[cfg(feature = "opendal-hdfs-native")]
             OpenDalStorageFactory::HdfsNative => Ok(Arc::new(OpenDalStorage::HdfsNative {
                 config: hdfs_native_config_parse(config.props().clone())?.into(),
-                operators: Arc::new(RwLock::new(HashMap::new())),
+                operators: HdfsNativeOperatorCache::default(),
             })),
             #[cfg(feature = "opendal-oss")]
             OpenDalStorageFactory::Oss => Ok(Arc::new(OpenDalStorage::Oss {
@@ -272,7 +271,7 @@ pub enum OpenDalStorage {
         config: Arc<HdfsNativeConfig>,
         /// Operator cache keyed by effective NameNode.
         #[serde(skip, default)]
-        operators: Arc<RwLock<HashMap<String, Operator>>>,
+        operators: HdfsNativeOperatorCache,
     },
     /// OSS storage variant.
     #[cfg(feature = "opendal-oss")]
@@ -857,7 +856,7 @@ mod tests {
     fn hdfs_native_test_storage() -> OpenDalStorage {
         OpenDalStorage::HdfsNative {
             config: Arc::new(HdfsNativeConfig::default()),
-            operators: Arc::new(RwLock::new(HashMap::new())),
+            operators: HdfsNativeOperatorCache::default(),
         }
     }
 
