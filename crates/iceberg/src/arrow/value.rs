@@ -23,7 +23,7 @@ use arrow_array::{
     LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
     Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray, new_null_array,
 };
-use arrow_buffer::NullBuffer;
+use arrow_buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::{DataType, FieldRef, TimeUnit};
 use uuid::Uuid;
 
@@ -206,6 +206,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
 
     fn primitive(&mut self, p: &PrimitiveType, partner: &ArrayRef) -> Result<Vec<Option<Literal>>> {
         match p {
+            PrimitiveType::Unknown => Ok(vec![None; partner.len()]),
             PrimitiveType::Boolean => {
                 let array = partner
                     .as_any()
@@ -636,6 +637,7 @@ pub(crate) fn create_primitive_array_single_element(
     prim_lit: Option<&PrimitiveLiteral>,
 ) -> Result<ArrayRef> {
     match (data_type, prim_lit) {
+        (DataType::Null, None) => Ok(Arc::new(arrow_array::NullArray::new(1))),
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(v))) => {
             Ok(Arc::new(BooleanArray::from(vec![*v])))
         }
@@ -822,7 +824,12 @@ pub(crate) fn create_primitive_array_repeated(
     Ok(match (data_type, prim_lit) {
         // --- Primitive Some arms ---
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(value))) => {
-            Arc::new(BooleanArray::from(vec![*value; num_rows]))
+            let buffer = if *value {
+                BooleanBuffer::new_set(num_rows)
+            } else {
+                BooleanBuffer::new_unset(num_rows)
+            };
+            Arc::new(BooleanArray::new(buffer, None))
         }
         (DataType::Int32, Some(PrimitiveLiteral::Int(value))) => {
             Arc::new(Int32Array::from(vec![*value; num_rows]))
@@ -958,7 +965,7 @@ pub(crate) fn create_primitive_array_repeated(
                 Some(NullBuffer::new_null(num_rows)),
             ))
         }
-        (DataType::Null, _) => Arc::new(arrow_array::NullArray::new(num_rows)),
+        (DataType::Null, None) => Arc::new(arrow_array::NullArray::new(num_rows)),
 
         // --- Catch-all null arm: use arrow-rs new_null_array for any remaining DataType ---
         (dt, None) => new_null_array(dt, num_rows),
@@ -1882,6 +1889,26 @@ mod test {
     }
 
     #[test]
+    fn test_create_null_array_rejects_non_null_literal() {
+        let literal = Some(PrimitiveLiteral::Int(1));
+
+        assert!(create_primitive_array_single_element(&DataType::Null, literal.as_ref()).is_err());
+        assert!(create_primitive_array_repeated(&DataType::Null, literal.as_ref(), 2).is_err());
+        assert_eq!(
+            create_primitive_array_single_element(&DataType::Null, None)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            create_primitive_array_repeated(&DataType::Null, None, 2)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
     fn test_create_decimal_array_repeated_respects_precision() {
         // Ensure repeated arrays also respect target precision, not Arrow's default.
         let target_precision = 18u8;
@@ -1978,6 +2005,34 @@ mod test {
             .unwrap();
         assert_eq!(fixed.len(), num_rows);
         assert!((0..num_rows).all(|i| fixed.value(i) == bytes.as_slice()));
+    }
+
+    #[test]
+    fn test_create_boolean_array_repeated() {
+        let num_rows = 4;
+
+        for value in [true, false] {
+            let array = create_primitive_array_repeated(
+                &DataType::Boolean,
+                Some(&PrimitiveLiteral::Boolean(value)),
+                num_rows,
+            )
+            .unwrap();
+            let array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+            assert_eq!(array.len(), num_rows);
+            assert_eq!(array.null_count(), 0);
+            assert!((0..num_rows).all(|i| array.value(i) == value));
+        }
+
+        // num_rows == 0 must produce an empty (not one-element) array.
+        let empty = create_primitive_array_repeated(
+            &DataType::Boolean,
+            Some(&PrimitiveLiteral::Boolean(true)),
+            0,
+        )
+        .unwrap();
+        assert_eq!(empty.len(), 0);
+        assert_eq!(empty.null_count(), 0);
     }
 
     #[test]
