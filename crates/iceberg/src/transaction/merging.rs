@@ -225,7 +225,7 @@ impl ManifestFilterManager {
                 manifest_spec.as_ref().clone(),
             )?;
             for entry in surviving_entries {
-                writer.add_entry(entry)?;
+                writer.add_existing_entry(entry)?;
             }
             let new_manifest = writer.write_manifest_file().await?;
             result.push(new_manifest);

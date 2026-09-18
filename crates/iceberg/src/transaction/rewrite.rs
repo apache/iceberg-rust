@@ -113,7 +113,7 @@ impl TransactionAction for RewriteFilesAction {
 #[cfg(test)]
 mod tests {
     use crate::memory::tests::new_memory_catalog;
-    use crate::spec::Operation;
+    use crate::spec::{ManifestStatus, Operation};
     use crate::transaction::tests::{
         append_files, make_data_file, make_v3_minimal_table_in_catalog,
     };
@@ -240,6 +240,7 @@ mod tests {
         let f2 = make_data_file(&table, "test/2.parquet", 10, 100);
         let f3 = make_data_file(&table, "test/3.parquet", 10, 100);
         let table = append_files(&catalog, &table, vec![f1.clone(), f2.clone(), f3.clone()]).await;
+        let append_snapshot = table.metadata().current_snapshot().unwrap().clone();
 
         // Rewrite only f1 and f2, keep f3.
         let merged = make_data_file(&table, "test/merged.parquet", 20, 200);
@@ -264,17 +265,32 @@ mod tests {
         // Verify live files: f3 (surviving) + merged (new).
         let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
         let mut live_files: Vec<String> = Vec::new();
+        let mut survivor = None;
         for manifest_entry in manifest_list.entries() {
-            let manifest = table.manifest_reader().read(manifest_entry).await.unwrap()
-;
+            let manifest = table.manifest_reader().read(manifest_entry).await.unwrap();
             for entry in manifest.entries() {
                 if entry.is_alive() {
                     live_files.push(entry.file_path().to_string());
+                }
+                if entry.file_path() == "test/3.parquet" {
+                    survivor = Some(entry.clone());
                 }
             }
         }
         live_files.sort();
         assert_eq!(live_files, vec!["test/3.parquet", "test/merged.parquet"]);
+
+        let survivor = survivor.expect("surviving file should still be in a manifest");
+        assert_eq!(survivor.status(), ManifestStatus::Existing);
+        assert_eq!(survivor.snapshot_id(), Some(append_snapshot.snapshot_id()));
+        assert_eq!(
+            survivor.sequence_number(),
+            Some(append_snapshot.sequence_number())
+        );
+        assert_eq!(
+            survivor.file_sequence_number,
+            Some(append_snapshot.sequence_number())
+        );
     }
 
     /// Rewrite on an empty table (no snapshot) should fail because
