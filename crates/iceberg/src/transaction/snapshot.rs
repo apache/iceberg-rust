@@ -27,7 +27,7 @@ use crate::error::Result;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
     ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation,
-    PartitionSpecRef, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
+    PartitionSpec, PartitionSpecRef, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
     SnapshotSummaryCollector, Struct, StructType, Summary, TableProperties,
     update_snapshot_summaries,
 };
@@ -258,7 +258,7 @@ impl<'a> SnapshotProducer<'a> {
     }
 
     /// Returns the path for the next manifest file of this commit.
-    pub(crate) fn new_manifest_path(&self) -> Result<String> {
+    fn new_manifest_path(&self) -> Result<String> {
         Ok(format!(
             "{}/{}-m{}.{}",
             self.table.metadata().metadata_location()?,
@@ -268,15 +268,15 @@ impl<'a> SnapshotProducer<'a> {
         ))
     }
 
-    fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
+    /// Returns a writer for the next manifest file of this commit, routed through the table's
+    /// encryption manager when one is configured.
+    pub(crate) fn new_manifest_writer(
+        &self,
+        content: ManifestContentType,
+        schema: SchemaRef,
+        partition_spec: PartitionSpec,
+    ) -> Result<ManifestWriter> {
         let output_file = self.table.file_io().new_output(self.new_manifest_path()?)?;
-        let partition_spec = self
-            .table
-            .metadata()
-            .default_partition_spec()
-            .as_ref()
-            .clone();
-        let schema = self.table.metadata().current_schema().clone();
 
         let builder = if let Some(em) = self.table.encryption_manager() {
             ManifestWriterBuilder::new_from_encrypted(
@@ -359,7 +359,15 @@ impl<'a> SnapshotProducer<'a> {
                 builder.build()
             }
         });
-        let mut writer = self.new_manifest_writer(ManifestContentType::Data)?;
+        let mut writer = self.new_manifest_writer(
+            ManifestContentType::Data,
+            self.table.metadata().current_schema().clone(),
+            self.table
+                .metadata()
+                .default_partition_spec()
+                .as_ref()
+                .clone(),
+        )?;
         for entry in manifest_entries {
             writer.add_entry(entry)?;
         }

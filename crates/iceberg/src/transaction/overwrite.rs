@@ -23,8 +23,7 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{
-    DataFile, FormatVersion, Manifest, ManifestContentType, ManifestEntry, ManifestFile,
-    ManifestWriterBuilder, Operation, PartitionSpecRef, SchemaRef,
+    DataFile, Manifest, ManifestEntry, ManifestFile, Operation, PartitionSpecRef, SchemaRef,
 };
 use crate::table::Table;
 use crate::transaction::snapshot::{
@@ -218,30 +217,12 @@ impl OverwriteOperation {
         manifest_file: &ManifestFile,
         manifest: &Manifest,
     ) -> Result<ManifestFile> {
-        let table = snapshot_produce.table;
-
-        let output_file = table
-            .file_io()
-            .new_output(snapshot_produce.new_manifest_path()?)?;
         let partition_spec: PartitionSpecRef = Arc::new(manifest.metadata().partition_spec.clone());
-        let builder = ManifestWriterBuilder::new(
-            output_file,
-            Some(self.snapshot_id),
+        let mut writer = snapshot_produce.new_manifest_writer(
+            manifest_file.content,
             manifest.metadata().schema.clone(),
-            manifest.metadata().partition_spec.clone(),
-        );
-
-        let mut writer = match table.metadata().format_version() {
-            FormatVersion::V1 => builder.build_v1(),
-            FormatVersion::V2 => match manifest_file.content {
-                ManifestContentType::Data => builder.build_v2_data(),
-                ManifestContentType::Deletes => builder.build_v2_deletes(),
-            },
-            FormatVersion::V3 => match manifest_file.content {
-                ManifestContentType::Data => builder.build_v3_data(),
-                ManifestContentType::Deletes => builder.build_v3_deletes(),
-            },
-        };
+            partition_spec.as_ref().clone(),
+        )?;
 
         for entry in manifest.entries() {
             let entry: ManifestEntry = (**entry).clone();
