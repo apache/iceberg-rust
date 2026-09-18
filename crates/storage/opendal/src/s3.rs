@@ -150,7 +150,7 @@ pub(crate) fn s3_config_build(
         builder = builder.credential_provider_chain(chain);
     }
 
-    Ok(Operator::new(builder).map_err(from_opendal_error)?.finish())
+    Operator::new(builder).map_err(from_opendal_error)
 }
 
 /// Custom AWS credential loader.

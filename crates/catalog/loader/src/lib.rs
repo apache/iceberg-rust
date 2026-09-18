@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use iceberg::encryption::kms::KmsClientFactory;
 use iceberg::io::StorageFactory;
 use iceberg::{Catalog, CatalogBuilder, Error, ErrorKind, Result};
 use iceberg_catalog_glue::GlueCatalogBuilder;
@@ -51,6 +52,11 @@ pub trait BoxedCatalogBuilder: Send {
         storage_factory: Arc<dyn StorageFactory>,
     ) -> Box<dyn BoxedCatalogBuilder>;
 
+    fn with_kms_client_factory(
+        self: Box<Self>,
+        kms_client_factory: Arc<dyn KmsClientFactory>,
+    ) -> Box<dyn BoxedCatalogBuilder>;
+
     async fn load(
         self: Box<Self>,
         name: String,
@@ -65,6 +71,16 @@ impl<T: CatalogBuilder + 'static> BoxedCatalogBuilder for T {
         storage_factory: Arc<dyn StorageFactory>,
     ) -> Box<dyn BoxedCatalogBuilder> {
         Box::new(CatalogBuilder::with_storage_factory(*self, storage_factory))
+    }
+
+    fn with_kms_client_factory(
+        self: Box<Self>,
+        kms_client_factory: Arc<dyn KmsClientFactory>,
+    ) -> Box<dyn BoxedCatalogBuilder> {
+        Box::new(CatalogBuilder::with_kms_client_factory(
+            *self,
+            kms_client_factory,
+        ))
     }
 
     async fn load(

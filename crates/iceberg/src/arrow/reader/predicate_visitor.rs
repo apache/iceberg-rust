@@ -246,16 +246,27 @@ impl PredicateConverter<'_> {
     /// Build an Arrow predicate that always returns true.
     fn build_always_true(&self) -> Result<Box<PredicateResult>> {
         Ok(Box::new(|batch| {
-            Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+            Ok(constant_bool_array(true, batch.num_rows()))
         }))
     }
 
     /// Build an Arrow predicate that always returns false.
     fn build_always_false(&self) -> Result<Box<PredicateResult>> {
         Ok(Box::new(|batch| {
-            Ok(BooleanArray::from(vec![false; batch.num_rows()]))
+            Ok(constant_bool_array(false, batch.num_rows()))
         }))
     }
+}
+
+/// Builds a non-null `BooleanArray` of `len` elements all set to `value`.
+fn constant_bool_array(value: bool, len: usize) -> BooleanArray {
+    let buffer = if value {
+        BooleanBuffer::new_set(len)
+    } else {
+        BooleanBuffer::new_unset(len)
+    };
+
+    BooleanArray::new(buffer, None)
 }
 
 /// Gets the leaf column from the record batch for the required column index. Only
@@ -590,7 +601,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
                 // update this if arrow ever adds a native is_in kernel
                 let left = project_column(&batch, idx)?;
 
-                let mut acc = BooleanArray::from(vec![false; batch.num_rows()]);
+                let mut acc = constant_bool_array(false, batch.num_rows());
                 for literal in &literals {
                     let literal = try_cast_literal(literal, left.data_type())?;
                     acc = or(&acc, &eq(&left, literal.as_ref())?)?
@@ -619,7 +630,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native not_in kernel
                 let left = project_column(&batch, idx)?;
-                let mut acc = BooleanArray::from(vec![true; batch.num_rows()]);
+                let mut acc = constant_bool_array(true, batch.num_rows());
                 for literal in &literals {
                     let literal = try_cast_literal(literal, left.data_type())?;
                     acc = and(&acc, &neq(&left, literal.as_ref())?)?
@@ -665,7 +676,7 @@ mod tests {
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
 
-    use super::{CollectFieldIdVisitor, PredicateConverter};
+    use super::{CollectFieldIdVisitor, PredicateConverter, constant_bool_array};
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, Predicate, Reference};
     use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
@@ -741,6 +752,21 @@ mod tests {
         expected.insert(3);
 
         assert_eq!(visitor.field_ids, expected);
+    }
+
+    #[test]
+    fn test_constant_bool_array() {
+        for len in [0, 8192] {
+            let all_true = constant_bool_array(true, len);
+            assert_eq!(all_true.len(), len);
+            assert_eq!(all_true.null_count(), 0);
+            assert!(all_true.iter().all(|v| v == Some(true)));
+
+            let all_false = constant_bool_array(false, len);
+            assert_eq!(all_false.len(), len);
+            assert_eq!(all_false.null_count(), 0);
+            assert!(all_false.iter().all(|v| v == Some(false)));
+        }
     }
 
     fn apply_predicate_to_batch(

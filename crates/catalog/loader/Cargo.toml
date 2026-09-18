@@ -46,3 +46,6 @@ reqwest = { workspace = true }
 rstest = { workspace = true }
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite", "migrate"] }
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

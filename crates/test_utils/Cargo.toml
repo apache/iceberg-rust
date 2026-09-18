@@ -32,3 +32,6 @@ tracing-subscriber = { workspace = true }
 
 [features]
 tests = []
+
+[lints]
+workspace = true

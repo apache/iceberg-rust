@@ -36,6 +36,7 @@ This guide complements the foundation-wide policies and guides:
 In this guide:
 
 - `iceberg_version`: the final Iceberg Rust version, like `0.9.1`.
+- `iceberg_minor_release_branch`: the release branch for the minor version, like `0.9.x`.
 - `rc`: the numeric release candidate voting round, like `2`.
 - `rc_tag`: the git tag for a release candidate, like `v0.9.1-rc.2`.
 - `rc_dist_dir`: the ASF dev distribution directory, like `apache-iceberg-rust-0.9.1-rc2`.
@@ -54,7 +55,7 @@ Where this can be supported by a non-committer, this will be mentioned in the gu
 
 <div class="warning">
 
-This section is the requirements for individuals who are new to the role of release manager.
+This section is the requirements for committers or PMC members who are new to the role of release manager.
 
 </div>
 
@@ -70,11 +71,22 @@ Install the release tooling used by the local scripts:
 
 The local release helpers are under `dev/release/`. They log every step before it runs and after it succeeds. If a step fails, the script prints the failed step and stops.
 
+## How to propose a new release
+
+Ultimately, it is up to the community on when to cut a new release.
+You can propose this via the [Apache Iceberg dev mailing list](https://lists.apache.org/list.html?dev@iceberg.apache.org)
+or simply open a tracking issue, mentioned later in this guide.
+
 ## Start a tracking issue about the next release
 
-Start a tracking issue on GitHub for the upcoming release to track all tasks that need to be completed.
-You should own this tracking issue and coordinate with the community when to target a new release and what changes need to be included.
+Start a tracking issue on GitHub for the upcoming release to track all the changes needed to be merged/addressed for the release.
+
+If you are acting as release manager, you should own this issue and coordinate with the community when to target a new release and what changes need to be included.
 You do not need to be a committer to create and own the tracking issue.
+
+### Template
+
+You may use the template below to create the issue.
 
 Title:
 
@@ -87,55 +99,61 @@ Content:
 ```markdown
 This issue is used to track tasks of the iceberg rust ${iceberg_version} release.
 
-## Tasks
-
 ### Blockers
 
-> Blockers are the tasks that must be completed before the release.
+> Blockers are the tasks, such as bugs, that should be completed before the release.
 
-### Build Release
+- TBD
 
-#### GitHub Side
+### Community-desired features / changes
 
-- [ ] Draft GitHub release
-- [ ] Bump version in project, update dependencies list, and update changelog
-- [ ] Create and push release candidate tag
+> These are features or other changes that the community would prefer to go into the next release,
+> but should not block it.
 
-#### ASF Side
+- TBD
 
-- [ ] Create ASF source release artifacts
-- [ ] Upload artifacts to the SVN dist repo
+### Release Guide
 
-### Voting
-
-- [ ] Start VOTE at iceberg community
-
-### Official Release
-
-- [ ] Publish artifacts to SVN RELEASE branch
-- [ ] Change Iceberg Rust Website download link
-- [ ] Publish GitHub release, automatically pushing the Git tag
-- [ ] Send the announcement
-
-For details of each step, please refer to: https://rust.iceberg.apache.org/release
+For details on how to run a release, please refer to: https://rust.iceberg.apache.org/release
 ```
 
 ## GitHub Side
 
 The following steps should be followed once the release is ready to begin.
 
+### Update dependencies
+
+Dependabot runs monthly to reduce update noise, so dependencies may be out of date by the time of a release.
+Before cutting a release candidate, open the repository's [Dependabot page](https://github.com/apache/iceberg-rust/network/updates) and trigger a manual check for each configured ecosystem: `cargo` and `github-actions` at `/`, and `uv` at `/bindings/python`.
+Review and merge the applicable dependency update PRs before creating the release branch and regenerating the dependency lists.
+For an existing release branch, backport the applicable updates to that branch before regenerating its dependency lists and cutting the release candidate.
+
+Only a committer with write access to the repository can trigger Dependabot manually.
+Work with a committer if you do not have write access.
+
+### Create a minor version release branch, if it doesn't already exist
+
+A committer must ensure that a release branch exists for each minor version.
+
+If the release is for an existing minor version (such as the `.1` patch release in `v0.10.1`), the release branch should already exist with the name `v0.10.x`.
+
+If the release is for a new minor version (such as the `.10` release in `v0.10.0`), you should create the release branch now.
+
+```
+git switch -c ${iceberg_minor_release_branch} && git push upstream ${iceberg_minor_release_branch}
+```
+
 ### Draft GitHub release
 
 - [Draft a new GitHub Release using the GitHub web UI](https://github.com/apache/iceberg-rust/releases/new).
 - Enter the git tag of this release version, of the form `v0.y.z`. For example, `v0.9.0`.
-  The tag should not exist at this stage and GitHub will offer to create it when the release is published.
-- Make sure the branch target is `main` for minor release (such as `0.9.0`), or the minor version branch for a patch release (such as `0.9.1`).
-- Generate the release note by clicking the `Generate release notes` button.
+  It is correct that the tag does not exist at this stage, as it will be created later in the release process.
+- Use the minor version branch created earlier as the branch target. For example, `v0.9.x`.
 - Save the draft.
 
 ### Update crate versions, dependencies list, and changelog
 
-The following changes can be made in one pull request.
+The following changes can be made in one pull request against the minor version branch (e.g. `v0.9.x`).
 
 #### Bump crate versions
 
@@ -144,10 +162,13 @@ This version is the final version, not the release candidate version.
 
 - Rust core and Python binding: bump version in root `Cargo.toml` under `[workspace.package]`.
 
+If you are preparing changes for later release candidates (2+), bumping crate versions should not be necessary.
+
 #### Update CHANGELOG.md
 
-Use the content of the draft GitHub release to update `CHANGELOG.md`.
-Since drafting a GitHub release requires `content: write` GitHub permissions, this step must be owned by a committer.
+Update `CHANGELOG.md` based on the changes since the previous version.
+You may use generative AI to assist making this update, but please review the proposed changes for correctness.
+The changelog should reflect a summary of each commit in the new release.
 
 #### Update dependency lists
 
@@ -165,9 +186,12 @@ dev/release/dependencies.sh check
 
 #### Open pull request
 
-Open a pull request with all three changes.
+Open a pull request with all the changes.
+The release branch should be used as the base for the pull request.
 
 ### Create release candidate tag and artifacts
+
+This step must be completed by a committer.
 
 After the version bump PR gets merged, check out the exact commit to release and run:
 
@@ -181,13 +205,15 @@ For example:
 dev/release/create_rc.sh 0.9.1 2
 ```
 
+The script always archives and tags `HEAD`, so make sure the exact commit to release is checked out before running it.
+
 Useful options include:
 
-- `--release_ref HEAD`: git commit-ish to archive and tag.
 - `--dist_dir dist`: artifact output root.
 - `--create_rc_tag 1`: create the signed annotated RC tag as the final release step.
 - `--check_headers 1`: check Apache license headers against the source archive.
 - `--check_deps 1`: run dependency license checks before artifact creation.
+- `--check_publish 1`: dry-run publishing every crate to crates.io before artifact creation.
 - `--sign 1`: create and verify the detached GPG signature.
 - `--upload_svn 0`: upload RC artifacts to the ASF dev dist SVN repository.
 - `--svn_dist_url https://dist.apache.org/repos/dist/dev/iceberg`: SVN directory URL where the RC artifact directory will be uploaded.
@@ -200,7 +226,10 @@ This script creates:
 - SHA-512 checksum: `apache-iceberg-rust-${iceberg_version}.tar.gz.sha512`
 - Signed annotated RC tag: `v${iceberg_version}-rc.${rc}`
 
-The script checks license headers against the generated source archive, not the live Git worktree. If enabled, SVN upload runs after local artifact verification and before RC tag creation. The script creates the signed RC tag as the final release step, then prints a draft VOTE email for `dev@iceberg.apache.org`.
+The script runs a number of verifications.
+It performs a dry-run packaging step and builds every crate as the final release would, so a crate that cannot be published fails RC creation.
+It also checks license headers against the generated source archive.
+If enabled, SVN upload runs after local artifact verification and before RC tag creation. The script creates the signed RC tag as the final release step, then prints a draft VOTE email for `dev@iceberg.apache.org`.
 
 To upload artifacts to ASF dev dist as part of RC creation, pass:
 
@@ -216,9 +245,41 @@ git push origin "v${iceberg_version}-rc.${rc}"
 
 If an RC has a problem, abandon that RC and increment the RC number.
 
+### Trigger release candidate PyPI publish
+
+Python packages based on the release candidate are published to PyPI.
+These are published by a workflow that must be triggered manually.
+
+Trigger this now using the following GitHub CLI command, or the equivalent on the GitHub website.
+It must use the published release tag as the reference for the workflow run.
+
+```shell
+gh workflow run --repo apache/iceberg-rust release_python.yml -f release_tag=${rc_tag} --ref refs/tags/${rc_tag}
+```
+
+### Draft an Apache Iceberg blog post
+
+The [Apache Iceberg blog](https://iceberg.apache.org/blog/) is one mechanism to share news about the project,
+however it is not a strict requirement for any release.
+Blog posts are published on the website, and shared via the project's social media.
+
+A blog post is typically published covering the whole minor release (i.e. `v0.9`), and communicates the changes since the last minor version.
+It may be updated for patch versions if deemed appropriate.
+For example, the [0.10 blog post was updated](https://iceberg.apache.org/blog/apache-iceberg-rust-0.10.0-release/#patch-releases) to communicate why `0.10.1` was released.
+
+If someone would like to volunteer to author this blog post, now is a good time to draft it based on the proposed changes to be released.
+The blog post should be a curated summary of the biggest changes to go in.
+Drafting the initial body of the post by hand is recommended, as this allows for a more authentic contribution and avoids mistakes where generative AI may summarize changes incorrectly.
+
+Blog posts are created by opening a PR to the main Apache Iceberg repository in the [`site/docs/blog/posts` directory](https://github.com/apache/iceberg/tree/main/site/docs/blog/posts).
+It should not be merged until the release has completed.
+
 ## ASF Side
 
-If any step in the ASF release process fails and requires code changes, abandon that RC and prepare a new RC number.
+All ASF-side steps must be performed by a project committer.
+
+**If any step in the ASF release process fails and requires code changes, abandon that RC and prepare a new RC number.**
+
 Our release page displays ASF releases instead of GitHub Releases.
 
 ### Verify the release candidate locally
@@ -316,7 +377,7 @@ Please vote accordingly:
 [ ] +0 No opinion
 [ ] -1 Disapprove (please provide a reason)
 
-To learn more about Apache Iceberg, please visit:
+To learn more about Apache Iceberg Rust, please visit:
 https://rust.iceberg.apache.org/
 
 Checklist for reference:
@@ -337,7 +398,7 @@ ${name}
 
 Example: <https://lists.apache.org/thread/c211gqq2yl15jbxqk4rcnq1bdqltjm5l>
 
-After at least 3 `+1` binding votes from Iceberg PMC members, claim the vote result.
+After at least 72 hours and 3 `+1` binding votes from Iceberg PMC members, claim the vote result.
 
 Title:
 
@@ -451,6 +512,9 @@ After downloading them, here are the instructions on how to verify them.
 
 ## Official Release
 
+All steps in this section must be performed by a project committer,
+except the announcement e-mail which must be performed by a PMC member.
+
 ### Promote the RC
 
 After the VOTE passes, create the final release tag and move the ASF artifacts from dev dist to release dist:
@@ -467,23 +531,49 @@ Useful options include:
 - `--dev_dist_url https://dist.apache.org/repos/dist/dev/iceberg`: SVN directory URL containing RC artifact directories.
 - `--release_dist_url https://dist.apache.org/repos/dist/release/iceberg`: SVN directory URL where final release artifact directories are published.
 
-The release script does not push the final release tag.
-Review the output and then move on to the next step to publish the GitHub release and tag.
+The release script does not push the final signed release tag.
+Review the output and then manually publish the release tag.
+
+```shell
+git push origin "v${iceberg_version}"
+```
+
+The creation of the final release tag triggers the publish workflow for crates.
+Python packages are manually triggered later.
+Please verify that the triggered workflows for the crates succeeded.
+
+New crates are reserved on crates.io when they are added, so the workflow should not fail on a new crate.
+If it does, see [if the Publish workflow fails on a missing crate](#if-the-publish-workflow-fails-on-a-missing-crate).
+Once all the crates are published, Python publishing should start.
+
+Python publishing is performed by a GitHub workflow, however the trigger is manual.
+Trigger this now using the following GitHub CLI command, or the equivalent on the GitHub website.
+It must use the published release tag as the reference for the workflow run.
+
+```shell
+gh workflow run --repo apache/iceberg-rust release_python.yml -f release_tag=v${iceberg_version} --ref refs/tags/v${iceberg_version}
+```
+
+Verify that the workflow succeeds, indicating that the Python packages are released.
+If there is any issue, you may continue with the release however please note in any relevant steps that the Python package publish failed and open a patch release tracking issue to plan addressing the problem.
+Note, this should be an exceptional case.
 
 ### Publish the GitHub Release
 
 A GitHub release should have been drafted earlier in the release process.
-Open the release and publish it now.
 
-On publish, the Git tag will be created for the release.
-
-The creation of the final release tag triggers the publish workflow for crates and pyiceberg-core.
+Open the GitHub release and update the body with the contents of the changelog.
+Then, publish the GitHub release.
 
 ### Send the announcement
 
 Send the release announcement to `dev@iceberg.apache.org` and CC `announce@apache.org`.
 
-Instead of adding breaking changes, include the new features as "notable changes" in the announcement.
+You must be a PMC member to send e-mails to `announce@apache.org`.
+The e-mail must be plain text.
+Disable HTML formatting if your e-mail client enables it by default.
+
+Instead of adding breaking changes, we include the new features as "notable changes" in the announcement.
 
 Title:
 
@@ -525,3 +615,106 @@ On behalf of Apache Iceberg Community
 ```
 
 Example: <https://lists.apache.org/thread/oy77n55brvk72tnlb2bjzfs9nz3cfd0s>
+
+### Publish the release blog post
+
+If a release blog post has been drafted (introduced earlier in this guide), now is the time to ensure it is ready to merge and publish.
+It does not need to be published immediately for the release to be considered complete,
+however it is in the community's best interest to publish it soon after.
+
+## Appendix
+
+### Adding a new crate
+
+Every publishable crate must exist on crates.io before the pull request that adds it is merged.
+CI enforces this with a check that fails for any publishable crate missing from crates.io.
+
+The release workflow publishes crates with [trusted publishing](https://crates.io/docs/trusted-publishing), which cannot create a crate.
+crates.io requires the first version of a crate to be published manually with an API token ([announcement](https://blog.rust-lang.org/2025/07/11/crates-io-development-update-2025-07/)).
+Publishing the crate by hand after the release workflow fails does not work either: the workflow runs `cargo publish --workspace`, which refuses to run if any crate already exists at the release version.
+
+A committer therefore reserves the crate when it is added, in three steps: publish a placeholder version, configure owners, and configure trusted publishing.
+
+#### Prerequisites
+
+Any crates.io account can publish an unclaimed name, and the first publisher becomes the crate's only owner.
+Reserve the crate promptly once the pull request is open, and have a committer do it, since the reserver must hand ownership to the project.
+
+The committer needs:
+
+- A crates.io account linked to their GitHub account.
+- Membership in the `apache/iceberg-private` GitHub team, with the `read:org` permission granted to crates.io, in order to add that team as an owner.
+- A crates.io API token with the `publish-new` and `change-owners` scopes, used with `cargo login`.
+  Existing tokens usually lack `publish-new`; create one at [crates.io/settings/tokens](https://crates.io/settings/tokens).
+
+Committers who already own the existing Iceberg crates meet the first two.
+List them with `cargo owner --list iceberg`.
+
+#### Step 1: Reserve the crate name
+
+Publish an empty placeholder crate as version `0.0.0`, so it never collides with a real release.
+The placeholder is created outside the repository; overriding the version inside the workspace does not work because other workspace crates depend on the new crate at the workspace version.
+
+```shell
+mkdir -p /tmp/<package-name>/src
+cd /tmp/<package-name>
+touch src/lib.rs
+cat > Cargo.toml <<'EOF'
+[package]
+name = "<package-name>"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Placeholder that reserves the crate name for Apache Iceberg Rust. See the repository for the real crate."
+repository = "https://github.com/apache/iceberg-rust"
+EOF
+cargo publish --dry-run
+cargo publish
+```
+
+A `403 Forbidden: authentication failed` error means the token lacks the `publish-new` scope.
+
+#### Step 2: Configure crate owners
+
+Add the GitHub team that owns the existing Iceberg crates.
+
+```shell
+cargo owner --add github:apache:iceberg-private <package-name>
+```
+
+Then add two PMC members other than yourself as individual owners.
+
+```shell
+cargo owner --add <github-handle> <package-name>
+```
+
+This sends an invitation; ask each invitee to accept it on crates.io.
+
+Individual owners are required because a team owner can publish and yank versions but cannot add or remove owners.
+Without them, the crate could become unmanageable if a PMC member becomes inactive.
+See the [Cargo documentation for `cargo owner`](https://doc.rust-lang.org/cargo/reference/publishing.html#cargo-owner).
+
+#### Step 3: Configure trusted publishing
+
+As a crate owner, open the crate's settings on the crates.io website and add a trusted publisher, following the [crates.io trusted publishing documentation](https://crates.io/docs/trusted-publishing).
+Use an existing Iceberg crate as the reference:
+
+- Repository: `apache/iceberg-rust`
+- Workflow: `publish.yml`
+- Environment: `publish`
+
+Then re-run CI on the pull request.
+The next release publishes the crate's first real version along with the rest of the workspace.
+
+#### If the Publish workflow fails on a missing crate
+
+Reserve the crate as above, using the `0.0.0` placeholder and never the release version.
+
+Then check the failed run's log for `Uploaded` lines to see which crates were already published, since cargo uploads crates one at a time in dependency order.
+
+- If nothing was uploaded, re-run the failed workflow run from the GitHub Actions UI. Re-running keeps the original tag as the workflow ref.
+- If some crates were uploaded, publish the rest from a clean checkout of the release tag, excluding each crate that was already published:
+
+```shell
+cargo publish --workspace --all-features --exclude <published-crate> --exclude <published-crate>
+```

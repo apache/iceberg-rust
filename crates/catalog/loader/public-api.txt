@@ -6,9 +6,11 @@ impl<'a> core::convert::From<&'a str> for iceberg_catalog_loader::CatalogLoader<
 pub fn iceberg_catalog_loader::CatalogLoader<'a>::from(s: &'a str) -> Self
 pub trait iceberg_catalog_loader::BoxedCatalogBuilder: core::marker::Send
 pub fn iceberg_catalog_loader::BoxedCatalogBuilder::load<'async_trait>(self: alloc::boxed::Box<Self>, name: alloc::string::String, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg::catalog::Catalog>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait
+pub fn iceberg_catalog_loader::BoxedCatalogBuilder::with_kms_client_factory(self: alloc::boxed::Box<Self>, kms_client_factory: alloc::sync::Arc<dyn iceberg::encryption::kms::factory::KmsClientFactory>) -> alloc::boxed::Box<dyn iceberg_catalog_loader::BoxedCatalogBuilder>
 pub fn iceberg_catalog_loader::BoxedCatalogBuilder::with_storage_factory(self: alloc::boxed::Box<Self>, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> alloc::boxed::Box<dyn iceberg_catalog_loader::BoxedCatalogBuilder>
 impl<T: iceberg::catalog::CatalogBuilder + 'static> iceberg_catalog_loader::BoxedCatalogBuilder for T
 pub fn T::load<'async_trait>(self: alloc::boxed::Box<Self>, name: alloc::string::String, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg::catalog::Catalog>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait
+pub fn T::with_kms_client_factory(self: alloc::boxed::Box<Self>, kms_client_factory: alloc::sync::Arc<dyn iceberg::encryption::kms::factory::KmsClientFactory>) -> alloc::boxed::Box<dyn iceberg_catalog_loader::BoxedCatalogBuilder>
 pub fn T::with_storage_factory(self: alloc::boxed::Box<Self>, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> alloc::boxed::Box<dyn iceberg_catalog_loader::BoxedCatalogBuilder>
 pub fn iceberg_catalog_loader::load(type: &str) -> iceberg::error::Result<alloc::boxed::Box<dyn iceberg_catalog_loader::BoxedCatalogBuilder>>
 pub fn iceberg_catalog_loader::supported_types() -> alloc::vec::Vec<&'static str>

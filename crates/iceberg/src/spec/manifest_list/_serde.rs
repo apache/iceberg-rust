@@ -193,7 +193,7 @@ pub(super) struct ManifestFileV3 {
     pub deleted_rows_count: i64,
     pub partitions: Option<Vec<FieldSummary>>,
     pub key_metadata: Option<ByteBuf>,
-    pub first_row_id: Option<u64>,
+    pub first_row_id: Option<i64>,
 }
 
 impl ManifestFileV3 {
@@ -215,7 +215,7 @@ impl ManifestFileV3 {
             deleted_rows_count: Some(self.deleted_rows_count.try_into()?),
             partitions: self.partitions,
             key_metadata: self.key_metadata.map(|b| b.into_vec()),
-            first_row_id: self.first_row_id,
+            first_row_id: self.first_row_id.map(|n| n.try_into()).transpose()?,
         };
 
         Ok(manifest_file)
@@ -372,7 +372,7 @@ impl TryFrom<ManifestFile> for ManifestFileV3 {
                 .try_into()?,
             partitions: value.partitions,
             key_metadata,
-            first_row_id: value.first_row_id,
+            first_row_id: value.first_row_id.map(|n| n.try_into()).transpose()?,
         })
     }
 }

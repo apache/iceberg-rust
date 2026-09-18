@@ -31,7 +31,7 @@ pub struct UpdateStatisticsAction {
 }
 
 impl UpdateStatisticsAction {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             statistics_to_set: HashMap::default(),
         }
@@ -65,12 +65,6 @@ impl UpdateStatisticsAction {
     pub fn remove_statistics(mut self, snapshot_id: i64) -> Self {
         self.statistics_to_set.insert(snapshot_id, None);
         self
-    }
-}
-
-impl Default for UpdateStatisticsAction {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

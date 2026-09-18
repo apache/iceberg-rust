@@ -56,7 +56,7 @@ impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_opendal::OpenDalS
 pub fn iceberg_storage_opendal::OpenDalStorageFactory::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_storage_opendal::CustomAwsCredentialLoader(_)
 impl iceberg_storage_opendal::CustomAwsCredentialLoader
-pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::new(provider: impl reqsign_core::api::ProvideCredential<Credential = reqsign_aws_v4::credential::Credential> + 'static) -> Self
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::new(provider: impl reqsign_core::api::ProvideCredential<Credential = reqsign_aws_core::credential::Credential> + 'static) -> Self
 impl core::clone::Clone for iceberg_storage_opendal::CustomAwsCredentialLoader
 pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::clone(&self) -> Self
 impl core::fmt::Debug for iceberg_storage_opendal::CustomAwsCredentialLoader

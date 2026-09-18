@@ -2096,6 +2096,32 @@ mod tests {
     }
 
     #[test]
+    fn test_table_properties_view_reflects_metadata_updates() {
+        let property = TableProperties::PROPERTY_COMMIT_NUM_RETRIES.to_string();
+        let metadata = builder_without_changes(FormatVersion::V2)
+            .set_properties(HashMap::from([(property.clone(), "7".to_string())]))
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(metadata.table_properties().commit_num_retries().unwrap(), 7);
+
+        let metadata = metadata
+            .into_builder(None)
+            .remove_properties(&[property])
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(
+            metadata.table_properties().commit_num_retries().unwrap(),
+            TableProperties::PROPERTY_COMMIT_NUM_RETRIES_DEFAULT
+        );
+    }
+
+    #[test]
     fn test_no_metadata_log_entry_for_no_previous_location() {
         // Used for first commit after stage-creation of tables
         let metadata = builder_without_changes(FormatVersion::V2)

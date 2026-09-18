@@ -41,6 +41,10 @@ name = "rest-catalog-table"
 path = "src/rest_catalog_table.rs"
 
 [[example]]
+name = "rest-session-catalog-namespace"
+path = "src/rest_session_catalog_namespace.rs"
+
+[[example]]
 name = "oss-backend"
 path = "src/oss_backend.rs"
 required-features = ["storage-oss"]
@@ -48,3 +52,6 @@ required-features = ["storage-oss"]
 [features]
 default = []
 storage-oss = ["iceberg-storage-opendal/opendal-oss"]
+
+[lints]
+workspace = true

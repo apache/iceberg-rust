@@ -26,7 +26,5 @@ pub(crate) fn fs_config_build() -> Result<Operator> {
     let mut cfg = FsConfig::default();
     cfg.root = Some("/".to_string());
 
-    Ok(Operator::from_config(cfg)
-        .map_err(from_opendal_error)?
-        .finish())
+    Operator::from_config(cfg).map_err(from_opendal_error)
 }

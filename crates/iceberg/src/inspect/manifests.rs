@@ -26,11 +26,11 @@ use arrow_array::types::{Int32Type, Int64Type};
 use arrow_schema::{DataType, Field, Fields};
 use futures::{StreamExt, stream};
 
-use crate::Result;
 use crate::arrow::schema_to_arrow_schema;
 use crate::scan::ArrowRecordBatchStream;
 use crate::spec::{Datum, FieldSummary, ListType, NestedField, PrimitiveType, StructType, Type};
 use crate::table::Table;
+use crate::{Error, ErrorKind, Result};
 
 /// Manifests table.
 pub struct ManifestsTable<'a> {
@@ -184,13 +184,19 @@ impl<'a> ManifestsTable<'a> {
                     .table
                     .metadata()
                     .partition_spec_by_id(manifest.partition_spec_id)
-                    .unwrap();
-                let spec_struct = spec
-                    .partition_type(self.table.metadata().current_schema())
-                    .unwrap();
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Partition spec {} for manifest {} is not in table metadata",
+                                manifest.partition_spec_id, manifest.manifest_path
+                            ),
+                        )
+                    })?;
+                let spec_struct = spec.partition_type(self.table.metadata().current_schema())?;
                 self.append_partition_summaries(
                     &mut partition_summaries,
-                    &manifest.partitions.clone().unwrap_or_else(Vec::new),
+                    manifest.partitions.as_deref().unwrap_or(&[]),
                     spec_struct,
                 );
             }
@@ -254,22 +260,22 @@ impl<'a> ManifestsTable<'a> {
                 .unwrap()
                 .append_option(summary.contains_nan);
 
-            partition_summaries_builder
-                .field_builder::<StringBuilder>(2)
-                .unwrap()
-                .append_option(summary.lower_bound.as_ref().map(|v| {
-                    Datum::try_from_bytes(v, field.field_type.as_primitive_type().unwrap().clone())
-                        .unwrap()
-                        .to_string()
-                }));
-            partition_summaries_builder
-                .field_builder::<StringBuilder>(3)
-                .unwrap()
-                .append_option(summary.upper_bound.as_ref().map(|v| {
-                    Datum::try_from_bytes(v, field.field_type.as_primitive_type().unwrap().clone())
-                        .unwrap()
-                        .to_string()
-                }));
+            let field_type = field.field_type.as_primitive_type().unwrap();
+            for (index, bound) in [(2, &summary.lower_bound), (3, &summary.upper_bound)] {
+                // Bounds cannot be decoded when the source column's type is unknown.
+                let bound = bound
+                    .as_ref()
+                    .filter(|_| *field_type != PrimitiveType::Unknown)
+                    .map(|v| {
+                        Datum::try_from_bytes(v, field_type.clone())
+                            .unwrap()
+                            .to_string()
+                    });
+                partition_summaries_builder
+                    .field_builder::<StringBuilder>(index)
+                    .unwrap()
+                    .append_option(bound);
+            }
             partition_summaries_builder.append(true);
         }
         builder.append(true);
@@ -278,10 +284,14 @@ impl<'a> ManifestsTable<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::{Array, ListArray, StructArray};
     use expect_test::expect;
     use futures::TryStreamExt;
 
     use crate::scan::tests::TableTestFixture;
+    use crate::spec::TableMetadata;
     use crate::test_utils::check_record_batches;
 
     #[tokio::test]
@@ -378,5 +388,60 @@ mod tests {
             &["path", "length"],
             Some("path"),
         );
+    }
+
+    #[tokio::test]
+    async fn test_manifests_table_with_dropped_partition_source_column() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Evolve the table so that the manifests reference a historical spec whose source
+        // column is no longer in the current schema: add an unpartitioned default spec, then
+        // drop the source column of the original spec.
+        let mut metadata = serde_json::to_value(fixture.table.metadata()).unwrap();
+        let current_schema_id = metadata["current-schema-id"].clone();
+        let schemas = metadata["schemas"].as_array_mut().unwrap();
+        for schema in schemas {
+            if schema["schema-id"] == current_schema_id {
+                let fields = schema["fields"].as_array_mut().unwrap();
+                fields.retain(|field| field["id"] != 1);
+                let identifier_ids = schema["identifier-field-ids"].as_array_mut().unwrap();
+                identifier_ids.retain(|id| *id != 1);
+            }
+        }
+
+        metadata["partition-specs"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"spec-id": 1, "fields": []}));
+        metadata["default-spec-id"] = serde_json::json!(1);
+
+        let metadata: TableMetadata = serde_json::from_value(metadata).unwrap();
+        let table = fixture.table.clone().with_metadata(Arc::new(metadata));
+
+        let batches: Vec<_> = table
+            .inspect()
+            .manifests()
+            .scan()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 1);
+        let summaries = batches[0]
+            .column_by_name("partition_summaries")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        let summary = summaries.value(0);
+        let summary = summary.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(summary.len(), 1);
+        assert!(summary.column_by_name("contains_null").unwrap().is_valid(0));
+        assert!(summary.column_by_name("contains_nan").unwrap().is_valid(0));
+        assert!(summary.column_by_name("lower_bound").unwrap().is_null(0));
+        assert!(summary.column_by_name("upper_bound").unwrap().is_null(0));
     }
 }
