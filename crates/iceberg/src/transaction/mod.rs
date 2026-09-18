@@ -359,7 +359,29 @@ mod tests {
             .unwrap()
     }
 
+    pub(crate) async fn make_v2_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+        make_minimal_table_in_catalog(
+            catalog,
+            "TableMetadataV2ValidMinimal.json",
+            crate::spec::FormatVersion::V2,
+        )
+        .await
+    }
+
     pub(crate) async fn make_v3_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+        make_minimal_table_in_catalog(
+            catalog,
+            "TableMetadataV3ValidMinimal.json",
+            crate::spec::FormatVersion::V3,
+        )
+        .await
+    }
+
+    async fn make_minimal_table_in_catalog(
+        catalog: &impl Catalog,
+        metadata_file: &str,
+        format_version: crate::spec::FormatVersion,
+    ) -> Table {
         let table_ident =
             TableIdent::from_strs([format!("ns1-{}", uuid::Uuid::new_v4()), "test1".to_string()])
                 .unwrap();
@@ -372,7 +394,7 @@ mod tests {
         let file = File::open(format!(
             "{}/testdata/table_metadata/{}",
             env!("CARGO_MANIFEST_DIR"),
-            "TableMetadataV3ValidMinimal.json"
+            metadata_file
         ))
         .unwrap();
         let reader = BufReader::new(file);
@@ -383,7 +405,7 @@ mod tests {
             .partition_spec((**base_metadata.default_partition_spec()).clone())
             .sort_order((**base_metadata.default_sort_order()).clone())
             .name(table_ident.name().to_string())
-            .format_version(crate::spec::FormatVersion::V3)
+            .format_version(format_version)
             .build();
 
         catalog

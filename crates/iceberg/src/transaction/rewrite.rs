@@ -171,8 +171,10 @@ mod tests {
         ManifestStatus, ManifestWriterBuilder, Operation, SnapshotRef, Struct,
     };
     use crate::table::Table;
+    use crate::Catalog;
     use crate::transaction::tests::{
-        append_files, make_data_file, make_v3_minimal_table_in_catalog,
+        append_files, make_data_file, make_v2_minimal_table_in_catalog,
+        make_v3_minimal_table_in_catalog,
     };
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{ErrorKind, TableUpdate};
@@ -199,12 +201,22 @@ mod tests {
     async fn test_rewrite_files_compaction() {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        rewrite_files_compaction(&catalog, table).await;
+    }
 
+    #[tokio::test]
+    async fn test_rewrite_files_compaction_on_v2_table() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        rewrite_files_compaction(&catalog, table).await;
+    }
+
+    async fn rewrite_files_compaction(catalog: &impl Catalog, table: Table) {
         // Append 3 small files (10 records each).
         let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
         let f2 = make_data_file(&table, "test/2.parquet", 10, 100);
         let f3 = make_data_file(&table, "test/3.parquet", 10, 100);
-        let table = append_files(&catalog, &table, vec![f1.clone(), f2.clone(), f3.clone()]).await;
+        let table = append_files(catalog, &table, vec![f1.clone(), f2.clone(), f3.clone()]).await;
 
         // Verify pre-compaction state.
         let summary = &table
@@ -226,7 +238,7 @@ mod tests {
             .delete_file(f3)
             .add_file(merged);
         let tx = action.apply(tx).unwrap();
-        let table = tx.commit(&catalog).await.unwrap();
+        let table = tx.commit(catalog).await.unwrap();
 
         // Verify post-compaction snapshot.
         let snapshot = table.metadata().current_snapshot().unwrap();
@@ -308,11 +320,21 @@ mod tests {
     async fn test_rewrite_files_partial() {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        rewrite_files_partial(&catalog, table).await;
+    }
 
+    #[tokio::test]
+    async fn test_rewrite_files_partial_on_v2_table() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        rewrite_files_partial(&catalog, table).await;
+    }
+
+    async fn rewrite_files_partial(catalog: &impl Catalog, table: Table) {
         let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
         let f2 = make_data_file(&table, "test/2.parquet", 10, 100);
         let f3 = make_data_file(&table, "test/3.parquet", 10, 100);
-        let table = append_files(&catalog, &table, vec![f1.clone(), f2.clone(), f3.clone()]).await;
+        let table = append_files(catalog, &table, vec![f1.clone(), f2.clone(), f3.clone()]).await;
         let append_snapshot = table.metadata().current_snapshot().unwrap().clone();
 
         // Rewrite only f1 and f2, keep f3.
@@ -324,7 +346,7 @@ mod tests {
             .delete_file(f2)
             .add_file(merged);
         let tx = action.apply(tx).unwrap();
-        let table = tx.commit(&catalog).await.unwrap();
+        let table = tx.commit(catalog).await.unwrap();
 
         let snapshot = table.metadata().current_snapshot().unwrap();
         assert_eq!(snapshot.summary().operation, Operation::Replace);
