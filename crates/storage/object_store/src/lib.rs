@@ -53,22 +53,19 @@ use serde::{Deserialize, Serialize};
 /// dispatching known variants to their corresponding `ErrorKind`.
 fn from_object_store_error(e: object_store::Error) -> Error {
     let (kind, msg) = match &e {
-        object_store::Error::NotFound { path, .. } => (
-            ErrorKind::DataInvalid,
-            format!("Object not found: {path}"),
-        ),
+        object_store::Error::NotFound { path, .. } => {
+            (ErrorKind::DataInvalid, format!("Object not found: {path}"))
+        }
         object_store::Error::AlreadyExists { path, .. } => (
             ErrorKind::DataInvalid,
             format!("Object already exists: {path}"),
         ),
-        object_store::Error::PermissionDenied { path, .. } => (
-            ErrorKind::DataInvalid,
-            format!("Permission denied: {path}"),
-        ),
-        object_store::Error::Unauthenticated { path, .. } => (
-            ErrorKind::DataInvalid,
-            format!("Unauthenticated: {path}"),
-        ),
+        object_store::Error::PermissionDenied { path, .. } => {
+            (ErrorKind::DataInvalid, format!("Permission denied: {path}"))
+        }
+        object_store::Error::Unauthenticated { path, .. } => {
+            (ErrorKind::DataInvalid, format!("Unauthenticated: {path}"))
+        }
         object_store::Error::NotSupported { .. } => (
             ErrorKind::FeatureUnsupported,
             "Operation not supported".to_string(),

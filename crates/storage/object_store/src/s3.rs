@@ -33,8 +33,6 @@ pub(crate) struct ParsedS3Url {
     pub(crate) relative: String,
 }
 
-
-
 /// Parse an absolute S3 URL into [`ParsedS3Url`].
 ///
 /// Accepts `s3://`, `s3a://`, and `s3n://` schemes.
@@ -43,7 +41,7 @@ pub(crate) fn parse_s3_url(path: &str) -> Result<ParsedS3Url> {
         Error::new(ErrorKind::DataInvalid, format!("Invalid URL: {path}")).with_source(e)
     })?;
 
-    let scheme = url.scheme();  
+    let scheme = url.scheme();
     match scheme {
         "s3" | "s3a" | "s3n" => {}
         _ => {
@@ -68,15 +66,13 @@ pub(crate) fn parse_s3_url(path: &str) -> Result<ParsedS3Url> {
         ));
     }
 
-    let bucket = percent_decode_str(bucket)
-        .decode_utf8()
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid percent-encoded bucket in s3 url: {path}"),
-            )
-            .with_source(e)
-        })?;
+    let bucket = percent_decode_str(bucket).decode_utf8().map_err(|e| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid percent-encoded bucket in s3 url: {path}"),
+        )
+        .with_source(e)
+    })?;
 
     let relative = url.path().trim_start_matches('/');
 
@@ -119,10 +115,8 @@ fn configure_sse(mut builder: AmazonS3Builder, config: &S3Config) -> Result<Amaz
                 }
             },
             "AES256" => {
-                builder = builder.with_config(
-                    parse_s3_config_key("aws_server_side_encryption")?,
-                    "AES256",
-                );
+                builder = builder
+                    .with_config(parse_s3_config_key("aws_server_side_encryption")?, "AES256");
             }
             other => {
                 return Err(Error::new(

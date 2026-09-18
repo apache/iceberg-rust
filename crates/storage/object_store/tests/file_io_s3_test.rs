@@ -398,9 +398,7 @@ mod tests {
         }
 
         // Create 2 files under other_prefix/
-        let keep_paths: Vec<String> = (0..2)
-            .map(|i| format!("{other_prefix}/keep_{i}"))
-            .collect();
+        let keep_paths: Vec<String> = (0..2).map(|i| format!("{other_prefix}/keep_{i}")).collect();
         for path in &keep_paths {
             let _ = file_io.delete(path).await;
             file_io
