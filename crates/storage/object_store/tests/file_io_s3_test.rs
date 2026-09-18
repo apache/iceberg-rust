@@ -224,11 +224,11 @@ mod tests {
     async fn test_file_io_s3_percent_encoded_bucket() {
         let file_io = get_file_io().await;
         let file_path = format!(
-            "s3://my%2Dbucket/{}",
+            "s3://bucket%31/{}",
             normalize_test_name_with_parts!("test_file_io_s3_percent_encoded_bucket")
         );
         let canonical_path = format!(
-            "s3://my-bucket/{}",
+            "s3://bucket1/{}",
             normalize_test_name_with_parts!("test_file_io_s3_percent_encoded_bucket")
         );
 
