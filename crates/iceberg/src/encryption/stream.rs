@@ -145,19 +145,16 @@ impl AesGcmFileRead {
         aad_prefix: Box<[u8]>,
         encrypted_file_length: u64,
     ) -> Result<Self> {
+        if encrypted_file_length < u64::from(MIN_STREAM_LENGTH) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid encrypted file length: {encrypted_file_length} is less than {MIN_STREAM_LENGTH}"
+                ),
+            ));
+        }
         let plain_stream_size = Self::calculate_plaintext_length(encrypted_file_length)?;
         let stream_length = encrypted_file_length - GCM_STREAM_HEADER_LENGTH as u64;
-
-        if stream_length == 0 {
-            return Ok(Self {
-                inner,
-                cipher,
-                aad_prefix,
-                plain_stream_size: 0,
-                num_blocks: 0,
-                last_cipher_block_size: 0,
-            });
-        }
 
         let num_full_blocks = stream_length / CIPHER_BLOCK_SIZE as u64;
         let cipher_bytes_in_last_block = (stream_length % CIPHER_BLOCK_SIZE as u64) as u32;
@@ -311,10 +308,6 @@ impl FileRead for AesGcmFileRead {
                     range.start, range.end, self.plain_stream_size
                 ),
             ));
-        }
-
-        if self.num_blocks == 0 {
-            return Ok(Bytes::new());
         }
 
         let first_block = range.start / PLAIN_BLOCK_SIZE as u64;
@@ -658,7 +651,8 @@ mod tests {
         #[async_trait::async_trait]
         impl FileRead for ShortRead {
             async fn read(&self, range: Range<u64>) -> Result<Bytes> {
-                Ok(Bytes::from(vec![0; (range.end - range.start - 1) as usize]))
+                let len = (range.end - range.start).saturating_sub(1) as usize;
+                Ok(Bytes::from(vec![0; len]))
             }
         }
 
@@ -1029,15 +1023,21 @@ mod tests {
         assert_eq!(&aad[..], &42u32.to_le_bytes());
     }
 
-    #[tokio::test]
-    async fn test_encrypted_file_too_short() {
-        let result = AesGcmFileRead::new(
-            memory_reader(vec![0; 4]),
-            Arc::new(make_cipher(b"0123456789abcdef")),
-            [].into(),
-            4,
-        );
-        assert!(result.is_err());
+    #[test]
+    fn test_encrypted_file_too_short() {
+        for length in 0..MIN_STREAM_LENGTH {
+            let result = AesGcmFileRead::new(
+                memory_reader(vec![0; length as usize]),
+                Arc::new(make_cipher(b"0123456789abcdef")),
+                [].into(),
+                u64::from(length),
+            );
+            let err = result
+                .err()
+                .expect("a stream must contain an authenticated block");
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.to_string().contains("Invalid encrypted file length"));
+        }
     }
 
     // --- AesGcmFileWrite tests ---

@@ -451,12 +451,13 @@ impl<'a> SnapshotProducer<'a> {
             .file_io()
             .new_output(manifest_list_path.clone())?;
 
-        // The encrypted output is kept alive past close(), since its key metadata can only be
-        // stamped once the writer reports how many bytes it stored.
         let (writer, encrypted_output) = match self.table.encryption_manager() {
             Some(em) => {
                 let encrypted_output = em.encrypt(raw_output);
-                (encrypted_output.writer().await?, Some(encrypted_output))
+                (
+                    encrypted_output.writer().await?,
+                    Some((em.clone(), encrypted_output)),
+                )
             }
             None => (raw_output.writer().await?, None),
         };
@@ -493,20 +494,12 @@ impl<'a> SnapshotProducer<'a> {
         let writer_next_row_id = manifest_list_writer.next_row_id();
         let file_metadata = manifest_list_writer.close().await?;
         let encryption_key_id = match encrypted_output {
-            Some(encrypted_output) => {
-                let em = self.table.encryption_manager().ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Encryption manager missing for an encrypted manifest list",
-                    )
-                })?;
-                Some(
-                    em.encrypt_manifest_list_key_metadata(
-                        &encrypted_output.key_metadata_with_length(file_metadata.size),
-                    )
-                    .await?,
+            Some((em, encrypted_output)) => Some(
+                em.encrypt_manifest_list_key_metadata(
+                    &encrypted_output.key_metadata_with_saved_file_metadata(&file_metadata),
                 )
-            }
+                .await?,
+            ),
             None => None,
         };
 

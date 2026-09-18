@@ -90,7 +90,7 @@ impl StandardKeyMetadata {
         self.aad_prefix.as_deref()
     }
 
-    /// Returns the encrypted file length in bytes, required for AGS1 files.
+    /// Returns the optional encrypted file length in bytes; AGS1 readers require it to be set.
     pub fn file_length(&self) -> Option<u64> {
         self.file_length
     }

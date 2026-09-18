@@ -665,12 +665,7 @@ impl FileWrite for OpenDalWriter {
             .await
             .map_err(from_opendal_error)?;
 
-        // `Metadata::content_length()` silently returns 0 when the service did not report a
-        // size, and most object stores don't: S3 only populates it from the `x-amz-object-size`
-        // response header, which general-purpose buckets never send. A bogus 0 here would be
-        // written into `manifest_length` and into the AGS1 `file_length` used for truncation
-        // protection, making the file permanently unreadable, so trust our own byte count and
-        // only use the service value to detect a genuine mismatch.
+        // Object stores may omit the size (reported as 0); validate only a reported nonzero size.
         let reported_size = metadata.content_length();
         if reported_size != 0 && reported_size != self.bytes_written {
             return Err(Error::new(

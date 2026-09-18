@@ -281,7 +281,7 @@ pub async fn iceberg::encryption::EncryptedInputFile::exists(&self) -> iceberg::
 pub fn iceberg::encryption::EncryptedInputFile::into_inner(self) -> iceberg::io::InputFile
 pub fn iceberg::encryption::EncryptedInputFile::key_metadata(&self) -> &iceberg::encryption::StandardKeyMetadata
 pub fn iceberg::encryption::EncryptedInputFile::location(&self) -> &str
-pub async fn iceberg::encryption::EncryptedInputFile::metadata(&self) -> iceberg::Result<iceberg::io::FileMetadata>
+pub fn iceberg::encryption::EncryptedInputFile::metadata(&self) -> iceberg::Result<iceberg::io::FileMetadata>
 pub fn iceberg::encryption::EncryptedInputFile::new(inner: iceberg::io::InputFile, key_metadata: iceberg::encryption::StandardKeyMetadata) -> Self
 pub async fn iceberg::encryption::EncryptedInputFile::read(&self) -> iceberg::Result<bytes::bytes::Bytes>
 pub async fn iceberg::encryption::EncryptedInputFile::reader(&self) -> iceberg::Result<alloc::boxed::Box<dyn iceberg::io::FileRead>>
@@ -291,7 +291,7 @@ pub struct iceberg::encryption::EncryptedOutputFile
 impl iceberg::encryption::EncryptedOutputFile
 pub async fn iceberg::encryption::EncryptedOutputFile::delete(&self) -> iceberg::Result<()>
 pub fn iceberg::encryption::EncryptedOutputFile::into_inner(self) -> iceberg::io::OutputFile
-pub fn iceberg::encryption::EncryptedOutputFile::key_metadata_with_length(&self, file_length: u64) -> iceberg::encryption::StandardKeyMetadata
+pub fn iceberg::encryption::EncryptedOutputFile::key_metadata_with_saved_file_metadata(&self, file_metadata: &iceberg::io::FileMetadata) -> iceberg::encryption::StandardKeyMetadata
 pub fn iceberg::encryption::EncryptedOutputFile::location(&self) -> &str
 pub fn iceberg::encryption::EncryptedOutputFile::new(inner: iceberg::io::OutputFile, key_metadata: iceberg::encryption::StandardKeyMetadata) -> Self
 pub async fn iceberg::encryption::EncryptedOutputFile::write(&self, bs: bytes::bytes::Bytes) -> iceberg::Result<iceberg::io::FileMetadata>

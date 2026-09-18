@@ -1654,7 +1654,7 @@ mod tests {
         let output = EncryptedOutputFile::new(file_io.new_output(&dv_path).unwrap(), key_metadata);
         let file_metadata = output.write(Bytes::from(blob)).await.unwrap();
         let encoded_key_metadata = output
-            .key_metadata_with_length(file_metadata.size)
+            .key_metadata_with_saved_file_metadata(&file_metadata)
             .encode()
             .unwrap();
 

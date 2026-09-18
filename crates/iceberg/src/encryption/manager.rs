@@ -694,7 +694,7 @@ mod tests {
             .unwrap();
 
         let serialized_metadata = encrypted_output
-            .key_metadata_with_length(file_metadata.size)
+            .key_metadata_with_saved_file_metadata(&file_metadata)
             .encode()
             .unwrap();
 

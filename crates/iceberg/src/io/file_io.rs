@@ -375,7 +375,7 @@ pub trait FileWrite: Send + Unpin + 'static {
     /// TODO: we can support writing non-contiguous bytes in the future.
     async fn write(&mut self, bs: Bytes) -> Result<()>;
 
-    /// Close the file and return its stored size.
+    /// Close the file and return its stored size, including encryption overhead for encrypted files.
     ///
     /// Calling close on closed file will generate an error.
     async fn close(&mut self) -> Result<FileMetadata>;

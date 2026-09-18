@@ -743,6 +743,7 @@ impl ArrowAsyncFileWriter for AsyncFileWriter {
 
     fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
         Box::pin(async {
+            // TODO(encryption): retain the stored file size in data-file key metadata.
             self.0
                 .close()
                 .await

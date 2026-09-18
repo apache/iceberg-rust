@@ -54,10 +54,10 @@ impl EncryptedInputFile {
         self.inner.exists().await
     }
 
-    /// Fetch and returns metadata of file.
+    /// Returns file metadata from the declared encrypted length without performing I/O.
     ///
     /// The returned size is the **plaintext** size.
-    pub async fn metadata(&self) -> Result<FileMetadata> {
+    pub fn metadata(&self) -> Result<FileMetadata> {
         let plaintext_size = AesGcmFileRead::calculate_plaintext_length(self.encrypted_length()?)?;
         Ok(FileMetadata {
             size: plaintext_size,
@@ -66,7 +66,7 @@ impl EncryptedInputFile {
 
     /// Read and returns whole content of file (decrypted plaintext).
     pub async fn read(&self) -> Result<Bytes> {
-        let meta = self.metadata().await?;
+        let meta = self.metadata()?;
         let reader = self.reader().await?;
         reader.read(0..meta.size).await
     }
@@ -81,6 +81,7 @@ impl EncryptedInputFile {
         Ok(Box::new(decrypting))
     }
 
+    // A storage stat would hide truncation; require the original length from key metadata.
     fn encrypted_length(&self) -> Result<u64> {
         let length = self.key_metadata.file_length().ok_or_else(|| {
             Error::new(
@@ -133,14 +134,14 @@ impl EncryptedOutputFile {
         }
     }
 
-    /// Returns the file's key metadata, carrying the length of what was written.
-    ///
-    /// `file_length` is the encrypted size reported by [`FileWrite::close`], which readers
-    /// require to detect truncation. It is a parameter rather than a property of the output
-    /// file because the size is only known once the file is closed, so there is no way to
-    /// obtain key metadata that silently omits it.
-    pub fn key_metadata_with_length(&self, file_length: u64) -> StandardKeyMetadata {
-        self.key_metadata.clone().with_file_length(file_length)
+    /// Returns key metadata using the encrypted size returned by [`FileWrite::close`] or [`Self::write`].
+    pub fn key_metadata_with_saved_file_metadata(
+        &self,
+        file_metadata: &FileMetadata,
+    ) -> StandardKeyMetadata {
+        self.key_metadata
+            .clone()
+            .with_file_length(file_metadata.size)
     }
 
     /// Absolute path of the file.
@@ -214,7 +215,7 @@ mod tests {
 
         let input = EncryptedInputFile::new(
             fileio.new_input(path).unwrap(),
-            key_metadata().with_file_length(file_metadata.size),
+            output.key_metadata_with_saved_file_metadata(&file_metadata),
         );
         let content = input.read().await.unwrap();
         assert_eq!(&content[..], plaintext);
@@ -244,9 +245,9 @@ mod tests {
         // A missing path proves the size comes from the key metadata rather than a stat call.
         let input = EncryptedInputFile::new(
             fileio.new_input("memory:///does-not-exist").unwrap(),
-            key_metadata().with_file_length(file_metadata.size),
+            output.key_metadata_with_saved_file_metadata(&file_metadata),
         );
-        let meta = input.metadata().await.unwrap();
+        let meta = input.metadata().unwrap();
         assert_eq!(meta.size, plaintext.len() as u64);
     }
 
@@ -259,7 +260,7 @@ mod tests {
         let input = EncryptedInputFile::new(fileio.new_input(path).unwrap(), key_metadata());
 
         for err in [
-            input.metadata().await.err().unwrap(),
+            input.metadata().err().unwrap(),
             input.reader().await.err().unwrap(),
             input.read().await.unwrap_err(),
         ] {
@@ -286,7 +287,7 @@ mod tests {
                 key_metadata().with_file_length(length),
             );
             assert_eq!(
-                input.metadata().await.err().unwrap().kind(),
+                input.metadata().err().unwrap().kind(),
                 ErrorKind::DataInvalid
             );
             assert_eq!(
@@ -313,7 +314,7 @@ mod tests {
                 key_metadata().with_file_length(file_metadata.size + excess),
             );
 
-            let inflated_size = input.metadata().await.unwrap().size;
+            let inflated_size = input.metadata().unwrap().size;
             assert!(inflated_size > plaintext.len() as u64);
 
             assert_eq!(
@@ -352,7 +353,7 @@ mod tests {
             .unwrap();
 
         let input = EncryptedInputFile::new(fileio.new_input(path).unwrap(), metadata);
-        assert_eq!(input.metadata().await.unwrap().size, plaintext.len() as u64);
+        assert_eq!(input.metadata().unwrap().size, plaintext.len() as u64);
         let reader = input.reader().await.unwrap();
         assert_eq!(
             reader.read(0..u64::from(PLAIN_BLOCK_SIZE)).await.unwrap(),

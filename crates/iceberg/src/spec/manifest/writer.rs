@@ -28,7 +28,7 @@ use super::{
 };
 use crate::encryption::EncryptedOutputFile;
 use crate::error::Result;
-use crate::io::{FileWrite, OutputFile};
+use crate::io::{FileMetadata, FileWrite, OutputFile};
 use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
 use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2};
 use crate::spec::{
@@ -41,8 +41,7 @@ use crate::{Error, ErrorKind};
 /// with the actual snapshot ID before it is committed.
 const UNASSIGNED_SNAPSHOT_ID: i64 = -1;
 
-/// The file a manifest is written to, retained until close so that an encrypted manifest's key
-/// metadata can be stamped with the size the writer reports.
+/// Retains the output until close provides the size required by encrypted key metadata.
 pub(crate) enum ManifestOutput {
     Plain(OutputFile),
     Encrypted(EncryptedOutputFile),
@@ -56,13 +55,12 @@ impl ManifestOutput {
         }
     }
 
-    /// Encoded key metadata for a file of `file_length` bytes, or `None` when unencrypted.
-    fn encoded_key_metadata(&self, file_length: u64) -> Result<Option<Vec<u8>>> {
+    fn encoded_key_metadata(&self, file_metadata: &FileMetadata) -> Result<Option<Vec<u8>>> {
         match self {
             Self::Plain(_) => Ok(None),
             Self::Encrypted(output) => Ok(Some(
                 output
-                    .key_metadata_with_length(file_length)
+                    .key_metadata_with_saved_file_metadata(file_metadata)
                     .encode()?
                     .into_vec(),
             )),
@@ -499,10 +497,11 @@ impl ManifestWriter {
         let mut writer = self.output.writer().await?;
         writer.write(Bytes::from(content)).await?;
         let file_metadata = writer.close().await?;
-        let key_metadata = self.output.encoded_key_metadata(file_metadata.size)?;
+        let key_metadata = self.output.encoded_key_metadata(&file_metadata)?;
 
         Ok(ManifestFile {
             manifest_path: self.location,
+            // Manifest lengths are on-disk sizes, including encryption overhead.
             manifest_length: file_metadata.size.try_into()?,
             partition_spec_id: self.metadata.partition_spec.spec_id(),
             content: self.metadata.content,
@@ -824,9 +823,9 @@ mod tests {
         assert_eq!(manifest_file.content, ManifestContentType::Deletes);
 
         // Read back the manifest file
-        let actual_manifest =
-            Manifest::parse_avro(fs::read(&path).expect("read_file must succeed").as_slice())
-                .unwrap();
+        let bytes = fs::read(&path).expect("read_file must succeed");
+        assert_eq!(manifest_file.manifest_length, bytes.len() as i64);
+        let actual_manifest = Manifest::parse_avro(&bytes).unwrap();
 
         // Verify the content type is correctly preserved as Deletes
         assert_eq!(

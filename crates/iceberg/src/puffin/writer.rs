@@ -418,7 +418,7 @@ mod tests {
         );
 
         // Read back through the decrypting reader over plaintext offsets.
-        let key_metadata = key_metadata().with_file_length(file_metadata.size);
+        let key_metadata = encrypted_output.key_metadata_with_saved_file_metadata(&file_metadata);
         assert_eq!(key_metadata.file_length(), Some(raw.len() as u64));
         let encrypted_input =
             EncryptedInputFile::new(file_io.new_input(path).unwrap(), key_metadata);
