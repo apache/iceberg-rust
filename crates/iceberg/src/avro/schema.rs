@@ -1229,6 +1229,23 @@ mod tests {
     }
 
     #[test]
+    fn test_non_record_schema_error_interpolates_schema() {
+        let err = avro_schema_to_schema(&AvroSchema::String).unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            !err.message().contains("{avro_schema}"),
+            "message should interpolate the schema, got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().ends_with(&AvroSchema::String.to_string()),
+            "message should end with the rendered schema, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
     fn test_decimal_type() {
         let avro_schema = {
             AvroSchema::parse_str(
