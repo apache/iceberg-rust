@@ -316,6 +316,8 @@ impl<'a> TableScanBuilder<'a> {
             }
         };
 
+        // A current-state scan projects the current schema, so a column added since the
+        // last write is visible. Time travel projects the snapshot's own schema instead.
         let schema = match self.snapshot_id {
             Some(_) => snapshot.schema(self.table.metadata())?,
             None => self.table.metadata().current_schema().clone(),
@@ -1975,6 +1977,7 @@ pub mod tests {
             .as_struct()
             .fields()
             .to_vec();
+        // Beyond the fixture's ids 1..=8.
         fields.push(
             NestedField::optional(
                 100,
@@ -2019,9 +2022,10 @@ pub mod tests {
             .await
             .unwrap();
 
-        // Projected because the column is on the table, null because the data
-        // files predate it.
-        assert!(!batches.is_empty());
+        // The loop below is vacuous over an empty scan.
+        assert!(batches.iter().map(RecordBatch::num_rows).sum::<usize>() > 0);
+
+        // Projected because the column is on the table, null because the files predate it.
         for batch in &batches {
             let column = batch
                 .column_by_name("added_after_write")
@@ -2043,6 +2047,27 @@ pub mod tests {
             .build()
             .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(
+            error.to_string().contains("added_after_write not found"),
+            "expected a missing-column error, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_scan_of_current_state_selects_column_added_after_last_write() {
+        let table = with_column_added_after_last_write(&TableTestFixture::new().table);
+
+        // Against the snapshot's schema this fails outright, rather than reading as null.
+        let scan = table
+            .scan()
+            .select(["added_after_write"])
+            .build()
+            .expect("column added after the last write should be selectable");
+
+        assert_eq!(
+            scan.plan_context.as_ref().unwrap().field_ids.as_ref(),
+            &vec![100]
+        );
     }
 
     fn table_with_property(key: &str, value: &str) -> Table {
