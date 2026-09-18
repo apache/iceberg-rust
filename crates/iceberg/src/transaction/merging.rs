@@ -23,7 +23,7 @@
 //! [`SnapshotProducer`].
 
 use std::collections::{HashMap, HashSet};
-use std::ops::RangeFrom;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use uuid::Uuid;
 
@@ -104,7 +104,7 @@ impl ManifestFilterManager {
         manifests: Vec<ManifestFile>,
         snapshot_id: i64,
         commit_uuid: Uuid,
-        manifest_counter: &mut RangeFrom<u64>,
+        manifest_counter: &AtomicU64,
     ) -> Result<(Vec<ManifestFile>, SnapshotSummaryCollector)> {
         if self.deleted_file_paths.is_empty() {
             return Ok((manifests, SnapshotSummaryCollector::default()));
@@ -210,7 +210,7 @@ impl ManifestFilterManager {
                 "{}/{}-m{}.{}",
                 table.metadata().metadata_location()?,
                 commit_uuid,
-                manifest_counter.next().unwrap(),
+                manifest_counter.fetch_add(1, Ordering::Relaxed),
                 DataFileFormat::Avro,
             );
             let output_file = table.file_io().new_output(new_manifest_path)?;
@@ -274,6 +274,10 @@ pub(crate) struct MergingSnapshotProducer {
     filter_manager: ManifestFilterManager,
     commit_uuid: Uuid,
     data_sequence_number: Option<i64>,
+    /// Names the manifests this producer writes. It is never reset, so a
+    /// commit retry cannot overwrite a manifest an earlier attempt wrote
+    /// under the same commit uuid.
+    manifest_counter: AtomicU64,
 }
 
 impl MergingSnapshotProducer {
@@ -285,6 +289,7 @@ impl MergingSnapshotProducer {
             filter_manager: ManifestFilterManager::new(true),
             commit_uuid: Uuid::now_v7(),
             data_sequence_number: None,
+            manifest_counter: AtomicU64::new(0),
         }
     }
 
@@ -341,7 +346,6 @@ impl MergingSnapshotProducer {
         snapshot_producer.validate_added_data_files()?;
         snapshot_producer.validate_duplicate_files().await?;
         let snapshot_id = snapshot_producer.snapshot_id;
-        let mut manifest_counter: RangeFrom<u64> = (0..);
 
         // 1. Load existing manifests from the current snapshot.
         let existing_manifests = match table.metadata().current_snapshot() {
@@ -367,14 +371,14 @@ impl MergingSnapshotProducer {
                 existing_manifests,
                 snapshot_id,
                 self.commit_uuid,
-                &mut manifest_counter,
+                &self.manifest_counter,
             )
             .await?;
 
         // 3. Write a new manifest for added files.
         if !self.added_data_files.is_empty() {
             let added_manifest = self
-                .write_added_manifest(table, snapshot_id, &mut manifest_counter)
+                .write_added_manifest(table, snapshot_id, &self.manifest_counter)
                 .await?;
             filtered_manifests.push(added_manifest);
         }
@@ -392,13 +396,13 @@ impl MergingSnapshotProducer {
         &self,
         table: &Table,
         snapshot_id: i64,
-        manifest_counter: &mut RangeFrom<u64>,
+        manifest_counter: &AtomicU64,
     ) -> Result<ManifestFile> {
         let new_manifest_path = format!(
             "{}/{}-m{}.{}",
             table.metadata().metadata_location()?,
             self.commit_uuid,
-            manifest_counter.next().unwrap(),
+            manifest_counter.fetch_add(1, Ordering::Relaxed),
             DataFileFormat::Avro,
         );
         let output_file = table.file_io().new_output(new_manifest_path)?;

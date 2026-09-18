@@ -124,7 +124,9 @@ impl TransactionAction for RewriteFilesAction {
 
 #[cfg(test)]
 mod tests {
-    use crate::ErrorKind;
+    use std::sync::Arc;
+
+    use super::*;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{Literal, ManifestEntryRef, ManifestStatus, Operation, SnapshotRef, Struct};
     use crate::table::Table;
@@ -132,6 +134,7 @@ mod tests {
         append_files, make_data_file, make_v3_minimal_table_in_catalog,
     };
     use crate::transaction::{ApplyTransactionAction, Transaction};
+    use crate::{ErrorKind, TableUpdate};
 
     /// Read back the manifest entry for `path` from the manifests of `snapshot`.
     async fn find_entry(
@@ -434,6 +437,56 @@ mod tests {
             1,
             "empty manifest should be omitted, not kept"
         );
+    }
+
+    /// A retried commit must not reuse the manifest paths of the attempt
+    /// before it: the commit uuid is fixed, so only the counter separates them.
+    #[tokio::test]
+    async fn test_rewrite_files_writes_distinct_manifests_per_attempt() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
+        let f2 = make_data_file(&table, "test/2.parquet", 10, 100);
+        let table = append_files(&catalog, &table, vec![f1.clone(), f2.clone()]).await;
+
+        let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
+        let tx = Transaction::new(&table);
+        let action = Arc::new(tx.rewrite_files().delete_file(f1).add_file(merged));
+
+        let first = manifest_paths(&table, Arc::clone(&action)).await;
+        let second = manifest_paths(&table, action).await;
+
+        assert_eq!(first.len(), 2, "{first:?}");
+        assert_eq!(first.len(), second.len());
+        for path in &first {
+            assert!(!second.contains(path), "{path} was written twice");
+        }
+    }
+
+    /// Commit `action` against `table` and return the paths of the manifests
+    /// the resulting snapshot points at.
+    async fn manifest_paths(table: &Table, action: Arc<RewriteFilesAction>) -> Vec<String> {
+        let mut commit = action.commit(table).await.unwrap();
+        let snapshot = commit
+            .take_updates()
+            .into_iter()
+            .find_map(|update| match update {
+                TableUpdate::AddSnapshot { snapshot } => Some(snapshot),
+                _ => None,
+            })
+            .expect("commit should add a snapshot");
+
+        let manifest_list = table
+            .manifest_list_reader(&Arc::new(snapshot))
+            .load()
+            .await
+            .unwrap();
+        manifest_list
+            .entries()
+            .iter()
+            .map(|entry| entry.manifest_path.clone())
+            .collect()
     }
 
     /// An added file whose partition value does not fit the default spec is
