@@ -22,3 +22,19 @@ pub const iceberg_kms::aws::KMS_DATA_KEY_SPEC_DEFAULT: &str
 pub const iceberg_kms::aws::KMS_ENCRYPTION_ALGORITHM_SPEC: &str
 pub const iceberg_kms::aws::KMS_ENCRYPTION_ALGORITHM_SPEC_DEFAULT: &str
 pub const iceberg_kms::aws::KMS_ENDPOINT: &str
+pub struct iceberg_kms::ResolvingKmsClientFactory
+impl iceberg_kms::ResolvingKmsClientFactory
+pub fn iceberg_kms::ResolvingKmsClientFactory::new() -> Self
+pub fn iceberg_kms::ResolvingKmsClientFactory::with_aws_factory(self, factory: iceberg_kms::aws::AwsKmsClientFactory) -> Self
+impl core::clone::Clone for iceberg_kms::ResolvingKmsClientFactory
+pub fn iceberg_kms::ResolvingKmsClientFactory::clone(&self) -> iceberg_kms::ResolvingKmsClientFactory
+impl core::default::Default for iceberg_kms::ResolvingKmsClientFactory
+pub fn iceberg_kms::ResolvingKmsClientFactory::default() -> Self
+impl core::fmt::Debug for iceberg_kms::ResolvingKmsClientFactory
+pub fn iceberg_kms::ResolvingKmsClientFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::encryption::kms::factory::KmsClientFactory for iceberg_kms::ResolvingKmsClientFactory
+pub fn iceberg_kms::ResolvingKmsClientFactory::create_kms_client<'life0, 'life1, 'async_trait>(&'life0 self, properties: &'life1 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg::encryption::kms::client::KeyManagementClient>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub const iceberg_kms::ENCRYPTION_KMS_TYPE: &str
+pub const iceberg_kms::ENCRYPTION_KMS_TYPE_AWS: &str
+pub const iceberg_kms::ENCRYPTION_KMS_TYPE_AZURE: &str
+pub const iceberg_kms::ENCRYPTION_KMS_TYPE_GCP: &str

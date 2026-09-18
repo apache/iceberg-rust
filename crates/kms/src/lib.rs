@@ -18,10 +18,18 @@
 //! Key management service integrations for Apache Iceberg client-side encryption.
 //!
 //! Provider implementations are enabled through crate features. Enable `aws`
-//! to use the `aws` module.
+//! to use the `aws` module. [`ResolvingKmsClientFactory`] selects an enabled
+//! provider from the `encryption.kms-type` catalog property.
 
 #![deny(missing_docs)]
 
 /// AWS Key Management Service integration.
 #[cfg(feature = "aws")]
 pub mod aws;
+
+mod resolving;
+
+pub use resolving::{
+    ENCRYPTION_KMS_TYPE, ENCRYPTION_KMS_TYPE_AWS, ENCRYPTION_KMS_TYPE_AZURE,
+    ENCRYPTION_KMS_TYPE_GCP, ResolvingKmsClientFactory,
+};
