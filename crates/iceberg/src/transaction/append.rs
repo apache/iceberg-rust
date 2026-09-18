@@ -124,7 +124,7 @@ impl SnapshotProduceOperation for FastAppendOperation {
     }
 
     async fn existing_manifest(
-        &self,
+        &mut self,
         snapshot_produce: &SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestFile>> {
         let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
