@@ -451,13 +451,12 @@ impl<'a> SnapshotProducer<'a> {
             .file_io()
             .new_output(manifest_list_path.clone())?;
 
-        let (writer, key_metadata) = match self.table.encryption_manager() {
+        // The encrypted output is kept alive past close(), since its key metadata can only be
+        // stamped once the writer reports how many bytes it stored.
+        let (writer, encrypted_output) = match self.table.encryption_manager() {
             Some(em) => {
                 let encrypted_output = em.encrypt(raw_output);
-                (
-                    encrypted_output.writer().await?,
-                    Some(encrypted_output.key_metadata().clone()),
-                )
+                (encrypted_output.writer().await?, Some(encrypted_output))
             }
             None => (raw_output.writer().await?, None),
         };
@@ -493,18 +492,22 @@ impl<'a> SnapshotProducer<'a> {
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
         let writer_next_row_id = manifest_list_writer.next_row_id();
         let file_metadata = manifest_list_writer.close().await?;
-        let encryption_key_id = if let Some(key_metadata) = key_metadata {
-            Some(
-                self.table
-                    .encryption_manager()
-                    .expect("Encryption manager must be present when key metadata exists")
-                    .encrypt_manifest_list_key_metadata(
-                        &key_metadata.with_file_length(file_metadata.size),
+        let encryption_key_id = match encrypted_output {
+            Some(encrypted_output) => {
+                let em = self.table.encryption_manager().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Encryption manager missing for an encrypted manifest list",
+                    )
+                })?;
+                Some(
+                    em.encrypt_manifest_list_key_metadata(
+                        &encrypted_output.key_metadata_with_length(file_metadata.size),
                     )
                     .await?,
-            )
-        } else {
-            None
+                )
+            }
+            None => None,
         };
 
         let commit_ts = chrono::Utc::now().timestamp_millis();

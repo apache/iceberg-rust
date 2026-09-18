@@ -16,8 +16,6 @@
 // under the License.
 
 use std::cmp::min;
-use std::future::Future;
-use std::pin::Pin;
 
 use apache_avro::{Writer as AvroWriter, to_value};
 use bytes::Bytes;
@@ -28,7 +26,7 @@ use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
-use crate::encryption::{EncryptedOutputFile, StandardKeyMetadata};
+use crate::encryption::EncryptedOutputFile;
 use crate::error::Result;
 use crate::io::{FileWrite, OutputFile};
 use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
@@ -43,14 +41,40 @@ use crate::{Error, ErrorKind};
 /// with the actual snapshot ID before it is committed.
 const UNASSIGNED_SNAPSHOT_ID: i64 = -1;
 
-type WriterFuture = Pin<Box<dyn Future<Output = Result<Box<dyn FileWrite>>> + Send>>;
+/// The file a manifest is written to, retained until close so that an encrypted manifest's key
+/// metadata can be stamped with the size the writer reports.
+pub(crate) enum ManifestOutput {
+    Plain(OutputFile),
+    Encrypted(EncryptedOutputFile),
+}
+
+impl ManifestOutput {
+    async fn writer(&self) -> Result<Box<dyn FileWrite>> {
+        match self {
+            Self::Plain(output) => output.writer().await,
+            Self::Encrypted(output) => output.writer().await,
+        }
+    }
+
+    /// Encoded key metadata for a file of `file_length` bytes, or `None` when unencrypted.
+    fn encoded_key_metadata(&self, file_length: u64) -> Result<Option<Vec<u8>>> {
+        match self {
+            Self::Plain(_) => Ok(None),
+            Self::Encrypted(output) => Ok(Some(
+                output
+                    .key_metadata_with_length(file_length)
+                    .encode()?
+                    .into_vec(),
+            )),
+        }
+    }
+}
 
 /// The builder used to create a [`ManifestWriter`].
 pub struct ManifestWriterBuilder {
-    writer_future: WriterFuture,
+    output: ManifestOutput,
     location: String,
     snapshot_id: Option<i64>,
-    key_metadata: Option<StandardKeyMetadata>,
     schema: SchemaRef,
     partition_spec: PartitionSpec,
 }
@@ -65,10 +89,9 @@ impl ManifestWriterBuilder {
     ) -> Self {
         let location = output.location().to_owned();
         Self {
-            writer_future: Box::pin(async move { output.writer().await }),
+            output: ManifestOutput::Plain(output),
             location,
             snapshot_id,
-            key_metadata: None,
             schema,
             partition_spec,
         }
@@ -84,12 +107,10 @@ impl ManifestWriterBuilder {
         partition_spec: PartitionSpec,
     ) -> Result<Self> {
         let location = encrypted_output.location().to_owned();
-        let key_metadata = Some(encrypted_output.key_metadata().clone());
         Ok(Self {
-            writer_future: Box::pin(async move { encrypted_output.writer().await }),
+            output: ManifestOutput::Encrypted(encrypted_output),
             location,
             snapshot_id,
-            key_metadata,
             schema,
             partition_spec,
         })
@@ -104,14 +125,7 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V1)
             .content(ManifestContentType::Data)
             .build();
-        ManifestWriter::new(
-            self.writer_future,
-            self.location,
-            self.snapshot_id,
-            self.key_metadata,
-            metadata,
-            None,
-        )
+        ManifestWriter::new(self.output, self.location, self.snapshot_id, metadata, None)
     }
 
     /// Build a [`ManifestWriter`] for format version 2, data content.
@@ -124,14 +138,7 @@ impl ManifestWriterBuilder {
             .content(ManifestContentType::Data)
             .build();
 
-        ManifestWriter::new(
-            self.writer_future,
-            self.location,
-            self.snapshot_id,
-            self.key_metadata,
-            metadata,
-            None,
-        )
+        ManifestWriter::new(self.output, self.location, self.snapshot_id, metadata, None)
     }
 
     /// Build a [`ManifestWriter`] for format version 2, deletes content.
@@ -143,14 +150,7 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V2)
             .content(ManifestContentType::Deletes)
             .build();
-        ManifestWriter::new(
-            self.writer_future,
-            self.location,
-            self.snapshot_id,
-            self.key_metadata,
-            metadata,
-            None,
-        )
+        ManifestWriter::new(self.output, self.location, self.snapshot_id, metadata, None)
     }
 
     /// Build a [`ManifestWriter`] for format version 2, data content.
@@ -163,10 +163,9 @@ impl ManifestWriterBuilder {
             .content(ManifestContentType::Data)
             .build();
         ManifestWriter::new(
-            self.writer_future,
+            self.output,
             self.location,
             self.snapshot_id,
-            self.key_metadata,
             metadata,
             // First row id is assigned by the [`ManifestListWriter`] when the manifest
             // is added to the list.
@@ -183,20 +182,13 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V3)
             .content(ManifestContentType::Deletes)
             .build();
-        ManifestWriter::new(
-            self.writer_future,
-            self.location,
-            self.snapshot_id,
-            self.key_metadata,
-            metadata,
-            None,
-        )
+        ManifestWriter::new(self.output, self.location, self.snapshot_id, metadata, None)
     }
 }
 
 /// A manifest writer.
 pub struct ManifestWriter {
-    writer_future: WriterFuture,
+    output: ManifestOutput,
     location: String,
 
     snapshot_id: Option<i64>,
@@ -211,8 +203,6 @@ pub struct ManifestWriter {
 
     min_seq_num: Option<i64>,
 
-    key_metadata: Option<StandardKeyMetadata>,
-
     manifest_entries: Vec<ManifestEntry>,
 
     metadata: ManifestMetadata,
@@ -221,15 +211,14 @@ pub struct ManifestWriter {
 impl ManifestWriter {
     /// Create a new manifest writer.
     pub(crate) fn new(
-        writer_future: WriterFuture,
+        output: ManifestOutput,
         location: String,
         snapshot_id: Option<i64>,
-        key_metadata: Option<StandardKeyMetadata>,
         metadata: ManifestMetadata,
         first_row_id: Option<u64>,
     ) -> Self {
         Self {
-            writer_future,
+            output,
             location,
             snapshot_id,
             added_files: 0,
@@ -240,7 +229,6 @@ impl ManifestWriter {
             deleted_rows: 0,
             first_row_id,
             min_seq_num: None,
-            key_metadata,
             manifest_entries: Vec::new(),
             metadata,
         }
@@ -508,18 +496,10 @@ impl ManifestWriter {
         }
 
         let content = avro_writer.into_inner()?;
-        let mut writer = self.writer_future.await?;
+        let mut writer = self.output.writer().await?;
         writer.write(Bytes::from(content)).await?;
         let file_metadata = writer.close().await?;
-        let key_metadata = self
-            .key_metadata
-            .map(|metadata| {
-                metadata
-                    .with_file_length(file_metadata.size)
-                    .encode()
-                    .map(|bytes| bytes.into_vec())
-            })
-            .transpose()?;
+        let key_metadata = self.output.encoded_key_metadata(file_metadata.size)?;
 
         Ok(ManifestFile {
             manifest_path: self.location,

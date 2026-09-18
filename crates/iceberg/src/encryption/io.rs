@@ -133,9 +133,14 @@ impl EncryptedOutputFile {
         }
     }
 
-    /// Returns a reference to the file's key metadata.
-    pub fn key_metadata(&self) -> &StandardKeyMetadata {
-        &self.key_metadata
+    /// Returns the file's key metadata, carrying the length of what was written.
+    ///
+    /// `file_length` is the encrypted size reported by [`FileWrite::close`], which readers
+    /// require to detect truncation. It is a parameter rather than a property of the output
+    /// file because the size is only known once the file is closed, so there is no way to
+    /// obtain key metadata that silently omits it.
+    pub fn key_metadata_with_length(&self, file_length: u64) -> StandardKeyMetadata {
+        self.key_metadata.clone().with_file_length(file_length)
     }
 
     /// Absolute path of the file.
