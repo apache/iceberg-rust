@@ -26,8 +26,8 @@ use aws_sdk_kms::config::{Builder as KmsConfigBuilder, Credentials, Region};
 use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::{Error, ErrorKind, Result};
 
-use crate::client::AwsKeyManagementClient;
-use crate::config::{
+use super::client::AwsKeyManagementClient;
+use super::config::{
     AWS_ACCESS_KEY_ID, AWS_PROFILE_NAME, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
     AwsKmsConfig,
 };
@@ -148,7 +148,7 @@ mod tests {
     use iceberg::encryption::kms::KmsClientFactory;
 
     use super::*;
-    use crate::KMS_ENDPOINT;
+    use crate::aws::KMS_ENDPOINT;
 
     #[tokio::test]
     async fn test_create_client_with_injected_sdk_config() {

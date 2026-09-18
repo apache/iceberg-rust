@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! AWS Key Management Service integration for Apache Iceberg client-side encryption.
+//! AWS Key Management Service integration.
 //!
-//! This crate provides [`AwsKmsClientFactory`], which creates AWS-backed
-//! implementations of Iceberg's
+//! This module provides [`AwsKmsClientFactory`](crate::aws::AwsKmsClientFactory),
+//! which creates AWS-backed implementations of Iceberg's
 //! [`KeyManagementClient`](iceberg::encryption::KeyManagementClient). The factory can
 //! be supplied to any Iceberg catalog builder through
 //! [`CatalogBuilder::with_kms_client_factory`](iceberg::CatalogBuilder::with_kms_client_factory).
@@ -59,7 +59,7 @@
 //!
 //! use iceberg::CatalogBuilder;
 //! use iceberg_catalog_rest::RestCatalogBuilder;
-//! use iceberg_kms_aws::AwsKmsClientFactory;
+//! use iceberg_kms::aws::AwsKmsClientFactory;
 //!
 //! # async fn example() -> iceberg::Result<()> {
 //! let catalog = RestCatalogBuilder::default()
@@ -70,8 +70,6 @@
 //! # Ok(())
 //! # }
 //! ```
-
-#![deny(missing_docs)]
 
 mod client;
 mod config;

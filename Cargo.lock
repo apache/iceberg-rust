@@ -4111,7 +4111,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "iceberg-kms-aws"
+name = "iceberg-kms"
 version = "0.10.1"
 dependencies = [
  "async-trait",

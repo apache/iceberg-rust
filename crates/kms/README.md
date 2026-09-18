@@ -17,10 +17,22 @@
   ~ under the License.
 -->
 
-# Apache Iceberg AWS KMS
+# Apache Iceberg KMS
 
-This crate provides AWS Key Management Service support for Apache Iceberg
-client-side encryption.
+This crate provides key management service integrations for Apache Iceberg
+client-side encryption. Provider implementations are enabled through feature
+flags.
 
-See the [API documentation](https://docs.rs/iceberg-kms-aws/latest) for
-configuration and usage.
+| Provider                   | Feature flag |
+| -------------------------- | ------------ |
+| AWS Key Management Service | `aws`        |
+
+Add the crate with the feature for the provider you need:
+
+```toml
+[dependencies]
+iceberg-kms = { version = "x.y.z", features = ["aws"] }
+```
+
+See the [API documentation](https://docs.rs/iceberg-kms/latest) for
+provider-specific configuration and usage.

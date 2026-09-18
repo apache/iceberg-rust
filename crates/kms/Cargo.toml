@@ -18,24 +18,36 @@
 [package]
 edition = { workspace = true }
 homepage = { workspace = true }
-name = "iceberg-kms-aws"
+name = "iceberg-kms"
 publish = true
 readme = "README.md"
 rust-version = { workspace = true }
 version = { workspace = true }
 
 categories = ["database"]
-description = "AWS KMS support for Apache Iceberg client-side encryption"
-keywords = ["iceberg", "aws", "kms", "encryption"]
+description = "Key management service integrations for Apache Iceberg client-side encryption"
+keywords = ["iceberg", "kms", "encryption"]
 license = { workspace = true }
 repository = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+aws = [
+  "dep:async-trait",
+  "dep:aws-config",
+  "dep:aws-sdk-kms",
+  "dep:iceberg-property-macro",
+]
+default = []
+
 [dependencies]
-async-trait = { workspace = true }
-aws-config = { workspace = true }
-aws-sdk-kms = { workspace = true }
+async-trait = { workspace = true, optional = true }
+aws-config = { workspace = true, optional = true }
+aws-sdk-kms = { workspace = true, optional = true }
 iceberg = { workspace = true }
-iceberg-property-macro = { workspace = true }
+iceberg-property-macro = { workspace = true, optional = true }
 
 [dev-dependencies]
 aws-sdk-kms = { workspace = true, features = ["test-util"] }
