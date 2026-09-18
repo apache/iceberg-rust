@@ -30,9 +30,9 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::{
-    DataContentType, DataFile, DataFileFormat, FormatVersion, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestStatus, ManifestWriter, ManifestWriterBuilder, Operation, PartitionSpec,
-    SchemaRef, SnapshotSummaryCollector, Summary, update_snapshot_summaries,
+    DataFile, DataFileFormat, FormatVersion, ManifestContentType, ManifestEntry, ManifestFile,
+    ManifestStatus, ManifestWriter, ManifestWriterBuilder, Operation, PartitionSpec, SchemaRef,
+    SnapshotSummaryCollector, Summary, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -332,8 +332,14 @@ impl MergingSnapshotProducer {
         // Create the SnapshotProducer first so we can use its snapshot_id
         // for new manifests. This ensures the manifest list writer can
         // assign sequence numbers to manifests from this snapshot.
-        let snapshot_producer =
-            SnapshotProducer::new(table, self.commit_uuid, HashMap::new(), Vec::new());
+        let snapshot_producer = SnapshotProducer::new(
+            table,
+            self.commit_uuid,
+            HashMap::new(),
+            self.added_data_files.clone(),
+        );
+        snapshot_producer.validate_added_data_files()?;
+        snapshot_producer.validate_duplicate_files().await?;
         let snapshot_id = snapshot_producer.snapshot_id;
         let mut manifest_counter: RangeFrom<u64> = (0..);
 
@@ -410,12 +416,6 @@ impl MergingSnapshotProducer {
 
         let format_version = table.metadata().format_version();
         for data_file in &self.added_data_files {
-            if data_file.content_type() != DataContentType::Data {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Only data content type is allowed in added_data_files",
-                ));
-            }
             if let Some(sequence_number) = self.data_sequence_number {
                 writer.add_file(data_file.clone(), sequence_number)?;
                 continue;

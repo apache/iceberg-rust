@@ -126,7 +126,7 @@ impl TransactionAction for RewriteFilesAction {
 mod tests {
     use crate::ErrorKind;
     use crate::memory::tests::new_memory_catalog;
-    use crate::spec::{ManifestEntryRef, ManifestStatus, Operation, SnapshotRef};
+    use crate::spec::{Literal, ManifestEntryRef, ManifestStatus, Operation, SnapshotRef, Struct};
     use crate::table::Table;
     use crate::transaction::tests::{
         append_files, make_data_file, make_v3_minimal_table_in_catalog,
@@ -433,6 +433,55 @@ mod tests {
             manifest_list.entries().len(),
             1,
             "empty manifest should be omitted, not kept"
+        );
+    }
+
+    /// An added file whose partition value does not fit the default spec is
+    /// rejected before anything is written.
+    #[tokio::test]
+    async fn test_rewrite_files_rejects_incompatible_partition_value() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
+        let table = append_files(&catalog, &table, vec![f1.clone()]).await;
+
+        let mut merged = make_data_file(&table, "test/merged.parquet", 10, 100);
+        merged.partition = Struct::from_iter([Some(Literal::string("not-a-long"))]);
+        let tx = Transaction::new(&table);
+        let action = tx.rewrite_files().delete_file(f1).add_file(merged);
+        let tx = action.apply(tx).unwrap();
+        let err = tx.commit(&catalog).await.unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string()
+                .contains("Partition value is not compatible partition type"),
+            "{err}"
+        );
+    }
+
+    /// An added file that is already live in the current snapshot is rejected.
+    #[tokio::test]
+    async fn test_rewrite_files_rejects_already_referenced_file() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
+        let f2 = make_data_file(&table, "test/2.parquet", 10, 100);
+        let table = append_files(&catalog, &table, vec![f1.clone(), f2.clone()]).await;
+
+        let tx = Transaction::new(&table);
+        let action = tx.rewrite_files().delete_file(f1).add_file(f2);
+        let tx = action.apply(tx).unwrap();
+        let err = tx.commit(&catalog).await.unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string().contains(
+                "Cannot add files that are already referenced by table, files: test/2.parquet"
+            ),
+            "{err}"
         );
     }
 
