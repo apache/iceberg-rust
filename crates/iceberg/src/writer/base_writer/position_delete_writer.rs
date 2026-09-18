@@ -65,8 +65,8 @@ static POSITION_DELETE_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
 
 /// [`POSITION_DELETE_SCHEMA`] converted to Arrow, keeping the reserved field ids in each
 /// field's Parquet field-id metadata. This is the crate-internal Arrow projection of a
-/// position delete file, shared with the
-/// [`position_delete_input`](super::position_delete_input) builder.
+/// position delete file, shared with
+/// [`position_delete_batch`](super::position_delete_input::position_delete_batch).
 static POSITION_DELETE_ARROW_SCHEMA: Lazy<arrow_schema::SchemaRef> = Lazy::new(|| {
     Arc::new(
         crate::arrow::schema_to_arrow_schema(&POSITION_DELETE_SCHEMA)
@@ -85,8 +85,8 @@ pub fn position_delete_schema() -> SchemaRef {
 
 /// Returns the canonical Arrow schema of a position delete file.
 ///
-/// A cheap [`Arc`] clone of the shared static, used by the
-/// [`position_delete_input`](super::position_delete_input) builder.
+/// A cheap [`Arc`] clone of the shared static, used by
+/// [`position_delete_batch`](super::position_delete_input::position_delete_batch).
 pub(crate) fn position_delete_arrow_schema() -> arrow_schema::SchemaRef {
     POSITION_DELETE_ARROW_SCHEMA.clone()
 }

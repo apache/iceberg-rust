@@ -3343,21 +3343,7 @@ pub fn iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteWrite
 impl core::fmt::Debug for iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteWriterConfig
 pub fn iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteWriterConfig::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub mod iceberg::writer::base_writer::position_delete_input
-pub struct iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder
-impl iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder
-pub fn iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder::build(self) -> iceberg::Result<arrow_array::record_batch::RecordBatch>
-pub fn iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder::extend<S, I>(&mut self, rows: I) -> &mut Self where S: core::convert::Into<alloc::string::String>, I: core::iter::traits::collect::IntoIterator<Item = (S, i64)>
-pub fn iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder::is_empty(&self) -> bool
-pub fn iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder::len(&self) -> usize
-pub fn iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder::new() -> Self
-pub fn iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder::push(&mut self, path: impl core::convert::Into<alloc::string::String>, pos: i64) -> &mut Self
-pub fn iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder::with_capacity(n: usize) -> Self
-impl core::clone::Clone for iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder
-pub fn iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder::clone(&self) -> iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder
-impl core::default::Default for iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder
-pub fn iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder::default() -> iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder
-impl core::fmt::Debug for iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder
-pub fn iceberg::writer::base_writer::position_delete_input::PositionDeleteInputBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn iceberg::writer::base_writer::position_delete_input::position_delete_batch<S, I>(rows: I) -> iceberg::Result<arrow_array::record_batch::RecordBatch> where S: core::convert::Into<alloc::string::String>, I: core::iter::traits::collect::IntoIterator<Item = (S, i64)>
 pub mod iceberg::writer::base_writer::position_delete_writer
 pub struct iceberg::writer::base_writer::position_delete_writer::PositionDeleteFileWriter<B: iceberg::writer::file_writer::FileWriterBuilder, L: iceberg::writer::file_writer::location_generator::LocationGenerator, F: iceberg::writer::file_writer::location_generator::FileNameGenerator>
 impl<B, L, F> iceberg::writer::IcebergWriter for iceberg::writer::base_writer::position_delete_writer::PositionDeleteFileWriter<B, L, F> where B: iceberg::writer::file_writer::FileWriterBuilder, L: iceberg::writer::file_writer::location_generator::LocationGenerator, F: iceberg::writer::file_writer::location_generator::FileNameGenerator
