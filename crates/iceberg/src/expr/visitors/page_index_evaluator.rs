@@ -28,6 +28,7 @@ use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
+use crate::spec::decimal_utils::i128_from_be_bytes;
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, Schema};
 use crate::{Error, ErrorKind, Result};
 
@@ -346,18 +347,10 @@ impl<'a> PageIndexEvaluator<'a> {
                 .zip(row_counts.iter())
                 .map(|((i, (min, max)), &row_count)| {
                     predicate(
-                        min.map(|val| {
-                            Datum::new(
-                                field_type.clone(),
-                                PrimitiveLiteral::String(String::from_utf8(val.to_vec()).unwrap()),
-                            )
-                        }),
-                        max.map(|val| {
-                            Datum::new(
-                                field_type.clone(),
-                                PrimitiveLiteral::String(String::from_utf8(val.to_vec()).unwrap()),
-                            )
-                        }),
+                        min.map(|val| Self::byte_array_bound_to_datum(field_type, val))
+                            .transpose()?,
+                        max.map(|val| Self::byte_array_bound_to_datum(field_type, val))
+                            .transpose()?,
                         PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
                     )
                 })
@@ -377,6 +370,40 @@ impl<'a> PageIndexEvaluator<'a> {
         };
 
         Ok(Some(result?))
+    }
+
+    /// Converts a `BYTE_ARRAY` page bound into a [`Datum`] according to the
+    /// field's primitive type. Parquet stores Iceberg `string` and `binary`
+    /// bounds as `BYTE_ARRAY`, along with `decimal` bounds from non-standard
+    /// writers (the spec maps `decimal(P > 18)` to `fixed_len_byte_array`).
+    fn byte_array_bound_to_datum(field_type: &PrimitiveType, bytes: &[u8]) -> Result<Datum> {
+        match field_type {
+            PrimitiveType::String => {
+                let value = std::str::from_utf8(bytes).map_err(|err| {
+                    Error::new(ErrorKind::DataInvalid, "Invalid UTF-8 in string page bound")
+                        .with_source(err)
+                })?;
+                Ok(Datum::string(value))
+            }
+            PrimitiveType::Binary => Ok(Datum::binary(bytes.to_vec())),
+            PrimitiveType::Decimal { .. } => {
+                // BYTE_ARRAY decimals are variable-length signed big-endian.
+                let unscaled = i128_from_be_bytes(bytes).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid decimal page bound: too many bytes (> 16): {bytes:?}"),
+                    )
+                })?;
+                Ok(Datum::new(
+                    field_type.clone(),
+                    PrimitiveLiteral::Int128(unscaled),
+                ))
+            }
+            _ => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Unsupported primitive type for BYTE_ARRAY page bound: {field_type}"),
+            )),
+        }
     }
 
     fn visit_inequality(
@@ -779,7 +806,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow_array::{ArrayRef, Float32Array, RecordBatch, StringArray};
+    use arrow_array::{ArrayRef, Float32Array, LargeBinaryArray, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use parquet::arrow::ArrowWriter;
     use parquet::arrow::arrow_reader::{
@@ -792,7 +819,7 @@ mod tests {
 
     use super::PageIndexEvaluator;
     use crate::expr::{Bind, Reference};
-    use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
+    use crate::spec::{Datum, NestedField, PrimitiveLiteral, PrimitiveType, Schema, Type};
     use crate::{ErrorKind, Result};
 
     /// Helper function to create a test parquet file with page indexes
@@ -881,6 +908,49 @@ mod tests {
 
         // Write rows one at a time to give the writer a chance to split into pages
         for batch in &batches {
+            for i in 0..batch.num_rows() {
+                writer.write(&batch.slice(i, 1)).unwrap();
+            }
+        }
+
+        writer.close().unwrap();
+
+        let file = temp_file.reopen().unwrap();
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+        let metadata = reader.metadata().clone();
+
+        Ok((metadata, temp_file))
+    }
+
+    /// Creates a single-column parquet file whose `col_binary` page bounds hold
+    /// non-UTF-8 bytes, backing the binary path through `BYTE_ARRAY` column
+    /// indexes. Page 0 is `[0x01]`, page 1 is `[0xff, 0x00]`.
+    fn create_binary_parquet_file() -> Result<(Arc<ParquetMetaData>, NamedTempFile)> {
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "col_binary",
+            DataType::LargeBinary,
+            true,
+        )]));
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let file = temp_file.reopen().unwrap();
+
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(1024)
+            .set_write_batch_size(512)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+
+        // Each page holds 1024 rows of a single value, one page per byte pattern.
+        let pages: [&[u8]; 2] = [&[0x01], &[0xff, 0x00]];
+
+        for value in pages {
+            let array = Arc::new(LargeBinaryArray::from_iter_values(std::iter::repeat_n(
+                value, 1024,
+            ))) as ArrayRef;
+            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![array]).unwrap();
             for i in 0..batch.num_rows() {
                 writer.write(&batch.slice(i, 1)).unwrap();
             }
@@ -1183,6 +1253,73 @@ mod tests {
         assert_eq!(result, expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn eval_inequality_prunes_binary_pages_with_non_utf8_bounds() -> Result<()> {
+        let (metadata, _temp_file) = create_binary_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_fields([Arc::new(NestedField::new(
+                    1,
+                    "col_binary",
+                    Type::Primitive(PrimitiveType::Binary),
+                    true,
+                ))])
+                .build()?,
+        );
+        let field_id_map = HashMap::from_iter([(1, 0)]);
+
+        // Page 0 bounds are [0x01], page 1 bounds are [0xff, 0x00]; only page 1
+        // exceeds [0x80]. Decoding [0xff, 0x00] as UTF-8 would panic.
+        let filter = Reference::new("col_binary")
+            .greater_than(Datum::binary(vec![0x80u8]))
+            .bind(iceberg_schema.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            row_group_metadata,
+            &field_id_map,
+            iceberg_schema.as_ref(),
+        )?;
+
+        let expected = vec![RowSelector::skip(1024), RowSelector::select(1024)];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn byte_array_bound_decodes_variable_length_decimals() -> Result<()> {
+        let decimal = PrimitiveType::Decimal {
+            precision: 10,
+            scale: 2,
+        };
+
+        // Short big-endian bounds: [0x01] = 1, [0xff] = -1 (two's complement).
+        assert_eq!(
+            PageIndexEvaluator::byte_array_bound_to_datum(&decimal, &[0x01])?,
+            Datum::new(decimal.clone(), PrimitiveLiteral::Int128(1)),
+        );
+        assert_eq!(
+            PageIndexEvaluator::byte_array_bound_to_datum(&decimal, &[0xff])?,
+            Datum::new(decimal.clone(), PrimitiveLiteral::Int128(-1)),
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn byte_array_bound_errors_on_invalid_utf8_string() {
+        let err = PageIndexEvaluator::byte_array_bound_to_datum(&PrimitiveType::String, &[0xff])
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
     #[test]
