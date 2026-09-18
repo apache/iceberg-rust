@@ -273,7 +273,7 @@ mod tests {
     use crate::table::Table;
     use crate::transaction::tests::{make_v2_minimal_table, make_v3_minimal_table_in_catalog};
     use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction, TransactionAction};
-    use crate::{TableRequirement, TableUpdate};
+    use crate::{ErrorKind, TableRequirement, TableUpdate};
 
     fn test_data_file(path: &str, partition_spec_id: i32) -> DataFile {
         DataFileBuilder::default()
@@ -320,7 +320,13 @@ mod tests {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
         let action = tx.overwrite().add_data_files(vec![]);
-        assert!(Arc::new(action).commit(&table).await.is_err());
+        let err = Arc::new(action).commit(&table).await.err().unwrap();
+        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+        assert!(
+            err.to_string()
+                .contains("No added data files, deleted data files, or added snapshot properties"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
