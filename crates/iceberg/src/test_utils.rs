@@ -130,9 +130,9 @@ pub(crate) fn encode_dv_blob(positions: impl IntoIterator<Item = u64>) -> Vec<u8
     for pos in positions {
         bitmap.insert(pos);
     }
-    let mut vector = Vec::new();
-    bitmap.serialize_into(&mut vector).unwrap();
-    crate::delete_vector::frame_dv_blob(&vector)
+    crate::delete_vector::DeleteVector::new(bitmap)
+        .serialize()
+        .expect("encoding a deletion vector for tests must not fail")
 }
 
 /// Build a table backed by the V3 encryption fixture and an in-memory KMS,

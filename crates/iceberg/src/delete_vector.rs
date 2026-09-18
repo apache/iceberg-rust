@@ -122,6 +122,52 @@ impl DeleteVector {
 
         Ok(DeleteVector { inner })
     }
+
+    /// Serializes this `DeleteVector` into a `deletion-vector-v1` Puffin blob that
+    /// [`DeleteVector::deserialize`] reads back, conforming to the Iceberg Puffin
+    /// `deletion-vector-v1` layout:
+    ///
+    /// ```text
+    /// [length: u32 big-endian][magic: D1 D3 39 64][vector][crc: u32 big-endian]
+    /// ```
+    ///
+    /// `length` counts the magic and vector bytes (not itself or the CRC). The CRC-32 is computed
+    /// over the magic and vector. `vector` is the roaring bitmap in the portable 64-bit format: a
+    /// directory of 32-bit key / 32-bit roaring bitmap pairs ordered by unsigned comparison of the
+    /// keys, one bitmap per key. `roaring`'s `RoaringTreemap::serialize_into` emits exactly that
+    /// directory (a `u64` little-endian count followed by ascending `u32`-keyed bitmaps), which the
+    /// round-trip tests verify against [`decode_roaring_directory`].
+    ///
+    /// The roaring vector is written as-is, not run-length-encoded, using sparse-key encoding: only
+    /// the non-empty 32-bit containers are emitted. For the same logical set of positions these
+    /// bytes therefore need not match Iceberg-Java's `BitmapPositionDeleteIndex` output, which
+    /// run-optimizes the bitmap and writes dense keys. Both encodings are `deletion-vector-v1`
+    /// spec-conformant and decode to the same positions, so each side reads back what the other
+    /// writes. Callers that want size-optimal, Java-like blobs should `optimize()` the underlying
+    /// roaring bitmap (`RoaringTreemap::optimize`) before serializing.
+    ///
+    /// This produces the raw blob only; wrapping it in a Puffin `Blob` with the associated
+    /// snapshot and sequence-number properties is handled separately.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::DataInvalid`] if the framed body (the magic plus the vector) would
+    /// exceed `u32::MAX` bytes, since the `deletion-vector-v1` length prefix is a `u32`; reaching
+    /// this requires a deletion vector of roughly 4 GiB, far larger than any realistic set of row
+    /// positions. Returns [`ErrorKind::Unexpected`] if writing the roaring treemap into the
+    /// in-memory buffer fails, which does not happen under Rust's allocator model (an allocation
+    /// failure aborts rather than returning an error); it guards only against a hypothetical future
+    /// change to `roaring`'s API that would make `serialize_into` fallible for an in-memory `Vec`.
+    // Nothing in non-test crate code calls this yet (the delete-vector write path wires it in
+    // later), and `delete_vector` is a private module, so it otherwise reads as dead code.
+    #[allow(unused)]
+    pub fn serialize(&self) -> Result<Vec<u8>> {
+        let mut vector = Vec::with_capacity(self.inner.serialized_size());
+        self.inner.serialize_into(&mut vector).map_err(|e| {
+            Error::new(ErrorKind::Unexpected, "failed to serialize roaring treemap").with_source(e)
+        })?;
+        frame_dv_blob(&vector)
+    }
 }
 
 fn verify_length_prefix(mut prefix: &[u8], body: &[u8]) -> Result<()> {
@@ -309,20 +355,26 @@ impl BitOrAssign for DeleteVector {
     }
 }
 
-// Reproduces Iceberg-Java's `deletion-vector-v1` framing so tests can round-trip through
-// `deserialize` without a Java writer, and so other test modules can build blob fixtures.
-// Cross-implementation golden fixtures produced by Iceberg-Java are tracked separately; this
-// only checks that our decode matches our encode.
-#[cfg(test)]
-pub(crate) fn frame_dv_blob(vector: &[u8]) -> Vec<u8> {
+// The single implementation of the `deletion-vector-v1` framing: it prepends the big-endian
+// length prefix and magic, appends the big-endian CRC-32 over the magic and vector, and is shared
+// by `serialize` and by the tests that craft raw roaring directories `serialize` can never emit.
+// Only reachable through `serialize` (dead in non-test builds) and the tests, hence `allow(unused)`.
+#[allow(unused)]
+fn frame_dv_blob(vector: &[u8]) -> Result<Vec<u8>> {
     let body_len = DV_MAGIC_BYTES + vector.len();
     let mut blob = Vec::with_capacity(DV_LENGTH_PREFIX_BYTES + body_len + DV_CRC_BYTES);
-    blob.extend_from_slice(&(body_len as u32).to_be_bytes());
+    let body_len = u32::try_from(body_len).map_err(|_| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            "deletion-vector-v1 body length exceeds u32::MAX",
+        )
+    })?;
+    blob.extend_from_slice(&body_len.to_be_bytes());
     blob.extend_from_slice(&DV_MAGIC);
     blob.extend_from_slice(vector);
     let crc = crc32fast::hash(&blob[DV_LENGTH_PREFIX_BYTES..]);
     blob.extend_from_slice(&crc.to_be_bytes());
-    blob
+    Ok(blob)
 }
 
 #[cfg(test)]
@@ -382,12 +434,6 @@ mod tests {
         assert!(res.is_err());
     }
 
-    fn encode_dv_blob(dv: &DeleteVector) -> Vec<u8> {
-        let mut vector = Vec::with_capacity(dv.inner.serialized_size());
-        dv.inner.serialize_into(&mut vector).unwrap();
-        frame_dv_blob(&vector)
-    }
-
     fn dv_of(positions: impl IntoIterator<Item = u64>) -> DeleteVector {
         let mut dv = DeleteVector::default();
         for pos in positions {
@@ -402,41 +448,123 @@ mod tests {
         positions
     }
 
-    #[test]
-    fn test_deserialize_roundtrip_empty() {
-        let blob = encode_dv_blob(&DeleteVector::default());
-        assert_eq!(DeleteVector::deserialize(&blob).unwrap().len(), 0);
+    // Serializes `dv`, asserts the blob carries well-formed `deletion-vector-v1` framing, and that
+    // decoding it recovers the same set of positions. This is the round-trip property:
+    // `deserialize(serialize(dv))` yields the same positions as `dv`.
+    fn assert_roundtrips(dv: &DeleteVector) {
+        let blob = dv.serialize().unwrap();
+
+        // The magic sits immediately after the 4-byte length prefix.
+        assert_eq!(
+            &blob[DV_LENGTH_PREFIX_BYTES..DV_LENGTH_PREFIX_BYTES + DV_MAGIC_BYTES],
+            &DV_MAGIC,
+            "magic must follow the length prefix"
+        );
+        // The length prefix counts the magic and vector, i.e. everything but itself and the CRC.
+        let declared = u32::from_be_bytes(blob[..DV_LENGTH_PREFIX_BYTES].try_into().unwrap());
+        assert_eq!(
+            declared as usize,
+            blob.len() - DV_LENGTH_PREFIX_BYTES - DV_CRC_BYTES,
+            "length prefix must cover the magic and vector"
+        );
+
+        // Decoding validates the CRC and reconstructs the vector.
+        let decoded = DeleteVector::deserialize(&blob).expect("serialized blob must decode");
+        assert_eq!(decoded.len(), dv.len());
+        assert_eq!(sorted(&decoded), sorted(dv));
     }
 
     #[test]
-    fn test_deserialize_roundtrip_small() {
-        let positions = [0u64, 5, 100, 1000];
-        let dv = DeleteVector::deserialize(&encode_dv_blob(&dv_of(positions))).unwrap();
-        assert_eq!(sorted(&dv), positions);
+    fn test_serialize_roundtrip_empty() {
+        assert_roundtrips(&DeleteVector::default());
     }
 
     #[test]
-    fn test_deserialize_roundtrip_spanning_64bit_keys() {
-        let positions = [1u64, 1 << 33, (1 << 33) + 5, 1 << 34];
-        let dv = DeleteVector::deserialize(&encode_dv_blob(&dv_of(positions))).unwrap();
-        assert_eq!(sorted(&dv), positions);
+    fn test_serialize_roundtrip_single_position() {
+        assert_roundtrips(&dv_of([42]));
+    }
+
+    #[test]
+    fn test_serialize_roundtrip_small() {
+        assert_roundtrips(&dv_of([0u64, 5, 100, 1000]));
+    }
+
+    // Many positions within a single 2^32 container, so the directory holds exactly one bitmap.
+    #[test]
+    fn test_serialize_roundtrip_many_in_one_container() {
+        assert_roundtrips(&dv_of((0..5_000).map(|i| i * 3)));
+    }
+
+    // Positions spanning multiple 2^32 containers, so the directory holds several keyed bitmaps
+    // that must be emitted in ascending key order.
+    #[test]
+    fn test_serialize_roundtrip_spanning_64bit_keys() {
+        assert_roundtrips(&dv_of([1u64, (1 << 32) + 5, (1 << 33) + 9]));
     }
 
     // Java run-optimizes every deletion vector before writing, so real blobs carry RUN
-    // containers, which use the SERIAL_COOKIE roaring layout. Force that layout so decode
+    // containers, which use the SERIAL_COOKIE roaring layout. Force that layout so the round trip
     // exercises the run-container path rather than only array and bitmap containers.
     #[test]
-    fn test_deserialize_roundtrip_run_optimized() {
+    fn test_serialize_roundtrip_run_optimized_dense_range() {
         let mut dv = dv_of(0..10_000);
         assert!(
             dv.inner.optimize(),
             "expected a dense range to run-length encode"
         );
-        let decoded = DeleteVector::deserialize(&encode_dv_blob(&dv)).unwrap();
-        assert_eq!(decoded.len(), 10_000);
-        let positions = sorted(&decoded);
-        assert_eq!(positions.first(), Some(&0));
-        assert_eq!(positions.last(), Some(&9_999));
+        assert_roundtrips(&dv);
+    }
+
+    // Spells out the `deletion-vector-v1` framing with literal offsets and magic bytes, guarding
+    // against a drift in the layout that a round trip through our own decoder could mask.
+    #[test]
+    fn test_serialize_golden_framing() {
+        let blob = dv_of([1u64, 2, 3]).serialize().unwrap();
+
+        assert_eq!(&blob[4..8], &[0xD1, 0xD3, 0x39, 0x64]);
+        let declared = u32::from_be_bytes(blob[..4].try_into().unwrap());
+        // Everything but the length prefix and the trailing CRC is covered by `declared`.
+        let framing_overhead = DV_LENGTH_PREFIX_BYTES + DV_CRC_BYTES;
+        assert_eq!(declared as usize, blob.len() - framing_overhead);
+        // A successful decode confirms the trailing CRC covers the magic and vector.
+        DeleteVector::deserialize(&blob).expect("golden blob must decode");
+    }
+
+    // Self-consistent byte stability: re-serializing a decoded blob reproduces the original bytes.
+    // This catches any container-type normalization introduced on the round trip (e.g. array,
+    // bitmap, or run containers being re-chosen on decode) without needing external bytes. The last
+    // case is run-optimized so the RUN-container layout is exercised too.
+    //
+    // A cross-implementation golden fixture produced by Iceberg-Java (asserting byte-level interop
+    // against `BitmapPositionDeleteIndex`) is deliberately deferred to the PR that wires `serialize`
+    // into the Puffin writer (the DeltaWriter #2218 series); we do not fabricate Java bytes here.
+    #[test]
+    fn test_serialize_deserialize_byte_stable() {
+        let mut run_optimized = dv_of(0..10_000);
+        assert!(
+            run_optimized.inner.optimize(),
+            "expected a dense range to run-length encode"
+        );
+
+        let cases = [
+            DeleteVector::default(),
+            dv_of([42]),
+            dv_of([0u64, 5, 100, 1000]),
+            dv_of([1u64, (1 << 32) + 5, (1 << 33) + 9]),
+            run_optimized,
+        ];
+
+        for dv in &cases {
+            let blob = dv.serialize().unwrap();
+            let reserialized = DeleteVector::deserialize(&blob)
+                .expect("serialized blob must decode")
+                .serialize()
+                .unwrap();
+            assert_eq!(
+                blob, reserialized,
+                "re-serializing a decoded blob must reproduce the original bytes"
+            );
+        }
     }
 
     #[test]
@@ -447,7 +575,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_rejects_bad_magic() {
-        let mut blob = encode_dv_blob(&dv_of([1]));
+        let mut blob = dv_of([1]).serialize().unwrap();
         blob[DV_LENGTH_PREFIX_BYTES] ^= 0xFF;
         // Recompute the CRC so the magic check, not the CRC check, is what fails.
         let end = blob.len() - DV_CRC_BYTES;
@@ -459,7 +587,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_rejects_bad_crc() {
-        let mut blob = encode_dv_blob(&dv_of([1, 2, 3]));
+        let mut blob = dv_of([1, 2, 3]).serialize().unwrap();
         let end = blob.len() - DV_CRC_BYTES;
         blob[end] ^= 0xFF;
         let err = DeleteVector::deserialize(&blob).unwrap_err();
@@ -468,7 +596,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_rejects_length_prefix_mismatch() {
-        let mut blob = encode_dv_blob(&dv_of([1]));
+        let mut blob = dv_of([1]).serialize().unwrap();
         let declared = u32::from_be_bytes(blob[..DV_LENGTH_PREFIX_BYTES].try_into().unwrap());
         blob[..DV_LENGTH_PREFIX_BYTES].copy_from_slice(&(declared + 1).to_be_bytes());
         let err = DeleteVector::deserialize(&blob).unwrap_err();
@@ -476,7 +604,7 @@ mod tests {
     }
 
     // Crafts a raw roaring treemap directory (bitmap count header + key/bitmap entries) so tests
-    // can exercise key-ordering violations that `dv_of`/`encode_dv_blob` can never produce, since
+    // can exercise key-ordering violations that `dv_of`/`serialize` can never produce, since
     // `DeleteVector::insert` always keeps keys unique and ascending.
     fn raw_roaring_vector(entries: &[(u32, &[u32])]) -> Vec<u8> {
         let mut vector = Vec::new();
@@ -498,7 +626,7 @@ mod tests {
     #[test]
     fn test_deserialize_rejects_duplicate_keys() {
         let vector = raw_roaring_vector(&[(5, &[1]), (5, &[2])]);
-        let err = DeleteVector::deserialize(&frame_dv_blob(&vector)).unwrap_err();
+        let err = DeleteVector::deserialize(&frame_dv_blob(&vector).unwrap()).unwrap_err();
         assert!(err.message().contains("unsigned comparison"), "got: {err}");
     }
 
@@ -508,7 +636,7 @@ mod tests {
     #[test]
     fn test_deserialize_rejects_out_of_order_keys() {
         let vector = raw_roaring_vector(&[(5, &[1]), (3, &[2])]);
-        let err = DeleteVector::deserialize(&frame_dv_blob(&vector)).unwrap_err();
+        let err = DeleteVector::deserialize(&frame_dv_blob(&vector).unwrap()).unwrap_err();
         assert!(err.message().contains("unsigned comparison"), "got: {err}");
     }
 
@@ -518,7 +646,7 @@ mod tests {
     #[test]
     fn test_deserialize_rejects_bitmap_count_overflow() {
         let vector = (u32::MAX as u64 + 1).to_le_bytes().to_vec();
-        let err = DeleteVector::deserialize(&frame_dv_blob(&vector)).unwrap_err();
+        let err = DeleteVector::deserialize(&frame_dv_blob(&vector).unwrap()).unwrap_err();
         assert!(err.message().contains("exceeds the"), "got: {err}");
     }
 }
