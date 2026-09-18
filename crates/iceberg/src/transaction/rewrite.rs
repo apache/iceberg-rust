@@ -120,9 +120,10 @@ impl RewriteFilesAction {
     /// fails closed, because a rewritten file carries the deletes of the files
     /// it replaces only if nothing was deleted from them in the meantime.
     async fn validate_no_new_deletes(&self, table: &Table) -> Result<()> {
-        let (Some(starting_snapshot_id), Some(current_snapshot)) =
-            (self.starting_snapshot_id, table.metadata().current_snapshot())
-        else {
+        let (Some(starting_snapshot_id), Some(current_snapshot)) = (
+            self.starting_snapshot_id,
+            table.metadata().current_snapshot(),
+        ) else {
             return Ok(());
         };
         let starting_sequence_number = table
@@ -171,13 +172,12 @@ mod tests {
         ManifestStatus, ManifestWriterBuilder, Operation, SnapshotRef, Struct,
     };
     use crate::table::Table;
-    use crate::Catalog;
     use crate::transaction::tests::{
         append_files, make_data_file, make_v2_minimal_table_in_catalog,
         make_v3_minimal_table_in_catalog,
     };
     use crate::transaction::{ApplyTransactionAction, Transaction};
-    use crate::{ErrorKind, TableUpdate};
+    use crate::{Catalog, ErrorKind, TableUpdate};
 
     /// Read back the manifest entry for `path` from the manifests of `snapshot`.
     async fn find_entry(
@@ -678,8 +678,9 @@ mod tests {
         };
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(
-            err.to_string()
-                .contains(&format!("delete manifest {delete_manifest_path} was added after")),
+            err.to_string().contains(&format!(
+                "delete manifest {delete_manifest_path} was added after"
+            )),
             "{err}"
         );
     }
