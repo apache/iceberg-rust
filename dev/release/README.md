@@ -36,10 +36,11 @@ This creates:
 
 The license header check runs against the generated source archive, not the live Git worktree. The optional SVN upload runs after local artifact verification and before RC tag creation. The signed RC tag is created as the final release step, then the script prints a draft VOTE email for `dev@iceberg.apache.org`. The script logs every step before it runs and after it succeeds. If a step fails, it prints the failed step and stops.
 
+The script always archives and tags `HEAD`, so check out the exact commit to release before running it.
+
 Common options:
 
 ```shell
-dev/release/create_rc.sh 0.9.1 2 --release_ref <commit-ish>
 dev/release/create_rc.sh 0.9.1 2 --create_rc_tag 0 --sign 0
 dev/release/create_rc.sh 0.9.1 2 --upload_svn 1
 dev/release/create_rc.sh 0.9.1 2 --check_headers 0 --check_deps 0 --check_publish 0
@@ -47,7 +48,6 @@ dev/release/create_rc.sh 0.9.1 2 --check_headers 0 --check_deps 0 --check_publis
 
 Defaults:
 
-- `--release_ref HEAD`: git commit-ish to archive and tag.
 - `--dist_dir dist`: artifact output root.
 - `--create_rc_tag 1`: create the signed annotated RC tag as the final release step.
 - `--check_headers 1`: check Apache license headers against the source archive.

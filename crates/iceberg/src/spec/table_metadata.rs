@@ -35,7 +35,7 @@ pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataB
 use super::{
     DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, Schema, SchemaId,
     SchemaRef, SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
-    TableProperties,
+    TableProperties, Transform,
 };
 use crate::catalog::{METADATA_FOLDER_NAME, MetadataLocation};
 use crate::compression::CompressionCodec;
@@ -558,8 +558,23 @@ impl TableMetadata {
         Ok(self)
     }
 
-    /// If the default partition spec is not present in specs, add it
+    /// Validate active default-spec sources and add the spec if it is not present.
     fn try_normalize_partition_spec(&mut self) -> Result<()> {
+        for field in self.default_spec.fields() {
+            // Historical specs may reference dropped columns, but active default-spec
+            // fields need a source for new writes. Void fields do not read their source.
+            if field.transform != Transform::Void
+                && self.current_schema().field_by_id(field.source_id).is_none()
+            {
+                return Err(invalid_data!(
+                    "Default partition spec {} references missing source field {} in current schema {}",
+                    self.default_spec.spec_id(),
+                    field.source_id,
+                    self.current_schema_id
+                ));
+            }
+        }
+
         if self
             .partition_spec_by_id(self.default_spec.spec_id())
             .is_none()
@@ -3483,6 +3498,70 @@ mod tests {
         assert!(FormatVersion::V1 < FormatVersion::V2);
         assert_eq!(FormatVersion::V1, FormatVersion::V1);
         assert_eq!(FormatVersion::V2, FormatVersion::V2);
+    }
+
+    #[test]
+    fn test_deserialize_default_partition_spec_with_dropped_source() {
+        for version in [1, 2, 3] {
+            for transform in ["identity", "truncate[4]", "bucket[16]"] {
+                let mut metadata = serde_json::json!({
+                    "format-version": version,
+                    "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+                    "location": "s3://bucket/table",
+                    "last-sequence-number": 0,
+                    "last-updated-ms": 1602638573590_i64,
+                    "last-column-id": 2,
+                    "current-schema-id": 1,
+                    "schemas": [
+                        {
+                            "schema-id": 0,
+                            "type": "struct",
+                            "fields": [
+                                {"id": 1, "name": "x", "required": false, "type": "long"},
+                                {"id": 2, "name": "y", "required": false, "type": "long"}
+                            ]
+                        },
+                        {
+                            "schema-id": 1,
+                            "type": "struct",
+                            "fields": [
+                                {"id": 2, "name": "y", "required": false, "type": "long"}
+                            ]
+                        }
+                    ],
+                    "default-spec-id": 0,
+                    "partition-specs": [{"spec-id": 0, "fields": [{
+                        "source-id": 1, "field-id": 1000, "name": "x_partition",
+                        "transform": transform
+                    }]}],
+                    "last-partition-id": 1000,
+                    "default-sort-order-id": 0,
+                    "sort-orders": [{"order-id": 0, "fields": []}],
+                    "next-row-id": 0
+                });
+
+                // Retaining the source in history does not make it writable using
+                // the current schema and default spec.
+                let err = serde_json::from_value::<TableMetadata>(metadata.clone()).unwrap_err();
+                assert!(err.to_string().contains(
+                    "Default partition spec 0 references missing source field 1 in current schema 1"
+                ));
+
+                // The same spec is allowed once it becomes historical.
+                metadata["partition-specs"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({"spec-id": 1, "fields": []}));
+                metadata["default-spec-id"] = serde_json::json!(1);
+                serde_json::from_value::<TableMetadata>(metadata.clone()).unwrap();
+
+                // A voided field does not require its dropped source, even in the default spec.
+                metadata["default-spec-id"] = serde_json::json!(0);
+                metadata["partition-specs"][0]["fields"][0]["transform"] =
+                    serde_json::json!("void");
+                serde_json::from_value::<TableMetadata>(metadata).unwrap();
+            }
+        }
     }
 
     #[test]

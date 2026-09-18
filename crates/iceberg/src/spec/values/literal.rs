@@ -521,6 +521,9 @@ impl Literal {
                         decimal_mantissa(&rescaled),
                     ))))
                 }
+                (PrimitiveType::Unknown, value) if !value.is_null() => Err(invalid_data!(
+                    "Unknown type only supports null default values"
+                )),
                 (_, JsonValue::Null) => Ok(None),
                 (i, j) => Err(invalid_data!(
                     "The json value {j} doesn't fit to the iceberg type {i}."
@@ -528,17 +531,15 @@ impl Literal {
             },
             Type::Struct(schema) => {
                 if let JsonValue::Object(mut object) = value {
-                    Ok(Some(Literal::Struct(Struct::from_iter(
-                        schema.fields().iter().map(|field| {
-                            object.remove(&field.id.to_string()).and_then(|value| {
-                                Literal::try_from_json(value, &field.field_type)
-                                    .and_then(|value| {
-                                        value.ok_or(invalid_data!("Key of map cannot be null"))
-                                    })
-                                    .ok()
-                            })
-                        }),
-                    ))))
+                    let values = schema
+                        .fields()
+                        .iter()
+                        .map(|field| match object.remove(&field.id.to_string()) {
+                            Some(value) => Literal::try_from_json(value, &field.field_type),
+                            None => Ok(None),
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(Some(Literal::Struct(Struct::from_iter(values))))
                 } else {
                     Err(invalid_data!(
                         "The json value for a struct type must be an object."

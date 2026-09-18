@@ -196,6 +196,33 @@ pub fn i128_to_be_bytes_min(value: i128) -> Vec<u8> {
     bytes[start..].to_vec()
 }
 
+/// Encode an i128 as exactly `len` big-endian two's complement bytes, matching a
+/// Parquet `FIXED_LEN_BYTE_ARRAY` column of that declared `type_length`.
+///
+/// Returns `None` if `value` does not fit in `len` bytes, since a truncated
+/// encoding would represent a different number.
+pub(crate) fn decimal_to_fixed_length_bytes_exact(value: i128, len: usize) -> Option<Vec<u8>> {
+    if len == 0 || len > 16 {
+        return None;
+    }
+
+    let be_bytes = value.to_be_bytes();
+    let offset = 16 - len;
+    let sign_byte = if value < 0 { 0xFF } else { 0x00 };
+
+    // The bytes being dropped must be pure sign extension.
+    if be_bytes[..offset].iter().any(|&b| b != sign_byte) {
+        return None;
+    }
+
+    // The retained leading byte must carry the value's sign.
+    if (be_bytes[offset] & 0x80 != 0) != (value < 0) {
+        return None;
+    }
+
+    Some(be_bytes[offset..].to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,5 +382,78 @@ mod tests {
                 "Round trip failed for {val}"
             );
         }
+    }
+
+    #[test]
+    fn test_decimal_to_fixed_length_bytes_exact_positive() {
+        let bytes = decimal_to_fixed_length_bytes_exact(12345, 9).unwrap();
+        assert_eq!(bytes.len(), 9);
+        // Big-endian, zero-padded on the left: 12345 = 0x3039
+        assert_eq!(bytes[7], 0x30);
+        assert_eq!(bytes[8], 0x39);
+        assert!(bytes[..7].iter().all(|&b| b == 0x00));
+    }
+
+    #[test]
+    fn test_decimal_to_fixed_length_bytes_exact_negative() {
+        let bytes = decimal_to_fixed_length_bytes_exact(-1, 9).unwrap();
+        assert_eq!(bytes.len(), 9);
+        assert!(bytes.iter().all(|&b| b == 0xFF));
+    }
+
+    #[test]
+    fn test_decimal_to_fixed_length_bytes_exact_round_trip() {
+        for value in [
+            0i128,
+            1,
+            -1,
+            12345,
+            -12345,
+            i64::MAX as i128,
+            i64::MIN as i128,
+        ] {
+            let bytes = decimal_to_fixed_length_bytes_exact(value, 16).unwrap();
+            assert_eq!(bytes.len(), 16);
+            assert_eq!(
+                i128_from_be_bytes(&bytes),
+                Some(value),
+                "Round trip failed for value={value}"
+            );
+        }
+    }
+
+    /// The length must be honoured exactly: a value needing more bytes cannot be
+    /// truncated into the column's width, because the truncation would encode a
+    /// different number and probe the wrong bloom filter slot.
+    #[test]
+    fn test_decimal_to_fixed_length_bytes_exact_rejects_overflow() {
+        // 200 needs a leading zero byte to stay positive in two's complement.
+        assert_eq!(decimal_to_fixed_length_bytes_exact(200, 1), None);
+        assert_eq!(
+            decimal_to_fixed_length_bytes_exact(200, 2),
+            Some(vec![0x00, 0xC8])
+        );
+
+        assert_eq!(decimal_to_fixed_length_bytes_exact(-200, 1), None);
+        assert_eq!(
+            decimal_to_fixed_length_bytes_exact(-200, 2),
+            Some(vec![0xFF, 0x38])
+        );
+
+        // Exactly representable boundaries.
+        assert_eq!(
+            decimal_to_fixed_length_bytes_exact(127, 1),
+            Some(vec![0x7F])
+        );
+        assert_eq!(decimal_to_fixed_length_bytes_exact(128, 1), None);
+        assert_eq!(
+            decimal_to_fixed_length_bytes_exact(-128, 1),
+            Some(vec![0x80])
+        );
+        assert_eq!(decimal_to_fixed_length_bytes_exact(-129, 1), None);
+
+        assert_eq!(decimal_to_fixed_length_bytes_exact(i128::MAX, 15), None);
+        assert_eq!(decimal_to_fixed_length_bytes_exact(0, 0), None);
+        assert_eq!(decimal_to_fixed_length_bytes_exact(0, 17), None);
     }
 }

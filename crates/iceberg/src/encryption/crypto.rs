@@ -66,9 +66,8 @@ impl AesKeySize {
             16 => Ok(Self::Bits128),
             24 => Ok(Self::Bits192),
             32 => Ok(Self::Bits256),
-            _ => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                format!("Unsupported data key length: {len} (must be 16, 24, or 32)"),
+            _ => Err(invalid_data!(
+                "Invalid data key length: {len} (must be 16, 24, or 32)"
             )),
         }
     }
@@ -82,10 +81,7 @@ impl FromStr for AesKeySize {
             "128" | "AES_GCM_128" | "AES128_GCM" => Ok(Self::Bits128),
             "192" | "AES_GCM_192" | "AES192_GCM" => Ok(Self::Bits192),
             "256" | "AES_GCM_256" | "AES256_GCM" => Ok(Self::Bits256),
-            _ => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                format!("Unsupported AES key size: {s}"),
-            )),
+            _ => Err(invalid_data!("Invalid AES key size: {s}")),
         }
     }
 }
@@ -291,6 +287,15 @@ mod tests {
         );
         assert!(AesKeySize::from_key_length(8).is_err());
 
+        for len in [0, 8, 15, 20, 33] {
+            let err = AesKeySize::from_key_length(len).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid, "for length {len}");
+            assert_eq!(
+                err.message(),
+                format!("Invalid data key length: {len} (must be 16, 24, or 32)")
+            );
+        }
+
         assert_eq!(AesKeySize::from_str("128").unwrap(), AesKeySize::Bits128);
         assert_eq!(
             AesKeySize::from_str("AES_GCM_128").unwrap(),
@@ -300,7 +305,11 @@ mod tests {
             AesKeySize::from_str("AES_GCM_256").unwrap(),
             AesKeySize::Bits256
         );
-        assert!(AesKeySize::from_str("INVALID").is_err());
+        for size in ["", "127", "AES_GCM_512", "INVALID"] {
+            let err = AesKeySize::from_str(size).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid, "for size {size}");
+            assert_eq!(err.message(), format!("Invalid AES key size: {size}"));
+        }
     }
 
     #[test]
