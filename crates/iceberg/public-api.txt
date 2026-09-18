@@ -3251,6 +3251,13 @@ pub fn iceberg::transaction::FastAppendAction::add_data_files(self, data_files: 
 pub fn iceberg::transaction::FastAppendAction::set_commit_uuid(self, commit_uuid: uuid::Uuid) -> Self
 pub fn iceberg::transaction::FastAppendAction::set_snapshot_properties(self, snapshot_properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
 pub fn iceberg::transaction::FastAppendAction::with_check_duplicate(self, v: bool) -> Self
+pub struct iceberg::transaction::OverwriteAction
+impl iceberg::transaction::OverwriteAction
+pub fn iceberg::transaction::OverwriteAction::add_data_files(self, data_files: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::DataFile>) -> Self
+pub fn iceberg::transaction::OverwriteAction::delete_data_files(self, data_files: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::DataFile>) -> Self
+pub fn iceberg::transaction::OverwriteAction::set_commit_uuid(self, commit_uuid: uuid::Uuid) -> Self
+pub fn iceberg::transaction::OverwriteAction::set_snapshot_properties(self, snapshot_properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
+pub fn iceberg::transaction::OverwriteAction::with_check_duplicate(self, v: bool) -> Self
 pub struct iceberg::transaction::ReplaceSortOrderAction
 impl iceberg::transaction::ReplaceSortOrderAction
 pub fn iceberg::transaction::ReplaceSortOrderAction::asc(self, name: &str, null_order: iceberg::spec::NullOrder) -> Self
