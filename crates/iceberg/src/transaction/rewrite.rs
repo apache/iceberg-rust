@@ -29,7 +29,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::error::Result;
-use crate::spec::{DataFile, Operation};
+use crate::spec::{DataFile, ManifestContentType, Operation};
 use crate::table::Table;
 use crate::transaction::merging::MergingSnapshotProducer;
 use crate::transaction::{ActionCommit, TransactionAction};
@@ -56,7 +56,6 @@ pub struct RewriteFilesAction {
     producer: MergingSnapshotProducer,
     /// The snapshot ID at which this rewrite started reading. Used to
     /// detect conflicting deletes added after this point.
-    #[allow(dead_code)] // Will be used for conflict detection in a follow-up PR.
     starting_snapshot_id: Option<i64>,
 }
 
@@ -112,12 +111,49 @@ impl RewriteFilesAction {
         }
         Ok(())
     }
+
+    /// Reject the rewrite when a delete manifest was added after the snapshot
+    /// it was planned against.
+    ///
+    /// Java re-checks those deletes file by file in
+    /// `validateNoNewDeletesForDataFiles`. Until that exists here the commit
+    /// fails closed, because a rewritten file carries the deletes of the files
+    /// it replaces only if nothing was deleted from them in the meantime.
+    async fn validate_no_new_deletes(&self, table: &Table) -> Result<()> {
+        let (Some(starting_snapshot_id), Some(current_snapshot)) =
+            (self.starting_snapshot_id, table.metadata().current_snapshot())
+        else {
+            return Ok(());
+        };
+        let starting_sequence_number = table
+            .metadata()
+            .snapshot_by_id(starting_snapshot_id)
+            .map_or(0, |snapshot| snapshot.sequence_number());
+
+        let manifest_list = table.manifest_list_reader(current_snapshot).load().await?;
+        let conflict = manifest_list.entries().iter().find(|entry| {
+            entry.content == ManifestContentType::Deletes
+                && entry.sequence_number > starting_sequence_number
+        });
+
+        match conflict {
+            Some(entry) => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot rewrite files: delete manifest {} was added after the starting snapshot {starting_snapshot_id}.",
+                    entry.manifest_path,
+                ),
+            )),
+            None => Ok(()),
+        }
+    }
 }
 
 #[async_trait]
 impl TransactionAction for RewriteFilesAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
         self.validate()?;
+        self.validate_no_new_deletes(table).await?;
         self.producer.commit_snapshot(table).await
     }
 }
@@ -131,8 +167,8 @@ mod tests {
     use super::*;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        Literal, ManifestEntryRef, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
-        Operation, SnapshotRef, Struct,
+        DataContentType, Literal, ManifestEntryRef, ManifestFile, ManifestListWriter,
+        ManifestStatus, ManifestWriterBuilder, Operation, SnapshotRef, Struct,
     };
     use crate::table::Table;
     use crate::transaction::tests::{
@@ -487,7 +523,6 @@ mod tests {
     /// Add a delete-only manifest, attributed to `added_snapshot_id`, to the
     /// manifest list of the table's current snapshot, and return its path.
     async fn add_delete_only_manifest(table: &Table, added_snapshot_id: i64) -> String {
-        let snapshot = table.metadata().current_snapshot().unwrap();
         let added_sequence_number = table
             .metadata()
             .snapshot_by_id(added_snapshot_id)
@@ -529,15 +564,54 @@ mod tests {
         assert!(!delete_manifest.has_added_files());
         assert!(!delete_manifest.has_existing_files());
 
-        let mut entries = table
+        append_to_manifest_list(table, delete_manifest).await;
+        delete_manifest_path
+    }
+
+    /// Add a delete manifest, attributed to the table's current snapshot, to
+    /// that snapshot's manifest list.
+    async fn add_delete_manifest(table: &Table) -> String {
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let output = table
+            .file_io()
+            .new_output(format!(
+                "{}/deletes-{}.avro",
+                table.metadata().metadata_location().unwrap(),
+                Uuid::new_v4()
+            ))
+            .unwrap();
+        let mut writer = ManifestWriterBuilder::new(
+            output,
+            Some(snapshot.snapshot_id()),
+            table.metadata().current_schema().clone(),
+            table.metadata().default_partition_spec().as_ref().clone(),
+        )
+        .build_v3_deletes();
+        let mut delete_file = make_data_file(table, "test/1-deletes.parquet", 1, 100);
+        delete_file.content = DataContentType::PositionDeletes;
+        writer
+            .add_file(delete_file, snapshot.sequence_number())
+            .unwrap();
+        let delete_manifest = writer.write_manifest_file().await.unwrap();
+        let delete_manifest_path = delete_manifest.manifest_path.clone();
+
+        append_to_manifest_list(table, delete_manifest).await;
+        delete_manifest_path
+    }
+
+    /// Rewrite the manifest list of the table's current snapshot so it also
+    /// contains `manifest`.
+    async fn append_to_manifest_list(table: &Table, manifest: ManifestFile) {
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let mut entries: Vec<ManifestFile> = table
             .manifest_list_reader(snapshot)
             .load()
             .await
             .unwrap()
             .consume_entries()
             .into_iter()
-            .collect::<Vec<_>>();
-        entries.push(delete_manifest);
+            .collect();
+        entries.push(manifest);
 
         let mut manifest_list_writer = ManifestListWriter::v3(
             table
@@ -556,8 +630,36 @@ mod tests {
             .add_manifests(entries.into_iter())
             .unwrap();
         manifest_list_writer.close().await.unwrap();
+    }
 
-        delete_manifest_path
+    /// A delete manifest added after the snapshot the rewrite was planned
+    /// against must stop the commit.
+    #[tokio::test]
+    async fn test_rewrite_files_rejects_deletes_added_after_starting_snapshot() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
+        let f2 = make_data_file(&table, "test/2.parquet", 10, 100);
+        let table = append_files(&catalog, &table, vec![f1.clone()]).await;
+
+        // Plan the rewrite against this snapshot, then let another commit land.
+        let tx = Transaction::new(&table);
+        let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
+        let action = Arc::new(tx.rewrite_files().delete_file(f1).add_file(merged));
+
+        let table = append_files(&catalog, &table, vec![f2]).await;
+        let delete_manifest_path = add_delete_manifest(&table).await;
+
+        let Err(err) = action.commit(&table).await else {
+            panic!("a delete manifest newer than the starting snapshot must be rejected");
+        };
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string()
+                .contains(&format!("delete manifest {delete_manifest_path} was added after")),
+            "{err}"
+        );
     }
 
     /// A retried commit must not reuse the manifest paths of the attempt
