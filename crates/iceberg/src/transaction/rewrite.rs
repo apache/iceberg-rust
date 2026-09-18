@@ -85,6 +85,18 @@ impl RewriteFilesAction {
         self
     }
 
+    /// Set the data sequence number recorded for every added file.
+    ///
+    /// Without this the added files inherit the sequence number of the new
+    /// snapshot. A compaction that must not shadow concurrently written
+    /// deletes sets the sequence number of the files it replaces instead.
+    /// V1 manifest entries carry no sequence number, so this has no effect on
+    /// a V1 table.
+    pub fn data_sequence_number(mut self, sequence_number: i64) -> Self {
+        self.producer.set_data_sequence_number(sequence_number);
+        self
+    }
+
     fn validate(&self) -> Result<()> {
         if !self.producer.has_deleted_data_files() {
             return Err(Error::new(
@@ -112,12 +124,30 @@ impl TransactionAction for RewriteFilesAction {
 
 #[cfg(test)]
 mod tests {
+    use crate::ErrorKind;
     use crate::memory::tests::new_memory_catalog;
-    use crate::spec::{ManifestStatus, Operation};
+    use crate::spec::{ManifestEntryRef, ManifestStatus, Operation, SnapshotRef};
+    use crate::table::Table;
     use crate::transaction::tests::{
         append_files, make_data_file, make_v3_minimal_table_in_catalog,
     };
     use crate::transaction::{ApplyTransactionAction, Transaction};
+
+    /// Read back the manifest entry for `path` from the manifests of `snapshot`.
+    async fn find_entry(
+        table: &Table,
+        snapshot: &SnapshotRef,
+        path: &str,
+    ) -> Option<ManifestEntryRef> {
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
+        for manifest_file in manifest_list.entries() {
+            let manifest = table.manifest_reader().read(manifest_file).await.unwrap();
+            if let Some(entry) = manifest.entries().iter().find(|e| e.file_path() == path) {
+                return Some(entry.clone());
+            }
+        }
+        None
+    }
 
     /// E2E: Compact 3 small files into 1 merged file.
     /// Verify: operation=Replace, file counts, record counts.
@@ -168,8 +198,7 @@ mod tests {
         let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
         let mut live_files: Vec<String> = Vec::new();
         for manifest_entry in manifest_list.entries() {
-            let manifest = table.manifest_reader().read(manifest_entry).await.unwrap()
-;
+            let manifest = table.manifest_reader().read(manifest_entry).await.unwrap();
             for entry in manifest.entries() {
                 if entry.is_alive() {
                     live_files.push(entry.file_path().to_string());
@@ -265,22 +294,20 @@ mod tests {
         // Verify live files: f3 (surviving) + merged (new).
         let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
         let mut live_files: Vec<String> = Vec::new();
-        let mut survivor = None;
         for manifest_entry in manifest_list.entries() {
             let manifest = table.manifest_reader().read(manifest_entry).await.unwrap();
             for entry in manifest.entries() {
                 if entry.is_alive() {
                     live_files.push(entry.file_path().to_string());
                 }
-                if entry.file_path() == "test/3.parquet" {
-                    survivor = Some(entry.clone());
-                }
             }
         }
         live_files.sort();
         assert_eq!(live_files, vec!["test/3.parquet", "test/merged.parquet"]);
 
-        let survivor = survivor.expect("surviving file should still be in a manifest");
+        let survivor = find_entry(&table, snapshot, "test/3.parquet")
+            .await
+            .expect("surviving file should still be in a manifest");
         assert_eq!(survivor.status(), ManifestStatus::Existing);
         assert_eq!(survivor.snapshot_id(), Some(append_snapshot.snapshot_id()));
         assert_eq!(
@@ -290,6 +317,71 @@ mod tests {
         assert_eq!(
             survivor.file_sequence_number,
             Some(append_snapshot.sequence_number())
+        );
+    }
+
+    /// An explicit data sequence number is recorded on the added file instead
+    /// of the one it would inherit from the rewrite snapshot.
+    #[tokio::test]
+    async fn test_rewrite_files_applies_data_sequence_number() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
+        let table = append_files(&catalog, &table, vec![f1.clone()]).await;
+        let append_sequence_number = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .sequence_number();
+
+        let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files()
+            .delete_file(f1)
+            .add_file(merged)
+            .data_sequence_number(append_sequence_number);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        assert_ne!(snapshot.sequence_number(), append_sequence_number);
+
+        let merged_entry = find_entry(&table, snapshot, "test/merged.parquet")
+            .await
+            .expect("added file should be in a manifest");
+        assert_eq!(merged_entry.sequence_number(), Some(append_sequence_number));
+    }
+
+    /// A data sequence number above the one the new snapshot will carry is
+    /// rejected.
+    #[tokio::test]
+    async fn test_rewrite_files_rejects_data_sequence_number_above_the_snapshot() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
+        let table = append_files(&catalog, &table, vec![f1.clone()]).await;
+        let snapshot_sequence_number = table.metadata().next_sequence_number();
+
+        let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files()
+            .delete_file(f1)
+            .add_file(merged)
+            .data_sequence_number(snapshot_sequence_number + 1);
+        let tx = action.apply(tx).unwrap();
+        let err = tx.commit(&catalog).await.unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string().contains(&format!(
+                "Data sequence number {} is greater than the snapshot's {snapshot_sequence_number}.",
+                snapshot_sequence_number + 1
+            )),
+            "{err}"
         );
     }
 

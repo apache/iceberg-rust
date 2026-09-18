@@ -273,6 +273,7 @@ pub(crate) struct MergingSnapshotProducer {
     deleted_data_files: Vec<DataFile>,
     filter_manager: ManifestFilterManager,
     commit_uuid: Uuid,
+    data_sequence_number: Option<i64>,
 }
 
 impl MergingSnapshotProducer {
@@ -283,11 +284,16 @@ impl MergingSnapshotProducer {
             deleted_data_files: Vec::new(),
             filter_manager: ManifestFilterManager::new(true),
             commit_uuid: Uuid::now_v7(),
+            data_sequence_number: None,
         }
     }
 
     pub(crate) fn add_data_file(&mut self, file: DataFile) {
         self.added_data_files.push(file);
+    }
+
+    pub(crate) fn set_data_sequence_number(&mut self, sequence_number: i64) {
+        self.data_sequence_number = Some(sequence_number);
     }
 
     pub(crate) fn delete_data_file(&mut self, file: DataFile) {
@@ -303,8 +309,26 @@ impl MergingSnapshotProducer {
         !self.deleted_data_files.is_empty()
     }
 
+    /// Reject a data sequence number above the one the new snapshot will carry.
+    fn validate_data_sequence_number(&self, table: &Table) -> Result<()> {
+        let Some(sequence_number) = self.data_sequence_number else {
+            return Ok(());
+        };
+        let snapshot_sequence_number = table.metadata().next_sequence_number();
+        if sequence_number > snapshot_sequence_number {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Data sequence number {sequence_number} is greater than the snapshot's {snapshot_sequence_number}."
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     /// Produce manifests, compute summary, and commit a new snapshot.
     pub(crate) async fn commit_snapshot(&self, table: &Table) -> Result<ActionCommit> {
+        self.validate_data_sequence_number(table)?;
         // Create the SnapshotProducer first so we can use its snapshot_id
         // for new manifests. This ensures the manifest list writer can
         // assign sequence numbers to manifests from this snapshot.
@@ -343,7 +367,9 @@ impl MergingSnapshotProducer {
 
         // 3. Write a new manifest for added files.
         if !self.added_data_files.is_empty() {
-            let added_manifest = self.write_added_manifest(table, snapshot_id, &mut manifest_counter).await?;
+            let added_manifest = self
+                .write_added_manifest(table, snapshot_id, &mut manifest_counter)
+                .await?;
             filtered_manifests.push(added_manifest);
         }
 
@@ -389,6 +415,10 @@ impl MergingSnapshotProducer {
                     ErrorKind::DataInvalid,
                     "Only data content type is allowed in added_data_files",
                 ));
+            }
+            if let Some(sequence_number) = self.data_sequence_number {
+                writer.add_file(data_file.clone(), sequence_number)?;
+                continue;
             }
             let entry_builder = ManifestEntry::builder()
                 .status(ManifestStatus::Added)
