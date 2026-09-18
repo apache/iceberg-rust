@@ -27,7 +27,7 @@ use crate::error::Result;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
     ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation,
-    PartitionSpecRef, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
+    PartitionSpec, PartitionSpecRef, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
     SnapshotSummaryCollector, Struct, StructType, Summary, TableProperties,
     update_snapshot_summaries,
 };
@@ -261,15 +261,15 @@ impl<'a> SnapshotProducer<'a> {
         ))
     }
 
-    fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
+    /// Returns a writer for the next manifest file of this commit, routed through the table's
+    /// encryption manager when one is configured.
+    pub(crate) fn new_manifest_writer(
+        &self,
+        content: ManifestContentType,
+        schema: SchemaRef,
+        partition_spec: PartitionSpec,
+    ) -> Result<ManifestWriter> {
         let output_file = self.table.file_io().new_output(self.new_manifest_path()?)?;
-        let partition_spec = self
-            .table
-            .metadata()
-            .default_partition_spec()
-            .as_ref()
-            .clone();
-        let schema = self.table.metadata().current_schema().clone();
 
         let builder = if let Some(em) = self.table.encryption_manager() {
             ManifestWriterBuilder::new_from_encrypted(
@@ -352,7 +352,15 @@ impl<'a> SnapshotProducer<'a> {
                 builder.build()
             }
         });
-        let mut writer = self.new_manifest_writer(ManifestContentType::Data)?;
+        let mut writer = self.new_manifest_writer(
+            ManifestContentType::Data,
+            self.table.metadata().current_schema().clone(),
+            self.table
+                .metadata()
+                .default_partition_spec()
+                .as_ref()
+                .clone(),
+        )?;
         for entry in manifest_entries {
             writer.add_entry(entry)?;
         }
@@ -585,11 +593,15 @@ impl<'a> SnapshotProducer<'a> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use uuid::Uuid;
 
     use super::*;
-    use crate::spec::{DataContentType, DataFileBuilder, Literal};
+    use crate::spec::{
+        DataContentType, DataFileBuilder, Literal, Manifest, NestedField, PartitionSpec,
+        PrimitiveType, Schema, Transform, Type,
+    };
     use crate::transaction::tests::make_v2_minimal_table;
 
     /// An operation that adds no existing manifests and reports one removed data file.
@@ -663,5 +675,60 @@ mod tests {
         assert_eq!(properties.get("added-records").unwrap(), "3");
         assert_eq!(properties.get("total-data-files").unwrap(), "0");
         assert_eq!(properties.get("total-records").unwrap(), "1");
+    }
+
+    #[tokio::test]
+    async fn test_new_manifest_writer_uses_the_given_schema_and_spec() {
+        let table = make_v2_minimal_table();
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(7)
+                .with_fields(vec![
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(3)
+            .add_partition_field("a", "a", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), HashMap::new(), vec![]);
+        let first = producer
+            .new_manifest_writer(
+                ManifestContentType::Data,
+                schema.clone(),
+                partition_spec.clone(),
+            )
+            .unwrap()
+            .write_manifest_file()
+            .await
+            .unwrap();
+        let second = producer
+            .new_manifest_writer(ManifestContentType::Data, schema.clone(), partition_spec)
+            .unwrap()
+            .write_manifest_file()
+            .await
+            .unwrap();
+
+        assert_ne!(first.manifest_path, second.manifest_path);
+
+        let bytes = table
+            .file_io()
+            .new_input(&first.manifest_path)
+            .unwrap()
+            .read()
+            .await
+            .unwrap();
+        let metadata = Manifest::parse_avro(&bytes).unwrap().into_parts().1;
+
+        // Not the table's defaults, which are schema 0 and spec 0.
+        assert_eq!(metadata.schema_id(), 7);
+        assert_eq!(metadata.schema().as_ref(), schema.as_ref());
+        assert_eq!(metadata.partition_spec().spec_id(), 3);
+        assert_eq!(first.partition_spec_id, 3);
     }
 }
