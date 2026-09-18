@@ -3342,8 +3342,6 @@ pub fn iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteWrite
 pub fn iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteWriterConfig::projected_arrow_schema_ref(&self) -> &arrow_schema::schema::SchemaRef
 impl core::fmt::Debug for iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteWriterConfig
 pub fn iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteWriterConfig::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub mod iceberg::writer::base_writer::position_delete_input
-pub fn iceberg::writer::base_writer::position_delete_input::position_delete_batch<S, I>(rows: I) -> iceberg::Result<arrow_array::record_batch::RecordBatch> where S: core::convert::Into<alloc::string::String>, I: core::iter::traits::collect::IntoIterator<Item = (S, i64)>
 pub mod iceberg::writer::base_writer::position_delete_writer
 pub struct iceberg::writer::base_writer::position_delete_writer::PositionDeleteFileWriter<B: iceberg::writer::file_writer::FileWriterBuilder, L: iceberg::writer::file_writer::location_generator::LocationGenerator, F: iceberg::writer::file_writer::location_generator::FileNameGenerator>
 impl<B, L, F> iceberg::writer::IcebergWriter for iceberg::writer::base_writer::position_delete_writer::PositionDeleteFileWriter<B, L, F> where B: iceberg::writer::file_writer::FileWriterBuilder, L: iceberg::writer::file_writer::location_generator::LocationGenerator, F: iceberg::writer::file_writer::location_generator::FileNameGenerator

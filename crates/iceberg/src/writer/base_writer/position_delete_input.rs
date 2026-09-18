@@ -15,99 +15,104 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Assembles a spec-conforming position delete [`RecordBatch`] from `(file_path, pos)` rows.
+//! Accumulates position delete rows and renders them as a spec-conforming [`RecordBatch`].
 //!
-//! A [`PositionDeleteFileWriter`](super::position_delete_writer::PositionDeleteFileWriter)
-//! accepts batches with exactly the two required position delete columns: `file_path`
-//! (`Utf8`, field id [`crate::metadata_columns::RESERVED_FIELD_ID_DELETE_FILE_PATH`]) and
-//! `pos` (`Int64`, field id [`crate::metadata_columns::RESERVED_FIELD_ID_DELETE_FILE_POS`]),
-//! both required. [`position_delete_batch`] produces exactly such a batch, with rows sorted
-//! by `(file_path, pos)` and duplicate pairs removed, as the spec requires for position
-//! delete files.
+//! [`PositionDeletes`] collects `(file_path, pos)` pairs and, on
+//! [`to_record_batch`](PositionDeletes::to_record_batch), emits the two required position
+//! delete columns — `file_path` (`Utf8`) and `pos` (`Int64`) — sorted by `(file_path, pos)`
+//! with duplicate pairs removed, as the spec requires. That batch is exactly what
+//! [`PositionDeleteFileWriter`](super::position_delete_writer::PositionDeleteFileWriter)
+//! accepts, so it can be handed straight to that writer.
 //!
 //! Position delete files are a v2 construct. v3 tables use deletion vectors and forbid adding
 //! new position delete files, so a format-version gate must be applied at the
 //! transaction/commit layer before routing v3 writes here.
 
+// Nothing wires `PositionDeletes` into a writer yet; the write-path plumbing lands in a follow-up.
+#![allow(dead_code)]
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+use arrow_array::builder::{Int64Builder, StringBuilder};
+use arrow_array::{ArrayRef, RecordBatch};
 use roaring::RoaringTreemap;
 
 use crate::{Error, ErrorKind, Result};
 
-/// Builds a spec-conforming position delete [`RecordBatch`] from `(file_path, pos)` rows.
+/// Accumulates `(file_path, pos)` position delete rows.
 ///
-/// The returned batch has exactly the two required position delete columns and passes the
-/// per-batch validation of
-/// [`PositionDeleteFileWriter`](super::position_delete_writer::PositionDeleteFileWriter), so
-/// it can be handed straight to that writer. Rows are emitted sorted by `(file_path, pos)`
-/// with duplicate pairs removed, satisfying the spec's ordering requirement regardless of the
-/// order in which they are supplied. Empty input yields a valid 0-row batch.
-///
-/// `pos` is a non-negative row position; a negative `pos` is rejected with
-/// [`ErrorKind::DataInvalid`].
-///
-/// # Example
-///
-/// ```
-/// use iceberg::writer::base_writer::position_delete_input::position_delete_batch;
-///
-/// // Rows may be supplied in any order; the batch comes out sorted.
-/// let batch = position_delete_batch([
-///     ("s3://bucket/data/f0.parquet", 4),
-///     ("s3://bucket/data/f0.parquet", 1),
-/// ])
-/// .unwrap();
-/// assert_eq!(batch.num_rows(), 2);
-/// assert_eq!(batch.num_columns(), 2);
-/// ```
-pub fn position_delete_batch<S, I>(rows: I) -> Result<RecordBatch>
-where
-    S: Into<String>,
-    I: IntoIterator<Item = (S, i64)>,
-{
-    // Keying paths in a `BTreeMap` and positions in a `RoaringTreemap` deduplicates repeated
-    // `(file_path, pos)` pairs and yields the spec-required ascending `(file_path, pos)` order
-    // when iterated.
-    let mut by_path: BTreeMap<String, RoaringTreemap> = BTreeMap::new();
-    for (path, pos) in rows {
-        let pos = u64::try_from(pos).map_err(|_| {
+/// Keying paths in a [`BTreeMap`] and positions in a [`RoaringTreemap`] deduplicates repeated
+/// `(file_path, pos)` pairs and, when iterated, yields the spec-required ascending
+/// `(file_path, pos)` order for free, so callers may [`insert`](Self::insert) rows in any
+/// order.
+#[derive(Debug, Default)]
+pub(crate) struct PositionDeletes {
+    rows: BTreeMap<String, RoaringTreemap>,
+}
+
+impl PositionDeletes {
+    /// Creates an empty accumulator.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Records that row `pos` of `path` is deleted. `pos` is a row position, so it is
+    /// non-negative by construction. Re-inserting the same `(path, pos)` is a no-op.
+    pub(crate) fn insert(&mut self, path: impl Into<String>, pos: u64) {
+        self.rows.entry(path.into()).or_default().insert(pos);
+    }
+
+    /// Returns whether no positions have been recorded. `insert` never leaves an empty
+    /// treemap behind, so an empty map means no positions.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// Returns the total number of recorded positions across all paths.
+    pub(crate) fn len(&self) -> usize {
+        self.rows
+            .values()
+            .map(|positions| positions.len())
+            .sum::<u64>() as usize
+    }
+
+    /// Renders the accumulated rows as a spec-conforming position delete [`RecordBatch`].
+    ///
+    /// The batch has exactly the two required position delete columns, built against the
+    /// writer's shared [`position_delete_arrow_schema`](super::position_delete_writer::position_delete_arrow_schema)
+    /// so the reserved field ids stay wired in. Rows are emitted sorted by `(file_path, pos)`
+    /// with duplicate pairs removed. An empty accumulator yields a valid 0-row batch.
+    pub(crate) fn to_record_batch(&self) -> Result<RecordBatch> {
+        let mut path_builder = StringBuilder::new();
+        let mut pos_builder = Int64Builder::new();
+        // The `BTreeMap` iterates paths ascending and each `RoaringTreemap` iterates positions
+        // ascending, so the columns come out sorted by `(file_path, pos)` and deduplicated.
+        for (path, positions) in &self.rows {
+            for pos in positions.iter() {
+                // The `pos` column is `Int64`; positions are `u64`, so guard the top of the
+                // range with a checked conversion rather than a silent wrap.
+                let pos = i64::try_from(pos)
+                    .map_err(|_| Error::new(ErrorKind::DataInvalid, "position exceeds i64::MAX"))?;
+                path_builder.append_value(path);
+                pos_builder.append_value(pos);
+            }
+        }
+
+        // Reuse the writer's crate-internal Arrow projection (a cheap `Arc` clone) so the
+        // field-id wiring stays shared.
+        let schema = super::position_delete_writer::position_delete_arrow_schema();
+        RecordBatch::try_new(schema, vec![
+            Arc::new(path_builder.finish()) as ArrayRef,
+            Arc::new(pos_builder.finish()) as ArrayRef,
+        ])
+        .map_err(|e| {
             Error::new(
                 ErrorKind::DataInvalid,
-                format!("Position delete row position must be non-negative, got {pos}"),
+                format!("Failed to build position delete record batch: {e}"),
             )
-        })?;
-        by_path.entry(path.into()).or_default().insert(pos);
+        })
     }
-
-    let mut paths: Vec<&str> = Vec::new();
-    let mut positions: Vec<i64> = Vec::new();
-    for (path, pos_set) in &by_path {
-        for pos in pos_set.iter() {
-            paths.push(path.as_str());
-            positions.push(pos as i64);
-        }
-    }
-
-    // `from_iter_values` produces non-null arrays, matching the required columns.
-    let path_array = StringArray::from_iter_values(paths);
-    let pos_array = Int64Array::from_iter_values(positions);
-
-    // Reuse the writer's crate-internal Arrow projection (a cheap `Arc` clone) so the
-    // field-id wiring stays shared.
-    let schema = super::position_delete_writer::position_delete_arrow_schema();
-    RecordBatch::try_new(schema, vec![
-        Arc::new(path_array) as ArrayRef,
-        Arc::new(pos_array) as ArrayRef,
-    ])
-    .map_err(|e| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!("Failed to build position delete record batch: {e}"),
-        )
-    })
 }
 
 #[cfg(test)]
@@ -182,20 +187,22 @@ mod test {
 
     #[test]
     fn test_column_shape_and_field_ids() {
-        let batch = position_delete_batch([("s3://bucket/data/f0.parquet", 1)]).unwrap();
+        let mut deletes = PositionDeletes::new();
+        deletes.insert("s3://bucket/data/f0.parquet", 1);
+        let batch = deletes.to_record_batch().unwrap();
         assert_position_delete_schema(&batch);
     }
 
     #[test]
-    fn test_unsorted_input_is_sorted() {
-        // Supplied out of order; both the paths and the positions within a path must sort.
-        let batch = position_delete_batch([
-            ("s3://bucket/data/f1.parquet", 2),
-            ("s3://bucket/data/f0.parquet", 4),
-            ("s3://bucket/data/f0.parquet", 1),
-        ])
-        .unwrap();
+    fn test_unsorted_inserts_sorted_by_path_then_pos() {
+        let mut deletes = PositionDeletes::new();
+        // Inserted out of order, across multiple paths; both the paths and the positions
+        // within a path must come out sorted.
+        deletes.insert("s3://bucket/data/f1.parquet", 2);
+        deletes.insert("s3://bucket/data/f0.parquet", 4);
+        deletes.insert("s3://bucket/data/f0.parquet", 1);
 
+        let batch = deletes.to_record_batch().unwrap();
         let (paths, positions) = columns(&batch);
         assert_eq!(paths, vec![
             "s3://bucket/data/f0.parquet",
@@ -207,13 +214,13 @@ mod test {
 
     #[test]
     fn test_duplicate_pairs_deduped() {
-        let batch = position_delete_batch([
-            ("s3://bucket/data/f0.parquet", 3),
-            ("s3://bucket/data/f0.parquet", 3),
-            ("s3://bucket/data/f0.parquet", 1),
-        ])
-        .unwrap();
+        let mut deletes = PositionDeletes::new();
+        deletes.insert("s3://bucket/data/f0.parquet", 3);
+        deletes.insert("s3://bucket/data/f0.parquet", 3);
+        deletes.insert("s3://bucket/data/f0.parquet", 1);
 
+        assert_eq!(deletes.len(), 2);
+        let batch = deletes.to_record_batch().unwrap();
         let (paths, positions) = columns(&batch);
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(paths, vec![
@@ -224,39 +231,44 @@ mod test {
     }
 
     #[test]
-    fn test_multiple_paths_sorted() {
-        let batch = position_delete_batch([
-            ("s3://bucket/data/c.parquet", 0),
-            ("s3://bucket/data/a.parquet", 5),
-            ("s3://bucket/data/b.parquet", 1),
-        ])
-        .unwrap();
+    fn test_len_and_is_empty() {
+        let mut deletes = PositionDeletes::new();
+        assert!(deletes.is_empty());
+        assert_eq!(deletes.len(), 0);
 
-        let (paths, _) = columns(&batch);
-        assert_eq!(paths, vec![
-            "s3://bucket/data/a.parquet",
-            "s3://bucket/data/b.parquet",
-            "s3://bucket/data/c.parquet",
-        ]);
+        deletes.insert("s3://bucket/data/f0.parquet", 1);
+        deletes.insert("s3://bucket/data/f0.parquet", 2);
+        deletes.insert("s3://bucket/data/f1.parquet", 9);
+        assert!(!deletes.is_empty());
+        assert_eq!(deletes.len(), 3);
+
+        // A duplicate pair does not change the count.
+        deletes.insert("s3://bucket/data/f0.parquet", 1);
+        assert_eq!(deletes.len(), 3);
     }
 
     #[test]
-    fn test_empty_input_builds_valid_zero_row_batch() {
-        let batch = position_delete_batch(Vec::<(String, i64)>::new()).unwrap();
+    fn test_empty_builds_valid_zero_row_batch() {
+        let deletes = PositionDeletes::new();
+        let batch = deletes.to_record_batch().unwrap();
         assert_eq!(batch.num_rows(), 0);
         // Even with no rows the schema must be the full position delete schema.
         assert_position_delete_schema(&batch);
     }
 
     #[test]
-    fn test_negative_pos_rejected() {
-        let err = position_delete_batch([("s3://bucket/data/f0.parquet", -1)]).unwrap_err();
+    fn test_position_above_i64_max_rejected() {
+        let mut deletes = PositionDeletes::new();
+        // A position beyond `i64::MAX` cannot fit the `Int64` column and must be rejected
+        // rather than silently wrapped.
+        deletes.insert("s3://bucket/data/f0.parquet", i64::MAX as u64 + 1);
+        let err = deletes.to_record_batch().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
-    /// Wires a real [`PositionDeleteFileWriter`] over a local filesystem for the
-    /// integration tests: the file IO, location/name generators, and the Parquet-backed
-    /// rolling writer configured with the [`position_delete_schema`].
+    /// Wires a real [`PositionDeleteFileWriter`] over a local filesystem for the integration
+    /// test: the file IO, location/name generators, and the Parquet-backed rolling writer
+    /// configured with the [`position_delete_schema`].
     fn writer_setup(
         temp_dir: &TempDir,
     ) -> PositionDeleteFileWriterBuilder<
@@ -289,44 +301,19 @@ mod test {
         let builder = writer_setup(&temp_dir);
         let mut writer = builder.build(None).await?;
 
-        // Deliberately unsorted; `position_delete_batch` sorts to the order the writer needs.
-        let batch = position_delete_batch([
-            ("s3://bucket/data/f1.parquet", 2),
-            ("s3://bucket/data/f0.parquet", 4),
-            ("s3://bucket/data/f0.parquet", 1),
-        ])?;
+        let mut deletes = PositionDeletes::new();
+        // Deliberately unsorted; `to_record_batch` sorts to the order the writer needs.
+        deletes.insert("s3://bucket/data/f1.parquet", 2);
+        deletes.insert("s3://bucket/data/f0.parquet", 4);
+        deletes.insert("s3://bucket/data/f0.parquet", 1);
 
-        writer.write(batch).await?;
+        writer.write(deletes.to_record_batch()?).await?;
         let data_files = writer.close().await?;
 
         assert_eq!(data_files.len(), 1);
         let data_file = &data_files[0];
         assert_eq!(data_file.content_type(), DataContentType::PositionDeletes);
-        assert_eq!(data_file.record_count, 3);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_empty_batch_feeds_position_delete_writer() -> Result<()> {
-        let temp_dir = TempDir::new().unwrap();
-        let builder = writer_setup(&temp_dir);
-        let mut writer = builder.build(None).await?;
-
-        // Empty input still produces a valid 0-row batch.
-        let batch = position_delete_batch(Vec::<(String, i64)>::new())?;
-        assert_eq!(batch.num_rows(), 0);
-
-        writer.write(batch).await?;
-        let data_files = writer.close().await?;
-
-        // The Parquet writer skips 0-row batches and never opens a file, so closing
-        // after writing only an empty batch produces no data files.
-        assert!(
-            data_files.is_empty(),
-            "expected no data files for an empty batch, got {}",
-            data_files.len()
-        );
+        assert_eq!(data_file.record_count, deletes.len() as u64);
 
         Ok(())
     }
