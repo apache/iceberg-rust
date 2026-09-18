@@ -1800,6 +1800,41 @@ mod tests {
     }
 
     #[test]
+    fn eval_true_for_nan_lower_bound_literal_inside_upper_is_in() -> Result<()> {
+        // NaN lower is treated as unbounded. upper = 3.0 with IN (2.0, 4.0)
+        // must still match because 2.0 is inside the finite upper bound.
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(
+                Some(f32::NAN),
+                Some(3.0),
+                None,
+                Some(0),
+                false,
+            )),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .is_in([Datum::float(2.0_f32), Datum::float(4.0_f32)])
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert!(result);
+        Ok(())
+    }
+
+    #[test]
     fn eval_false_for_upper_bound_below_all_vals_is_in() -> Result<()> {
         let row_group_metadata = create_row_group_metadata(
             1,

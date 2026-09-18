@@ -45,6 +45,17 @@ fn check_json_serde(json: &str, expected_literal: Literal, expected_type: &Type)
     assert_eq!(parsed_json_value, raw_json_value);
 }
 
+fn check_raw_literal_json_serde(expected_literal: Literal, expected_type: &Type) {
+    let raw_literal = RawLiteral::try_from(expected_literal.clone(), expected_type).unwrap();
+    let serialized = serde_json::to_string(&raw_literal).unwrap();
+    let deserialized: RawLiteral = serde_json::from_str(&serialized).unwrap();
+
+    assert_eq!(
+        deserialized.try_into(expected_type).unwrap(),
+        Some(expected_literal)
+    );
+}
+
 fn check_avro_bytes_serde(input: Vec<u8>, expected_datum: Datum, expected_type: &PrimitiveType) {
     let raw_schema = r#""bytes""#;
     let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
@@ -236,6 +247,18 @@ fn json_timestamptz_ns() {
 }
 
 #[test]
+fn raw_literal_json_serde_nanosecond_timestamps() {
+    check_raw_literal_json_serde(
+        Literal::timestamp_nano(1510871468123456789),
+        &Primitive(PrimitiveType::TimestampNs),
+    );
+    check_raw_literal_json_serde(
+        Literal::timestamptz_nano(1510871468123456789),
+        &Primitive(PrimitiveType::TimestamptzNs),
+    );
+}
+
+#[test]
 fn json_timestamptz_ns_rejects_non_utc_offset() {
     // Per the spec, timestamptz_ns single-value serialization must use offset "+00:00"; Java's
     // SingleValueParser enforces the same (DateTimeUtil.isUTCTimestamptz). A non-UTC offset is not a
@@ -316,6 +339,23 @@ fn json_fixed() {
         record,
         Literal::Primitive(PrimitiveLiteral::Binary(vec![0, 1, 15, 255])),
         &Primitive(PrimitiveType::Fixed(4)),
+    );
+}
+
+#[test]
+fn json_unknown_only_accepts_null() {
+    let unknown = Primitive(PrimitiveType::Unknown);
+
+    assert_eq!(
+        Literal::try_from_json(JsonValue::Null, &unknown).unwrap(),
+        None
+    );
+    let error = Literal::try_from_json(serde_json::json!(1), &unknown).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::DataInvalid);
+    assert!(
+        error
+            .message()
+            .contains("Unknown type only supports null default values")
     );
 }
 

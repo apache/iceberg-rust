@@ -19,6 +19,7 @@ use fnv::FnvHashSet;
 
 use crate::spec::Datum;
 
+pub(crate) mod bloom_filter_evaluator;
 pub(crate) mod bound_predicate_visitor;
 pub(crate) mod expression_evaluator;
 pub(crate) mod inclusive_metrics_evaluator;
@@ -35,9 +36,6 @@ pub(crate) mod strict_projection;
 /// Missing bounds are treated as unbounded on that side.
 ///
 /// `(None, None)` returns true because no bound is available to prune against.
-/// Manifest evaluation must not reach this helper when the partition summary
-/// has no lower bound: that case is all-null and `IN` prunes before calling
-/// here. Metrics evaluators use `(None, None)` for a missing min/max pair.
 pub(crate) fn any_literal_in_bounds(
     lower: Option<&Datum>,
     upper: Option<&Datum>,
@@ -56,6 +54,10 @@ pub(crate) fn any_literal_in_bounds(
 /// Drops a NaN bound so that side is treated as unbounded.
 ///
 /// A NaN min or max is unreliable, but the other bound may still prune.
+/// Inclusive evaluators in Java and PyIceberg bail to might-match when
+/// either bound is NaN. Dropping only the NaN side is a deliberate
+/// divergence: `total_cmp` treats NaN as the maximum, so the remaining
+/// finite bound is still a valid prune.
 pub(crate) fn finite_bound(bound: Option<&Datum>) -> Option<&Datum> {
     bound.filter(|datum| !datum.is_nan())
 }

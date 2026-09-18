@@ -1580,6 +1580,20 @@ mod test {
     }
 
     #[test]
+    fn test_float_in_nan_lower_bound_does_not_prune_when_a_literal_is_inside_upper() {
+        let result = InclusiveMetricsEvaluator::eval(
+            &r#in_float("no_nans", &[2.0, 4.0]),
+            &get_test_file_float_nan_lower_upper_3(),
+            true,
+        )
+        .unwrap();
+        assert!(
+            result,
+            "Should read: NaN lower is unbounded, 2.0 is inside upper 3.0"
+        );
+    }
+
+    #[test]
     fn test_integer_not_in() {
         let result = InclusiveMetricsEvaluator::eval(
             &r#not_in_int("id", &[INT_MIN_VALUE - 25, INT_MIN_VALUE - 24]),
@@ -2172,6 +2186,32 @@ mod test {
             nan_value_counts: HashMap::from([(9, 0)]),
             lower_bounds: HashMap::from([(9, Datum::float(f32::NAN))]),
             upper_bounds: HashMap::from([(9, Datum::float(1.0_f32))]),
+            key_metadata: None,
+            split_offsets: None,
+            equality_ids: None,
+            sort_order_id: None,
+            partition_spec_id: 0,
+            first_row_id: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+
+    fn get_test_file_float_nan_lower_upper_3() -> DataFile {
+        DataFile {
+            content: DataContentType::Data,
+            file_path: "/test/path".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: Struct::empty(),
+            record_count: 10,
+            file_size_in_bytes: 10,
+            column_sizes: Default::default(),
+            value_counts: HashMap::from([(9, 10)]),
+            null_value_counts: HashMap::from([(9, 0)]),
+            nan_value_counts: HashMap::from([(9, 0)]),
+            lower_bounds: HashMap::from([(9, Datum::float(f32::NAN))]),
+            upper_bounds: HashMap::from([(9, Datum::float(3.0_f32))]),
             key_metadata: None,
             split_offsets: None,
             equality_ids: None,

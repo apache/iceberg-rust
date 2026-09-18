@@ -23,6 +23,7 @@ mod context;
 use context::*;
 mod task;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -41,7 +42,7 @@ use crate::metadata_columns::{
     RESERVED_FIELD_ID_PARTITION, get_metadata_field_id, is_metadata_column_name,
 };
 use crate::runtime::Runtime;
-use crate::spec::{DataContentType, Schema, SchemaRef, SnapshotRef, StructType};
+use crate::spec::{DataContentType, Schema, SchemaRef, SnapshotRef, SortOrderRef, StructType};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::{Error, ErrorKind, Result};
@@ -141,6 +142,7 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    bloom_filter_enabled: bool,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -159,6 +161,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            bloom_filter_enabled: false,
         }
     }
 
@@ -265,6 +268,20 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
+    /// Determines whether to enable bloom filter-based row group filtering.
+    ///
+    /// When enabled, if a read is performed with an equality or IN predicate,
+    /// the bloom filter for relevant columns in each row group is read and
+    /// checked. Row groups where the bloom filter proves the value is absent
+    /// are skipped entirely.
+    ///
+    /// Defaults to disabled, as reading bloom filters requires additional I/O
+    /// per column per row group.
+    pub fn with_bloom_filter_enabled(mut self, bloom_filter_enabled: bool) -> Self {
+        self.bloom_filter_enabled = bloom_filter_enabled;
+        self
+    }
+
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
         let snapshot = match self.snapshot_id {
@@ -291,6 +308,7 @@ impl<'a> TableScanBuilder<'a> {
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
+                        bloom_filter_enabled: self.bloom_filter_enabled,
                         runtime: self.table.runtime().clone(),
                     });
                 };
@@ -311,6 +329,16 @@ impl<'a> TableScanBuilder<'a> {
             .map(Arc::new);
         let unified_partition_type = projected_partition_type(self.table, &schema, &field_ids)?;
 
+        // Precompute the table's sort orders once, keyed by id, so each manifest-file
+        // context carries only this narrow map instead of the full table metadata.
+        let sort_orders = Arc::new(
+            self.table
+                .metadata()
+                .sort_orders_iter()
+                .map(|order| (order.order_id, order.clone()))
+                .collect::<HashMap<i64, SortOrderRef>>(),
+        );
+
         let plan_context = PlanContext {
             snapshot,
             table_metadata: self.table.metadata_ref(),
@@ -325,6 +353,7 @@ impl<'a> TableScanBuilder<'a> {
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
             unified_partition_type,
+            sort_orders,
         };
 
         Ok(TableScan {
@@ -337,6 +366,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            bloom_filter_enabled: self.bloom_filter_enabled,
             runtime: self.table.runtime().clone(),
         })
     }
@@ -366,6 +396,7 @@ pub struct TableScan {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    bloom_filter_enabled: bool,
 
     runtime: Runtime,
 }
@@ -498,7 +529,8 @@ impl TableScan {
             ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
                 .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
                 .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
-                .with_row_selection_enabled(self.row_selection_enabled);
+                .with_row_selection_enabled(self.row_selection_enabled)
+                .with_bloom_filter_enabled(self.bloom_filter_enabled);
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
@@ -660,12 +692,14 @@ pub mod tests {
         RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_DELETE_FILE_PATH,
         RESERVED_FIELD_ID_DELETE_FILE_POS, RESERVED_FIELD_ID_POS,
     };
-    use crate::scan::FileScanTask;
+    use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, FormatVersion, Literal,
         MAIN_BRANCH, ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
-        NestedField, Operation, PartitionSpec, PrimitiveType, Schema, Snapshot, Struct, StructType,
-        Summary, TableMetadata, TableMetadataBuilder, TableProperties, Type, UnboundPartitionSpec,
+        MappedField, NameMapping, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType,
+        Schema, Snapshot, SortDirection, SortField, SortOrder, Struct, StructType, Summary,
+        TableMetadata, TableMetadataBuilder, TableProperties, Transform, Type,
+        UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -1637,6 +1671,76 @@ pub mod tests {
             manifest_list_write.close().await.unwrap();
         }
 
+        /// Writes a manifest with three live "Added" data-file entries (partitioned on `x`
+        /// = 100, 200, 300), each with the given `sort_order_id` set on its `DataFile`
+        /// (`None` leaves the field unset). Used to test how `sort_order_id` resolution
+        /// against the table's sort orders flows into each entry's `FileScanTask`.
+        pub async fn setup_manifest_files_with_sort_order_ids(
+            &mut self,
+            sort_order_ids: [Option<i32>; 4],
+        ) {
+            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+            let current_partition_spec = self.table.metadata().default_partition_spec();
+            let parquet_file_size = self.write_parquet_data_files();
+
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
+            )
+            .build_v2_data();
+
+            for (i, sort_order_id) in sort_order_ids.into_iter().enumerate() {
+                let mut data_file_builder = DataFileBuilder::default();
+                data_file_builder
+                    .partition_spec_id(0)
+                    .content(DataContentType::Data)
+                    .file_path(format!("{}/{}.parquet", &self.table_location, i + 1))
+                    .file_format(DataFileFormat::Parquet)
+                    .file_size_in_bytes(parquet_file_size)
+                    .record_count(1)
+                    .partition(Struct::from_iter([Some(Literal::long(
+                        100 * (i as i64 + 1),
+                    ))]));
+                if let Some(id) = sort_order_id {
+                    data_file_builder.sort_order_id(id);
+                }
+                let data_file = data_file_builder.build().unwrap();
+
+                writer
+                    .add_entry(
+                        ManifestEntry::builder()
+                            .status(ManifestStatus::Added)
+                            .data_file(data_file)
+                            .build(),
+                    )
+                    .unwrap();
+            }
+
+            let data_file_manifest = writer.write_manifest_file().await.unwrap();
+
+            let manifest_list_writer = self
+                .table
+                .file_io()
+                .new_output(current_snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap();
+            let mut manifest_list_write = ManifestListWriter::v2(
+                manifest_list_writer,
+                current_snapshot.snapshot_id(),
+                current_snapshot.parent_snapshot_id(),
+                current_snapshot.sequence_number(),
+            );
+            manifest_list_write
+                .add_manifests(std::iter::once(data_file_manifest))
+                .unwrap();
+            manifest_list_write.close().await.unwrap();
+        }
+
         /// Writes `mrg.parquet` with three 100-row row groups. Columns `x` (field
         /// id `1`) and `y` (field id `2`) both run 1000..1300, so row position `p`
         /// carries `x = y = 1000 + p`. Returns `(path, file_size_in_bytes)`.
@@ -1969,6 +2073,104 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn test_plan_files_carries_sort_order_into_file_scan_task() {
+        let mut fixture = TableTestFixture::new();
+
+        // Inject the reserved unsorted order (id 0) inline rather than editing the shared
+        // testdata fixture, so the id-0 file below exercises the `!is_unsorted()` filter
+        // branch instead of the `and_then` short-circuit an absent entry would take.
+        let mut metadata = fixture.table.metadata().clone();
+        metadata
+            .sort_orders
+            .insert(0, Arc::new(SortOrder::unsorted_order()));
+        fixture.table = fixture.table.with_metadata(Arc::new(metadata));
+
+        let expected_sort_order = fixture
+            .table
+            .metadata()
+            .sort_order_by_id(3)
+            .unwrap()
+            .clone();
+
+        // sort_order_ids: resolvable (3), absent, unresolvable (99), reserved unsorted (0).
+        fixture
+            .setup_manifest_files_with_sort_order_ids([Some(3), None, Some(99), Some(0)])
+            .await;
+
+        let tasks: Vec<_> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(tasks.len(), 4, "expected all four FileScanTasks");
+
+        // Aggregates catch a systemic regression (every entry resolving to id 3, or
+        // resolution dropping entirely) that the per-file checks below would each still pass.
+        assert_eq!(
+            tasks.iter().filter(|t| t.sort_order().is_some()).count(),
+            1,
+            "exactly one file resolves to a sort order"
+        );
+        assert_eq!(
+            tasks.iter().filter(|t| t.sort_order_id().is_some()).count(),
+            3,
+            "three files carry a raw sort_order_id"
+        );
+
+        let resolved = tasks
+            .iter()
+            .find(|t| t.data_file_path().ends_with("1.parquet"))
+            .unwrap();
+        assert_eq!(resolved.sort_order_id(), Some(3));
+        assert_eq!(
+            resolved.sort_order(),
+            Some(&expected_sort_order),
+            "sort_order_id 3 should resolve to the table's sort order at id 3"
+        );
+
+        let missing = tasks
+            .iter()
+            .find(|t| t.data_file_path().ends_with("2.parquet"))
+            .unwrap();
+        assert_eq!(missing.sort_order_id(), None);
+        assert!(
+            missing.sort_order().is_none(),
+            "a file with no sort_order_id carries no sort_order"
+        );
+
+        let unresolvable = tasks
+            .iter()
+            .find(|t| t.data_file_path().ends_with("3.parquet"))
+            .unwrap();
+        assert_eq!(
+            unresolvable.sort_order_id(),
+            Some(99),
+            "the raw id is preserved even when it does not resolve"
+        );
+        assert!(
+            unresolvable.sort_order().is_none(),
+            "an unresolvable sort_order_id resolves to no sort_order"
+        );
+
+        let unsorted = tasks
+            .iter()
+            .find(|t| t.data_file_path().ends_with("4.parquet"))
+            .unwrap();
+        assert_eq!(unsorted.sort_order_id(), Some(0));
+        assert!(
+            unsorted.sort_order().is_none(),
+            "the reserved unsorted order (id 0) resolves to no sort_order"
+        );
+    }
+
+    #[tokio::test]
     async fn test_plan_files_on_table_without_any_snapshots() {
         let table = TableTestFixture::new_empty().table;
         let batch_stream = table.scan().build().unwrap().to_arrow().await.unwrap();
@@ -2082,9 +2284,14 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_filtered_scan_rejects_dropped_partition_source_column() {
+    async fn test_filtered_scan_with_dropped_partition_source_column() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
+
+        // Baseline: the same filtered scan against the table before evolution.
+        let baseline = scan_y_gte_5(&fixture.table).await;
+        assert!(!baseline.is_empty());
+        assert!(baseline.iter().all(|y| *y >= 5));
 
         // Evolve the table so that the manifests reference a historical spec whose source
         // column is no longer in the current schema: make an unpartitioned spec the
@@ -2135,23 +2342,37 @@ pub mod tests {
             .metadata;
         let table = fixture.table.clone().with_metadata(Arc::new(metadata));
 
+        // Planning and reading must succeed, and the results must match the table before
+        // evolution: no rows wrongly pruned and none returned unfiltered.
+        let evolved = scan_y_gte_5(&table).await;
+        assert_eq!(evolved, baseline);
+    }
+
+    async fn scan_y_gte_5(table: &Table) -> Vec<i64> {
         let table_scan = table
             .scan()
             .select(["y"])
             .with_filter(Reference::new("y").greater_than_or_equal_to(Datum::long(5)))
             .build()
             .unwrap();
-
-        let err = table_scan
-            .plan_files()
+        let batches: Vec<_> = table_scan
+            .to_arrow()
             .await
             .unwrap()
-            .try_collect::<Vec<_>>()
+            .try_collect()
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert_eq!(err.kind(), ErrorKind::Unexpected);
-        assert!(err.message().contains("No column with source column id 1"));
+        let mut values: Vec<i64> = batches
+            .iter()
+            .flat_map(|batch| {
+                let col = batch.column_by_name("y").unwrap();
+                let arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+                (0..arr.len()).map(|i| arr.value(i)).collect::<Vec<_>>()
+            })
+            .collect();
+        values.sort_unstable();
+        values
     }
 
     #[tokio::test]
@@ -2629,33 +2850,64 @@ pub mod tests {
         assert_eq!(string_arr.value(0), "Apache");
     }
 
-    #[test]
-    fn test_file_scan_task_serialize_deserialize() {
-        let test_fn = |task: FileScanTask| {
-            let serialized = serde_json::to_string(&task).unwrap();
-            let deserialized: FileScanTask = serde_json::from_str(&serialized).unwrap();
-
-            assert_eq!(task, deserialized);
-        };
-
-        // without predicate
-        let schema = Arc::new(
+    fn file_scan_task_test_schema(primitive_type: PrimitiveType) -> Arc<Schema> {
+        Arc::new(
             Schema::builder()
                 .with_fields(vec![Arc::new(NestedField::required(
                     1,
                     "x",
-                    Type::Primitive(PrimitiveType::Binary),
+                    Type::Primitive(primitive_type),
                 ))])
                 .build()
                 .unwrap(),
+        )
+    }
+
+    fn assert_file_scan_task_serde_round_trip(task: FileScanTask) {
+        // Regression test for https://github.com/apache/iceberg-rust/issues/3089.
+        let serialized = serde_json::to_string(&task).unwrap();
+        let deserialized: FileScanTask = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(task, deserialized);
+    }
+
+    fn file_scan_task_with_partition(
+        primitive_type: PrimitiveType,
+        transform: Transform,
+        partition_value: Literal,
+    ) -> FileScanTask {
+        let schema = file_scan_task_test_schema(primitive_type);
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_partition_field("x", "x_partition", transform)
+                .unwrap()
+                .build()
+                .unwrap(),
         );
+        FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(123)
+            .with_start(10)
+            .with_length(100)
+            .with_project_field_ids(vec![1])
+            .with_schema(schema)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_partition(Some(Struct::from_iter([Some(partition_value)])))
+            .with_partition_spec(Some(partition_spec))
+            .with_case_sensitive(true)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_without_predicate() {
         let task = FileScanTask::builder()
             .with_data_file_path("data_file_path".to_string())
             .with_file_size_in_bytes(0)
             .with_start(0)
             .with_length(100)
             .with_project_field_ids(vec![1, 2, 3])
-            .with_schema(schema.clone())
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
             .with_record_count(Some(100))
             .with_first_row_id(Some(1000))
             .with_data_sequence_number(Some(5))
@@ -2663,9 +2915,11 @@ pub mod tests {
             .with_case_sensitive(false)
             .build()
             .unwrap();
-        test_fn(task);
+        assert_file_scan_task_serde_round_trip(task);
+    }
 
-        // with predicate
+    #[test]
+    fn test_file_scan_task_serde_with_predicate() {
         let task = FileScanTask::builder()
             .with_data_file_path("data_file_path".to_string())
             .with_file_size_in_bytes(0)
@@ -2673,12 +2927,170 @@ pub mod tests {
             .with_length(100)
             .with_project_field_ids(vec![1, 2, 3])
             .with_predicate(Some(BoundPredicate::AlwaysTrue))
-            .with_schema(schema)
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
             .with_data_file_format(DataFileFormat::Avro)
             .with_case_sensitive(false)
             .build()
             .unwrap();
-        test_fn(task);
+
+        let serialized = serde_json::to_value(&task).unwrap();
+        assert!(serialized.get("record_count").is_none());
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_unpartitioned_file_scan_task_serde() {
+        let task = FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(0)
+            .with_start(0)
+            .with_length(100)
+            .with_project_field_ids(vec![1, 2, 3])
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_partition(Some(Struct::empty()))
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_all_optional_fields() {
+        let schema = file_scan_task_test_schema(PrimitiveType::Long);
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_partition_field("x", "x", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+        let unified_partition_type = Arc::new(partition_spec.partition_type(&schema).unwrap());
+        let sort_order = Arc::new(
+            SortOrder::builder()
+                .with_order_id(1)
+                .with_sort_field(
+                    SortField::builder()
+                        .source_id(1)
+                        .transform(Transform::Identity)
+                        .direction(SortDirection::Ascending)
+                        .null_order(NullOrder::First)
+                        .build(),
+                )
+                .build(&schema)
+                .unwrap(),
+        );
+        let task = FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(123)
+            .with_start(10)
+            .with_length(100)
+            .with_project_field_ids(vec![1])
+            .with_schema(schema)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_path("delete_file_path".to_string())
+                    .with_file_size_in_bytes(23)
+                    .with_file_type(DataContentType::EqualityDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
+                    .with_partition_spec_id(0)
+                    .with_equality_ids(Some(vec![1]))
+                    .with_referenced_data_file(Some("data_file_path".to_string()))
+                    .with_content_offset(Some(12))
+                    .with_content_size_in_bytes(Some(34))
+                    .with_record_count(Some(5))
+                    .with_key_metadata(Some(vec![4, 5, 6].into_boxed_slice()))
+                    .build(),
+            ])
+            .with_partition(Some(Struct::from_iter([Some(Literal::long(42))])))
+            .with_partition_spec(Some(partition_spec))
+            .with_name_mapping(Some(Arc::new(NameMapping::new(vec![MappedField::new(
+                Some(1),
+                vec!["x".to_string()],
+                vec![],
+            )]))))
+            .with_unified_partition_type(Some(unified_partition_type))
+            .with_sort_order_id(Some(1))
+            .with_sort_order(Some(sort_order))
+            .with_case_sensitive(true)
+            .with_key_metadata(Some(vec![1, 2, 3].into_boxed_slice()))
+            .build()
+            .unwrap();
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_date_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Date,
+            Transform::Identity,
+            Literal::date(19_000),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_timestamp_ns_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::TimestampNs,
+            Transform::Identity,
+            Literal::timestamp_nano(1_510_871_468_123_456_789),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_timestamptz_ns_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::TimestamptzNs,
+            Transform::Identity,
+            Literal::timestamptz_nano(1_510_871_468_123_456_789),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_decimal_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Decimal {
+                precision: 9,
+                scale: 2,
+            },
+            Transform::Identity,
+            Literal::decimal(12_345),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_uuid_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Uuid,
+            Transform::Identity,
+            Literal::uuid(Uuid::from_u128(0x12345678_90ab_cdef_1234_567890abcdef)),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_fixed_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Fixed(4),
+            Transform::Identity,
+            Literal::fixed([1, 2, 3, 4]),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_bucket_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::String,
+            Transform::Bucket(4),
+            Literal::int(2),
+        );
+        assert_file_scan_task_serde_round_trip(task);
     }
 
     #[tokio::test]
