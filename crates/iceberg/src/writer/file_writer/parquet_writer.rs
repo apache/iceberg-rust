@@ -40,7 +40,7 @@ use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
     get_field_id_from_metadata, get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
-    schema_to_arrow_schema_for_parquet_write,
+    schema_to_arrow_schema, schema_to_arrow_schema_for_parquet_write,
 };
 use crate::compression::CompressionCodec;
 use crate::encryption::{EncryptionManager, StandardKeyMetadata};
@@ -183,6 +183,7 @@ impl FileWriterBuilder for ParquetWriterBuilder {
             resolve_writer_properties(self.props.clone(), key_metadata.as_ref())?;
         Ok(ParquetWriter {
             schema: self.schema.clone(),
+            logical_arrow_schema: Arc::new(schema_to_arrow_schema(&self.schema)?),
             arrow_schema: Arc::new(schema_to_arrow_schema_for_parquet_write(&self.schema)?),
             match_mode: self.match_mode,
             inner_writer: None,
@@ -214,6 +215,98 @@ fn find_field_index(
             .iter()
             .position(|field| field.name() == target.name())),
     }
+}
+
+fn fields_match(source: &FieldRef, target: &FieldRef, match_mode: FieldMatchMode) -> Result<bool> {
+    match match_mode {
+        FieldMatchMode::Id => {
+            Ok(get_field_id_from_metadata(source)? == get_field_id_from_metadata(target)?)
+        }
+        FieldMatchMode::Name => Ok(source.name() == target.name()),
+    }
+}
+
+fn validate_source_field_for_parquet_write(
+    source: &FieldRef,
+    target: &FieldRef,
+    match_mode: FieldMatchMode,
+) -> Result<()> {
+    match (source.data_type(), target.data_type()) {
+        (DataType::Null, DataType::Null) => Ok(()),
+        (source_type, DataType::Null) => Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Expected unknown field {} to use Arrow Null type, got {source_type}",
+                source.name()
+            ),
+        )),
+        (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+            validate_source_fields_for_parquet_write(source_fields, target_fields, match_mode)
+        }
+        (DataType::List(source_element), DataType::List(target_element)) => {
+            if !fields_match(source_element, target_element, match_mode)? {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "List element field {} does not match configured field {} for Parquet write",
+                        source_element.name(),
+                        target_element.name()
+                    ),
+                ));
+            }
+            validate_source_field_for_parquet_write(source_element, target_element, match_mode)
+        }
+        (DataType::Map(source_entries, _), DataType::Map(target_entries, _)) => {
+            match (source_entries.data_type(), target_entries.data_type()) {
+                (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+                    validate_source_fields_for_parquet_write(
+                        source_fields,
+                        target_fields,
+                        match_mode,
+                    )
+                }
+                _ => Ok(()),
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_source_fields_for_parquet_write(
+    source_fields: &Fields,
+    target_fields: &Fields,
+    match_mode: FieldMatchMode,
+) -> Result<()> {
+    let mut matched_targets = vec![false; target_fields.len()];
+    for source_field in source_fields {
+        let target_index = find_field_index(target_fields, source_field, match_mode)?.ok_or_else(
+            || {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Field {} is not present in the configured Iceberg schema for Parquet write",
+                        source_field.name()
+                    ),
+                )
+            },
+        )?;
+        if matched_targets[target_index] {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Multiple source fields match configured field {} for Parquet write",
+                    target_fields[target_index].name()
+                ),
+            ));
+        }
+        matched_targets[target_index] = true;
+        validate_source_field_for_parquet_write(
+            source_field,
+            &target_fields[target_index],
+            match_mode,
+        )?;
+    }
+    Ok(())
 }
 
 fn project_array_for_parquet_write(
@@ -329,6 +422,7 @@ fn project_array_for_parquet_write(
 
 fn project_batch_for_parquet_write(
     batch: &RecordBatch,
+    logical_schema: ArrowSchemaRef,
     target_schema: ArrowSchemaRef,
     match_mode: FieldMatchMode,
 ) -> Result<RecordBatch> {
@@ -337,6 +431,11 @@ fn project_batch_for_parquet_write(
     }
 
     let source_schema = batch.schema();
+    validate_source_fields_for_parquet_write(
+        source_schema.fields(),
+        logical_schema.fields(),
+        match_mode,
+    )?;
     let columns = target_schema
         .fields()
         .iter()
@@ -494,6 +593,7 @@ impl SchemaVisitor for IndexByParquetPathName {
 /// Parquet file.
 pub struct ParquetWriter {
     schema: SchemaRef,
+    logical_arrow_schema: ArrowSchemaRef,
     arrow_schema: ArrowSchemaRef,
     match_mode: FieldMatchMode,
     output_file: OutputFile,
@@ -809,8 +909,12 @@ impl FileWriter for ParquetWriter {
 
         self.current_row_num += batch.num_rows();
 
-        let batch =
-            project_batch_for_parquet_write(batch, self.arrow_schema.clone(), self.match_mode)?;
+        let batch = project_batch_for_parquet_write(
+            batch,
+            self.logical_arrow_schema.clone(),
+            self.arrow_schema.clone(),
+            self.match_mode,
+        )?;
         self.nan_value_count_visitor
             .compute(self.schema.clone(), batch.clone())?;
 
@@ -942,7 +1046,7 @@ mod tests {
 
     use anyhow::Result;
     use arrow_array::builder::{Float32Builder, Int32Builder, MapBuilder};
-    use arrow_array::types::{Float32Type, Int64Type};
+    use arrow_array::types::{Float32Type, Int32Type, Int64Type};
     use arrow_array::{
         Array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array,
         Int64Array, ListArray, MapArray, NullArray, RecordBatch, StructArray,
@@ -960,7 +1064,7 @@ mod tests {
 
     use super::*;
     use crate::Runtime;
-    use crate::arrow::{ArrowReaderBuilder, schema_to_arrow_schema};
+    use crate::arrow::ArrowReaderBuilder;
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskStream};
     use crate::spec::decimal_utils::{decimal_mantissa, decimal_new, decimal_scale};
@@ -1061,15 +1165,21 @@ mod tests {
             ],
             None,
         ));
-        let batch = RecordBatch::try_new(source_schema, vec![
+        let batch = RecordBatch::try_new(source_schema.clone(), vec![
             Arc::new(NullArray::new(2)),
             struct_array,
         ])
         .unwrap();
+        let logical_schema = source_schema.clone();
         let target_schema = Arc::new(schema_to_arrow_schema_for_parquet_write(&schema).unwrap());
 
-        let projected =
-            project_batch_for_parquet_write(&batch, target_schema, FieldMatchMode::Id).unwrap();
+        let projected = project_batch_for_parquet_write(
+            &batch,
+            logical_schema,
+            target_schema,
+            FieldMatchMode::Id,
+        )
+        .unwrap();
 
         assert_eq!(projected.num_rows(), 2);
         assert_eq!(projected.num_columns(), 1);
@@ -1099,20 +1209,19 @@ mod tests {
                 PARQUET_FIELD_ID_META_KEY.to_string(),
                 "2".to_string(),
             )])),
-            Field::new("wrong", DataType::Int32, true).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "1".to_string(),
-            )])),
         ]));
-        let batch = RecordBatch::try_new(source_schema, vec![
-            Arc::new(Int32Array::from(vec![10])),
-            Arc::new(Int32Array::from(vec![20])),
-        ])
-        .unwrap();
+        let batch = RecordBatch::try_new(source_schema, vec![Arc::new(Int32Array::from(vec![10]))])
+            .unwrap();
+        let logical_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
         let target_schema = Arc::new(schema_to_arrow_schema_for_parquet_write(&schema).unwrap());
 
-        let projected =
-            project_batch_for_parquet_write(&batch, target_schema, FieldMatchMode::Name).unwrap();
+        let projected = project_batch_for_parquet_write(
+            &batch,
+            logical_schema,
+            target_schema,
+            FieldMatchMode::Name,
+        )
+        .unwrap();
 
         let values = projected
             .column(0)
@@ -1120,6 +1229,181 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .unwrap();
         assert_eq!(values.value(0), 10);
+    }
+
+    #[test]
+    fn test_project_batch_for_parquet_rejects_unconfigured_fields() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "known", PrimitiveType::Int.into()).into(),
+                NestedField::optional(
+                    2,
+                    "struct",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(3, "unknown", PrimitiveType::Unknown.into()).into(),
+                        NestedField::optional(4, "known", PrimitiveType::Int.into()).into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        let logical_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let target_schema = Arc::new(schema_to_arrow_schema_for_parquet_write(&schema).unwrap());
+        let DataType::Struct(logical_struct_fields) = logical_schema.field(1).data_type() else {
+            panic!("expected struct field");
+        };
+        let logical_struct = Arc::new(StructArray::new(
+            logical_struct_fields.clone(),
+            vec![
+                Arc::new(NullArray::new(1)),
+                Arc::new(Int32Array::from(vec![10])),
+            ],
+            None,
+        ));
+        let unexpected_field = Field::new("unexpected", DataType::Int32, true).with_metadata(
+            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "5".to_string())]),
+        );
+
+        let top_level_batch = RecordBatch::try_new(
+            Arc::new(arrow_schema::Schema::new(vec![
+                logical_schema.field(0).clone(),
+                logical_schema.field(1).clone(),
+                unexpected_field.clone(),
+            ])),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                logical_struct.clone(),
+                Arc::new(Int32Array::from(vec![20])),
+            ],
+        )
+        .unwrap();
+
+        let mut source_struct_fields: Vec<FieldRef> =
+            logical_struct_fields.iter().cloned().collect();
+        source_struct_fields.push(Arc::new(unexpected_field));
+        let source_struct_fields: Fields = source_struct_fields.into();
+        let source_struct = Arc::new(StructArray::new(
+            source_struct_fields.clone(),
+            vec![
+                Arc::new(NullArray::new(1)),
+                Arc::new(Int32Array::from(vec![10])),
+                Arc::new(Int32Array::from(vec![20])),
+            ],
+            None,
+        ));
+        let source_struct_field = logical_schema
+            .field(1)
+            .clone()
+            .with_data_type(DataType::Struct(source_struct_fields));
+        let nested_batch = RecordBatch::try_new(
+            Arc::new(arrow_schema::Schema::new(vec![
+                logical_schema.field(0).clone(),
+                source_struct_field,
+            ])),
+            vec![Arc::new(Int32Array::from(vec![1])), source_struct],
+        )
+        .unwrap();
+
+        for match_mode in [FieldMatchMode::Id, FieldMatchMode::Name] {
+            for batch in [&top_level_batch, &nested_batch] {
+                let error = project_batch_for_parquet_write(
+                    batch,
+                    logical_schema.clone(),
+                    target_schema.clone(),
+                    match_mode,
+                )
+                .unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("is not present in the configured Iceberg schema"),
+                    "unexpected error: {error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_project_batch_for_parquet_validates_list_element_identity() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(
+                    1,
+                    "list",
+                    Type::List(ListType::new(
+                        NestedField::optional(2, "element", PrimitiveType::Int.into()).into(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        let logical_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let target_schema = Arc::new(schema_to_arrow_schema_for_parquet_write(&schema).unwrap());
+        let DataType::List(target_element) = logical_schema.field(0).data_type() else {
+            panic!("expected list field");
+        };
+        let mismatched_elements = [
+            (
+                Arc::new(
+                    Field::new(
+                        target_element.name(),
+                        target_element.data_type().clone(),
+                        target_element.is_nullable(),
+                    )
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "3".to_string(),
+                    )])),
+                ),
+                FieldMatchMode::Id,
+            ),
+            (
+                Arc::new(
+                    Field::new(
+                        "wrong",
+                        target_element.data_type().clone(),
+                        target_element.is_nullable(),
+                    )
+                    .with_metadata(target_element.metadata().clone()),
+                ),
+                FieldMatchMode::Name,
+            ),
+        ];
+
+        for (source_element, match_mode) in mismatched_elements {
+            let list_parts =
+                ListArray::from_iter_primitive::<Int32Type, _, _>([Some(vec![Some(10)])])
+                    .into_parts();
+            let list_array = Arc::new(ListArray::new(
+                source_element.clone(),
+                list_parts.1,
+                list_parts.2,
+                list_parts.3,
+            ));
+            let source_field = logical_schema
+                .field(0)
+                .clone()
+                .with_data_type(DataType::List(source_element));
+            let batch = RecordBatch::try_new(
+                Arc::new(arrow_schema::Schema::new(vec![source_field])),
+                vec![list_array],
+            )
+            .unwrap();
+
+            let error = project_batch_for_parquet_write(
+                &batch,
+                logical_schema.clone(),
+                target_schema.clone(),
+                match_mode,
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("List element field"),
+                "unexpected error: {error}"
+            );
+        }
     }
 
     #[test]
@@ -1131,6 +1415,7 @@ mod tests {
             .build()
             .unwrap();
         let target_schema = Arc::new(schema_to_arrow_schema_for_parquet_write(&schema).unwrap());
+        let logical_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
 
         let cases = [
             (
@@ -1153,9 +1438,13 @@ mod tests {
                 ])
                 .unwrap();
 
-            let error =
-                project_batch_for_parquet_write(&batch, target_schema.clone(), FieldMatchMode::Id)
-                    .unwrap_err();
+            let error = project_batch_for_parquet_write(
+                &batch,
+                logical_schema.clone(),
+                target_schema.clone(),
+                FieldMatchMode::Id,
+            )
+            .unwrap_err();
             assert!(
                 error.to_string().contains(expected_message),
                 "unexpected error: {error}"
