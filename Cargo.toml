@@ -25,7 +25,6 @@ members = [
   "crates/integrations/*",
   "crates/kms",
   "crates/property-macro",
-  "crates/sqllogictest",
   "crates/storage/*",
   "crates/test_utils",
 ]
@@ -80,16 +79,8 @@ bimap = "0.6"
 bytes = "1.11"
 cfg-if = "1"
 chrono = "0.4.41"
-clap = { version = "4.5.48", features = ["derive", "cargo"] }
 crc32fast = "1"
-dashmap = "6"
-datafusion = "55.0.0"
-datafusion-cli = "55.0.0"
-datafusion-sqllogictest = "55.0.0"
 derive_builder = "0.20"
-dirs = "6"
-enum-ordinalize = "4.3.0"
-env_logger = "0.11.8"
 expect-test = "1"
 fastnum = { version = "0.7", default-features = false, features = [
   "std",
@@ -99,10 +90,8 @@ faststr = "0.2.31"
 flate2 = "1.1.5"
 fnv = "1.0.7"
 form_urlencoded = "1.2.2"
-fs-err = "3.1.0"
 futures = "0.3"
 hive_metastore = "0.2.0"
-home = "0.5.12"
 http = "1.2"
 iceberg = { version = "0.10.0", path = "./crates/iceberg" }
 iceberg-catalog-glue = { version = "0.10.0", path = "./crates/catalog/glue" }
@@ -110,17 +99,12 @@ iceberg-catalog-hms = { version = "0.10.0", path = "./crates/catalog/hms" }
 iceberg-catalog-rest = { version = "0.10.0", path = "./crates/catalog/rest" }
 iceberg-catalog-s3tables = { version = "0.10.0", path = "./crates/catalog/s3tables" }
 iceberg-catalog-sql = { version = "0.10.0", path = "./crates/catalog/sql" }
-iceberg-datafusion = { version = "0.10.0", path = "./crates/integrations/datafusion" }
 iceberg-kms = { version = "0.10.0", path = "./crates/kms" }
 iceberg-property-macro = { version = "0.10.0", path = "./crates/property-macro" }
 iceberg-storage-opendal = { version = "0.10.0", path = "./crates/storage/opendal" }
-indicatif = "0.18"
 itertools = "0.13"
-libtest-mimic = "0.8.1"
 linkedbytes = "0.1.8"
-log = "0.4.28"
 metainfo = "0.7.14"
-mimalloc = "0.1.46"
 minijinja = "2.12.0"
 mockall = "0.13.1"
 mockito = "1"
@@ -146,9 +130,7 @@ serde_derive = "1.0.219"
 serde_json = "1.0.142"
 serde_repr = "0.1.16"
 serde_with = "3.4"
-sqllogictest = "0.29"
 sqlx = { version = "0.8.1", default-features = false }
-stacker = "0.1.20"
 strum = "0.27.2"
 syn = "2"
 tempfile = "3.18"
@@ -156,7 +138,6 @@ tokio = { version = "1.47", default-features = false, features = [
   "sync",
   "rt-multi-thread",
 ] }
-toml = "0.8"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
 trybuild = "1"

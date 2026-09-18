@@ -11,16 +11,16 @@ android_system_properties@0.1.5		X								X
 anyhow@1.0.103		X								X			
 apache-avro@0.21.0		X											
 array-init@2.1.0		X								X			
-arrow-arith@59.2.0		X											
-arrow-array@59.2.0		X								X			
-arrow-buffer@59.2.0		X											
-arrow-cast@59.2.0		X											
-arrow-data@59.2.0		X											
-arrow-ipc@59.2.0		X											
-arrow-ord@59.2.0		X											
-arrow-schema@59.2.0		X											
-arrow-select@59.2.0		X											
-arrow-string@59.2.0		X											
+arrow-arith@59.3.0		X											
+arrow-array@59.3.0		X								X			
+arrow-buffer@59.3.0		X											
+arrow-cast@59.3.0		X											
+arrow-data@59.3.0		X											
+arrow-ipc@59.3.0		X											
+arrow-ord@59.3.0		X											
+arrow-schema@59.3.0		X											
+arrow-select@59.3.0		X											
+arrow-string@59.3.0		X											
 as-any@0.3.2		X								X			
 async-lock@3.4.2		X								X			
 async-trait@0.1.89		X								X			
@@ -167,7 +167,7 @@ ordered-float@4.6.0										X
 parking@2.2.1		X								X			
 parking_lot@0.12.5		X								X			
 parking_lot_core@0.9.12		X								X			
-parquet@59.2.0		X											
+parquet@59.3.0		X											
 percent-encoding@2.3.2		X								X			
 pin-project-lite@0.2.17		X								X			
 pkg-config@0.3.33		X								X			
