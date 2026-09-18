@@ -231,13 +231,17 @@ impl OverwriteOperation {
         };
 
         for entry in manifest.entries() {
-            if entry.is_alive() && self.deleted_file_paths.contains(entry.file_path()) {
-                let mut deleted: ManifestEntry = (**entry).clone();
+            let entry: ManifestEntry = (**entry).clone();
+            if !entry.is_alive() {
+                // A tombstone keeps its original snapshot id so the delete stays attributed
+                // to the snapshot that made it.
+                writer.add_deleted_entry(entry)?;
+            } else if self.deleted_file_paths.contains(entry.file_path()) {
+                let mut deleted = entry;
                 deleted.snapshot_id = Some(self.snapshot_id);
                 writer.add_deleted_entry(deleted)?;
             } else {
-                let cloned: ManifestEntry = (**entry).clone();
-                writer.add_existing_entry(cloned)?;
+                writer.add_existing_entry(entry)?;
             }
         }
 
@@ -250,12 +254,14 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
-        ManifestStatus, Operation, SnapshotRef, Struct,
+        ManifestEntryRef, ManifestStatus, Operation, SnapshotRef, Struct,
     };
-    use crate::transaction::tests::make_v2_minimal_table;
-    use crate::transaction::{Transaction, TransactionAction};
+    use crate::table::Table;
+    use crate::transaction::tests::{make_v2_minimal_table, make_v3_minimal_table_in_catalog};
+    use crate::transaction::{ApplyTransactionAction, Transaction, TransactionAction};
     use crate::{TableRequirement, TableUpdate};
 
     fn test_data_file(path: &str, partition_spec_id: i32) -> DataFile {
@@ -269,6 +275,33 @@ mod tests {
             .partition(Struct::from_iter([Some(Literal::long(300))]))
             .build()
             .unwrap()
+    }
+
+    async fn current_manifest_entries(table: &Table) -> Vec<(ManifestStatus, String)> {
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
+
+        let mut entries = vec![];
+        for manifest_file in manifest_list.entries() {
+            let manifest = table.manifest_reader().read(manifest_file).await.unwrap();
+            for entry in manifest.entries() {
+                entries.push((entry.status(), entry.file_path().to_string()));
+            }
+        }
+        entries
+    }
+
+    async fn current_manifest_entry(table: &Table, path: &str) -> ManifestEntryRef {
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
+
+        for manifest_file in manifest_list.entries() {
+            let manifest = table.manifest_reader().read(manifest_file).await.unwrap();
+            if let Some(entry) = manifest.entries().iter().find(|e| e.file_path() == path) {
+                return entry.clone();
+            }
+        }
+        panic!("no manifest entry for {path}");
     }
 
     #[tokio::test]
@@ -405,10 +438,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_overwrite_with_deleted_files() {
-        use crate::memory::tests::new_memory_catalog;
-        use crate::transaction::ApplyTransactionAction;
-        use crate::transaction::tests::make_v3_minimal_table_in_catalog;
-
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
         let spec_id = table.metadata().default_partition_spec_id();
@@ -517,5 +546,58 @@ mod tests {
                 "Deleted entry should survive fast_append, entries: {all_entries:?}",
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_second_overwrite_keeps_prior_deleted_entries_deleted() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let file_b = test_data_file("test/b.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .fast_append()
+            .add_data_files(vec![file_a.clone(), file_b.clone()]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite()
+            .add_data_files(vec![test_data_file("test/c.parquet", spec_id)])
+            .delete_data_files(vec![file_a.clone()]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+        let tombstone = current_manifest_entry(&table, "test/a.parquet").await;
+        assert_eq!(ManifestStatus::Deleted, tombstone.status());
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite()
+            .add_data_files(vec![test_data_file("test/d.parquet", spec_id)])
+            .delete_data_files(vec![file_b.clone()]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let carried = current_manifest_entry(&table, "test/a.parquet").await;
+        assert_eq!(
+            ManifestStatus::Deleted,
+            carried.status(),
+            "the first overwrite's tombstone must stay Deleted"
+        );
+        assert_eq!(
+            tombstone.snapshot_id, carried.snapshot_id,
+            "the tombstone must keep the snapshot that deleted the file"
+        );
+        assert_eq!(
+            (tombstone.sequence_number, tombstone.file_sequence_number),
+            (carried.sequence_number, carried.file_sequence_number),
+            "the tombstone must keep its original sequence numbers"
+        );
+
+        let entries = current_manifest_entries(&table).await;
+        assert!(
+            entries.contains(&(ManifestStatus::Deleted, "test/b.parquet".to_string())),
+            "the second overwrite's own delete must be a tombstone, entries: {entries:?}"
+        );
     }
 }
