@@ -17,67 +17,19 @@
 
 //! Core cryptographic operations for Iceberg encryption.
 
-use std::fmt;
 use std::str::FromStr;
 
 use aes_gcm::aead::generic_array::typenum::U12;
 use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
 use aes_gcm::{Aes128Gcm, Aes256Gcm, AesGcm, Nonce};
-use zeroize::Zeroizing;
 
 /// AES-192-GCM with 96-bit nonce. Not provided by `aes-gcm` but constructible
 /// from the underlying primitives, same as `Aes128Gcm` and `Aes256Gcm`.
 type Aes192Gcm = AesGcm<aes_gcm::aes::Aes192, U12>;
 
+use crate::sensitive::SensitiveBytes;
 use crate::{Error, ErrorKind, Result};
-
-/// Wrapper for sensitive byte data (encryption keys, DEKs, etc.) that:
-/// - Zeroizes memory on drop
-/// - Redacts content in [`Debug`] and [`Display`] output
-/// - Provides only `&[u8]` access via [`as_bytes()`](Self::as_bytes)
-/// - Uses `Box<[u8]>` (immutable boxed slice) since key bytes never grow
-///
-/// Use this type for any struct field that holds plaintext key material.
-/// Because its [`Debug`] impl always prints `[N bytes REDACTED]`, structs
-/// containing `SensitiveBytes` can safely derive or implement `Debug`
-/// without risk of leaking key material.
-#[derive(Clone, PartialEq, Eq)]
-pub struct SensitiveBytes(Zeroizing<Box<[u8]>>);
-
-impl SensitiveBytes {
-    /// Wraps the given bytes as sensitive material.
-    pub fn new(bytes: impl Into<Box<[u8]>>) -> Self {
-        Self(Zeroizing::new(bytes.into()))
-    }
-
-    /// Returns the underlying bytes.
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    /// Returns the number of bytes.
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    /// Returns `true` if the byte slice is empty.
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-impl fmt::Debug for SensitiveBytes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{} bytes REDACTED]", self.0.len())
-    }
-}
-
-impl fmt::Display for SensitiveBytes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{} bytes REDACTED]", self.0.len())
-    }
-}
 
 /// Supported AES key sizes for AES-GCM encryption.
 ///
@@ -114,8 +66,8 @@ impl AesKeySize {
             24 => Ok(Self::Bits192),
             32 => Ok(Self::Bits256),
             _ => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                format!("Unsupported data key length: {len} (must be 16, 24, or 32)"),
+                ErrorKind::DataInvalid,
+                format!("Invalid data key length: {len} (must be 16, 24, or 32)"),
             )),
         }
     }
@@ -130,8 +82,8 @@ impl FromStr for AesKeySize {
             "192" | "AES_GCM_192" | "AES192_GCM" => Ok(Self::Bits192),
             "256" | "AES_GCM_256" | "AES256_GCM" => Ok(Self::Bits256),
             _ => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                format!("Unsupported AES key size: {s}"),
+                ErrorKind::DataInvalid,
+                format!("Invalid AES key size: {s}"),
             )),
         }
     }
@@ -217,7 +169,7 @@ impl AesGcmCipher {
     /// * `aad` - Additional authenticated data (optional)
     ///
     /// # Returns
-    /// The encrypted data in the format: [12-byte nonce][ciphertext][16-byte auth tag]
+    /// The encrypted data in the format: `[12-byte nonce][ciphertext][16-byte auth tag]`
     /// This matches the Java implementation format for compatibility.
     pub fn encrypt(&self, plaintext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>> {
         match self.key_size {
@@ -343,6 +295,15 @@ mod tests {
         );
         assert!(AesKeySize::from_key_length(8).is_err());
 
+        for len in [0, 8, 15, 20, 33] {
+            let err = AesKeySize::from_key_length(len).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid, "for length {len}");
+            assert_eq!(
+                err.message(),
+                format!("Invalid data key length: {len} (must be 16, 24, or 32)")
+            );
+        }
+
         assert_eq!(AesKeySize::from_str("128").unwrap(), AesKeySize::Bits128);
         assert_eq!(
             AesKeySize::from_str("AES_GCM_128").unwrap(),
@@ -352,7 +313,11 @@ mod tests {
             AesKeySize::from_str("AES_GCM_256").unwrap(),
             AesKeySize::Bits256
         );
-        assert!(AesKeySize::from_str("INVALID").is_err());
+        for size in ["", "127", "AES_GCM_512", "INVALID"] {
+            let err = AesKeySize::from_str(size).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid, "for size {size}");
+            assert_eq!(err.message(), format!("Invalid AES key size: {size}"));
+        }
     }
 
     #[test]

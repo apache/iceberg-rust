@@ -418,6 +418,12 @@ pub(crate) mod _serde {
                     Type::Primitive(PrimitiveType::Timestamptz) => {
                         Ok(Some(Literal::timestamptz(v)))
                     }
+                    Type::Primitive(PrimitiveType::TimestampNs) => {
+                        Ok(Some(Literal::timestamp_nano(v)))
+                    }
+                    Type::Primitive(PrimitiveType::TimestamptzNs) => {
+                        Ok(Some(Literal::timestamptz_nano(v)))
+                    }
                     _ => Err(invalid_err("long")),
                 },
                 RawLiteralEnum::Float(v) => match ty {
@@ -681,7 +687,7 @@ pub(crate) mod _serde {
                                     .ok_or_else(|| {
                                         invalid_err_with_reason(
                                             "record",
-                                            &format!("field {} is not exist", &field_name),
+                                            &format!("field {} is not exist", field_name),
                                         )
                                     })?;
                                 let value = value.try_into(&field.field_type)?;

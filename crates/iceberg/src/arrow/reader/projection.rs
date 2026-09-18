@@ -312,6 +312,26 @@ pub(super) fn build_field_id_map(
     Ok(Some(column_map))
 }
 
+/// Finds the Parquet leaf column index carrying `field_id` by its embedded id.
+///
+/// Unlike [`build_field_id_map`], a leaf without an embedded id does not abort the
+/// search -- it is simply skipped. This tolerates files that legitimately mix id-bearing
+/// and id-less leaves, e.g. a Variant column whose internal metadata/value leaves are
+/// required by the spec to have no field id, alongside a reserved metadata column that
+/// does carry its id.
+pub(super) fn find_leaf_by_field_id(
+    parquet_schema: &SchemaDescriptor,
+    field_id: i32,
+) -> Option<usize> {
+    parquet_schema.columns().iter().position(|col| {
+        matches!(
+            col.self_type(),
+            ParquetType::PrimitiveType { basic_info, .. }
+                if basic_info.has_id() && basic_info.id() == field_id
+        )
+    })
+}
+
 /// Build a fallback field ID map for Parquet files without embedded field IDs.
 ///
 /// Returns the number of primitive (leaf) columns in a Parquet type, recursing into groups.
@@ -715,7 +735,8 @@ message schema {
                 .with_schema(new_schema.clone())
                 .with_project_field_ids(vec![1, 2]) // Request both columns 'a' and 'b'
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -814,7 +835,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -917,7 +939,8 @@ message schema {
                 .with_project_field_ids(vec![2, 4])
                 .with_case_sensitive(false)
                 .with_name_mapping(Some(name_mapping))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1025,7 +1048,8 @@ message schema {
                 .with_case_sensitive(false)
                 .with_name_mapping(Some(name_mapping))
                 .with_predicate(Some(predicate.bind(schema, true).unwrap()))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1118,7 +1142,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 3])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1205,7 +1230,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2, 3])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1306,7 +1332,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1436,7 +1463,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1533,7 +1561,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 5, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1644,7 +1673,8 @@ message schema {
                 .with_project_field_ids(vec![1, 2, 3])
                 .with_case_sensitive(false)
                 .with_predicate(Some(predicate.bind(schema, true).unwrap()))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1786,7 +1816,8 @@ message schema {
                 .with_case_sensitive(false)
                 .with_partition(Some(partition_data))
                 .with_partition_spec(Some(partition_spec))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1993,7 +2024,8 @@ message schema {
                 .with_project_field_ids(vec![4])
                 .with_case_sensitive(false)
                 .with_predicate(Some(predicate.bind(iceberg_schema, true).unwrap()))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 

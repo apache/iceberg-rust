@@ -21,7 +21,7 @@ use serde_derive::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use super::{Datum, ManifestEntry, Schema, Struct};
-use crate::spec::{FormatVersion, Literal, RawLiteral, StructType, Type};
+use crate::spec::{FormatVersion, Literal, RawLiteral, Type};
 use crate::{Error, ErrorKind, metadata_columns};
 
 #[derive(Serialize, Deserialize)]
@@ -34,7 +34,7 @@ pub(super) struct ManifestEntryV2 {
 }
 
 impl ManifestEntryV2 {
-    pub fn try_from(value: ManifestEntry, partition_type: &StructType) -> Result<Self, Error> {
+    pub fn try_from(value: ManifestEntry, partition_type: &Type) -> Result<Self, Error> {
         Ok(Self {
             status: value.status as i32,
             snapshot_id: value.snapshot_id,
@@ -47,7 +47,7 @@ impl ManifestEntryV2 {
     pub fn try_into(
         self,
         partition_spec_id: i32,
-        partition_type: &StructType,
+        partition_type: &Type,
         schema: &Schema,
     ) -> Result<ManifestEntry, Error> {
         Ok(ManifestEntry {
@@ -70,7 +70,7 @@ pub(super) struct ManifestEntryV1 {
 }
 
 impl ManifestEntryV1 {
-    pub fn try_from(value: ManifestEntry, partition_type: &StructType) -> Result<Self, Error> {
+    pub fn try_from(value: ManifestEntry, partition_type: &Type) -> Result<Self, Error> {
         Ok(Self {
             status: value.status as i32,
             snapshot_id: value.snapshot_id.unwrap_or_default(),
@@ -81,7 +81,7 @@ impl ManifestEntryV1 {
     pub fn try_into(
         self,
         partition_spec_id: i32,
-        partition_type: &StructType,
+        partition_type: &Type,
         schema: &Schema,
     ) -> Result<ManifestEntry, Error> {
         Ok(ManifestEntry {
@@ -127,7 +127,7 @@ pub(super) struct DataFileSerde {
 impl DataFileSerde {
     pub fn try_from(
         value: super::DataFile,
-        partition_type: &StructType,
+        partition_type: &Type,
         format_version: FormatVersion,
     ) -> Result<Self, Error> {
         let block_size_in_bytes = if format_version == FormatVersion::V1 {
@@ -139,10 +139,7 @@ impl DataFileSerde {
             content: value.content as i32,
             file_path: value.file_path,
             file_format: value.file_format.to_string().to_ascii_uppercase(),
-            partition: RawLiteral::try_from(
-                Literal::Struct(value.partition),
-                &Type::Struct(partition_type.clone()),
-            )?,
+            partition: RawLiteral::try_from(Literal::Struct(value.partition), partition_type)?,
             record_count: value.record_count.try_into()?,
             file_size_in_bytes: value.file_size_in_bytes.try_into()?,
             block_size_in_bytes,
@@ -166,12 +163,12 @@ impl DataFileSerde {
     pub fn try_into(
         self,
         partition_spec_id: i32,
-        partition_type: &StructType,
+        partition_type: &Type,
         schema: &Schema,
     ) -> Result<super::DataFile, Error> {
         let partition = self
             .partition
-            .try_into(&Type::Struct(partition_type.clone()))?
+            .try_into(partition_type)?
             .map(|v| {
                 if let Literal::Struct(v) = v {
                     Ok(v)
@@ -492,7 +489,7 @@ mod tests {
         let v2_entry = v1_entry
             .try_into(
                 0, // partition_spec_id
-                &StructType::new(vec![]),
+                &Type::Struct(StructType::new(vec![])),
                 &schema(),
             )
             .unwrap();
@@ -572,7 +569,7 @@ mod tests {
         let data_file = v1_style_data_file
             .try_into(
                 0, // partition_spec_id
-                &StructType::new(vec![]),
+                &Type::Struct(StructType::new(vec![])),
                 &schema(),
             )
             .unwrap();

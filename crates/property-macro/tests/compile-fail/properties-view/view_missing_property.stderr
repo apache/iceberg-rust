@@ -1,0 +1,5 @@
+error: Properties fields must declare #[property(...)]
+  --> tests/compile-fail/properties-view/view_missing_property.rs:22:9
+   |
+22 |         value: u64,
+   |         ^^^^^^^^^^

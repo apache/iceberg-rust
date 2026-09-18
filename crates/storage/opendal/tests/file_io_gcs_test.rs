@@ -25,7 +25,7 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use iceberg::io::{FileIO, FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_PATH};
+    use iceberg::io::{FileIO, FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_HOST};
     use iceberg_storage_opendal::OpenDalStorageFactory;
     use iceberg_test_utils::{get_gcs_endpoint, set_up};
 
@@ -41,10 +41,35 @@ mod tests {
 
         FileIOBuilder::new(Arc::new(OpenDalStorageFactory::Gcs))
             .with_props(vec![
-                (GCS_SERVICE_PATH, gcs_endpoint),
+                (GCS_SERVICE_HOST, gcs_endpoint),
                 (GCS_NO_AUTH, "true".to_string()),
             ])
             .build()
+    }
+
+    fn roundtrip_file_io(file_io: &FileIO) -> FileIO {
+        let serialized = file_io.serialize_all().unwrap();
+        FileIO::deserialize_all(&serialized).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_file_io_gcs_serialization_roundtrip() {
+        let file_io = roundtrip_file_io(&get_file_io_gcs().await);
+        let path = format!("{}/serialization-roundtrip", get_gs_path());
+
+        let _ = file_io.delete(&path).await;
+        file_io
+            .new_output(&path)
+            .unwrap()
+            .write(Bytes::from_static(b"roundtrip"))
+            .await
+            .unwrap();
+        assert_eq!(
+            file_io.new_input(&path).unwrap().read().await.unwrap(),
+            Bytes::from_static(b"roundtrip")
+        );
+        file_io.delete(&path).await.unwrap();
+        assert!(!file_io.exists(&path).await.unwrap());
     }
 
     // Create a bucket against the emulated GCS storage server.

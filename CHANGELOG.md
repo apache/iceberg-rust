@@ -24,6 +24,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.10.1] - 2026-07-28
+
+* chore: Update crossbeam-epoch to 0.9.20, pin CI ruff version to 0.15.22 by @dannycjones in https://github.com/apache/iceberg-rust/pull/2911
+
 ## [v0.10.0] - 2026-07-07
 
 ### Breaking Changes
@@ -288,6 +292,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * Fix zizmor pin by @blackmwk in https://github.com/apache/iceberg-rust/pull/2762
 * feat(encryption) [8/N] Read encrypted manifest file by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2586
 * Reject negative positional delete positions by @fallintoplace in https://github.com/apache/iceberg-rust/pull/2631
+* chore: Update changelog for 0.10.0 by @dannycjones in https://github.com/apache/iceberg-rust/pull/2782
+* Include license and notice files in iceberg-storage-opendal crate by @ankane in https://github.com/apache/iceberg-rust/pull/2823
+* fix(license): Add missing LICENSE and NOTICE symlinks for iceberg-cache-moka and iceberg-catalog-loader by @dannycjones in https://github.com/apache/iceberg-rust/pull/2828
 
 ## [v0.9.0] - 2026-03-10
 

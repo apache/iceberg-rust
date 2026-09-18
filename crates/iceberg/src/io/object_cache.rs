@@ -21,8 +21,8 @@ use std::sync::Arc;
 use crate::encryption::EncryptionManager;
 use crate::io::FileIO;
 use crate::spec::{
-    FormatVersion, Manifest, ManifestFile, ManifestList, ManifestListReader, SchemaId, SnapshotRef,
-    TableMetadataRef,
+    FormatVersion, Manifest, ManifestFile, ManifestList, ManifestListReader, ManifestReader,
+    SchemaId, SnapshotRef, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -103,8 +103,8 @@ impl ObjectCache {
     /// or retrieves one from FileIO and parses it if not present
     pub(crate) async fn get_manifest(&self, manifest_file: &ManifestFile) -> Result<Arc<Manifest>> {
         if self.cache_disabled {
-            return manifest_file
-                .load_manifest(&self.file_io)
+            return ManifestReader::new(self.file_io.clone())
+                .read(manifest_file)
                 .await
                 .map(Arc::new);
         }
@@ -187,7 +187,9 @@ impl ObjectCache {
     }
 
     async fn fetch_and_parse_manifest(&self, manifest_file: &ManifestFile) -> Result<CachedItem> {
-        let manifest = manifest_file.load_manifest(&self.file_io).await?;
+        let manifest = ManifestReader::new(self.file_io.clone())
+            .read(manifest_file)
+            .await?;
 
         Ok(CachedItem::Manifest(Arc::new(manifest)))
     }

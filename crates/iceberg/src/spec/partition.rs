@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::transform::Transform;
-use super::{NestedField, Schema, SchemaRef, StructType};
+use super::{NestedField, PrimitiveType, Schema, SchemaRef, StructType};
 use crate::spec::Struct;
 use crate::{Error, ErrorKind, Result};
 
@@ -103,8 +103,32 @@ impl PartitionSpec {
     }
 
     /// Returns the partition type of this partition spec.
+    /// If a source column is absent, preserves fixed transform result types and uses
+    /// unknown for result types that depend on the source type.
     pub fn partition_type(&self, schema: &Schema) -> Result<StructType> {
-        PartitionSpecBuilder::partition_type(&self.fields, schema)
+        let mut struct_fields = Vec::with_capacity(self.fields.len());
+        for partition_field in &self.fields {
+            let res_type = match schema.field_by_id(partition_field.source_id) {
+                Some(field) => partition_field.transform.result_type(&field.field_type)?,
+                // Historical specs may reference dropped source columns. Retain every
+                // field's position and any result type that is independent of its source.
+                None => match partition_field.transform {
+                    Transform::Bucket(_) | Transform::Year | Transform::Month | Transform::Hour => {
+                        PrimitiveType::Int.into()
+                    }
+                    Transform::Day => PrimitiveType::Date.into(),
+                    Transform::Unknown => PrimitiveType::String.into(),
+                    Transform::Identity | Transform::Truncate(_) | Transform::Void => {
+                        PrimitiveType::Unknown.into()
+                    }
+                },
+            };
+            struct_fields.push(
+                NestedField::optional(partition_field.field_id, &partition_field.name, res_type)
+                    .into(),
+            );
+        }
+        Ok(StructType::new(struct_fields))
     }
 
     /// Convert to unbound partition spec
@@ -564,32 +588,6 @@ impl PartitionSpecBuilder {
         }
 
         Ok(bound_fields)
-    }
-
-    /// Returns the partition type of this partition spec.
-    fn partition_type(fields: &Vec<PartitionField>, schema: &Schema) -> Result<StructType> {
-        let mut struct_fields = Vec::with_capacity(fields.len());
-        for partition_field in fields {
-            let field = schema
-                .field_by_id(partition_field.source_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        // This should never occur as check_transform_compatibility
-                        // already ensures that the source field exists in the schema
-                        ErrorKind::Unexpected,
-                        format!(
-                            "No column with source column id {} in schema {:?}",
-                            partition_field.source_id, schema
-                        ),
-                    )
-                })?;
-            let res_type = partition_field.transform.result_type(&field.field_type)?;
-            let field =
-                NestedField::optional(partition_field.field_id, &partition_field.name, res_type)
-                    .into();
-            struct_fields.push(field);
-        }
-        Ok(StructType::new(struct_fields))
     }
 
     /// Ensure that the partition name is unique among columns in the schema.
@@ -1055,7 +1053,7 @@ mod tests {
     }
 
     #[test]
-    fn test_partition_error() {
+    fn test_partition_type_with_dropped_source_column() {
         let spec = r#"
         {
         "spec-id": 1,
@@ -1087,7 +1085,73 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(partition_spec.partition_type(&schema).is_err());
+        assert_eq!(
+            partition_spec.partition_type(&schema).unwrap(),
+            StructType::new(vec![
+                NestedField::optional(1000, "ts_day", PrimitiveType::Date.into()).into(),
+                NestedField::optional(1001, "id_bucket", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1002, "id_truncate", PrimitiveType::String.into()).into(),
+            ])
+        );
+
+        // Dropping all sources must retain every partition field in its original position.
+        let empty_schema = Schema::builder().build().unwrap();
+        assert_eq!(
+            partition_spec.partition_type(&empty_schema).unwrap(),
+            StructType::new(vec![
+                NestedField::optional(1000, "ts_day", PrimitiveType::Date.into()).into(),
+                NestedField::optional(1001, "id_bucket", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1002, "id_truncate", PrimitiveType::Unknown.into()).into(),
+            ])
+        );
+
+        // Missing sources must not suppress validation of transforms on remaining sources.
+        let incompatible_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", PrimitiveType::Boolean.into()).into(),
+            ])
+            .build()
+            .unwrap();
+        let err = partition_spec
+            .partition_type(&incompatible_schema)
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.message(),
+            "boolean is not a valid input type of bucket transform"
+        );
+    }
+
+    #[test]
+    fn test_partition_type_without_source_type() {
+        let schema = Schema::builder().build().unwrap();
+        for (transform, expected_type) in [
+            (Transform::Identity, PrimitiveType::Unknown),
+            (Transform::Truncate(4), PrimitiveType::Unknown),
+            (Transform::Void, PrimitiveType::Unknown),
+            (Transform::Bucket(16), PrimitiveType::Int),
+            (Transform::Year, PrimitiveType::Int),
+            (Transform::Month, PrimitiveType::Int),
+            (Transform::Day, PrimitiveType::Date),
+            (Transform::Hour, PrimitiveType::Int),
+            (Transform::Unknown, PrimitiveType::String),
+        ] {
+            let spec = PartitionSpec {
+                spec_id: 0,
+                fields: vec![PartitionField {
+                    source_id: 1,
+                    field_id: 1000,
+                    name: "partition".to_string(),
+                    transform,
+                }],
+            };
+            assert_eq!(
+                spec.partition_type(&schema).unwrap(),
+                StructType::new(vec![
+                    NestedField::optional(1000, "partition", expected_type.into()).into(),
+                ])
+            );
+        }
     }
 
     #[test]
@@ -1748,7 +1812,7 @@ mod tests {
 
         assert_eq!(
             spec.partition_to_path(&data, schema.into()),
-            "id=42/name=alice/ts_hour=1000/empty_void=null"
+            "id=42/name=alice/ts_hour=1970-02-11-16/empty_void=null"
         );
     }
 

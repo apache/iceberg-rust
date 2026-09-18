@@ -21,7 +21,6 @@ on:
   push:
     branches:
       - main
-  pull_request:
     paths:
       - '**'                                       # Include all files and directories in the repository by default.
       - '!.github/ISSUE_TEMPLATE/**'               # Exclude files and directories that don't impact tests or code like templates, metadata, and documentation.
@@ -35,6 +34,8 @@ on:
       - '!LICENSE'
       - '!NOTICE'
       - '!README.md'
+  pull_request:
+  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
@@ -50,13 +51,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.9.3"
           enable-cache: true
       - name: Install tools
         run: |
-          uv tool install ruff
+          uv tool install ruff@0.15.22
       - name: Check format
         working-directory: "bindings/python"
         run: |
@@ -85,10 +86,10 @@ jobs:
       # Linux maturin builds may run inside manylinux Docker, so host Rust caches only help Windows/macOS.
       - name: Setup Rust toolchain
         if: runner.os != 'Linux'
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Cache Rust artifacts
         if: runner.os != 'Linux'
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: bindings-python
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -97,7 +98,7 @@ jobs:
           working-directory: "bindings/python"
           command: build
           args: --out dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.9.3"
           enable-cache: true
@@ -121,3 +122,17 @@ jobs:
           HF_DATASET: ${{ secrets.HF_DATASET }}
         run: |
           make test
+
+  bindings-python-ci-required:
+    if: ${{ always() }}
+    needs: [check-python, test]
+    runs-on: ubuntu-slim
+    steps:
+      - name: Verify Bindings Python CI jobs succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          read -ra results <<< "$RESULTS"
+          for result in "${results[@]}"; do
+            test "$result" = "success"
+          done

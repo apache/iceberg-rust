@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::Result;
-use crate::spec::{DataFileFormat, PartitionKey, TableMetadata, TableProperties};
+use crate::spec::{DataFileFormat, PartitionKey, TableMetadata};
 use crate::util::location::strip_trailing_slash;
 
 /// `LocationGenerator` used to generate the location of data file.
@@ -67,10 +67,12 @@ impl DefaultLocationGenerator {
     /// `{table_location}/data`.
     pub fn new(table_metadata: &TableMetadata) -> Result<Self> {
         let table_location = strip_trailing_slash(table_metadata.location());
-        let prop = TableProperties::try_from(table_metadata.properties())?;
+        let prop = table_metadata.table_properties();
+        let write_data_location = prop.write_data_location()?;
+        let write_folder_storage_location = prop.write_folder_storage_location()?;
         let data_location = strip_trailing_slash(
-            prop.write_data_location
-                .or(prop.write_folder_storage_location)
+            write_data_location
+                .or(write_folder_storage_location)
                 .unwrap_or(format!("{table_location}{DEFAULT_DATA_DIR}"))
                 .as_ref(),
         )
@@ -134,11 +136,14 @@ impl ObjectStorageLocationGenerator {
     /// `{table_location}/data`.
     pub fn new(table_metadata: &TableMetadata) -> Result<Self> {
         let table_location = strip_trailing_slash(table_metadata.location());
-        let prop = TableProperties::try_from(table_metadata.properties())?;
+        let prop = table_metadata.table_properties();
+        let write_data_location = prop.write_data_location()?;
+        let write_object_storage_location = prop.write_object_storage_location()?;
+        let write_folder_storage_location = prop.write_folder_storage_location()?;
         let storage_location = strip_trailing_slash(
-            prop.write_data_location
-                .or(prop.write_object_storage_location)
-                .or(prop.write_folder_storage_location)
+            write_data_location
+                .or(write_object_storage_location)
+                .or(write_folder_storage_location)
                 .unwrap_or(format!("{table_location}{DEFAULT_DATA_DIR}"))
                 .as_ref(),
         )
@@ -152,7 +157,7 @@ impl ObjectStorageLocationGenerator {
             Some(path_context(table_location))
         };
 
-        let include_partition_paths = prop.write_object_storage_partitioned_paths;
+        let include_partition_paths = prop.write_object_storage_partitioned_paths()?;
 
         Ok(Self {
             storage_location,

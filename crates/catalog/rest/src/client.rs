@@ -17,57 +17,109 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
-use http::StatusCode;
 use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
-use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
+use reqwest::{Client, IntoUrl, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
-use tokio::sync::Mutex;
 
 use crate::RestCatalogConfig;
-use crate::types::{ErrorResponse, TokenResponse};
+use crate::auth::{AuthSession, NoopSession};
+use crate::request::HttpRequest;
+use crate::response::HttpResponse;
 
-pub(crate) struct HttpClient {
+/// The catalog's HTTP client, handed to an [`AuthManager`] so its own
+/// requests share the catalog's connection pool and configuration.
+///
+/// [`AuthManager`]: crate::auth::AuthManager
+#[derive(Clone)]
+pub struct HttpClient {
     client: Client,
 
-    /// The token to be used for authentication.
-    ///
-    /// It's possible to fetch the token from the server while needed.
-    token: Mutex<Option<String>>,
-    /// The token endpoint to be used for authentication.
-    token_endpoint: String,
-    /// The credential to be used for authentication.
-    credential: Option<(Option<String>, String)>,
     /// Extra headers to be added to each request.
     extra_headers: HeaderMap,
-    /// Extra oauth parameters to be added to each authentication request.
-    extra_oauth_params: HashMap<String, String>,
     /// Whether to disable header redaction in error logs (defaults to false for security).
     disable_header_redaction: bool,
+    /// Authenticates everything this client sends. A client handed to an
+    /// [`AuthManager`] carries no authentication, since that is what the
+    /// manager is about to create.
+    ///
+    /// [`AuthManager`]: crate::auth::AuthManager
+    auth_session: Arc<dyn AuthSession>,
 }
 
 impl Debug for HttpClient {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // The inner client is omitted: an injected one may carry secrets in
+        // its default headers.
         f.debug_struct("HttpClient")
-            .field("client", &self.client)
-            .field("extra_headers", &self.extra_headers)
+            .field(
+                // `header.*` values may hold secrets (e.g. `authorization`).
+                "extra_headers",
+                &format_headers_redacted(&self.extra_headers, self.disable_header_redaction),
+            )
             .finish_non_exhaustive()
     }
 }
 
 impl HttpClient {
+    /// The same client authenticating with `auth_session` instead: a derived
+    /// auth session reuses the connection pool and headers of the client it
+    /// came from, carrying its own authentication.
+    pub fn with_auth_session(&self, auth_session: Arc<dyn AuthSession>) -> Self {
+        Self {
+            auth_session,
+            ..self.clone()
+        }
+    }
+
+    /// The same client with no authentication, for the requests that must not
+    /// carry it — a session refreshing its own token over the client it
+    /// authenticates would otherwise recurse.
+    pub fn without_auth_session(&self) -> Self {
+        self.with_auth_session(Arc::new(NoopSession))
+    }
+
+    /// Sends a form-encoded POST and returns the response status and body,
+    /// which is what an [`AuthManager`] needs to exchange a credential for a
+    /// token. Only `headers` are sent; the catalog's own extra headers are
+    /// not merged in.
+    ///
+    /// Like every request, it carries this client's session; call
+    /// [`Self::without_auth_session`] first to send it unauthenticated.
+    ///
+    /// [`AuthManager`]: crate::auth::AuthManager
+    pub async fn post_form(
+        &self,
+        url: &str,
+        headers: &HeaderMap,
+        form: &HashMap<&str, &str>,
+    ) -> Result<HttpResponse> {
+        let mut request = HttpRequest::build(
+            self.client
+                .request(Method::POST, url)
+                .headers(headers.clone())
+                .form(form),
+        )?;
+        // `headers` may carry a `content-type: application/json` that `form`
+        // leaves in place.
+        request.headers_mut().insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+        self.auth_session.authenticate(&mut request).await?;
+        let response = self.client.execute(request.into_inner()).await?;
+        HttpResponse::read(response).await
+    }
+
     /// Create a new http client.
-    pub fn new(cfg: &RestCatalogConfig) -> Result<Self> {
-        let extra_headers = cfg.extra_headers()?;
+    pub(crate) fn new(cfg: &RestCatalogConfig) -> Result<Self> {
         Ok(HttpClient {
-            client: cfg.client().unwrap_or_default(),
-            token: Mutex::new(cfg.token()),
-            token_endpoint: cfg.get_token_endpoint(),
-            credential: cfg.credential(),
-            extra_headers,
-            extra_oauth_params: cfg.extra_oauth_params(),
+            client: cfg.client(),
+            extra_headers: cfg.extra_headers()?,
             disable_header_redaction: cfg.disable_header_redaction(),
+            auth_session: Arc::new(NoopSession),
         })
     }
 
@@ -75,192 +127,64 @@ impl HttpClient {
     ///
     /// If cfg carries new value, we will use cfg instead.
     /// Otherwise, we will keep the old value.
-    pub fn update_with(self, cfg: &RestCatalogConfig) -> Result<Self> {
+    pub(crate) fn update_with(self, cfg: &RestCatalogConfig) -> Result<Self> {
         let extra_headers = (!cfg.extra_headers()?.is_empty())
             .then(|| cfg.extra_headers())
             .transpose()?
             .unwrap_or(self.extra_headers);
         Ok(HttpClient {
-            client: cfg.client().unwrap_or(self.client),
-            token: Mutex::new(cfg.token().or_else(|| self.token.into_inner())),
-            token_endpoint: if !cfg.get_token_endpoint().is_empty() {
-                cfg.get_token_endpoint()
-            } else {
-                self.token_endpoint
-            },
-            credential: cfg.credential().or(self.credential),
+            // `cfg.client()` returns the same shared client.
+            client: cfg.client(),
             extra_headers,
-            extra_oauth_params: if !cfg.extra_oauth_params().is_empty() {
-                cfg.extra_oauth_params()
-            } else {
-                self.extra_oauth_params
-            },
             disable_header_redaction: cfg.disable_header_redaction(),
+            auth_session: self.auth_session,
         })
     }
 
-    /// This API is testing only to assert the token.
+    /// Testing only: the session authenticating this client's requests.
+    #[cfg(test)]
+    pub(crate) fn auth_session(&self) -> &Arc<dyn AuthSession> {
+        &self.auth_session
+    }
+
+    /// Testing only: the bearer token `session` would attach.
+    ///
+    /// Authenticates a throwaway request (never sent) and reads the header
+    /// back, so it works for any [`AuthSession`].
     #[cfg(test)]
     pub(crate) async fn token(&self) -> Option<String> {
-        let mut req = self
-            .request(Method::GET, &self.token_endpoint)
-            .build()
-            .unwrap();
-        self.authenticate(&mut req).await.ok();
-        self.token.lock().await.clone()
-    }
-
-    async fn exchange_credential_for_token(&self) -> Result<String> {
-        // Credential must exist here.
-        let (client_id, client_secret) = self.credential.as_ref().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Credential must be provided for authentication",
-            )
-        })?;
-
-        let mut params = HashMap::with_capacity(4);
-        params.insert("grant_type", "client_credentials");
-        if let Some(client_id) = client_id {
-            params.insert("client_id", client_id);
-        }
-        params.insert("client_secret", client_secret);
-        params.extend(
-            self.extra_oauth_params
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str())),
-        );
-
-        let mut auth_req = self
-            .request(Method::POST, &self.token_endpoint)
-            .form(&params)
-            .build()?;
-        // extra headers add content-type application/json header it's necessary to override it with proper type
-        // note that form call doesn't add content-type header if already present
-        auth_req.headers_mut().insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
-        );
-        let auth_url = auth_req.url().clone();
-        let auth_resp = self.client.execute(auth_req).await?;
-
-        let auth_res: TokenResponse = if auth_resp.status() == StatusCode::OK {
-            let text = auth_resp
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(auth_url.clone()))?;
-            Ok(serde_json::from_slice(&text).map_err(|e| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Failed to parse response from rest catalog server!",
-                )
-                .with_context("operation", "auth")
-                .with_context("url", auth_url.to_string())
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
-            })?)
-        } else {
-            let code = auth_resp.status();
-            let text = auth_resp
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(auth_url.clone()))?;
-            let e: ErrorResponse = serde_json::from_slice(&text).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "Received unexpected response")
-                    .with_context("code", code.to_string())
-                    .with_context("operation", "auth")
-                    .with_context("url", auth_url.to_string())
-                    .with_context("json", String::from_utf8_lossy(&text))
-                    .with_source(e)
-            })?;
-            Err(Error::from(e))
-        }?;
-        Ok(auth_res.access_token)
-    }
-
-    /// Invalidate the current token without generating a new one. On the next request, the client
-    /// will attempt to generate a new token.
-    pub(crate) async fn invalidate_token(&self) -> Result<()> {
-        *self.token.lock().await = None;
-        Ok(())
-    }
-
-    /// Invalidate the current token and set a new one. Generates a new token before invalidating
-    /// the current token, meaning the old token will be used until this function acquires the lock
-    /// and overwrites the token.
-    ///
-    /// If credential is invalid, or the request fails, this method will return an error and leave
-    /// the current token unchanged.
-    pub(crate) async fn regenerate_token(&self) -> Result<()> {
-        let new_token = self.exchange_credential_for_token().await?;
-        *self.token.lock().await = Some(new_token.clone());
-        Ok(())
-    }
-
-    /// Authenticates the request by adding a bearer token to the authorization header.
-    ///
-    /// This method supports three authentication modes:
-    ///
-    /// 1. **No authentication** - Skip authentication when both `credential` and `token` are missing.
-    /// 2. **Token authentication** - Use the provided `token` directly for authentication.
-    /// 3. **OAuth authentication** - Exchange `credential` for a token, cache it, then use it for authentication.
-    ///
-    /// When both `credential` and `token` are present, `token` takes precedence.
-    ///
-    /// # TODO: Support automatic token refreshing.
-    async fn authenticate(&self, req: &mut Request) -> Result<()> {
-        // Clone the token from lock without holding the lock for entire function.
-        let token = self.token.lock().await.clone();
-
-        if self.credential.is_none() && token.is_none() {
-            return Ok(());
-        }
-
-        // Either use the provided token or exchange credential for token, cache and use that
-        let token = match token {
-            Some(token) => token,
-            None => {
-                let token = self.exchange_credential_for_token().await?;
-                // Update token so that we use it for next request instead of
-                // exchanging credential for token from the server again
-                *self.token.lock().await = Some(token.clone());
-                token
-            }
-        };
-
-        // Insert token in request.
-        req.headers_mut().insert(
-            http::header::AUTHORIZATION,
-            format!("Bearer {token}").parse().map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Invalid token received from catalog server!",
-                )
-                .with_source(e)
-            })?,
-        );
-
-        Ok(())
+        let mut request = HttpRequest::build(
+            self.client
+                .request(Method::GET, "http://localhost/token-probe"),
+        )
+        .ok()?;
+        self.auth_session.authenticate(&mut request).await.ok()?;
+        let request = request.into_inner();
+        request
+            .headers()
+            .get(reqwest::header::AUTHORIZATION)?
+            .to_str()
+            .ok()?
+            .strip_prefix("Bearer ")
+            .map(str::to_string)
     }
 
     #[inline]
-    pub fn request<U: IntoUrl>(&self, method: Method, url: U) -> RequestBuilder {
+    pub(crate) fn request<U: IntoUrl>(&self, method: Method, url: U) -> RequestBuilder {
         self.client
             .request(method, url)
             .headers(self.extra_headers.clone())
     }
 
-    /// Executes the given `Request` and returns a `Response`.
-    pub async fn execute(&self, mut request: Request) -> Result<Response> {
+    /// Sends `request` to the Iceberg REST catalog, authenticated by this
+    /// client's session.
+    pub(crate) async fn query_catalog(&self, mut request: HttpRequest) -> Result<HttpResponse> {
+        // Authenticate first, then apply extra headers, so a configured
+        // `header.authorization` keeps overriding a token (unchanged behavior).
+        self.auth_session.authenticate(&mut request).await?;
+        let mut request = request.into_inner();
         request.headers_mut().extend(self.extra_headers.clone());
-        Ok(self.client.execute(request).await?)
-    }
-
-    // Queries the Iceberg REST catalog after authentication with the given `Request` and
-    // returns a `Response`.
-    pub async fn query_catalog(&self, mut request: Request) -> Result<Response> {
-        self.authenticate(&mut request).await?;
-        self.execute(request).await
+        HttpResponse::read(self.client.execute(request).await?).await
     }
 
     /// Returns whether header redaction is disabled for this client.
@@ -269,45 +193,46 @@ impl HttpClient {
     }
 }
 
-/// Deserializes a catalog response into the given [`DeserializedOwned`] type.
+/// Deserializes a catalog response into the given [`DeserializeOwned`] type.
 ///
 /// Returns an error if unable to parse the response bytes.
-pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
-    response: Response,
+pub(crate) fn deserialize_catalog_response<R: DeserializeOwned>(
+    response: HttpResponse,
 ) -> Result<R> {
-    let bytes = response.bytes().await?;
+    let bytes = response.body();
 
-    serde_json::from_slice::<R>(&bytes).map_err(|e| {
+    serde_json::from_slice::<R>(bytes).map_err(|e| {
         Error::new(
             ErrorKind::Unexpected,
             "Failed to parse response from rest catalog server",
         )
-        .with_context("json", String::from_utf8_lossy(&bytes))
+        .with_context("json", String::from_utf8_lossy(bytes))
         .with_source(e)
     })
 }
 
-/// Headers that contain sensitive information and should be excluded from logs.
-const SENSITIVE_HEADERS: &[&str] = &[
-    "authorization",
-    "proxy-authorization",
-    "set-cookie",
-    "cookie",
-    "x-api-key",
-    "x-auth-token",
-];
-
-/// Returns true if the header name is considered sensitive.
+/// Returns true if the header may carry a secret (matched by substring, so
+/// e.g. `x-client-secret` is covered along with `authorization`).
 fn is_sensitive_header(name: &str) -> bool {
     let name_lower = name.to_lowercase();
-    SENSITIVE_HEADERS.iter().any(|h| name_lower == *h)
+    [
+        "auth",
+        "token",
+        "secret",
+        "key",
+        "password",
+        "cookie",
+        "credential",
+    ]
+    .iter()
+    .any(|pattern| name_lower.contains(pattern))
 }
 
 /// Redacts sensitive headers and returns a debug-formatted string.
 ///
 /// If `disable_redaction` is true, returns all headers without redaction.
-/// Otherwise, replaces sensitive header values with "[REDACTED]".
-fn format_headers_redacted(headers: &HeaderMap, disable_redaction: bool) -> String {
+/// Otherwise, replaces sensitive header values with `[REDACTED]`.
+pub(crate) fn format_headers_redacted(headers: &HeaderMap, disable_redaction: bool) -> String {
     if disable_redaction {
         // Return all headers as-is without redaction
         let all: HashMap<&str, &str> = headers
@@ -332,8 +257,8 @@ fn format_headers_redacted(headers: &HeaderMap, disable_redaction: bool) -> Stri
 }
 
 /// Deserializes a unexpected catalog response into an error.
-pub(crate) async fn deserialize_unexpected_catalog_error(
-    response: Response,
+pub(crate) fn deserialize_unexpected_catalog_error(
+    response: HttpResponse,
     disable_header_redaction: bool,
 ) -> Error {
     let err = Error::new(
@@ -346,20 +271,146 @@ pub(crate) async fn deserialize_unexpected_catalog_error(
         format_headers_redacted(response.headers(), disable_header_redaction),
     );
 
-    let bytes = match response.bytes().await {
-        Ok(bytes) => bytes,
-        Err(err) => return err.into(),
-    };
-
+    let bytes = response.body();
     if bytes.is_empty() {
         return err;
     }
-    err.with_context("json", String::from_utf8_lossy(&bytes))
+    err.with_context("json", String::from_utf8_lossy(bytes))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug)]
+    struct StaticSession;
+
+    #[async_trait::async_trait]
+    impl AuthSession for StaticSession {
+        async fn authenticate(&self, request: &mut HttpRequest) -> Result<()> {
+            request
+                .headers_mut()
+                .insert("authorization", "Bearer tok".parse().unwrap());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_a_truncated_body_error_names_the_url() {
+        // `bytes()` builds its error without a URL, so `read` attaches the one
+        // the response came from; otherwise a failure can't be attributed to a
+        // catalog. Needs a raw socket: the body has to be cut short.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = std::io::Read::read(&mut stream, &mut buf);
+            // Promise more than is sent, then hang up.
+            let _ = std::io::Write::write_all(
+                &mut stream,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort",
+            );
+        });
+
+        let url = format!("http://{addr}/token");
+        let err = HttpClient::new(&RestCatalogConfig::builder().uri(url.clone()).build())
+            .unwrap()
+            .post_form(&url, &HeaderMap::new(), &HashMap::new())
+            .await
+            .unwrap_err();
+
+        assert!(format!("{err:?}").contains(&url), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn test_reading_a_response_keeps_status_headers_and_body() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/token")
+            .with_status(418)
+            .with_header("x-request-id", "abc123")
+            .with_body("brewing")
+            .create_async()
+            .await;
+
+        let response = HttpClient::new(&RestCatalogConfig::builder().uri(server.url()).build())
+            .unwrap()
+            .post_form(
+                &format!("{}/token", server.url()),
+                &HeaderMap::new(),
+                &HashMap::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 418);
+        assert_eq!(response.headers().get("x-request-id").unwrap(), "abc123");
+        assert_eq!(response.body(), b"brewing");
+        mock.assert_async().await;
+    }
+
+    #[test]
+    fn test_unexpected_error_carries_status_headers_and_body() {
+        // Everything a user needs to diagnose an unexpected status, with the
+        // sensitive headers held back.
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer leaked".parse().unwrap());
+        headers.insert("x-request-id", "abc123".parse().unwrap());
+        let response = HttpResponse::new(
+            http::StatusCode::IM_A_TEAPOT,
+            headers,
+            br#"{"error": "nope"}"#.to_vec(),
+        );
+
+        let err = format!(
+            "{:?}",
+            deserialize_unexpected_catalog_error(response, false)
+        );
+
+        assert!(err.contains("418"), "{err}");
+        assert!(err.contains("x-request-id"), "{err}");
+        assert!(err.contains("abc123"), "{err}");
+        assert!(err.contains("nope"), "{err}");
+        assert!(!err.contains("leaked"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_post_form_carries_the_session_until_it_is_removed() {
+        // Every request a client sends carries its session; a caller that
+        // needs an unauthenticated one removes the session first.
+        let mut server = mockito::Server::new_async().await;
+        let signed = server
+            .mock("POST", "/token")
+            .match_header("authorization", "Bearer tok")
+            .with_status(200)
+            .create_async()
+            .await;
+        let unsigned = server
+            .mock("POST", "/token")
+            .match_header("authorization", mockito::Matcher::Missing)
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let client = HttpClient::new(&RestCatalogConfig::builder().uri(server.url()).build())
+            .unwrap()
+            .with_auth_session(Arc::new(StaticSession));
+        let url = format!("{}/token", server.url());
+
+        client
+            .post_form(&url, &HeaderMap::new(), &HashMap::new())
+            .await
+            .unwrap();
+        signed.assert_async().await;
+
+        client
+            .without_auth_session()
+            .post_form(&url, &HeaderMap::new(), &HashMap::new())
+            .await
+            .unwrap();
+        unsigned.assert_async().await;
+    }
 
     #[test]
     fn test_format_headers_redacted_empty() {
@@ -380,6 +431,31 @@ mod tests {
         assert!(result.contains("application/json"));
         assert!(result.contains("x-request-id"));
         assert!(result.contains("abc123"));
+    }
+
+    #[tokio::test]
+    async fn test_http_client_debug_redacts_headers() {
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([
+                ("header.authorization".to_string(), "Basic xyz".to_string()),
+                (
+                    "header.x-client-secret".to_string(),
+                    "shh-secret".to_string(),
+                ),
+                (
+                    "header.x-client-credential".to_string(),
+                    "cred-value".to_string(),
+                ),
+            ]))
+            .build();
+        let client = HttpClient::new(&config).unwrap();
+
+        let out = format!("{client:?}");
+        assert!(!out.contains("Basic xyz"));
+        assert!(!out.contains("shh-secret"));
+        assert!(!out.contains("cred-value"));
+        assert!(out.contains("[REDACTED]"));
     }
 
     #[test]

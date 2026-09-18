@@ -24,6 +24,9 @@
 * Create and list namespaces.
 * Create, load, and drop tables
 
+`SessionCatalog` offers the same operations, but takes a `SessionContext` with each call instead of
+binding one for the lifetime of the catalog. It is currently implemented by the REST catalog only.
+
 There is support for the following catalogs:
 
 | Catalog | Description |
@@ -37,7 +40,16 @@ There is support for the following catalogs:
 
 Not all catalog implementations are complete.
 
-## `RestCatalog` 
+## REST catalog APIs
+
+The REST catalog provides two interfaces:
+
+* `RestCatalog` implements `Catalog` and binds one `SessionContext` to every operation.
+* `RestSessionCatalog` implements `SessionCatalog` and accepts a context with each operation.
+
+REST configuration, authentication, and the HTTP client are shared by the catalog instance.
+
+### `RestCatalog`
 
 Here is an example of how to create a `RestCatalog`:
 
@@ -52,8 +64,30 @@ You can run following code to list all root namespaces:
 ```
 
 Then you can run following code to create namespace:
+
 ```rust,no_run,noplayground
 {{#rustdoc_include ../../crates/examples/src/rest_catalog_namespace.rs:create_namespace}}
+```
+
+### `RestSessionCatalog`
+
+Use `RestSessionCatalog` when the caller supplies a session context for each operation. Build the
+catalog and the context it should run under:
+
+```rust,no_run,noplayground
+{{#rustdoc_include ../../crates/examples/src/rest_session_catalog_namespace.rs:create_catalog}}
+```
+
+Every operation then takes that context. You can run following code to list all root namespaces:
+
+```rust,no_run,noplayground
+{{#rustdoc_include ../../crates/examples/src/rest_session_catalog_namespace.rs:list_all_namespace}}
+```
+
+Then you can run following code to create namespace:
+
+```rust,no_run,noplayground
+{{#rustdoc_include ../../crates/examples/src/rest_session_catalog_namespace.rs:create_namespace}}
 ```
 
 # Table
