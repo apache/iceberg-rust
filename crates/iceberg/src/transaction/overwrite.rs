@@ -158,7 +158,13 @@ impl SnapshotProduceOperation for OverwriteOperation {
             return Ok(manifest_list
                 .entries()
                 .iter()
-                .filter(|entry| entry.has_added_files() || entry.has_existing_files())
+                .filter(|entry| {
+                    // Delete-only manifests record which files were removed and must survive
+                    // until `expire_snapshots` cleans them up (see #2148).
+                    entry.has_added_files()
+                        || entry.has_existing_files()
+                        || entry.has_deleted_files()
+                })
                 .cloned()
                 .collect());
         }
@@ -166,7 +172,10 @@ impl SnapshotProduceOperation for OverwriteOperation {
         let mut result = Vec::new();
 
         for manifest_file in manifest_list.entries() {
-            if !manifest_file.has_added_files() && !manifest_file.has_existing_files() {
+            if !manifest_file.has_added_files()
+                && !manifest_file.has_existing_files()
+                && !manifest_file.has_deleted_files()
+            {
                 continue;
             }
 
@@ -681,5 +690,36 @@ mod tests {
 
         assert_eq!(original_schema_id, rewritten_manifest.metadata().schema_id);
         assert_eq!(original_spec_id, rewritten_file.partition_spec_id);
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_preserves_delete_only_manifest() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite()
+            .add_data_files(vec![test_data_file("test/b.parquet", spec_id)])
+            .delete_data_files(vec![file_a.clone()]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite()
+            .add_data_files(vec![test_data_file("test/c.parquet", spec_id)]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let entries = current_manifest_entries(&table).await;
+        assert!(
+            entries.contains(&(ManifestStatus::Deleted, "test/a.parquet".to_string())),
+            "the delete-only manifest must survive a later overwrite, entries: {entries:?}"
+        );
     }
 }
