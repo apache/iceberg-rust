@@ -1,4 +1,12 @@
 pub mod iceberg_catalog_glue
+pub use iceberg_catalog_glue::AWS_ACCESS_KEY_ID
+pub use iceberg_catalog_glue::AWS_ASSUME_ROLE_ARN
+pub use iceberg_catalog_glue::AWS_ASSUME_ROLE_EXTERNAL_ID
+pub use iceberg_catalog_glue::AWS_ASSUME_ROLE_SESSION_NAME
+pub use iceberg_catalog_glue::AWS_PROFILE_NAME
+pub use iceberg_catalog_glue::AWS_REGION_NAME
+pub use iceberg_catalog_glue::AWS_SECRET_ACCESS_KEY
+pub use iceberg_catalog_glue::AWS_SESSION_TOKEN
 pub macro iceberg_catalog_glue::with_catalog_id!
 pub struct iceberg_catalog_glue::GlueCatalog
 impl iceberg_catalog_glue::GlueCatalog
@@ -32,11 +40,6 @@ pub fn iceberg_catalog_glue::GlueCatalogBuilder::load(self, name: impl core::con
 pub fn iceberg_catalog_glue::GlueCatalogBuilder::with_kms_client_factory(self, kms_client_factory: alloc::sync::Arc<dyn iceberg::encryption::kms::factory::KmsClientFactory>) -> Self
 pub fn iceberg_catalog_glue::GlueCatalogBuilder::with_runtime(self, runtime: iceberg::runtime::Runtime) -> Self
 pub fn iceberg_catalog_glue::GlueCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> Self
-pub const iceberg_catalog_glue::AWS_ACCESS_KEY_ID: &str
-pub const iceberg_catalog_glue::AWS_PROFILE_NAME: &str
-pub const iceberg_catalog_glue::AWS_REGION_NAME: &str
-pub const iceberg_catalog_glue::AWS_SECRET_ACCESS_KEY: &str
-pub const iceberg_catalog_glue::AWS_SESSION_TOKEN: &str
 pub const iceberg_catalog_glue::GLUE_CATALOG_PROP_CATALOG_ID: &str
 pub const iceberg_catalog_glue::GLUE_CATALOG_PROP_URI: &str
 pub const iceberg_catalog_glue::GLUE_CATALOG_PROP_WAREHOUSE: &str

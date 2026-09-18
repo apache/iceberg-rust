@@ -26,26 +26,25 @@ use aws_sdk_glue::operation::create_table::CreateTableError;
 use aws_sdk_glue::operation::update_table::UpdateTableError;
 use aws_sdk_glue::types::TableInput;
 use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
-use iceberg::io::{
-    FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
-    S3_SESSION_TOKEN, StorageFactory,
-};
+use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     Runtime, TableCommit, TableCreation, TableIdent,
 };
-use iceberg_storage_opendal::OpenDalStorageFactory;
+use iceberg_aws::{
+    AWS_ASSUME_ROLE_ARN, AwsSdkCredentialProvider, create_sdk_config, has_explicit_s3_credentials,
+    map_aws_to_s3_properties, remove_assume_role_properties,
+};
+use iceberg_storage_opendal::{CustomAwsCredentialLoader, OpenDalStorageFactory};
 
 use crate::error::{from_aws_build_error, from_aws_sdk_error};
 use crate::utils::{
-    convert_to_database, convert_to_glue_table, convert_to_namespace, create_sdk_config,
-    get_default_table_location, get_metadata_location, is_iceberg_table, validate_namespace,
+    convert_to_database, convert_to_glue_table, convert_to_namespace, get_default_table_location,
+    get_metadata_location, is_iceberg_table, validate_namespace,
 };
-use crate::{
-    AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, with_catalog_id,
-};
+use crate::with_catalog_id;
 
 /// Glue catalog URI
 pub const GLUE_CATALOG_PROP_URI: &str = "uri";
@@ -53,6 +52,7 @@ pub const GLUE_CATALOG_PROP_URI: &str = "uri";
 pub const GLUE_CATALOG_PROP_CATALOG_ID: &str = "catalog_id";
 /// Glue catalog warehouse location
 pub const GLUE_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
+const DEFAULT_ASSUME_ROLE_SESSION_NAME: &str = "iceberg-glue-catalog";
 
 /// Builder for [`GlueCatalog`].
 #[derive(Debug)]
@@ -194,43 +194,37 @@ impl GlueCatalog {
         runtime: Runtime,
         kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
-        let sdk_config = create_sdk_config(&config.props, config.uri.as_ref()).await;
-        let mut file_io_props = config.props.clone();
-        if !file_io_props.contains_key(S3_ACCESS_KEY_ID)
-            && let Some(access_key_id) = file_io_props.get(AWS_ACCESS_KEY_ID)
-        {
-            file_io_props.insert(S3_ACCESS_KEY_ID.to_string(), access_key_id.to_string());
-        }
-        if !file_io_props.contains_key(S3_SECRET_ACCESS_KEY)
-            && let Some(secret_access_key) = file_io_props.get(AWS_SECRET_ACCESS_KEY)
-        {
-            file_io_props.insert(
-                S3_SECRET_ACCESS_KEY.to_string(),
-                secret_access_key.to_string(),
-            );
-        }
-        if !file_io_props.contains_key(S3_REGION)
-            && let Some(region) = file_io_props.get(AWS_REGION_NAME)
-        {
-            file_io_props.insert(S3_REGION.to_string(), region.to_string());
-        }
-        if !file_io_props.contains_key(S3_SESSION_TOKEN)
-            && let Some(session_token) = file_io_props.get(AWS_SESSION_TOKEN)
-        {
-            file_io_props.insert(S3_SESSION_TOKEN.to_string(), session_token.to_string());
-        }
-        if !file_io_props.contains_key(S3_ENDPOINT)
-            && let Some(aws_endpoint) = config.uri.as_ref()
-        {
-            file_io_props.insert(S3_ENDPOINT.to_string(), aws_endpoint.to_string());
-        }
+        let sdk_config = create_sdk_config(
+            &config.props,
+            config.uri.as_deref(),
+            DEFAULT_ASSUME_ROLE_SESSION_NAME,
+        )
+        .await;
+        let mut file_io_props = map_aws_to_s3_properties(
+            &config.props,
+            config.uri.as_deref(),
+            DEFAULT_ASSUME_ROLE_SESSION_NAME,
+            sdk_config.region().map(AsRef::as_ref),
+        );
 
         let client = aws_sdk_glue::Client::new(&sdk_config);
 
         // Use provided factory or default to OpenDalStorageFactory::S3
         let factory = storage_factory.unwrap_or_else(|| {
+            let customized_credential_load = if config.props.contains_key(AWS_ASSUME_ROLE_ARN)
+                && !has_explicit_s3_credentials(&config.props)
+            {
+                let provider = AwsSdkCredentialProvider::from_sdk_config(&sdk_config)
+                    .map(CustomAwsCredentialLoader::new);
+                if provider.is_some() {
+                    remove_assume_role_properties(&mut file_io_props);
+                }
+                provider
+            } else {
+                None
+            };
             Arc::new(OpenDalStorageFactory::S3 {
-                customized_credential_load: None,
+                customized_credential_load,
             })
         });
         let file_io = FileIOBuilder::new(factory)
@@ -957,5 +951,48 @@ impl Catalog for GlueCatalog {
         })?;
 
         Ok(staged_table)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iceberg::encryption::kms::MemoryKmsClientFactory;
+    use iceberg::io::{S3_ACCESS_KEY_ID, S3_REGION, S3_SECRET_ACCESS_KEY};
+
+    use super::*;
+    use crate::{AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY};
+
+    #[tokio::test]
+    async fn builder_preserves_configured_kms_factory() {
+        let properties = HashMap::from([
+            (
+                GLUE_CATALOG_PROP_URI.to_string(),
+                "http://localhost:1".to_string(),
+            ),
+            (
+                GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
+                "s3://warehouse".to_string(),
+            ),
+            (AWS_ACCESS_KEY_ID.to_string(), "aws-access-key".to_string()),
+            (
+                AWS_SECRET_ACCESS_KEY.to_string(),
+                "aws-secret-key".to_string(),
+            ),
+            (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
+            (S3_ACCESS_KEY_ID.to_string(), "s3-access-key".to_string()),
+            (
+                S3_SECRET_ACCESS_KEY.to_string(),
+                "s3-secret-key".to_string(),
+            ),
+            (S3_REGION.to_string(), "us-east-1".to_string()),
+        ]);
+
+        let catalog = GlueCatalogBuilder::default()
+            .with_kms_client_factory(Arc::new(MemoryKmsClientFactory::new()))
+            .load("glue", properties)
+            .await
+            .unwrap();
+
+        assert!(catalog.kms_client.is_some());
     }
 }
