@@ -341,6 +341,7 @@ mod tests {
             .with_spec_id(1)
             .add_unbound_fields(vec![UnboundPartitionField {
                 source_id: 2,
+                source_ids: None,
                 name: "year".to_string(),
                 field_id: Some(1000),
                 transform: Transform::Year,
@@ -376,6 +377,7 @@ mod tests {
             .with_spec_id(1)
             .add_unbound_fields(vec![UnboundPartitionField {
                 source_id: 2,
+                source_ids: None,
                 name: "month".to_string(),
                 field_id: Some(1000),
                 transform: Transform::Month,
@@ -411,6 +413,7 @@ mod tests {
             .with_spec_id(1)
             .add_unbound_fields(vec![UnboundPartitionField {
                 source_id: 2,
+                source_ids: None,
                 name: "day".to_string(),
                 field_id: Some(1000),
                 transform: Transform::Day,

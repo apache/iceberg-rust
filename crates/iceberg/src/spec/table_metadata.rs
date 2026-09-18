@@ -1789,6 +1789,7 @@ mod tests {
                 name: "ts_day".to_string(),
                 transform: Transform::Day,
                 source_id: 4,
+                source_ids: None,
                 field_id: Some(1000),
             })
             .unwrap()
@@ -1937,6 +1938,7 @@ mod tests {
                 name: "ts_day".to_string(),
                 transform: Transform::Day,
                 source_id: 4,
+                source_ids: None,
                 field_id: Some(1000),
             })
             .unwrap()
@@ -2979,6 +2981,51 @@ mod tests {
     }
 
     #[test]
+    fn test_table_metadata_v3_multi_arg_transforms() {
+        let metadata_str =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV3MultiArgTransforms.json")
+                .unwrap();
+
+        let table_metadata = serde_json::from_str::<TableMetadata>(&metadata_str).unwrap();
+
+        let partition_field = &table_metadata
+            .partition_spec_by_id(0)
+            .unwrap()
+            .fields()
+            .first()
+            .unwrap()
+            .clone();
+        assert_eq!(Some(vec![1, 2]), partition_field.source_ids);
+        assert_eq!(1, partition_field.source_id);
+        assert_eq!(Transform::Unknown, partition_field.transform);
+
+        let sort_field = table_metadata
+            .sort_order_by_id(3)
+            .unwrap()
+            .fields
+            .first()
+            .unwrap()
+            .clone();
+        assert_eq!(Some(vec![2, 3]), sort_field.source_ids);
+        assert_eq!(2, sort_field.source_id);
+        assert_eq!(Transform::Unknown, sort_field.transform);
+
+        // Both surfaces must write source-ids back out, and only source-ids
+        let serialized = serde_json::to_value(&table_metadata).unwrap();
+        for (pointer, expected) in [
+            ("/partition-specs/0/fields/0", serde_json::json!([1, 2])),
+            ("/sort-orders/0/fields/0", serde_json::json!([2, 3])),
+        ] {
+            let field = serialized.pointer(pointer).unwrap();
+            assert_eq!(Some(&expected), field.get("source-ids"), "at {pointer}");
+            assert!(
+                field.get("source-id").is_none(),
+                "{pointer} still writes source-id"
+            );
+        }
+    }
+
+    #[test]
     fn test_table_metadata_v3_valid_minimal() {
         let metadata_str =
             fs::read_to_string("testdata/table_metadata/TableMetadataV3ValidMinimal.json").unwrap();
@@ -3013,6 +3060,7 @@ mod tests {
                 name: "x".to_string(),
                 transform: Transform::Identity,
                 source_id: 1,
+                source_ids: None,
                 field_id: Some(1000),
             })
             .unwrap()
@@ -3112,6 +3160,7 @@ mod tests {
                 name: "x".to_string(),
                 transform: Transform::Identity,
                 source_id: 1,
+                source_ids: None,
                 field_id: Some(1000),
             })
             .unwrap()
@@ -3243,6 +3292,7 @@ mod tests {
                 name: "x".to_string(),
                 transform: Transform::Identity,
                 source_id: 1,
+                source_ids: None,
                 field_id: Some(1000),
             })
             .unwrap()
@@ -3331,6 +3381,7 @@ mod tests {
                 name: "x".to_string(),
                 transform: Transform::Identity,
                 source_id: 1,
+                source_ids: None,
                 field_id: Some(1000),
             })
             .unwrap()
