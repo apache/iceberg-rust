@@ -368,6 +368,12 @@ impl Datum {
     /// See [this spec](https://iceberg.apache.org/spec/#binary-single-value-serialization) for reference.
     pub fn try_from_bytes(bytes: &[u8], data_type: PrimitiveType) -> Result<Self> {
         let literal = match data_type {
+            PrimitiveType::Unknown => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Cannot create datum for unknown type from bytes",
+                ));
+            }
             PrimitiveType::Boolean => {
                 if bytes.len() == 1 && bytes[0] == 0u8 {
                     PrimitiveLiteral::Boolean(false)
