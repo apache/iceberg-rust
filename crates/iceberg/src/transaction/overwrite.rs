@@ -40,7 +40,6 @@ use crate::transaction::{ActionCommit, TransactionAction};
 pub struct OverwriteAction {
     check_duplicate: bool,
     commit_uuid: Option<Uuid>,
-    key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
     deleted_data_files: Vec<DataFile>,
@@ -51,7 +50,6 @@ impl OverwriteAction {
         Self {
             check_duplicate: true,
             commit_uuid: None,
-            key_metadata: None,
             snapshot_properties: HashMap::default(),
             added_data_files: vec![],
             deleted_data_files: vec![],
@@ -82,12 +80,6 @@ impl OverwriteAction {
         self
     }
 
-    /// Set key metadata for manifest files.
-    pub fn set_key_metadata(mut self, key_metadata: Vec<u8>) -> Self {
-        self.key_metadata = Some(key_metadata);
-        self
-    }
-
     /// Set snapshot summary properties.
     pub fn set_snapshot_properties(mut self, snapshot_properties: HashMap<String, String>) -> Self {
         self.snapshot_properties = snapshot_properties;
@@ -101,7 +93,6 @@ impl TransactionAction for OverwriteAction {
         let snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
-            self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
             self.deleted_data_files.clone(),
@@ -179,8 +170,10 @@ impl SnapshotProduceOperation for OverwriteOperation {
                 continue;
             }
 
-            let manifest = manifest_file
-                .load_manifest(snapshot_produce.table.file_io())
+            let manifest = snapshot_produce
+                .table
+                .manifest_reader()
+                .read(manifest_file)
                 .await?;
 
             let has_deletes = manifest.entries().iter().any(|entry| {
@@ -221,7 +214,6 @@ impl OverwriteOperation {
         let builder = ManifestWriterBuilder::new(
             output_file,
             Some(self.snapshot_id),
-            manifest_file.key_metadata.clone(),
             table.metadata().current_schema().clone(),
             table.metadata().default_partition_spec().as_ref().clone(),
         );
@@ -392,8 +384,9 @@ mod tests {
             new_snapshot.sequence_number()
         );
 
-        let manifest = manifest_list.entries()[0]
-            .load_manifest(table.file_io())
+        let manifest = table
+            .manifest_reader()
+            .read(&manifest_list.entries()[0])
             .await
             .unwrap();
         assert_eq!(1, manifest.entries().len());
@@ -451,7 +444,7 @@ mod tests {
 
         let mut all_entries = vec![];
         for manifest_file in manifest_list.entries() {
-            let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+            let manifest = table.manifest_reader().read(manifest_file).await.unwrap();
             for entry in manifest.entries() {
                 all_entries.push((entry.status(), entry.file_path().to_string()));
             }
@@ -508,7 +501,7 @@ mod tests {
 
         let mut all_entries = vec![];
         for manifest_file in manifest_list.entries() {
-            let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+            let manifest = table.manifest_reader().read(manifest_file).await.unwrap();
             for entry in manifest.entries() {
                 all_entries.push((entry.status(), entry.file_path().to_string()));
             }
