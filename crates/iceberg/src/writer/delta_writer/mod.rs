@@ -18,19 +18,9 @@
 //! Delta writer module.
 //!
 //! A delta writer consumes a stream of row-level changes (inserts and deletes)
-//! and produces both data files and delete files in a single pass. This is the
-//! foundation for the `DeltaWriter` epic (see <https://github.com/apache/iceberg-rust/issues/2218>).
-//!
-//! This module currently hosts the building blocks for that writer. The first
-//! inhabitant is [`record_ops`], which splits a batch carrying the repo's
-//! [`_change_type`](crate::metadata_columns::RESERVED_COL_NAME_CHANGE_TYPE)
-//! column into separate insert and delete batches: `INSERT`/`UPDATE_AFTER` rows
-//! become inserts and `DELETE`/`UPDATE_BEFORE` rows become deletes.
-//!
-//! [`RecordBatch`]: arrow_array::RecordBatch
+//! and produces both data files and delete files in a single pass.
 
-// The building blocks here are wired into the DeltaWriter in a later PR (#2218),
-// so nothing in non-test crate code calls them yet.
+// Nothing wires these building blocks into a writer yet.
 #![allow(dead_code)]
 
 pub mod record_ops;

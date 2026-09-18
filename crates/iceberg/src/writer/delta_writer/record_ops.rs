@@ -30,18 +30,13 @@
 //! `INSERT` and `UPDATE_AFTER` become inserts, `DELETE` and `UPDATE_BEFORE`
 //! become deletes. The `_change_type` column is stripped from both outputs.
 //!
-//! This is a building block for the `DeltaWriter` epic (see
-//! <https://github.com/apache/iceberg-rust/issues/2218>).
-//!
 //! [`RecordBatch`]: arrow_array::RecordBatch
 //! [`Utf8`]: arrow_schema::DataType::Utf8
-
-use std::sync::Arc;
 
 use arrow_arith::boolean::not;
 use arrow_array::{Array, BooleanArray, RecordBatch, StringArray};
 use arrow_buffer::BooleanBufferBuilder;
-use arrow_schema::{DataType, Schema};
+use arrow_schema::DataType;
 use arrow_select::filter::filter_record_batch;
 
 use crate::metadata_columns::RESERVED_COL_NAME_CHANGE_TYPE;
@@ -62,13 +57,13 @@ pub(crate) const CHANGE_TYPE_UPDATE_AFTER: &str = "UPDATE_AFTER";
 /// `_change_type` column removed. Field metadata (including Parquet field ids)
 /// and the schema-level metadata are preserved.
 #[derive(Debug)]
-pub struct SplitBatches {
+pub(crate) struct SplitBatches {
     /// Rows whose `_change_type` was [`CHANGE_TYPE_INSERT`] or
     /// [`CHANGE_TYPE_UPDATE_AFTER`], with the `_change_type` column removed.
-    pub inserts: RecordBatch,
+    pub(crate) inserts: RecordBatch,
     /// Rows whose `_change_type` was [`CHANGE_TYPE_DELETE`] or
     /// [`CHANGE_TYPE_UPDATE_BEFORE`], with the `_change_type` column removed.
-    pub deletes: RecordBatch,
+    pub(crate) deletes: RecordBatch,
 }
 
 /// Split a change-type [`RecordBatch`] into separate insert and delete batches.
@@ -111,7 +106,7 @@ pub struct SplitBatches {
 ///
 /// [`RecordBatch`]: arrow_array::RecordBatch
 /// [`Utf8`]: arrow_schema::DataType::Utf8
-pub fn split_by_change_type(batch: RecordBatch) -> Result<SplitBatches> {
+pub(crate) fn split_by_change_type(batch: RecordBatch) -> Result<SplitBatches> {
     let schema = batch.schema();
 
     // Locate the change-type column by name, wherever it sits in the schema.
@@ -201,28 +196,12 @@ pub fn split_by_change_type(batch: RecordBatch) -> Result<SplitBatches> {
     // complement of the insert side.
     let delete_mask = not(&insert_mask)?;
 
-    // Rebuild the payload schema from the original fields minus the change-type
-    // column, preserving each field's metadata (field ids) and the schema-level
-    // metadata.
-    let payload_fields = schema
-        .fields()
-        .iter()
-        .enumerate()
-        .filter(|(idx, _)| *idx != change_type_idx)
-        .map(|(_, field)| field.clone())
-        .collect::<Vec<_>>();
-    let payload_schema = Arc::new(Schema::new_with_metadata(
-        payload_fields,
-        schema.metadata().clone(),
-    ));
-    let payload_columns = batch
-        .columns()
-        .iter()
-        .enumerate()
-        .filter(|(idx, _)| *idx != change_type_idx)
-        .map(|(_, column)| column.clone())
-        .collect::<Vec<_>>();
-    let payload = RecordBatch::try_new(payload_schema, payload_columns)?;
+    // Drop the change-type column with `project`, which carries over each
+    // surviving field's metadata (field ids) and the schema-level metadata.
+    let payload_indices: Vec<usize> = (0..batch.num_columns())
+        .filter(|idx| *idx != change_type_idx)
+        .collect();
+    let payload = batch.project(&payload_indices)?;
 
     // `filter_record_batch` preserves field-id metadata on the surviving columns.
     let inserts = filter_record_batch(&payload, &insert_mask)?;
@@ -234,9 +213,10 @@ pub fn split_by_change_type(batch: RecordBatch) -> Result<SplitBatches> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use arrow_array::Int32Array;
-    use arrow_schema::Field;
+    use arrow_schema::{Field, Schema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use super::*;
