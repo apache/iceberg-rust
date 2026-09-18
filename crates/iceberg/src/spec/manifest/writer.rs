@@ -382,8 +382,13 @@ impl ManifestWriter {
         Ok(())
     }
 
-    /// Add a deleted manifest entry, preserving the original sequence numbers.
-    pub(crate) fn add_deleted_entry(&mut self, mut entry: ManifestEntry) -> Result<()> {
+    /// Add a manifest entry as a tombstone, preserving its original sequence numbers and
+    /// snapshot id.
+    ///
+    /// The caller owns `snapshot_id`: set it to the deleting snapshot for a file this commit
+    /// removes, and leave it untouched when carrying an earlier tombstone forward. Use
+    /// `add_delete_entry` instead to have this manifest's snapshot id stamped on the entry.
+    pub(crate) fn add_tombstone_entry(&mut self, mut entry: ManifestEntry) -> Result<()> {
         self.check_data_file(&entry.data_file)?;
         entry.status = ManifestStatus::Deleted;
         self.add_entry_inner(entry)?;

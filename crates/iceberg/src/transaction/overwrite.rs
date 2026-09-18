@@ -229,7 +229,7 @@ impl OverwriteOperation {
             if !entry.is_alive() {
                 // A tombstone keeps its original snapshot id so the delete stays attributed
                 // to the snapshot that made it.
-                writer.add_deleted_entry(entry)?;
+                writer.add_tombstone_entry(entry)?;
             } else if self.deleted_file_paths.contains(entry.file_path()) {
                 let mut deleted = entry;
                 deleted.snapshot_id = Some(self.snapshot_id);
@@ -238,7 +238,7 @@ impl OverwriteOperation {
                     manifest.metadata().schema.clone(),
                     partition_spec.clone(),
                 ));
-                writer.add_deleted_entry(deleted)?;
+                writer.add_tombstone_entry(deleted)?;
             } else {
                 writer.add_existing_entry(entry)?;
             }
