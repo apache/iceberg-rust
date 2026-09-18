@@ -44,6 +44,10 @@ use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
 use crate::encryption::StandardKeyMetadata;
 use crate::error::Result;
+use crate::expr::BoundPredicate;
+use crate::expr::visitors::bloom_filter_evaluator::{
+    BloomFilterEvaluator, ColumnBloomFilter, collect_bloom_filter_field_ids,
+};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::metadata_columns::{
     RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER, RESERVED_COL_NAME_POS,
@@ -70,6 +74,7 @@ impl ArrowReader {
                 .with_scan_metrics(scan_metrics.clone()),
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            bloom_filter_enabled: self.bloom_filter_enabled,
             parquet_read_options: self.parquet_read_options,
             scan_metrics: scan_metrics.clone(),
         };
@@ -123,6 +128,7 @@ struct FileScanTaskReader {
     delete_file_loader: CachingDeleteFileLoader,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    bloom_filter_enabled: bool,
     parquet_read_options: ParquetReadOptions,
     scan_metrics: ScanMetrics,
 }
@@ -632,6 +638,30 @@ impl FileScanTaskReader {
                 };
             }
 
+            if self.bloom_filter_enabled {
+                let all_rgs;
+                let candidate_rgs = match &selected_row_group_indices {
+                    Some(indices) => indices.as_slice(),
+                    None => {
+                        all_rgs = (0..record_batch_stream_builder.metadata().num_row_groups())
+                            .collect::<Vec<_>>();
+                        &all_rgs
+                    }
+                };
+
+                let bloom_filtered = Self::filter_row_groups_by_bloom_filter(
+                    &predicate,
+                    &mut record_batch_stream_builder,
+                    candidate_rgs,
+                    &field_id_map,
+                )
+                .await?;
+
+                if bloom_filtered.len() < candidate_rgs.len() {
+                    selected_row_group_indices = Some(bloom_filtered);
+                }
+            }
+
             if self.row_selection_enabled {
                 row_selection = ArrowReader::get_row_selection_for_filter_predicate(
                     &predicate,
@@ -691,6 +721,78 @@ impl FileScanTaskReader {
         });
 
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
+    }
+
+    /// Reads bloom filters for relevant columns and evaluates the predicate
+    /// against them to filter out row groups that definitely don't match.
+    async fn filter_row_groups_by_bloom_filter(
+        predicate: &BoundPredicate,
+        builder: &mut ParquetRecordBatchStreamBuilder<ArrowFileReader>,
+        candidate_row_groups: &[usize],
+        field_id_map: &HashMap<i32, usize>,
+    ) -> Result<Vec<usize>> {
+        // Only collect field IDs from eq/in predicates — the only types
+        // bloom filters can help with. Skip columns not in the parquet schema.
+        let bloom_filter_field_ids: Vec<i32> = collect_bloom_filter_field_ids(predicate)?
+            .into_iter()
+            .filter(|id| field_id_map.contains_key(id))
+            .collect();
+
+        if bloom_filter_field_ids.is_empty() {
+            return Ok(candidate_row_groups.to_vec());
+        }
+
+        let mut result = Vec::with_capacity(candidate_row_groups.len());
+
+        for &rg_idx in candidate_row_groups {
+            let mut bloom_filters: HashMap<i32, ColumnBloomFilter> = HashMap::new();
+
+            for &field_id in &bloom_filter_field_ids {
+                let col_idx = field_id_map[&field_id];
+                let col_meta = builder.metadata().row_group(rg_idx).column(col_idx);
+
+                // Only attempt to load if this column chunk actually has a bloom filter
+                if col_meta.bloom_filter_offset().is_none() {
+                    continue;
+                }
+
+                let physical_type = col_meta.column_type();
+                let type_length = col_meta.column_descr().type_length();
+
+                match builder
+                    .get_row_group_column_bloom_filter(rg_idx, col_idx)
+                    .await
+                {
+                    Ok(Some(sbbf)) => {
+                        bloom_filters.insert(
+                            field_id,
+                            ColumnBloomFilter::new(sbbf, physical_type, type_length),
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        // Left absent from the map, so the evaluator treats the column
+                        // as might-match and the row group survives.
+                        tracing::debug!(
+                            "Bloom filter for field {field_id} in row group {rg_idx} could not be read: {e}"
+                        );
+                    }
+                }
+            }
+
+            match BloomFilterEvaluator::eval(predicate, &bloom_filters) {
+                Ok(true) => result.push(rg_idx),
+                Ok(false) => { /* Row group pruned by bloom filter */ }
+                Err(e) => {
+                    tracing::debug!(
+                        "Bloom filter evaluation failed for row group {rg_idx}, including it: {e}"
+                    );
+                    result.push(rg_idx);
+                }
+            }
+        }
+
+        Ok(result)
     }
 }
 

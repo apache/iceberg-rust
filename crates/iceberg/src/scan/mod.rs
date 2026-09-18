@@ -142,6 +142,7 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    bloom_filter_enabled: bool,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -160,6 +161,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            bloom_filter_enabled: false,
         }
     }
 
@@ -266,6 +268,20 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
+    /// Determines whether to enable bloom filter-based row group filtering.
+    ///
+    /// When enabled, if a read is performed with an equality or IN predicate,
+    /// the bloom filter for relevant columns in each row group is read and
+    /// checked. Row groups where the bloom filter proves the value is absent
+    /// are skipped entirely.
+    ///
+    /// Defaults to disabled, as reading bloom filters requires additional I/O
+    /// per column per row group.
+    pub fn with_bloom_filter_enabled(mut self, bloom_filter_enabled: bool) -> Self {
+        self.bloom_filter_enabled = bloom_filter_enabled;
+        self
+    }
+
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
         let snapshot = match self.snapshot_id {
@@ -292,6 +308,7 @@ impl<'a> TableScanBuilder<'a> {
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
+                        bloom_filter_enabled: self.bloom_filter_enabled,
                         runtime: self.table.runtime().clone(),
                     });
                 };
@@ -349,6 +366,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            bloom_filter_enabled: self.bloom_filter_enabled,
             runtime: self.table.runtime().clone(),
         })
     }
@@ -378,6 +396,7 @@ pub struct TableScan {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    bloom_filter_enabled: bool,
 
     runtime: Runtime,
 }
@@ -510,7 +529,8 @@ impl TableScan {
             ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
                 .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
                 .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
-                .with_row_selection_enabled(self.row_selection_enabled);
+                .with_row_selection_enabled(self.row_selection_enabled)
+                .with_bloom_filter_enabled(self.bloom_filter_enabled);
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
@@ -2264,9 +2284,14 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_filtered_scan_rejects_dropped_partition_source_column() {
+    async fn test_filtered_scan_with_dropped_partition_source_column() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
+
+        // Baseline: the same filtered scan against the table before evolution.
+        let baseline = scan_y_gte_5(&fixture.table).await;
+        assert!(!baseline.is_empty());
+        assert!(baseline.iter().all(|y| *y >= 5));
 
         // Evolve the table so that the manifests reference a historical spec whose source
         // column is no longer in the current schema: make an unpartitioned spec the
@@ -2317,23 +2342,37 @@ pub mod tests {
             .metadata;
         let table = fixture.table.clone().with_metadata(Arc::new(metadata));
 
+        // Planning and reading must succeed, and the results must match the table before
+        // evolution: no rows wrongly pruned and none returned unfiltered.
+        let evolved = scan_y_gte_5(&table).await;
+        assert_eq!(evolved, baseline);
+    }
+
+    async fn scan_y_gte_5(table: &Table) -> Vec<i64> {
         let table_scan = table
             .scan()
             .select(["y"])
             .with_filter(Reference::new("y").greater_than_or_equal_to(Datum::long(5)))
             .build()
             .unwrap();
-
-        let err = table_scan
-            .plan_files()
+        let batches: Vec<_> = table_scan
+            .to_arrow()
             .await
             .unwrap()
-            .try_collect::<Vec<_>>()
+            .try_collect()
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert_eq!(err.kind(), ErrorKind::Unexpected);
-        assert!(err.message().contains("No column with source column id 1"));
+        let mut values: Vec<i64> = batches
+            .iter()
+            .flat_map(|batch| {
+                let col = batch.column_by_name("y").unwrap();
+                let arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+                (0..arr.len()).map(|i| arr.value(i)).collect::<Vec<_>>()
+            })
+            .collect();
+        values.sort_unstable();
+        values
     }
 
     #[tokio::test]

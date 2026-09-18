@@ -191,6 +191,7 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
                     | DataType::Utf8
                     | DataType::LargeUtf8
                     | DataType::Utf8View
+                    | DataType::Null
                     | DataType::Binary
                     | DataType::LargeBinary
                     | DataType::BinaryView
@@ -509,6 +510,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
 
     fn primitive(&mut self, p: &DataType) -> Result<Self::T> {
         match p {
+            DataType::Null => Ok(Type::Primitive(PrimitiveType::Unknown)),
             DataType::Boolean => Ok(Type::Primitive(PrimitiveType::Boolean)),
             DataType::Int8 | DataType::Int16 | DataType::Int32 => {
                 Ok(Type::Primitive(PrimitiveType::Int))
@@ -697,6 +699,7 @@ impl SchemaVisitor for ToArrowSchemaConverter {
 
     fn primitive(&mut self, p: &PrimitiveType) -> Result<ArrowSchemaOrFieldOrType> {
         match p {
+            PrimitiveType::Unknown => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Null)),
             PrimitiveType::Boolean => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Boolean)),
             PrimitiveType::Int => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Int32)),
             PrimitiveType::Long => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Int64)),
@@ -1209,6 +1212,7 @@ pub(crate) fn primitive_type_to_arrow_type_with_ree(primitive_type: &PrimitiveTy
     };
 
     match primitive_type {
+        PrimitiveType::Unknown => make_ree(DataType::Null),
         PrimitiveType::Boolean => make_ree(DataType::Boolean),
         PrimitiveType::Int => make_ree(DataType::Int32),
         PrimitiveType::Long => make_ree(DataType::Int64),
@@ -2223,6 +2227,13 @@ mod tests {
         {
             let arrow_type = DataType::Int32;
             let iceberg_type = Type::Primitive(PrimitiveType::Int);
+            assert_eq!(arrow_type, type_to_arrow_type(&iceberg_type).unwrap());
+            assert_eq!(iceberg_type, arrow_type_to_type(&arrow_type).unwrap());
+        }
+
+        {
+            let arrow_type = DataType::Null;
+            let iceberg_type = Type::Primitive(PrimitiveType::Unknown);
             assert_eq!(arrow_type, type_to_arrow_type(&iceberg_type).unwrap());
             assert_eq!(iceberg_type, arrow_type_to_type(&arrow_type).unwrap());
         }
