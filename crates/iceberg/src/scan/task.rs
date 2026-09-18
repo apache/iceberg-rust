@@ -212,6 +212,16 @@ impl FileScanTask {
         self.predicate.as_ref()
     }
 
+    /// Clears the row predicate of this file scan task.
+    ///
+    /// The COW rewrite path uses this after candidate selection: candidates are
+    /// chosen with the predicate during planning, but each chosen file must then
+    /// be read in full so the rewrite sees every surviving row. Delete-file
+    /// application is unaffected.
+    pub(crate) fn clear_predicate(&mut self) {
+        self.predicate = None;
+    }
+
     /// Returns the delete files that may need to be applied to the data file.
     pub fn deletes(&self) -> &[FileScanTaskDeleteFile] {
         &self.deletes
