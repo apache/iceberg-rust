@@ -1,0 +1,59 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[package]
+edition = { workspace = true }
+homepage = { workspace = true }
+name = "iceberg-kms"
+publish = true
+readme = "README.md"
+rust-version = { workspace = true }
+version = { workspace = true }
+
+categories = ["database"]
+description = "Key management service integrations for Apache Iceberg client-side encryption"
+keywords = ["iceberg", "kms", "encryption"]
+license = { workspace = true }
+repository = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+aws = [
+  "dep:async-trait",
+  "dep:aws-config",
+  "dep:aws-sdk-kms",
+  "dep:iceberg-property-macro",
+]
+default = []
+
+[dependencies]
+async-trait = { workspace = true, optional = true }
+aws-config = { workspace = true, optional = true }
+aws-sdk-kms = { workspace = true, optional = true }
+iceberg = { workspace = true }
+iceberg-property-macro = { workspace = true, optional = true }
+
+[dev-dependencies]
+aws-sdk-kms = { workspace = true, features = ["test-util"] }
+aws-smithy-mocks = "0.3"
+iceberg-catalog-rest = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
+
+[lints]
+workspace = true
