@@ -45,6 +45,8 @@ impl PendingSortField {
             )
         })?;
 
+        // This action intentionally refuses to author all-null (void) sort keys;
+        // this policy does not restrict reading or preserving existing metadata.
         if matches!(self.transform, Transform::Unknown | Transform::Void) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
@@ -93,7 +95,8 @@ impl ReplaceSortOrderAction {
     /// Whether the transform is valid for the column's type is checked at commit time,
     /// once the table schema is available (mirroring Java's `SortOrder.Builder.build()`).
     /// `Transform::Unknown` and `Transform::Void` are rejected at commit time with
-    /// [`ErrorKind::DataInvalid`].
+    /// [`ErrorKind::DataInvalid`]. Rejecting `Void` is an intentional authoring policy
+    /// for this action: an all-null sort key adds no ordering information.
     ///
     /// Note: `Term` is currently a plain column reference. Once it becomes
     /// transform-carrying (#2665), sort-order declaration is expected to converge on
