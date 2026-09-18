@@ -220,12 +220,9 @@ impl OverwriteOperation {
     ) -> Result<ManifestFile> {
         let table = snapshot_produce.table;
 
-        let new_manifest_path = format!(
-            "{}/metadata/{}-m-overwrite.avro",
-            table.metadata().location(),
-            Uuid::now_v7(),
-        );
-        let output_file = table.file_io().new_output(&new_manifest_path)?;
+        let output_file = table
+            .file_io()
+            .new_output(snapshot_produce.new_manifest_path()?)?;
         let partition_spec: PartitionSpecRef = Arc::new(manifest.metadata().partition_spec.clone());
         let builder = ManifestWriterBuilder::new(
             output_file,
@@ -274,6 +271,8 @@ impl OverwriteOperation {
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    use uuid::Uuid;
 
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
@@ -769,5 +768,45 @@ mod tests {
             summary.additional_properties.get("total-data-files"),
             Some(&"2".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn test_rewritten_manifest_is_named_after_the_commit_uuid() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let commit_uuid = Uuid::now_v7();
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite()
+            .set_commit_uuid(commit_uuid)
+            .add_data_files(vec![test_data_file("test/b.parquet", spec_id)])
+            .delete_data_files(vec![file_a.clone()]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let prefix = format!(
+            "{}/{}-m",
+            table.metadata().metadata_location().unwrap(),
+            commit_uuid
+        );
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
+        assert_eq!(2, manifest_list.entries().len());
+        for manifest_file in manifest_list.entries() {
+            let path = &manifest_file.manifest_path;
+            let counter = path
+                .strip_prefix(&prefix)
+                .and_then(|rest| rest.strip_suffix(".avro"));
+            assert!(
+                counter.is_some_and(|c| !c.is_empty() && c.chars().all(|c| c.is_ascii_digit())),
+                "manifest path must be {prefix}<counter>.avro, got {path}"
+            );
+        }
     }
 }
