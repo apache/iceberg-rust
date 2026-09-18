@@ -214,8 +214,8 @@ impl OverwriteOperation {
         let builder = ManifestWriterBuilder::new(
             output_file,
             Some(self.snapshot_id),
-            table.metadata().current_schema().clone(),
-            table.metadata().default_partition_spec().as_ref().clone(),
+            manifest.metadata().schema.clone(),
+            manifest.metadata().partition_spec.clone(),
         );
 
         let mut writer = match table.metadata().format_version() {
@@ -257,11 +257,12 @@ mod tests {
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
-        ManifestEntryRef, ManifestStatus, Operation, SnapshotRef, Struct,
+        ManifestEntryRef, ManifestStatus, Operation, PrimitiveType, SnapshotRef, Struct, Transform,
+        Type, UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::transaction::tests::{make_v2_minimal_table, make_v3_minimal_table_in_catalog};
-    use crate::transaction::{ApplyTransactionAction, Transaction, TransactionAction};
+    use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction, TransactionAction};
     use crate::{TableRequirement, TableUpdate};
 
     fn test_data_file(path: &str, partition_spec_id: i32) -> DataFile {
@@ -599,5 +600,86 @@ mod tests {
             entries.contains(&(ManifestStatus::Deleted, "test/b.parquet".to_string())),
             "the second overwrite's own delete must be a tombstone, entries: {entries:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_rewritten_manifest_keeps_the_schema_and_spec_it_was_written_with() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let original_spec_id = table.metadata().default_partition_spec_id();
+        let original_schema_id = table.metadata().current_schema_id();
+
+        let file_a = test_data_file("test/a.parquet", original_spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.update_schema().add_column(AddColumn::optional(
+            "extra",
+            Type::Primitive(PrimitiveType::Int),
+        ));
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        // There is no transaction action for partition evolution yet, so the spec is replaced
+        // on the metadata directly.
+        let evolved = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .add_default_partition_spec(
+                UnboundPartitionSpec::builder()
+                    .add_partition_field(2, "y", Transform::Identity)
+                    .unwrap()
+                    .build(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        let table = table.with_metadata(Arc::new(evolved));
+        assert_ne!(original_schema_id, table.metadata().current_schema_id());
+        assert_ne!(
+            original_spec_id,
+            table.metadata().default_partition_spec_id()
+        );
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite()
+            .add_data_files(vec![test_data_file(
+                "test/b.parquet",
+                table.metadata().default_partition_spec_id(),
+            )])
+            .delete_data_files(vec![file_a.clone()]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+        let new_snapshot: SnapshotRef = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            SnapshotRef::new(snapshot.clone())
+        } else {
+            unreachable!()
+        };
+
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot)
+            .load()
+            .await
+            .unwrap();
+        let mut rewritten = None;
+        for manifest_file in manifest_list.entries() {
+            let manifest = table.manifest_reader().read(manifest_file).await.unwrap();
+            if manifest
+                .entries()
+                .iter()
+                .any(|entry| entry.status() == ManifestStatus::Deleted)
+            {
+                rewritten = Some((manifest_file.clone(), manifest));
+            }
+        }
+        let (rewritten_file, rewritten_manifest) =
+            rewritten.expect("the manifest holding test/a.parquet must have been rewritten");
+
+        assert_eq!(original_schema_id, rewritten_manifest.metadata().schema_id);
+        assert_eq!(original_spec_id, rewritten_file.partition_spec_id);
     }
 }
