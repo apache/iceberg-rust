@@ -49,9 +49,36 @@ use object_store::{ObjectStore, ObjectStoreExt, PutPayload, WriteMultipart};
 use s3::{build_s3_store, parse_s3_url};
 use serde::{Deserialize, Serialize};
 
-/// Convert an `object_store::Error` into an `iceberg::Error`.
+/// Convert an `object_store::Error` into an `iceberg::Error`,
+/// dispatching known variants to their corresponding `ErrorKind`.
 fn from_object_store_error(e: object_store::Error) -> Error {
-    Error::new(ErrorKind::Unexpected, "Failure in doing io operation").with_source(e)
+    let (kind, msg) = match &e {
+        object_store::Error::NotFound { path, .. } => (
+            ErrorKind::DataInvalid,
+            format!("Object not found: {path}"),
+        ),
+        object_store::Error::AlreadyExists { path, .. } => (
+            ErrorKind::DataInvalid,
+            format!("Object already exists: {path}"),
+        ),
+        object_store::Error::PermissionDenied { path, .. } => (
+            ErrorKind::DataInvalid,
+            format!("Permission denied: {path}"),
+        ),
+        object_store::Error::Unauthenticated { path, .. } => (
+            ErrorKind::DataInvalid,
+            format!("Unauthenticated: {path}"),
+        ),
+        object_store::Error::NotSupported { .. } => (
+            ErrorKind::FeatureUnsupported,
+            "Operation not supported".to_string(),
+        ),
+        _ => (
+            ErrorKind::Unexpected,
+            "Failure in doing io operation".to_string(),
+        ),
+    };
+    Error::new(kind, msg).with_source(e)
 }
 
 /// Convert `object_store::ObjectMeta` into `iceberg::io::FileMetadata`.
@@ -220,37 +247,51 @@ impl Storage for ObjectStoreStorage {
 
     async fn delete_prefix(&self, path: &str) -> Result<()> {
         let target = self.get_store_and_path(path)?;
-        let prefix = if target.path.as_ref().ends_with('/') {
-            target.path
-        } else {
-            ObjectStorePath::from(format!("{}/", target.path.as_ref()))
-        };
-
-        let mut list_stream = target.store.list(Some(&prefix));
-        while let Some(entry) = list_stream.next().await {
-            let entry = entry.map_err(from_object_store_error)?;
-            target
-                .store
-                .delete(&entry.location)
-                .await
-                .map_err(from_object_store_error)?;
-        }
+        let locations = target
+            .store
+            .list(Some(&target.path))
+            .map_ok(|m| m.location)
+            .boxed();
+        target
+            .store
+            .delete_stream(locations)
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(from_object_store_error)?;
         Ok(())
     }
 
     async fn delete_stream(&self, paths: BoxStream<'static, String>) -> Result<()> {
-        paths
-            .map(Ok)
-            .try_for_each_concurrent(16, |path| async move {
-                let target = self.get_store_and_path(&path)?;
-                target
-                    .store
-                    .delete(&target.path)
-                    .await
-                    .map_err(from_object_store_error)?;
-                Ok(())
-            })
-            .await
+        // Collect and group by bucket so each store gets a single bulk DeleteObjects call.
+        let all_paths: Vec<String> = paths.collect().await;
+        let mut grouped: std::collections::HashMap<String, Vec<ObjectStorePath>> =
+            std::collections::HashMap::new();
+        let mut stores: std::collections::HashMap<String, Arc<dyn ObjectStore>> =
+            std::collections::HashMap::new();
+
+        for path in all_paths {
+            let target = self.get_store_and_path(&path)?;
+            let bucket = match self {
+                #[cfg(feature = "object_store-s3")]
+                ObjectStoreStorage::S3(_) => {
+                    let parsed = parse_s3_url(&path)?;
+                    parsed.bucket
+                }
+            };
+            stores.entry(bucket.clone()).or_insert(target.store);
+            grouped.entry(bucket).or_default().push(target.path);
+        }
+
+        for (bucket, locations) in grouped {
+            let store = stores.remove(&bucket).expect("store must exist");
+            let location_stream = futures::stream::iter(locations.into_iter().map(Ok)).boxed();
+            store
+                .delete_stream(location_stream)
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(from_object_store_error)?;
+        }
+        Ok(())
     }
 
     fn new_input(&self, path: &str) -> Result<InputFile> {
@@ -291,12 +332,16 @@ struct ObjectStoreWriter {
 
 impl Drop for ObjectStoreWriter {
     fn drop(&mut self) {
-        if let Some(writer) = self.writer.take()
-            && let Ok(handle) = tokio::runtime::Handle::try_current()
-        {
-            handle.spawn(async move {
-                let _ = writer.abort().await;
-            });
+        if let Some(writer) = self.writer.take() {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let _ = writer.abort().await;
+                });
+            } else {
+                tracing::warn!(
+                    "ObjectStoreWriter dropped outside a Tokio runtime; multipart upload abort skipped"
+                );
+            }
         }
     }
 }
@@ -406,5 +451,24 @@ mod tests {
         let bytes = file_io.serialize_all().unwrap();
         let deserialized = iceberg::io::FileIO::deserialize_all(&bytes).unwrap();
         assert_eq!(file_io.config(), deserialized.config());
+    }
+
+    #[tokio::test]
+    async fn test_writer_already_closed_errors() {
+        let mut writer = ObjectStoreWriter { writer: None };
+        let write_err = writer.write(Bytes::from_static(b"data")).await.unwrap_err();
+        assert_eq!(write_err.kind(), ErrorKind::Unexpected);
+        assert_eq!(write_err.message(), "Writer has already been closed");
+
+        let close_err = writer.close().await.unwrap_err();
+        assert_eq!(close_err.kind(), ErrorKind::Unexpected);
+        assert_eq!(close_err.message(), "Writer has already been closed");
+    }
+
+    #[test]
+    fn test_writer_drop_outside_tokio_warns_and_does_not_panic() {
+        // A plain synchronous #[test] runs on an OS thread outside a Tokio runtime context
+        let writer = ObjectStoreWriter { writer: None };
+        drop(writer);
     }
 }

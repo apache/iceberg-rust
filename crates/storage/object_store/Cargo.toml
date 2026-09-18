@@ -38,8 +38,10 @@ dashmap = { workspace = true }
 futures = { workspace = true }
 iceberg = { workspace = true }
 object_store = { workspace = true }
-serde = { workspace = true }
+percent-encoding = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true }
+tracing = { workspace = true }
 typetag = { workspace = true }
 url = { workspace = true }
 

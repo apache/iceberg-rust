@@ -3996,9 +3996,11 @@ dependencies = [
  "iceberg",
  "iceberg_test_utils",
  "object_store",
+ "percent-encoding",
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
  "typetag",
  "url",
 ]
