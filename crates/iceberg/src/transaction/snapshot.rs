@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::ops::RangeFrom;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
@@ -132,7 +132,7 @@ pub(crate) struct SnapshotProducer<'a> {
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
-    manifest_counter: RangeFrom<u64>,
+    manifest_counter: AtomicU64,
 }
 
 impl<'a> SnapshotProducer<'a> {
@@ -148,7 +148,7 @@ impl<'a> SnapshotProducer<'a> {
             commit_uuid,
             snapshot_properties,
             added_data_files,
-            manifest_counter: (0..),
+            manifest_counter: AtomicU64::new(0),
         }
     }
 
@@ -250,15 +250,19 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
-    fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
-        let new_manifest_path = format!(
+    /// Returns the path for the next manifest file of this commit.
+    fn new_manifest_path(&self) -> Result<String> {
+        Ok(format!(
             "{}/{}-m{}.{}",
             self.table.metadata().metadata_location()?,
             self.commit_uuid,
-            self.manifest_counter.next().unwrap(),
+            self.manifest_counter.fetch_add(1, Ordering::Relaxed),
             DataFileFormat::Avro
-        );
-        let output_file = self.table.file_io().new_output(new_manifest_path)?;
+        ))
+    }
+
+    fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
+        let output_file = self.table.file_io().new_output(self.new_manifest_path()?)?;
         let partition_spec = self
             .table
             .metadata()
