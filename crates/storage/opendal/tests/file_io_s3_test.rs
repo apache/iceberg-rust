@@ -63,6 +63,10 @@ mod tests {
 
     /// Number of upload parts S3 recorded for `key`. A multipart upload reports
     /// a `<md5>-<part-count>` ETag; a single-request upload reports a bare MD5.
+    ///
+    /// The suffix is a MinIO and plain-S3 behavior. A server-side encrypted
+    /// object can report an ETag without it, so this helper holds only for the
+    /// MinIO fixture these tests run against.
     async fn upload_part_count(key: &str) -> usize {
         let mut config = opendal::services::S3Config::default();
         config.endpoint = Some(get_minio_endpoint());
@@ -77,7 +81,9 @@ mod tests {
             .expect("MinIO reports an ETag")
             .trim_matches('"');
         match etag.rsplit_once('-') {
-            Some((_, parts)) => parts.parse().unwrap(),
+            Some((_, parts)) => parts
+                .parse()
+                .unwrap_or_else(|e| panic!("unexpected ETag format {etag}: {e}")),
             None => 1,
         }
     }
@@ -159,6 +165,55 @@ mod tests {
         writer.close().await.unwrap();
 
         assert_eq!(upload_part_count(&key).await, PARTS);
+        file_io.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_file_io_s3_write_splits_buffer_into_bounded_parts() {
+        const PART_SIZE: usize = 5 * 1024 * 1024;
+        const PARTS: usize = 3;
+
+        let file_io =
+            get_file_io_with_props(vec![(S3_MULTIPART_PART_SIZE_BYTES, PART_SIZE.to_string())])
+                .await;
+        let key = normalize_test_name_with_parts!(
+            "test_file_io_s3_write_splits_buffer_into_bounded_parts"
+        );
+        let path = format!("s3://bucket1/{key}");
+
+        let _ = file_io.delete(&path).await;
+        file_io
+            .new_output(&path)
+            .unwrap()
+            .write(Bytes::from(vec![0u8; PART_SIZE * PARTS]))
+            .await
+            .unwrap();
+
+        assert_eq!(upload_part_count(&key).await, PARTS);
+        file_io.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_file_io_s3_write_below_part_size_stays_single_request() {
+        let file_io = get_file_io_with_props(vec![(
+            S3_MULTIPART_PART_SIZE_BYTES,
+            (5 * 1024 * 1024).to_string(),
+        )])
+        .await;
+        let key = normalize_test_name_with_parts!(
+            "test_file_io_s3_write_below_part_size_stays_single_request"
+        );
+        let path = format!("s3://bucket1/{key}");
+
+        let _ = file_io.delete(&path).await;
+        file_io
+            .new_output(&path)
+            .unwrap()
+            .write(Bytes::from_static(b"{\"format-version\":2}"))
+            .await
+            .unwrap();
+
+        assert_eq!(upload_part_count(&key).await, 1);
         file_io.delete(&path).await.unwrap();
     }
 

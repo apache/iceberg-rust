@@ -412,6 +412,9 @@ impl OpenDalStorage {
                 multipart_part_size,
                 ..
             } => WriteOptions {
+                // A validated part size is at most 5 GiB, which still exceeds
+                // `usize` on a 32-bit target. Clamp there instead of panicking
+                // on a configured value.
                 chunk: Some(usize::try_from(*multipart_part_size).unwrap_or(usize::MAX)),
                 ..WriteOptions::default()
             },
