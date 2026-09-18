@@ -354,9 +354,8 @@ impl MergingSnapshotProducer {
                 manifest_list
                     .entries()
                     .iter()
-                    .filter(|e| {
-                        e.has_added_files() || e.has_existing_files() || e.has_deleted_files()
-                    })
+                    // Java's third arm is the new snapshot's id, which no existing manifest has.
+                    .filter(|e| e.has_added_files() || e.has_existing_files())
                     .cloned()
                     .collect()
             }

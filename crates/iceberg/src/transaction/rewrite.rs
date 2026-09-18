@@ -126,9 +126,14 @@ impl TransactionAction for RewriteFilesAction {
 mod tests {
     use std::sync::Arc;
 
+    use uuid::Uuid;
+
     use super::*;
     use crate::memory::tests::new_memory_catalog;
-    use crate::spec::{Literal, ManifestEntryRef, ManifestStatus, Operation, SnapshotRef, Struct};
+    use crate::spec::{
+        Literal, ManifestEntryRef, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
+        Operation, SnapshotRef, Struct,
+    };
     use crate::table::Table;
     use crate::transaction::tests::{
         append_files, make_data_file, make_v3_minimal_table_in_catalog,
@@ -437,6 +442,122 @@ mod tests {
             1,
             "empty manifest should be omitted, not kept"
         );
+    }
+
+    /// A manifest left with only deleted entries records nothing live, whether
+    /// the current snapshot or an older one left it that way.
+    #[tokio::test]
+    async fn test_rewrite_files_drops_all_deleted_manifests() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
+        let f2 = make_data_file(&table, "test/2.parquet", 10, 100);
+        let table = append_files(&catalog, &table, vec![f1.clone()]).await;
+        let table = append_files(&catalog, &table, vec![f2]).await;
+        let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+        let earlier_snapshot_id = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .parent_snapshot_id()
+            .unwrap();
+        let older = add_delete_only_manifest(&table, earlier_snapshot_id).await;
+        let current = add_delete_only_manifest(&table, current_snapshot_id).await;
+
+        let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
+        let tx = Transaction::new(&table);
+        let action = tx.rewrite_files().delete_file(f1).add_file(merged);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
+        for path in [older, current] {
+            assert!(
+                !manifest_list
+                    .entries()
+                    .iter()
+                    .any(|m| m.manifest_path == path),
+                "{path} holds no live entry and should have been dropped"
+            );
+        }
+    }
+
+    /// Add a delete-only manifest, attributed to `added_snapshot_id`, to the
+    /// manifest list of the table's current snapshot, and return its path.
+    async fn add_delete_only_manifest(table: &Table, added_snapshot_id: i64) -> String {
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let added_sequence_number = table
+            .metadata()
+            .snapshot_by_id(added_snapshot_id)
+            .unwrap()
+            .sequence_number();
+        let output = table
+            .file_io()
+            .new_output(format!(
+                "{}/delete-only-{}.avro",
+                table.metadata().metadata_location().unwrap(),
+                Uuid::new_v4()
+            ))
+            .unwrap();
+        let mut writer = ManifestWriterBuilder::new(
+            output,
+            Some(added_snapshot_id),
+            table.metadata().current_schema().clone(),
+            table.metadata().default_partition_spec().as_ref().clone(),
+        )
+        .build_v3_data();
+        writer
+            .add_delete_file(
+                make_data_file(
+                    table,
+                    &format!("test/removed-{added_snapshot_id}.parquet"),
+                    10,
+                    100,
+                ),
+                added_sequence_number,
+                Some(added_sequence_number),
+            )
+            .unwrap();
+        let mut delete_manifest = writer.write_manifest_file().await.unwrap();
+        // The manifest list writer only assigns sequence numbers to manifests of
+        // the snapshot being written; this one belongs to an earlier snapshot.
+        delete_manifest.sequence_number = added_sequence_number;
+        delete_manifest.min_sequence_number = added_sequence_number;
+        let delete_manifest_path = delete_manifest.manifest_path.clone();
+        assert!(!delete_manifest.has_added_files());
+        assert!(!delete_manifest.has_existing_files());
+
+        let mut entries = table
+            .manifest_list_reader(snapshot)
+            .load()
+            .await
+            .unwrap()
+            .consume_entries()
+            .into_iter()
+            .collect::<Vec<_>>();
+        entries.push(delete_manifest);
+
+        let mut manifest_list_writer = ManifestListWriter::v3(
+            table
+                .file_io()
+                .new_output(snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap(),
+            snapshot.snapshot_id(),
+            snapshot.parent_snapshot_id(),
+            snapshot.sequence_number(),
+            Some(table.metadata().next_row_id()),
+        );
+        manifest_list_writer
+            .add_manifests(entries.into_iter())
+            .unwrap();
+        manifest_list_writer.close().await.unwrap();
+
+        delete_manifest_path
     }
 
     /// A retried commit must not reuse the manifest paths of the attempt
