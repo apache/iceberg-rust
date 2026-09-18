@@ -149,20 +149,23 @@ impl DeleteVector {
     /// This produces the raw blob only; wrapping it in a Puffin `Blob` with the associated
     /// snapshot and sequence-number properties is handled separately.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Does not panic in practice. Writing a roaring treemap into a `Vec` is infallible under
-    /// Rust's allocator model (an allocation failure aborts rather than returning an error), so the
-    /// internal `expect` never fires; it guards only against a hypothetical future change to
-    /// `roaring`'s API that would make `serialize_into` fallible for an in-memory `Vec`.
+    /// Returns [`ErrorKind::DataInvalid`] if the framed body (the magic plus the vector) would
+    /// exceed `u32::MAX` bytes, since the `deletion-vector-v1` length prefix is a `u32`; reaching
+    /// this requires a deletion vector of roughly 4 GiB, far larger than any realistic set of row
+    /// positions. Returns [`ErrorKind::Unexpected`] if writing the roaring treemap into the
+    /// in-memory buffer fails, which does not happen under Rust's allocator model (an allocation
+    /// failure aborts rather than returning an error); it guards only against a hypothetical future
+    /// change to `roaring`'s API that would make `serialize_into` fallible for an in-memory `Vec`.
     // Nothing in non-test crate code calls this yet (the delete-vector write path wires it in
     // later), and `delete_vector` is a private module, so it otherwise reads as dead code.
     #[allow(unused)]
-    pub fn serialize(&self) -> Vec<u8> {
+    pub fn serialize(&self) -> Result<Vec<u8>> {
         let mut vector = Vec::with_capacity(self.inner.serialized_size());
-        self.inner
-            .serialize_into(&mut vector)
-            .expect("serializing a roaring treemap into a Vec is infallible");
+        self.inner.serialize_into(&mut vector).map_err(|e| {
+            Error::new(ErrorKind::Unexpected, "failed to serialize roaring treemap").with_source(e)
+        })?;
         frame_dv_blob(&vector)
     }
 }
@@ -357,17 +360,21 @@ impl BitOrAssign for DeleteVector {
 // by `serialize` and by the tests that craft raw roaring directories `serialize` can never emit.
 // Only reachable through `serialize` (dead in non-test builds) and the tests, hence `allow(unused)`.
 #[allow(unused)]
-fn frame_dv_blob(vector: &[u8]) -> Vec<u8> {
+fn frame_dv_blob(vector: &[u8]) -> Result<Vec<u8>> {
     let body_len = DV_MAGIC_BYTES + vector.len();
     let mut blob = Vec::with_capacity(DV_LENGTH_PREFIX_BYTES + body_len + DV_CRC_BYTES);
-    let body_len =
-        u32::try_from(body_len).expect("deletion-vector-v1 body length exceeds u32::MAX");
+    let body_len = u32::try_from(body_len).map_err(|_| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            "deletion-vector-v1 body length exceeds u32::MAX",
+        )
+    })?;
     blob.extend_from_slice(&body_len.to_be_bytes());
     blob.extend_from_slice(&DV_MAGIC);
     blob.extend_from_slice(vector);
     let crc = crc32fast::hash(&blob[DV_LENGTH_PREFIX_BYTES..]);
     blob.extend_from_slice(&crc.to_be_bytes());
-    blob
+    Ok(blob)
 }
 
 #[cfg(test)]
@@ -445,7 +452,7 @@ mod tests {
     // decoding it recovers the same set of positions. This is the round-trip property:
     // `deserialize(serialize(dv))` yields the same positions as `dv`.
     fn assert_roundtrips(dv: &DeleteVector) {
-        let blob = dv.serialize();
+        let blob = dv.serialize().unwrap();
 
         // The magic sits immediately after the 4-byte length prefix.
         assert_eq!(
@@ -512,7 +519,7 @@ mod tests {
     // against a drift in the layout that a round trip through our own decoder could mask.
     #[test]
     fn test_serialize_golden_framing() {
-        let blob = dv_of([1u64, 2, 3]).serialize();
+        let blob = dv_of([1u64, 2, 3]).serialize().unwrap();
 
         assert_eq!(&blob[4..8], &[0xD1, 0xD3, 0x39, 0x64]);
         let declared = u32::from_be_bytes(blob[..4].try_into().unwrap());
@@ -548,10 +555,11 @@ mod tests {
         ];
 
         for dv in &cases {
-            let blob = dv.serialize();
+            let blob = dv.serialize().unwrap();
             let reserialized = DeleteVector::deserialize(&blob)
                 .expect("serialized blob must decode")
-                .serialize();
+                .serialize()
+                .unwrap();
             assert_eq!(
                 blob, reserialized,
                 "re-serializing a decoded blob must reproduce the original bytes"
@@ -567,7 +575,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_rejects_bad_magic() {
-        let mut blob = dv_of([1]).serialize();
+        let mut blob = dv_of([1]).serialize().unwrap();
         blob[DV_LENGTH_PREFIX_BYTES] ^= 0xFF;
         // Recompute the CRC so the magic check, not the CRC check, is what fails.
         let end = blob.len() - DV_CRC_BYTES;
@@ -579,7 +587,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_rejects_bad_crc() {
-        let mut blob = dv_of([1, 2, 3]).serialize();
+        let mut blob = dv_of([1, 2, 3]).serialize().unwrap();
         let end = blob.len() - DV_CRC_BYTES;
         blob[end] ^= 0xFF;
         let err = DeleteVector::deserialize(&blob).unwrap_err();
@@ -588,7 +596,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_rejects_length_prefix_mismatch() {
-        let mut blob = dv_of([1]).serialize();
+        let mut blob = dv_of([1]).serialize().unwrap();
         let declared = u32::from_be_bytes(blob[..DV_LENGTH_PREFIX_BYTES].try_into().unwrap());
         blob[..DV_LENGTH_PREFIX_BYTES].copy_from_slice(&(declared + 1).to_be_bytes());
         let err = DeleteVector::deserialize(&blob).unwrap_err();
@@ -618,7 +626,7 @@ mod tests {
     #[test]
     fn test_deserialize_rejects_duplicate_keys() {
         let vector = raw_roaring_vector(&[(5, &[1]), (5, &[2])]);
-        let err = DeleteVector::deserialize(&frame_dv_blob(&vector)).unwrap_err();
+        let err = DeleteVector::deserialize(&frame_dv_blob(&vector).unwrap()).unwrap_err();
         assert!(err.message().contains("unsigned comparison"), "got: {err}");
     }
 
@@ -628,7 +636,7 @@ mod tests {
     #[test]
     fn test_deserialize_rejects_out_of_order_keys() {
         let vector = raw_roaring_vector(&[(5, &[1]), (3, &[2])]);
-        let err = DeleteVector::deserialize(&frame_dv_blob(&vector)).unwrap_err();
+        let err = DeleteVector::deserialize(&frame_dv_blob(&vector).unwrap()).unwrap_err();
         assert!(err.message().contains("unsigned comparison"), "got: {err}");
     }
 
@@ -638,7 +646,7 @@ mod tests {
     #[test]
     fn test_deserialize_rejects_bitmap_count_overflow() {
         let vector = (u32::MAX as u64 + 1).to_le_bytes().to_vec();
-        let err = DeleteVector::deserialize(&frame_dv_blob(&vector)).unwrap_err();
+        let err = DeleteVector::deserialize(&frame_dv_blob(&vector).unwrap()).unwrap_err();
         assert!(err.message().contains("exceeds the"), "got: {err}");
     }
 }
