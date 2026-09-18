@@ -114,6 +114,7 @@ impl TransactionAction for OverwriteAction {
             .commit(
                 OverwriteOperation {
                     deleted_file_paths,
+                    has_added_data_files: !self.added_data_files.is_empty(),
                     snapshot_id,
                     removed_data_files: vec![],
                 },
@@ -125,13 +126,21 @@ impl TransactionAction for OverwriteAction {
 
 struct OverwriteOperation {
     deleted_file_paths: HashSet<String>,
+    has_added_data_files: bool,
     snapshot_id: i64,
     removed_data_files: Vec<(DataFile, SchemaRef, PartitionSpecRef)>,
 }
 
 impl SnapshotProduceOperation for OverwriteOperation {
     fn operation(&self) -> Operation {
-        Operation::Overwrite
+        match (
+            self.has_added_data_files,
+            !self.deleted_file_paths.is_empty(),
+        ) {
+            (true, true) => Operation::Overwrite,
+            (false, true) => Operation::Delete,
+            _ => Operation::Append,
+        }
     }
 
     async fn delete_entries(
@@ -406,7 +415,7 @@ mod tests {
         } else {
             unreachable!()
         };
-        assert_eq!(new_snapshot.summary().operation, Operation::Overwrite);
+        assert_eq!(new_snapshot.summary().operation, Operation::Append);
 
         let manifest_list = table
             .manifest_list_reader(&new_snapshot)
@@ -789,5 +798,44 @@ mod tests {
                 "manifest path must be {prefix}<counter>.avro, got {path}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_delete_only_overwrite_reports_a_delete_operation() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let file_b = test_data_file("test/b.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .fast_append()
+            .add_data_files(vec![file_a.clone(), file_b.clone()]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.overwrite().delete_data_files(vec![file_a.clone()]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        assert_eq!(snapshot.summary().operation, Operation::Delete);
+        assert_eq!(
+            snapshot
+                .summary()
+                .additional_properties
+                .get("deleted-data-files"),
+            Some(&"1".to_string())
+        );
+
+        let entries = current_manifest_entries(&table).await;
+        assert!(
+            entries.contains(&(ManifestStatus::Deleted, "test/a.parquet".to_string())),
+            "the deleted file must be a tombstone, entries: {entries:?}"
+        );
+        assert!(
+            entries.contains(&(ManifestStatus::Existing, "test/b.parquet".to_string())),
+            "the untouched file must stay live, entries: {entries:?}"
+        );
     }
 }

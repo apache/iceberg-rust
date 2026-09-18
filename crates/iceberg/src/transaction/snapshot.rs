@@ -395,7 +395,7 @@ impl<'a> SnapshotProducer<'a> {
         {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
-                "No added data files or added snapshot properties found when write a manifest file",
+                "No added data files, deleted data files, or added snapshot properties found when write a manifest file",
             ));
         }
 
