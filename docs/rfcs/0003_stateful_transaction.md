@@ -75,7 +75,7 @@ pub(crate) trait TransactionAction: Send + Sync + 'static {
     ) -> Result<ActionCommit>;
 
     /// Best-effort cleanup after the transaction reaches a terminal result.
-    async fn finish_commit(
+    async fn cleanup(
         &self,
         _state: &mut Self::State,
         _table: &Table,
@@ -139,7 +139,7 @@ flowchart TD
     Submit -->|Indeterminate result| Unknown["Unknown"]
     Action -->|Definitive execution failure| Failed
     Apply -->|Definitive local apply failure| Failed
-    Committed --> Finish["Call finish_commit on every entry"]
+    Committed --> Finish["Call cleanup on every entry"]
     Failed --> Finish
     Unknown --> Finish
 ```
@@ -314,8 +314,16 @@ reaches a terminal result.
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommitStatus {
+    /// The catalog confirmed that the commit was applied.
     Committed,
+    /// The transaction definitively did not commit and will not retry.
     Failed,
+    /// The commit request was submitted, but its outcome could not be
+    /// resolved: the catalog may or may not have applied it.
+    ///
+    /// Example: every action executed and validated successfully, but the
+    /// connection failed while awaiting the catalog's response to
+    /// `update_table`.
     Unknown,
 }
 ```
@@ -328,7 +336,7 @@ pub(crate) enum CommitStatus {
 
 The transaction/catalog layer determines this classification. Producers consume
 it rather than independently interpreting catalog errors. Once the retry loop
-terminates, every entry receives `finish_commit`, including entries that wrote
+terminates, every entry receives `cleanup`, including entries that wrote
 files before a later action failed.
 
 For `Committed`, the supplied table reflects the accepted metadata and supports
@@ -340,6 +348,16 @@ definitively did not commit, so producer-owned artifacts are deletable.
 For `Unknown`, the supplied table is available execution context only — it is
 not proof that the commit failed or that a potentially committed artifact is
 unreachable — and cleanup deletes nothing.
+
+`Unknown` arises only at the catalog boundary, after local work has succeeded:
+the commit request was submitted, but its result could not be verified — for
+example, a network failure while awaiting the catalog's response. The catalog
+layer should make a best-effort attempt to resolve the true outcome before
+reporting `Unknown` (for example through idempotent request handling or by
+re-checking table state), so `Unknown` is a last resort, not a routine result.
+When it is reported, the transaction fails with an error and must not be
+retried: retrying could commit a second time if the original request landed,
+and cleaning up could delete metadata that is now live.
 
 Cleanup is best-effort and must not change the already-determined transaction
 result. Failures are reported without turning a successful commit into a failed
@@ -367,8 +385,8 @@ internal locking is needed.
 **Producer-typed action state.** `TransactionAction::State` could have been
 bounded by a snapshot-producer trait. But many actions are stateless or not
 snapshot-producing, and no transaction-level code needs to know that a state is
-a producer: replay calls `commit`, cleanup calls `finish_commit`, both on the
-action. A generic `State` subsumes the producer case without vacuous impls.
+a producer: replay calls `commit`, terminal cleanup calls `cleanup`, both on
+the action. A generic `State` subsumes the producer case without vacuous impls.
 
 ## 8. Adoption Plan and Deferred Decisions
 
@@ -405,7 +423,6 @@ operations, without requiring every optimization or operation up front.
 
 The following do not need to be fixed to agree on this architecture:
 
-- Heterogeneous storage, type erasure, and adapter machinery.
 - Shared state structs such as `CommitIdentity`, and eager/lazy UUID generation.
 - Cache representations, keys, bounds, eviction, and placement in lower layers.
 - Manifest-filter internals and per-spec bookkeeping.
