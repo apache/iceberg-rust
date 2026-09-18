@@ -45,6 +45,7 @@ use crate::runtime::Runtime;
 use crate::spec::{DataContentType, Schema, SchemaRef, SnapshotRef, SortOrderRef, StructType};
 use crate::table::Table;
 use crate::util::available_parallelism;
+use crate::util::snapshot::snapshot_id_as_of_time;
 use crate::{Error, ErrorKind, Result};
 
 /// A stream of arrow [`RecordBatch`]es.
@@ -134,6 +135,7 @@ pub struct TableScanBuilder<'a> {
     // Defaults to none which means select all columns
     column_names: Option<Vec<String>>,
     snapshot_id: Option<i64>,
+    as_of_timestamp_ms: Option<i64>,
     batch_size: Option<usize>,
     case_sensitive: bool,
     filter: Option<Predicate>,
@@ -153,6 +155,7 @@ impl<'a> TableScanBuilder<'a> {
             table,
             column_names: None,
             snapshot_id: None,
+            as_of_timestamp_ms: None,
             batch_size: None,
             case_sensitive: true,
             filter: None,
@@ -209,9 +212,38 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Set the snapshot to scan. When not set, it uses current snapshot.
+    /// Set the snapshot to scan. Repeated calls use the last ID.
+    ///
+    /// When neither this nor [`Self::as_of_time`] is set, uses the current snapshot.
+    /// Combining both selectors causes [`Self::build`] to return an error.
     pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
         self.snapshot_id = Some(snapshot_id);
+        self
+    }
+
+    /// Select a snapshot using a timestamp in milliseconds since the Unix epoch.
+    ///
+    /// At [`Self::build`], resolves the greatest timestamp at or before the request
+    /// in the loaded table's main snapshot history. Equal timestamps keep the
+    /// first history entry. This uses when snapshots became current, so it also
+    /// handles rollback to an older snapshot. It does not refresh table metadata.
+    ///
+    /// The scan uses the selected snapshot's schema, falling back to the current
+    /// schema for older snapshots without a schema ID, just like [`Self::snapshot_id`].
+    /// Repeated calls use the last timestamp. Combining this selector with
+    /// [`Self::snapshot_id`] in either order causes [`Self::build`] to return an
+    /// error, as does unavailable history or a missing selected snapshot.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # fn example(table: &iceberg::table::Table) -> iceberg::Result<()> {
+    /// let scan = table.scan().as_of_time(1_602_638_573_590).build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn as_of_time(mut self, timestamp_ms: i64) -> Self {
+        self.as_of_timestamp_ms = Some(timestamp_ms);
         self
     }
 
@@ -284,7 +316,20 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
-        let snapshot = match self.snapshot_id {
+        let snapshot_id = match (self.snapshot_id, self.as_of_timestamp_ms) {
+            (Some(_), Some(_)) => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Cannot combine snapshot_id and as_of_time",
+                ));
+            }
+            (Some(id), None) => Some(id),
+            (None, Some(timestamp_ms)) => {
+                Some(snapshot_id_as_of_time(self.table.metadata(), timestamp_ms)?)
+            }
+            (None, None) => None,
+        };
+        let snapshot = match snapshot_id {
             Some(snapshot_id) => self
                 .table
                 .metadata()
@@ -1961,6 +2006,243 @@ pub mod tests {
             table_scan.snapshot().unwrap().snapshot_id(),
             3051729675574597004
         );
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_selects_historical_snapshot() {
+        let table = TableTestFixture::new().table;
+        for entry in table.metadata().history() {
+            let scan = table.scan().as_of_time(entry.timestamp_ms).build().unwrap();
+            assert_eq!(scan.snapshot().unwrap().snapshot_id(), entry.snapshot_id);
+        }
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_after_rollback() {
+        let table = TableTestFixture::new().table;
+        let mut metadata = table.metadata().clone();
+        let original = metadata.history()[0].snapshot_id;
+        let rollback_time = metadata.history()[1].timestamp_ms + 1000;
+        metadata.snapshot_log.push(crate::spec::SnapshotLog {
+            timestamp_ms: rollback_time,
+            snapshot_id: original,
+        });
+        metadata.current_snapshot_id = Some(original);
+        metadata.refs.get_mut(MAIN_BRANCH).unwrap().snapshot_id = original;
+        let table = table.with_metadata(Arc::new(metadata));
+        let scan = table.scan().as_of_time(rollback_time).build().unwrap();
+        assert_eq!(scan.snapshot().unwrap().snapshot_id(), original);
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_rejects_empty_history() {
+        let table = TableTestFixture::new_empty().table;
+        assert!(table.scan().build().unwrap().snapshot().is_none());
+        let err = table.scan().as_of_time(0).build().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("No snapshot history"));
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_rejects_before_history() {
+        let table = TableTestFixture::new().table;
+        let before = table.metadata().history()[0].timestamp_ms - 1;
+        let err = table.scan().as_of_time(before).build().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains(&before.to_string()));
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_rejects_missing_snapshot() {
+        let table = TableTestFixture::new().table;
+        let mut metadata = table.metadata().clone();
+        let entry = metadata.history()[0].clone();
+        metadata.snapshots.remove(&entry.snapshot_id);
+        let table = table.with_metadata(Arc::new(metadata));
+        let err = table
+            .scan()
+            .as_of_time(entry.timestamp_ms)
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.message(),
+            format!("Snapshot with id {} not found", entry.snapshot_id)
+        );
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_conflicts_with_snapshot_id() {
+        for id_first in [true, false] {
+            let table = TableTestFixture::new().table;
+            let entry = &table.metadata().history()[0];
+            let scan = table.scan();
+            let scan = if id_first {
+                scan.snapshot_id(entry.snapshot_id)
+                    .as_of_time(entry.timestamp_ms)
+            } else {
+                scan.as_of_time(entry.timestamp_ms)
+                    .snapshot_id(entry.snapshot_id)
+            };
+            let err = scan.build().unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert_eq!(err.message(), "Cannot combine snapshot_id and as_of_time");
+        }
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_last_timestamp_wins() {
+        let table = TableTestFixture::new().table;
+        let first = &table.metadata().history()[0];
+        let scan = table
+            .scan()
+            .as_of_time(i64::MAX)
+            .as_of_time(first.timestamp_ms)
+            .build()
+            .unwrap();
+        assert_eq!(scan.snapshot().unwrap().snapshot_id(), first.snapshot_id);
+        // Keep the existing repeated snapshot_id setter behavior as well.
+        let scan = table
+            .scan()
+            .snapshot_id(-1)
+            .snapshot_id(first.snapshot_id)
+            .build()
+            .unwrap();
+        assert_eq!(scan.snapshot().unwrap().snapshot_id(), first.snapshot_id);
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_uses_snapshot_schema() {
+        for select_current in [false, true] {
+            let table = TableTestFixture::new().table;
+            let mut metadata = table.metadata().clone();
+            let entry = metadata.history()[usize::from(select_current)].clone();
+            // Simulate a schema-only update after this snapshot: schema 0 has x only,
+            // while the current table schema also contains y and other columns.
+            Arc::make_mut(metadata.snapshots.get_mut(&entry.snapshot_id).unwrap()).schema_id =
+                Some(0);
+            let table = table.with_metadata(Arc::new(metadata));
+            let scan = table
+                .scan()
+                .as_of_time(entry.timestamp_ms)
+                .select(["x"])
+                .with_filter(Reference::new("x").greater_than(Datum::long(0)))
+                .build()
+                .unwrap();
+            let context = scan.plan_context.as_ref().unwrap();
+            assert_eq!(context.snapshot_schema.schema_id(), 0);
+            assert!(context.snapshot_bound_predicate.is_some());
+            assert!(
+                table
+                    .scan()
+                    .as_of_time(entry.timestamp_ms)
+                    .select(["y"])
+                    .build()
+                    .is_err()
+            );
+            assert!(
+                table
+                    .scan()
+                    .as_of_time(entry.timestamp_ms)
+                    .with_filter(Reference::new("y").greater_than(Datum::long(0)))
+                    .build()
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_schema_compatibility() {
+        let table = TableTestFixture::new().table;
+        let entry = table.metadata().history()[0].clone();
+        // Older snapshots may omit schema-id and use the current-schema fallback.
+        assert!(
+            table
+                .metadata()
+                .snapshot_by_id(entry.snapshot_id)
+                .unwrap()
+                .schema_id()
+                .is_none()
+        );
+        let scan = table.scan().as_of_time(entry.timestamp_ms).build().unwrap();
+        assert_eq!(
+            scan.plan_context.as_ref().unwrap().snapshot_schema,
+            *table.metadata().current_schema()
+        );
+
+        let mut metadata = table.metadata().clone();
+        Arc::make_mut(metadata.snapshots.get_mut(&entry.snapshot_id).unwrap()).schema_id =
+            Some(1234);
+        let table = table.with_metadata(Arc::new(metadata));
+        let err = table
+            .scan()
+            .as_of_time(entry.timestamp_ms)
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("Schema with id 1234 not found"));
+    }
+
+    #[tokio::test]
+    async fn test_table_scan_as_of_time_matches_explicit_snapshot_read() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let table = fixture.table;
+        let entry = table.metadata().history().last().unwrap();
+        let predicate = Reference::new("y").greater_than_or_equal_to(Datum::long(5));
+        let by_time = table
+            .scan()
+            .as_of_time(entry.timestamp_ms)
+            .select(["y"])
+            .with_filter(predicate.clone())
+            .build()
+            .unwrap();
+        let by_id = table
+            .scan()
+            .snapshot_id(entry.snapshot_id)
+            .select(["y"])
+            .with_filter(predicate)
+            .build()
+            .unwrap();
+        let mut time_tasks: Vec<_> = by_time
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        let mut id_tasks: Vec<_> = by_id
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        time_tasks.sort_by_key(|task| task.data_file_path().to_string());
+        id_tasks.sort_by_key(|task| task.data_file_path().to_string());
+        assert!(!time_tasks.is_empty());
+        assert_eq!(time_tasks, id_tasks);
+        let mut rows = Vec::new();
+        for scan in [by_time, by_id] {
+            let batches: Vec<_> = scan.to_arrow().await.unwrap().try_collect().await.unwrap();
+            let mut values: Vec<i64> = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect();
+            values.sort_unstable();
+            rows.push(values);
+        }
+        assert!(!rows[0].is_empty());
+        assert_eq!(rows[0], rows[1]);
     }
 
     fn table_with_property(key: &str, value: &str) -> Table {
