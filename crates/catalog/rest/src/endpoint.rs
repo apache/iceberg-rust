@@ -168,6 +168,10 @@ endpoints! {
     V1_REGISTER_TABLE => POST "/v1/{prefix}/namespaces/{namespace}/register",
     V1_REPORT_METRICS => POST "/v1/{prefix}/namespaces/{namespace}/tables/{table}/metrics",
     V1_COMMIT_TRANSACTION => POST "/v1/{prefix}/transactions/commit",
+    V1_PLAN_TABLE_SCAN => POST "/v1/{prefix}/namespaces/{namespace}/tables/{table}/plan",
+    V1_FETCH_PLAN_RESULT => GET "/v1/{prefix}/namespaces/{namespace}/tables/{table}/plan/{plan-id}",
+    V1_CANCEL_PLANNING => DELETE "/v1/{prefix}/namespaces/{namespace}/tables/{table}/plan/{plan-id}",
+    V1_FETCH_SCAN_TASKS => POST "/v1/{prefix}/namespaces/{namespace}/tables/{table}/tasks",
 }
 
 /// The standard v1 endpoints assumed to be supported when a server's
@@ -230,5 +234,29 @@ mod tests {
     #[test]
     fn normalizes_http_method_to_uppercase() {
         assert_eq!("get /v1/x".parse::<Endpoint>().unwrap().method(), "GET");
+    }
+
+    #[test]
+    fn scan_planning_endpoints_are_optional_and_not_in_the_default_set() {
+        assert_eq!(
+            V1_PLAN_TABLE_SCAN.to_string(),
+            "POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan"
+        );
+        assert_eq!(
+            V1_FETCH_PLAN_RESULT.to_string(),
+            "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan/{plan-id}"
+        );
+        assert_eq!(
+            V1_CANCEL_PLANNING.to_string(),
+            "DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan/{plan-id}"
+        );
+        assert_eq!(
+            V1_FETCH_SCAN_TASKS.to_string(),
+            "POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/tasks"
+        );
+        assert!(!DEFAULT_ENDPOINTS.contains(&V1_PLAN_TABLE_SCAN));
+        assert!(!DEFAULT_ENDPOINTS.contains(&V1_FETCH_PLAN_RESULT));
+        assert!(!DEFAULT_ENDPOINTS.contains(&V1_CANCEL_PLANNING));
+        assert!(!DEFAULT_ENDPOINTS.contains(&V1_FETCH_SCAN_TASKS));
     }
 }
