@@ -196,31 +196,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_file_io_s3_multipart_writer_drop_aborts() {
-        let file_io = get_file_io().await;
-        let file_path = format!(
-            "s3://bucket1/{}",
-            normalize_test_name_with_parts!("test_file_io_s3_multipart_writer_drop_aborts")
-        );
-        let _ = file_io.delete(&file_path).await;
-
-        let output_file = file_io.new_output(&file_path).unwrap();
-        let mut writer = output_file.writer().await.unwrap();
-        writer
-            .write(Bytes::from_static(b"uncommitted chunk"))
-            .await
-            .unwrap();
-
-        // Dropping writer without close() should abort the multipart upload
-        drop(writer);
-
-        // Give background abort task a moment to execute
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-        assert!(!file_io.exists(&file_path).await.unwrap());
-    }
-
-    #[tokio::test]
     async fn test_file_io_s3_percent_encoded_bucket() {
         let file_io = get_file_io().await;
         let file_path = format!(

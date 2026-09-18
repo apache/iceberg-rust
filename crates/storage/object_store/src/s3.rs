@@ -46,7 +46,7 @@ pub(crate) fn parse_s3_url(path: &str) -> Result<ParsedS3Url> {
         "s3" | "s3a" | "s3n" => {}
         _ => {
             return Err(Error::new(
-                ErrorKind::DataInvalid,
+                ErrorKind::FeatureUnsupported,
                 format!("Unsupported S3 scheme: {scheme} in url: {path}"),
             ));
         }
@@ -74,7 +74,7 @@ pub(crate) fn parse_s3_url(path: &str) -> Result<ParsedS3Url> {
         .with_source(e)
     })?;
 
-    let relative = url.path().trim_start_matches('/');
+    let relative = url.path().strip_prefix('/').unwrap_or(url.path());
 
     Ok(ParsedS3Url {
         scheme: scheme.to_string(),
@@ -87,7 +87,7 @@ pub(crate) fn parse_s3_url(path: &str) -> Result<ParsedS3Url> {
 fn parse_s3_config_key(key: &str) -> Result<AmazonS3ConfigKey> {
     AmazonS3ConfigKey::from_str(key).map_err(|e| {
         Error::new(
-            ErrorKind::Unexpected,
+            ErrorKind::DataInvalid,
             format!("Failed to parse S3 config key: {key}"),
         )
         .with_source(e)
@@ -212,7 +212,8 @@ mod tests {
 
     #[test]
     fn test_parse_s3_url_unsupported_scheme() {
-        assert!(parse_s3_url("gs://my-bucket/file.parquet").is_err());
+        let err = parse_s3_url("gs://my-bucket/file.parquet").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
     }
 
     #[test]
@@ -256,6 +257,14 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_s3_url_double_slash_path() {
+        let parsed = parse_s3_url("s3://my-bucket//path/to/file.parquet").unwrap();
+        assert_eq!(parsed.scheme, "s3");
+        assert_eq!(parsed.bucket, "my-bucket");
+        assert_eq!(parsed.relative, "/path/to/file.parquet");
+    }
+
+    #[test]
     fn test_parse_s3_url_empty_bucket() {
         assert!(parse_s3_url("s3:///path/to/file.parquet").is_err());
         assert!(parse_s3_url("s3://").is_err());
@@ -265,7 +274,7 @@ mod tests {
     fn test_parse_s3_config_key() {
         assert!(parse_s3_config_key("aws_server_side_encryption").is_ok());
         let err = parse_s3_config_key("invalid_config_key_foo_bar").unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
     #[test]
