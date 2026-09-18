@@ -30,6 +30,7 @@ use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
+use crate::{Error, ErrorKind};
 
 /// OverwriteAction is a transaction action for overwriting data files in the table.
 ///
@@ -159,6 +160,7 @@ impl SnapshotProduceOperation for OverwriteOperation {
         snapshot_produce: &SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestFile>> {
         let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
+            self.validate_deletes_matched()?;
             return Ok(vec![]);
         };
 
@@ -213,11 +215,39 @@ impl SnapshotProduceOperation for OverwriteOperation {
             }
         }
 
+        self.validate_deletes_matched()?;
+
         Ok(result)
     }
 }
 
 impl OverwriteOperation {
+    /// Fails when a requested delete path was not live in any manifest, matching the existence
+    /// check Java's `BaseOverwriteFiles` performs before committing.
+    fn validate_deletes_matched(&self) -> Result<()> {
+        let removed: HashSet<&str> = self
+            .removed_data_files
+            .iter()
+            .map(|(data_file, _, _)| data_file.file_path.as_str())
+            .collect();
+        let mut missing: Vec<&str> = self
+            .deleted_file_paths
+            .iter()
+            .map(String::as_str)
+            .filter(|path| !removed.contains(path))
+            .collect();
+
+        if missing.is_empty() {
+            return Ok(());
+        }
+
+        missing.sort_unstable();
+        Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Missing required files to delete: {}", missing.join(", ")),
+        ))
+    }
+
     /// Rewrite a manifest, marking entries whose file paths are in `deleted_file_paths`
     /// as `ManifestStatus::Deleted`.
     async fn rewrite_manifest(
@@ -842,6 +872,34 @@ mod tests {
         assert!(
             entries.contains(&(ManifestStatus::Existing, "test/b.parquet".to_string())),
             "the untouched file must stay live, entries: {entries:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_rejects_deleting_a_file_the_table_does_not_have() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite()
+            .add_data_files(vec![test_data_file("test/b.parquet", spec_id)])
+            .delete_data_files(vec![
+                file_a.clone(),
+                test_data_file("test/never-committed.parquet", spec_id),
+            ]);
+        let err = Arc::new(action).commit(&table).await.err().unwrap();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string()
+                .contains("Missing required files to delete: test/never-committed.parquet"),
+            "{err}"
         );
     }
 }
