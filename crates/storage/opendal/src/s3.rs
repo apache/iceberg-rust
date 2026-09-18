@@ -39,9 +39,14 @@ use crate::utils::{from_opendal_error, is_truthy};
 /// S3 rejects a non-final part smaller than this.
 const MULTIPART_PART_SIZE_MIN: u64 = 5 * 1024 * 1024;
 
+/// S3 rejects a part larger than this.
+const MULTIPART_PART_SIZE_MAX: u64 = 5 * 1024 * 1024 * 1024;
+
 /// Matches Java `S3FileIOProperties.MULTIPART_SIZE_DEFAULT`.
+const MULTIPART_PART_SIZE_DEFAULT: u64 = 32 * 1024 * 1024;
+
 pub(crate) fn default_multipart_part_size() -> u64 {
-    32 * 1024 * 1024
+    MULTIPART_PART_SIZE_DEFAULT
 }
 
 /// Parse iceberg props to s3 multipart upload part size.
@@ -59,7 +64,15 @@ pub(crate) fn s3_multipart_part_size_parse(m: &HashMap<String, String>) -> Resul
         return Err(Error::new(
             ErrorKind::DataInvalid,
             format!(
-                "Invalid {S3_MULTIPART_PART_SIZE_BYTES}: {part_size} is below the S3 minimum part size of {MULTIPART_PART_SIZE_MIN}"
+                "Invalid {S3_MULTIPART_PART_SIZE_BYTES}: {part_size} bytes is below the S3 minimum part size of {MULTIPART_PART_SIZE_MIN} bytes (5 MiB)"
+            ),
+        ));
+    }
+    if part_size > MULTIPART_PART_SIZE_MAX {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Invalid {S3_MULTIPART_PART_SIZE_BYTES}: {part_size} bytes is above the S3 maximum part size of {MULTIPART_PART_SIZE_MAX} bytes (5 GiB)"
             ),
         ));
     }
@@ -216,7 +229,10 @@ mod tests {
 
     use iceberg::io::{S3_MULTIPART_PART_SIZE_BYTES, S3_PATH_STYLE_ACCESS};
 
-    use super::*;
+    use super::{
+        MULTIPART_PART_SIZE_DEFAULT, MULTIPART_PART_SIZE_MAX, MULTIPART_PART_SIZE_MIN, Result,
+        s3_config_parse, s3_multipart_part_size_parse,
+    };
 
     fn parse_with(prop: Option<&str>) -> bool {
         let mut props = HashMap::new();
@@ -245,15 +261,20 @@ mod tests {
     #[test]
     fn s3_multipart_part_size_parse_defaults_and_overrides() {
         // Match Iceberg S3FileIOProperties.MULTIPART_SIZE_DEFAULT = 32 MiB.
-        assert_eq!(parse_part_size(None).unwrap(), 32 * 1024 * 1024);
+        assert_eq!(MULTIPART_PART_SIZE_DEFAULT, 32 * 1024 * 1024);
+        assert_eq!(parse_part_size(None).unwrap(), MULTIPART_PART_SIZE_DEFAULT);
         assert_eq!(parse_part_size(Some("8388608")).unwrap(), 8 * 1024 * 1024);
     }
 
     #[test]
     fn s3_multipart_part_size_parse_rejects_invalid() {
         // Match Iceberg S3FileIOProperties.MULTIPART_SIZE_MIN = 5 MiB.
-        assert!(parse_part_size(Some("5242880")).is_ok());
-        assert!(parse_part_size(Some("5242879")).is_err());
+        assert_eq!(MULTIPART_PART_SIZE_MIN, 5 * 1024 * 1024);
+        assert_eq!(MULTIPART_PART_SIZE_MAX, 5 * 1024 * 1024 * 1024);
+        assert!(parse_part_size(Some(&MULTIPART_PART_SIZE_MIN.to_string())).is_ok());
+        assert!(parse_part_size(Some(&(MULTIPART_PART_SIZE_MIN - 1).to_string())).is_err());
+        assert!(parse_part_size(Some(&MULTIPART_PART_SIZE_MAX.to_string())).is_ok());
+        assert!(parse_part_size(Some(&(MULTIPART_PART_SIZE_MAX + 1).to_string())).is_err());
         assert!(parse_part_size(Some("not-a-number")).is_err());
     }
 }
