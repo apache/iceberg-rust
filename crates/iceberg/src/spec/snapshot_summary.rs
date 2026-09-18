@@ -532,7 +532,7 @@ fn update_totals(
         return;
     };
 
-    let new_total = previous_total + added - removed;
+    let new_total = (previous_total + added).saturating_sub(removed);
     summary
         .additional_properties
         .insert(total_property.to_string(), new_total.to_string());

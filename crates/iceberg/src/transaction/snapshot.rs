@@ -26,9 +26,10 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
-    TableProperties, update_snapshot_summaries,
+    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation,
+    PartitionSpecRef, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
+    SnapshotSummaryCollector, Struct, StructType, Summary, TableProperties,
+    update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -82,9 +83,24 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
     /// - **Overwrite operations**: May exclude manifests for partitions being overwritten
     /// - **Delete operations**: May exclude manifests for partitions being deleted
     fn existing_manifest(
-        &self,
+        &mut self,
         snapshot_produce: &SnapshotProducer<'_>,
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
+
+    /// Returns the data files this operation actually removed, each with the schema and
+    /// partition spec of the manifest that recorded it.
+    ///
+    /// Only populated once [`Self::existing_manifest`] has run, so the snapshot summary counts
+    /// what was really removed rather than what the caller asked to remove.
+    fn removed_data_files(&self) -> &[(DataFile, SchemaRef, PartitionSpecRef)] {
+        &[]
+    }
+
+    /// Returns whether this operation replaces the whole table, dropping the previous totals
+    /// from the snapshot summary. A partial overwrite must return `false`.
+    fn truncate_full_table(&self) -> bool {
+        false
+    }
 }
 
 pub(crate) struct DefaultManifestProcess;
@@ -315,7 +331,9 @@ impl<'a> SnapshotProducer<'a> {
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
-        let added_data_files = std::mem::take(&mut self.added_data_files);
+        // Cloned rather than taken: the summary is built after the manifests, so the added
+        // files must still be here.
+        let added_data_files = self.added_data_files.clone();
         if added_data_files.is_empty() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
@@ -348,7 +366,7 @@ impl<'a> SnapshotProducer<'a> {
     /// and collects all of the manifests to be included in the new snapshot as [ManifestFile] entries.
     async fn produce_manifests<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         &mut self,
-        snapshot_produce_operation: &OP,
+        snapshot_produce_operation: &mut OP,
         manifest_process: &MP,
     ) -> Result<Vec<ManifestFile>> {
         // Assert current snapshot producer contains new content to add to new snapshot.
@@ -416,12 +434,8 @@ impl<'a> SnapshotProducer<'a> {
             );
         }
 
-        for data_file in &self.deleted_data_files {
-            summary_collector.remove_file(
-                data_file,
-                table_metadata.current_schema().clone(),
-                table_metadata.default_partition_spec().clone(),
-            );
+        for (data_file, schema, partition_spec) in snapshot_produce_operation.removed_data_files() {
+            summary_collector.remove_file(data_file, schema.clone(), partition_spec.clone());
         }
 
         let previous_snapshot = table_metadata.current_snapshot();
@@ -442,7 +456,7 @@ impl<'a> SnapshotProducer<'a> {
         update_snapshot_summaries(
             summary,
             previous_snapshot.map(|s| s.summary()),
-            snapshot_produce_operation.operation() == Operation::Overwrite,
+            snapshot_produce_operation.truncate_full_table(),
         )
     }
 
@@ -460,7 +474,7 @@ impl<'a> SnapshotProducer<'a> {
     /// Finished building the action and return the [`ActionCommit`] to the transaction.
     pub(crate) async fn commit<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         mut self,
-        snapshot_produce_operation: OP,
+        mut snapshot_produce_operation: OP,
         process: MP,
     ) -> Result<ActionCommit> {
         let manifest_list_path = self.generate_manifest_list_file_path(0)?;
@@ -500,16 +514,15 @@ impl<'a> SnapshotProducer<'a> {
             ),
         };
 
-        // Calling self.summary() before self.produce_manifests() is important because self.added_data_files
-        // will be set to an empty vec after self.produce_manifests() returns, resulting in an empty summary
-        // being generated.
+        // The manifests are produced first so the summary can count the entries the operation
+        // actually marked Deleted.
+        let new_manifests = self
+            .produce_manifests(&mut snapshot_produce_operation, &process)
+            .await?;
+
         let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
             Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
         })?;
-
-        let new_manifests = self
-            .produce_manifests(&snapshot_produce_operation, &process)
-            .await?;
 
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
         let writer_next_row_id = manifest_list_writer.next_row_id();

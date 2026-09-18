@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::spec::{
     DataFile, FormatVersion, Manifest, ManifestContentType, ManifestEntry, ManifestFile,
-    ManifestWriterBuilder, Operation,
+    ManifestWriterBuilder, Operation, PartitionSpecRef, SchemaRef,
 };
 use crate::table::Table;
 use crate::transaction::snapshot::{
@@ -116,6 +116,7 @@ impl TransactionAction for OverwriteAction {
                 OverwriteOperation {
                     deleted_file_paths,
                     snapshot_id,
+                    removed_data_files: vec![],
                 },
                 DefaultManifestProcess,
             )
@@ -126,6 +127,7 @@ impl TransactionAction for OverwriteAction {
 struct OverwriteOperation {
     deleted_file_paths: HashSet<String>,
     snapshot_id: i64,
+    removed_data_files: Vec<(DataFile, SchemaRef, PartitionSpecRef)>,
 }
 
 impl SnapshotProduceOperation for OverwriteOperation {
@@ -140,8 +142,12 @@ impl SnapshotProduceOperation for OverwriteOperation {
         Ok(vec![])
     }
 
+    fn removed_data_files(&self) -> &[(DataFile, SchemaRef, PartitionSpecRef)] {
+        &self.removed_data_files
+    }
+
     async fn existing_manifest(
-        &self,
+        &mut self,
         snapshot_produce: &SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestFile>> {
         let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
@@ -207,7 +213,7 @@ impl OverwriteOperation {
     /// Rewrite a manifest, marking entries whose file paths are in `deleted_file_paths`
     /// as `ManifestStatus::Deleted`.
     async fn rewrite_manifest(
-        &self,
+        &mut self,
         snapshot_produce: &SnapshotProducer<'_>,
         manifest_file: &ManifestFile,
         manifest: &Manifest,
@@ -220,6 +226,7 @@ impl OverwriteOperation {
             Uuid::now_v7(),
         );
         let output_file = table.file_io().new_output(&new_manifest_path)?;
+        let partition_spec: PartitionSpecRef = Arc::new(manifest.metadata().partition_spec.clone());
         let builder = ManifestWriterBuilder::new(
             output_file,
             Some(self.snapshot_id),
@@ -248,6 +255,11 @@ impl OverwriteOperation {
             } else if self.deleted_file_paths.contains(entry.file_path()) {
                 let mut deleted = entry;
                 deleted.snapshot_id = Some(self.snapshot_id);
+                self.removed_data_files.push((
+                    deleted.data_file().clone(),
+                    manifest.metadata().schema.clone(),
+                    partition_spec.clone(),
+                ));
                 writer.add_deleted_entry(deleted)?;
             } else {
                 writer.add_existing_entry(entry)?;
@@ -720,6 +732,42 @@ mod tests {
         assert!(
             entries.contains(&(ManifestStatus::Deleted, "test/a.parquet".to_string())),
             "the delete-only manifest must survive a later overwrite, entries: {entries:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_counts_a_duplicated_delete_path_once() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let file_b = test_data_file("test/b.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .fast_append()
+            .add_data_files(vec![file_a.clone(), file_b.clone()]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite()
+            .add_data_files(vec![test_data_file("test/c.parquet", spec_id)])
+            .delete_data_files(vec![file_a.clone(), file_a.clone()]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let summary = table.metadata().current_snapshot().unwrap().summary();
+        assert_eq!(
+            summary.additional_properties.get("deleted-data-files"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            summary.additional_properties.get("deleted-records"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            summary.additional_properties.get("total-data-files"),
+            Some(&"2".to_string())
         );
     }
 }
