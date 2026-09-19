@@ -61,7 +61,7 @@ the lifecycle; the heterogeneous storage adapters are implementation details.
 
 ```rust
 #[async_trait]
-pub(crate) trait TransactionAction: Send + Sync + 'static {
+pub(crate) trait TransactionAction: Clone + Send + Sync + 'static {
     type State: Send + Sync + 'static;
 
     /// Fresh state for one logical execution; infallible and table-independent.
@@ -75,19 +75,23 @@ pub(crate) trait TransactionAction: Send + Sync + 'static {
     ) -> Result<ActionCommit>;
 
     /// Best-effort cleanup after the transaction reaches a terminal result.
+    /// Consumes the action and its state: the type system guarantees that
+    /// no further attempt can run for this entry after cleanup.
     async fn cleanup(
-        &self,
-        _state: &mut Self::State,
-        _table: &Table,
-        _status: CommitStatus,
-    ) {}
+        self: Box<Self>,
+        state: Self::State,
+        table: &Table,
+        status: CommitStatus,
+    );
 }
 ```
 
-The action is borrowed immutably, its execution state mutably, and the table per
-attempt. Stateless actions use `State = ()`. State is created when an action is
-added to a transaction. Table-dependent initialization happens during execution;
-once resolved, logical snapshot identity remains stable across retries.
+During replay the action is borrowed immutably, its execution state mutably,
+and the table per attempt. The terminal `cleanup` instead consumes the action
+and its state by value, so replay cannot resume after cleanup. Stateless
+actions use `State = ()`. State is created when an action is added to a
+transaction. Table-dependent initialization happens during execution; once
+resolved, logical snapshot identity remains stable across retries.
 
 `CommitStatus` describes terminal cleanup safety (§6). Neither the action nor its
 state needs to control the transaction's catalog retry loop.
@@ -103,7 +107,7 @@ execution state. Conceptually:
 
 ```rust
 struct ActionEntry<A: TransactionAction> {
-    action: Arc<A>,
+    action: Box<A>,
     state: A::State,
 }
 ```
@@ -112,10 +116,13 @@ The transaction must preserve that pairing when storing heterogeneous entries.
 A typed entry erased behind an adapter and separately erased action/state values
 with a checked pairing are both acceptable implementations.
 
-Retry reuses the same entry state. Cloning a transaction creates a new execution
-of the action plan: it may share immutable actions, but creates fresh state via
-`new_state()`. Mutable retry state and generated execution identity are not shared
-between transaction executions.
+Entries own their actions exclusively so that terminal cleanup can consume
+them. Retry reuses the same entry state. Cloning a transaction creates a new
+execution of the action plan: it duplicates the immutable actions (actions are
+`Clone`) and creates fresh state via `new_state()`. Mutable retry state and
+generated execution identity are never shared between transaction executions,
+and transaction cloning is expected to be rare, so duplicating intent is an
+acceptable cost.
 
 ## 3. Retry and Replay Workflow
 
