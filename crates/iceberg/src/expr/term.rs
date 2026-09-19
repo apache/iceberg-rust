@@ -311,10 +311,10 @@ impl Bind for Reference {
 
     fn bind(&self, schema: SchemaRef, case_sensitive: bool) -> crate::Result<Self::Bound> {
         let field = if case_sensitive {
-            schema.field_by_name(&self.name)
+            Ok(schema.field_by_name(&self.name))
         } else {
-            schema.field_by_name_case_insensitive(&self.name)
-        };
+            schema.field_by_name_case_insensitive_checked(&self.name)
+        }?;
 
         let field = field.ok_or_else(|| {
             Error::new(
