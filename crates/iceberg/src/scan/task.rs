@@ -277,6 +277,23 @@ impl TryFrom<&DeleteFileContext> for FileScanTaskDeleteFile {
     type Error = Error;
 
     fn try_from(ctx: &DeleteFileContext) -> Result<Self> {
+        // The manifest stores these as i64. Convert here so a negative byte offset is
+        // rejected once at the boundary, for every delete-file kind rather than only
+        // deletion vectors, instead of being carried inward and re-checked per consumer.
+        let file_path = ctx.manifest_entry.file_path();
+        let to_offset = |value: Option<i64>, field: &str| -> Result<Option<u64>> {
+            value
+                .map(|value| {
+                    u64::try_from(value).map_err(|_| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("delete file {file_path} has negative {field} {value}"),
+                        )
+                    })
+                })
+                .transpose()
+        };
+
         FileScanTaskDeleteFile::builder()
             .with_file_path(ctx.manifest_entry.file_path().to_string())
             .with_file_size_in_bytes(ctx.manifest_entry.file_size_in_bytes())
@@ -285,8 +302,14 @@ impl TryFrom<&DeleteFileContext> for FileScanTaskDeleteFile {
             .with_partition_spec_id(ctx.partition_spec_id)
             .with_equality_ids(ctx.manifest_entry.data_file.equality_ids.clone())
             .with_referenced_data_file(ctx.manifest_entry.data_file.referenced_data_file.clone())
-            .with_content_offset(ctx.manifest_entry.data_file.content_offset)
-            .with_content_size_in_bytes(ctx.manifest_entry.data_file.content_size_in_bytes)
+            .with_content_offset(to_offset(
+                ctx.manifest_entry.data_file.content_offset,
+                "content_offset",
+            )?)
+            .with_content_size_in_bytes(to_offset(
+                ctx.manifest_entry.data_file.content_size_in_bytes,
+                "content_size_in_bytes",
+            )?)
             .with_record_count(Some(ctx.manifest_entry.record_count()))
             .with_key_metadata(
                 ctx.manifest_entry
@@ -334,18 +357,21 @@ pub struct FileScanTaskDeleteFile {
     referenced_data_file: Option<String>,
 
     /// For a deletion vector, the offset of the blob within its Puffin file. Set only for
-    /// deletion vectors, where it locates the blob for direct access.
+    /// deletion vectors, where it locates the blob for direct access. Unsigned because it is a
+    /// byte offset: a negative value is rejected once, when the task is built from a manifest
+    /// entry, rather than re-checked by every consumer.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[builder(default)]
-    content_offset: Option<i64>,
+    content_offset: Option<u64>,
 
     /// For a deletion vector, the length in bytes of the blob within its Puffin file.
     /// Required together with `content_offset`; both are absent for non-DV delete files.
+    /// Unsigned for the same reason as `content_offset`.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[builder(default)]
-    content_size_in_bytes: Option<i64>,
+    content_size_in_bytes: Option<u64>,
 
     /// The number of records in the delete file, from the manifest entry; for a deletion vector,
     /// the cardinality of its bitmap. `None` only for a task not built from a manifest entry.
@@ -577,12 +603,12 @@ impl FileScanTaskDeleteFile {
     }
 
     /// Returns the deletion vector blob offset.
-    pub fn content_offset(&self) -> Option<i64> {
+    pub fn content_offset(&self) -> Option<u64> {
         self.content_offset
     }
 
     /// Returns the deletion vector blob size in bytes.
-    pub fn content_size_in_bytes(&self) -> Option<i64> {
+    pub fn content_size_in_bytes(&self) -> Option<u64> {
         self.content_size_in_bytes
     }
 
@@ -602,78 +628,30 @@ impl FileScanTaskDeleteFile {
     }
 
     fn validate(&self) -> Result<()> {
-        if let Some(offset) = self.content_offset
-            && offset < 0
-        {
-            let kind = if self.is_deletion_vector() {
-                "deletion vector"
-            } else {
-                "delete file"
-            };
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "{kind} {} has negative content_offset {}",
-                    self.file_path, offset
-                ),
-            ));
-        }
-
-        if let Some(size) = self.content_size_in_bytes
-            && size < 0
-        {
-            let kind = if self.is_deletion_vector() {
-                "deletion vector"
-            } else {
-                "delete file"
-            };
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "{kind} {} has negative content_size_in_bytes {}",
-                    self.file_path, size
-                ),
-            ));
-        }
-
+        // Negative offsets/sizes are unrepresentable: both fields are u64, and the
+        // conversion from the manifest entry's i64 rejects a negative there. So the
+        // only thing left to check is presence, and only for deletion vectors --
+        // other delete files legitimately carry none of these.
         if !self.is_deletion_vector() {
             return Ok(());
         }
 
-        if self.referenced_data_file.is_none() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion vector {} is missing referenced_data_file",
-                    self.file_path
-                ),
-            ));
-        }
+        let missing = if self.referenced_data_file.is_none() {
+            Some("referenced_data_file")
+        } else if self.content_offset.is_none() {
+            Some("content_offset")
+        } else if self.content_size_in_bytes.is_none() {
+            Some("content_size_in_bytes")
+        } else if self.record_count.is_none() {
+            Some("record_count")
+        } else {
+            None
+        };
 
-        if self.content_offset.is_none() {
+        if let Some(field) = missing {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!(
-                    "deletion vector {} is missing content_offset",
-                    self.file_path
-                ),
-            ));
-        }
-
-        if self.content_size_in_bytes.is_none() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion vector {} is missing content_size_in_bytes",
-                    self.file_path
-                ),
-            ));
-        }
-
-        if self.record_count.is_none() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("deletion vector {} is missing record_count", self.file_path),
+                format!("deletion vector {} is missing {field}", self.file_path),
             ));
         }
 
@@ -690,9 +668,14 @@ impl From<FileScanTaskDeleteFile> for Result<FileScanTaskDeleteFile> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::ErrorKind;
-    use crate::spec::{Literal, NestedField, PrimitiveType, Transform, Type};
+    use crate::spec::{
+        DataFileBuilder, Literal, ManifestEntry, ManifestStatus, NestedField, PrimitiveType,
+        Transform, Type,
+    };
 
     fn build_file_scan_task(
         schema: SchemaRef,
@@ -975,66 +958,96 @@ mod tests {
         );
     }
 
+    fn delete_manifest_entry(
+        file_path: &str,
+        file_format: DataFileFormat,
+        content_offset: Option<i64>,
+        content_size_in_bytes: Option<i64>,
+    ) -> DeleteFileContext {
+        let mut data_file = DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path(file_path.to_string())
+            .file_format(file_format)
+            .partition(Struct::empty())
+            .record_count(3)
+            .file_size_in_bytes(100)
+            .column_sizes(HashMap::new())
+            .value_counts(HashMap::new())
+            .null_value_counts(HashMap::new())
+            .partition_spec_id(0)
+            .referenced_data_file(Some("data.parquet".to_string()))
+            .build()
+            .unwrap();
+        data_file.content_offset = content_offset;
+        data_file.content_size_in_bytes = content_size_in_bytes;
+
+        DeleteFileContext {
+            manifest_entry: Arc::new(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(data_file)
+                    .build(),
+            ),
+            partition_spec_id: 0,
+        }
+    }
+
+    fn assert_delete_context_error(ctx: &DeleteFileContext, expected_message: &str) {
+        match FileScanTaskDeleteFile::try_from(ctx) {
+            Ok(task) => panic!(
+                "expected conversion to fail with `{expected_message}`, but got Ok({task:?})"
+            ),
+            Err(error) => {
+                assert_eq!(error.kind(), ErrorKind::DataInvalid);
+                assert!(
+                    error.message().contains(expected_message),
+                    "expected `{expected_message}`, got `{}`",
+                    error.message()
+                );
+            }
+        }
+    }
+
+    /// A negative byte offset is now unrepresentable in `FileScanTaskDeleteFile`
+    /// (`content_offset` / `content_size_in_bytes` are `u64`), so the rejection has
+    /// moved to the single place the i64-typed manifest value crosses into the task.
     #[test]
-    fn test_delete_file_builder_rejects_negative_dv_offset() {
-        assert_delete_file_builder_error(
-            FileScanTaskDeleteFile::builder()
-                .with_file_path("dv.puffin".to_string())
-                .with_file_size_in_bytes(100)
-                .with_file_type(DataContentType::PositionDeletes)
-                .with_file_format(DataFileFormat::Puffin)
-                .with_partition_spec_id(0)
-                .with_referenced_data_file(Some("data.parquet".to_string()))
-                .with_content_offset(Some(-1))
-                .with_content_size_in_bytes(Some(11))
-                .with_record_count(Some(3))
-                .build(),
-            "deletion vector dv.puffin has negative content_offset -1",
+    fn test_delete_context_rejects_negative_dv_offset() {
+        assert_delete_context_error(
+            &delete_manifest_entry("dv.puffin", DataFileFormat::Puffin, Some(-1), Some(11)),
+            "delete file dv.puffin has negative content_offset -1",
         );
     }
 
     #[test]
-    fn test_delete_file_builder_rejects_negative_dv_size() {
-        assert_delete_file_builder_error(
-            FileScanTaskDeleteFile::builder()
-                .with_file_path("dv.puffin".to_string())
-                .with_file_size_in_bytes(100)
-                .with_file_type(DataContentType::PositionDeletes)
-                .with_file_format(DataFileFormat::Puffin)
-                .with_partition_spec_id(0)
-                .with_referenced_data_file(Some("data.parquet".to_string()))
-                .with_content_offset(Some(7))
-                .with_content_size_in_bytes(Some(-1))
-                .with_record_count(Some(3))
-                .build(),
-            "deletion vector dv.puffin has negative content_size_in_bytes -1",
+    fn test_delete_context_rejects_negative_dv_size() {
+        assert_delete_context_error(
+            &delete_manifest_entry("dv.puffin", DataFileFormat::Puffin, Some(7), Some(-1)),
+            "delete file dv.puffin has negative content_size_in_bytes -1",
         );
     }
 
+    /// The check applies to every delete-file kind, not only deletion vectors --
+    /// this is the non-DV case the previous validate() had to special-case.
     #[test]
-    fn test_delete_file_builder_rejects_negative_coordinates_for_non_dv() {
-        assert_delete_file_builder_error(
-            FileScanTaskDeleteFile::builder()
-                .with_file_path("position-deletes.parquet".to_string())
-                .with_file_size_in_bytes(100)
-                .with_file_type(DataContentType::PositionDeletes)
-                .with_file_format(DataFileFormat::Parquet)
-                .with_partition_spec_id(0)
-                .with_content_offset(Some(-1))
-                .build(),
+    fn test_delete_context_rejects_negative_coordinates_for_non_dv() {
+        assert_delete_context_error(
+            &delete_manifest_entry(
+                "position-deletes.parquet",
+                DataFileFormat::Parquet,
+                Some(-1),
+                None,
+            ),
             "delete file position-deletes.parquet has negative content_offset -1",
         );
-
-        assert_delete_file_builder_error(
-            FileScanTaskDeleteFile::builder()
-                .with_file_path("equality-deletes.parquet".to_string())
-                .with_file_size_in_bytes(100)
-                .with_file_type(DataContentType::EqualityDeletes)
-                .with_file_format(DataFileFormat::Parquet)
-                .with_partition_spec_id(0)
-                .with_content_size_in_bytes(Some(-1))
-                .build(),
-            "delete file equality-deletes.parquet has negative content_size_in_bytes -1",
+        assert_delete_context_error(
+            &delete_manifest_entry(
+                "position-deletes.parquet",
+                DataFileFormat::Parquet,
+                None,
+                Some(-1),
+            ),
+            "delete file position-deletes.parquet has negative content_size_in_bytes -1",
         );
     }
 

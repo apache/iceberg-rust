@@ -386,26 +386,10 @@ impl CachingDeleteFileLoader {
             )
         })?;
 
-        let start = u64::try_from(content_offset).map_err(|_| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion vector {} has negative content_offset {content_offset}",
-                    task.file_path()
-                ),
-            )
-        })?;
-        let len = u64::try_from(content_size).map_err(|_| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion vector {} has negative content_size_in_bytes {content_size}",
-                    task.file_path()
-                ),
-            )
-        })?;
-
-        Ok((start, len, data_file_path, record_count))
+        // content_offset / content_size_in_bytes are u64 on the task, and the
+        // manifest -> task conversion already rejected a negative, so there is
+        // nothing left to convert or re-check here.
+        Ok((content_offset, content_size, data_file_path, record_count))
     }
 
     /// Validates a decoded deletion vector's cardinality against the manifest entry's
@@ -1594,8 +1578,8 @@ mod tests {
         dv_path: String,
         file_size: u64,
         data_file_path: String,
-        content_offset: i64,
-        content_size: i64,
+        content_offset: u64,
+        content_size: u64,
         record_count: u64,
         key_metadata: Option<Box<[u8]>>,
     ) -> FileScanTaskDeleteFile {
@@ -1624,8 +1608,8 @@ mod tests {
 
         // Embed the blob in a Puffin-like file behind leading bytes so content_offset is
         // non-zero, then let the loader read it back by range.
-        let content_offset = 12i64;
-        let content_size = blob.len() as i64;
+        let content_offset = 12u64;
+        let content_size = blob.len() as u64;
         let mut file_bytes = vec![0u8; content_offset as usize];
         file_bytes.extend_from_slice(&blob);
         file_bytes.extend_from_slice(&[0u8; 8]);
@@ -1677,7 +1661,7 @@ mod tests {
         let encoded_key_metadata = key_metadata.encode().unwrap();
 
         let blob = encode_dv_blob([2u64, 4]);
-        let plaintext_size = blob.len() as i64;
+        let plaintext_size = blob.len() as u64;
         let dv_path = format!("{table_location}/deletes.puffin");
         let output = EncryptedOutputFile::new(file_io.new_output(&dv_path).unwrap(), key_metadata);
         output.write(Bytes::from(blob)).await.unwrap();
@@ -1733,7 +1717,7 @@ mod tests {
             std::fs::metadata(&dv_path).unwrap().len(),
             data_file_path,
             0,
-            blob.len() as i64,
+            blob.len() as u64,
             2,
             None,
         );
@@ -1772,26 +1756,32 @@ mod tests {
         )
     }
 
+    // A negative byte offset cannot be deserialized at all now that these fields are
+    // u64, so a hand-written or corrupted scan plan is rejected before any loader code
+    // runs. That is strictly stronger than the previous runtime check, which only fired
+    // once the task reached this function.
     #[test]
-    fn test_validate_deletion_vector_task_rejects_negative_content_offset() {
+    fn test_deserializing_negative_content_offset_is_rejected() {
         let mut task = serde_json::to_value(valid_dv_task()).unwrap();
         task["content_offset"] = serde_json::json!(-1);
-        let task = serde_json::from_value(task).unwrap();
 
-        let err = CachingDeleteFileLoader::validate_deletion_vector_task(&task).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("negative content_offset"));
+        let err = serde_json::from_value::<FileScanTaskDeleteFile>(task).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid value"),
+            "expected an out-of-range integer error, got `{err}`"
+        );
     }
 
     #[test]
-    fn test_validate_deletion_vector_task_rejects_negative_content_size() {
+    fn test_deserializing_negative_content_size_is_rejected() {
         let mut task = serde_json::to_value(valid_dv_task()).unwrap();
         task["content_size_in_bytes"] = serde_json::json!(-1);
-        let task = serde_json::from_value(task).unwrap();
 
-        let err = CachingDeleteFileLoader::validate_deletion_vector_task(&task).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("negative content_size_in_bytes"));
+        let err = serde_json::from_value::<FileScanTaskDeleteFile>(task).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid value"),
+            "expected an out-of-range integer error, got `{err}`"
+        );
     }
 
     #[test]
