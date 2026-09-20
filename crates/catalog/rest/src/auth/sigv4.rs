@@ -31,9 +31,10 @@ const EMPTY_BODY_HEX_SHA256: &str =
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PayloadHashMode {
     /// Iceberg Java's RESTSigV4 style: base64 header when there is a body, hex
-    /// when there is none; the canonical request always uses hex. A header the
-    /// caller already set is replaced and moved to `Original-x-amz-content-sha256`,
-    /// where Java signs the caller's value as-is.
+    /// when there is none; the canonical request always uses hex. A caller-set
+    /// header is replaced, and moved to `Original-x-amz-content-sha256` when it
+    /// differed. Java replaces it too for a bodiless request, but signs the
+    /// caller's value when a body is present.
     IcebergRest,
     /// Standard AWS SigV4 style: hex everywhere (e.g. AWS Glue).
     StandardAws,
@@ -183,8 +184,14 @@ impl SigV4Signer {
 
         // The crate traces what it signs, and redacts `authorization` but not
         // the `Original-` copy, so a bearer token would be logged verbatim.
-        let signed =
-            tracing::subscriber::with_default(NoSubscriber::default(), || sign(signable, &params));
+        // Only when a subscriber exists: `with_default` sets tracing's global
+        // "a dispatcher was installed" flag for good, which would silently
+        // divert every later event away from an app's `tracing/log` bridge.
+        let signed = if tracing::dispatcher::has_been_set() {
+            tracing::subscriber::with_default(NoSubscriber::default(), || sign(signable, &params))
+        } else {
+            sign(signable, &params)
+        };
         let (instructions, _signature) = signed
             .map_err(|e| Error::new(ErrorKind::Unexpected, "SigV4 signing failed").with_source(e))?
             .into_parts();
@@ -258,6 +265,11 @@ fn signing_settings() -> aws_sigv4::http_request::SigningSettings {
         "expect".into(),
         "connection".into(),
         "x-forwarded-for".into(),
+        // Relocation appends to these after signing, so a caller-supplied one
+        // would otherwise be signed and then changed on the wire.
+        "original-x-amz-date".into(),
+        "original-x-amz-content-sha256".into(),
+        "original-x-amz-security-token".into(),
     ]);
     settings.excluded_headers = Some(excluded);
     settings
@@ -578,6 +590,59 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.message().contains("x-amz-meta-tenant"), "{err}");
+    }
+
+    /// A caller-supplied `Original-x-amz-*` must not be signed: relocation
+    /// appends to it afterwards, which would change a signed value on the wire.
+    #[test]
+    fn a_caller_supplied_relocation_header_is_not_signed() {
+        use chrono::TimeZone;
+
+        let signer = test_signer(PayloadHashMode::StandardAws);
+        let mut req = HttpRequest::new(
+            reqwest::Client::new()
+                .get("https://rest.example.com/v1/config")
+                .header("x-amz-content-sha256", "caller-hash")
+                .header("original-x-amz-content-sha256", "previous")
+                .build()
+                .unwrap(),
+        );
+
+        signer
+            .sign_at(
+                &mut req,
+                &test_credentials(),
+                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
+            )
+            .unwrap();
+
+        let auth = req
+            .headers()
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let signed = auth
+            .split("SignedHeaders=")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap();
+        assert!(
+            !signed
+                .split(';')
+                .any(|h| h == "original-x-amz-content-sha256"),
+            "{signed}"
+        );
+        // Both values still travel, they are just outside the signature.
+        let relocated: Vec<_> = req
+            .headers()
+            .get_all("original-x-amz-content-sha256")
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .collect();
+        assert_eq!(relocated, ["previous", "caller-hash"]);
     }
 
     #[test]
