@@ -488,6 +488,10 @@ async fn credentials_from_props(
 /// session and leaves credentials to the session. It differs in one way:
 /// properties configure static credentials only, with no fallback to the AWS
 /// default provider chain. Pass a provider to [`Self::new`] for anything else.
+///
+/// The catalog's HTTP client must not follow redirects: a redirect replays a
+/// signature made for another URL, and across hosts reqwest drops
+/// `Authorization` but keeps the relocated `Original-Authorization`.
 #[derive(Debug)]
 pub struct SigV4AuthManager {
     delegate: Arc<dyn AuthManager>,

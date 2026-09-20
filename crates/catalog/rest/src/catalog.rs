@@ -2892,6 +2892,66 @@ mod tests {
         assert!(err.message().contains(REST_CATALOG_PROP_AUTH_TYPE));
     }
 
+    /// Through the real transport: a configured `header.authorization` must not
+    /// land on top of the signature. Only the wire proves the order in
+    /// `query_catalog`; calling `authenticate` directly cannot.
+    #[cfg(feature = "sigv4")]
+    #[tokio::test]
+    async fn test_configured_authorization_header_does_not_clobber_the_signature() {
+        use aws_credential_types::provider::SharedCredentialsProvider;
+        use mockito::{Matcher, Mock};
+
+        use crate::auth::{NoopAuthManager, PayloadHashMode, SigV4AuthManager, SigV4Signer};
+
+        let mut server = Server::new_async().await;
+        let signed = |m: Mock| {
+            m.match_header("authorization", Matcher::Regex("^AWS4-HMAC-SHA256 ".into()))
+                .match_header("original-authorization", "Bearer configured")
+        };
+        let config_mock = signed(server.mock("GET", "/v1/config"))
+            .with_status(200)
+            .with_body(r#"{"overrides": {}, "defaults": {}}"#)
+            .create_async()
+            .await;
+        let namespaces_mock = signed(server.mock("GET", "/v1/namespaces"))
+            .with_status(200)
+            .with_body(r#"{"namespaces": []}"#)
+            .create_async()
+            .await;
+
+        let config = RestCatalogConfig::builder()
+            .uri(server.url())
+            .props(HashMap::from([(
+                "header.authorization".to_string(),
+                "Bearer configured".to_string(),
+            )]))
+            .build();
+        let manager = SigV4AuthManager::new(
+            Arc::new(NoopAuthManager),
+            SigV4Signer::new(
+                "us-east-1".into(),
+                "execute-api".into(),
+                PayloadHashMode::IcebergRest,
+            ),
+            SharedCredentialsProvider::new(aws_credential_types::Credentials::new(
+                "ak",
+                "sk",
+                None::<String>,
+                None,
+                "test",
+            )),
+        );
+        let catalog = test_catalog_with(config, manager);
+
+        catalog
+            .list_namespaces(&SessionContext::empty(), None)
+            .await
+            .unwrap();
+
+        config_mock.assert_async().await;
+        namespaces_mock.assert_async().await;
+    }
+
     #[tokio::test]
     async fn test_with_auth_manager_overrides_config() {
         // A custom auth manager takes precedence over `rest.auth.type`.
