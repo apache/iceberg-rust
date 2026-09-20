@@ -1422,7 +1422,6 @@ mod test {
     };
     use crate::spec::{Literal, NestedField, PrimitiveType, Schema, Struct, Type};
 
-    /// Create a simple arrow field with parquet field-id metadata.
     fn simple_field(name: &str, ty: DataType, nullable: bool, value: &str) -> Field {
         Field::new(name, ty, nullable).with_metadata(HashMap::from([(
             PARQUET_FIELD_ID_META_KEY.to_string(),
@@ -1499,6 +1498,34 @@ mod test {
         assert_eq!(s.column(1).null_count(), 2);
         let cc = s.column(2).as_string::<i32>();
         assert_eq!((cc.value(0), cc.value(1)), ("x", "y"));
+    }
+
+    #[test]
+    fn promote_struct_fills_appended_field_by_id() {
+        let source = Arc::new(StructArray::new(
+            Fields::from(vec![
+                simple_field("a", DataType::Int32, true, "1"),
+                simple_field("b", DataType::Utf8, true, "2"),
+            ]),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["x", "y"])) as ArrayRef,
+            ],
+            None,
+        )) as ArrayRef;
+        let target = DataType::Struct(Fields::from(vec![
+            simple_field("a", DataType::Int32, true, "1"),
+            simple_field("b", DataType::Utf8, true, "2"),
+            simple_field("c", DataType::Int32, true, "3"),
+        ]));
+
+        let out = promote(&source, &target, &empty_schema()).unwrap();
+        let s = out.as_struct();
+        assert_eq!(s.num_columns(), 3);
+        assert_eq!(s.column(0).as_primitive::<Int32Type>().values(), &[1, 2]);
+        let bb = s.column(1).as_string::<i32>();
+        assert_eq!((bb.value(0), bb.value(1)), ("x", "y"));
+        assert_eq!(s.column(2).null_count(), 2);
     }
 
     #[test]
