@@ -218,8 +218,13 @@ impl Transaction {
         }
 
         // Actions read and write manifests, so they need the credentials the
-        // refresh load vended, whether or not the base was stale.
-        let mut current_table = self.table.clone().with_file_io(refreshed.file_io().clone());
+        // refresh load vended, whether or not the base was stale. Identical
+        // settings keep the original: a rebuilt FileIO would drop a backend
+        // the table has already initialized.
+        let mut current_table = self.table.clone();
+        if !current_table.file_io().same_routing_as(refreshed.file_io()) {
+            current_table = current_table.with_file_io(refreshed.file_io().clone());
+        }
         let mut existing_updates: Vec<TableUpdate> = vec![];
         let mut existing_requirements: Vec<TableRequirement> = vec![];
 
@@ -500,6 +505,59 @@ mod tests {
         tx.commit(&mock_catalog).await.unwrap();
 
         assert_eq!(seen.lock().unwrap().as_deref(), Some("refreshed"));
+    }
+
+    /// A reload that changed nothing must not cost the table its initialized
+    /// backend: `MemoryStorageFactory` builds a fresh, empty store each time.
+    #[tokio::test]
+    async fn test_unchanged_settings_keep_the_initialized_storage() {
+        let table = table_with_marker("same");
+        table
+            .file_io()
+            .new_output("memory://warehouse/manifest")
+            .unwrap()
+            .write("written-before-commit".into())
+            .await
+            .unwrap();
+
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let action_io = seen.clone();
+        let mut mock_catalog = MockCatalog::new();
+        // A reload rebuilds the FileIO, as a REST catalog does.
+        mock_catalog
+            .expect_load_table()
+            .returning_st(|_| Box::pin(async { Ok(table_with_marker("same")) }));
+        mock_catalog
+            .expect_update_table()
+            .returning_st(|_| Box::pin(async { Ok(make_v2_table()) }));
+
+        let tx = ReadingAction(action_io)
+            .apply(Transaction::new(&table))
+            .unwrap();
+        tx.commit(&mock_catalog).await.unwrap();
+
+        assert_eq!(
+            seen.lock().unwrap().as_deref(),
+            Some("written-before-commit")
+        );
+    }
+
+    /// Reads a file the table wrote before the transaction started.
+    struct ReadingAction(Arc<std::sync::Mutex<Option<String>>>);
+
+    #[async_trait]
+    impl TransactionAction for ReadingAction {
+        async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+            let read = table
+                .file_io()
+                .new_input("memory://warehouse/manifest")?
+                .read()
+                .await
+                .ok()
+                .map(|b| String::from_utf8_lossy(&b).to_string());
+            *self.0.lock().unwrap() = read;
+            Ok(ActionCommit::new(vec![], vec![]))
+        }
     }
 
     /// Another writer moved the table between our refresh and our commit; the
