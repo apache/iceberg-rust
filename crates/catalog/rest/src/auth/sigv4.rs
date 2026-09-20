@@ -31,7 +31,9 @@ const EMPTY_BODY_HEX_SHA256: &str =
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PayloadHashMode {
     /// Iceberg Java's RESTSigV4 style: base64 header when there is a body, hex
-    /// when there is none; the canonical request always uses hex.
+    /// when there is none; the canonical request always uses hex. A header the
+    /// caller already set is replaced and moved to `Original-x-amz-content-sha256`,
+    /// where Java signs the caller's value as-is.
     IcebergRest,
     /// Standard AWS SigV4 style: hex everywhere (e.g. AWS Glue).
     StandardAws,
@@ -110,6 +112,14 @@ impl SigV4Signer {
     ///
     /// Fails rather than sign a streaming body or a non-UTF-8 header, neither
     /// of which canonicalizes faithfully.
+    ///
+    /// Send the result through a client that does not follow redirects: a
+    /// redirect replays a signature made for another URL, and across hosts
+    /// reqwest drops `Authorization` but keeps `Original-Authorization`.
+    ///
+    /// `tracing` subscribers are muted while signing, since `aws_sigv4` traces
+    /// the headers it is given. The `tracing/log-always` bridge to `log` is not,
+    /// and still forwards them at trace level.
     pub fn sign(
         &self,
         request: &mut crate::HttpRequest,
