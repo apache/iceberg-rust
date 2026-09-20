@@ -227,6 +227,18 @@ impl FileIO {
         &self.config
     }
 
+    /// Whether `other` would route and authenticate identically. Used to keep
+    /// an initialized backend when a reload brought back the same settings.
+    pub(crate) fn same_routing_as(&self, other: &FileIO) -> bool {
+        self.config == other.config
+            && self.prefixed.len() == other.prefixed.len()
+            && self
+                .prefixed
+                .iter()
+                .zip(other.prefixed.iter())
+                .all(|(a, b)| a.prefix == b.prefix && a.config == b.config)
+    }
+
     /// The configuration `path` routes to: the longest-matching prefix's if
     /// any, else the default. Vended credentials live on the prefix configs,
     /// so this answers "which credentials apply to this path".
