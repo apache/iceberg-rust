@@ -492,6 +492,10 @@ async fn credentials_from_props(
 /// The catalog's HTTP client must not follow redirects: a redirect replays a
 /// signature made for another URL, and across hosts reqwest drops
 /// `Authorization` but keeps the relocated `Original-Authorization`.
+///
+/// Signing-relevant headers must reach the session too: an injected client's
+/// default headers are applied after authentication, so configure them as
+/// `header.*` properties rather than on the client.
 #[derive(Debug)]
 pub struct SigV4AuthManager {
     delegate: Arc<dyn AuthManager>,
