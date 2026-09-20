@@ -60,7 +60,7 @@ use crate::Result;
 ///     .with_prop("key", "value")
 ///     .build();
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct FileIO {
     /// Storage configuration containing properties
     config: StorageConfig,
@@ -74,11 +74,31 @@ pub struct FileIO {
 }
 
 /// A storage scoped to a location `prefix`, lazily built from its own config.
-#[derive(Debug)]
 struct PrefixedStorage {
     prefix: String,
     config: StorageConfig,
     storage: OnceLock<Arc<dyn Storage>>,
+}
+
+// A backend's Debug may print the raw credential map that `StorageConfig`
+// redacts, so neither cached storage is shown.
+impl std::fmt::Debug for FileIO {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileIO")
+            .field("config", &self.config)
+            .field("factory", &self.factory)
+            .field("prefixed", &self.prefixed)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for PrefixedStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrefixedStorage")
+            .field("prefix", &self.prefix)
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
 }
 
 mod _serde {
@@ -599,10 +619,17 @@ mod tests {
     use bytes::Bytes;
     use futures::AsyncReadExt;
     use futures::io::AllowStdIo;
+    use futures::stream::BoxStream;
+    use serde::{Deserialize, Serialize};
     use tempfile::TempDir;
 
-    use super::{FileIO, FileIOBuilder};
-    use crate::io::{LocalFsStorageFactory, MemoryStorageFactory};
+    use super::{
+        FileIO, FileIOBuilder, InputFile, OutputFile, Storage, StorageConfig, StorageFactory,
+    };
+    use crate::Result;
+    use crate::io::{
+        FileMetadata, FileRead, FileWrite, LocalFsStorageFactory, MemoryStorageFactory,
+    };
 
     fn create_local_file_io() -> FileIO {
         FileIO::new_with_fs()
@@ -818,6 +845,107 @@ mod tests {
                 .get("s3.access-key-id"),
             Some(&"default-key".to_string())
         );
+    }
+
+    /// Stands in for a backend whose Debug prints its raw props.
+    #[derive(Serialize, Deserialize)]
+    struct LeakyStorage(String);
+
+    impl std::fmt::Debug for LeakyStorage {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "LeakyStorage {{ secret: {} }}", self.0)
+        }
+    }
+
+    #[typetag::serde]
+    #[async_trait::async_trait]
+    impl Storage for LeakyStorage {
+        async fn exists(&self, _: &str) -> Result<bool> {
+            Ok(false)
+        }
+        async fn metadata(&self, _: &str) -> Result<FileMetadata> {
+            unimplemented!()
+        }
+        async fn read(&self, _: &str) -> Result<Bytes> {
+            unimplemented!()
+        }
+        async fn reader(&self, _: &str) -> Result<Box<dyn FileRead>> {
+            unimplemented!()
+        }
+        async fn write(&self, _: &str, _: Bytes) -> Result<()> {
+            unimplemented!()
+        }
+        async fn writer(&self, _: &str) -> Result<Box<dyn FileWrite>> {
+            unimplemented!()
+        }
+        async fn delete(&self, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn delete_prefix(&self, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn delete_stream(&self, _: BoxStream<'static, String>) -> Result<()> {
+            unimplemented!()
+        }
+        fn new_input(&self, _: &str) -> Result<InputFile> {
+            unimplemented!()
+        }
+        fn new_output(&self, _: &str) -> Result<OutputFile> {
+            unimplemented!()
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct LeakyFactory;
+
+    #[typetag::serde]
+    impl StorageFactory for LeakyFactory {
+        fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+            let secret = config
+                .get("s3.secret-access-key")
+                .cloned()
+                .unwrap_or_default();
+            Ok(Arc::new(LeakyStorage(secret)))
+        }
+    }
+
+    /// Once a storage is initialized its own Debug is reachable through
+    /// `FileIO`; the vended secret must not come out that way.
+    #[tokio::test]
+    async fn test_debug_omits_initialized_storages() {
+        let file_io = FileIOBuilder::new(Arc::new(LeakyFactory))
+            .with_prop("s3.secret-access-key", "DEFAULT-SECRET")
+            .with_prefixed_props("memory://warehouse/t", [(
+                "s3.secret-access-key",
+                "VENDED-SECRET",
+            )])
+            .build();
+        // Initialize both the default and the prefixed storage.
+        file_io.exists("memory://elsewhere/f").await.unwrap();
+        file_io.exists("memory://warehouse/t/f").await.unwrap();
+
+        let debug = format!("{file_io:?}");
+        assert!(!debug.contains("VENDED-SECRET"), "{debug}");
+        assert!(!debug.contains("DEFAULT-SECRET"), "{debug}");
+        // Still informative: the prefix and the redacted config keys show.
+        assert!(debug.contains("memory://warehouse/t"), "{debug}");
+        assert!(debug.contains("s3.secret-access-key"), "{debug}");
+    }
+
+    /// Two prefixes where one nests in the other: the longest-first order
+    /// that routing depends on has to survive the roundtrip.
+    #[tokio::test]
+    async fn test_overlapping_prefixes_survive_serialization_roundtrip() {
+        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+            .with_prefixed_props("memory://w/t", [("s3.access-key-id", "outer")])
+            .with_prefixed_props("memory://w/t/nested", [("s3.access-key-id", "inner")])
+            .build();
+
+        let deserialized = FileIO::deserialize_all(&file_io.serialize_all().unwrap()).unwrap();
+
+        let key = |p: &str| deserialized.config_for(p).get("s3.access-key-id").cloned();
+        assert_eq!(key("memory://w/t/nested/f"), Some("inner".to_string()));
+        assert_eq!(key("memory://w/t/other/f"), Some("outer".to_string()));
     }
 
     #[tokio::test]
