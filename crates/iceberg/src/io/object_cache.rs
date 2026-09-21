@@ -21,8 +21,8 @@ use std::sync::Arc;
 use crate::encryption::EncryptionManager;
 use crate::io::FileIO;
 use crate::spec::{
-    FormatVersion, Manifest, ManifestFile, ManifestList, ManifestListReader, ManifestReader,
-    SnapshotRef, TableMetadataRef,
+    Manifest, ManifestFile, ManifestList, ManifestListReader, ManifestReader, SnapshotRef,
+    TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -36,7 +36,10 @@ pub(crate) enum CachedItem {
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub(crate) enum CachedObjectKey {
-    ManifestList((String, FormatVersion)),
+    // Location alone: the file is immutable and uniquely identified by its
+    // path, and a cache is bound to one table, so the format version can't
+    // disambiguate two lookups at the same location.
+    ManifestList(String),
     // The manifest-level `first_row_id` is part of the key because the parsed
     // manifest inherits it onto its entries: the same physical manifest can be
     // referenced with different offsets across snapshots and branches, so it
@@ -156,10 +159,7 @@ impl ObjectCache {
             .map(Arc::new);
         }
 
-        let key = CachedObjectKey::ManifestList((
-            snapshot.manifest_list().to_string(),
-            table_metadata.format_version,
-        ));
+        let key = CachedObjectKey::ManifestList(snapshot.manifest_list().to_string());
         let cache_entry = self
             .cache
             .entry_by_ref(&key)
@@ -225,7 +225,7 @@ mod tests {
     use crate::TableIdent;
     use crate::io::{FileIO, OutputFile};
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestEntry,
+        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, ManifestEntry,
         ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Operation, Snapshot, Struct,
         Summary, TableMetadata,
     };
@@ -487,6 +487,46 @@ mod tests {
         assert!(
             Arc::ptr_eq(&inserted, &cached),
             "snapshots with and without schema-id at one location must share a cache entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_manifest_list_ignores_format_version() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let current_snapshot = fixture.table.metadata().current_snapshot().unwrap();
+
+        // A single ObjectCache is bound to one table whose format version is fixed,
+        // so the format version cannot disambiguate two lookups at the same
+        // manifest-list location. Two metadata refs differing only in format version
+        // must therefore share one cache entry.
+        let mut metadata_v1 = fixture.table.metadata().clone();
+        metadata_v1.format_version = FormatVersion::V1;
+        let metadata_v1: TableMetadataRef = Arc::new(metadata_v1);
+        assert_ne!(
+            fixture.table.metadata().format_version,
+            metadata_v1.format_version
+        );
+
+        let object_cache = ObjectCache::new(fixture.table.file_io().clone(), None);
+
+        // Cold miss under the table's real format version populates the cache.
+        let inserted = object_cache
+            .get_manifest_list(current_snapshot, &fixture.table.metadata_ref())
+            .await
+            .unwrap();
+        assert_eq!(inserted.entries().len(), 1);
+
+        // Warm hit under a different format version at the same location returns the
+        // same cached entry rather than reparsing.
+        let cached = object_cache
+            .get_manifest_list(current_snapshot, &metadata_v1)
+            .await
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(&inserted, &cached),
+            "lookups at one location must share a cache entry across format versions"
         );
     }
 
