@@ -362,7 +362,12 @@ where D: Deserializer<'de> {
     let precision: u32 = precision.trim().parse().map_err(|_| malformed())?;
     let scale: u32 = scale.trim().parse().map_err(|_| malformed())?;
 
-    if precision == 0 || precision > MAX_DECIMAL_PRECISION {
+    if precision == 0 {
+        return Err(D::Error::custom(
+            "Decimal precision must be greater than zero",
+        ));
+    }
+    if precision > MAX_DECIMAL_PRECISION {
         return Err(D::Error::custom(format!(
             "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}"
         )));
@@ -1363,6 +1368,17 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_zero_precision_error() {
+        let error = serde_json::from_str::<PrimitiveType>(r#""decimal(0, 0)""#).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Decimal precision must be greater than zero"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn test_accept_valid_decimal_and_fixed_type_strings() {
         for (json, expected) in [
             (
@@ -1395,6 +1411,9 @@ mod tests {
     fn check_type_serde_roundtrip_value(json: &str, expected_type: Type) {
         let parsed: Type = serde_json::from_str(json).unwrap();
         assert_eq!(parsed, expected_type);
+        let serialized = serde_json::to_string(&expected_type).unwrap();
+        let reparsed: Type = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(reparsed, expected_type);
     }
 
     #[test]
