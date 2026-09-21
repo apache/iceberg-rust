@@ -350,16 +350,30 @@ impl Serialize for PrimitiveType {
 fn deserialize_decimal<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
 where D: Deserializer<'de> {
     let s = String::deserialize(deserializer)?;
-    let (precision, scale) = s
-        .trim_start_matches(r"decimal(")
-        .trim_end_matches(')')
-        .split_once(',')
-        .ok_or_else(|| D::Error::custom("Decimal requires precision and scale: {s}"))?;
+    let malformed = || D::Error::custom(format!("Invalid decimal type: {s}"));
 
-    Ok(PrimitiveType::Decimal {
-        precision: precision.trim().parse().map_err(D::Error::custom)?,
-        scale: scale.trim().parse().map_err(D::Error::custom)?,
-    })
+    let (precision, scale) = s
+        .strip_prefix("decimal(")
+        .and_then(|inner| inner.strip_suffix(')'))
+        .ok_or_else(malformed)?
+        .split_once(',')
+        .ok_or_else(|| D::Error::custom(format!("Decimal requires precision and scale: {s}")))?;
+
+    let precision: u32 = precision.trim().parse().map_err(|_| malformed())?;
+    let scale: u32 = scale.trim().parse().map_err(|_| malformed())?;
+
+    if precision == 0 || precision > MAX_DECIMAL_PRECISION {
+        return Err(D::Error::custom(format!(
+            "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}"
+        )));
+    }
+    if scale > precision {
+        return Err(D::Error::custom(format!(
+            "Decimal scale {scale} must not be larger than precision {precision}"
+        )));
+    }
+
+    Ok(PrimitiveType::Decimal { precision, scale })
 }
 
 fn serialize_decimal<S>(
@@ -375,15 +389,13 @@ where
 
 fn deserialize_fixed<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
 where D: Deserializer<'de> {
-    let fixed = String::deserialize(deserializer)?
-        .trim_start_matches(r"fixed[")
-        .trim_end_matches(']')
-        .to_owned();
+    let s = String::deserialize(deserializer)?;
 
-    fixed
-        .parse()
+    s.strip_prefix("fixed[")
+        .and_then(|inner| inner.strip_suffix(']'))
+        .and_then(|length| length.trim().parse().ok())
         .map(PrimitiveType::Fixed)
-        .map_err(D::Error::custom)
+        .ok_or_else(|| D::Error::custom(format!("Invalid fixed type: {s}")))
 }
 
 fn serialize_fixed<S>(value: &u64, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -1324,6 +1336,65 @@ mod tests {
 
         assert_eq!(5, Type::decimal_required_bytes(10).unwrap());
         assert_eq!(16, Type::decimal_required_bytes(38).unwrap());
+    }
+
+    #[test]
+    fn test_reject_malformed_decimal_and_fixed_type_strings() {
+        for invalid in [
+            r#""decimal(50, 2)""#,
+            r#""decimal(0, 0)""#,
+            r#""decimal(5, 8)""#,
+            r#""decimal(decimal(5, 2)))""#,
+            r#""decimal(5, 2""#,
+            r#""decimal(5, 2)))))""#,
+            r#""decimal(5, 2, 3)""#,
+            r#""decimal(-5, 2)""#,
+            r#""decimal()""#,
+            r#""fixed[fixed[16]]]""#,
+            r#""fixed[16""#,
+            r#""fixed[16]]]""#,
+            r#""fixed[]""#,
+        ] {
+            assert!(
+                serde_json::from_str::<Type>(invalid).is_err(),
+                "expected {invalid} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_accept_valid_decimal_and_fixed_type_strings() {
+        for (json, expected) in [
+            (
+                r#""decimal(9, 2)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                }),
+            ),
+            (
+                r#""decimal(38, 10)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 38,
+                    scale: 10,
+                }),
+            ),
+            (
+                r#""decimal(5,2)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 5,
+                    scale: 2,
+                }),
+            ),
+            (r#""fixed[16]""#, Type::Primitive(PrimitiveType::Fixed(16))),
+        ] {
+            check_type_serde_roundtrip_value(json, expected);
+        }
+    }
+
+    fn check_type_serde_roundtrip_value(json: &str, expected_type: Type) {
+        let parsed: Type = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed, expected_type);
     }
 
     #[test]
