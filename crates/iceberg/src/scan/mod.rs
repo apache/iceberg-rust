@@ -2245,6 +2245,120 @@ pub mod tests {
         assert_eq!(rows[0], rows[1]);
     }
 
+    #[tokio::test]
+    async fn test_table_scan_as_of_time_reads_historical_rows() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let entry = fixture.table.metadata().history()[0].clone();
+
+        // The older snapshot has only x, while the current snapshot has eight columns.
+        let mut metadata = fixture.table.metadata().clone();
+        Arc::make_mut(metadata.snapshots.get_mut(&entry.snapshot_id).unwrap()).schema_id = Some(0);
+        fixture.table = fixture.table.with_metadata(Arc::new(metadata));
+        let snapshot = fixture
+            .table
+            .metadata()
+            .snapshot_by_id(entry.snapshot_id)
+            .unwrap();
+        let schema = snapshot.schema(fixture.table.metadata()).unwrap();
+        let arrow_schema = Arc::new(crate::arrow::schema_to_arrow_schema(&schema).unwrap());
+
+        // Write distinct historical data: x = 100, versus x = 1 in the current files.
+        let path = format!("{}/historical.parquet", fixture.table_location);
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int64Array::from(
+            vec![100],
+        ))])
+        .unwrap();
+        let mut writer =
+            ArrowWriter::try_new(File::create(&path).unwrap(), arrow_schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut manifest_writer = ManifestWriterBuilder::new(
+            fixture.next_manifest_file(),
+            Some(snapshot.snapshot_id()),
+            schema,
+            fixture
+                .table
+                .metadata()
+                .default_partition_spec()
+                .as_ref()
+                .clone(),
+        )
+        .build_v2_data();
+        manifest_writer
+            .add_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFileBuilder::default()
+                            .partition_spec_id(0)
+                            .content(DataContentType::Data)
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(fs::metadata(&path).unwrap().len())
+                            .file_path(path)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(100))]))
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let manifest = manifest_writer.write_manifest_file().await.unwrap();
+        let output = fixture
+            .table
+            .file_io()
+            .new_output(snapshot.manifest_list())
+            .unwrap()
+            .writer()
+            .await
+            .unwrap();
+        let mut list_writer = ManifestListWriter::v2(
+            output,
+            snapshot.snapshot_id(),
+            snapshot.parent_snapshot_id(),
+            snapshot.sequence_number(),
+        );
+        list_writer.add_manifests([manifest].into_iter()).unwrap();
+        list_writer.close().await.unwrap();
+
+        let table = fixture.table;
+        let by_time = table.scan().as_of_time(entry.timestamp_ms).build().unwrap();
+        let by_id = table.scan().snapshot_id(entry.snapshot_id).build().unwrap();
+        let current = table.scan().build().unwrap();
+        let mut rows = Vec::new();
+        let mut schemas = Vec::new();
+        for scan in [by_time, by_id, current] {
+            let batches: Vec<_> = scan.to_arrow().await.unwrap().try_collect().await.unwrap();
+            assert!(!batches.is_empty());
+            schemas.push(batches[0].schema());
+            let mut values: Vec<i64> = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column_by_name("x")
+                        .unwrap()
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect();
+            values.sort_unstable();
+            rows.push(values);
+        }
+        assert_eq!(rows[0], vec![100]);
+        assert_eq!(rows[0], rows[1]);
+        assert_eq!(rows[2], vec![1; 2048]);
+        assert_ne!(rows[0], rows[2]);
+        assert_eq!(schemas[0], schemas[1]);
+        assert_eq!(schemas[0].fields().len(), 1);
+        assert_eq!(schemas[2].fields().len(), 8);
+    }
+
     fn table_with_property(key: &str, value: &str) -> Table {
         let fixture = TableTestFixture::new();
         let mut metadata = fixture.table.metadata().clone();
