@@ -31,8 +31,6 @@ use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, Schema};
 use crate::{Error, ErrorKind, Result};
 
-type OffsetIndex = Vec<OffsetIndexMetaData>;
-
 const IN_PREDICATE_LIMIT: usize = 200;
 
 enum MissingColBehavior {
@@ -59,8 +57,8 @@ impl PageNullCount {
 }
 
 pub(crate) struct PageIndexEvaluator<'a> {
-    column_index: &'a [ColumnIndexMetaData],
-    offset_index: &'a OffsetIndex,
+    column_index: &'a [Option<ColumnIndexMetaData>],
+    offset_index: &'a [Option<OffsetIndexMetaData>],
     row_group_metadata: &'a RowGroupMetaData,
     iceberg_field_id_to_parquet_column_index: &'a HashMap<i32, usize>,
     snapshot_schema: &'a Schema,
@@ -69,8 +67,8 @@ pub(crate) struct PageIndexEvaluator<'a> {
 
 impl<'a> PageIndexEvaluator<'a> {
     pub(crate) fn new(
-        column_index: &'a [ColumnIndexMetaData],
-        offset_index: &'a OffsetIndex,
+        column_index: &'a [Option<ColumnIndexMetaData>],
+        offset_index: &'a [Option<OffsetIndexMetaData>],
         row_group_metadata: &'a RowGroupMetaData,
         field_id_map: &'a HashMap<i32, usize>,
         snapshot_schema: &'a Schema,
@@ -92,8 +90,8 @@ impl<'a> PageIndexEvaluator<'a> {
     /// matching the filter predicate.
     pub(crate) fn eval(
         filter: &'a BoundPredicate,
-        column_index: &'a [ColumnIndexMetaData],
-        offset_index: &'a OffsetIndex,
+        column_index: &'a [Option<ColumnIndexMetaData>],
+        offset_index: &'a [Option<OffsetIndexMetaData>],
         row_group_metadata: &'a RowGroupMetaData,
         field_id_map: &'a HashMap<i32, usize>,
         snapshot_schema: &'a Schema,
@@ -161,7 +159,11 @@ impl<'a> PageIndexEvaluator<'a> {
             ));
         };
 
-        let Some(column_index) = self.column_index.get(parquet_column_index) else {
+        let Some(column_index) = self
+            .column_index
+            .get(parquet_column_index)
+            .and_then(Option::as_ref)
+        else {
             // This should not happen, but we fail soft anyway so that the scan is still
             // successful, just a bit slower
             return self.select_all_rows();
@@ -173,12 +175,15 @@ impl<'a> PageIndexEvaluator<'a> {
             match self.row_count_cache.get(&parquet_column_index) {
                 Some(count) => count.clone(),
                 None => {
-                    let Some(offset_index) = self.offset_index.get(parquet_column_index) else {
-                        // if we have a column index, we should always have an offset index.
-                        return Err(Error::new(
-                            ErrorKind::Unexpected,
-                            format!("Missing offset index for field id {field_id}"),
-                        ));
+                    let Some(offset_index) = self
+                        .offset_index
+                        .get(parquet_column_index)
+                        .and_then(Option::as_ref)
+                    else {
+                        // A page index provider can load column and offset indexes
+                        // independently. Without offsets, we cannot construct a row
+                        // selection, so preserve correctness by skipping page pruning.
+                        return self.select_all_rows();
                     };
 
                     let count = self.calc_row_counts(offset_index);
@@ -247,9 +252,6 @@ impl<'a> PageIndexEvaluator<'a> {
         F: Fn(Option<Datum>, Option<Datum>, PageNullCount) -> Result<bool>,
     {
         let result: Result<Vec<bool>> = match column_index {
-            ColumnIndexMetaData::NONE => {
-                return Ok(None);
-            }
             ColumnIndexMetaData::BOOLEAN(idx) => idx
                 .min_values_iter()
                 .zip(idx.max_values_iter())
@@ -900,13 +902,19 @@ mod tests {
     fn get_test_metadata(
         metadata: &ParquetMetaData,
     ) -> (
-        Vec<parquet::file::page_index::column_index::ColumnIndexMetaData>,
-        Vec<parquet::file::page_index::offset_index::OffsetIndexMetaData>,
+        Vec<Option<parquet::file::page_index::column_index::ColumnIndexMetaData>>,
+        Vec<Option<parquet::file::page_index::offset_index::OffsetIndexMetaData>>,
         &parquet::file::metadata::RowGroupMetaData,
     ) {
         let row_group_metadata = metadata.row_group(0);
-        let column_index = metadata.column_index().unwrap()[0].to_vec();
-        let offset_index = metadata.offset_index().unwrap()[0].to_vec();
+        let page_index = metadata.page_index_for_row_group(0);
+        let column_count = row_group_metadata.columns().len();
+        let column_index = (0..column_count)
+            .map(|column_idx| page_index.column_index(column_idx).cloned())
+            .collect();
+        let offset_index = (0..column_count)
+            .map(|column_idx| page_index.offset_index(column_idx).cloned())
+            .collect();
         (column_index, offset_index, row_group_metadata)
     }
 
@@ -945,8 +953,14 @@ mod tests {
             .bind(iceberg_schema_ref.clone(), false)?;
 
         let row_group_metadata = metadata.row_group(0);
-        let column_index = metadata.column_index().unwrap()[0].to_vec();
-        let offset_index = metadata.offset_index().unwrap()[0].to_vec();
+        let page_index = metadata.page_index_for_row_group(0);
+        let column_count = row_group_metadata.columns().len();
+        let column_index = (0..column_count)
+            .map(|column_idx| page_index.column_index(column_idx).cloned())
+            .collect::<Vec<_>>();
+        let offset_index = (0..column_count)
+            .map(|column_idx| page_index.offset_index(column_idx).cloned())
+            .collect::<Vec<_>>();
 
         let result = PageIndexEvaluator::eval(
             &filter,

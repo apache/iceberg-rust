@@ -984,7 +984,9 @@ mod test {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StructBuilder};
+    use arrow_array::builder::{
+        Int32Builder, ListBuilder, MapBuilder, MapFieldNames, StructBuilder,
+    };
     use arrow_array::{
         ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
         Float64Array, Int32Array, Int64Array, StringArray, StructArray, Time64MicrosecondArray,
@@ -1622,7 +1624,17 @@ mod test {
 
                 let map_key_builder = Int32Builder::new();
                 let map_value_builder = Int32Builder::new();
-                let map_builder = MapBuilder::new(None, map_key_builder, map_value_builder);
+                // Arrow 60 defaults to `key` and `value`; this fixture's schema uses
+                // the Iceberg field names `keys` and `values`.
+                let map_builder = MapBuilder::new(
+                    Some(MapFieldNames {
+                        entry: "entries".to_string(),
+                        key: "keys".to_string(),
+                        value: "values".to_string(),
+                    }),
+                    map_key_builder,
+                    map_value_builder,
+                );
                 let b_builder = ListBuilder::new(map_builder);
 
                 let inner_list_item_builder = Int32Builder::new();

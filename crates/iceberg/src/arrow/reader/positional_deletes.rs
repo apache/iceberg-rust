@@ -178,7 +178,7 @@ mod tests {
         schema_descr: SchemaDescPtr,
         columns: Vec<ColumnChunkMetaData>,
         num_rows: i64,
-        ordinal: i16,
+        ordinal: i32,
     ) -> RowGroupMetaData {
         RowGroupMetaData::builder(schema_descr.clone())
             .set_num_rows(num_rows)
