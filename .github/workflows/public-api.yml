@@ -21,9 +21,10 @@ on:
   push:
     branches:
       - main
-  pull_request:
     paths:
       - 'crates/**'
+  pull_request:
+  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
@@ -44,7 +45,7 @@ jobs:
         uses: $/.github/actions/setup-builder
 
       - name: Cache Rust artifacts
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 

@@ -869,15 +869,22 @@ impl RecordBatchTransformer {
                         ));
                     }
 
-                    // TODO: Materialize complex initial defaults instead of silently null-filling
-                    // them. A struct default must produce a non-null struct with child defaults.
-                    let default_value = iceberg_field.initial_default.as_ref().and_then(|lit| {
-                        if let Literal::Primitive(prim) = lit {
-                            Some(prim.clone())
-                        } else {
-                            None
+                    // TODO: Materialize complex initial defaults, including child defaults.
+                    let default_value = match iceberg_field.initial_default.as_ref() {
+                        None => None,
+                        Some(Literal::Primitive(prim)) => Some(prim.clone()),
+                        Some(_) => {
+                            return Err(Error::new(
+                                ErrorKind::FeatureUnsupported,
+                                format!(
+                                    "Cannot read field {} that is absent from the data file: \
+                                     applying a non-primitive initial-default for {} is not yet \
+                                     supported",
+                                    iceberg_field.name, iceberg_field.field_type
+                                ),
+                            ));
                         }
-                    });
+                    };
 
                     ColumnSource::Add {
                         value: default_value,
@@ -1370,6 +1377,51 @@ mod test {
                 .contains("Missing required field: missing_str"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn schema_evolution_absent_struct_with_initial_default_errors() {
+        for required in [false, true] {
+            let added_field = NestedField::new(
+                2,
+                "added_struct",
+                Type::Struct(crate::spec::StructType::new(vec![
+                    NestedField::optional(3, "child", Type::Primitive(PrimitiveType::Int))
+                        .with_initial_default(Literal::int(42))
+                        .into(),
+                ])),
+                required,
+            )
+            .with_initial_default(Literal::Struct(Struct::from_iter(vec![None])));
+            let snapshot_schema = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                        added_field.into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let mut transformer =
+                RecordBatchTransformerBuilder::new(snapshot_schema, &[1, 2]).build();
+            let file_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+                "id",
+                DataType::Int32,
+                false,
+                1,
+            )]));
+            let file_batch =
+                RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
+                    .unwrap();
+
+            let err = transformer.process_record_batch(file_batch).unwrap_err();
+            assert_eq!(err.kind(), crate::ErrorKind::FeatureUnsupported);
+            assert!(err.to_string().contains("Cannot read field added_struct"));
+            assert!(
+                err.to_string()
+                    .contains("applying a non-primitive initial-default")
+            );
+        }
     }
 
     #[test]
