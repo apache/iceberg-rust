@@ -19,11 +19,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::spec::{NullOrder, SchemaRef, SortDirection, SortField, SortOrder, Transform};
 use crate::table::Table;
 use crate::transaction::{ActionCommit, TransactionAction};
-use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
+use crate::{TableRequirement, TableUpdate};
 
 /// Represents a sort field whose construction and validation are deferred until commit time.
 /// This avoids the need to pass a `Table` reference into methods like `asc` or `desc` when
@@ -38,20 +38,14 @@ struct PendingSortField {
 
 impl PendingSortField {
     fn to_sort_field(&self, schema: &SchemaRef) -> Result<SortField> {
-        let field_id = schema.field_id_by_name(self.name.as_str()).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot find field {} in table schema", self.name),
-            )
-        })?;
+        let field_id = schema
+            .field_id_by_name(self.name.as_str())
+            .ok_or_else(|| invalid_data!("Cannot find field {} in table schema", self.name))?;
 
         // This action intentionally refuses to author all-null (void) sort keys;
         // this policy does not restrict reading or preserving existing metadata.
         if matches!(self.transform, Transform::Unknown | Transform::Void) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot sort by transform {}", self.transform),
-            ));
+            return Err(invalid_data!("Cannot sort by transform {}", self.transform));
         }
 
         Ok(SortField::builder()
@@ -95,8 +89,9 @@ impl ReplaceSortOrderAction {
     /// Whether the transform is valid for the column's type is checked at commit time,
     /// once the table schema is available (mirroring Java's `SortOrder.Builder.build()`).
     /// `Transform::Unknown` and `Transform::Void` are rejected at commit time with
-    /// [`ErrorKind::DataInvalid`]. Rejecting `Void` is an intentional authoring policy
-    /// for this action: an all-null sort key adds no ordering information.
+    /// [`ErrorKind::DataInvalid`](crate::ErrorKind::DataInvalid). Rejecting `Void` is an
+    /// intentional authoring policy for this action: an all-null sort key adds no
+    /// ordering information.
     ///
     /// Note: `Term` is currently a plain column reference. Once it becomes
     /// transform-carrying (#2665), sort-order declaration is expected to converge on
