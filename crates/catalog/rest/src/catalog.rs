@@ -261,6 +261,20 @@ impl RestCatalogConfig {
             .unwrap_or_else(|| self.default_client.get_or_init(Client::default).clone())
     }
 
+    /// Pre-builds the shared default client so it will not follow redirects.
+    /// Called before the first request when the auth manager signs; an injected
+    /// client is left alone, since its policy is the caller's to choose.
+    pub(crate) fn disable_client_redirects(&self) {
+        if self.client.is_none() {
+            self.default_client.get_or_init(|| {
+                Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .expect("failed to build default HTTP client")
+            });
+        }
+    }
+
     /// Get the token from the config.
     ///
     /// The client can use this token to send requests.
@@ -815,7 +829,11 @@ impl RestSessionCatalog {
     async fn client(&self) -> Result<&RestClient> {
         self.client
             .get_or_try_init(|| async {
-                RestClient::init(&self.user_config, self.resolve_auth_manager()?).await
+                let auth_manager = self.resolve_auth_manager()?;
+                if auth_manager.signs_requests() {
+                    self.user_config.disable_client_redirects();
+                }
+                RestClient::init(&self.user_config, auth_manager).await
             })
             .await
     }
@@ -1685,6 +1703,29 @@ mod tests {
 
     fn test_catalog(config: RestCatalogConfig) -> RestSessionCatalog {
         RestSessionCatalog::new(config, None, None, Runtime::current(), None)
+    }
+
+    #[cfg(feature = "sigv4")]
+    fn test_sigv4_manager() -> crate::auth::SigV4AuthManager {
+        use aws_credential_types::provider::SharedCredentialsProvider;
+
+        use crate::auth::{PayloadHashMode, SigV4AuthManager, SigV4Signer};
+
+        SigV4AuthManager::new(
+            Arc::new(NoopAuthManager),
+            SigV4Signer::new(
+                "us-east-1".into(),
+                "execute-api".into(),
+                PayloadHashMode::IcebergRest,
+            ),
+            SharedCredentialsProvider::new(aws_credential_types::Credentials::new(
+                "ak",
+                "sk",
+                None::<String>,
+                None,
+                "test",
+            )),
+        )
     }
 
     fn test_catalog_with<M>(config: RestCatalogConfig, auth_manager: M) -> RestSessionCatalog
@@ -2892,16 +2933,73 @@ mod tests {
         assert!(err.message().contains(REST_CATALOG_PROP_AUTH_TYPE));
     }
 
+    /// A signed request must not be replayed at another URL, so the default
+    /// client stops at the 3xx instead of following it. The relocated bearer
+    /// token is exactly what reqwest's cross-origin strip list does not know.
+    #[cfg(feature = "sigv4")]
+    #[tokio::test]
+    async fn test_a_signing_manager_does_not_follow_redirects() {
+        let mut server = Server::new_async().await;
+        let redirect = server
+            .mock("GET", "/v1/config")
+            .with_status(307)
+            .with_header("location", "https://elsewhere.example.com/v1/config")
+            .create_async()
+            .await;
+
+        let config = RestCatalogConfig::builder().uri(server.url()).build();
+        let err = test_catalog_with(config, test_sigv4_manager())
+            .list_namespaces(&SessionContext::empty(), None)
+            .await
+            .unwrap_err();
+
+        // The 3xx surfaces rather than being followed to the other host.
+        assert!(err.to_string().contains("307"), "{err}");
+        redirect.assert_async().await;
+    }
+
+    /// The same redirect is still followed when nothing signs, so this does not
+    /// silently change behaviour for other auth types.
+    #[tokio::test]
+    async fn test_a_non_signing_manager_still_follows_redirects() {
+        let mut server = Server::new_async().await;
+        let redirect = server
+            .mock("GET", "/v1/config")
+            .with_status(307)
+            .with_header("location", "/v1/config-final")
+            .create_async()
+            .await;
+        let final_config = server
+            .mock("GET", "/v1/config-final")
+            .with_status(200)
+            .with_body(r#"{"overrides": {}, "defaults": {}}"#)
+            .create_async()
+            .await;
+        let namespaces = server
+            .mock("GET", "/v1/namespaces")
+            .with_status(200)
+            .with_body(r#"{"namespaces": []}"#)
+            .create_async()
+            .await;
+
+        let config = RestCatalogConfig::builder().uri(server.url()).build();
+        test_catalog_with(config, NoopAuthManager)
+            .list_namespaces(&SessionContext::empty(), None)
+            .await
+            .unwrap();
+
+        redirect.assert_async().await;
+        final_config.assert_async().await;
+        namespaces.assert_async().await;
+    }
+
     /// Through the real transport: a configured `header.authorization` must not
     /// land on top of the signature. Only the wire proves the order in
     /// `query_catalog`; calling `authenticate` directly cannot.
     #[cfg(feature = "sigv4")]
     #[tokio::test]
     async fn test_configured_authorization_header_does_not_clobber_the_signature() {
-        use aws_credential_types::provider::SharedCredentialsProvider;
         use mockito::{Matcher, Mock};
-
-        use crate::auth::{NoopAuthManager, PayloadHashMode, SigV4AuthManager, SigV4Signer};
 
         let mut server = Server::new_async().await;
         let signed = |m: Mock| {
@@ -2926,22 +3024,7 @@ mod tests {
                 "Bearer configured".to_string(),
             )]))
             .build();
-        let manager = SigV4AuthManager::new(
-            Arc::new(NoopAuthManager),
-            SigV4Signer::new(
-                "us-east-1".into(),
-                "execute-api".into(),
-                PayloadHashMode::IcebergRest,
-            ),
-            SharedCredentialsProvider::new(aws_credential_types::Credentials::new(
-                "ak",
-                "sk",
-                None::<String>,
-                None,
-                "test",
-            )),
-        );
-        let catalog = test_catalog_with(config, manager);
+        let catalog = test_catalog_with(config, test_sigv4_manager());
 
         catalog
             .list_namespaces(&SessionContext::empty(), None)
