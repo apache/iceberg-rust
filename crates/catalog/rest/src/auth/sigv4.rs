@@ -118,9 +118,10 @@ impl SigV4Signer {
     /// redirect replays a signature made for another URL, and across hosts
     /// reqwest drops `Authorization` but keeps `Original-Authorization`.
     ///
-    /// `tracing` subscribers are muted while signing, since `aws_sigv4` traces
-    /// the headers it is given. The `tracing/log-always` bridge to `log` is not,
-    /// and still forwards them at trace level.
+    /// `aws_sigv4` traces the headers it is given, and its redaction list does
+    /// not cover the `Original-` copy. An installed `tracing` subscriber is
+    /// muted for the call; with no subscriber, `tracing`'s `log` bridge still
+    /// forwards those events, so keep `aws_sigv4` below trace level there.
     pub fn sign(
         &self,
         request: &mut crate::HttpRequest,
@@ -184,9 +185,10 @@ impl SigV4Signer {
 
         // The crate traces what it signs, and redacts `authorization` but not
         // the `Original-` copy, so a bearer token would be logged verbatim.
-        // Only when a subscriber exists: `with_default` sets tracing's global
-        // "a dispatcher was installed" flag for good, which would silently
-        // divert every later event away from an app's `tracing/log` bridge.
+        // Only when a subscriber exists. `with_default` sets tracing's global
+        // "a dispatcher was installed" flag for good, so doing it unasked would
+        // silently divert every later event away from an app's `log` bridge —
+        // a worse trade than a trace-level exposure the operator opted into.
         let signed = if tracing::dispatcher::has_been_set() {
             tracing::subscriber::with_default(NoSubscriber::default(), || sign(signable, &params))
         } else {
