@@ -582,6 +582,10 @@ impl AuthManager for SigV4AuthManager {
             credentials,
         }))
     }
+
+    fn signs_requests(&self) -> bool {
+        true
+    }
 }
 
 /// [`AuthSession`] applying the delegate's auth, then SigV4-signing.

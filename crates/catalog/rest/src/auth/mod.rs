@@ -81,6 +81,14 @@ pub trait AuthManager: Debug + Send + Sync {
         client: &HttpClient,
         props: &HashMap<String, String>,
     ) -> Result<Arc<dyn AuthSession>>;
+
+    /// Whether the sessions this manager builds sign requests, so the catalog
+    /// must not let its HTTP client follow redirects: a redirect would replay a
+    /// signature made for another URL, and across hosts reqwest drops
+    /// `Authorization` while keeping any relocated copy of it.
+    fn signs_requests(&self) -> bool {
+        false
+    }
 }
 
 /// Authenticates outgoing REST catalog requests.
