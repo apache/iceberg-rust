@@ -45,10 +45,7 @@ impl PendingSortField {
         // This action intentionally refuses to author all-null (void) sort keys;
         // this policy does not restrict reading or preserving existing metadata.
         if matches!(self.transform, Transform::Unknown | Transform::Void) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot sort by transform {}", self.transform),
-            ));
+            return Err(invalid_data!("Cannot sort by transform {}", self.transform));
         }
 
         Ok(SortField::builder()
