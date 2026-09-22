@@ -1721,12 +1721,14 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "ts_day".to_string(),
-                transform: Transform::Day,
-                source_id: 4,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![4])
+                    .field_id(1000)
+                    .name("ts_day".to_string())
+                    .transform(Transform::Day)
+                    .build(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -1869,12 +1871,14 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "ts_day".to_string(),
-                transform: Transform::Day,
-                source_id: 4,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![4])
+                    .field_id(1000)
+                    .name("ts_day".to_string())
+                    .transform(Transform::Day)
+                    .build(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -2945,12 +2949,14 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1000)
+                    .name("x".to_string())
+                    .transform(Transform::Identity)
+                    .build(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -3042,12 +3048,14 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema2.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1000)
+                    .name("x".to_string())
+                    .transform(Transform::Identity)
+                    .build(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -3171,12 +3179,14 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1000)
+                    .name("x".to_string())
+                    .transform(Transform::Identity)
+                    .build(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -3257,12 +3267,14 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1000)
+                    .name("x".to_string())
+                    .transform(Transform::Identity)
+                    .build(),
+            )
             .unwrap()
             .build()
             .unwrap();

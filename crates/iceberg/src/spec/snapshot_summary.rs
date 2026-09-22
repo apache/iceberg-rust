@@ -828,7 +828,7 @@ mod tests {
             PartitionSpec::builder(schema.clone())
                 .add_unbound_fields(vec![
                     UnboundPartitionField::builder()
-                        .source_id(2)
+                        .source_ids(vec![2])
                         .name("year".to_string())
                         .transform(Transform::Identity)
                         .build(),
@@ -978,7 +978,7 @@ mod tests {
             PartitionSpec::builder(schema.clone())
                 .add_unbound_fields(vec![
                     UnboundPartitionField::builder()
-                        .source_id(2)
+                        .source_ids(vec![2])
                         .name("year".to_string())
                         .transform(Transform::Identity)
                         .build(),

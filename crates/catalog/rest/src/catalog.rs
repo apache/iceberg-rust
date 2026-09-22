@@ -1671,7 +1671,7 @@ mod tests {
     use iceberg::spec::{
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
         SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
-        UnboundPartitionField, UnboundPartitionSpec,
+        UnboundPartitionSpec,
     };
     use iceberg::test_utils::test_runtime;
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
@@ -3832,13 +3832,7 @@ mod tests {
             .properties(HashMap::from([("owner".to_string(), "testx".to_string())]))
             .partition_spec(
                 UnboundPartitionSpec::builder()
-                    .add_partition_fields(vec![
-                        UnboundPartitionField::builder()
-                            .source_id(1)
-                            .transform(Transform::Truncate(3))
-                            .name("id".to_string())
-                            .build(),
-                    ])
+                    .add_partition_field(1, "id", Transform::Truncate(3))
                     .unwrap()
                     .build(),
             )

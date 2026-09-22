@@ -244,12 +244,13 @@ mod tests {
         let partition_spec = Arc::new(
             PartitionSpecBuilder::new(schema.clone())
                 .with_spec_id(1)
-                .add_unbound_field(UnboundPartitionField {
-                    source_id: 1,
-                    field_id: None,
-                    name: "id_bucket".to_string(),
-                    transform: Transform::Identity,
-                })
+                .add_unbound_field(
+                    UnboundPartitionField::builder()
+                        .source_ids(vec![1])
+                        .name("id_bucket".to_string())
+                        .transform(Transform::Identity)
+                        .build(),
+                )
                 .unwrap()
                 .build()
                 .unwrap(),
@@ -358,12 +359,13 @@ mod tests {
         let partition_spec = Arc::new(
             PartitionSpecBuilder::new(schema.clone())
                 .with_spec_id(1)
-                .add_unbound_field(UnboundPartitionField {
-                    source_id: 1,
-                    field_id: None,
-                    name: "id_bucket".to_string(),
-                    transform: Transform::Identity,
-                })
+                .add_unbound_field(
+                    UnboundPartitionField::builder()
+                        .source_ids(vec![1])
+                        .name("id_bucket".to_string())
+                        .transform(Transform::Identity)
+                        .build(),
+                )
                 .unwrap()
                 .build()
                 .unwrap(),
