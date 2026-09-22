@@ -54,6 +54,7 @@ bytes = { workspace = true }
 cfg-if = { workspace = true }
 futures = { workspace = true }
 iceberg = { workspace = true }
+iceberg-property-macro = { workspace = true }
 opendal = { workspace = true }
 reqsign-aws-v4 = { version = "3.0.0", optional = true }
 reqsign-core = { version = "3.0.0", optional = true }

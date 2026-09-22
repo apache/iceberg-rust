@@ -2935,6 +2935,7 @@ dependencies = [
  "cfg-if 1.0.4",
  "futures",
  "iceberg",
+ "iceberg-property-macro",
  "iceberg_test_utils",
  "opendal",
  "reqsign-aws-v4",

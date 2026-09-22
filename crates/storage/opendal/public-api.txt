@@ -3,18 +3,28 @@ pub use iceberg_storage_opendal::AwsCredential
 pub use iceberg_storage_opendal::ProvideCredential
 pub enum iceberg_storage_opendal::OpenDalStorage
 pub iceberg_storage_opendal::OpenDalStorage::Azdls
+pub iceberg_storage_opendal::OpenDalStorage::Azdls::client: iceberg_storage_opendal::OpenDalClientConfig
 pub iceberg_storage_opendal::OpenDalStorage::Azdls::config: alloc::sync::Arc<opendal_service_azdls::config::AzdlsConfig>
 pub iceberg_storage_opendal::OpenDalStorage::Gcs
+pub iceberg_storage_opendal::OpenDalStorage::Gcs::client: iceberg_storage_opendal::OpenDalClientConfig
 pub iceberg_storage_opendal::OpenDalStorage::Gcs::config: alloc::sync::Arc<opendal_service_gcs::config::GcsConfig>
 pub iceberg_storage_opendal::OpenDalStorage::Hf
+pub iceberg_storage_opendal::OpenDalStorage::Hf::client: iceberg_storage_opendal::OpenDalClientConfig
 pub iceberg_storage_opendal::OpenDalStorage::Hf::config: alloc::sync::Arc<opendal_service_hf::config::HfConfig>
 pub iceberg_storage_opendal::OpenDalStorage::LocalFs
-pub iceberg_storage_opendal::OpenDalStorage::Memory(opendal_core::types::operator::operator::Operator)
+pub iceberg_storage_opendal::OpenDalStorage::LocalFs::client: iceberg_storage_opendal::OpenDalClientConfig
+pub iceberg_storage_opendal::OpenDalStorage::Memory
+pub iceberg_storage_opendal::OpenDalStorage::Memory::client: iceberg_storage_opendal::OpenDalClientConfig
+pub iceberg_storage_opendal::OpenDalStorage::Memory::operator: opendal_core::types::operator::operator::Operator
 pub iceberg_storage_opendal::OpenDalStorage::Oss
+pub iceberg_storage_opendal::OpenDalStorage::Oss::client: iceberg_storage_opendal::OpenDalClientConfig
 pub iceberg_storage_opendal::OpenDalStorage::Oss::config: alloc::sync::Arc<opendal_service_oss::config::OssConfig>
 pub iceberg_storage_opendal::OpenDalStorage::S3
+pub iceberg_storage_opendal::OpenDalStorage::S3::client: iceberg_storage_opendal::OpenDalClientConfig
 pub iceberg_storage_opendal::OpenDalStorage::S3::config: alloc::sync::Arc<opendal_service_s3::config::S3Config>
 pub iceberg_storage_opendal::OpenDalStorage::S3::customized_credential_load: core::option::Option<iceberg_storage_opendal::CustomAwsCredentialLoader>
+impl iceberg_storage_opendal::OpenDalStorage
+pub fn iceberg_storage_opendal::OpenDalStorage::client(&self) -> &iceberg_storage_opendal::OpenDalClientConfig
 impl core::clone::Clone for iceberg_storage_opendal::OpenDalStorage
 pub fn iceberg_storage_opendal::OpenDalStorage::clone(&self) -> iceberg_storage_opendal::OpenDalStorage
 impl core::fmt::Debug for iceberg_storage_opendal::OpenDalStorage
@@ -61,6 +71,20 @@ impl core::clone::Clone for iceberg_storage_opendal::CustomAwsCredentialLoader
 pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::clone(&self) -> Self
 impl core::fmt::Debug for iceberg_storage_opendal::CustomAwsCredentialLoader
 pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg_storage_opendal::OpenDalClientConfig
+impl iceberg_storage_opendal::OpenDalClientConfig
+pub fn iceberg_storage_opendal::OpenDalClientConfig::from_properties(properties: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::error::Result<Self>
+pub fn iceberg_storage_opendal::OpenDalClientConfig::io_timeout_ms(&self) -> u64
+impl core::clone::Clone for iceberg_storage_opendal::OpenDalClientConfig
+pub fn iceberg_storage_opendal::OpenDalClientConfig::clone(&self) -> iceberg_storage_opendal::OpenDalClientConfig
+impl core::default::Default for iceberg_storage_opendal::OpenDalClientConfig
+pub fn iceberg_storage_opendal::OpenDalClientConfig::default() -> Self
+impl core::fmt::Debug for iceberg_storage_opendal::OpenDalClientConfig
+pub fn iceberg_storage_opendal::OpenDalClientConfig::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for iceberg_storage_opendal::OpenDalClientConfig
+pub fn iceberg_storage_opendal::OpenDalClientConfig::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_opendal::OpenDalClientConfig where iceberg_storage_opendal::OpenDalClientConfig: core::default::Default
+pub fn iceberg_storage_opendal::OpenDalClientConfig::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_storage_opendal::OpenDalResolvingStorage
 impl core::fmt::Debug for iceberg_storage_opendal::OpenDalResolvingStorage
 pub fn iceberg_storage_opendal::OpenDalResolvingStorage::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
