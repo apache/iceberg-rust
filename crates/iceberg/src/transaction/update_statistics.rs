@@ -16,16 +16,17 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::spec::StatisticsFile;
 use crate::table::Table;
+use crate::transaction::action::CommitStatus;
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Result, TableUpdate};
 
 /// A transactional action for updating statistics files in a table
+#[derive(Clone)]
 pub struct UpdateStatisticsAction {
     statistics_to_set: HashMap<i64, Option<StatisticsFile>>,
 }
@@ -70,7 +71,11 @@ impl UpdateStatisticsAction {
 
 #[async_trait]
 impl TransactionAction for UpdateStatisticsAction {
-    async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
+    type State = ();
+
+    fn new_state(&self) -> Self::State {}
+
+    async fn commit(&self, _state: &mut (), _table: &Table) -> Result<ActionCommit> {
         let mut updates: Vec<TableUpdate> = vec![];
 
         self.statistics_to_set
@@ -89,6 +94,8 @@ impl TransactionAction for UpdateStatisticsAction {
 
         Ok(ActionCommit::new(updates, vec![]))
     }
+
+    async fn cleanup(self: Box<Self>, _state: (), _table: &Table, _status: CommitStatus) {}
 }
 
 #[cfg(test)]
@@ -98,6 +105,7 @@ mod tests {
     use as_any::Downcast;
 
     use crate::spec::{BlobMetadata, StatisticsFile};
+    use crate::transaction::action::ActionEntry;
     use crate::transaction::tests::make_v2_table;
     use crate::transaction::update_statistics::UpdateStatisticsAction;
     use crate::transaction::{ApplyTransactionAction, Transaction};
@@ -147,8 +155,9 @@ mod tests {
             .unwrap();
 
         let action = (*tx.actions[0])
-            .downcast_ref::<UpdateStatisticsAction>()
-            .unwrap();
+            .downcast_ref::<ActionEntry<UpdateStatisticsAction>>()
+            .unwrap()
+            .action();
         assert!(
             action
                 .statistics_to_set
@@ -188,8 +197,9 @@ mod tests {
             .unwrap();
 
         let action = (*tx.actions[0])
-            .downcast_ref::<UpdateStatisticsAction>()
-            .unwrap();
+            .downcast_ref::<ActionEntry<UpdateStatisticsAction>>()
+            .unwrap()
+            .action();
 
         // Verify that the statistics file is set correctly
         assert_eq!(
@@ -211,8 +221,9 @@ mod tests {
         let tx = tx.update_statistics().apply(tx).unwrap();
 
         let action = (*tx.actions[0])
-            .downcast_ref::<UpdateStatisticsAction>()
-            .unwrap();
+            .downcast_ref::<ActionEntry<UpdateStatisticsAction>>()
+            .unwrap()
+            .action();
 
         // Verify that no statistics are set
         assert!(action.statistics_to_set.is_empty());

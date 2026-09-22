@@ -72,7 +72,7 @@ pub use update_schema::AddColumn;
 use crate::error::Result;
 use crate::spec::TableProperties;
 use crate::table::Table;
-use crate::transaction::action::BoxedTransactionAction;
+use crate::transaction::action::TransactionActionEntry;
 pub use crate::transaction::append::FastAppendAction;
 pub use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
 pub use crate::transaction::sort_order::ReplaceSortOrderAction;
@@ -84,10 +84,25 @@ pub use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
-#[derive(Clone)]
 pub struct Transaction {
     table: Table,
-    actions: Vec<BoxedTransactionAction>,
+    actions: Vec<TransactionActionEntry>,
+}
+
+impl Clone for Transaction {
+    /// Cloning a transaction creates a new execution of the action plan:
+    /// the actions (immutable intent) are duplicated and paired with fresh
+    /// state. Retry state is never shared between transaction executions.
+    fn clone(&self) -> Self {
+        Self {
+            table: self.table.clone(),
+            actions: self
+                .actions
+                .iter()
+                .map(|entry| entry.fresh_clone())
+                .collect(),
+        }
+    }
 }
 
 impl Transaction {
@@ -221,8 +236,8 @@ impl Transaction {
         let mut existing_updates: Vec<TableUpdate> = vec![];
         let mut existing_requirements: Vec<TableRequirement> = vec![];
 
-        for action in &self.actions {
-            let action_commit = Arc::clone(action).commit(&current_table).await?;
+        for entry in self.actions.iter_mut() {
+            let action_commit = entry.commit(&current_table).await?;
             // apply action commit to current_table
             current_table = Self::apply(
                 current_table,

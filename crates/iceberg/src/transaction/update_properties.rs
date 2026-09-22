@@ -16,12 +16,11 @@
 // under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::table::Table;
-use crate::transaction::action::{ActionCommit, TransactionAction};
+use crate::transaction::action::{ActionCommit, CommitStatus, TransactionAction};
 use crate::{Error, ErrorKind, Result, TableUpdate};
 
 /// A transactional action that updates or removes table properties
@@ -30,6 +29,7 @@ use crate::{Error, ErrorKind, Result, TableUpdate};
 /// properties during a transaction. It supports setting new values for existing keys
 /// or adding new keys, as well as removing existing keys. Each key can only be updated
 /// or removed in a single action, not both.
+#[derive(Clone)]
 pub struct UpdatePropertiesAction {
     updates: HashMap<String, String>,
     removals: HashSet<String>,
@@ -76,7 +76,11 @@ impl UpdatePropertiesAction {
 
 #[async_trait]
 impl TransactionAction for UpdatePropertiesAction {
-    async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
+    type State = ();
+
+    fn new_state(&self) -> Self::State {}
+
+    async fn commit(&self, _state: &mut (), _table: &Table) -> Result<ActionCommit> {
         if let Some(overlapping_key) = self.removals.iter().find(|k| self.updates.contains_key(*k))
         {
             return Err(Error::new(
@@ -96,6 +100,8 @@ impl TransactionAction for UpdatePropertiesAction {
 
         Ok(ActionCommit::new(updates, vec![]))
     }
+
+    async fn cleanup(self: Box<Self>, _state: (), _table: &Table, _status: CommitStatus) {}
 }
 
 #[cfg(test)]
@@ -105,7 +111,7 @@ mod tests {
     use as_any::Downcast;
 
     use crate::transaction::Transaction;
-    use crate::transaction::action::ApplyTransactionAction;
+    use crate::transaction::action::{ActionEntry, ApplyTransactionAction};
     use crate::transaction::tests::make_v2_table;
     use crate::transaction::update_properties::UpdatePropertiesAction;
 
@@ -123,8 +129,9 @@ mod tests {
         assert_eq!(tx.actions.len(), 1);
 
         let action = (*tx.actions[0])
-            .downcast_ref::<UpdatePropertiesAction>()
-            .unwrap();
+            .downcast_ref::<ActionEntry<UpdatePropertiesAction>>()
+            .unwrap()
+            .action();
         assert_eq!(
             action.updates,
             HashMap::from([("a".to_string(), "b".to_string())])
