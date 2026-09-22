@@ -24,8 +24,9 @@ use bytes::Bytes;
 use super::crypto::AesGcmCipher;
 use super::key_metadata::StandardKeyMetadata;
 use super::stream::{AesGcmFileRead, AesGcmFileWrite, MIN_STREAM_LENGTH};
+use crate::Result;
+use crate::error::invalid_data;
 use crate::io::{FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
-use crate::{Error, ErrorKind, Result};
 
 /// An AGS1 stream-encrypted input file wrapping a plain [`InputFile`].
 ///
@@ -84,15 +85,11 @@ impl EncryptedInputFile {
     // A storage stat would hide truncation; require the original length from key metadata.
     fn encrypted_length(&self) -> Result<u64> {
         let length = self.key_metadata.file_length().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "AGS1 key metadata is missing the encrypted file length",
-            )
+            invalid_data!("AGS1 key metadata is missing the encrypted file length")
         })?;
         if length < u64::from(MIN_STREAM_LENGTH) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid encrypted file length: {length} is less than {MIN_STREAM_LENGTH}"),
+            return Err(invalid_data!(
+                "Invalid encrypted file length: {length} is less than {MIN_STREAM_LENGTH}"
             ));
         }
         Ok(length)
@@ -193,6 +190,7 @@ fn build_cipher(metadata: &StandardKeyMetadata) -> Result<Arc<AesGcmCipher>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ErrorKind;
     use crate::encryption::stream::{
         CIPHER_BLOCK_SIZE, GCM_STREAM_HEADER_LENGTH, PLAIN_BLOCK_SIZE,
     };

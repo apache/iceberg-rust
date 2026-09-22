@@ -49,6 +49,7 @@ use std::sync::Arc;
 use bytes::{Bytes, BytesMut};
 
 use super::AesGcmCipher;
+use crate::error::invalid_data;
 use crate::io::{FileMetadata, FileRead, FileWrite};
 use crate::{Error, ErrorKind, Result};
 
@@ -146,11 +147,8 @@ impl AesGcmFileRead {
         encrypted_file_length: u64,
     ) -> Result<Self> {
         if encrypted_file_length < u64::from(MIN_STREAM_LENGTH) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid encrypted file length: {encrypted_file_length} is less than {MIN_STREAM_LENGTH}"
-                ),
+            return Err(invalid_data!(
+                "Invalid encrypted file length: {encrypted_file_length} is less than {MIN_STREAM_LENGTH}"
             ));
         }
         let plain_stream_size = Self::calculate_plaintext_length(encrypted_file_length)?;
@@ -167,12 +165,9 @@ impl AesGcmFileRead {
         };
 
         if num_blocks > u32::MAX as u64 {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "AGS1 format supports at most {} blocks (~4 TiB per file), but file requires {num_blocks} blocks",
-                    u32::MAX
-                ),
+            return Err(invalid_data!(
+                "AGS1 format supports at most {} blocks (~4 TiB per file), but file requires {num_blocks} blocks",
+                u32::MAX
             ));
         }
 
@@ -203,11 +198,8 @@ impl AesGcmFileRead {
     /// `AesGcmInputStream.calculatePlaintextLength()`.
     pub fn calculate_plaintext_length(encrypted_file_length: u64) -> Result<u64> {
         if encrypted_file_length < GCM_STREAM_HEADER_LENGTH as u64 {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Encrypted file too short: {encrypted_file_length} bytes (minimum {GCM_STREAM_HEADER_LENGTH})"
-                ),
+            return Err(invalid_data!(
+                "Encrypted file too short: {encrypted_file_length} bytes (minimum {GCM_STREAM_HEADER_LENGTH})"
             ));
         }
 
@@ -225,13 +217,10 @@ impl AesGcmFileRead {
             0
         } else {
             if cipher_bytes_in_last_block < (NONCE_LENGTH + GCM_TAG_LENGTH) as u64 {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Truncated encrypted file: last block is {} bytes (minimum {})",
-                        cipher_bytes_in_last_block,
-                        NONCE_LENGTH + GCM_TAG_LENGTH
-                    ),
+                return Err(invalid_data!(
+                    "Truncated encrypted file: last block is {} bytes (minimum {})",
+                    cipher_bytes_in_last_block,
+                    NONCE_LENGTH + GCM_TAG_LENGTH
                 ));
             }
             cipher_bytes_in_last_block - NONCE_LENGTH as u64 - GCM_TAG_LENGTH as u64
@@ -291,22 +280,19 @@ impl FileRead for AesGcmFileRead {
         }
 
         if range.start > range.end {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid read range: start ({}) is greater than end ({})",
-                    range.start, range.end
-                ),
+            return Err(invalid_data!(
+                "Invalid read range: start ({}) is greater than end ({})",
+                range.start,
+                range.end
             ));
         }
 
         if range.end > self.plain_stream_size {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Read range {}..{} exceeds plaintext size {}",
-                    range.start, range.end, self.plain_stream_size
-                ),
+            return Err(invalid_data!(
+                "Read range {}..{} exceeds plaintext size {}",
+                range.start,
+                range.end,
+                self.plain_stream_size
             ));
         }
 
@@ -320,13 +306,10 @@ impl FileRead for AesGcmFileRead {
 
         let all_encrypted = self.inner.read(encrypted_start..encrypted_end).await?;
         if all_encrypted.len() as u64 != encrypted_end - encrypted_start {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid encrypted read length: expected {} bytes, got {}",
-                    encrypted_end - encrypted_start,
-                    all_encrypted.len()
-                ),
+            return Err(invalid_data!(
+                "Invalid encrypted read length: expected {} bytes, got {}",
+                encrypted_end - encrypted_start,
+                all_encrypted.len()
             ));
         }
 
@@ -446,9 +429,8 @@ impl AesGcmFileWrite {
             return Err(e);
         }
         self.block_index = self.block_index.checked_add(1).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "AGS1 block index overflow: file exceeds the maximum supported size (~4 TiB)",
+            invalid_data!(
+                "AGS1 block index overflow: file exceeds the maximum supported size (~4 TiB)"
             )
         })?;
         Ok(())
@@ -466,9 +448,8 @@ impl AesGcmFileWrite {
             return Err(e);
         }
         self.block_index = self.block_index.checked_add(1).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "AGS1 block index overflow: file exceeds the maximum supported size (~4 TiB)",
+            invalid_data!(
+                "AGS1 block index overflow: file exceeds the maximum supported size (~4 TiB)"
             )
         })?;
         self.buffer.drain(..PLAIN_BLOCK_SIZE as usize);
@@ -604,14 +585,11 @@ mod tests {
             let start = range.start as usize;
             let end = range.end as usize;
             if end > self.0.len() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Range {}..{} out of bounds for {} bytes",
-                        start,
-                        end,
-                        self.0.len()
-                    ),
+                return Err(invalid_data!(
+                    "Range {}..{} out of bounds for {} bytes",
+                    start,
+                    end,
+                    self.0.len()
                 ));
             }
             Ok(self.0.slice(start..end))
