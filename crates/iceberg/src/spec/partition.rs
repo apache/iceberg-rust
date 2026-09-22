@@ -600,14 +600,17 @@ impl PartitionSpecBuilder {
     ) -> Result<()> {
         match schema.field_by_name(field.name.as_str()) {
             Some(schema_collision) => {
-                if field.transform == Transform::Identity {
+                // A void transform always produces null, so like identity it cannot carry a
+                // value that disagrees with the schema column it shares a name with. Rewriting
+                // an identity field to void is how a v1 table drops a partition field.
+                if matches!(field.transform, Transform::Identity | Transform::Void) {
                     if schema_collision.id == field.source_id {
                         Ok(())
                     } else {
                         Err(Error::new(
                             ErrorKind::DataInvalid,
                             format!(
-                                "Cannot create identity partition sourced from different field in schema. Field name '{}' has id `{}` in schema but partition source id is `{}`",
+                                "Cannot create partition sourced from different field in schema. Field name '{}' has id `{}` in schema but partition source id is `{}`",
                                 field.name, schema_collision.id, field.source_id
                             ),
                         ))
@@ -616,7 +619,7 @@ impl PartitionSpecBuilder {
                     Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!(
-                            "Cannot create partition with name: '{}' that conflicts with schema field and is not an identity transform.",
+                            "Cannot create partition with name: '{}' that conflicts with schema field and is not an identity or void transform.",
                             field.name
                         ),
                     ))
@@ -1333,6 +1336,90 @@ mod tests {
                 name: "id".to_string(),
                 transform: Transform::Identity,
             })
+            .unwrap_err();
+    }
+
+    #[test]
+    fn test_builder_collision_is_ok_for_void_transforms() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "region", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        // A void field may reuse the name of the column it is sourced from, which is how a
+        // v1 table drops a partition field.
+        let spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(1)
+            .add_unbound_field(UnboundPartitionField {
+                source_id: 1,
+                field_id: None,
+                name: "id".to_string(),
+                transform: Transform::Void,
+            })
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_eq!(spec.fields().len(), 1);
+        assert_eq!(spec.fields()[0].name, "id");
+        assert_eq!(spec.fields()[0].source_id, 1);
+        assert_eq!(spec.fields()[0].transform, Transform::Void);
+
+        // The allowance is not specific to one column.
+        PartitionSpec::builder(schema.clone())
+            .with_spec_id(1)
+            .add_unbound_field(UnboundPartitionField {
+                source_id: 2,
+                field_id: None,
+                name: "region".to_string(),
+                transform: Transform::Void,
+            })
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Not OK for different source id, same as identity.
+        PartitionSpec::builder(schema)
+            .with_spec_id(1)
+            .add_unbound_field(UnboundPartitionField {
+                source_id: 2,
+                field_id: None,
+                name: "id".to_string(),
+                transform: Transform::Void,
+            })
+            .unwrap_err();
+    }
+
+    #[test]
+    fn test_bind_collision_is_ok_for_void_transforms() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "region", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let spec = UnboundPartitionSpec::builder()
+            .with_spec_id(1)
+            .add_partition_field(1, "id", Transform::Void)
+            .unwrap()
+            .build()
+            .bind(schema.clone())
+            .unwrap();
+
+        assert_eq!(spec.fields()[0].name, "id");
+        assert_eq!(spec.fields()[0].transform, Transform::Void);
+
+        UnboundPartitionSpec::builder()
+            .with_spec_id(1)
+            .add_partition_field(2, "id", Transform::Void)
+            .unwrap()
+            .build()
+            .bind(schema)
             .unwrap_err();
     }
 
