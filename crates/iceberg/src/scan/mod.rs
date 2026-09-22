@@ -3001,7 +3001,8 @@ pub mod tests {
                     .with_content_size_in_bytes(Some(34))
                     .with_record_count(Some(5))
                     .with_key_metadata(Some(vec![4, 5, 6].into_boxed_slice()))
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .with_partition(Some(Struct::from_iter([Some(Literal::long(42))])))
             .with_partition_spec(Some(partition_spec))
@@ -4025,7 +4026,7 @@ pub mod tests {
             "positional delete file should be planned into the task"
         );
         assert_eq!(
-            tasks[0].deletes()[0].file_type,
+            tasks[0].deletes()[0].file_type(),
             DataContentType::PositionDeletes
         );
 
