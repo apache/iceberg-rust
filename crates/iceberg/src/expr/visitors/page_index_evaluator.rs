@@ -28,7 +28,6 @@ use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
-use crate::spec::decimal_utils::i128_from_be_bytes;
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, Schema};
 use crate::{Error, ErrorKind, Result};
 
@@ -340,32 +339,35 @@ impl<'a> PageIndexEvaluator<'a> {
                     )
                 })
                 .collect(),
-            ColumnIndexMetaData::BYTE_ARRAY(idx) => idx
-                .min_values_iter()
-                .zip(idx.max_values_iter())
-                .enumerate()
-                .zip(row_counts.iter())
-                .map(|((i, (min, max)), &row_count)| {
-                    predicate(
-                        min.map(|val| Self::byte_array_bound_to_datum(field_type, val))
-                            .transpose()?,
-                        max.map(|val| Self::byte_array_bound_to_datum(field_type, val))
-                            .transpose()?,
-                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
-                    )
-                })
-                .collect(),
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(_) => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    "unsupported 'FIXED_LEN_BYTE_ARRAY' index type in column_index",
-                ));
+            ColumnIndexMetaData::BYTE_ARRAY(idx) => {
+                // Parquet stores Iceberg string and binary bounds as BYTE_ARRAY.
+                // Any other field type on a BYTE_ARRAY column (e.g. a non-spec
+                // BYTE_ARRAY decimal) can't be decoded safely, so skip page
+                // pruning for it rather than risk pruning pages that match.
+                if !matches!(field_type, PrimitiveType::String | PrimitiveType::Binary) {
+                    return Ok(None);
+                }
+
+                idx.min_values_iter()
+                    .zip(idx.max_values_iter())
+                    .enumerate()
+                    .zip(row_counts.iter())
+                    .map(|((i, (min, max)), &row_count)| {
+                        predicate(
+                            min.map(|val| Self::byte_array_bound_to_datum(field_type, val))
+                                .transpose()?,
+                            max.map(|val| Self::byte_array_bound_to_datum(field_type, val))
+                                .transpose()?,
+                            PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
+                        )
+                    })
+                    .collect()
             }
-            ColumnIndexMetaData::INT96(_) => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    "unsupported 'INT96' index type in column_index",
-                ));
+            // Column index types we can't interpret: skip page pruning rather
+            // than abort the scan. Row-group filtering and the Arrow row filter
+            // still apply the predicate.
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(_) | ColumnIndexMetaData::INT96(_) => {
+                return Ok(None);
             }
         };
 
@@ -374,8 +376,7 @@ impl<'a> PageIndexEvaluator<'a> {
 
     /// Converts a `BYTE_ARRAY` page bound into a [`Datum`] according to the
     /// field's primitive type. Parquet stores Iceberg `string` and `binary`
-    /// bounds as `BYTE_ARRAY`, along with `decimal` bounds from non-standard
-    /// writers (the spec maps `decimal(P > 18)` to `fixed_len_byte_array`).
+    /// bounds as `BYTE_ARRAY`.
     fn byte_array_bound_to_datum(field_type: &PrimitiveType, bytes: &[u8]) -> Result<Datum> {
         match field_type {
             PrimitiveType::String => {
@@ -386,21 +387,9 @@ impl<'a> PageIndexEvaluator<'a> {
                 Ok(Datum::string(value))
             }
             PrimitiveType::Binary => Ok(Datum::binary(bytes.to_vec())),
-            PrimitiveType::Decimal { .. } => {
-                // BYTE_ARRAY decimals are variable-length signed big-endian.
-                let unscaled = i128_from_be_bytes(bytes).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid decimal page bound: too many bytes (> 16): {bytes:?}"),
-                    )
-                })?;
-                Ok(Datum::new(
-                    field_type.clone(),
-                    PrimitiveLiteral::Int128(unscaled),
-                ))
-            }
+            // Unreachable: callers gate BYTE_ARRAY decoding to string and binary.
             _ => Err(Error::new(
-                ErrorKind::DataInvalid,
+                ErrorKind::Unexpected,
                 format!("Unsupported primitive type for BYTE_ARRAY page bound: {field_type}"),
             )),
         }
@@ -806,7 +795,9 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow_array::{ArrayRef, Float32Array, LargeBinaryArray, RecordBatch, StringArray};
+    use arrow_array::{
+        ArrayRef, FixedSizeBinaryArray, Float32Array, LargeBinaryArray, RecordBatch, StringArray,
+    };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use parquet::arrow::ArrowWriter;
     use parquet::arrow::arrow_reader::{
@@ -819,7 +810,7 @@ mod tests {
 
     use super::PageIndexEvaluator;
     use crate::expr::{Bind, Reference};
-    use crate::spec::{Datum, NestedField, PrimitiveLiteral, PrimitiveType, Schema, Type};
+    use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
     use crate::{ErrorKind, Result};
 
     /// Helper function to create a test parquet file with page indexes
@@ -950,6 +941,49 @@ mod tests {
             let array = Arc::new(LargeBinaryArray::from_iter_values(std::iter::repeat_n(
                 value, 1024,
             ))) as ArrayRef;
+            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![array]).unwrap();
+            for i in 0..batch.num_rows() {
+                writer.write(&batch.slice(i, 1)).unwrap();
+            }
+        }
+
+        writer.close().unwrap();
+
+        let file = temp_file.reopen().unwrap();
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+        let metadata = reader.metadata().clone();
+
+        Ok((metadata, temp_file))
+    }
+
+    /// Creates a single-column parquet file with a `FixedSizeBinary(2)` column,
+    /// producing `FIXED_LEN_BYTE_ARRAY` page bounds. Page 0 is `[0x01, 0x01]`,
+    /// page 1 is `[0x02, 0x02]`.
+    fn create_fixed_len_byte_array_parquet_file() -> Result<(Arc<ParquetMetaData>, NamedTempFile)> {
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "col_fixed",
+            DataType::FixedSizeBinary(2),
+            true,
+        )]));
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let file = temp_file.reopen().unwrap();
+
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(1024)
+            .set_write_batch_size(512)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+
+        // Each page holds 1024 rows of a single value, one page per byte pattern.
+        let pages: [&[u8]; 2] = [&[0x01, 0x01], &[0x02, 0x02]];
+
+        for value in pages {
+            let array = Arc::new(
+                FixedSizeBinaryArray::try_from_iter(std::iter::repeat_n(value, 1024)).unwrap(),
+            ) as ArrayRef;
             let batch = RecordBatch::try_new(arrow_schema.clone(), vec![array]).unwrap();
             for i in 0..batch.num_rows() {
                 writer.write(&batch.slice(i, 1)).unwrap();
@@ -1295,21 +1329,89 @@ mod tests {
     }
 
     #[test]
-    fn byte_array_bound_decodes_variable_length_decimals() -> Result<()> {
-        let decimal = PrimitiveType::Decimal {
-            precision: 10,
-            scale: 2,
-        };
+    fn eval_skips_pruning_for_byte_array_decimal_bounds() -> Result<()> {
+        // A non-spec writer can store a decimal column as BYTE_ARRAY. Those
+        // bounds can't be decoded safely (Parquet may truncate them, and
+        // truncation only preserves lexicographic byte order, not decimal
+        // order), so the evaluator skips page pruning rather than prune pages
+        // that might match.
+        let (metadata, _temp_file) = create_binary_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
 
-        // Short big-endian bounds: [0x01] = 1, [0xff] = -1 (two's complement).
-        assert_eq!(
-            PageIndexEvaluator::byte_array_bound_to_datum(&decimal, &[0x01])?,
-            Datum::new(decimal.clone(), PrimitiveLiteral::Int128(1)),
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_fields([Arc::new(NestedField::new(
+                    1,
+                    "col_decimal",
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: 10,
+                        scale: 2,
+                    }),
+                    true,
+                ))])
+                .build()?,
         );
-        assert_eq!(
-            PageIndexEvaluator::byte_array_bound_to_datum(&decimal, &[0xff])?,
-            Datum::new(decimal.clone(), PrimitiveLiteral::Int128(-1)),
+        let field_id_map = HashMap::from_iter([(1, 0)]);
+
+        // A predicate that would prune every page if the bounds were decoded.
+        let filter = Reference::new("col_decimal")
+            .greater_than(Datum::decimal_with_precision(
+                crate::spec::decimal_utils::decimal_from_i128_with_scale(99999, 2),
+                10,
+            )?)
+            .bind(iceberg_schema.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            row_group_metadata,
+            &field_id_map,
+            iceberg_schema.as_ref(),
+        )?;
+
+        // Both 1024-row pages survive: no page pruning is applied.
+        assert_eq!(result, vec![RowSelector::select(2048)]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_skips_pruning_for_fixed_len_byte_array() -> Result<()> {
+        // FIXED_LEN_BYTE_ARRAY page indexes back spec-conforming fixed, uuid,
+        // and decimal(P > 18) columns. The evaluator can't interpret those
+        // bounds, so it skips page pruning rather than abort the scan.
+        let (metadata, _temp_file) = create_fixed_len_byte_array_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_fields([Arc::new(NestedField::new(
+                    1,
+                    "col_fixed",
+                    Type::Primitive(PrimitiveType::Fixed(2)),
+                    true,
+                ))])
+                .build()?,
         );
+        let field_id_map = HashMap::from_iter([(1, 0)]);
+
+        // A predicate that would prune every page if the bounds were decoded.
+        let filter = Reference::new("col_fixed")
+            .greater_than(Datum::fixed(vec![0xffu8, 0xff]))
+            .bind(iceberg_schema.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            row_group_metadata,
+            &field_id_map,
+            iceberg_schema.as_ref(),
+        )?;
+
+        // All rows survive: no page pruning is applied for FIXED_LEN_BYTE_ARRAY.
+        assert_eq!(result, vec![RowSelector::select(2048)]);
 
         Ok(())
     }
