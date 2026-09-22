@@ -36,9 +36,11 @@ pub(crate) enum CachedItem {
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub(crate) enum CachedObjectKey {
-    // Location alone: the file is immutable and uniquely identified by its
-    // path, and a cache is bound to one table, so the format version can't
-    // disambiguate two lookups at the same location.
+    // Keyed by location alone. A location holds one set of immutable bytes, and
+    // a cache is bound to one table, so the first access parses those bytes
+    // under the table's then-current format version and every later access
+    // shares that entry. The version can still shift under a live cache across
+    // an in-place upgrade (`Table::with_metadata`), which is why the key omits it.
     ManifestList(String),
     // The manifest-level `first_row_id` is part of the key because the parsed
     // manifest inherits it onto its entries: the same physical manifest can be
@@ -225,9 +227,9 @@ mod tests {
     use crate::TableIdent;
     use crate::io::{FileIO, OutputFile};
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, ManifestEntry,
-        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Operation, Snapshot, Struct,
-        Summary, TableMetadata,
+        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal,
+        ManifestContentType, ManifestEntry, ManifestListWriter, ManifestStatus,
+        ManifestWriterBuilder, Operation, Snapshot, Struct, Summary, TableMetadata,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -342,6 +344,60 @@ mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
+            );
+            manifest_list_write
+                .add_manifests(vec![data_file_manifest].into_iter())
+                .unwrap();
+            manifest_list_write.close().await.unwrap();
+        }
+
+        async fn setup_v1_manifest_files(&mut self) {
+            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+            let current_partition_spec = self.table.metadata().default_partition_spec();
+
+            // Write data files
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
+            )
+            .build_v1();
+            writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/1.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(100)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(100))]))
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            let data_file_manifest = writer.write_manifest_file().await.unwrap();
+
+            // Write to manifest list
+            let manifest_list_writer = self
+                .table
+                .file_io()
+                .new_output(current_snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap();
+            let mut manifest_list_write = ManifestListWriter::v1(
+                manifest_list_writer,
+                current_snapshot.snapshot_id(),
+                current_snapshot.parent_snapshot_id(),
             );
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
@@ -491,43 +547,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_manifest_list_ignores_format_version() {
+    async fn test_get_manifest_list_serves_cached_v1_parse_after_upgrade() {
         let mut fixture = TableTestFixture::new();
-        fixture.setup_manifest_files().await;
+        fixture.setup_v1_manifest_files().await;
 
         let current_snapshot = fixture.table.metadata().current_snapshot().unwrap();
 
-        // A single ObjectCache is bound to one table whose format version is fixed,
-        // so the format version cannot disambiguate two lookups at the same
-        // manifest-list location. Two metadata refs differing only in format version
-        // must therefore share one cache entry.
+        // The manifest list on disk is v1. The fixture table is v2, so clone its
+        // metadata as v1 to model the state before an in-place upgrade; the real
+        // metadata_ref models the state after it. Both drive lookups at the same
+        // location through one cache.
+        let metadata_v2 = fixture.table.metadata_ref();
         let mut metadata_v1 = fixture.table.metadata().clone();
         metadata_v1.format_version = FormatVersion::V1;
         let metadata_v1: TableMetadataRef = Arc::new(metadata_v1);
         assert_ne!(
-            fixture.table.metadata().format_version,
-            metadata_v1.format_version
+            metadata_v2.format_version, metadata_v1.format_version,
+            "setup invariant: the two metadata refs must differ in format version"
         );
 
         let object_cache = ObjectCache::new(fixture.table.file_io().clone(), None);
 
-        // Cold miss under the table's real format version populates the cache.
-        let inserted = object_cache
-            .get_manifest_list(current_snapshot, &fixture.table.metadata_ref())
-            .await
-            .unwrap();
-        assert_eq!(inserted.entries().len(), 1);
-
-        // Warm hit under a different format version at the same location returns the
-        // same cached entry rather than reparsing.
-        let cached = object_cache
+        // Cold miss under v1 parses the v1 bytes as v1: content defaults to Data and
+        // the sequence number to 0.
+        let cached_under_v1 = object_cache
             .get_manifest_list(current_snapshot, &metadata_v1)
             .await
             .unwrap();
+        let entry = cached_under_v1.entries().first().unwrap();
+        assert_eq!(entry.content, ManifestContentType::Data);
+        assert_eq!(entry.sequence_number, 0);
+
+        // Warm hit under v2 at the same location returns the cached v1 parse rather
+        // than reparsing the v1 bytes as v2, so the upgraded caller sees the same
+        // correct content.
+        let cached_under_v2 = object_cache
+            .get_manifest_list(current_snapshot, &metadata_v2)
+            .await
+            .unwrap();
         assert!(
-            Arc::ptr_eq(&inserted, &cached),
+            Arc::ptr_eq(&cached_under_v1, &cached_under_v2),
             "lookups at one location must share a cache entry across format versions"
         );
+        let entry = cached_under_v2.entries().first().unwrap();
+        assert_eq!(entry.content, ManifestContentType::Data);
+        assert_eq!(entry.sequence_number, 0);
     }
 
     #[tokio::test]
