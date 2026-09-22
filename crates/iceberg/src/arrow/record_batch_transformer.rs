@@ -314,10 +314,12 @@ impl PromotePlan {
                 source_by_id.insert(id, idx);
             }
         }
-        // Name mapping only assigns ids to top-level fields. Match id-less children
-        // by position when types line up, and error otherwise rather than nulling them.
-        if !source_fields.is_empty() && source_by_id.is_empty() {
-            if source_fields.len() == target_fields.len()
+        // Name mapping only assigns top-level ids. Fully id-less children match by
+        // position when types line up. A same-type reorder cannot be detected without
+        // ids and stays positional. Any missing id errors instead of nulling that child.
+        if !source_fields.is_empty() && source_by_id.len() != source_fields.len() {
+            if source_by_id.is_empty()
+                && source_fields.len() == target_fields.len()
                 && source_fields
                     .iter()
                     .zip(target_fields.iter())
@@ -341,7 +343,7 @@ impl PromotePlan {
             }
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                "cannot reconcile struct fields by id: no source field carries a field id",
+                "cannot reconcile struct fields by id: source fields do not all have field ids",
             ));
         }
 
@@ -1778,10 +1780,7 @@ mod test {
         )) as ArrayRef;
 
         let err = promote(&source, &evolved_struct_type(), &empty_schema()).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("no source field carries a field id")
-        );
+        assert!(err.to_string().contains("do not all have field ids"));
     }
 
     #[test]
