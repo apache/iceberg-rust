@@ -191,6 +191,7 @@ impl<'a> PageIndexEvaluator<'a> {
         };
 
         let Some(page_filter) = Self::apply_predicate_to_column_index(
+            field_id,
             predicate,
             field_type,
             column_index,
@@ -238,6 +239,7 @@ impl<'a> PageIndexEvaluator<'a> {
     }
 
     fn apply_predicate_to_column_index<F>(
+        field_id: i32,
         predicate: F,
         field_type: &PrimitiveType,
         column_index: &ColumnIndexMetaData,
@@ -345,28 +347,57 @@ impl<'a> PageIndexEvaluator<'a> {
                 // BYTE_ARRAY decimal) can't be decoded safely, so skip page
                 // pruning for it rather than risk pruning pages that match.
                 if !matches!(field_type, PrimitiveType::String | PrimitiveType::Binary) {
+                    tracing::debug!(
+                        field_id,
+                        %field_type,
+                        "Skipping page-index pruning: BYTE_ARRAY column index on a non-string/binary field"
+                    );
                     return Ok(None);
                 }
 
-                idx.min_values_iter()
+                let mut page_filter = Vec::with_capacity(row_counts.len());
+                for ((i, (min, max)), &row_count) in idx
+                    .min_values_iter()
                     .zip(idx.max_values_iter())
                     .enumerate()
                     .zip(row_counts.iter())
-                    .map(|((i, (min, max)), &row_count)| {
-                        predicate(
-                            min.map(|val| Self::byte_array_bound_to_datum(field_type, val))
-                                .transpose()?,
-                            max.map(|val| Self::byte_array_bound_to_datum(field_type, val))
-                                .transpose()?,
-                            PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
-                        )
-                    })
-                    .collect()
+                {
+                    // A bound that won't decode (e.g. a min/max stat truncated
+                    // mid-UTF-8-sequence) means this column's page index can't
+                    // be trusted, so skip pruning for the whole column rather
+                    // than abort the scan.
+                    let (Ok(min), Ok(max)) = (
+                        min.map(|val| Self::byte_array_bound_to_datum(field_type, val))
+                            .transpose(),
+                        max.map(|val| Self::byte_array_bound_to_datum(field_type, val))
+                            .transpose(),
+                    ) else {
+                        tracing::debug!(
+                            field_id,
+                            %field_type,
+                            "Skipping page-index pruning: undecodable BYTE_ARRAY page bound"
+                        );
+                        return Ok(None);
+                    };
+
+                    page_filter.push(predicate(
+                        min,
+                        max,
+                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
+                    )?);
+                }
+
+                Ok(page_filter)
             }
             // Column index types we can't interpret: skip page pruning rather
             // than abort the scan. Row-group filtering and the Arrow row filter
             // still apply the predicate.
             ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(_) | ColumnIndexMetaData::INT96(_) => {
+                tracing::debug!(
+                    field_id,
+                    %field_type,
+                    "Skipping page-index pruning: unsupported FIXED_LEN_BYTE_ARRAY or INT96 column index"
+                );
                 return Ok(None);
             }
         };
@@ -387,7 +418,7 @@ impl<'a> PageIndexEvaluator<'a> {
                 Ok(Datum::string(value))
             }
             PrimitiveType::Binary => Ok(Datum::binary(bytes.to_vec())),
-            // Unreachable: callers gate BYTE_ARRAY decoding to string and binary.
+            // Defensive: production callers only invoke this for String/Binary.
             _ => Err(Error::new(
                 ErrorKind::Unexpected,
                 format!("Unsupported primitive type for BYTE_ARRAY page bound: {field_type}"),
@@ -1417,11 +1448,46 @@ mod tests {
     }
 
     #[test]
-    fn byte_array_bound_errors_on_invalid_utf8_string() {
-        let err = PageIndexEvaluator::byte_array_bound_to_datum(&PrimitiveType::String, &[0xff])
-            .unwrap_err();
+    fn eval_skips_pruning_for_non_utf8_string_bound() -> Result<()> {
+        // A writer can truncate a string min/max stat mid-UTF-8-sequence,
+        // leaving a BYTE_ARRAY page bound that isn't valid UTF-8. Decoding it
+        // as a string fails, so the evaluator skips page pruning for the column
+        // rather than aborting the whole file read.
+        let (metadata, _temp_file) = create_binary_parquet_file()?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
 
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_fields([Arc::new(NestedField::new(
+                    1,
+                    "col_string",
+                    Type::Primitive(PrimitiveType::String),
+                    true,
+                ))])
+                .build()?,
+        );
+        let field_id_map = HashMap::from_iter([(1, 0)]);
+
+        // Page 1's bound [0xff, 0x00] isn't valid UTF-8. A predicate that would
+        // otherwise prune every page must not: the undecodable bound forces a
+        // skip rather than an error.
+        let filter = Reference::new("col_string")
+            .greater_than(Datum::string("zzz"))
+            .bind(iceberg_schema.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            row_group_metadata,
+            &field_id_map,
+            iceberg_schema.as_ref(),
+        )?;
+
+        // Both pages survive: no page pruning is applied when a bound won't decode.
+        assert_eq!(result, vec![RowSelector::select(2048)]);
+
+        Ok(())
     }
 
     #[test]
