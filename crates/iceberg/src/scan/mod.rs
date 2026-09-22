@@ -221,27 +221,10 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Select a snapshot using a timestamp in milliseconds since the Unix epoch.
+    /// Select a snapshot at or before a timestamp in milliseconds since the Unix epoch.
     ///
-    /// At [`Self::build`], resolves the greatest timestamp at or before the request
-    /// in the loaded table's main snapshot history. Equal timestamps keep the
-    /// first history entry. This uses when snapshots became current, so it also
-    /// handles rollback to an older snapshot. It does not refresh table metadata.
-    ///
-    /// The scan uses the selected snapshot's schema, falling back to the current
-    /// schema for older snapshots without a schema ID, just like [`Self::snapshot_id`].
-    /// Repeated calls use the last timestamp. Combining this selector with
-    /// [`Self::snapshot_id`] in either order causes [`Self::build`] to return an
-    /// error, as does unavailable history or a missing selected snapshot.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # fn example(table: &iceberg::table::Table) -> iceberg::Result<()> {
-    /// let scan = table.scan().as_of_time(1_602_638_573_590).build()?;
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Uses the table's main history. Repeated calls use the last timestamp.
+    /// Combining this with [`Self::snapshot_id`] causes [`Self::build`] to return an error.
     pub fn as_of_time(mut self, timestamp_ms: i64) -> Self {
         self.as_of_timestamp_ms = Some(timestamp_ms);
         self

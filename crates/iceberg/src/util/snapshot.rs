@@ -77,24 +77,11 @@ pub fn ancestors_between(
     })
 }
 
-/// Resolve a snapshot ID from the table's main history at a timestamp in
-/// milliseconds since the Unix epoch.
+/// Resolve the snapshot ID from the latest main-history entry at or before
+/// `timestamp_ms` (milliseconds since the Unix epoch).
 ///
-/// Selects the entry with the greatest timestamp less than or equal to
-/// `timestamp_ms`. If timestamps tie, the first entry in history wins. History
-/// need not be sorted by timestamp, so every entry is considered.
-///
-/// This uses the snapshot log, not snapshot creation times: rolling back to an
-/// existing snapshot records a new history entry for that snapshot. Snapshots
-/// absent from main history (for example, staged or branch-only snapshots) are
-/// not considered. A timestamp beyond the available history selects its greatest
-/// timestamp, without refreshing the table or waiting for future commits.
-///
-/// # Errors
-///
-/// Returns [`ErrorKind::DataInvalid`] if no history entry exists at or before the
-/// requested timestamp, including when history is empty or has expired. This
-/// function only resolves an ID; the caller must check that the snapshot exists.
+/// Equal timestamps select the first entry. Returns [`ErrorKind::DataInvalid`]
+/// if no matching history exists; does not check whether the snapshot is retained.
 pub fn snapshot_id_as_of_time(metadata: &TableMetadata, timestamp_ms: i64) -> Result<i64> {
     let mut best: Option<&SnapshotLog> = None;
     for entry in metadata.history() {
