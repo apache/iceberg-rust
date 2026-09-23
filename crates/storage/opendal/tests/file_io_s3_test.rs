@@ -26,31 +26,76 @@ mod tests {
     use bytes::Bytes;
     use futures::StreamExt;
     use iceberg::io::{
-        FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION,
-        S3_SECRET_ACCESS_KEY,
+        FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_MULTIPART_PART_SIZE_BYTES,
+        S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
     };
     use iceberg_storage_opendal::{
         AwsCredential, CustomAwsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
     };
     use iceberg_test_utils::{get_minio_endpoint, normalize_test_name_with_parts, set_up};
+    use opendal::Configurator;
     use reqsign_core::Context;
 
+    const MINIO_ACCESS_KEY_ID: &str = "admin";
+    const MINIO_SECRET_ACCESS_KEY: &str = "password";
+    const MINIO_REGION: &str = "us-east-1";
+    const MINIO_BUCKET: &str = "bucket1";
+
     async fn get_file_io() -> FileIO {
+        get_file_io_with_props(vec![]).await
+    }
+
+    async fn get_file_io_with_props(extra: Vec<(&'static str, String)>) -> FileIO {
         set_up();
 
         let minio_endpoint = get_minio_endpoint();
 
+        let mut props = vec![
+            (S3_ENDPOINT, minio_endpoint),
+            (S3_ACCESS_KEY_ID, MINIO_ACCESS_KEY_ID.to_string()),
+            (S3_SECRET_ACCESS_KEY, MINIO_SECRET_ACCESS_KEY.to_string()),
+            (S3_REGION, MINIO_REGION.to_string()),
+            (S3_PATH_STYLE_ACCESS, "true".to_string()),
+        ];
+        props.extend(extra);
+
         FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
             customized_credential_load: None,
         }))
-        .with_props(vec![
-            (S3_ENDPOINT, minio_endpoint),
-            (S3_ACCESS_KEY_ID, "admin".to_string()),
-            (S3_SECRET_ACCESS_KEY, "password".to_string()),
-            (S3_REGION, "us-east-1".to_string()),
-            (S3_PATH_STYLE_ACCESS, "true".to_string()),
-        ])
+        .with_props(props)
         .build()
+    }
+
+    /// Number of upload parts S3 recorded for `key`. A multipart upload reports
+    /// a `<md5>-<part-count>` ETag; a single-request upload reports a bare MD5.
+    ///
+    /// The suffix is a MinIO and plain-S3 behavior. A server-side encrypted
+    /// object can report an ETag without it, so this helper holds only for the
+    /// MinIO fixture these tests run against.
+    async fn upload_part_count(key: &str) -> usize {
+        let mut config = opendal::services::S3Config::default();
+        config.endpoint = Some(get_minio_endpoint());
+        config.access_key_id = Some(MINIO_ACCESS_KEY_ID.to_string());
+        config.secret_access_key = Some(MINIO_SECRET_ACCESS_KEY.to_string());
+        config.region = Some(MINIO_REGION.to_string());
+        config.bucket = MINIO_BUCKET.to_string();
+        // Each `#[tokio::test]` has its own runtime, and the first request after
+        // an earlier one went away fails before the client reconnects. The
+        // storage under test carries the same layer.
+        let op = opendal::Operator::new(config.into_builder())
+            .unwrap()
+            .layer(opendal::layers::RetryLayer::new());
+        let meta = op.stat(key).await.unwrap();
+        let etag = meta
+            .etag()
+            .expect("MinIO reports an ETag")
+            .trim_matches('"');
+        match etag.rsplit_once('-') {
+            Some((_, parts)) => parts
+                .parse()
+                .unwrap_or_else(|e| panic!("unexpected ETag format {etag}: {e}")),
+            None => 1,
+        }
     }
 
     fn roundtrip_file_io(file_io: &FileIO) -> FileIO {
@@ -62,7 +107,7 @@ mod tests {
     async fn test_file_io_s3_serialization_roundtrip() {
         let file_io = roundtrip_file_io(&get_file_io().await);
         let path = format!(
-            "s3://bucket1/{}",
+            "s3://{MINIO_BUCKET}/{}",
             normalize_test_name_with_parts!("test_file_io_s3_serialization_roundtrip")
         );
 
@@ -85,7 +130,12 @@ mod tests {
     async fn test_file_io_s3_exists() {
         let file_io = get_file_io().await;
         assert!(!file_io.exists("s3://bucket2/any").await.unwrap());
-        assert!(file_io.exists("s3://bucket1/").await.unwrap());
+        assert!(
+            file_io
+                .exists(&format!("s3://{MINIO_BUCKET}/"))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -93,7 +143,7 @@ mod tests {
         let file_io = get_file_io().await;
         // Use unique file path based on module path to avoid conflicts
         let output_path = format!(
-            "s3://bucket1/{}",
+            "s3://{MINIO_BUCKET}/{}",
             normalize_test_name_with_parts!("test_file_io_s3_output")
         );
         // Clean up from any previous test runs
@@ -106,12 +156,88 @@ mod tests {
         assert!(file_io.exists(&output_path).await.unwrap());
     }
 
+    /// `ParquetWriter` hands over a whole row group in one `write` call, so an
+    /// unbounded part size would make the request as large as that row group.
+    #[tokio::test]
+    async fn test_file_io_s3_writer_splits_write_into_bounded_parts() {
+        const PART_SIZE: usize = 5 * 1024 * 1024;
+        const PARTS: usize = 3;
+
+        let file_io =
+            get_file_io_with_props(vec![(S3_MULTIPART_PART_SIZE_BYTES, PART_SIZE.to_string())])
+                .await;
+        let key = normalize_test_name_with_parts!(
+            "test_file_io_s3_writer_splits_write_into_bounded_parts"
+        );
+        let path = format!("s3://{MINIO_BUCKET}/{key}");
+
+        let _ = file_io.delete(&path).await;
+        let mut writer = file_io.new_output(&path).unwrap().writer().await.unwrap();
+        writer
+            .write(Bytes::from(vec![0u8; PART_SIZE * PARTS]))
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+
+        assert_eq!(upload_part_count(&key).await, PARTS);
+        file_io.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_file_io_s3_write_splits_buffer_into_bounded_parts() {
+        const PART_SIZE: usize = 5 * 1024 * 1024;
+        const PARTS: usize = 3;
+
+        let file_io =
+            get_file_io_with_props(vec![(S3_MULTIPART_PART_SIZE_BYTES, PART_SIZE.to_string())])
+                .await;
+        let key = normalize_test_name_with_parts!(
+            "test_file_io_s3_write_splits_buffer_into_bounded_parts"
+        );
+        let path = format!("s3://{MINIO_BUCKET}/{key}");
+
+        let _ = file_io.delete(&path).await;
+        file_io
+            .new_output(&path)
+            .unwrap()
+            .write(Bytes::from(vec![0u8; PART_SIZE * PARTS]))
+            .await
+            .unwrap();
+
+        assert_eq!(upload_part_count(&key).await, PARTS);
+        file_io.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_file_io_s3_write_below_part_size_stays_single_request() {
+        let file_io = get_file_io_with_props(vec![(
+            S3_MULTIPART_PART_SIZE_BYTES,
+            (5 * 1024 * 1024).to_string(),
+        )])
+        .await;
+        let key = normalize_test_name_with_parts!(
+            "test_file_io_s3_write_below_part_size_stays_single_request"
+        );
+        let path = format!("s3://{MINIO_BUCKET}/{key}");
+
+        let _ = file_io.delete(&path).await;
+        file_io
+            .new_output(&path)
+            .unwrap()
+            .write(Bytes::from_static(b"{\"format-version\":2}"))
+            .await
+            .unwrap();
+
+        assert_eq!(upload_part_count(&key).await, 1);
+        file_io.delete(&path).await.unwrap();
+    }
+
     #[tokio::test]
     async fn test_file_io_s3_input() {
         let file_io = get_file_io().await;
         // Use unique file path based on module path to avoid conflicts
         let file_path = format!(
-            "s3://bucket1/{}",
+            "s3://{MINIO_BUCKET}/{}",
             normalize_test_name_with_parts!("test_file_io_s3_input")
         );
         let output_file = file_io.new_output(&file_path).unwrap();
@@ -199,7 +325,10 @@ mod tests {
         .build();
 
         // Test that the FileIO was built successfully with the custom loader
-        match file_io_with_custom_creds.exists("s3://bucket1/any").await {
+        match file_io_with_custom_creds
+            .exists(&format!("s3://{MINIO_BUCKET}/any"))
+            .await
+        {
             Ok(_) => {}
             Err(e) => panic!("Failed to check existence of bucket: {e}"),
         }
@@ -227,7 +356,10 @@ mod tests {
         .build();
 
         // Test that the FileIO was built successfully with the custom loader
-        match file_io_with_custom_creds.exists("s3://bucket1/any").await {
+        match file_io_with_custom_creds
+            .exists(&format!("s3://{MINIO_BUCKET}/any"))
+            .await
+        {
             Ok(_) => panic!(
                 "Expected error, but got Ok - the credential loader should fail to provide valid credentials"
             ),
@@ -248,7 +380,7 @@ mod tests {
         let paths: Vec<String> = (0..5)
             .map(|i| {
                 format!(
-                    "s3://bucket1/{}/file-{i}",
+                    "s3://{MINIO_BUCKET}/{}/file-{i}",
                     normalize_test_name_with_parts!("test_file_io_s3_delete_stream")
                 )
             })
