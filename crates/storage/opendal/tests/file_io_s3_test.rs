@@ -36,6 +36,11 @@ mod tests {
     use opendal::Configurator;
     use reqsign_core::Context;
 
+    const OBJECT_STORE_ACCESS_KEY_ID: &str = "admin";
+    const OBJECT_STORE_SECRET_ACCESS_KEY: &str = "password";
+    const OBJECT_STORE_REGION: &str = "us-east-1";
+    const OBJECT_STORE_BUCKET: &str = "bucket1";
+
     async fn get_file_io() -> FileIO {
         get_file_io_with_props(vec![]).await
     }
@@ -47,9 +52,12 @@ mod tests {
 
         let mut props = vec![
             (S3_ENDPOINT, object_store_endpoint),
-            (S3_ACCESS_KEY_ID, "admin".to_string()),
-            (S3_SECRET_ACCESS_KEY, "password".to_string()),
-            (S3_REGION, "us-east-1".to_string()),
+            (S3_ACCESS_KEY_ID, OBJECT_STORE_ACCESS_KEY_ID.to_string()),
+            (
+                S3_SECRET_ACCESS_KEY,
+                OBJECT_STORE_SECRET_ACCESS_KEY.to_string(),
+            ),
+            (S3_REGION, OBJECT_STORE_REGION.to_string()),
             (S3_PATH_STYLE_ACCESS, "true".to_string()),
         ];
         props.extend(extra);
@@ -64,21 +72,25 @@ mod tests {
     /// Number of upload parts S3 recorded for `key`. A multipart upload reports
     /// a `<md5>-<part-count>` ETag; a single-request upload reports a bare MD5.
     ///
-    /// The suffix is a MinIO and plain-S3 behavior. A server-side encrypted
-    /// object can report an ETag without it, so this helper holds only for the
-    /// MinIO fixture these tests run against.
+    /// A server-side encrypted object can report an ETag without the suffix, so
+    /// this helper holds only for the object store fixture these tests run against.
     async fn upload_part_count(key: &str) -> usize {
         let mut config = opendal::services::S3Config::default();
         config.endpoint = Some(get_object_store_endpoint());
-        config.access_key_id = Some("admin".to_string());
-        config.secret_access_key = Some("password".to_string());
-        config.region = Some("us-east-1".to_string());
-        config.bucket = "bucket1".to_string();
-        let op = opendal::Operator::new(config.into_builder()).unwrap();
+        config.access_key_id = Some(OBJECT_STORE_ACCESS_KEY_ID.to_string());
+        config.secret_access_key = Some(OBJECT_STORE_SECRET_ACCESS_KEY.to_string());
+        config.region = Some(OBJECT_STORE_REGION.to_string());
+        config.bucket = OBJECT_STORE_BUCKET.to_string();
+        // Each `#[tokio::test]` has its own runtime, and the first request after
+        // an earlier one went away fails before the client reconnects. The
+        // storage under test carries the same layer.
+        let op = opendal::Operator::new(config.into_builder())
+            .unwrap()
+            .layer(opendal::layers::RetryLayer::new());
         let meta = op.stat(key).await.unwrap();
         let etag = meta
             .etag()
-            .expect("MinIO reports an ETag")
+            .expect("object store reports an ETag")
             .trim_matches('"');
         match etag.rsplit_once('-') {
             Some((_, parts)) => parts
@@ -97,7 +109,7 @@ mod tests {
     async fn test_file_io_s3_serialization_roundtrip() {
         let file_io = roundtrip_file_io(&get_file_io().await);
         let path = format!(
-            "s3://bucket1/{}",
+            "s3://{OBJECT_STORE_BUCKET}/{}",
             normalize_test_name_with_parts!("test_file_io_s3_serialization_roundtrip")
         );
 
@@ -120,7 +132,12 @@ mod tests {
     async fn test_file_io_s3_exists() {
         let file_io = get_file_io().await;
         assert!(!file_io.exists("s3://bucket2/any").await.unwrap());
-        assert!(file_io.exists("s3://bucket1/").await.unwrap());
+        assert!(
+            file_io
+                .exists(&format!("s3://{OBJECT_STORE_BUCKET}/"))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -128,7 +145,7 @@ mod tests {
         let file_io = get_file_io().await;
         // Use unique file path based on module path to avoid conflicts
         let output_path = format!(
-            "s3://bucket1/{}",
+            "s3://{OBJECT_STORE_BUCKET}/{}",
             normalize_test_name_with_parts!("test_file_io_s3_output")
         );
         // Clean up from any previous test runs
@@ -154,7 +171,7 @@ mod tests {
         let key = normalize_test_name_with_parts!(
             "test_file_io_s3_writer_splits_write_into_bounded_parts"
         );
-        let path = format!("s3://bucket1/{key}");
+        let path = format!("s3://{OBJECT_STORE_BUCKET}/{key}");
 
         let _ = file_io.delete(&path).await;
         let mut writer = file_io.new_output(&path).unwrap().writer().await.unwrap();
@@ -179,7 +196,7 @@ mod tests {
         let key = normalize_test_name_with_parts!(
             "test_file_io_s3_write_splits_buffer_into_bounded_parts"
         );
-        let path = format!("s3://bucket1/{key}");
+        let path = format!("s3://{OBJECT_STORE_BUCKET}/{key}");
 
         let _ = file_io.delete(&path).await;
         file_io
@@ -203,7 +220,7 @@ mod tests {
         let key = normalize_test_name_with_parts!(
             "test_file_io_s3_write_below_part_size_stays_single_request"
         );
-        let path = format!("s3://bucket1/{key}");
+        let path = format!("s3://{OBJECT_STORE_BUCKET}/{key}");
 
         let _ = file_io.delete(&path).await;
         file_io
@@ -222,7 +239,7 @@ mod tests {
         let file_io = get_file_io().await;
         // Use unique file path based on module path to avoid conflicts
         let file_path = format!(
-            "s3://bucket1/{}",
+            "s3://{OBJECT_STORE_BUCKET}/{}",
             normalize_test_name_with_parts!("test_file_io_s3_input")
         );
         let output_file = file_io.new_output(&file_path).unwrap();
@@ -310,7 +327,10 @@ mod tests {
         .build();
 
         // Test that the FileIO was built successfully with the custom loader
-        match file_io_with_custom_creds.exists("s3://bucket1/any").await {
+        match file_io_with_custom_creds
+            .exists(&format!("s3://{OBJECT_STORE_BUCKET}/any"))
+            .await
+        {
             Ok(_) => {}
             Err(e) => panic!("Failed to check existence of bucket: {e}"),
         }
@@ -338,7 +358,10 @@ mod tests {
         .build();
 
         // Test that the FileIO was built successfully with the custom loader
-        match file_io_with_custom_creds.exists("s3://bucket1/any").await {
+        match file_io_with_custom_creds
+            .exists(&format!("s3://{OBJECT_STORE_BUCKET}/any"))
+            .await
+        {
             Ok(_) => panic!(
                 "Expected error, but got Ok - the credential loader should fail to provide valid credentials"
             ),
@@ -359,7 +382,7 @@ mod tests {
         let paths: Vec<String> = (0..5)
             .map(|i| {
                 format!(
-                    "s3://bucket1/{}/file-{i}",
+                    "s3://{OBJECT_STORE_BUCKET}/{}/file-{i}",
                     normalize_test_name_with_parts!("test_file_io_s3_delete_stream")
                 )
             })
