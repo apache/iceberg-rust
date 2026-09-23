@@ -1350,14 +1350,23 @@ mod tests {
             r#""decimal(0, 0)""#,
             r#""decimal(5, 8)""#,
             r#""decimal(decimal(5, 2)))""#,
+            r#""decimal(decimal(5, 2)""#,
             r#""decimal(5, 2""#,
             r#""decimal(5, 2)))))""#,
             r#""decimal(5, 2, 3)""#,
             r#""decimal(-5, 2)""#,
+            r#""decimal(5, -2)""#,
+            r#""decimal(-5, -2)""#,
+            r#""decimal(-2, -5)""#,
+            r#""decimal((5, 2))""#,
+            r#""decimal[5, 2]""#,
             r#""decimal()""#,
             r#""fixed[fixed[16]]]""#,
             r#""fixed[16""#,
             r#""fixed[16]]]""#,
+            r#""fixed[[16]]""#,
+            r#""fixed[[16]""#,
+            r#""fixed(16)""#,
             r#""fixed[]""#,
         ] {
             assert!(
@@ -1400,6 +1409,20 @@ mod tests {
                 Type::Primitive(PrimitiveType::Decimal {
                     precision: 5,
                     scale: 2,
+                }),
+            ),
+            (
+                r#""decimal(5, 0)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 5,
+                    scale: 0,
+                }),
+            ),
+            (
+                r#""decimal(5, 5)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 5,
+                    scale: 5,
                 }),
             ),
             (r#""fixed[16]""#, Type::Primitive(PrimitiveType::Fixed(16))),
