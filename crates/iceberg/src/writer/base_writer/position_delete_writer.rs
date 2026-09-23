@@ -38,6 +38,7 @@ use arrow_schema::{DataType, Field};
 use once_cell::sync::Lazy;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
+use crate::error::invalid_data;
 use crate::metadata_columns::{
     RESERVED_FIELD_ID_DELETE_FILE_PATH, RESERVED_FIELD_ID_DELETE_FILE_POS, delete_file_path_field,
     delete_file_pos_field,
@@ -95,22 +96,16 @@ fn field_id(field: &Field) -> Result<i32> {
         .metadata()
         .get(PARQUET_FIELD_ID_META_KEY)
         .ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Position delete column `{}` is missing its Iceberg field id metadata.",
-                    field.name()
-                ),
+            invalid_data!(
+                "Position delete column `{}` is missing its Iceberg field id metadata.",
+                field.name()
             )
         })?
         .parse::<i32>()
         .map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Position delete column `{}` has an invalid field id: {e}",
-                    field.name()
-                ),
+            invalid_data!(
+                "Position delete column `{}` has an invalid field id: {e}",
+                field.name()
             )
         })
 }
@@ -121,68 +116,51 @@ fn field_id(field: &Field) -> Result<i32> {
 fn validate_position_delete_batch(batch: &RecordBatch) -> Result<()> {
     let fields = batch.schema_ref().fields();
     if fields.len() != 2 {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "This writer supports only the two required position delete columns (`file_path`, `pos`); \
-                 batches with a different column count (e.g. including the optional `row` column) are not supported. Got {} columns.",
-                fields.len()
-            ),
+        return Err(invalid_data!(
+            "This writer supports only the two required position delete columns (`file_path`, `pos`); \
+             batches with a different column count (e.g. including the optional `row` column) are not supported. Got {} columns.",
+            fields.len()
         ));
     }
 
     let path = &fields[0];
     let path_id = field_id(path)?;
     if path_id != RESERVED_FIELD_ID_DELETE_FILE_PATH {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "The first position delete column must be `file_path` (field id {RESERVED_FIELD_ID_DELETE_FILE_PATH}), but got field id {path_id}."
-            ),
+        return Err(invalid_data!(
+            "The first position delete column must be `file_path` (field id {RESERVED_FIELD_ID_DELETE_FILE_PATH}), but got field id {path_id}."
         ));
     }
     // The canonical schema maps Iceberg `string` to `Utf8` and the file writer is
     // configured with it, so a `LargeUtf8` column has to be cast to `Utf8` first.
     if path.data_type() != &DataType::Utf8 {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "The position delete `file_path` column must be Utf8 (cast it first); got {:?}.",
-                path.data_type()
-            ),
+        return Err(invalid_data!(
+            "The position delete `file_path` column must be Utf8 (cast it first); got {:?}.",
+            path.data_type()
         ));
     }
     // Required column: a nullable field could write nulls under a required schema.
     if path.is_nullable() {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            "The position delete `file_path` column must be required (non-nullable).",
+        return Err(invalid_data!(
+            "The position delete `file_path` column must be required (non-nullable)."
         ));
     }
 
     let pos = &fields[1];
     let pos_id = field_id(pos)?;
     if pos_id != RESERVED_FIELD_ID_DELETE_FILE_POS {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "The second position delete column must be `pos` (field id {RESERVED_FIELD_ID_DELETE_FILE_POS}), but got field id {pos_id}."
-            ),
+        return Err(invalid_data!(
+            "The second position delete column must be `pos` (field id {RESERVED_FIELD_ID_DELETE_FILE_POS}), but got field id {pos_id}."
         ));
     }
     if pos.data_type() != &DataType::Int64 {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "The position delete `pos` column must be Int64, but got {:?}.",
-                pos.data_type()
-            ),
+        return Err(invalid_data!(
+            "The position delete `pos` column must be Int64, but got {:?}.",
+            pos.data_type()
         ));
     }
     if pos.is_nullable() {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            "The position delete `pos` column must be required (non-nullable).",
+        return Err(invalid_data!(
+            "The position delete `pos` column must be required (non-nullable)."
         ));
     }
 
@@ -282,12 +260,8 @@ where
                         res.partition(pk.data().clone());
                         res.partition_spec_id(pk.spec().spec_id());
                     }
-                    res.build().map_err(|e| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Failed to build position delete file: {e}"),
-                        )
-                    })
+                    res.build()
+                        .map_err(|e| invalid_data!("Failed to build position delete file: {e}"))
                 })
                 .collect()
         } else {

@@ -20,8 +20,8 @@ use std::str::FromStr;
 use serde_derive::{Deserialize, Serialize};
 
 use super::ByteBuf;
-use crate::error::Result;
-use crate::{Error, ErrorKind};
+use crate::Error;
+use crate::error::{Result, invalid_data};
 
 /// Entry in a manifest list.
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
@@ -139,10 +139,7 @@ impl FromStr for ManifestContentType {
         match s {
             "data" => Ok(ManifestContentType::Data),
             "deletes" => Ok(ManifestContentType::Deletes),
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid manifest content type: {s}"),
-            )),
+            _ => Err(invalid_data!("Invalid manifest content type: {s}")),
         }
     }
 }
@@ -163,9 +160,8 @@ impl TryFrom<i32> for ManifestContentType {
         match value {
             0 => Ok(ManifestContentType::Data),
             1 => Ok(ManifestContentType::Deletes),
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid manifest content type. Expected 0 or 1, got {value}"),
+            _ => Err(invalid_data!(
+                "Invalid manifest content type. Expected 0 or 1, got {value}"
             )),
         }
     }
@@ -290,12 +286,15 @@ mod test {
         let key_metadata = StandardKeyMetadata::try_new(b"0123456789abcdef")
             .unwrap()
             .with_aad_prefix(b"test-aad-prefix!");
-        let encoded_key_metadata = key_metadata.encode().unwrap().to_vec();
-
         let io = FileIO::new_with_memory();
         let path = "memory:///test/encrypted_manifest.avro";
-        let manifest_file = write_encrypted_manifest(&io, path, key_metadata).await;
-        assert_eq!(manifest_file.key_metadata, Some(encoded_key_metadata));
+        let manifest_file = write_encrypted_manifest(&io, path, key_metadata.clone()).await;
+        let size = io.new_input(path).unwrap().metadata().await.unwrap().size;
+        assert_eq!(manifest_file.manifest_length, size as i64);
+        assert_eq!(
+            StandardKeyMetadata::decode(manifest_file.key_metadata.as_ref().unwrap()).unwrap(),
+            key_metadata.with_file_length(size)
+        );
 
         let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
         assert_eq!(manifest.entries().len(), 1);
@@ -322,7 +321,8 @@ mod test {
         // returning garbage.
         let wrong_key_metadata = StandardKeyMetadata::try_new(b"fedcba9876543210")
             .unwrap()
-            .with_aad_prefix(b"test-aad-prefix!");
+            .with_aad_prefix(b"test-aad-prefix!")
+            .with_file_length(manifest_file.manifest_length as u64);
         manifest_file.key_metadata = Some(wrong_key_metadata.encode().unwrap().to_vec());
 
         let err = ManifestReader::new(io)
@@ -347,7 +347,8 @@ mod test {
         // so GCM authentication must fail even though the key is right.
         let wrong_aad_metadata = StandardKeyMetadata::try_new(b"0123456789abcdef")
             .unwrap()
-            .with_aad_prefix(b"wrong-aad-prefix");
+            .with_aad_prefix(b"wrong-aad-prefix")
+            .with_file_length(manifest_file.manifest_length as u64);
         manifest_file.key_metadata = Some(wrong_aad_metadata.encode().unwrap().to_vec());
 
         let err = ManifestReader::new(io)
