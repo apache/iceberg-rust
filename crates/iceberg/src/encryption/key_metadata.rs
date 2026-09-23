@@ -74,7 +74,7 @@ impl StandardKeyMetadata {
         self
     }
 
-    /// Adds a file length.
+    /// Sets the encrypted file length in bytes, required for AGS1 truncation protection.
     pub fn with_file_length(mut self, length: u64) -> Self {
         self.file_length = Some(length);
         self
@@ -90,7 +90,7 @@ impl StandardKeyMetadata {
         self.aad_prefix.as_deref()
     }
 
-    /// Returns the optional file length.
+    /// Returns the optional encrypted file length in bytes; AGS1 readers require it to be set.
     pub fn file_length(&self) -> Option<u64> {
         self.file_length
     }
