@@ -35,8 +35,7 @@ use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType, Schema, Struct, Type,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
-use crate::error::Result;
-use crate::{Error, ErrorKind};
+use crate::error::{Result, invalid_data};
 
 /// A manifest contains metadata and a list of entries.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -135,13 +134,8 @@ pub fn serialize_data_file_to_json(
 ) -> Result<String> {
     let partition_struct_type = Type::Struct(partition_type.clone());
     let serde = _serde::DataFileSerde::try_from(data_file, &partition_struct_type, format_version)?;
-    serde_json::to_string(&serde).map_err(|e| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            "Failed to serialize DataFile to JSON!".to_string(),
-        )
-        .with_source(e)
-    })
+    serde_json::to_string(&serde)
+        .map_err(|e| invalid_data!("Failed to serialize DataFile to JSON!").with_source(e))
 }
 
 /// Deserialize a DataFile from a JSON string.
@@ -151,13 +145,8 @@ pub fn deserialize_data_file_from_json(
     partition_type: &super::StructType,
     schema: &Schema,
 ) -> Result<DataFile> {
-    let serde = serde_json::from_str::<_serde::DataFileSerde>(json).map_err(|e| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            "Failed to deserialize JSON to DataFile!".to_string(),
-        )
-        .with_source(e)
-    })?;
+    let serde = serde_json::from_str::<_serde::DataFileSerde>(json)
+        .map_err(|e| invalid_data!("Failed to deserialize JSON to DataFile!").with_source(e))?;
 
     let partition_struct_type = Type::Struct(partition_type.clone());
     serde.try_into(partition_spec_id, &partition_struct_type, schema)

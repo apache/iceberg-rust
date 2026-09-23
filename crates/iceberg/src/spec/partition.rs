@@ -26,8 +26,9 @@ use typed_builder::TypedBuilder;
 
 use super::transform::Transform;
 use super::{NestedField, PrimitiveType, Schema, SchemaRef, StructType};
+use crate::Result;
+use crate::error::invalid_data;
 use crate::spec::Struct;
-use crate::{Error, ErrorKind, Result};
 
 pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
 pub(crate) const DEFAULT_PARTITION_SPEC_ID: i32 = 0;
@@ -487,12 +488,9 @@ impl PartitionSpecBuilder {
             .schema
             .field_by_name(source_name.as_ref())
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot find source column with name: {} in schema",
-                        source_name.as_ref()
-                    ),
+                invalid_data!(
+                    "Cannot find source column with name: {} in schema",
+                    source_name.as_ref()
                 )
             })?
             .id;
@@ -558,12 +556,8 @@ impl PartitionSpecBuilder {
             .collect::<std::collections::HashSet<_>>();
 
         fn _check_add_1(prev: i32) -> Result<i32> {
-            prev.checked_add(1).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot assign more partition ids. Overflow.",
-                )
-            })
+            prev.checked_add(1)
+                .ok_or_else(|| invalid_data!("Cannot assign more partition ids. Overflow."))
         }
 
         let mut bound_fields = Vec::with_capacity(fields.len());
@@ -604,21 +598,17 @@ impl PartitionSpecBuilder {
                     if schema_collision.id == field.source_id {
                         Ok(())
                     } else {
-                        Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Cannot create identity partition sourced from different field in schema. Field name '{}' has id `{}` in schema but partition source id is `{}`",
-                                field.name, schema_collision.id, field.source_id
-                            ),
+                        Err(invalid_data!(
+                            "Cannot create identity partition sourced from different field in schema. Field name '{}' has id `{}` in schema but partition source id is `{}`",
+                            field.name,
+                            schema_collision.id,
+                            field.source_id
                         ))
                     }
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Cannot create partition with name: '{}' that conflicts with schema field and is not an identity transform.",
-                            field.name
-                        ),
+                    Err(invalid_data!(
+                        "Cannot create partition with name: '{}' that conflicts with schema field and is not an identity transform.",
+                        field.name
                     ))
                 }
             }
@@ -630,23 +620,17 @@ impl PartitionSpecBuilder {
     /// in the schema. Implicitly also checks if the source field exists in the schema.
     fn check_transform_compatibility(field: &UnboundPartitionField, schema: &Schema) -> Result<()> {
         let schema_field = schema.field_by_id(field.source_id).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot find partition source field with id `{}` in schema",
-                    field.source_id
-                ),
+            invalid_data!(
+                "Cannot find partition source field with id `{}` in schema",
+                field.source_id
             )
         })?;
 
         if field.transform != Transform::Void {
             if !schema_field.field_type.is_primitive() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot partition by non-primitive source field: '{}'.",
-                        schema_field.field_type
-                    ),
+                return Err(invalid_data!(
+                    "Cannot partition by non-primitive source field: '{}'.",
+                    schema_field.field_type
                 ));
             }
 
@@ -655,13 +639,10 @@ impl PartitionSpecBuilder {
                 .result_type(&schema_field.field_type)
                 .is_err()
             {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Invalid source type: '{}' for transform: '{}'.",
-                        schema_field.field_type,
-                        field.transform.dedup_name()
-                    ),
+                return Err(invalid_data!(
+                    "Invalid source type: '{}' for transform: '{}'.",
+                    schema_field.field_type,
+                    field.transform.dedup_name()
                 ));
             }
         }
@@ -675,16 +656,12 @@ trait CorePartitionSpecValidator {
     /// Ensure that the partition name is unique among the partition fields and is not empty.
     fn check_name_set_and_unique(&self, name: &str) -> Result<()> {
         if name.is_empty() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot use empty partition name",
-            ));
+            return Err(invalid_data!("Cannot use empty partition name"));
         }
 
         if self.fields().iter().any(|f| f.name == name) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot use partition name more than once: {name}"),
+            return Err(invalid_data!(
+                "Cannot use partition name more than once: {name}"
             ));
         }
         Ok(())
@@ -697,14 +674,11 @@ trait CorePartitionSpecValidator {
         });
 
         if let Some(collision) = collision {
-            Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot add redundant partition with source id `{}` and transform `{}`. A partition with the same source id and transform already exists with name `{}`",
-                    source_id,
-                    transform.dedup_name(),
-                    collision.name
-                ),
+            Err(invalid_data!(
+                "Cannot add redundant partition with source id `{}` and transform `{}`. A partition with the same source id and transform already exists with name `{}`",
+                source_id,
+                transform.dedup_name(),
+                collision.name
             ))
         } else {
             Ok(())
@@ -714,9 +688,8 @@ trait CorePartitionSpecValidator {
     /// Check field / partition_id unique within the partition spec if set
     fn check_partition_id_unique(&self, field_id: i32) -> Result<()> {
         if self.fields().iter().any(|f| f.field_id == Some(field_id)) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot use field id more than once in one PartitionSpec: {field_id}"),
+            return Err(invalid_data!(
+                "Cannot use field id more than once in one PartitionSpec: {field_id}"
             ));
         }
 
@@ -741,6 +714,7 @@ impl CorePartitionSpecValidator for UnboundPartitionSpecBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ErrorKind;
     use crate::spec::{Literal, PrimitiveType, Type};
 
     #[test]

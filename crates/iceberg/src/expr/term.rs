@@ -22,12 +22,12 @@ use std::fmt::{Display, Formatter};
 use fnv::FnvHashSet;
 use serde::{Deserialize, Serialize};
 
+use crate::error::invalid_data;
 use crate::expr::accessor::{StructAccessor, StructAccessorRef};
 use crate::expr::{
     BinaryExpression, Bind, Predicate, PredicateOperator, SetExpression, UnaryExpression,
 };
 use crate::spec::{Datum, NestedField, NestedFieldRef, SchemaRef};
-use crate::{Error, ErrorKind};
 
 /// Unbound term before binding to a schema.
 pub type Term = Reference;
@@ -316,19 +316,12 @@ impl Bind for Reference {
             schema.field_by_name_case_insensitive(&self.name)
         };
 
-        let field = field.ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Field {} not found in schema", self.name),
-            )
-        })?;
+        let field =
+            field.ok_or_else(|| invalid_data!("Field {} not found in schema", self.name))?;
 
-        let accessor = schema.accessor_by_field_id(field.id).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Accessor for Field {} not found", self.name),
-            )
-        })?;
+        let accessor = schema
+            .accessor_by_field_id(field.id)
+            .ok_or_else(|| invalid_data!("Accessor for Field {} not found", self.name))?;
 
         Ok(BoundReference::new(
             self.name.clone(),
