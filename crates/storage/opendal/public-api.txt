@@ -12,7 +12,7 @@ pub iceberg_storage_opendal::OpenDalStorage::LocalFs
 pub iceberg_storage_opendal::OpenDalStorage::Memory(opendal_core::types::operator::operator::Operator)
 pub iceberg_storage_opendal::OpenDalStorage::Oss
 pub iceberg_storage_opendal::OpenDalStorage::Oss::config: alloc::sync::Arc<opendal_service_oss::config::OssConfig>
-pub iceberg_storage_opendal::OpenDalStorage::S3
+#[non_exhaustive] pub iceberg_storage_opendal::OpenDalStorage::S3
 pub iceberg_storage_opendal::OpenDalStorage::S3::config: alloc::sync::Arc<opendal_service_s3::config::S3Config>
 pub iceberg_storage_opendal::OpenDalStorage::S3::customized_credential_load: core::option::Option<iceberg_storage_opendal::CustomAwsCredentialLoader>
 pub iceberg_storage_opendal::OpenDalStorage::S3::multipart_part_size: u64
