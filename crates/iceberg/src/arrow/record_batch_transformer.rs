@@ -255,7 +255,11 @@ impl PromotePlan {
                     fields: target_fields.clone(),
                 })
             }
-            (DataType::List(source_field), DataType::List(target_field)) => Ok(PromotePlan::List {
+            // A file's Arrow schema hint can give either offset width; `apply` converts it.
+            (
+                DataType::List(source_field) | DataType::LargeList(source_field),
+                DataType::List(target_field),
+            ) => Ok(PromotePlan::List {
                 element: Box::new(Self::build(
                     source_field.data_type(),
                     target_field.data_type(),
@@ -263,16 +267,17 @@ impl PromotePlan {
                 )?),
                 field: target_field.clone(),
             }),
-            (DataType::LargeList(source_field), DataType::LargeList(target_field)) => {
-                Ok(PromotePlan::LargeList {
-                    element: Box::new(Self::build(
-                        source_field.data_type(),
-                        target_field.data_type(),
-                        snapshot_schema,
-                    )?),
-                    field: target_field.clone(),
-                })
-            }
+            (
+                DataType::List(source_field) | DataType::LargeList(source_field),
+                DataType::LargeList(target_field),
+            ) => Ok(PromotePlan::LargeList {
+                element: Box::new(Self::build(
+                    source_field.data_type(),
+                    target_field.data_type(),
+                    snapshot_schema,
+                )?),
+                field: target_field.clone(),
+            }),
             (DataType::Map(source_entries, _), DataType::Map(target_entries, sorted)) => {
                 match (source_entries.data_type(), target_entries.data_type()) {
                     (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
@@ -394,15 +399,23 @@ impl PromotePlan {
                 Ok(Arc::new(Self::apply_struct(source, fields, children)?))
             }
             PromotePlan::List { field, element } => {
+                let array = match array.data_type() {
+                    DataType::LargeList(f) => cast(array.as_ref(), &DataType::List(Arc::clone(f)))?,
+                    _ => Arc::clone(array),
+                };
                 let source = array
                     .as_list_opt::<i32>()
-                    .ok_or_else(|| promote_err(array, "list"))?;
+                    .ok_or_else(|| promote_err(&array, "list"))?;
                 Self::apply_list(source, field, element)
             }
             PromotePlan::LargeList { field, element } => {
+                let array = match array.data_type() {
+                    DataType::List(f) => cast(array.as_ref(), &DataType::LargeList(Arc::clone(f)))?,
+                    _ => Arc::clone(array),
+                };
                 let source = array
                     .as_list_opt::<i64>()
-                    .ok_or_else(|| promote_err(array, "large list"))?;
+                    .ok_or_else(|| promote_err(&array, "large list"))?;
                 Self::apply_list(source, field, element)
             }
             PromotePlan::Map {
@@ -1425,7 +1438,7 @@ mod test {
     };
     use crate::arrow::{DEFAULT_MAP_FIELD_NAME, build_partition_constant};
     use crate::spec::{
-        Literal, MapType, NestedField, PrimitiveType, Schema, Struct, StructType, Type,
+        ListType, Literal, MapType, NestedField, PrimitiveType, Schema, Struct, StructType, Type,
     };
 
     fn promote(source: &ArrayRef, target: &DataType, schema: &Schema) -> crate::Result<ArrayRef> {
@@ -2003,6 +2016,35 @@ mod test {
             false,
         );
         assert_eq!(out.as_map(), &expected);
+    }
+
+    #[test]
+    fn promote_large_list_file_column_to_list() {
+        let element = Arc::new(field_with_id("element", DataType::Int32, true, 3));
+        let file = LargeListArray::new(
+            element.clone(),
+            OffsetBuffer::new(vec![0i64, 2, 3].into()),
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+            None,
+        );
+        let out = transform_top_level(
+            NestedField::optional(
+                2,
+                "l",
+                Type::List(ListType::new(
+                    NestedField::list_element(3, Type::Primitive(PrimitiveType::Int), false).into(),
+                )),
+            ),
+            Arc::new(file),
+        )
+        .unwrap();
+        let expected = ListArray::new(
+            element,
+            OffsetBuffer::new(vec![0, 2, 3].into()),
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+            None,
+        );
+        assert_eq!(out.as_list::<i32>(), &expected);
     }
 
     #[test]
