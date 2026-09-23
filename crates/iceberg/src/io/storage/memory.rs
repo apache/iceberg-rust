@@ -32,6 +32,7 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
+use crate::error::invalid_data;
 use crate::io::{
     FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
     StorageFactory,
@@ -119,10 +120,7 @@ impl Storage for MemoryStorage {
             Some(bytes) => Ok(FileMetadata {
                 size: bytes.len() as u64,
             }),
-            None => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("File not found: {path}"),
-            )),
+            None => Err(invalid_data!("File not found: {path}")),
         }
     }
 
@@ -136,10 +134,7 @@ impl Storage for MemoryStorage {
         })?;
         match data.get(&normalized) {
             Some(bytes) => Ok(bytes.clone()),
-            None => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("File not found: {path}"),
-            )),
+            None => Err(invalid_data!("File not found: {path}")),
         }
     }
 
@@ -153,10 +148,7 @@ impl Storage for MemoryStorage {
         })?;
         match data.get(&normalized) {
             Some(bytes) => Ok(Box::new(MemoryFileRead::new(bytes.clone()))),
-            None => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("File not found: {path}"),
-            )),
+            None => Err(invalid_data!("File not found: {path}")),
         }
     }
 
@@ -272,14 +264,11 @@ impl FileRead for MemoryFileRead {
         let end = range.end as usize;
 
         if start > self.data.len() || end > self.data.len() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Range {}..{} is out of bounds for data of length {}",
-                    start,
-                    end,
-                    self.data.len()
-                ),
+            return Err(invalid_data!(
+                "Range {}..{} is out of bounds for data of length {}",
+                start,
+                end,
+                self.data.len()
             ));
         }
 
@@ -316,10 +305,7 @@ impl MemoryFileWrite {
 impl FileWrite for MemoryFileWrite {
     async fn write(&mut self, bs: Bytes) -> Result<()> {
         if self.closed {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot write to closed file",
-            ));
+            return Err(invalid_data!("Cannot write to closed file"));
         }
         self.buffer.extend_from_slice(&bs);
         Ok(())
@@ -327,7 +313,7 @@ impl FileWrite for MemoryFileWrite {
 
     async fn close(&mut self) -> Result<()> {
         if self.closed {
-            return Err(Error::new(ErrorKind::DataInvalid, "File already closed"));
+            return Err(invalid_data!("File already closed"));
         }
 
         let mut data = self.data.write().map_err(|e| {

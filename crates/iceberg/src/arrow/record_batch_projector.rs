@@ -22,7 +22,7 @@ use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 
 use crate::arrow::schema::{schema_to_arrow_schema, try_get_field_id_from_metadata};
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::spec::Schema as IcebergSchema;
 use crate::{Error, ErrorKind};
 
@@ -154,7 +154,7 @@ impl RecordBatchProjector {
             self.projected_schema.clone(),
             self.project_column(batch.columns())?,
         )
-        .map_err(|err| Error::new(ErrorKind::DataInvalid, format!("{err}")))
+        .map_err(|err| invalid_data!("{err}"))
     }
 
     /// Do projection with columns
