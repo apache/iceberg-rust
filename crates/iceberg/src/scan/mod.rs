@@ -309,9 +309,10 @@ impl<'a> TableScanBuilder<'a> {
                 ));
             }
             (Some(id), None) => Some(id),
-            (None, Some(timestamp_ms)) => {
-                Some(snapshot_id_as_of_time(self.table.metadata(), timestamp_ms)?)
-            }
+            (None, Some(timestamp_ms)) => Some(snapshot_id_as_of_time(
+                &self.table.metadata_ref(),
+                timestamp_ms,
+            )?),
             (None, None) => None,
         };
         let snapshot = match snapshot_id {
@@ -741,6 +742,7 @@ mod tests {
     use crate::table::Table;
     use crate::test_utils::scan::{TableTestFixture, assert_last_updated_seq_all};
     use crate::test_utils::test_runtime;
+    use crate::util::snapshot::snapshot_id_as_of_time;
     use crate::{ErrorKind, TableIdent};
 
     #[tokio::test]
@@ -938,19 +940,28 @@ mod tests {
 
     #[test]
     fn test_table_scan_as_of_time_after_rollback() {
-        let table = TableTestFixture::new().table;
-        let mut metadata = table.metadata().clone();
-        let original = metadata.history()[0].snapshot_id;
-        let rollback_time = metadata.history()[1].timestamp_ms + 1000;
-        metadata.snapshot_log.push(crate::spec::SnapshotLog {
-            timestamp_ms: rollback_time,
-            snapshot_id: original,
-        });
-        metadata.current_snapshot_id = Some(original);
-        metadata.refs.get_mut(MAIN_BRANCH).unwrap().snapshot_id = original;
-        let table = table.with_metadata(Arc::new(metadata));
-        let scan = table.scan().as_of_time(rollback_time).build().unwrap();
-        assert_eq!(scan.snapshot().unwrap().snapshot_id(), original);
+        for elapsed_ms in [0, 1000] {
+            let table = TableTestFixture::new().table;
+            let mut metadata = table.metadata().clone();
+            let original = metadata.history()[0].snapshot_id;
+            let previous = metadata.history()[1].clone();
+            let rollback_time = previous.timestamp_ms + elapsed_ms;
+            metadata.snapshot_log.push(crate::spec::SnapshotLog {
+                timestamp_ms: rollback_time,
+                snapshot_id: original,
+            });
+            metadata.current_snapshot_id = Some(original);
+            metadata.refs.get_mut(MAIN_BRANCH).unwrap().snapshot_id = original;
+            let table = table.with_metadata(Arc::new(metadata));
+            let scan = table.scan().as_of_time(rollback_time).build().unwrap();
+            // A rollback at the same timestamp keeps the earlier history entry.
+            let expected = if elapsed_ms == 0 {
+                previous.snapshot_id
+            } else {
+                original
+            };
+            assert_eq!(scan.snapshot().unwrap().snapshot_id(), expected);
+        }
     }
 
     #[test]
@@ -978,6 +989,40 @@ mod tests {
         let entry = metadata.history()[0].clone();
         metadata.snapshots.remove(&entry.snapshot_id);
         let table = table.with_metadata(Arc::new(metadata));
+        let err = table
+            .scan()
+            .as_of_time(entry.timestamp_ms)
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.message(),
+            format!("Snapshot with id {} not found", entry.snapshot_id)
+        );
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_rejects_all_qualifying_snapshots_expired() {
+        let table = TableTestFixture::new_with_deep_history().table;
+        let mut metadata = table.metadata().clone();
+        let entry = metadata.history()[3].clone();
+        let expired_ids: Vec<_> = metadata
+            .history()
+            .iter()
+            .filter(|log| log.timestamp_ms <= entry.timestamp_ms)
+            .map(|log| log.snapshot_id)
+            .collect();
+        assert_eq!(expired_ids.len(), 4);
+        for snapshot_id in expired_ids {
+            metadata.snapshots.remove(&snapshot_id);
+        }
+        let table = table.with_metadata(Arc::new(metadata));
+        // History resolution succeeds even though every qualifying snapshot expired.
+        assert_eq!(
+            snapshot_id_as_of_time(&table.metadata_ref(), entry.timestamp_ms).unwrap(),
+            entry.snapshot_id
+        );
+        assert!(table.scan().build().unwrap().snapshot().is_some());
         let err = table
             .scan()
             .as_of_time(entry.timestamp_ms)
@@ -1271,6 +1316,7 @@ mod tests {
         }
         assert_eq!(rows[0], vec![100]);
         assert_eq!(rows[0], rows[1]);
+        // Two live fixture files contain 1,024 rows each.
         assert_eq!(rows[2], vec![1; 2048]);
         assert_ne!(rows[0], rows[2]);
         assert_eq!(schemas[0], schemas[1]);
