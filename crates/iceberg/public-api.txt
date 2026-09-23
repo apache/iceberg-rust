@@ -3304,7 +3304,7 @@ pub mod iceberg::util::location
 pub mod iceberg::util::snapshot
 pub fn iceberg::util::snapshot::ancestors_between(table_metadata: &iceberg::spec::TableMetadataRef, latest_snapshot_id: i64, oldest_snapshot_id: core::option::Option<i64>) -> impl core::iter::traits::iterator::Iterator<Item = iceberg::spec::SnapshotRef> + core::marker::Send
 pub fn iceberg::util::snapshot::ancestors_of(table_metadata: &iceberg::spec::TableMetadataRef, snapshot_id: i64) -> impl core::iter::traits::iterator::Iterator<Item = iceberg::spec::SnapshotRef> + core::marker::Send
-pub fn iceberg::util::snapshot::snapshot_id_as_of_time(metadata: &iceberg::spec::TableMetadata, timestamp_ms: i64) -> iceberg::Result<i64>
+pub fn iceberg::util::snapshot::snapshot_id_as_of_time(table_metadata: &iceberg::spec::TableMetadataRef, timestamp_ms: i64) -> iceberg::Result<i64>
 pub mod iceberg::writer
 pub mod iceberg::writer::base_writer
 pub mod iceberg::writer::base_writer::data_file_writer

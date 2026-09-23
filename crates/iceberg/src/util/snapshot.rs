@@ -17,7 +17,7 @@
 
 use std::collections::HashSet;
 
-use crate::spec::{SnapshotLog, SnapshotRef, TableMetadata, TableMetadataRef};
+use crate::spec::{SnapshotRef, TableMetadataRef};
 use crate::{Error, ErrorKind, Result};
 
 struct Ancestors {
@@ -81,16 +81,21 @@ pub fn ancestors_between(
 /// `timestamp_ms` (milliseconds since the Unix epoch).
 ///
 /// Equal timestamps select the first entry. Returns [`ErrorKind::DataInvalid`]
-/// if no matching history exists; does not check whether the snapshot is retained.
-pub fn snapshot_id_as_of_time(metadata: &TableMetadata, timestamp_ms: i64) -> Result<i64> {
-    let mut best: Option<&SnapshotLog> = None;
-    for entry in metadata.history() {
-        if entry.timestamp_ms() <= timestamp_ms
-            && best.is_none_or(|previous| entry.timestamp_ms() > previous.timestamp_ms())
-        {
-            best = Some(entry);
-        }
-    }
+/// if no matching history exists. The returned snapshot may have expired, so
+/// [`snapshot_by_id`](crate::spec::TableMetadata::snapshot_by_id) can still return `None`.
+pub fn snapshot_id_as_of_time(table_metadata: &TableMetadataRef, timestamp_ms: i64) -> Result<i64> {
+    let best = table_metadata
+        .history()
+        .iter()
+        .filter(|entry| entry.timestamp_ms() <= timestamp_ms)
+        .reduce(|best, entry| {
+            // Keep the first entry on ties, matching Java's timestamp selection.
+            if entry.timestamp_ms() > best.timestamp_ms() {
+                entry
+            } else {
+                best
+            }
+        });
     best.map(|entry| entry.snapshot_id).ok_or_else(|| {
         Error::new(
             ErrorKind::DataInvalid,
@@ -103,6 +108,7 @@ pub fn snapshot_id_as_of_time(metadata: &TableMetadata, timestamp_ms: i64) -> Re
 mod tests {
     use super::*;
     use crate::scan::tests::TableTestFixture;
+    use crate::spec::SnapshotLog;
 
     // Five snapshots chained as: S1 (root) -> S2 -> S3 -> S4 -> S5 (current)
     const S1: i64 = 3051729675574597004;
@@ -118,7 +124,7 @@ mod tests {
 
     type History = [(i64, i64)];
 
-    fn metadata_with_history(history: &History) -> TableMetadata {
+    fn metadata_with_history(history: &History) -> TableMetadataRef {
         let mut metadata = metadata().as_ref().clone();
         metadata.snapshot_log = history
             .iter()
@@ -127,7 +133,7 @@ mod tests {
                 snapshot_id,
             })
             .collect();
-        metadata
+        metadata.into()
     }
 
     #[test]
@@ -180,7 +186,10 @@ mod tests {
         metadata.snapshot_log.truncate(2);
         // Newer retained snapshots may be staged or belong only to another branch.
         assert!(metadata.snapshot_by_id(S5).is_some());
-        assert_eq!(snapshot_id_as_of_time(&metadata, i64::MAX).unwrap(), S2);
+        assert_eq!(
+            snapshot_id_as_of_time(&metadata.into(), i64::MAX).unwrap(),
+            S2
+        );
     }
 
     // --- ancestors_of ---
