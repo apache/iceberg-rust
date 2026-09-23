@@ -40,6 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   * feat(parquet): wire in additional parquet writer settings by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2887
   * fix(gcs): Fix GCS host property by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2965
   * refactor(scan): extract reusable scan functions by @xanderbailey in https://github.com/apache/iceberg-rust/pull/3093
+  * fix(encryption) [18/N] wire in ags1 file length for tamper proofing by @xanderbailey in https://github.com/apache/iceberg-rust/pull/3236
+    * `FileWrite::close`, `EncryptedOutputFile::write`, `ManifestListWriter::close`, and `PuffinWriter::close` now return `Result<io::FileMetadata>` instead of `Result<()>`. The returned size is the on-disk size, including encryption overhead. Custom `FileWrite` implementations must return the number of bytes stored.
+    * `EncryptedOutputFile::key_metadata()` is replaced by `key_metadata_with_saved_file_metadata(&FileMetadata)`. Pass the metadata returned by `write()` or the writer's `close()` to include the stored length before encoding key metadata.
+    * `EncryptedInputFile::metadata()` is now synchronous and derives the plaintext size from key metadata without a storage stat. Remove `.await` from calls to this method.
+    * AGS1 readers now require `StandardKeyMetadata::file_length` and reject missing or invalid lengths without falling back to a storage stat. AGS1-encrypted manifests, manifest lists, and Puffin files written by earlier development builds without this field must be rewritten using a build that can still read them before upgrading. This matches the Java client's read contract.
 
 * **Compatibility:**
   * chore: Update MSRV to Rust 1.95 by @dannycjones in https://github.com/apache/iceberg-rust/pull/3083
@@ -230,6 +235,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * fix: break dev-dependency cycle that blocks publishing iceberg-property-macro by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/3184
 * ci: check new crates are reserved on crates.io before merge by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/3185
 * ci: pull MinIO images from Quay by @smaheshwar-pltr in https://github.com/apache/iceberg-rust/pull/3202
+* fix(encryption) [18/N] wire in ags1 file length for tamper proofing by @xanderbailey in https://github.com/apache/iceberg-rust/pull/3236
 
 ## [v0.10.1] - 2026-07-28
 

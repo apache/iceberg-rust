@@ -290,12 +290,15 @@ mod test {
         let key_metadata = StandardKeyMetadata::try_new(b"0123456789abcdef")
             .unwrap()
             .with_aad_prefix(b"test-aad-prefix!");
-        let encoded_key_metadata = key_metadata.encode().unwrap().to_vec();
-
         let io = FileIO::new_with_memory();
         let path = "memory:///test/encrypted_manifest.avro";
-        let manifest_file = write_encrypted_manifest(&io, path, key_metadata).await;
-        assert_eq!(manifest_file.key_metadata, Some(encoded_key_metadata));
+        let manifest_file = write_encrypted_manifest(&io, path, key_metadata.clone()).await;
+        let size = io.new_input(path).unwrap().metadata().await.unwrap().size;
+        assert_eq!(manifest_file.manifest_length, size as i64);
+        assert_eq!(
+            StandardKeyMetadata::decode(manifest_file.key_metadata.as_ref().unwrap()).unwrap(),
+            key_metadata.with_file_length(size)
+        );
 
         let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
         assert_eq!(manifest.entries().len(), 1);
@@ -322,7 +325,8 @@ mod test {
         // returning garbage.
         let wrong_key_metadata = StandardKeyMetadata::try_new(b"fedcba9876543210")
             .unwrap()
-            .with_aad_prefix(b"test-aad-prefix!");
+            .with_aad_prefix(b"test-aad-prefix!")
+            .with_file_length(manifest_file.manifest_length as u64);
         manifest_file.key_metadata = Some(wrong_key_metadata.encode().unwrap().to_vec());
 
         let err = ManifestReader::new(io)
@@ -347,7 +351,8 @@ mod test {
         // so GCM authentication must fail even though the key is right.
         let wrong_aad_metadata = StandardKeyMetadata::try_new(b"0123456789abcdef")
             .unwrap()
-            .with_aad_prefix(b"wrong-aad-prefix");
+            .with_aad_prefix(b"wrong-aad-prefix")
+            .with_file_length(manifest_file.manifest_length as u64);
         manifest_file.key_metadata = Some(wrong_aad_metadata.encode().unwrap().to_vec());
 
         let err = ManifestReader::new(io)

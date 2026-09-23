@@ -26,7 +26,7 @@ use super::_const_schema::{
 use super::_serde::{ManifestFileV1, ManifestFileV2, ManifestFileV3};
 use super::{FormatVersion, ManifestContentType, ManifestFile, UNASSIGNED_SEQUENCE_NUMBER};
 use crate::error::Result;
-use crate::io::FileWrite;
+use crate::io::{FileMetadata, FileWrite};
 use crate::{Error, ErrorKind};
 
 /// A manifest list writer.
@@ -196,12 +196,11 @@ impl ManifestListWriter {
         Ok(())
     }
 
-    /// Write the manifest list to the output file.
-    pub async fn close(mut self) -> Result<()> {
+    /// Write the manifest list and return its stored size.
+    pub async fn close(mut self) -> Result<FileMetadata> {
         let data = self.avro_writer.into_inner()?;
         self.writer.write(Bytes::from(data)).await?;
-        self.writer.close().await?;
-        Ok(())
+        self.writer.close().await
     }
 
     /// Assign sequence numbers to manifest if they are unassigned
@@ -616,7 +615,6 @@ mod test {
         let path = "memory:///manifest_list_v3_encrypted.avro";
 
         let encrypted_output = mgr.encrypt(file_io.new_output(path).unwrap());
-        let key_metadata = encrypted_output.key_metadata().clone();
 
         let snapshot_id = 9_000_000_000_000_001i64;
         let seq_num = 7i64;
@@ -651,7 +649,7 @@ mod test {
         writer
             .add_manifests(expected.entries.clone().into_iter())
             .unwrap();
-        writer.close().await.unwrap();
+        let file_metadata = writer.close().await.unwrap();
 
         let raw_bytes = file_io.new_input(path).unwrap().read().await.unwrap();
         assert!(
@@ -659,6 +657,8 @@ mod test {
             "raw bytes should be ciphertext, not parseable as Avro"
         );
 
+        let key_metadata = encrypted_output.key_metadata_with_saved_file_metadata(&file_metadata);
+        assert_eq!(key_metadata.file_length(), Some(raw_bytes.len() as u64));
         let plaintext = EncryptedInputFile::new(file_io.new_input(path).unwrap(), key_metadata)
             .read()
             .await
