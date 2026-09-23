@@ -314,17 +314,12 @@ impl PromotePlan {
                 source_by_id.insert(id, idx);
             }
         }
-        // Name mapping only assigns top-level ids. Fully id-less children match by
-        // position when types line up. A same-type reorder cannot be detected without
-        // ids and stays positional. Any missing id errors instead of nulling that child.
+        // Name mapping only assigns top-level ids (#1845). Fully id-less children
+        // match by position when the counts line up, and `build` checks each pair.
+        // A same-type reorder cannot be detected without ids. Any missing id
+        // errors instead of nulling that child.
         if !source_fields.is_empty() && source_by_id.len() != source_fields.len() {
-            if source_by_id.is_empty()
-                && source_fields.len() == target_fields.len()
-                && source_fields
-                    .iter()
-                    .zip(target_fields.iter())
-                    .all(|(s, t)| s.data_type().equals_datatype(t.data_type()))
-            {
+            if source_by_id.is_empty() && source_fields.len() == target_fields.len() {
                 return source_fields
                     .iter()
                     .zip(target_fields.iter())
@@ -1710,9 +1705,12 @@ mod test {
         )]));
 
         let out = promote(&source, &target, &empty_schema()).unwrap();
-        let s = out.as_struct();
-        assert_eq!(s.fields()[0].name(), "x");
-        assert_eq!(s.column(0).as_primitive::<Int32Type>().values(), &[1, 2]);
+        let expected = StructArray::new(
+            Fields::from(vec![field_with_id("x", DataType::Int32, true, 5)]),
+            vec![Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef],
+            None,
+        );
+        assert_eq!(out.as_struct(), &expected);
     }
 
     #[test]
@@ -1838,13 +1836,18 @@ mod test {
             Arc::new(file),
         )
         .unwrap();
-        let s = out.as_struct();
-        assert_eq!(s.fields()[0].name(), "b");
-        assert_eq!(s.fields()[1].name(), "a");
-        assert_eq!(s.column(0).as_primitive::<Int32Type>().values(), &[
-            100, 200
-        ]);
-        assert_eq!(s.column(1).as_primitive::<Int32Type>().values(), &[1, 2]);
+        let expected = StructArray::new(
+            Fields::from(vec![
+                field_with_id("b", DataType::Int32, true, 6),
+                field_with_id("a", DataType::Int32, true, 5),
+            ]),
+            vec![
+                Arc::new(Int32Array::from(vec![100, 200])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+            ],
+            None,
+        );
+        assert_eq!(out.as_struct(), &expected);
     }
 
     #[test]
@@ -1865,11 +1868,12 @@ mod test {
             Arc::new(file),
         )
         .unwrap();
-        let s = out.as_struct();
-        assert_eq!(s.fields()[0].name(), "x");
-        assert_eq!(s.column(0).as_primitive::<Int32Type>().values(), &[
-            10, 20, 30
-        ]);
+        let expected = StructArray::new(
+            Fields::from(vec![field_with_id("x", DataType::Int32, true, 5)]),
+            vec![Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef],
+            None,
+        );
+        assert_eq!(out.as_struct(), &expected);
     }
 
     #[test]
@@ -1903,11 +1907,48 @@ mod test {
             Arc::new(file),
         )
         .unwrap();
-        let inner = out.as_struct().column(0).as_struct();
-        assert_eq!(inner.fields()[0].name(), "x");
-        assert_eq!(inner.column(0).as_primitive::<Int32Type>().values(), &[
-            10, 20, 30
-        ]);
+        let inner_fields = Fields::from(vec![field_with_id("x", DataType::Int32, true, 4)]);
+        let expected = StructArray::new(
+            Fields::from(vec![field_with_id(
+                "inner",
+                DataType::Struct(inner_fields.clone()),
+                true,
+                3,
+            )]),
+            vec![Arc::new(StructArray::new(
+                inner_fields,
+                vec![Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef],
+                None,
+            )) as ArrayRef],
+            None,
+        );
+        assert_eq!(out.as_struct(), &expected);
+    }
+
+    #[test]
+    fn promote_idless_struct_promotes_child_int_to_long() {
+        let file = StructArray::new(
+            Fields::from(vec![Field::new("x", DataType::Int32, true)]),
+            vec![Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef],
+            None,
+        );
+        let out = transform_top_level(
+            NestedField::optional(
+                2,
+                "s",
+                Type::Struct(StructType::new(vec![
+                    NestedField::optional(3, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                ])),
+            ),
+            Arc::new(file),
+        )
+        .unwrap();
+        let expected = StructArray::new(
+            Fields::from(vec![field_with_id("x", DataType::Int64, true, 3)]),
+            vec![Arc::new(Int64Array::from(vec![1i64, 2])) as ArrayRef],
+            None,
+        );
+        assert_eq!(out.as_struct(), &expected);
     }
 
     #[test]
@@ -1999,15 +2040,18 @@ mod test {
 
         let result = transformer.process_record_batch(file_batch).unwrap();
 
-        assert_eq!(result.num_columns(), 2);
-        assert_eq!(result.num_rows(), 3);
-        let s = result.column(1).as_struct();
-        assert_eq!(s.fields()[0].name(), "x");
-        assert_eq!(s.column(0).as_primitive::<Int64Type>().values(), &[
-            10, 20, 30
-        ]);
-        assert!(s.is_null(2));
-        assert_eq!(s.column(1).null_count(), 3);
+        let expected = StructArray::new(
+            Fields::from(vec![
+                field_with_id("x", DataType::Int64, true, 5),
+                field_with_id("y", DataType::Int32, true, 6),
+            ]),
+            vec![
+                Arc::new(Int64Array::from(vec![10i64, 20, 30])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![None, None, None])) as ArrayRef,
+            ],
+            Some(NullBuffer::from(vec![true, true, false])),
+        );
+        assert_eq!(result.column(1).as_struct(), &expected);
     }
 
     /// Helper to extract string values from either StringArray or RunEndEncoded<StringArray>
