@@ -296,10 +296,9 @@ impl PromotePlan {
                 }
             }
             (_, DataType::Struct(_) | DataType::List(_) | DataType::LargeList(_))
-            | (_, DataType::Map(_, _)) => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("cannot promote {source:?} to {target:?}"),
-            )),
+            | (_, DataType::Map(_, _)) => {
+                Err(invalid_data!("cannot promote {source:?} to {target:?}"))
+            }
             _ => Ok(PromotePlan::Cast(target.clone())),
         }
     }
@@ -337,9 +336,8 @@ impl PromotePlan {
                     })
                     .collect();
             }
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "cannot reconcile struct fields by id: source fields do not all have field ids",
+            return Err(invalid_data!(
+                "cannot reconcile struct fields by id: source fields do not all have field ids"
             ));
         }
 
@@ -371,12 +369,9 @@ impl PromotePlan {
                             ));
                         }
                         if iceberg_field.map_or(!target_field.is_nullable(), |f| f.required) {
-                            return Err(Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
-                                    "required nested field {} is absent from the data file and has no initial-default",
-                                    target_field.name()
-                                ),
+                            return Err(invalid_data!(
+                                "required nested field {} is absent from the data file and has no initial-default",
+                                target_field.name()
                             ));
                         }
                         Ok(ChildPlan::Null {
@@ -1425,10 +1420,10 @@ mod test {
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema};
 
     use super::field_with_id;
-    use crate::arrow::build_partition_constant;
     use crate::arrow::record_batch_transformer::{
         PromotePlan, RecordBatchTransformer, RecordBatchTransformerBuilder,
     };
+    use crate::arrow::{DEFAULT_MAP_FIELD_NAME, build_partition_constant};
     use crate::spec::{
         Literal, MapType, NestedField, PrimitiveType, Schema, Struct, StructType, Type,
     };
@@ -1726,7 +1721,12 @@ mod test {
             Arc::new(file),
         )
         .unwrap();
-        assert_eq!(out.as_struct().column(0).null_count(), 2);
+        let expected = StructArray::new(
+            Fields::from(vec![field_with_id("x", DataType::Int32, true, 6)]),
+            vec![Arc::new(Int32Array::from(vec![None, None])) as ArrayRef],
+            None,
+        );
+        assert_eq!(out.as_struct(), &expected);
     }
 
     #[test]
@@ -1980,10 +1980,29 @@ mod test {
             Arc::new(map),
         )
         .unwrap();
-        let map = out.as_map();
-        let keys = map.keys().as_string::<i32>();
-        assert_eq!((keys.value(0), keys.value(1)), ("k1", "k2"));
-        assert_eq!(map.values().as_primitive::<Int32Type>().values(), &[1, 2]);
+        let expected_entries = StructArray::new(
+            Fields::from(vec![
+                field_with_id("key", DataType::Utf8, false, 3),
+                field_with_id("value", DataType::Int32, true, 4),
+            ]),
+            vec![
+                Arc::new(StringArray::from(vec!["k1", "k2"])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+            ],
+            None,
+        );
+        let expected = MapArray::new(
+            Arc::new(Field::new(
+                DEFAULT_MAP_FIELD_NAME,
+                expected_entries.data_type().clone(),
+                false,
+            )),
+            OffsetBuffer::new(vec![0, 2].into()),
+            expected_entries,
+            None,
+            false,
+        );
+        assert_eq!(out.as_map(), &expected);
     }
 
     #[test]
