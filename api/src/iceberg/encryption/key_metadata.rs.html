@@ -75,7 +75,7 @@
 <a href=#75 id=75 data-nosnippet>75</a>        <span class="self">self
 <a href=#76 id=76 data-nosnippet>76</a>    </span>}
 <a href=#77 id=77 data-nosnippet>77</a>
-<a href=#78 id=78 data-nosnippet>78</a>    <span class="doccomment">/// Adds a file length.
+<a href=#78 id=78 data-nosnippet>78</a>    <span class="doccomment">/// Sets the encrypted file length in bytes, required for AGS1 truncation protection.
 <a href=#79 id=79 data-nosnippet>79</a>    </span><span class="kw">pub fn </span>with_file_length(<span class="kw-2">mut </span><span class="self">self</span>, length: u64) -&gt; <span class="self">Self </span>{
 <a href=#80 id=80 data-nosnippet>80</a>        <span class="self">self</span>.file_length = <span class="prelude-val">Some</span>(length);
 <a href=#81 id=81 data-nosnippet>81</a>        <span class="self">self
@@ -91,7 +91,7 @@
 <a href=#91 id=91 data-nosnippet>91</a>        <span class="self">self</span>.aad_prefix.as_deref()
 <a href=#92 id=92 data-nosnippet>92</a>    }
 <a href=#93 id=93 data-nosnippet>93</a>
-<a href=#94 id=94 data-nosnippet>94</a>    <span class="doccomment">/// Returns the optional file length.
+<a href=#94 id=94 data-nosnippet>94</a>    <span class="doccomment">/// Returns the optional encrypted file length in bytes; AGS1 readers require it to be set.
 <a href=#95 id=95 data-nosnippet>95</a>    </span><span class="kw">pub fn </span>file_length(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;u64&gt; {
 <a href=#96 id=96 data-nosnippet>96</a>        <span class="self">self</span>.file_length
 <a href=#97 id=97 data-nosnippet>97</a>    }

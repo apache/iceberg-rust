@@ -1621,193 +1621,196 @@
 <a href=#1621 id=1621 data-nosnippet>1621</a>        <span class="kw">let </span>key_metadata = StandardKeyMetadata::try_new(<span class="string">b"0123456789abcdef"</span>)
 <a href=#1622 id=1622 data-nosnippet>1622</a>            .unwrap()
 <a href=#1623 id=1623 data-nosnippet>1623</a>            .with_aad_prefix(<span class="string">b"test-aad-prefix!"</span>);
-<a href=#1624 id=1624 data-nosnippet>1624</a>        <span class="kw">let </span>encoded_key_metadata = key_metadata.encode().unwrap();
-<a href=#1625 id=1625 data-nosnippet>1625</a>
-<a href=#1626 id=1626 data-nosnippet>1626</a>        <span class="kw">let </span>blob = encode_dv_blob([<span class="number">2u64</span>, <span class="number">4</span>]);
-<a href=#1627 id=1627 data-nosnippet>1627</a>        <span class="kw">let </span>plaintext_size = blob.len() <span class="kw">as </span>i64;
-<a href=#1628 id=1628 data-nosnippet>1628</a>        <span class="kw">let </span>dv_path = <span class="macro">format!</span>(<span class="string">"{table_location}/deletes.puffin"</span>);
-<a href=#1629 id=1629 data-nosnippet>1629</a>        <span class="kw">let </span>output = EncryptedOutputFile::new(file_io.new_output(<span class="kw-2">&amp;</span>dv_path).unwrap(), key_metadata);
-<a href=#1630 id=1630 data-nosnippet>1630</a>        output.write(Bytes::from(blob)).<span class="kw">await</span>.unwrap();
-<a href=#1631 id=1631 data-nosnippet>1631</a>
-<a href=#1632 id=1632 data-nosnippet>1632</a>        <span class="comment">// content_offset / content_size_in_bytes are in the plaintext coordinate space, distinct
-<a href=#1633 id=1633 data-nosnippet>1633</a>        // from the ciphertext's on-disk size (header, nonce, and tag overhead).
-<a href=#1634 id=1634 data-nosnippet>1634</a>        </span><span class="kw">let </span>file_size = std::fs::metadata(<span class="kw-2">&amp;</span>dv_path).unwrap().len();
-<a href=#1635 id=1635 data-nosnippet>1635</a>        <span class="kw">let </span>data_file_path = <span class="macro">format!</span>(<span class="string">"{table_location}/data-1.parquet"</span>);
-<a href=#1636 id=1636 data-nosnippet>1636</a>        <span class="kw">let </span>dv = dv_task(
-<a href=#1637 id=1637 data-nosnippet>1637</a>            dv_path.clone(),
-<a href=#1638 id=1638 data-nosnippet>1638</a>            file_size,
-<a href=#1639 id=1639 data-nosnippet>1639</a>            data_file_path.clone(),
-<a href=#1640 id=1640 data-nosnippet>1640</a>            <span class="number">0</span>,
-<a href=#1641 id=1641 data-nosnippet>1641</a>            plaintext_size,
-<a href=#1642 id=1642 data-nosnippet>1642</a>            <span class="number">2</span>,
-<a href=#1643 id=1643 data-nosnippet>1643</a>            <span class="prelude-val">Some</span>(encoded_key_metadata),
-<a href=#1644 id=1644 data-nosnippet>1644</a>        );
-<a href=#1645 id=1645 data-nosnippet>1645</a>
-<a href=#1646 id=1646 data-nosnippet>1646</a>        <span class="kw">let </span>schema = Arc::new(
-<a href=#1647 id=1647 data-nosnippet>1647</a>            Schema::builder()
-<a href=#1648 id=1648 data-nosnippet>1648</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#1649 id=1649 data-nosnippet>1649</a>                    NestedField::optional(<span class="number">1</span>, <span class="string">"x"</span>, Type::Primitive(PrimitiveType::Long)).into(),
-<a href=#1650 id=1650 data-nosnippet>1650</a>                ])
-<a href=#1651 id=1651 data-nosnippet>1651</a>                .build()
-<a href=#1652 id=1652 data-nosnippet>1652</a>                .unwrap(),
-<a href=#1653 id=1653 data-nosnippet>1653</a>        );
-<a href=#1654 id=1654 data-nosnippet>1654</a>
-<a href=#1655 id=1655 data-nosnippet>1655</a>        <span class="kw">let </span>loader = CachingDeleteFileLoader::new(file_io, <span class="number">10</span>, Runtime::current());
-<a href=#1656 id=1656 data-nosnippet>1656</a>        <span class="kw">let </span>delete_filter = loader.load_deletes(<span class="kw-2">&amp;</span>[dv], schema).<span class="kw">await</span>.unwrap().unwrap();
+<a href=#1624 id=1624 data-nosnippet>1624</a>
+<a href=#1625 id=1625 data-nosnippet>1625</a>        <span class="kw">let </span>blob = encode_dv_blob([<span class="number">2u64</span>, <span class="number">4</span>]);
+<a href=#1626 id=1626 data-nosnippet>1626</a>        <span class="kw">let </span>plaintext_size = blob.len() <span class="kw">as </span>i64;
+<a href=#1627 id=1627 data-nosnippet>1627</a>        <span class="kw">let </span>dv_path = <span class="macro">format!</span>(<span class="string">"{table_location}/deletes.puffin"</span>);
+<a href=#1628 id=1628 data-nosnippet>1628</a>        <span class="kw">let </span>output = EncryptedOutputFile::new(file_io.new_output(<span class="kw-2">&amp;</span>dv_path).unwrap(), key_metadata);
+<a href=#1629 id=1629 data-nosnippet>1629</a>        <span class="kw">let </span>file_metadata = output.write(Bytes::from(blob)).<span class="kw">await</span>.unwrap();
+<a href=#1630 id=1630 data-nosnippet>1630</a>        <span class="kw">let </span>encoded_key_metadata = output
+<a href=#1631 id=1631 data-nosnippet>1631</a>            .key_metadata_with_saved_file_metadata(<span class="kw-2">&amp;</span>file_metadata)
+<a href=#1632 id=1632 data-nosnippet>1632</a>            .encode()
+<a href=#1633 id=1633 data-nosnippet>1633</a>            .unwrap();
+<a href=#1634 id=1634 data-nosnippet>1634</a>
+<a href=#1635 id=1635 data-nosnippet>1635</a>        <span class="comment">// content_offset / content_size_in_bytes are in the plaintext coordinate space, distinct
+<a href=#1636 id=1636 data-nosnippet>1636</a>        // from the ciphertext's on-disk size (header, nonce, and tag overhead).
+<a href=#1637 id=1637 data-nosnippet>1637</a>        </span><span class="kw">let </span>file_size = std::fs::metadata(<span class="kw-2">&amp;</span>dv_path).unwrap().len();
+<a href=#1638 id=1638 data-nosnippet>1638</a>        <span class="kw">let </span>data_file_path = <span class="macro">format!</span>(<span class="string">"{table_location}/data-1.parquet"</span>);
+<a href=#1639 id=1639 data-nosnippet>1639</a>        <span class="kw">let </span>dv = dv_task(
+<a href=#1640 id=1640 data-nosnippet>1640</a>            dv_path.clone(),
+<a href=#1641 id=1641 data-nosnippet>1641</a>            file_size,
+<a href=#1642 id=1642 data-nosnippet>1642</a>            data_file_path.clone(),
+<a href=#1643 id=1643 data-nosnippet>1643</a>            <span class="number">0</span>,
+<a href=#1644 id=1644 data-nosnippet>1644</a>            plaintext_size,
+<a href=#1645 id=1645 data-nosnippet>1645</a>            <span class="number">2</span>,
+<a href=#1646 id=1646 data-nosnippet>1646</a>            <span class="prelude-val">Some</span>(encoded_key_metadata),
+<a href=#1647 id=1647 data-nosnippet>1647</a>        );
+<a href=#1648 id=1648 data-nosnippet>1648</a>
+<a href=#1649 id=1649 data-nosnippet>1649</a>        <span class="kw">let </span>schema = Arc::new(
+<a href=#1650 id=1650 data-nosnippet>1650</a>            Schema::builder()
+<a href=#1651 id=1651 data-nosnippet>1651</a>                .with_fields(<span class="macro">vec!</span>[
+<a href=#1652 id=1652 data-nosnippet>1652</a>                    NestedField::optional(<span class="number">1</span>, <span class="string">"x"</span>, Type::Primitive(PrimitiveType::Long)).into(),
+<a href=#1653 id=1653 data-nosnippet>1653</a>                ])
+<a href=#1654 id=1654 data-nosnippet>1654</a>                .build()
+<a href=#1655 id=1655 data-nosnippet>1655</a>                .unwrap(),
+<a href=#1656 id=1656 data-nosnippet>1656</a>        );
 <a href=#1657 id=1657 data-nosnippet>1657</a>
-<a href=#1658 id=1658 data-nosnippet>1658</a>        <span class="kw">let </span>delete_vector = delete_filter
-<a href=#1659 id=1659 data-nosnippet>1659</a>            .get_delete_vector_for_path(<span class="kw-2">&amp;</span>data_file_path)
-<a href=#1660 id=1660 data-nosnippet>1660</a>            .expect(<span class="string">"a delete vector should be indexed for the referenced data file"</span>);
-<a href=#1661 id=1661 data-nosnippet>1661</a>        <span class="kw">let </span><span class="kw-2">mut </span>positions: Vec&lt;u64&gt; = delete_vector.lock().unwrap().iter().collect();
-<a href=#1662 id=1662 data-nosnippet>1662</a>        positions.sort_unstable();
-<a href=#1663 id=1663 data-nosnippet>1663</a>        <span class="macro">assert_eq!</span>(positions, <span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">4</span>]);
-<a href=#1664 id=1664 data-nosnippet>1664</a>    }
-<a href=#1665 id=1665 data-nosnippet>1665</a>
-<a href=#1666 id=1666 data-nosnippet>1666</a>    <span class="attr">#[tokio::test]
-<a href=#1667 id=1667 data-nosnippet>1667</a>    </span><span class="kw">async fn </span>test_load_deletes_rejects_deletion_vector_cardinality_mismatch() {
-<a href=#1668 id=1668 data-nosnippet>1668</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
-<a href=#1669 id=1669 data-nosnippet>1669</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#1670 id=1670 data-nosnippet>1670</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
-<a href=#1671 id=1671 data-nosnippet>1671</a>
-<a href=#1672 id=1672 data-nosnippet>1672</a>        <span class="kw">let </span>blob = encode_dv_blob([<span class="number">0u64</span>, <span class="number">1</span>, <span class="number">5</span>]);
-<a href=#1673 id=1673 data-nosnippet>1673</a>        <span class="kw">let </span>dv_path = <span class="macro">format!</span>(<span class="string">"{table_location}/deletes.puffin"</span>);
-<a href=#1674 id=1674 data-nosnippet>1674</a>        std::fs::write(<span class="kw-2">&amp;</span>dv_path, <span class="kw-2">&amp;</span>blob).unwrap();
-<a href=#1675 id=1675 data-nosnippet>1675</a>
-<a href=#1676 id=1676 data-nosnippet>1676</a>        <span class="kw">let </span>data_file_path = <span class="macro">format!</span>(<span class="string">"{table_location}/data-1.parquet"</span>);
-<a href=#1677 id=1677 data-nosnippet>1677</a>        <span class="comment">// record_count says 2 positions, but the blob decodes to 3.
-<a href=#1678 id=1678 data-nosnippet>1678</a>        </span><span class="kw">let </span>dv = dv_task(
-<a href=#1679 id=1679 data-nosnippet>1679</a>            dv_path.clone(),
-<a href=#1680 id=1680 data-nosnippet>1680</a>            std::fs::metadata(<span class="kw-2">&amp;</span>dv_path).unwrap().len(),
-<a href=#1681 id=1681 data-nosnippet>1681</a>            data_file_path,
-<a href=#1682 id=1682 data-nosnippet>1682</a>            <span class="number">0</span>,
-<a href=#1683 id=1683 data-nosnippet>1683</a>            blob.len() <span class="kw">as </span>i64,
-<a href=#1684 id=1684 data-nosnippet>1684</a>            <span class="number">2</span>,
-<a href=#1685 id=1685 data-nosnippet>1685</a>            <span class="prelude-val">None</span>,
-<a href=#1686 id=1686 data-nosnippet>1686</a>        );
-<a href=#1687 id=1687 data-nosnippet>1687</a>
-<a href=#1688 id=1688 data-nosnippet>1688</a>        <span class="kw">let </span>schema = Arc::new(
-<a href=#1689 id=1689 data-nosnippet>1689</a>            Schema::builder()
-<a href=#1690 id=1690 data-nosnippet>1690</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#1691 id=1691 data-nosnippet>1691</a>                    NestedField::optional(<span class="number">1</span>, <span class="string">"x"</span>, Type::Primitive(PrimitiveType::Long)).into(),
-<a href=#1692 id=1692 data-nosnippet>1692</a>                ])
-<a href=#1693 id=1693 data-nosnippet>1693</a>                .build()
-<a href=#1694 id=1694 data-nosnippet>1694</a>                .unwrap(),
-<a href=#1695 id=1695 data-nosnippet>1695</a>        );
-<a href=#1696 id=1696 data-nosnippet>1696</a>
-<a href=#1697 id=1697 data-nosnippet>1697</a>        <span class="kw">let </span>loader = CachingDeleteFileLoader::new(file_io, <span class="number">10</span>, Runtime::current());
-<a href=#1698 id=1698 data-nosnippet>1698</a>        <span class="kw">let </span>err = loader
-<a href=#1699 id=1699 data-nosnippet>1699</a>            .load_deletes(<span class="kw-2">&amp;</span>[dv], schema)
-<a href=#1700 id=1700 data-nosnippet>1700</a>            .<span class="kw">await
-<a href=#1701 id=1701 data-nosnippet>1701</a>            </span>.unwrap()
-<a href=#1702 id=1702 data-nosnippet>1702</a>            .unwrap_err();
-<a href=#1703 id=1703 data-nosnippet>1703</a>
-<a href=#1704 id=1704 data-nosnippet>1704</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
-<a href=#1705 id=1705 data-nosnippet>1705</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"expected 2 from record_count"</span>));
-<a href=#1706 id=1706 data-nosnippet>1706</a>    }
-<a href=#1707 id=1707 data-nosnippet>1707</a>
-<a href=#1708 id=1708 data-nosnippet>1708</a>    <span class="comment">// A well-formed deletion-vector task, for tests that then clear or corrupt one field.
-<a href=#1709 id=1709 data-nosnippet>1709</a>    </span><span class="kw">fn </span>valid_dv_task() -&gt; FileScanTaskDeleteFile {
-<a href=#1710 id=1710 data-nosnippet>1710</a>        dv_task(
-<a href=#1711 id=1711 data-nosnippet>1711</a>            <span class="string">"deletes.puffin"</span>.to_string(),
-<a href=#1712 id=1712 data-nosnippet>1712</a>            <span class="number">100</span>,
-<a href=#1713 id=1713 data-nosnippet>1713</a>            <span class="string">"data.parquet"</span>.to_string(),
-<a href=#1714 id=1714 data-nosnippet>1714</a>            <span class="number">4</span>,
-<a href=#1715 id=1715 data-nosnippet>1715</a>            <span class="number">40</span>,
-<a href=#1716 id=1716 data-nosnippet>1716</a>            <span class="number">2</span>,
-<a href=#1717 id=1717 data-nosnippet>1717</a>            <span class="prelude-val">None</span>,
-<a href=#1718 id=1718 data-nosnippet>1718</a>        )
-<a href=#1719 id=1719 data-nosnippet>1719</a>    }
-<a href=#1720 id=1720 data-nosnippet>1720</a>
-<a href=#1721 id=1721 data-nosnippet>1721</a>    <span class="attr">#[test]
-<a href=#1722 id=1722 data-nosnippet>1722</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_task_rejects_missing_content_offset() {
-<a href=#1723 id=1723 data-nosnippet>1723</a>        <span class="kw">let </span><span class="kw-2">mut </span>task = valid_dv_task();
-<a href=#1724 id=1724 data-nosnippet>1724</a>        task.content_offset = <span class="prelude-val">None</span>;
-<a href=#1725 id=1725 data-nosnippet>1725</a>
-<a href=#1726 id=1726 data-nosnippet>1726</a>        <span class="kw">let </span>err = CachingDeleteFileLoader::validate_deletion_vector_task(<span class="kw-2">&amp;</span>task).unwrap_err();
-<a href=#1727 id=1727 data-nosnippet>1727</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
-<a href=#1728 id=1728 data-nosnippet>1728</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"missing content_offset"</span>));
-<a href=#1729 id=1729 data-nosnippet>1729</a>    }
-<a href=#1730 id=1730 data-nosnippet>1730</a>
-<a href=#1731 id=1731 data-nosnippet>1731</a>    <span class="attr">#[test]
-<a href=#1732 id=1732 data-nosnippet>1732</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_task_rejects_missing_content_size() {
-<a href=#1733 id=1733 data-nosnippet>1733</a>        <span class="kw">let </span><span class="kw-2">mut </span>task = valid_dv_task();
-<a href=#1734 id=1734 data-nosnippet>1734</a>        task.content_size_in_bytes = <span class="prelude-val">None</span>;
-<a href=#1735 id=1735 data-nosnippet>1735</a>
-<a href=#1736 id=1736 data-nosnippet>1736</a>        <span class="kw">let </span>err = CachingDeleteFileLoader::validate_deletion_vector_task(<span class="kw-2">&amp;</span>task).unwrap_err();
-<a href=#1737 id=1737 data-nosnippet>1737</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
-<a href=#1738 id=1738 data-nosnippet>1738</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"missing content_size_in_bytes"</span>));
-<a href=#1739 id=1739 data-nosnippet>1739</a>    }
-<a href=#1740 id=1740 data-nosnippet>1740</a>
-<a href=#1741 id=1741 data-nosnippet>1741</a>    <span class="attr">#[test]
-<a href=#1742 id=1742 data-nosnippet>1742</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_task_rejects_missing_referenced_data_file() {
-<a href=#1743 id=1743 data-nosnippet>1743</a>        <span class="kw">let </span><span class="kw-2">mut </span>task = valid_dv_task();
-<a href=#1744 id=1744 data-nosnippet>1744</a>        task.referenced_data_file = <span class="prelude-val">None</span>;
-<a href=#1745 id=1745 data-nosnippet>1745</a>
-<a href=#1746 id=1746 data-nosnippet>1746</a>        <span class="kw">let </span>err = CachingDeleteFileLoader::validate_deletion_vector_task(<span class="kw-2">&amp;</span>task).unwrap_err();
-<a href=#1747 id=1747 data-nosnippet>1747</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
-<a href=#1748 id=1748 data-nosnippet>1748</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"missing referenced_data_file"</span>));
-<a href=#1749 id=1749 data-nosnippet>1749</a>    }
-<a href=#1750 id=1750 data-nosnippet>1750</a>
-<a href=#1751 id=1751 data-nosnippet>1751</a>    <span class="attr">#[test]
-<a href=#1752 id=1752 data-nosnippet>1752</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_task_rejects_missing_record_count() {
-<a href=#1753 id=1753 data-nosnippet>1753</a>        <span class="kw">let </span><span class="kw-2">mut </span>task = valid_dv_task();
-<a href=#1754 id=1754 data-nosnippet>1754</a>        task.record_count = <span class="prelude-val">None</span>;
-<a href=#1755 id=1755 data-nosnippet>1755</a>
-<a href=#1756 id=1756 data-nosnippet>1756</a>        <span class="kw">let </span>err = CachingDeleteFileLoader::validate_deletion_vector_task(<span class="kw-2">&amp;</span>task).unwrap_err();
-<a href=#1757 id=1757 data-nosnippet>1757</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
-<a href=#1758 id=1758 data-nosnippet>1758</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"missing record_count"</span>));
-<a href=#1759 id=1759 data-nosnippet>1759</a>    }
-<a href=#1760 id=1760 data-nosnippet>1760</a>
-<a href=#1761 id=1761 data-nosnippet>1761</a>    <span class="attr">#[test]
-<a href=#1762 id=1762 data-nosnippet>1762</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_task_rejects_negative_content_offset() {
-<a href=#1763 id=1763 data-nosnippet>1763</a>        <span class="kw">let </span><span class="kw-2">mut </span>task = valid_dv_task();
-<a href=#1764 id=1764 data-nosnippet>1764</a>        task.content_offset = <span class="prelude-val">Some</span>(-<span class="number">1</span>);
-<a href=#1765 id=1765 data-nosnippet>1765</a>
-<a href=#1766 id=1766 data-nosnippet>1766</a>        <span class="kw">let </span>err = CachingDeleteFileLoader::validate_deletion_vector_task(<span class="kw-2">&amp;</span>task).unwrap_err();
-<a href=#1767 id=1767 data-nosnippet>1767</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
-<a href=#1768 id=1768 data-nosnippet>1768</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"negative content_offset"</span>));
-<a href=#1769 id=1769 data-nosnippet>1769</a>    }
-<a href=#1770 id=1770 data-nosnippet>1770</a>
-<a href=#1771 id=1771 data-nosnippet>1771</a>    <span class="attr">#[test]
-<a href=#1772 id=1772 data-nosnippet>1772</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_task_rejects_negative_content_size() {
-<a href=#1773 id=1773 data-nosnippet>1773</a>        <span class="kw">let </span><span class="kw-2">mut </span>task = valid_dv_task();
-<a href=#1774 id=1774 data-nosnippet>1774</a>        task.content_size_in_bytes = <span class="prelude-val">Some</span>(-<span class="number">1</span>);
-<a href=#1775 id=1775 data-nosnippet>1775</a>
-<a href=#1776 id=1776 data-nosnippet>1776</a>        <span class="kw">let </span>err = CachingDeleteFileLoader::validate_deletion_vector_task(<span class="kw-2">&amp;</span>task).unwrap_err();
-<a href=#1777 id=1777 data-nosnippet>1777</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
-<a href=#1778 id=1778 data-nosnippet>1778</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"negative content_size_in_bytes"</span>));
-<a href=#1779 id=1779 data-nosnippet>1779</a>    }
-<a href=#1780 id=1780 data-nosnippet>1780</a>
-<a href=#1781 id=1781 data-nosnippet>1781</a>    <span class="attr">#[test]
-<a href=#1782 id=1782 data-nosnippet>1782</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_task_accepts_valid_coordinates() {
-<a href=#1783 id=1783 data-nosnippet>1783</a>        <span class="kw">let </span>(start, len, data_file_path, record_count) =
-<a href=#1784 id=1784 data-nosnippet>1784</a>            CachingDeleteFileLoader::validate_deletion_vector_task(<span class="kw-2">&amp;</span>valid_dv_task()).unwrap();
-<a href=#1785 id=1785 data-nosnippet>1785</a>        <span class="macro">assert_eq!</span>(start, <span class="number">4</span>);
-<a href=#1786 id=1786 data-nosnippet>1786</a>        <span class="macro">assert_eq!</span>(len, <span class="number">40</span>);
-<a href=#1787 id=1787 data-nosnippet>1787</a>        <span class="macro">assert_eq!</span>(data_file_path, <span class="string">"data.parquet"</span>);
-<a href=#1788 id=1788 data-nosnippet>1788</a>        <span class="macro">assert_eq!</span>(record_count, <span class="number">2</span>);
-<a href=#1789 id=1789 data-nosnippet>1789</a>    }
-<a href=#1790 id=1790 data-nosnippet>1790</a>
-<a href=#1791 id=1791 data-nosnippet>1791</a>    <span class="attr">#[test]
-<a href=#1792 id=1792 data-nosnippet>1792</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_cardinality_accepts_matching_count() {
-<a href=#1793 id=1793 data-nosnippet>1793</a>        <span class="kw">let </span><span class="kw-2">mut </span>dv = DeleteVector::default();
-<a href=#1794 id=1794 data-nosnippet>1794</a>        dv.insert(<span class="number">1</span>);
-<a href=#1795 id=1795 data-nosnippet>1795</a>        dv.insert(<span class="number">2</span>);
-<a href=#1796 id=1796 data-nosnippet>1796</a>
-<a href=#1797 id=1797 data-nosnippet>1797</a>        CachingDeleteFileLoader::validate_deletion_vector_cardinality(<span class="kw-2">&amp;</span>dv, <span class="number">2</span>, <span class="string">"deletes.puffin"</span>)
-<a href=#1798 id=1798 data-nosnippet>1798</a>            .unwrap();
-<a href=#1799 id=1799 data-nosnippet>1799</a>    }
-<a href=#1800 id=1800 data-nosnippet>1800</a>
-<a href=#1801 id=1801 data-nosnippet>1801</a>    <span class="attr">#[test]
-<a href=#1802 id=1802 data-nosnippet>1802</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_cardinality_rejects_mismatched_count() {
-<a href=#1803 id=1803 data-nosnippet>1803</a>        <span class="kw">let </span><span class="kw-2">mut </span>dv = DeleteVector::default();
-<a href=#1804 id=1804 data-nosnippet>1804</a>        dv.insert(<span class="number">1</span>);
-<a href=#1805 id=1805 data-nosnippet>1805</a>
-<a href=#1806 id=1806 data-nosnippet>1806</a>        <span class="kw">let </span>err =
-<a href=#1807 id=1807 data-nosnippet>1807</a>            CachingDeleteFileLoader::validate_deletion_vector_cardinality(<span class="kw-2">&amp;</span>dv, <span class="number">2</span>, <span class="string">"deletes.puffin"</span>)
-<a href=#1808 id=1808 data-nosnippet>1808</a>                .unwrap_err();
-<a href=#1809 id=1809 data-nosnippet>1809</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
-<a href=#1810 id=1810 data-nosnippet>1810</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"expected 2 from record_count"</span>));
-<a href=#1811 id=1811 data-nosnippet>1811</a>    }
-<a href=#1812 id=1812 data-nosnippet>1812</a>}
+<a href=#1658 id=1658 data-nosnippet>1658</a>        <span class="kw">let </span>loader = CachingDeleteFileLoader::new(file_io, <span class="number">10</span>, Runtime::current());
+<a href=#1659 id=1659 data-nosnippet>1659</a>        <span class="kw">let </span>delete_filter = loader.load_deletes(<span class="kw-2">&amp;</span>[dv], schema).<span class="kw">await</span>.unwrap().unwrap();
+<a href=#1660 id=1660 data-nosnippet>1660</a>
+<a href=#1661 id=1661 data-nosnippet>1661</a>        <span class="kw">let </span>delete_vector = delete_filter
+<a href=#1662 id=1662 data-nosnippet>1662</a>            .get_delete_vector_for_path(<span class="kw-2">&amp;</span>data_file_path)
+<a href=#1663 id=1663 data-nosnippet>1663</a>            .expect(<span class="string">"a delete vector should be indexed for the referenced data file"</span>);
+<a href=#1664 id=1664 data-nosnippet>1664</a>        <span class="kw">let </span><span class="kw-2">mut </span>positions: Vec&lt;u64&gt; = delete_vector.lock().unwrap().iter().collect();
+<a href=#1665 id=1665 data-nosnippet>1665</a>        positions.sort_unstable();
+<a href=#1666 id=1666 data-nosnippet>1666</a>        <span class="macro">assert_eq!</span>(positions, <span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">4</span>]);
+<a href=#1667 id=1667 data-nosnippet>1667</a>    }
+<a href=#1668 id=1668 data-nosnippet>1668</a>
+<a href=#1669 id=1669 data-nosnippet>1669</a>    <span class="attr">#[tokio::test]
+<a href=#1670 id=1670 data-nosnippet>1670</a>    </span><span class="kw">async fn </span>test_load_deletes_rejects_deletion_vector_cardinality_mismatch() {
+<a href=#1671 id=1671 data-nosnippet>1671</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
+<a href=#1672 id=1672 data-nosnippet>1672</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
+<a href=#1673 id=1673 data-nosnippet>1673</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
+<a href=#1674 id=1674 data-nosnippet>1674</a>
+<a href=#1675 id=1675 data-nosnippet>1675</a>        <span class="kw">let </span>blob = encode_dv_blob([<span class="number">0u64</span>, <span class="number">1</span>, <span class="number">5</span>]);
+<a href=#1676 id=1676 data-nosnippet>1676</a>        <span class="kw">let </span>dv_path = <span class="macro">format!</span>(<span class="string">"{table_location}/deletes.puffin"</span>);
+<a href=#1677 id=1677 data-nosnippet>1677</a>        std::fs::write(<span class="kw-2">&amp;</span>dv_path, <span class="kw-2">&amp;</span>blob).unwrap();
+<a href=#1678 id=1678 data-nosnippet>1678</a>
+<a href=#1679 id=1679 data-nosnippet>1679</a>        <span class="kw">let </span>data_file_path = <span class="macro">format!</span>(<span class="string">"{table_location}/data-1.parquet"</span>);
+<a href=#1680 id=1680 data-nosnippet>1680</a>        <span class="comment">// record_count says 2 positions, but the blob decodes to 3.
+<a href=#1681 id=1681 data-nosnippet>1681</a>        </span><span class="kw">let </span>dv = dv_task(
+<a href=#1682 id=1682 data-nosnippet>1682</a>            dv_path.clone(),
+<a href=#1683 id=1683 data-nosnippet>1683</a>            std::fs::metadata(<span class="kw-2">&amp;</span>dv_path).unwrap().len(),
+<a href=#1684 id=1684 data-nosnippet>1684</a>            data_file_path,
+<a href=#1685 id=1685 data-nosnippet>1685</a>            <span class="number">0</span>,
+<a href=#1686 id=1686 data-nosnippet>1686</a>            blob.len() <span class="kw">as </span>i64,
+<a href=#1687 id=1687 data-nosnippet>1687</a>            <span class="number">2</span>,
+<a href=#1688 id=1688 data-nosnippet>1688</a>            <span class="prelude-val">None</span>,
+<a href=#1689 id=1689 data-nosnippet>1689</a>        );
+<a href=#1690 id=1690 data-nosnippet>1690</a>
+<a href=#1691 id=1691 data-nosnippet>1691</a>        <span class="kw">let </span>schema = Arc::new(
+<a href=#1692 id=1692 data-nosnippet>1692</a>            Schema::builder()
+<a href=#1693 id=1693 data-nosnippet>1693</a>                .with_fields(<span class="macro">vec!</span>[
+<a href=#1694 id=1694 data-nosnippet>1694</a>                    NestedField::optional(<span class="number">1</span>, <span class="string">"x"</span>, Type::Primitive(PrimitiveType::Long)).into(),
+<a href=#1695 id=1695 data-nosnippet>1695</a>                ])
+<a href=#1696 id=1696 data-nosnippet>1696</a>                .build()
+<a href=#1697 id=1697 data-nosnippet>1697</a>                .unwrap(),
+<a href=#1698 id=1698 data-nosnippet>1698</a>        );
+<a href=#1699 id=1699 data-nosnippet>1699</a>
+<a href=#1700 id=1700 data-nosnippet>1700</a>        <span class="kw">let </span>loader = CachingDeleteFileLoader::new(file_io, <span class="number">10</span>, Runtime::current());
+<a href=#1701 id=1701 data-nosnippet>1701</a>        <span class="kw">let </span>err = loader
+<a href=#1702 id=1702 data-nosnippet>1702</a>            .load_deletes(<span class="kw-2">&amp;</span>[dv], schema)
+<a href=#1703 id=1703 data-nosnippet>1703</a>            .<span class="kw">await
+<a href=#1704 id=1704 data-nosnippet>1704</a>            </span>.unwrap()
+<a href=#1705 id=1705 data-nosnippet>1705</a>            .unwrap_err();
+<a href=#1706 id=1706 data-nosnippet>1706</a>
+<a href=#1707 id=1707 data-nosnippet>1707</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
+<a href=#1708 id=1708 data-nosnippet>1708</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"expected 2 from record_count"</span>));
+<a href=#1709 id=1709 data-nosnippet>1709</a>    }
+<a href=#1710 id=1710 data-nosnippet>1710</a>
+<a href=#1711 id=1711 data-nosnippet>1711</a>    <span class="comment">// A well-formed deletion-vector task, for tests that then clear or corrupt one field.
+<a href=#1712 id=1712 data-nosnippet>1712</a>    </span><span class="kw">fn </span>valid_dv_task() -&gt; FileScanTaskDeleteFile {
+<a href=#1713 id=1713 data-nosnippet>1713</a>        dv_task(
+<a href=#1714 id=1714 data-nosnippet>1714</a>            <span class="string">"deletes.puffin"</span>.to_string(),
+<a href=#1715 id=1715 data-nosnippet>1715</a>            <span class="number">100</span>,
+<a href=#1716 id=1716 data-nosnippet>1716</a>            <span class="string">"data.parquet"</span>.to_string(),
+<a href=#1717 id=1717 data-nosnippet>1717</a>            <span class="number">4</span>,
+<a href=#1718 id=1718 data-nosnippet>1718</a>            <span class="number">40</span>,
+<a href=#1719 id=1719 data-nosnippet>1719</a>            <span class="number">2</span>,
+<a href=#1720 id=1720 data-nosnippet>1720</a>            <span class="prelude-val">None</span>,
+<a href=#1721 id=1721 data-nosnippet>1721</a>        )
+<a href=#1722 id=1722 data-nosnippet>1722</a>    }
+<a href=#1723 id=1723 data-nosnippet>1723</a>
+<a href=#1724 id=1724 data-nosnippet>1724</a>    <span class="attr">#[test]
+<a href=#1725 id=1725 data-nosnippet>1725</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_task_rejects_missing_content_offset() {
+<a href=#1726 id=1726 data-nosnippet>1726</a>        <span class="kw">let </span><span class="kw-2">mut </span>task = valid_dv_task();
+<a href=#1727 id=1727 data-nosnippet>1727</a>        task.content_offset = <span class="prelude-val">None</span>;
+<a href=#1728 id=1728 data-nosnippet>1728</a>
+<a href=#1729 id=1729 data-nosnippet>1729</a>        <span class="kw">let </span>err = CachingDeleteFileLoader::validate_deletion_vector_task(<span class="kw-2">&amp;</span>task).unwrap_err();
+<a href=#1730 id=1730 data-nosnippet>1730</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
+<a href=#1731 id=1731 data-nosnippet>1731</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"missing content_offset"</span>));
+<a href=#1732 id=1732 data-nosnippet>1732</a>    }
+<a href=#1733 id=1733 data-nosnippet>1733</a>
+<a href=#1734 id=1734 data-nosnippet>1734</a>    <span class="attr">#[test]
+<a href=#1735 id=1735 data-nosnippet>1735</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_task_rejects_missing_content_size() {
+<a href=#1736 id=1736 data-nosnippet>1736</a>        <span class="kw">let </span><span class="kw-2">mut </span>task = valid_dv_task();
+<a href=#1737 id=1737 data-nosnippet>1737</a>        task.content_size_in_bytes = <span class="prelude-val">None</span>;
+<a href=#1738 id=1738 data-nosnippet>1738</a>
+<a href=#1739 id=1739 data-nosnippet>1739</a>        <span class="kw">let </span>err = CachingDeleteFileLoader::validate_deletion_vector_task(<span class="kw-2">&amp;</span>task).unwrap_err();
+<a href=#1740 id=1740 data-nosnippet>1740</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
+<a href=#1741 id=1741 data-nosnippet>1741</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"missing content_size_in_bytes"</span>));
+<a href=#1742 id=1742 data-nosnippet>1742</a>    }
+<a href=#1743 id=1743 data-nosnippet>1743</a>
+<a href=#1744 id=1744 data-nosnippet>1744</a>    <span class="attr">#[test]
+<a href=#1745 id=1745 data-nosnippet>1745</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_task_rejects_missing_referenced_data_file() {
+<a href=#1746 id=1746 data-nosnippet>1746</a>        <span class="kw">let </span><span class="kw-2">mut </span>task = valid_dv_task();
+<a href=#1747 id=1747 data-nosnippet>1747</a>        task.referenced_data_file = <span class="prelude-val">None</span>;
+<a href=#1748 id=1748 data-nosnippet>1748</a>
+<a href=#1749 id=1749 data-nosnippet>1749</a>        <span class="kw">let </span>err = CachingDeleteFileLoader::validate_deletion_vector_task(<span class="kw-2">&amp;</span>task).unwrap_err();
+<a href=#1750 id=1750 data-nosnippet>1750</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
+<a href=#1751 id=1751 data-nosnippet>1751</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"missing referenced_data_file"</span>));
+<a href=#1752 id=1752 data-nosnippet>1752</a>    }
+<a href=#1753 id=1753 data-nosnippet>1753</a>
+<a href=#1754 id=1754 data-nosnippet>1754</a>    <span class="attr">#[test]
+<a href=#1755 id=1755 data-nosnippet>1755</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_task_rejects_missing_record_count() {
+<a href=#1756 id=1756 data-nosnippet>1756</a>        <span class="kw">let </span><span class="kw-2">mut </span>task = valid_dv_task();
+<a href=#1757 id=1757 data-nosnippet>1757</a>        task.record_count = <span class="prelude-val">None</span>;
+<a href=#1758 id=1758 data-nosnippet>1758</a>
+<a href=#1759 id=1759 data-nosnippet>1759</a>        <span class="kw">let </span>err = CachingDeleteFileLoader::validate_deletion_vector_task(<span class="kw-2">&amp;</span>task).unwrap_err();
+<a href=#1760 id=1760 data-nosnippet>1760</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
+<a href=#1761 id=1761 data-nosnippet>1761</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"missing record_count"</span>));
+<a href=#1762 id=1762 data-nosnippet>1762</a>    }
+<a href=#1763 id=1763 data-nosnippet>1763</a>
+<a href=#1764 id=1764 data-nosnippet>1764</a>    <span class="attr">#[test]
+<a href=#1765 id=1765 data-nosnippet>1765</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_task_rejects_negative_content_offset() {
+<a href=#1766 id=1766 data-nosnippet>1766</a>        <span class="kw">let </span><span class="kw-2">mut </span>task = valid_dv_task();
+<a href=#1767 id=1767 data-nosnippet>1767</a>        task.content_offset = <span class="prelude-val">Some</span>(-<span class="number">1</span>);
+<a href=#1768 id=1768 data-nosnippet>1768</a>
+<a href=#1769 id=1769 data-nosnippet>1769</a>        <span class="kw">let </span>err = CachingDeleteFileLoader::validate_deletion_vector_task(<span class="kw-2">&amp;</span>task).unwrap_err();
+<a href=#1770 id=1770 data-nosnippet>1770</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
+<a href=#1771 id=1771 data-nosnippet>1771</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"negative content_offset"</span>));
+<a href=#1772 id=1772 data-nosnippet>1772</a>    }
+<a href=#1773 id=1773 data-nosnippet>1773</a>
+<a href=#1774 id=1774 data-nosnippet>1774</a>    <span class="attr">#[test]
+<a href=#1775 id=1775 data-nosnippet>1775</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_task_rejects_negative_content_size() {
+<a href=#1776 id=1776 data-nosnippet>1776</a>        <span class="kw">let </span><span class="kw-2">mut </span>task = valid_dv_task();
+<a href=#1777 id=1777 data-nosnippet>1777</a>        task.content_size_in_bytes = <span class="prelude-val">Some</span>(-<span class="number">1</span>);
+<a href=#1778 id=1778 data-nosnippet>1778</a>
+<a href=#1779 id=1779 data-nosnippet>1779</a>        <span class="kw">let </span>err = CachingDeleteFileLoader::validate_deletion_vector_task(<span class="kw-2">&amp;</span>task).unwrap_err();
+<a href=#1780 id=1780 data-nosnippet>1780</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
+<a href=#1781 id=1781 data-nosnippet>1781</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"negative content_size_in_bytes"</span>));
+<a href=#1782 id=1782 data-nosnippet>1782</a>    }
+<a href=#1783 id=1783 data-nosnippet>1783</a>
+<a href=#1784 id=1784 data-nosnippet>1784</a>    <span class="attr">#[test]
+<a href=#1785 id=1785 data-nosnippet>1785</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_task_accepts_valid_coordinates() {
+<a href=#1786 id=1786 data-nosnippet>1786</a>        <span class="kw">let </span>(start, len, data_file_path, record_count) =
+<a href=#1787 id=1787 data-nosnippet>1787</a>            CachingDeleteFileLoader::validate_deletion_vector_task(<span class="kw-2">&amp;</span>valid_dv_task()).unwrap();
+<a href=#1788 id=1788 data-nosnippet>1788</a>        <span class="macro">assert_eq!</span>(start, <span class="number">4</span>);
+<a href=#1789 id=1789 data-nosnippet>1789</a>        <span class="macro">assert_eq!</span>(len, <span class="number">40</span>);
+<a href=#1790 id=1790 data-nosnippet>1790</a>        <span class="macro">assert_eq!</span>(data_file_path, <span class="string">"data.parquet"</span>);
+<a href=#1791 id=1791 data-nosnippet>1791</a>        <span class="macro">assert_eq!</span>(record_count, <span class="number">2</span>);
+<a href=#1792 id=1792 data-nosnippet>1792</a>    }
+<a href=#1793 id=1793 data-nosnippet>1793</a>
+<a href=#1794 id=1794 data-nosnippet>1794</a>    <span class="attr">#[test]
+<a href=#1795 id=1795 data-nosnippet>1795</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_cardinality_accepts_matching_count() {
+<a href=#1796 id=1796 data-nosnippet>1796</a>        <span class="kw">let </span><span class="kw-2">mut </span>dv = DeleteVector::default();
+<a href=#1797 id=1797 data-nosnippet>1797</a>        dv.insert(<span class="number">1</span>);
+<a href=#1798 id=1798 data-nosnippet>1798</a>        dv.insert(<span class="number">2</span>);
+<a href=#1799 id=1799 data-nosnippet>1799</a>
+<a href=#1800 id=1800 data-nosnippet>1800</a>        CachingDeleteFileLoader::validate_deletion_vector_cardinality(<span class="kw-2">&amp;</span>dv, <span class="number">2</span>, <span class="string">"deletes.puffin"</span>)
+<a href=#1801 id=1801 data-nosnippet>1801</a>            .unwrap();
+<a href=#1802 id=1802 data-nosnippet>1802</a>    }
+<a href=#1803 id=1803 data-nosnippet>1803</a>
+<a href=#1804 id=1804 data-nosnippet>1804</a>    <span class="attr">#[test]
+<a href=#1805 id=1805 data-nosnippet>1805</a>    </span><span class="kw">fn </span>test_validate_deletion_vector_cardinality_rejects_mismatched_count() {
+<a href=#1806 id=1806 data-nosnippet>1806</a>        <span class="kw">let </span><span class="kw-2">mut </span>dv = DeleteVector::default();
+<a href=#1807 id=1807 data-nosnippet>1807</a>        dv.insert(<span class="number">1</span>);
+<a href=#1808 id=1808 data-nosnippet>1808</a>
+<a href=#1809 id=1809 data-nosnippet>1809</a>        <span class="kw">let </span>err =
+<a href=#1810 id=1810 data-nosnippet>1810</a>            CachingDeleteFileLoader::validate_deletion_vector_cardinality(<span class="kw-2">&amp;</span>dv, <span class="number">2</span>, <span class="string">"deletes.puffin"</span>)
+<a href=#1811 id=1811 data-nosnippet>1811</a>                .unwrap_err();
+<a href=#1812 id=1812 data-nosnippet>1812</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
+<a href=#1813 id=1813 data-nosnippet>1813</a>        <span class="macro">assert!</span>(err.message().contains(<span class="string">"expected 2 from record_count"</span>));
+<a href=#1814 id=1814 data-nosnippet>1814</a>    }
+<a href=#1815 id=1815 data-nosnippet>1815</a>}
 </code></pre></div></section></main></body></html>

@@ -670,18 +670,22 @@
 <a href=#670 id=670 data-nosnippet>670</a>        <span class="kw">let </span>encrypted_output = mgr.encrypt(output);
 <a href=#671 id=671 data-nosnippet>671</a>
 <a href=#672 id=672 data-nosnippet>672</a>        <span class="kw">let </span>plaintext = <span class="string">b"Hello, encrypted Iceberg round-trip!"</span>;
-<a href=#673 id=673 data-nosnippet>673</a>        <span class="kw">let </span>serialized_metadata = encrypted_output.key_metadata().encode().unwrap();
-<a href=#674 id=674 data-nosnippet>674</a>        encrypted_output
-<a href=#675 id=675 data-nosnippet>675</a>            .write(bytes::Bytes::from(plaintext.to_vec()))
-<a href=#676 id=676 data-nosnippet>676</a>            .<span class="kw">await
-<a href=#677 id=677 data-nosnippet>677</a>            </span>.unwrap();
-<a href=#678 id=678 data-nosnippet>678</a>
-<a href=#679 id=679 data-nosnippet>679</a>        <span class="kw">let </span>input = io.new_input(path).unwrap();
-<a href=#680 id=680 data-nosnippet>680</a>        <span class="kw">let </span>parsed_metadata = StandardKeyMetadata::decode(<span class="kw-2">&amp;</span>serialized_metadata).unwrap();
-<a href=#681 id=681 data-nosnippet>681</a>        <span class="kw">let </span>decrypted_file = EncryptedInputFile::new(input, parsed_metadata);
+<a href=#673 id=673 data-nosnippet>673</a>        <span class="kw">let </span>file_metadata = encrypted_output
+<a href=#674 id=674 data-nosnippet>674</a>            .write(bytes::Bytes::from(plaintext.to_vec()))
+<a href=#675 id=675 data-nosnippet>675</a>            .<span class="kw">await
+<a href=#676 id=676 data-nosnippet>676</a>            </span>.unwrap();
+<a href=#677 id=677 data-nosnippet>677</a>
+<a href=#678 id=678 data-nosnippet>678</a>        <span class="kw">let </span>serialized_metadata = encrypted_output
+<a href=#679 id=679 data-nosnippet>679</a>            .key_metadata_with_saved_file_metadata(<span class="kw-2">&amp;</span>file_metadata)
+<a href=#680 id=680 data-nosnippet>680</a>            .encode()
+<a href=#681 id=681 data-nosnippet>681</a>            .unwrap();
 <a href=#682 id=682 data-nosnippet>682</a>
-<a href=#683 id=683 data-nosnippet>683</a>        <span class="kw">let </span>content = decrypted_file.read().<span class="kw">await</span>.unwrap();
-<a href=#684 id=684 data-nosnippet>684</a>        <span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>content[..], plaintext);
-<a href=#685 id=685 data-nosnippet>685</a>    }
-<a href=#686 id=686 data-nosnippet>686</a>}
+<a href=#683 id=683 data-nosnippet>683</a>        <span class="kw">let </span>input = io.new_input(path).unwrap();
+<a href=#684 id=684 data-nosnippet>684</a>        <span class="kw">let </span>parsed_metadata = StandardKeyMetadata::decode(<span class="kw-2">&amp;</span>serialized_metadata).unwrap();
+<a href=#685 id=685 data-nosnippet>685</a>        <span class="kw">let </span>decrypted_file = EncryptedInputFile::new(input, parsed_metadata);
+<a href=#686 id=686 data-nosnippet>686</a>
+<a href=#687 id=687 data-nosnippet>687</a>        <span class="kw">let </span>content = decrypted_file.read().<span class="kw">await</span>.unwrap();
+<a href=#688 id=688 data-nosnippet>688</a>        <span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>content[..], plaintext);
+<a href=#689 id=689 data-nosnippet>689</a>    }
+<a href=#690 id=690 data-nosnippet>690</a>}
 </code></pre></div></section></main></body></html>
