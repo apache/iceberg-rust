@@ -1134,10 +1134,19 @@ fn test_pre_epoch_timestamptz_formatting() {
         Datum::timestamptz_nanos(-1).to_string(),
         "1969-12-31 23:59:59.999999999 UTC"
     );
+    assert_eq!(
+        Datum::timestamptz_micros(-1_500_000).to_string(),
+        "1969-12-31 23:59:58.500000 UTC"
+    );
 
     check_json_serde(
         r#""1969-12-31T23:59:59.999999+00:00""#,
         Literal::long(-1),
+        &Primitive(PrimitiveType::Timestamptz),
+    );
+    check_json_serde(
+        r#""1969-12-31T23:59:58.500000+00:00""#,
+        Literal::long(-1_500_000),
         &Primitive(PrimitiveType::Timestamptz),
     );
     check_json_serde(
