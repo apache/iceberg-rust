@@ -62,12 +62,20 @@ impl PositionDeletes {
     /// Records that row `pos` of `path` is deleted. `pos` is a row position, so it is
     /// non-negative by construction.
     ///
-    /// Re-inserting the same `(path, pos)` is idempotent: the backing [`RoaringTreemap`]
-    /// collapses the duplicate, so the pair is recorded once. This silent dedup is
-    /// intentional — a position delete file must not list the same `(file_path, pos)` twice,
-    /// so repeated inserts of one deleted row are a no-op rather than an error.
+    /// A duplicate `(file_path, pos)` or a position exceeding `i64::MAX` is a caller bug,
+    /// caught by [`debug_assert!`] in debug builds so it surfaces early in debug/CI (a
+    /// position delete file must not list the same `(file_path, pos)` twice, and the `pos`
+    /// column is `Int64`). In release those assertions compile out and the old behavior
+    /// stands: the backing [`RoaringTreemap`] silently collapses a duplicate pair, and an
+    /// oversized position is still rejected as [`ErrorKind::DataInvalid`] when the batch is
+    /// built.
     pub(crate) fn insert(&mut self, path: impl Into<String>, pos: u64) {
-        self.rows.entry(path.into()).or_default().insert(pos);
+        debug_assert!(pos <= i64::MAX as u64, "position {pos} exceeds i64::MAX");
+        let inserted = self.rows.entry(path.into()).or_default().insert(pos);
+        debug_assert!(
+            inserted,
+            "duplicate position delete: the same (file_path, pos) was inserted twice"
+        );
     }
 
     /// Returns whether no positions have been recorded. `insert` never leaves an empty
@@ -307,6 +315,10 @@ mod test {
         assert_eq!(positions, vec![1, 4, 2]);
     }
 
+    // Release behavior: a duplicate `(file_path, pos)` is silently deduped. In debug builds
+    // that same input trips a `debug_assert!` (see `insert_duplicate_pair_debug_asserts`), so
+    // this test is release-only.
+    #[cfg(not(debug_assertions))]
     #[test]
     fn test_duplicate_pairs_deduped() {
         let mut deletes = PositionDeletes::new();
@@ -325,6 +337,18 @@ mod test {
         assert_eq!(positions, vec![1, 3]);
     }
 
+    // Debug behavior: re-inserting the same `(file_path, pos)` is a caller bug that trips a
+    // `debug_assert!` rather than silently deduping (the release behavior asserted by
+    // `test_duplicate_pairs_deduped`).
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "duplicate position delete")]
+    fn insert_duplicate_pair_debug_asserts() {
+        let mut deletes = PositionDeletes::new();
+        deletes.insert("s3://bucket/data/f0.parquet", 3);
+        deletes.insert("s3://bucket/data/f0.parquet", 3);
+    }
+
     #[test]
     fn test_len_and_is_empty() {
         let mut deletes = PositionDeletes::new();
@@ -337,9 +361,13 @@ mod test {
         assert!(!deletes.is_empty());
         assert_eq!(deletes.len(), 3);
 
-        // A duplicate pair does not change the count.
-        deletes.insert("s3://bucket/data/f0.parquet", 1);
-        assert_eq!(deletes.len(), 3);
+        // A duplicate pair does not change the count. This is release behavior; in debug the
+        // duplicate insert trips a `debug_assert!`, so the check is release-only here.
+        #[cfg(not(debug_assertions))]
+        {
+            deletes.insert("s3://bucket/data/f0.parquet", 1);
+            assert_eq!(deletes.len(), 3);
+        }
     }
 
     #[test]
@@ -351,6 +379,11 @@ mod test {
         assert_position_delete_schema(&batch);
     }
 
+    // Release behavior: a position beyond `i64::MAX` cannot fit the `Int64` column and is
+    // rejected as `DataInvalid` when the batch is built (the release safety net). In debug
+    // builds that same input trips a `debug_assert!` in `insert` up front (see
+    // `insert_position_above_i64_max_debug_asserts`), so this test is release-only.
+    #[cfg(not(debug_assertions))]
     #[test]
     fn test_position_above_i64_max_rejected() {
         let mut deletes = PositionDeletes::new();
@@ -359,6 +392,17 @@ mod test {
         deletes.insert("s3://bucket/data/f0.parquet", i64::MAX as u64 + 1);
         let err = deletes.to_record_batch().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    // Debug behavior: a position beyond `i64::MAX` is a caller bug that trips a
+    // `debug_assert!` in `insert` up front, rather than being rejected only when the batch is
+    // built (the release behavior asserted by `test_position_above_i64_max_rejected`).
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "exceeds i64::MAX")]
+    fn insert_position_above_i64_max_debug_asserts() {
+        let mut deletes = PositionDeletes::new();
+        deletes.insert("s3://bucket/data/f0.parquet", i64::MAX as u64 + 1);
     }
 
     /// Drains [`PositionDeletes::to_record_batches`] into per-batch `(paths, positions)`
@@ -472,6 +516,9 @@ mod test {
         assert!(it.next().is_none());
     }
 
+    // Release-only: inserting a position beyond `i64::MAX` trips a `debug_assert!` in debug
+    // builds, so the streaming overflow safety net can only be exercised in release.
+    #[cfg(not(debug_assertions))]
     #[test]
     fn test_to_record_batches_stops_after_overflow_error() {
         let mut deletes = PositionDeletes::new();
@@ -496,6 +543,9 @@ mod test {
         assert_position_delete_schema(&batch);
     }
 
+    // Release-only: inserting the same `(file_path, pos)` twice trips a `debug_assert!` in
+    // debug builds, so the streaming dedup behavior can only be exercised in release.
+    #[cfg(not(debug_assertions))]
     #[test]
     fn test_to_record_batches_dedups_repeated_pairs() {
         let mut deletes = PositionDeletes::new();
