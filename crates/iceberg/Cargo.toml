@@ -99,8 +99,8 @@ serde_arrow = { version = "0.14", features = ["arrow-59"] }
 tempfile = { workspace = true }
 
 [[bench]]
-name = "row_group_intersection"
 harness = false
+name = "row_group_intersection"
 
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
