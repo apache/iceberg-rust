@@ -45,14 +45,6 @@ pub use oss::*;
 pub use s3::*;
 use serde::{Deserialize, Serialize};
 
-/// Deadline in milliseconds for one IO operation, and for every method call on a returned
-/// reader, writer, lister or deleter. Honored by every `iceberg-storage-opendal` backend, where
-/// it defaults to 10000 to match OpenDAL's `TimeoutLayer`.
-///
-/// Each retry attempt is bounded separately, so it is a per-attempt budget, not a total one.
-/// Control operations such as `stat` and `rename` are bounded by a separate, fixed budget.
-pub const CLIENT_IO_TIMEOUT_MS: &str = "client.io-timeout-ms";
-
 /// Configuration properties for storage backends.
 ///
 /// This struct contains only configuration properties without specifying

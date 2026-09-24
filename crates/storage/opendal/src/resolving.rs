@@ -343,9 +343,9 @@ impl Storage for OpenDalResolvingStorage {
 
 #[cfg(test)]
 mod tests {
-    use iceberg::io::CLIENT_IO_TIMEOUT_MS;
-
     use super::*;
+    #[cfg(feature = "opendal-s3")]
+    use crate::OPENDAL_IO_TIMEOUT_MS;
 
     #[cfg(feature = "opendal-s3")]
     #[derive(Debug)]
@@ -394,7 +394,7 @@ mod tests {
         let mut storage = empty_resolving_storage();
         storage
             .props
-            .insert(CLIENT_IO_TIMEOUT_MS.to_string(), "45000".to_string());
+            .insert(OPENDAL_IO_TIMEOUT_MS.to_string(), "45000".to_string());
 
         let resolved = storage.resolve("s3://bucket/key").unwrap();
         assert_eq!(resolved.client().io_timeout_ms(), 45_000);

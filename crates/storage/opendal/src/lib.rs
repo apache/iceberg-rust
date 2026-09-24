@@ -35,8 +35,8 @@ use cfg_if::cfg_if;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use iceberg::io::{
-    CLIENT_IO_TIMEOUT_MS, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage,
-    StorageConfig, StorageFactory,
+    FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
+    StorageFactory,
 };
 use iceberg::{Error, ErrorKind, Result};
 use iceberg_property_macro::Properties;
@@ -102,6 +102,14 @@ cfg_if! {
 mod resolving;
 pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 
+/// Deadline in milliseconds for one IO operation, and for every method call on a returned
+/// reader, writer, lister or deleter. Honored by every [`OpenDalStorage`] backend, where it
+/// defaults to 10000 to match OpenDAL's `TimeoutLayer`.
+///
+/// Each retry attempt is bounded separately, so it is a per-attempt budget, not a total one.
+/// Control operations such as `stat` and `rename` are bounded by a separate, fixed budget.
+pub const OPENDAL_IO_TIMEOUT_MS: &str = "opendal.io-timeout-ms";
+
 /// Matches the `opendal::layers::TimeoutLayer` default.
 const DEFAULT_IO_TIMEOUT_MS: u64 = 10_000;
 
@@ -114,7 +122,7 @@ const DEFAULT_IO_TIMEOUT_MS: u64 = 10_000;
 pub struct OpenDalClientConfig {
     /// Per-attempt deadline for one IO operation, in milliseconds.
     #[property(
-        key = CLIENT_IO_TIMEOUT_MS,
+        key = OPENDAL_IO_TIMEOUT_MS,
         default = DEFAULT_IO_TIMEOUT_MS,
         parse_with = parse_io_timeout_ms,
         getter
@@ -805,7 +813,7 @@ mod tests {
 
     fn client_config(value: &str) -> Result<OpenDalClientConfig> {
         OpenDalClientConfig::from_properties(&HashMap::from([(
-            CLIENT_IO_TIMEOUT_MS.to_string(),
+            OPENDAL_IO_TIMEOUT_MS.to_string(),
             value.to_string(),
         )]))
     }
@@ -818,7 +826,7 @@ mod tests {
 
         for invalid in ["0", "-1", "12.5", "abc", ""] {
             let err = client_config(invalid).unwrap_err().to_string();
-            assert!(err.contains(CLIENT_IO_TIMEOUT_MS), "{invalid}");
+            assert!(err.contains(OPENDAL_IO_TIMEOUT_MS), "{invalid}");
             assert!(err.contains(&format!("value: {invalid:?}")), "{err}");
         }
     }
@@ -858,10 +866,10 @@ mod tests {
     #[cfg(feature = "opendal-memory")]
     #[test]
     fn test_factory_rejects_invalid_io_timeout() {
-        let config = StorageConfig::new().with_prop(CLIENT_IO_TIMEOUT_MS, "nope");
+        let config = StorageConfig::new().with_prop(OPENDAL_IO_TIMEOUT_MS, "nope");
 
         let err = OpenDalStorageFactory::Memory.build(&config).unwrap_err();
-        assert!(err.to_string().contains(CLIENT_IO_TIMEOUT_MS));
+        assert!(err.to_string().contains(OPENDAL_IO_TIMEOUT_MS));
     }
 
     #[cfg(feature = "opendal-s3")]
