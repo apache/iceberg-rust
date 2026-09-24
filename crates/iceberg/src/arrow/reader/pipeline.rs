@@ -32,7 +32,6 @@ use parquet::arrow::{
 };
 use parquet::encryption::decrypt::FileDecryptionProperties;
 
-use super::row_group_intersection::intersect_sorted_row_group_indices;
 use super::row_lineage::synthesize_row_id_column;
 use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
@@ -614,26 +613,24 @@ impl FileScanTaskReader {
             record_batch_stream_builder = record_batch_stream_builder.with_row_filter(row_filter);
 
             if self.row_group_filtering_enabled {
-                let predicate_filtered_row_groups = ArrowReader::get_selected_row_group_indices(
+                let all_row_groups;
+                let candidate_row_groups = match &selected_row_group_indices {
+                    Some(indices) => indices.as_slice(),
+                    None => {
+                        all_row_groups =
+                            (0..record_batch_stream_builder.metadata().num_row_groups())
+                                .collect::<Vec<_>>();
+                        &all_row_groups
+                    }
+                };
+
+                selected_row_group_indices = Some(ArrowReader::get_selected_row_group_indices(
                     &predicate,
                     record_batch_stream_builder.metadata(),
                     &field_id_map,
                     task.schema(),
-                )?;
-
-                // Merge predicate-based filtering with byte range filtering (if present)
-                // by taking the intersection of both filters
-                selected_row_group_indices = match selected_row_group_indices {
-                    Some(byte_range_filtered) => {
-                        // Keep only row groups that are in both filters
-                        let intersection = intersect_sorted_row_group_indices(
-                            &byte_range_filtered,
-                            &predicate_filtered_row_groups,
-                        );
-                        Some(intersection)
-                    }
-                    None => Some(predicate_filtered_row_groups),
-                };
+                    candidate_row_groups,
+                )?);
             }
 
             if self.bloom_filter_enabled {
@@ -887,7 +884,6 @@ mod tests {
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
-    use super::intersect_sorted_row_group_indices;
     use crate::Runtime;
     use crate::arrow::ArrowReaderBuilder;
     use crate::arrow::test_utils::write_encrypted_parquet;
@@ -906,62 +902,6 @@ mod tests {
     // Noon on 3333-01-01 (Julian day 2_953_529) — outside the i64 nanosecond range (~1677-2262).
     const INT96_TEST_NANOS_WITHIN_DAY: u64 = 43_200_000_000_000;
     const INT96_TEST_JULIAN_DAY: u32 = 2_953_529;
-
-    #[test]
-    fn test_intersect_sorted_row_group_indices_with_empty_inputs() {
-        assert_eq!(
-            intersect_sorted_row_group_indices(&[], &[]),
-            Vec::<usize>::new()
-        );
-        assert_eq!(
-            intersect_sorted_row_group_indices(&[], &[1, 2]),
-            Vec::<usize>::new()
-        );
-        assert_eq!(
-            intersect_sorted_row_group_indices(&[1, 2], &[]),
-            Vec::<usize>::new()
-        );
-    }
-
-    #[test]
-    fn test_intersect_sorted_row_group_indices_with_identical_inputs() {
-        assert_eq!(
-            intersect_sorted_row_group_indices(&[0, 2, 5], &[0, 2, 5]),
-            vec![0, 2, 5]
-        );
-    }
-
-    #[test]
-    fn test_intersect_sorted_row_group_indices_with_partial_overlap() {
-        assert_eq!(
-            intersect_sorted_row_group_indices(&[0, 2, 4, 6, 8], &[1, 2, 3, 6, 9]),
-            vec![2, 6]
-        );
-    }
-
-    #[test]
-    fn test_intersect_sorted_row_group_indices_with_no_overlap() {
-        assert_eq!(
-            intersect_sorted_row_group_indices(&[0, 2, 4], &[1, 3, 5]),
-            Vec::<usize>::new()
-        );
-    }
-
-    #[test]
-    fn test_intersect_sorted_row_group_indices_with_uneven_inputs() {
-        assert_eq!(
-            intersect_sorted_row_group_indices(&[3], &[0, 1, 2, 3, 4, 5]),
-            vec![3]
-        );
-        assert_eq!(
-            intersect_sorted_row_group_indices(&[0, 1, 2, 3, 4, 5], &[3]),
-            vec![3]
-        );
-        assert_eq!(
-            intersect_sorted_row_group_indices(&[2, 9], &[1, 2, 3, 4, 5, 6, 7, 8, 9]),
-            vec![2, 9]
-        );
-    }
 
     fn make_int96_test_value() -> (parquet::data_type::Int96, i64) {
         let mut val = parquet::data_type::Int96::new();

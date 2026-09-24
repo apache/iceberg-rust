@@ -71,11 +71,13 @@ impl ArrowReader {
         parquet_metadata: &Arc<ParquetMetaData>,
         field_id_map: &HashMap<i32, usize>,
         snapshot_schema: &Schema,
+        candidate_row_groups: &[usize],
     ) -> Result<Vec<usize>> {
         let row_groups_metadata = parquet_metadata.row_groups();
-        let mut results = Vec::with_capacity(row_groups_metadata.len());
+        let mut results = Vec::with_capacity(candidate_row_groups.len());
 
-        for (idx, row_group_metadata) in row_groups_metadata.iter().enumerate() {
+        for &idx in candidate_row_groups {
+            let row_group_metadata = &row_groups_metadata[idx];
             if RowGroupMetricsEvaluator::eval(
                 predicate,
                 row_group_metadata,
@@ -634,6 +636,53 @@ mod tests {
 
             assert_eq!(first_val, 100, "Task 2 should start with id=100, not id=0");
         }
+
+        // Combining byte-range and predicate row-group filtering should narrow the
+        // split's candidates instead of evaluating and intersecting independent lists.
+        // This task owns row groups 1 and 2, while the predicate can match row groups
+        // 0 and 2. Only row group 2 should be read.
+        let predicate = Reference::new("id")
+            .less_than(Datum::int(100))
+            .or(Reference::new("id").greater_than_or_equal_to(Datum::int(200)))
+            .bind(schema.clone(), true)
+            .unwrap();
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(rg1_start)
+            .with_length(file_end - rg1_start)
+            .with_data_file_path(file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema.clone())
+            .with_project_field_ids(vec![1])
+            .with_predicate(Some(predicate))
+            .with_record_count(Some(200))
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+            .with_row_group_filtering_enabled(true)
+            .build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        let mut ids = Vec::new();
+        for batch in &result {
+            let id_col = batch
+                .column(0)
+                .as_primitive::<arrow_array::types::Int32Type>();
+            ids.extend((0..id_col.len()).map(|index| id_col.value(index)));
+        }
+
+        assert_eq!(ids, (200..300).collect::<Vec<_>>());
+
     }
 
     /// A single data file split into multiple sub-row-group byte ranges (as Spark/Iceberg

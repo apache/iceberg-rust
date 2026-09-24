@@ -87,7 +87,6 @@ zeroize = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
-criterion = { workspace = true }
 expect-test = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 minijinja = { workspace = true }
@@ -97,14 +96,6 @@ rand = { workspace = true }
 regex = { workspace = true }
 serde_arrow = { version = "0.14", features = ["arrow-59"] }
 tempfile = { workspace = true }
-
-[[bench]]
-harness = false
-name = "row_group_intersection"
-
-[[bench]]
-harness = false
-name = "name_mapping_lookup"
 
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
