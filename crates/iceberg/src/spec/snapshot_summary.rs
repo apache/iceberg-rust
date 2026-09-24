@@ -530,7 +530,7 @@ fn update_totals(
         return;
     };
 
-    let new_total = previous_total + added - removed;
+    let new_total = (previous_total + added).saturating_sub(removed);
     summary
         .additional_properties
         .insert(total_property.to_string(), new_total.to_string());
@@ -1271,5 +1271,43 @@ mod tests {
         assert_eq!(props.get(TOTAL_FILE_SIZE).unwrap(), "800");
         assert_eq!(props.get(TOTAL_POSITION_DELETES).unwrap(), "2");
         assert_eq!(props.get(TOTAL_EQUALITY_DELETES).unwrap(), "1");
+    }
+
+    #[test]
+    fn test_update_totals_saturates_when_removed_exceeds_previous_total() {
+        let prev_props: HashMap<String, String> = [
+            (TOTAL_DATA_FILES, "2"),
+            (TOTAL_RECORDS, "10"),
+            (TOTAL_FILE_SIZE, "100"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        let previous_summary = Summary {
+            operation: Operation::Append,
+            additional_properties: prev_props,
+        };
+
+        let new_props: HashMap<String, String> = [
+            (DELETED_DATA_FILES, "3"),
+            (DELETED_RECORDS, "25"),
+            (REMOVED_FILE_SIZE, "250"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        let summary = Summary {
+            operation: Operation::Delete,
+            additional_properties: new_props,
+        };
+
+        let updated = update_snapshot_summaries(summary, Some(&previous_summary), false).unwrap();
+        let props = &updated.additional_properties;
+
+        assert_eq!(props.get(TOTAL_DATA_FILES).unwrap(), "0");
+        assert_eq!(props.get(TOTAL_RECORDS).unwrap(), "0");
+        assert_eq!(props.get(TOTAL_FILE_SIZE).unwrap(), "0");
     }
 }
