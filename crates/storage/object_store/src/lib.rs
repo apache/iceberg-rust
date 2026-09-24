@@ -34,7 +34,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use dashmap::DashMap;
-use futures::stream::BoxStream;
+use futures::stream::{BoxStream, FuturesUnordered};
 use futures::{StreamExt, TryStreamExt};
 #[cfg(feature = "object_store-s3")]
 use iceberg::io::S3Config;
@@ -291,7 +291,9 @@ impl Storage for ObjectStoreStorage {
         Ok(Box::new(ObjectStoreWriter {
             upload: Some(upload),
             buffer: BytesMut::new(),
-            tasks: Vec::new(),
+            tasks: FuturesUnordered::new(),
+            parts_submitted: 0,
+            bytes_written: 0,
         }))
     }
 
@@ -392,38 +394,46 @@ impl FileRead for ObjectStoreReader {
 /// Minimum part size for S3 multipart upload (5 MiB).
 const MIN_PART_SIZE: usize = 5 * 1024 * 1024;
 
+/// Default maximum concurrent in-flight part uploads.
+const MAX_CONCURRENT_PART_UPLOADS: usize = 8;
+
 /// Writer that implements `FileWrite` using `object_store` multipart upload.
 struct ObjectStoreWriter {
     upload: Option<Box<dyn MultipartUpload>>,
     buffer: BytesMut,
-    tasks: Vec<UploadPart>,
+    tasks: FuturesUnordered<UploadPart>,
+    parts_submitted: usize,
+    bytes_written: u64,
 }
 
 impl ObjectStoreWriter {
     /// Flushes any buffered bytes as an in-flight part upload to S3.
     fn flush_buffer(
         buffer: &mut BytesMut,
-        tasks: &mut Vec<UploadPart>,
+        tasks: &mut FuturesUnordered<UploadPart>,
+        parts_submitted: &mut usize,
         upload: &mut Box<dyn MultipartUpload>,
     ) {
         if !buffer.is_empty() {
             let part_data = std::mem::take(buffer).freeze();
             let part_fut = upload.put_part(PutPayload::from_bytes(part_data));
             tasks.push(part_fut);
+            *parts_submitted += 1;
         }
     }
 
     /// Accumulates bytes into `buffer`, flushing 5 MiB parts when full.
     fn append_bytes(
         buffer: &mut BytesMut,
-        tasks: &mut Vec<UploadPart>,
+        tasks: &mut FuturesUnordered<UploadPart>,
+        parts_submitted: &mut usize,
         mut bs: Bytes,
         upload: &mut Box<dyn MultipartUpload>,
     ) {
         while !bs.is_empty() {
             let remaining = MIN_PART_SIZE.saturating_sub(buffer.len());
             if remaining == 0 {
-                Self::flush_buffer(buffer, tasks, upload);
+                Self::flush_buffer(buffer, tasks, parts_submitted, upload);
                 continue;
             }
 
@@ -433,7 +443,7 @@ impl ObjectStoreWriter {
             }
             let chunk = bs.split_to(remaining);
             buffer.extend_from_slice(&chunk);
-            Self::flush_buffer(buffer, tasks, upload);
+            Self::flush_buffer(buffer, tasks, parts_submitted, upload);
         }
     }
 }
@@ -468,11 +478,36 @@ impl FileWrite for ObjectStoreWriter {
                 "Writer has already been closed",
             )
         })?;
-        Self::append_bytes(&mut self.buffer, &mut self.tasks, bs, upload);
+        self.bytes_written += bs.len() as u64;
+        Self::append_bytes(
+            &mut self.buffer,
+            &mut self.tasks,
+            &mut self.parts_submitted,
+            bs,
+            upload,
+        );
+
+        // Throttle in-flight uploads: fail fast if any part upload fails
+        while self.tasks.len() >= MAX_CONCURRENT_PART_UPLOADS {
+            if let Some(res) = self.tasks.next().await {
+                if let Err(e) = res {
+                    if let Some(mut upload) = self.upload.take() {
+                        if let Err(abort_err) = upload.abort().await {
+                            tracing::warn!(
+                                error = %abort_err,
+                                "Failed to abort multipart upload after part upload failure"
+                            );
+                        }
+                    }
+                    return Err(from_object_store_error(e));
+                }
+            }
+        }
+
         Ok(())
     }
 
-    async fn close(&mut self) -> Result<()> {
+    async fn close(&mut self) -> Result<FileMetadata> {
         let mut upload = self.upload.take().ok_or_else(|| {
             Error::new(
                 ErrorKind::PreconditionFailed,
@@ -482,22 +517,24 @@ impl FileWrite for ObjectStoreWriter {
 
         // Flush any remaining buffered data, or emit an empty part if 0 parts
         // have been sent (S3 requires at least 1 part to complete a multipart upload).
-        if !self.buffer.is_empty() || self.tasks.is_empty() {
+        if !self.buffer.is_empty() || self.parts_submitted == 0 {
             let part_data = std::mem::take(&mut self.buffer).freeze();
             let part_fut = upload.put_part(PutPayload::from_bytes(part_data));
             self.tasks.push(part_fut);
+            self.parts_submitted += 1;
         }
 
         // Await all in-flight part uploads; abort if any part fails.
-        let tasks = std::mem::take(&mut self.tasks);
-        if let Err(e) = futures::future::try_join_all(tasks).await {
-            if let Err(abort_err) = upload.abort().await {
-                tracing::warn!(
-                    error = %abort_err,
-                    "Failed to abort multipart upload after part upload failure"
-                );
+        while let Some(res) = self.tasks.next().await {
+            if let Err(e) = res {
+                if let Err(abort_err) = upload.abort().await {
+                    tracing::warn!(
+                        error = %abort_err,
+                        "Failed to abort multipart upload after part upload failure"
+                    );
+                }
+                return Err(from_object_store_error(e));
             }
-            return Err(from_object_store_error(e));
         }
 
         // Complete multipart upload; abort if S3 rejects completion.
@@ -511,7 +548,9 @@ impl FileWrite for ObjectStoreWriter {
             return Err(from_object_store_error(e));
         }
 
-        Ok(())
+        Ok(FileMetadata {
+            size: self.bytes_written,
+        })
     }
 }
 
@@ -655,13 +694,17 @@ mod tests {
         let mut writer = ObjectStoreWriter {
             upload: None,
             buffer: BytesMut::new(),
-            tasks: Vec::new(),
+            tasks: FuturesUnordered::new(),
+            parts_submitted: 0,
+            bytes_written: 0,
         };
         let write_err = writer.write(Bytes::from_static(b"data")).await.unwrap_err();
         assert_eq!(write_err.kind(), ErrorKind::PreconditionFailed);
         assert_eq!(write_err.message(), "Writer has already been closed");
 
-        let close_err = writer.close().await.unwrap_err();
+        let close_res = writer.close().await;
+        assert!(close_res.is_err());
+        let close_err = close_res.err().unwrap();
         assert_eq!(close_err.kind(), ErrorKind::PreconditionFailed);
         assert_eq!(close_err.message(), "Writer has already been closed");
     }
@@ -741,7 +784,9 @@ mod tests {
         let writer = ObjectStoreWriter {
             upload: Some(upload),
             buffer: BytesMut::new(),
-            tasks: Vec::new(),
+            tasks: FuturesUnordered::new(),
+            parts_submitted: 0,
+            bytes_written: 0,
         };
 
         (writer, parts_count, completed, aborted)
@@ -790,7 +835,9 @@ mod tests {
             .write(Bytes::from(vec![0u8; 6 * 1024 * 1024]))
             .await
             .unwrap();
-        let err = writer.close().await.unwrap_err();
+        let close_res = writer.close().await;
+        assert!(close_res.is_err());
+        let err = close_res.err().unwrap();
 
         assert_eq!(err.kind(), ErrorKind::Unexpected);
         assert!(!completed.load(Ordering::SeqCst));
@@ -804,13 +851,47 @@ mod tests {
     async fn test_writer_complete_failure_aborts() {
         let (mut writer, _parts, completed, aborted) = make_mock_writer(false, true);
         writer.write(Bytes::from_static(b"hello")).await.unwrap();
-        let err = writer.close().await.unwrap_err();
+        let close_res = writer.close().await;
+        assert!(close_res.is_err());
+        let err = close_res.err().unwrap();
 
         assert_eq!(err.kind(), ErrorKind::Unexpected);
         assert!(!completed.load(Ordering::SeqCst));
         assert!(
             aborted.load(Ordering::SeqCst),
             "abort() MUST be called when complete() fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_writer_bounded_concurrency_past_limit() {
+        let (mut writer, parts, completed, aborted) = make_mock_writer(false, false);
+        // Write 10 parts (50 MiB) which exceeds MAX_CONCURRENT_PART_UPLOADS (8)
+        writer
+            .write(Bytes::from(vec![0u8; 10 * 5 * 1024 * 1024]))
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+
+        assert_eq!(parts.load(Ordering::SeqCst), 10);
+        assert!(completed.load(Ordering::SeqCst));
+        assert!(!aborted.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_writer_fail_fast_during_write() {
+        let (mut writer, _parts, completed, aborted) = make_mock_writer(true, false);
+        // Writing past MAX_CONCURRENT_PART_UPLOADS triggers in-flight task awaiting inside write()
+        let err = writer
+            .write(Bytes::from(vec![0u8; 10 * 5 * 1024 * 1024]))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(!completed.load(Ordering::SeqCst));
+        assert!(
+            aborted.load(Ordering::SeqCst),
+            "abort() MUST be called immediately on write() failure"
         );
     }
 
