@@ -41,6 +41,7 @@ mod positional_deletes;
 mod predicate_visitor;
 mod projection;
 mod row_filter;
+mod row_group_intersection;
 mod row_lineage;
 pub use file_reader::ArrowFileReader;
 pub(crate) use options::ParquetReadOptions;

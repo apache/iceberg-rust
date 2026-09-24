@@ -32,6 +32,7 @@ use parquet::arrow::{
 };
 use parquet::encryption::decrypt::FileDecryptionProperties;
 
+use super::row_group_intersection::intersect_sorted_row_group_indices;
 use super::row_lineage::synthesize_row_id_column;
 use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
@@ -868,26 +869,6 @@ impl ArrowReader {
             None => Ok(ArrowReaderOptions::default()),
         }
     }
-}
-
-/// Intersects two ascending lists of unique row-group indices while preserving their order.
-fn intersect_sorted_row_group_indices(left: &[usize], right: &[usize]) -> Vec<usize> {
-    let mut intersection = Vec::with_capacity(left.len().min(right.len()));
-    let (mut left_index, mut right_index) = (0, 0);
-
-    while left_index < left.len() && right_index < right.len() {
-        match left[left_index].cmp(&right[right_index]) {
-            std::cmp::Ordering::Less => left_index += 1,
-            std::cmp::Ordering::Greater => right_index += 1,
-            std::cmp::Ordering::Equal => {
-                intersection.push(left[left_index]);
-                left_index += 1;
-                right_index += 1;
-            }
-        }
-    }
-
-    intersection
 }
 
 #[cfg(test)]
