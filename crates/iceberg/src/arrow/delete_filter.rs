@@ -184,9 +184,8 @@ impl DeleteFilter {
 
         match self.state.read().unwrap().equality_deletes.get(file_path) {
             Some(EqDelState::Loaded(predicate)) => Some(predicate.clone()),
-            // Woken without a `Loaded` entry: the load we waited on failed and
-            // `insert_equality_delete` removed the entry (a retry may have re-added it as
-            // `Loading`).
+            // Woken without a `Loaded` entry: the load we waited on failed (a retry may have
+            // re-added the entry as `Loading`).
             _ => None,
         }
     }
