@@ -50,30 +50,19 @@ services:
       timeout: 5s
       retries: 5
 
-  # Creates buckets for tests
+  # One-shot job that creates buckets for tests. Re-creating an existing bucket
+  # returns 200, so this is safe to re-run.
   create-buckets:
     depends_on:
       object-store:
         condition: service_healthy
     image: rustfs/rustfs:1.0.0
-    # 409 means the bucket already exists, which is fine on container restarts.
     entrypoint: >
       /bin/sh -c "
-        set -e;
-        for bucket in icebergdata warehouse bucket1; do
-          code=$$(curl -sS -o /dev/null -w '%{http_code}' --aws-sigv4 aws:amz:us-east-1:s3 -u admin:password -X PUT http://object-store:9000/$$bucket);
-          case $$code in 200|409) ;; *) echo \"Failed to create bucket $$bucket: HTTP $$code\"; exit 1;; esac;
-        done;
-        touch /tmp/buckets-ready;
-        echo 'Buckets created successfully';
-        tail -f /dev/null
+        curl -fsS --aws-sigv4 aws:amz:us-east-1:s3 -u admin:password -X PUT http://object-store:9000/icebergdata &&
+        curl -fsS --aws-sigv4 aws:amz:us-east-1:s3 -u admin:password -X PUT http://object-store:9000/warehouse &&
+        curl -fsS --aws-sigv4 aws:amz:us-east-1:s3 -u admin:password -X PUT http://object-store:9000/bucket1
       "
-    # Lets `docker compose up --wait` block until the buckets exist.
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/buckets-ready"]
-      interval: 2s
-      timeout: 2s
-      retries: 15
     networks:
       iceberg_test:
 
@@ -171,8 +160,8 @@ services:
     depends_on:
       rest:
         condition: service_healthy
-      object-store:
-        condition: service_healthy
+      create-buckets:
+        condition: service_completed_successfully
     environment:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
