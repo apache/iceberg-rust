@@ -50,7 +50,8 @@ use iceberg_catalog_sql::{
 };
 use iceberg_storage_opendal::OpenDalStorageFactory;
 use iceberg_test_utils::{
-    get_glue_endpoint, get_hms_endpoint, get_rest_catalog_endpoint, get_rustfs_endpoint, set_up,
+    get_glue_endpoint, get_hms_endpoint, get_object_store_endpoint, get_rest_catalog_endpoint,
+    set_up,
 };
 use sqlx::migrate::MigrateDatabase;
 use tempfile::TempDir;
@@ -230,7 +231,7 @@ async fn rest_catalog(kms_client_factory: Arc<dyn KmsClientFactory>) -> RestCata
 
 async fn glue_catalog(kms_client_factory: Arc<dyn KmsClientFactory>) -> GlueCatalog {
     let glue_endpoint = get_glue_endpoint();
-    let rustfs_endpoint = get_rustfs_endpoint();
+    let object_store_endpoint = get_object_store_endpoint();
 
     let props = HashMap::from([
         (AWS_ACCESS_KEY_ID.to_string(), "my_access_id".to_string()),
@@ -239,7 +240,7 @@ async fn glue_catalog(kms_client_factory: Arc<dyn KmsClientFactory>) -> GlueCata
             "my_secret_key".to_string(),
         ),
         (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
-        (S3_ENDPOINT.to_string(), rustfs_endpoint),
+        (S3_ENDPOINT.to_string(), object_store_endpoint),
         (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
         (S3_REGION.to_string(), "us-east-1".to_string()),
@@ -279,7 +280,7 @@ async fn glue_catalog(kms_client_factory: Arc<dyn KmsClientFactory>) -> GlueCata
 
 async fn hms_catalog(kms_client_factory: Arc<dyn KmsClientFactory>) -> HmsCatalog {
     let hms_endpoint = get_hms_endpoint();
-    let rustfs_endpoint = get_rustfs_endpoint();
+    let object_store_endpoint = get_object_store_endpoint();
 
     let props = HashMap::from([
         (HMS_CATALOG_PROP_URI.to_string(), hms_endpoint),
@@ -291,7 +292,7 @@ async fn hms_catalog(kms_client_factory: Arc<dyn KmsClientFactory>) -> HmsCatalo
             HMS_CATALOG_PROP_WAREHOUSE.to_string(),
             "s3a://warehouse/hive".to_string(),
         ),
-        (S3_ENDPOINT.to_string(), rustfs_endpoint),
+        (S3_ENDPOINT.to_string(), object_store_endpoint),
         (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
         (S3_REGION.to_string(), "us-east-1".to_string()),

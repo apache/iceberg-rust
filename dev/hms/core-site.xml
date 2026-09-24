@@ -30,7 +30,7 @@
     </property>
     <property>
       <name>fs.s3a.endpoint</name>
-      <value>http://rustfs:9000</value>
+      <value>http://object-store:9000</value>
     </property>
     <property>
       <name>fs.s3a.access.key</name>

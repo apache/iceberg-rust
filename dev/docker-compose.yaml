@@ -25,22 +25,22 @@ networks:
 
 services:
   # =============================================================================
-  # RustFS - S3-compatible storage (shared by all tests)
+  # Object store - S3-compatible storage backed by RustFS (shared by all tests)
   # =============================================================================
-  rustfs:
+  object-store:
     image: rustfs/rustfs:1.0.0
     environment:
       - RUSTFS_ACCESS_KEY=admin
       - RUSTFS_SECRET_KEY=password
-      - RUSTFS_SERVER_DOMAINS=rustfs
-    hostname: rustfs
+      - RUSTFS_SERVER_DOMAINS=object-store
+    hostname: object-store
     networks:
       iceberg_test:
         # Add aliases for virtual-hosted style bucket access
         aliases:
-          - icebergdata.rustfs
-          - warehouse.rustfs
-          - bucket1.rustfs
+          - icebergdata.object-store
+          - warehouse.object-store
+          - bucket1.object-store
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -53,14 +53,14 @@ services:
   # Creates buckets for tests
   create-buckets:
     depends_on:
-      rustfs:
+      object-store:
         condition: service_healthy
     image: rustfs/rustfs:1.0.0
     entrypoint: >
       /bin/sh -c "
-        curl -fsS --aws-sigv4 aws:amz:us-east-1:s3 -u admin:password -X PUT http://rustfs:9000/icebergdata;
-        curl -fsS --aws-sigv4 aws:amz:us-east-1:s3 -u admin:password -X PUT http://rustfs:9000/warehouse;
-        curl -fsS --aws-sigv4 aws:amz:us-east-1:s3 -u admin:password -X PUT http://rustfs:9000/bucket1;
+        curl -fsS --aws-sigv4 aws:amz:us-east-1:s3 -u admin:password -X PUT http://object-store:9000/icebergdata;
+        curl -fsS --aws-sigv4 aws:amz:us-east-1:s3 -u admin:password -X PUT http://object-store:9000/warehouse;
+        curl -fsS --aws-sigv4 aws:amz:us-east-1:s3 -u admin:password -X PUT http://object-store:9000/bucket1;
         echo 'Buckets created successfully';
         tail -f /dev/null
       "
@@ -80,9 +80,9 @@ services:
       - CATALOG_URI=jdbc:sqlite:file:/tmp/iceberg_rest.db?journal_mode=WAL
       - CATALOG_WAREHOUSE=s3://icebergdata/demo
       - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
-      - CATALOG_S3_ENDPOINT=http://rustfs:9000
+      - CATALOG_S3_ENDPOINT=http://object-store:9000
     depends_on:
-      rustfs:
+      object-store:
         condition: service_healthy
     networks:
       iceberg_test:
@@ -104,7 +104,7 @@ services:
       dockerfile: Dockerfile
     platform: ${DOCKER_DEFAULT_PLATFORM:-linux/amd64}
     depends_on:
-      rustfs:
+      object-store:
         condition: service_healthy
     networks:
       iceberg_test:
@@ -161,7 +161,7 @@ services:
     depends_on:
       rest:
         condition: service_healthy
-      rustfs:
+      object-store:
         condition: service_healthy
     environment:
       - AWS_ACCESS_KEY_ID=admin

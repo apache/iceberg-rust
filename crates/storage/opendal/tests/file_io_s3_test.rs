@@ -32,19 +32,19 @@ mod tests {
     use iceberg_storage_opendal::{
         AwsCredential, CustomAwsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
     };
-    use iceberg_test_utils::{get_rustfs_endpoint, normalize_test_name_with_parts, set_up};
+    use iceberg_test_utils::{get_object_store_endpoint, normalize_test_name_with_parts, set_up};
     use reqsign_core::Context;
 
     async fn get_file_io() -> FileIO {
         set_up();
 
-        let rustfs_endpoint = get_rustfs_endpoint();
+        let object_store_endpoint = get_object_store_endpoint();
 
         FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
             customized_credential_load: None,
         }))
         .with_props(vec![
-            (S3_ENDPOINT, rustfs_endpoint),
+            (S3_ENDPOINT, object_store_endpoint),
             (S3_ACCESS_KEY_ID, "admin".to_string()),
             (S3_SECRET_ACCESS_KEY, "password".to_string()),
             (S3_REGION, "us-east-1".to_string()),
@@ -138,7 +138,7 @@ mod tests {
             Self { credential }
         }
 
-        fn new_rustfs() -> Self {
+        fn new_object_store() -> Self {
             Self::new(Some(AwsCredential {
                 access_key_id: "admin".to_string(),
                 secret_access_key: "password".to_string(),
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn test_custom_aws_credential_loader_instantiation() {
         // Test creating CustomAwsCredentialLoader with mock loader
-        let mock_loader = MockCredentialLoader::new_rustfs();
+        let mock_loader = MockCredentialLoader::new_object_store();
         let custom_loader = CustomAwsCredentialLoader::new(mock_loader);
 
         // Test that the loader can be used in FileIOBuilder with OpenDalStorageFactory
@@ -182,17 +182,17 @@ mod tests {
         let _file_io = get_file_io().await;
 
         // Create a mock credential loader
-        let mock_loader = MockCredentialLoader::new_rustfs();
+        let mock_loader = MockCredentialLoader::new_object_store();
         let custom_loader = CustomAwsCredentialLoader::new(mock_loader);
 
-        let rustfs_endpoint = get_rustfs_endpoint();
+        let object_store_endpoint = get_object_store_endpoint();
 
         // Build FileIO with custom credential loader via OpenDalStorageFactory
         let file_io_with_custom_creds = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
             customized_credential_load: Some(custom_loader),
         }))
         .with_props(vec![
-            (S3_ENDPOINT, rustfs_endpoint),
+            (S3_ENDPOINT, object_store_endpoint),
             (S3_REGION, "us-east-1".to_string()),
             (S3_PATH_STYLE_ACCESS, "true".to_string()),
         ])
@@ -213,14 +213,14 @@ mod tests {
         let mock_loader = MockCredentialLoader::new(None);
         let custom_loader = CustomAwsCredentialLoader::new(mock_loader);
 
-        let rustfs_endpoint = get_rustfs_endpoint();
+        let object_store_endpoint = get_object_store_endpoint();
 
         // Build FileIO with custom credential loader via OpenDalStorageFactory
         let file_io_with_custom_creds = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
             customized_credential_load: Some(custom_loader),
         }))
         .with_props(vec![
-            (S3_ENDPOINT, rustfs_endpoint),
+            (S3_ENDPOINT, object_store_endpoint),
             (S3_REGION, "us-east-1".to_string()),
             (S3_PATH_STYLE_ACCESS, "true".to_string()),
         ])
