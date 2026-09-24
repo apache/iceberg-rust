@@ -1136,7 +1136,7 @@ fn test_pre_epoch_timestamptz_formatting() {
     );
     assert_eq!(
         Datum::timestamptz_micros(-1_500_000).to_string(),
-        "1969-12-31 23:59:58.500000 UTC"
+        "1969-12-31 23:59:58.500 UTC"
     );
 
     check_json_serde(
