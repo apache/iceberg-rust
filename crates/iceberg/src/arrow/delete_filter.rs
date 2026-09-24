@@ -180,9 +180,12 @@ impl DeleteFilter {
 
         notifier.notified().await;
 
+        // A missing entry here means the load failed: `insert_equality_delete` removes the
+        // `Loading` marker before notifying waiters when the delete file could not be parsed.
+        // Return None so the caller surfaces a "missing predicate" error instead of hanging.
         match self.state.read().unwrap().equality_deletes.get(file_path) {
             Some(EqDelState::Loaded(predicate)) => Some(predicate.clone()),
-            _ => unreachable!("Cannot be any other state than loaded"),
+            _ => None,
         }
     }
 
@@ -261,14 +264,29 @@ impl DeleteFilter {
         let state = self.state.clone();
         let delete_file_path = delete_file_path.to_string();
         self.runtime.cpu().spawn(async move {
-            let eq_del = eq_del.await.unwrap();
-            {
-                let mut state = state.write().unwrap();
-                state
-                    .equality_deletes
-                    .insert(delete_file_path, EqDelState::Loaded(eq_del));
+            match eq_del.await {
+                Ok(predicate) => {
+                    {
+                        let mut state = state.write().unwrap();
+                        state
+                            .equality_deletes
+                            .insert(delete_file_path, EqDelState::Loaded(predicate));
+                    }
+                    notify.notify_waiters();
+                }
+                // The loader dropped the sender without delivering a predicate, which happens
+                // when the equality-delete file fails to parse and the load returns early. Drop
+                // the `Loading` marker so the entry is not stuck forever, then wake any waiters:
+                // on wakeup they find the entry gone and surface an error instead of blocking on
+                // a notification that would otherwise never fire.
+                Err(_) => {
+                    {
+                        let mut state = state.write().unwrap();
+                        state.equality_deletes.remove(&delete_file_path);
+                    }
+                    notify.notify_waiters();
+                }
             }
-            notify.notify_waiters();
         });
     }
 }
@@ -578,6 +596,30 @@ pub(crate) mod tests {
         assert!(
             result.is_err(),
             "case_sensitive=true should fail when column case mismatches"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_equality_delete_predicate_resolves_when_load_fails() {
+        // Regression test: when the loader drops the predicate sender without sending (the
+        // equality-delete file failed to parse), a waiter must resolve to `None` instead of
+        // blocking forever on a notification that never fires. Before the fix the loader task
+        // panicked on `RecvError` and left the entry stuck in `Loading`, hanging every waiter.
+        let filter = DeleteFilter::new(Runtime::current());
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<Predicate>();
+        filter.insert_equality_delete("eq-del.parquet", rx);
+
+        // Simulate the failed load by dropping the sender before any predicate is sent.
+        drop(tx);
+
+        let result = filter
+            .get_equality_delete_predicate_for_delete_file_path("eq-del.parquet")
+            .await;
+
+        assert!(
+            result.is_none(),
+            "a failed equality-delete load must resolve to None instead of hanging"
         );
     }
 }
