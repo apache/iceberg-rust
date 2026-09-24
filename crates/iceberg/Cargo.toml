@@ -102,6 +102,10 @@ tempfile = { workspace = true }
 harness = false
 name = "row_group_intersection"
 
+[[bench]]
+harness = false
+name = "name_mapping_lookup"
+
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
 ignored = ["tap"]

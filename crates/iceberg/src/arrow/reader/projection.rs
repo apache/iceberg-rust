@@ -27,6 +27,7 @@ use arrow_schema::{Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
+use super::name_mapping_lookup::contains_name;
 use super::{ArrowReader, CollectFieldIdVisitor};
 use crate::arrow::arrow_schema_to_schema;
 use crate::error::{Result, invalid_data};
@@ -436,7 +437,7 @@ pub(super) fn apply_name_mapping_to_arrow_schema(
             let mapped_field_opt = name_mapping
                 .fields()
                 .iter()
-                .find(|f| f.names().contains(&field.name().to_string()));
+                .find(|f| contains_name(f.names(), field.name()));
 
             let mut metadata = field.metadata().clone();
 
