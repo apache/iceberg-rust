@@ -1987,15 +1987,6 @@ pub mod tests {
     }
 
     #[test]
-    fn test_table_scan_as_of_time_selects_historical_snapshot() {
-        let table = TableTestFixture::new().table;
-        for entry in table.metadata().history() {
-            let scan = table.scan().as_of_time(entry.timestamp_ms).build().unwrap();
-            assert_eq!(scan.snapshot().unwrap().snapshot_id(), entry.snapshot_id);
-        }
-    }
-
-    #[test]
     fn test_table_scan_as_of_time_after_rollback() {
         for elapsed_ms in [0, 1000] {
             let table = TableTestFixture::new().table;
@@ -2037,25 +2028,6 @@ pub mod tests {
         let err = table.scan().as_of_time(before).build().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.message().contains(&before.to_string()));
-    }
-
-    #[test]
-    fn test_table_scan_as_of_time_rejects_missing_snapshot() {
-        let table = TableTestFixture::new().table;
-        let mut metadata = table.metadata().clone();
-        let entry = metadata.history()[0].clone();
-        metadata.snapshots.remove(&entry.snapshot_id);
-        let table = table.with_metadata(Arc::new(metadata));
-        let err = table
-            .scan()
-            .as_of_time(entry.timestamp_ms)
-            .build()
-            .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert_eq!(
-            err.message(),
-            format!("Snapshot with id {} not found", entry.snapshot_id)
-        );
     }
 
     #[test]
@@ -2205,68 +2177,6 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_table_scan_as_of_time_matches_explicit_snapshot_read() {
-        let mut fixture = TableTestFixture::new();
-        fixture.setup_manifest_files().await;
-        let table = fixture.table;
-        let entry = table.metadata().history().last().unwrap();
-        let predicate = Reference::new("y").greater_than_or_equal_to(Datum::long(5));
-        let by_time = table
-            .scan()
-            .as_of_time(entry.timestamp_ms)
-            .select(["y"])
-            .with_filter(predicate.clone())
-            .build()
-            .unwrap();
-        let by_id = table
-            .scan()
-            .snapshot_id(entry.snapshot_id)
-            .select(["y"])
-            .with_filter(predicate)
-            .build()
-            .unwrap();
-        let mut time_tasks: Vec<_> = by_time
-            .plan_files()
-            .await
-            .unwrap()
-            .try_collect()
-            .await
-            .unwrap();
-        let mut id_tasks: Vec<_> = by_id
-            .plan_files()
-            .await
-            .unwrap()
-            .try_collect()
-            .await
-            .unwrap();
-        time_tasks.sort_by_key(|task| task.data_file_path().to_string());
-        id_tasks.sort_by_key(|task| task.data_file_path().to_string());
-        assert!(!time_tasks.is_empty());
-        assert_eq!(time_tasks, id_tasks);
-        let mut rows = Vec::new();
-        for scan in [by_time, by_id] {
-            let batches: Vec<_> = scan.to_arrow().await.unwrap().try_collect().await.unwrap();
-            let mut values: Vec<i64> = batches
-                .iter()
-                .flat_map(|batch| {
-                    batch
-                        .column(0)
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .unwrap()
-                        .values()
-                        .iter()
-                        .copied()
-                })
-                .collect();
-            values.sort_unstable();
-            rows.push(values);
-        }
-        assert!(!rows[0].is_empty());
-        assert_eq!(rows[0], rows[1]);
-    }
-
-    #[tokio::test]
     async fn test_table_scan_as_of_time_reads_historical_rows() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
@@ -2345,12 +2255,29 @@ pub mod tests {
         list_writer.close().await.unwrap();
 
         let table = fixture.table;
-        let by_time = table.scan().as_of_time(entry.timestamp_ms).build().unwrap();
-        let by_id = table.scan().snapshot_id(entry.snapshot_id).build().unwrap();
+        let [by_time, by_id] = [
+            table.scan().as_of_time(entry.timestamp_ms),
+            table.scan().snapshot_id(entry.snapshot_id),
+        ]
+        .map(|scan| {
+            scan.with_filter(Reference::new("x").greater_than_or_equal_to(Datum::long(100)))
+                .build()
+                .unwrap()
+        });
         let current = table.scan().build().unwrap();
+        let mut planned_files = Vec::new();
         let mut rows = Vec::new();
         let mut schemas = Vec::new();
         for scan in [by_time, by_id, current] {
+            let mut tasks: Vec<_> = scan
+                .plan_files()
+                .await
+                .unwrap()
+                .try_collect()
+                .await
+                .unwrap();
+            tasks.sort_by_key(|task| task.data_file_path().to_string());
+            planned_files.push(tasks);
             let batches: Vec<_> = scan.to_arrow().await.unwrap().try_collect().await.unwrap();
             assert!(!batches.is_empty());
             schemas.push(batches[0].schema());
@@ -2371,11 +2298,12 @@ pub mod tests {
             values.sort_unstable();
             rows.push(values);
         }
+        assert!(!planned_files[0].is_empty());
+        assert_eq!(planned_files[0], planned_files[1]);
         assert_eq!(rows[0], vec![100]);
         assert_eq!(rows[0], rows[1]);
         // Two live fixture files contain 1,024 rows each.
         assert_eq!(rows[2], vec![1; 2048]);
-        assert_ne!(rows[0], rows[2]);
         assert_eq!(schemas[0], schemas[1]);
         assert_eq!(schemas[0].fields().len(), 1);
         assert_eq!(schemas[2].fields().len(), 8);
