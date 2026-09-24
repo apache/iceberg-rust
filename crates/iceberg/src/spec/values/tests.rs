@@ -1145,7 +1145,7 @@ fn test_pre_epoch_timestamptz_formatting() {
         &Primitive(PrimitiveType::Timestamptz),
     );
     check_json_serde(
-        r#""1969-12-31T23:59:58.500000+00:00""#,
+        r#""1969-12-31T23:59:58.500+00:00""#,
         Literal::long(-1_500_000),
         &Primitive(PrimitiveType::Timestamptz),
     );
