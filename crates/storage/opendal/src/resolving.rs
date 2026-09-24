@@ -377,28 +377,24 @@ mod tests {
         );
     }
 
-    /// Builds a resolving storage, suitable for `resolve()` calls that don't
-    /// actually hit any backend.
-    fn resolving_storage(props: HashMap<String, String>) -> OpenDalResolvingStorage {
+    /// Builds a resolving storage with empty props, suitable for `resolve()`
+    /// calls that don't actually hit any backend.
+    fn empty_resolving_storage() -> OpenDalResolvingStorage {
         OpenDalResolvingStorage {
-            props,
+            props: HashMap::new(),
             storages: RwLock::new(HashMap::new()),
             #[cfg(feature = "opendal-s3")]
             customized_credential_load: None,
         }
     }
 
-    fn empty_resolving_storage() -> OpenDalResolvingStorage {
-        resolving_storage(HashMap::new())
-    }
-
     #[cfg(feature = "opendal-s3")]
     #[test]
     fn test_resolve_propagates_io_timeout() {
-        let storage = resolving_storage(HashMap::from([(
-            CLIENT_IO_TIMEOUT_MS.to_string(),
-            "45000".to_string(),
-        )]));
+        let mut storage = empty_resolving_storage();
+        storage
+            .props
+            .insert(CLIENT_IO_TIMEOUT_MS.to_string(), "45000".to_string());
 
         let resolved = storage.resolve("s3://bucket/key").unwrap();
         assert_eq!(resolved.client().io_timeout_ms(), 45_000);

@@ -122,15 +122,11 @@ pub struct OpenDalClientConfig {
     io_timeout_ms: u64,
 }
 
-impl OpenDalClientConfig {
-    const DEFAULT: Self = Self {
-        io_timeout_ms: DEFAULT_IO_TIMEOUT_MS,
-    };
-}
-
 impl Default for OpenDalClientConfig {
     fn default() -> Self {
-        Self::DEFAULT
+        Self {
+            io_timeout_ms: DEFAULT_IO_TIMEOUT_MS,
+        }
     }
 }
 
@@ -143,7 +139,7 @@ fn parse_io_timeout_ms(value: &str) -> Result<u64> {
             ErrorKind::DataInvalid,
             "Expected a positive integer number of milliseconds",
         )
-        .with_context("value", value)),
+        .with_context("value", format!("{value:?}"))),
     }
 }
 
@@ -481,8 +477,7 @@ impl OpenDalStorage {
         Ok((operator, relative_path))
     }
 
-    /// Client settings for this backend. The fallback arm is gated on every backend feature
-    /// being off, when the enum has no variants, so a new variant is a compile error here.
+    /// Client settings for this backend.
     pub fn client(&self) -> &OpenDalClientConfig {
         match self {
             #[cfg(feature = "opendal-memory")]
@@ -499,6 +494,8 @@ impl OpenDalStorage {
             OpenDalStorage::Azdls { client, .. } => client,
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { client, .. } => client,
+            // Only compiled when every backend feature is off and the enum has no variants.
+            // Gating it this way makes a new variant without an arm a compile error.
             #[cfg(all(
                 not(feature = "opendal-memory"),
                 not(feature = "opendal-s3"),
@@ -508,7 +505,7 @@ impl OpenDalStorage {
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
             ))]
-            _ => &OpenDalClientConfig::DEFAULT,
+            _ => unreachable!(),
         }
     }
 
@@ -816,22 +813,52 @@ mod tests {
     #[test]
     fn test_io_timeout_parsing() {
         let unset = OpenDalClientConfig::from_properties(&HashMap::new()).unwrap();
-        assert_eq!(unset.io_timeout_ms(), 10_000);
+        assert_eq!(unset.io_timeout_ms(), DEFAULT_IO_TIMEOUT_MS);
         assert_eq!(client_config("45000").unwrap().io_timeout_ms(), 45_000);
 
         for invalid in ["0", "-1", "12.5", "abc", ""] {
-            let err = client_config(invalid).unwrap_err();
-            assert!(err.to_string().contains(CLIENT_IO_TIMEOUT_MS), "{invalid}");
+            let err = client_config(invalid).unwrap_err().to_string();
+            assert!(err.contains(CLIENT_IO_TIMEOUT_MS), "{invalid}");
+            assert!(err.contains(&format!("value: {invalid:?}")), "{err}");
         }
+    }
+
+    #[test]
+    fn test_default_io_timeout_matches_opendal() {
+        // `TimeoutLayer` has no getters, so compare through `Debug`. An OpenDAL upgrade that
+        // changes its default fails here instead of silently diverging from it.
+        assert_eq!(
+            format!("{:?}", TimeoutLayer::new()),
+            format!(
+                "{:?}",
+                TimeoutLayer::new().with_io_timeout(Duration::from_millis(DEFAULT_IO_TIMEOUT_MS))
+            ),
+        );
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[test]
+    fn test_client_config_serde_round_trip() {
+        let storage = OpenDalStorage::S3 {
+            config: Arc::new(S3Config::default()),
+            customized_credential_load: None,
+            client: client_config("45000").unwrap(),
+        };
+
+        let mut value = serde_json::to_value(&storage).unwrap();
+        let restored: OpenDalStorage = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(restored.client().io_timeout_ms(), 45_000);
+
+        // A payload without `client` falls back to the default.
+        value["S3"].as_object_mut().unwrap().remove("client");
+        let restored: OpenDalStorage = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.client().io_timeout_ms(), DEFAULT_IO_TIMEOUT_MS);
     }
 
     #[cfg(feature = "opendal-memory")]
     #[test]
     fn test_factory_rejects_invalid_io_timeout() {
-        let config = StorageConfig::from_props(HashMap::from([(
-            CLIENT_IO_TIMEOUT_MS.to_string(),
-            "nope".to_string(),
-        )]));
+        let config = StorageConfig::new().with_prop(CLIENT_IO_TIMEOUT_MS, "nope");
 
         let err = OpenDalStorageFactory::Memory.build(&config).unwrap_err();
         assert!(err.to_string().contains(CLIENT_IO_TIMEOUT_MS));
@@ -882,7 +909,10 @@ mod tests {
 
         // Note: the memory service does report a content length, so this only pins the happy
         // path. The counter in `OpenDalWriter` is what covers services that don't, such as S3.
-        let storage = Arc::new(OpenDalStorage::Memory(default_memory_operator()));
+        let storage = Arc::new(OpenDalStorage::Memory {
+            operator: default_memory_operator(),
+            client: OpenDalClientConfig::default(),
+        });
         let path = "memory:///stored-size";
         for plaintext in [
             Bytes::new(),
