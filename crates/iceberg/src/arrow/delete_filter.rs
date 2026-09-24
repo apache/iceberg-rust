@@ -163,7 +163,9 @@ impl DeleteFilter {
         }
     }
 
-    /// Retrieve the equality delete predicate for a given eq delete file path
+    /// Retrieve the equality delete predicate for a given eq delete file path.
+    ///
+    /// Returns `None` if the file was never registered, or if its load failed.
     pub(crate) async fn get_equality_delete_predicate_for_delete_file_path(
         &self,
         file_path: &str,
@@ -180,11 +182,11 @@ impl DeleteFilter {
 
         notifier.notified().await;
 
-        // A missing entry here means the load failed: `insert_equality_delete` removes the
-        // `Loading` marker before notifying waiters when the delete file could not be parsed.
-        // Return None so the caller surfaces a "missing predicate" error instead of hanging.
         match self.state.read().unwrap().equality_deletes.get(file_path) {
             Some(EqDelState::Loaded(predicate)) => Some(predicate.clone()),
+            // Woken without a `Loaded` entry: the load we waited on failed and
+            // `insert_equality_delete` removed the entry (a retry may have re-added it as
+            // `Loading`).
             _ => None,
         }
     }
