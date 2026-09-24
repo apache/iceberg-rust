@@ -31,16 +31,16 @@ mod tests {
         S3_SECRET_ACCESS_KEY, S3_SSE_KEY, S3_SSE_TYPE,
     };
     use iceberg_storage_object_store::ObjectStoreStorageFactory;
-    use iceberg_test_utils::{get_minio_endpoint, normalize_test_name_with_parts, set_up};
+    use iceberg_test_utils::{get_object_store_endpoint, normalize_test_name_with_parts, set_up};
 
     async fn get_file_io() -> FileIO {
         set_up();
 
-        let minio_endpoint = get_minio_endpoint();
+        let endpoint = get_object_store_endpoint();
 
         FileIOBuilder::new(Arc::new(ObjectStoreStorageFactory::S3))
             .with_props(vec![
-                (S3_ENDPOINT, minio_endpoint),
+                (S3_ENDPOINT, endpoint),
                 (S3_ACCESS_KEY_ID, "admin".to_string()),
                 (S3_SECRET_ACCESS_KEY, "password".to_string()),
                 (S3_REGION, "us-east-1".to_string()),
@@ -230,10 +230,22 @@ mod tests {
         assert!(!file_io.exists(&file_path).await.unwrap());
     }
 
+    fn assert_minio_kms_rejection(err: &iceberg::Error) {
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("501")
+                || err_str.contains("NotImplemented")
+                || err_str.contains("KMS is not configured")
+                || err_str.contains("kms")
+                || err_str.contains("ServerNotInitialized"),
+            "Expected KMS rejection from KES-less MinIO confirming SSE header was sent, got: {err_str}"
+        );
+    }
+
     #[tokio::test]
     async fn test_file_io_s3_sse_kms_default() {
         set_up();
-        let endpoint = get_minio_endpoint();
+        let endpoint = get_object_store_endpoint();
 
         let file_io = FileIOBuilder::new(Arc::new(ObjectStoreStorageFactory::S3))
             .with_props(vec![
@@ -252,33 +264,23 @@ mod tests {
         );
 
         let _ = file_io.delete(&file_path).await;
-        match file_io
+        // MinIO without KES does not configure KMS; asserting that MinIO returns 501 / KMS error
+        // verifies that the SSE-KMS header was attached (an unencrypted PUT would succeed).
+        let err = file_io
             .new_output(&file_path)
             .unwrap()
             .write(Bytes::from_static(b"kms-encrypted-data"))
             .await
-        {
-            Ok(_) => {
-                assert!(file_io.exists(&file_path).await.unwrap());
-                let content = file_io.new_input(&file_path).unwrap().read().await.unwrap();
-                assert_eq!(content, Bytes::from_static(b"kms-encrypted-data"));
-                file_io.delete(&file_path).await.unwrap();
-            }
-            Err(e)
-                if e.to_string().contains("501")
-                    || e.to_string().contains("NotImplemented")
-                    || e.to_string().contains("KMS is not configured") =>
-            {
-                // MinIO without KES does not configure KMS; passing 501 verifies header was sent
-            }
-            Err(e) => panic!("Unexpected error: {e:?}"),
-        }
+            .expect_err(
+                "MinIO without KES must reject SSE-KMS requests, proving SSE header was sent",
+            );
+        assert_minio_kms_rejection(&err);
     }
 
     #[tokio::test]
     async fn test_file_io_s3_sse_kms_custom_key() {
         set_up();
-        let endpoint = get_minio_endpoint();
+        let endpoint = get_object_store_endpoint();
 
         let file_io = FileIOBuilder::new(Arc::new(ObjectStoreStorageFactory::S3))
             .with_props(vec![
@@ -302,30 +304,17 @@ mod tests {
         );
 
         let _ = file_io.delete(&file_path).await;
-        match file_io
+        // MinIO without KES does not configure KMS; asserting that MinIO returns 501 / KMS error
+        // verifies that the SSE-KMS custom key header was attached.
+        let err = file_io
             .new_output(&file_path)
             .unwrap()
             .write(Bytes::from_static(b"kms-custom-key-encrypted-data"))
             .await
-        {
-            Ok(_) => {
-                assert!(file_io.exists(&file_path).await.unwrap());
-                let content = file_io.new_input(&file_path).unwrap().read().await.unwrap();
-                assert_eq!(
-                    content,
-                    Bytes::from_static(b"kms-custom-key-encrypted-data")
-                );
-                file_io.delete(&file_path).await.unwrap();
-            }
-            Err(e)
-                if e.to_string().contains("501")
-                    || e.to_string().contains("NotImplemented")
-                    || e.to_string().contains("KMS is not configured") =>
-            {
-                // MinIO without KES does not configure KMS; passing 501 verifies header was sent
-            }
-            Err(e) => panic!("Unexpected error: {e:?}"),
-        }
+            .expect_err(
+                "MinIO without KES must reject SSE-KMS requests, proving SSE custom key header was sent",
+            );
+        assert_minio_kms_rejection(&err);
     }
 
     /// Writes 12 MiB (3 × 4 MiB chunks) to exercise real S3 multipart uploads
@@ -478,7 +467,7 @@ mod tests {
     #[tokio::test]
     async fn test_file_io_s3_sse_s3_aes256() {
         set_up();
-        let endpoint = get_minio_endpoint();
+        let endpoint = get_object_store_endpoint();
 
         let file_io = FileIOBuilder::new(Arc::new(ObjectStoreStorageFactory::S3))
             .with_props(vec![

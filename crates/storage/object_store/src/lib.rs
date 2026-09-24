@@ -78,30 +78,21 @@ fn from_object_store_error(e: object_store::Error) -> Error {
     Error::new(kind, msg).with_source(e)
 }
 
-/// Property key for configuring S3 bulk delete batch size.
-pub const S3_DELETE_BATCH_SIZE: &str = "s3.delete-batch-size";
-/// Default batch size for S3 bulk deletions (matches AWS S3 DeleteObjects max).
-pub const DEFAULT_DELETE_BATCH_SIZE: usize = 1000;
+/// Property key for configuring S3 bulk delete batch size (matches Iceberg Java specification).
+pub const S3_DELETE_BATCH_SIZE: &str = "s3.delete.batch-size";
+/// Default batch size for S3 bulk deletions (matches Iceberg Java specification).
+pub const DEFAULT_DELETE_BATCH_SIZE: usize = 250;
 /// Maximum batch size allowed by the AWS S3 DeleteObjects API specification.
 pub const S3_MAX_DELETE_BATCH_SIZE: usize = 1000;
 
 fn parse_delete_batch_size(config: &StorageConfig) -> usize {
     if let Some(val) = config.get(S3_DELETE_BATCH_SIZE) {
         match val.parse::<usize>() {
-            Ok(parsed) if parsed > 0 => {
-                if parsed > S3_MAX_DELETE_BATCH_SIZE {
-                    tracing::warn!(
-                        configured = parsed,
-                        limit = S3_MAX_DELETE_BATCH_SIZE,
-                        "Configured s3.delete-batch-size exceeds AWS S3 hard limit of 1000; requests may fail with MalformedXML"
-                    );
-                }
-                parsed
-            }
+            Ok(parsed) if parsed > 0 => parsed.clamp(1, S3_MAX_DELETE_BATCH_SIZE),
             _ => {
                 tracing::warn!(
                     val = %val,
-                    "Invalid s3.delete-batch-size; falling back to default 1000"
+                    "Invalid s3.delete.batch-size; falling back to default 250"
                 );
                 DEFAULT_DELETE_BATCH_SIZE
             }
@@ -163,7 +154,7 @@ type StoreCache = Arc<DashMap<String, Arc<dyn ObjectStore>>>;
 pub struct S3Storage {
     config: Arc<S3Config>,
     #[serde(default = "default_delete_batch_size")]
-    pub delete_batch_size: usize,
+    delete_batch_size: usize,
     #[serde(skip, default)]
     store_cache: StoreCache,
 }
@@ -407,44 +398,71 @@ struct ObjectStoreWriter {
 }
 
 impl ObjectStoreWriter {
-    /// Flushes any buffered bytes as an in-flight part upload to S3.
-    fn flush_buffer(
+    /// Best-effort abort on upload error, converting the underlying
+    /// object_store error to an iceberg Error while logging abort failures.
+    async fn abort_and_wrap(
+        upload: &mut Box<dyn MultipartUpload>,
+        e: object_store::Error,
+        context: &'static str,
+    ) -> Error {
+        if let Err(abort_err) = upload.abort().await {
+            tracing::warn!(
+                error = %abort_err,
+                "Failed to abort multipart upload after {context}"
+            );
+        }
+        from_object_store_error(e)
+    }
+
+    /// Flushes any buffered bytes as an in-flight part upload to S3,
+    /// throttling concurrency so that at most `MAX_CONCURRENT_PART_UPLOADS`
+    /// uploads are in flight at any given time.
+    async fn flush_buffer(
         buffer: &mut BytesMut,
         tasks: &mut FuturesUnordered<UploadPart>,
         parts_submitted: &mut usize,
         upload: &mut Box<dyn MultipartUpload>,
-    ) {
+    ) -> Result<()> {
         if !buffer.is_empty() {
+            // Drain in-flight tasks down below cap before queuing the next chunk
+            while tasks.len() >= MAX_CONCURRENT_PART_UPLOADS {
+                if let Some(Err(e)) = tasks.next().await {
+                    return Err(Self::abort_and_wrap(upload, e, "part upload failure").await);
+                }
+            }
+
             let part_data = std::mem::take(buffer).freeze();
             let part_fut = upload.put_part(PutPayload::from_bytes(part_data));
             tasks.push(part_fut);
             *parts_submitted += 1;
         }
+        Ok(())
     }
 
     /// Accumulates bytes into `buffer`, flushing 5 MiB parts when full.
-    fn append_bytes(
+    async fn append_bytes(
         buffer: &mut BytesMut,
         tasks: &mut FuturesUnordered<UploadPart>,
         parts_submitted: &mut usize,
         mut bs: Bytes,
         upload: &mut Box<dyn MultipartUpload>,
-    ) {
+    ) -> Result<()> {
         while !bs.is_empty() {
             let remaining = MIN_PART_SIZE.saturating_sub(buffer.len());
             if remaining == 0 {
-                Self::flush_buffer(buffer, tasks, parts_submitted, upload);
+                Self::flush_buffer(buffer, tasks, parts_submitted, upload).await?;
                 continue;
             }
 
             if bs.len() < remaining {
                 buffer.extend_from_slice(&bs);
-                return;
+                return Ok(());
             }
             let chunk = bs.split_to(remaining);
             buffer.extend_from_slice(&chunk);
-            Self::flush_buffer(buffer, tasks, parts_submitted, upload);
+            Self::flush_buffer(buffer, tasks, parts_submitted, upload).await?;
         }
+        Ok(())
     }
 }
 
@@ -485,26 +503,8 @@ impl FileWrite for ObjectStoreWriter {
             &mut self.parts_submitted,
             bs,
             upload,
-        );
-
-        // Throttle in-flight uploads: fail fast if any part upload fails
-        while self.tasks.len() >= MAX_CONCURRENT_PART_UPLOADS {
-            if let Some(res) = self.tasks.next().await {
-                if let Err(e) = res {
-                    if let Some(mut upload) = self.upload.take() {
-                        if let Err(abort_err) = upload.abort().await {
-                            tracing::warn!(
-                                error = %abort_err,
-                                "Failed to abort multipart upload after part upload failure"
-                            );
-                        }
-                    }
-                    return Err(from_object_store_error(e));
-                }
-            }
-        }
-
-        Ok(())
+        )
+        .await
     }
 
     async fn close(&mut self) -> Result<FileMetadata> {
@@ -527,25 +527,13 @@ impl FileWrite for ObjectStoreWriter {
         // Await all in-flight part uploads; abort if any part fails.
         while let Some(res) = self.tasks.next().await {
             if let Err(e) = res {
-                if let Err(abort_err) = upload.abort().await {
-                    tracing::warn!(
-                        error = %abort_err,
-                        "Failed to abort multipart upload after part upload failure"
-                    );
-                }
-                return Err(from_object_store_error(e));
+                return Err(Self::abort_and_wrap(&mut upload, e, "part upload failure").await);
             }
         }
 
         // Complete multipart upload; abort if S3 rejects completion.
         if let Err(e) = upload.complete().await {
-            if let Err(abort_err) = upload.abort().await {
-                tracing::warn!(
-                    error = %abort_err,
-                    "Failed to abort multipart upload after complete failure"
-                );
-            }
-            return Err(from_object_store_error(e));
+            return Err(Self::abort_and_wrap(&mut upload, e, "complete failure").await);
         }
 
         Ok(FileMetadata {
@@ -576,9 +564,9 @@ mod tests {
     #[test]
     fn test_parse_delete_batch_size_custom() {
         let mut props = std::collections::HashMap::new();
-        props.insert(S3_DELETE_BATCH_SIZE.to_string(), "250".to_string());
+        props.insert(S3_DELETE_BATCH_SIZE.to_string(), "500".to_string());
         let config = StorageConfig::from_props(props);
-        assert_eq!(parse_delete_batch_size(&config), 250);
+        assert_eq!(parse_delete_batch_size(&config), 500);
     }
 
     #[test]
@@ -586,20 +574,26 @@ mod tests {
         let mut props = std::collections::HashMap::new();
         props.insert(S3_DELETE_BATCH_SIZE.to_string(), "5000".to_string());
         let config = StorageConfig::from_props(props);
-        assert_eq!(parse_delete_batch_size(&config), 5000);
+        assert_eq!(parse_delete_batch_size(&config), S3_MAX_DELETE_BATCH_SIZE);
     }
 
     #[test]
     fn test_parse_delete_batch_size_invalid_fallback() {
         let mut props = std::collections::HashMap::new();
-        props.insert(S3_DELETE_BATCH_SIZE.to_string(), "invalid_number".to_string());
+        props.insert(
+            S3_DELETE_BATCH_SIZE.to_string(),
+            "invalid_number".to_string(),
+        );
         let config = StorageConfig::from_props(props);
         assert_eq!(parse_delete_batch_size(&config), DEFAULT_DELETE_BATCH_SIZE);
 
         let mut props_zero = std::collections::HashMap::new();
         props_zero.insert(S3_DELETE_BATCH_SIZE.to_string(), "0".to_string());
         let config_zero = StorageConfig::from_props(props_zero);
-        assert_eq!(parse_delete_batch_size(&config_zero), DEFAULT_DELETE_BATCH_SIZE);
+        assert_eq!(
+            parse_delete_batch_size(&config_zero),
+            DEFAULT_DELETE_BATCH_SIZE
+        );
     }
 
     #[cfg(feature = "object_store-s3")]
@@ -710,6 +704,7 @@ mod tests {
     }
 
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
     use object_store::PutResult;
 
     #[derive(Debug)]
@@ -906,6 +901,71 @@ mod tests {
         assert!(
             aborted.load(Ordering::SeqCst),
             "abort() MUST be called on drop"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_writer_bounded_concurrency_in_flight_cap() {
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+
+        #[derive(Debug)]
+        struct TrackingMockUpload {
+            in_flight: Arc<AtomicUsize>,
+            max_in_flight: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl MultipartUpload for TrackingMockUpload {
+            fn put_part(&mut self, _data: PutPayload) -> UploadPart {
+                let in_flight = self.in_flight.clone();
+                let max_in_flight = self.max_in_flight.clone();
+                Box::pin(async move {
+                    let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_in_flight.fetch_max(current, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                    Ok(())
+                })
+            }
+
+            async fn complete(&mut self) -> object_store::Result<PutResult> {
+                Ok(PutResult {
+                    e_tag: None,
+                    version: None,
+                })
+            }
+
+            async fn abort(&mut self) -> object_store::Result<()> {
+                Ok(())
+            }
+        }
+
+        let upload = Box::new(TrackingMockUpload {
+            in_flight: in_flight.clone(),
+            max_in_flight: max_in_flight.clone(),
+        });
+
+        let mut writer = ObjectStoreWriter {
+            upload: Some(upload),
+            buffer: BytesMut::new(),
+            tasks: FuturesUnordered::new(),
+            parts_submitted: 0,
+            bytes_written: 0,
+        };
+
+        // Write 20 parts (100 MiB) in a single write call
+        writer
+            .write(Bytes::from(vec![0u8; 20 * 5 * 1024 * 1024]))
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+
+        assert!(
+            max_in_flight.load(Ordering::SeqCst) <= MAX_CONCURRENT_PART_UPLOADS,
+            "max concurrent in-flight uploads exceeded {} (was {})",
+            MAX_CONCURRENT_PART_UPLOADS,
+            max_in_flight.load(Ordering::SeqCst)
         );
     }
 }
