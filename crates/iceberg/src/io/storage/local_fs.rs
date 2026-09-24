@@ -268,12 +268,16 @@ impl FileRead for LocalFsFileRead {
 #[derive(Debug)]
 pub struct LocalFsFileWrite {
     file: Option<fs::File>,
+    bytes_written: u64,
 }
 
 impl LocalFsFileWrite {
     /// Create a new `LocalFsFileWrite` for the given file.
     pub fn new(file: fs::File) -> Self {
-        Self { file: Some(file) }
+        Self {
+            file: Some(file),
+            bytes_written: 0,
+        }
     }
 }
 
@@ -291,11 +295,12 @@ impl FileWrite for LocalFsFileWrite {
                 format!("Failed to write to file: {e}"),
             )
         })?;
+        self.bytes_written += bs.len() as u64;
 
         Ok(())
     }
 
-    async fn close(&mut self) -> Result<()> {
+    async fn close(&mut self) -> Result<FileMetadata> {
         let file = self
             .file
             .take()
@@ -304,7 +309,9 @@ impl FileWrite for LocalFsFileWrite {
         file.sync_all()
             .map_err(|e| Error::new(ErrorKind::Unexpected, format!("Failed to sync file: {e}")))?;
 
-        Ok(())
+        Ok(FileMetadata {
+            size: self.bytes_written,
+        })
     }
 }
 
@@ -483,10 +490,11 @@ mod tests {
         let mut writer = storage.writer(path_str).await.unwrap();
         writer.write(Bytes::from("Hello, ")).await.unwrap();
         writer.write(Bytes::from("World!")).await.unwrap();
-        writer.close().await.unwrap();
+        let metadata = writer.close().await.unwrap();
 
         let content = storage.read(path_str).await.unwrap();
         assert_eq!(content, Bytes::from("Hello, World!"));
+        assert_eq!(metadata.size, content.len() as u64);
     }
 
     #[tokio::test]
@@ -513,7 +521,7 @@ mod tests {
         let path_str = path.to_str().unwrap();
 
         let mut writer = storage.writer(path_str).await.unwrap();
-        writer.close().await.unwrap();
+        assert_eq!(writer.close().await.unwrap().size, 0);
 
         // Write after close should fail
         let result = writer.write(Bytes::from("test")).await;

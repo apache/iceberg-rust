@@ -688,10 +688,14 @@ mod tests {
         let encrypted_output = mgr.encrypt(output);
 
         let plaintext = b"Hello, encrypted Iceberg round-trip!";
-        let serialized_metadata = encrypted_output.key_metadata().encode().unwrap();
-        encrypted_output
+        let file_metadata = encrypted_output
             .write(bytes::Bytes::from(plaintext.to_vec()))
             .await
+            .unwrap();
+
+        let serialized_metadata = encrypted_output
+            .key_metadata_with_saved_file_metadata(&file_metadata)
+            .encode()
             .unwrap();
 
         let input = io.new_input(path).unwrap();
