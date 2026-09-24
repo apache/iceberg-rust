@@ -168,11 +168,11 @@ impl DeleteFilter {
         &self,
         file_path: &str,
     ) -> Option<Predicate> {
-        // Create the `Notified` while holding the read lock. The read lock ensures that
-        // when we go inside it, either the state is already at Loaded or it is still at
-        // Loading AND `notify_waiters()` has not been called yet. Any `Notified` created
-        // before the invocation of `notify_waiters()` will be notified by it even if
-        // `await` has not been called on it yet.
+        // Build the `Notified` while holding the read lock. `notified_owned()` records tokio's
+        // `notify_waiters_calls` counter at construction and completes on first poll if that
+        // counter has since advanced. Reading the counter under the lock guarantees it is taken
+        // before `insert_equality_delete` can advance it via `notify_waiters()`, so the
+        // notification is never missed even though we `.await` after releasing the lock.
         let notified = {
             match self.state.read().unwrap().equality_deletes.get(file_path) {
                 None => return None,
