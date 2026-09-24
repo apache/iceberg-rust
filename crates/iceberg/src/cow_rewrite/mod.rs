@@ -28,10 +28,10 @@
 //! partition values; this primitive does not repartition rewritten rows.
 //!
 //! The result carries data files only. A commit adapter consuming these file
-//! lists must also account for delete files that reference removed files —
-//! for example deletion vectors whose referenced data file is being removed,
-//! and position deletes scoped to it; equality deletes remain valid but
-//! become redundant once their target rows are rewritten.
+//! lists may remove position delete files and deletion vectors only when they
+//! exclusively reference removed data files. Equality delete files must be
+//! retained while they can still apply to other live data files by sequence
+//! number.
 //!
 //! ```rust,no_run
 //! # use std::sync::Arc;
@@ -110,8 +110,10 @@ pub struct CowRewriteResult {
     ///
     /// Files whose visible rows were all removed by delete files are NOT
     /// included here: they read as zero rows and are reported in
-    /// `removed_data_files` with no replacement, so a commit adapter can drop
-    /// them together with the delete files that reference them.
+    /// `removed_data_files` with no replacement. A commit adapter may remove
+    /// position deletes and deletion vectors that exclusively reference these
+    /// removed files, but must retain equality deletes that can still apply to
+    /// other live files.
     pub unchanged_data_files: Vec<DataFile>,
     /// Rewrite counters.
     pub stats: CowRewriteStats,
@@ -209,7 +211,9 @@ impl<'a> CowRewriteBuilder<'a> {
             // Schema the rows are read in (the planned snapshot's schema). The
             // replacement files must be written with this schema so that batches
             // remain compatible when the table's current schema has evolved past
-            // the snapshot the source files belong to.
+            // the snapshot the source files belong to. This preserves the older
+            // schema in replacement files rather than promoting them to the
+            // table's current schema during this rewrite.
             let write_schema = scan_task.schema_ref();
             let has_delete_files = !scan_task.deletes().is_empty();
 
@@ -265,32 +269,36 @@ impl<'a> CowRewriteBuilder<'a> {
                     result.stats.changed_batches += 1;
                 }
 
-                if let Some(output) = rewrite.output {
-                    file_output_rows += output.num_rows() as u64;
+                // A dropped batch can be the first change. Flush any kept
+                // prefix even when this batch has no output; defer opening the
+                // writer only if there are no rows to preserve yet.
+                if file_changed
+                    && writer.is_none()
+                    && (!prefix.is_empty() || rewrite.output.is_some())
+                {
+                    let partition_key =
+                        source_partition_key(self.table, &old_data_file, &write_schema)?;
+                    writer = Some(
+                        writer::build_replacement_writer(
+                            self.table,
+                            write_schema.clone(),
+                            Some(partition_key),
+                        )
+                        .await?,
+                    );
+                }
 
-                    if file_changed {
-                        if writer.is_none() {
-                            let partition_key =
-                                source_partition_key(self.table, &old_data_file, &write_schema)?;
-                            writer = Some(
-                                writer::build_replacement_writer(
-                                    self.table,
-                                    write_schema.clone(),
-                                    Some(partition_key),
-                                )
-                                .await?,
-                            );
-                        }
-                        let Some(writer) = writer.as_mut() else {
-                            unreachable!("writer initialized above");
-                        };
-                        for prefix_batch in prefix.drain(..) {
-                            writer.write(prefix_batch).await?;
-                        }
-                        writer.write(output).await?;
-                    } else {
-                        prefix.push(output);
+                if let Some(writer) = writer.as_mut() {
+                    for prefix_batch in prefix.drain(..) {
+                        writer.write(prefix_batch).await?;
                     }
+                    if let Some(output) = rewrite.output {
+                        file_output_rows += output.num_rows() as u64;
+                        writer.write(output).await?;
+                    }
+                } else if let Some(output) = rewrite.output {
+                    file_output_rows += output.num_rows() as u64;
+                    prefix.push(output);
                 }
             }
 
@@ -311,9 +319,8 @@ impl<'a> CowRewriteBuilder<'a> {
                     let added_data_files = writer.close().await?;
                     result.added_data_files.extend(added_data_files);
                 }
-                // If `writer` is `None`, the source file was fully deleted
-                // (every batch dropped to `output: None`), so no replacement
-                // file is written.
+                // If `writer` is `None`, no visible rows remain after delete
+                // files and batch rewriting, so no replacement is written.
             } else {
                 result.stats.unchanged_files += 1;
                 result.unchanged_data_files.push(old_data_file);
@@ -380,6 +387,7 @@ mod tests {
     use crate::cow_rewrite::{CowBatchRewrite, CowBatchRewriter, CowRewriteBuilder};
     use crate::io::LocalFsStorageFactory;
     use crate::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+    use crate::scan::tests::TableTestFixture;
     use crate::scan::{FileScanTask, FileScanTaskStream};
     use crate::spec::{
         DataFile, Literal, NestedField, PrimitiveType, Schema, Struct, TableProperties, Transform,
@@ -849,6 +857,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cow_rewrite_removes_file_fully_covered_by_position_deletes() -> Result<()> {
+        let mut fixture = TableTestFixture::new();
+        let positions = (0..300).collect::<Vec<i64>>();
+        fixture.setup_multi_row_group_manifest(&positions).await;
+
+        let result = CowRewriteBuilder::new(&fixture.table)
+            .with_predicate(crate::expr::Predicate::AlwaysTrue)
+            .with_rewriter(Arc::new(KeepAll))
+            .rewrite()
+            .await?;
+
+        assert_eq!(result.stats.candidate_files, 1);
+        assert_eq!(result.stats.rewritten_files, 1);
+        assert_eq!(result.stats.input_rows, 0);
+        assert_eq!(result.stats.output_rows, 0);
+        assert_eq!(result.removed_data_files.len(), 1);
+        assert!(result.added_data_files.is_empty());
+        assert!(result.unchanged_data_files.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn cow_rewrite_delete_no_matching_rows_keeps_old_file() -> Result<()> {
         let fixture = test_table_with_ids(vec![1, 3]).await?;
 
@@ -953,6 +984,30 @@ mod tests {
 
         let ids = read_ids(&fixture.table, &result.added_data_files).await?;
         assert_eq!(ids, vec![3, 4]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cow_rewrite_kept_prefix_survives_later_full_batch_delete() -> Result<()> {
+        let fixture = test_table_with_ids(vec![1, 3, 2, 4]).await?;
+
+        let result = CowRewriteBuilder::new(&fixture.table)
+            .with_predicate(crate::expr::Predicate::AlwaysTrue)
+            .with_batch_size(2)
+            .with_rewriter(Arc::new(DeleteEvenIds))
+            .rewrite()
+            .await?;
+
+        assert_eq!(result.removed_data_files.len(), 1);
+        assert_eq!(result.stats.input_rows, 4);
+        assert_eq!(result.stats.output_rows, 2);
+        assert_eq!(result.added_data_files.len(), 1);
+        assert!(result.unchanged_data_files.is_empty());
+        assert_eq!(
+            read_ids(&fixture.table, &result.added_data_files).await?,
+            vec![1, 3]
+        );
 
         Ok(())
     }
