@@ -36,6 +36,14 @@ pub const ADLS_ACCOUNT_NAME: &str = "adls.account-name";
 pub const ADLS_ACCOUNT_KEY: &str = "adls.account-key";
 /// The shared access signature.
 pub const ADLS_SAS_TOKEN: &str = "adls.sas-token";
+/// Prefix for account-specific shared access signatures vended by a REST catalog.
+pub const ADLS_SAS_TOKEN_PREFIX: &str = "adls.sas-token.";
+/// Prefix for the epoch-millisecond expiration of an account-specific SAS token.
+pub const ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX: &str = "adls.sas-token-expires-at-ms.";
+/// Table property naming the endpoint used to refresh vended ADLS credentials.
+pub const ADLS_REFRESH_CREDENTIALS_ENDPOINT: &str = "adls.refresh-credentials-endpoint";
+/// Table property controlling whether vended ADLS credentials are refreshed.
+pub const ADLS_REFRESH_CREDENTIALS_ENABLED: &str = "adls.refresh-credentials-enabled";
 /// The tenant-id.
 pub const ADLS_TENANT_ID: &str = "adls.tenant-id";
 /// The client-id.
