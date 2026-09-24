@@ -141,12 +141,6 @@ impl HttpClient {
         })
     }
 
-    /// Testing only: the session authenticating this client's requests.
-    #[cfg(test)]
-    pub(crate) fn auth_session(&self) -> &Arc<dyn AuthSession> {
-        &self.auth_session
-    }
-
     /// Testing only: the bearer token `session` would attach.
     ///
     /// Authenticates a throwaway request (never sent) and reads the header
