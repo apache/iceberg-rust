@@ -19,7 +19,7 @@
 
 # Container Runtimes
 
-Iceberg-rust uses containers for integration tests, where `docker` and `docker compose` start containers for MinIO and various catalogs. You can use any of the following container runtimes.
+Iceberg-rust uses containers for integration tests, where `docker` and `docker compose` start containers for RustFS and various catalogs. You can use any of the following container runtimes.
 
 ## Docker Desktop
 

@@ -37,24 +37,24 @@ mod common {
     }
 
     // Environment variable names for service endpoints
-    pub const ENV_MINIO_ENDPOINT: &str = "ICEBERG_TEST_MINIO_ENDPOINT";
+    pub const ENV_RUSTFS_ENDPOINT: &str = "ICEBERG_TEST_RUSTFS_ENDPOINT";
     pub const ENV_REST_CATALOG_ENDPOINT: &str = "ICEBERG_TEST_REST_ENDPOINT";
     pub const ENV_HMS_ENDPOINT: &str = "ICEBERG_TEST_HMS_ENDPOINT";
     pub const ENV_GLUE_ENDPOINT: &str = "ICEBERG_TEST_GLUE_ENDPOINT";
     pub const ENV_GCS_ENDPOINT: &str = "ICEBERG_TEST_GCS_ENDPOINT";
 
     // Default ports matching dev/docker-compose.yaml
-    pub const DEFAULT_MINIO_PORT: u16 = 9000;
+    pub const DEFAULT_RUSTFS_PORT: u16 = 9000;
     pub const DEFAULT_REST_CATALOG_PORT: u16 = 8181;
     pub const DEFAULT_HMS_PORT: u16 = 9083;
     pub const DEFAULT_GLUE_PORT: u16 = 5001;
     pub const DEFAULT_GCS_PORT: u16 = 4443;
 
-    /// Returns the MinIO S3-compatible endpoint.
-    /// Checks ICEBERG_TEST_MINIO_ENDPOINT env var, otherwise returns localhost default.
-    pub fn get_minio_endpoint() -> String {
-        std::env::var(ENV_MINIO_ENDPOINT)
-            .unwrap_or_else(|_| format!("http://localhost:{DEFAULT_MINIO_PORT}"))
+    /// Returns the RustFS S3-compatible endpoint.
+    /// Checks ICEBERG_TEST_RUSTFS_ENDPOINT env var, otherwise returns localhost default.
+    pub fn get_rustfs_endpoint() -> String {
+        std::env::var(ENV_RUSTFS_ENDPOINT)
+            .unwrap_or_else(|_| format!("http://localhost:{DEFAULT_RUSTFS_PORT}"))
     }
 
     /// Returns the REST catalog endpoint.
