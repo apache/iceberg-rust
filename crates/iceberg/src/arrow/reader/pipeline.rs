@@ -613,26 +613,24 @@ impl FileScanTaskReader {
             record_batch_stream_builder = record_batch_stream_builder.with_row_filter(row_filter);
 
             if self.row_group_filtering_enabled {
-                let predicate_filtered_row_groups = ArrowReader::get_selected_row_group_indices(
+                let all_row_groups;
+                let candidate_row_groups = match &selected_row_group_indices {
+                    Some(indices) => indices.as_slice(),
+                    None => {
+                        all_row_groups =
+                            (0..record_batch_stream_builder.metadata().num_row_groups())
+                                .collect::<Vec<_>>();
+                        &all_row_groups
+                    }
+                };
+
+                selected_row_group_indices = Some(ArrowReader::get_selected_row_group_indices(
                     &predicate,
                     record_batch_stream_builder.metadata(),
                     &field_id_map,
                     task.schema(),
-                )?;
-
-                // Merge predicate-based filtering with byte range filtering (if present)
-                // by taking the intersection of both filters
-                selected_row_group_indices = match selected_row_group_indices {
-                    Some(byte_range_filtered) => {
-                        // Keep only row groups that are in both filters
-                        let intersection: Vec<usize> = byte_range_filtered
-                            .into_iter()
-                            .filter(|idx| predicate_filtered_row_groups.contains(idx))
-                            .collect();
-                        Some(intersection)
-                    }
-                    None => Some(predicate_filtered_row_groups),
-                };
+                    candidate_row_groups,
+                )?);
             }
 
             if self.bloom_filter_enabled {
