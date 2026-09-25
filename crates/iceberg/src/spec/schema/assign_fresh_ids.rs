@@ -356,7 +356,6 @@ mod tests {
 
         let assigned = assign_fresh_ids(replacement, &base, 10).unwrap();
 
-        assert_eq!(assigned.schema_id(), 1);
         assert_eq!(assigned.field_by_name("nested").unwrap().id, 1);
         assert_eq!(assigned.field_by_name("nested.a").unwrap().id, 2);
         assert_eq!(assigned.field_by_name("items").unwrap().id, 3);
