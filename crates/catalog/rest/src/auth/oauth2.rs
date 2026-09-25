@@ -219,7 +219,11 @@ fn attach_bearer(req: &mut HttpRequest, token: &SensitiveString) -> Result<()> {
             .with_source(e)
         })?;
     value.set_sensitive(true);
-    req.headers_mut().insert(http::header::AUTHORIZATION, value);
+    // Java's `OAuth2Util.AuthSession` puts the header only if absent, leaving a
+    // configured `header.authorization` in place.
+    if !req.headers().contains_key(http::header::AUTHORIZATION) {
+        req.headers_mut().insert(http::header::AUTHORIZATION, value);
+    }
     Ok(())
 }
 
