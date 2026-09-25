@@ -16,6 +16,7 @@
 // under the License.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use futures::{StreamExt, TryStreamExt};
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
@@ -62,6 +63,10 @@ impl BasicDeleteFileLoader {
         &self.file_io
     }
 
+    pub(crate) fn scan_metrics(&self) -> &ScanMetrics {
+        &self.scan_metrics
+    }
+
     /// Loads a RecordBatchStream for a given datafile.
     pub(crate) async fn parquet_to_batch_stream(
         &self,
@@ -80,10 +85,14 @@ impl BasicDeleteFileLoader {
             &self.file_io,
             file_size_in_bytes,
             parquet_read_options,
-            self.scan_metrics.bytes_read_counter(),
+            self.scan_metrics.delete_bytes_read_counter(),
             key_metadata,
         )
         .await?;
+
+        self.scan_metrics()
+            .delete_files_opened_counter()
+            .fetch_add(1, Ordering::Relaxed);
 
         let record_batch_stream =
             ParquetRecordBatchStreamBuilder::new_with_metadata(parquet_file_reader, arrow_metadata)
@@ -156,7 +165,7 @@ mod tests {
         let file_io = FileIO::new_with_fs();
 
         let scan_metrics = ScanMetrics::new();
-        let delete_file_loader = BasicDeleteFileLoader::new(file_io.clone(), scan_metrics);
+        let delete_file_loader = BasicDeleteFileLoader::new(file_io.clone(), scan_metrics.clone());
 
         let file_scan_tasks = setup(table_location);
 
@@ -171,6 +180,12 @@ mod tests {
         let result = result.try_collect::<Vec<_>>().await.unwrap();
 
         assert_eq!(result.len(), 1);
+        assert_eq!(scan_metrics.data_bytes_read(), 0);
+        assert!(scan_metrics.delete_bytes_read() > 0);
+        assert_eq!(scan_metrics.bytes_read(), scan_metrics.delete_bytes_read());
+        assert_eq!(scan_metrics.data_files_opened(), 0);
+        assert_eq!(scan_metrics.delete_files_opened(), 1);
+        assert_eq!(scan_metrics.rows_emitted(), 0);
     }
 
     #[tokio::test]
