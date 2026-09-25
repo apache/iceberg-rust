@@ -19,14 +19,15 @@ use super::utils::try_insert_field;
 use super::*;
 
 pub(crate) fn assign_fresh_ids(schema: Schema, base: &Schema, start_from: i32) -> Result<Schema> {
-    let mut assigner = AssignFreshIds::new(&schema, base, start_from);
     let Schema {
         r#struct,
         schema_id,
         identifier_field_ids,
         alias_to_id,
+        id_to_name,
         ..
     } = schema;
+    let mut assigner = AssignFreshIds::new(id_to_name, base, start_from);
     let fields = assigner.assign_fields(r#struct.fields().to_vec())?;
     let identifier_field_ids = assigner.apply_to_identifier_fields(identifier_field_ids)?;
     let alias_to_id = assigner.apply_to_aliases(alias_to_id)?;
@@ -47,10 +48,10 @@ struct AssignFreshIds {
 }
 
 impl AssignFreshIds {
-    fn new(target: &Schema, base: &Schema, start_from: i32) -> Self {
+    fn new(target_names: HashMap<i32, String>, base: &Schema, start_from: i32) -> Self {
         Self {
             next_field_id: start_from,
-            target_names: target.field_id_to_name_map().clone(),
+            target_names,
             base_ids: base
                 .field_id_to_name_map()
                 .iter()
