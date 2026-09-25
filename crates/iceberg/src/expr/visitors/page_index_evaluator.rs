@@ -366,18 +366,23 @@ impl<'a> PageIndexEvaluator<'a> {
                     // mid-UTF-8-sequence) means this column's page index can't
                     // be trusted, so skip pruning for the whole column rather
                     // than abort the scan.
-                    let (Ok(min), Ok(max)) = (
+                    let (min, max) = match (
                         min.map(|val| Self::byte_array_bound_to_datum(field_type, val))
                             .transpose(),
                         max.map(|val| Self::byte_array_bound_to_datum(field_type, val))
                             .transpose(),
-                    ) else {
-                        tracing::debug!(
-                            field_id,
-                            %field_type,
-                            "Skipping page-index pruning: undecodable BYTE_ARRAY page bound"
-                        );
-                        return Ok(None);
+                    ) {
+                        (Ok(min), Ok(max)) => (min, max),
+                        (Err(err), _) | (_, Err(err)) => {
+                            tracing::debug!(
+                                field_id,
+                                %field_type,
+                                page_index = i,
+                                %err,
+                                "Skipping page-index pruning: undecodable BYTE_ARRAY page bound"
+                            );
+                            return Ok(None);
+                        }
                     };
 
                     page_filter.push(predicate(
