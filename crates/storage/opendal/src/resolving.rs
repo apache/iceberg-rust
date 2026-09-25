@@ -33,9 +33,9 @@ use iceberg::{Error, ErrorKind, Result};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::OpenDalStorage;
 #[cfg(feature = "opendal-s3")]
 use crate::s3::CustomAwsCredentialLoader;
+use crate::{OpenDalClientConfig, OpenDalStorage};
 
 /// Schemes supported by OpenDalResolvingStorage
 pub const SCHEME_MEMORY: &str = "memory";
@@ -86,6 +86,7 @@ fn build_storage_for_scheme(
     props: &HashMap<String, String>,
     #[cfg(feature = "opendal-s3")] customized_credential_load: &Option<CustomAwsCredentialLoader>,
 ) -> Result<OpenDalStorage> {
+    let client = OpenDalClientConfig::from_properties(props)?;
     match scheme {
         #[cfg(feature = "opendal-s3")]
         "s3" => {
@@ -93,6 +94,7 @@ fn build_storage_for_scheme(
             Ok(OpenDalStorage::S3 {
                 config: Arc::new(config),
                 customized_credential_load: customized_credential_load.clone(),
+                client,
             })
         }
         #[cfg(feature = "opendal-gcs")]
@@ -100,6 +102,7 @@ fn build_storage_for_scheme(
             let config = crate::gcs::gcs_config_parse(props.clone())?;
             Ok(OpenDalStorage::Gcs {
                 config: Arc::new(config),
+                client,
             })
         }
         #[cfg(feature = "opendal-oss")]
@@ -107,6 +110,7 @@ fn build_storage_for_scheme(
             let config = crate::oss::oss_config_parse(props.clone())?;
             Ok(OpenDalStorage::Oss {
                 config: Arc::new(config),
+                client,
             })
         }
         #[cfg(feature = "opendal-azdls")]
@@ -114,17 +118,22 @@ fn build_storage_for_scheme(
             let config = crate::azdls::azdls_config_parse(props.clone())?;
             Ok(OpenDalStorage::Azdls {
                 config: Arc::new(config),
+                client,
             })
         }
         #[cfg(feature = "opendal-fs")]
-        "file" => Ok(OpenDalStorage::LocalFs),
+        "file" => Ok(OpenDalStorage::LocalFs { client }),
         #[cfg(feature = "opendal-memory")]
-        "memory" => Ok(OpenDalStorage::Memory(crate::memory::memory_config_build()?)),
+        "memory" => Ok(OpenDalStorage::Memory {
+            operator: crate::memory::memory_config_build()?,
+            client,
+        }),
         #[cfg(feature = "opendal-hf")]
         "hf" => {
             let config = crate::hf::hf_config_parse(props.clone())?;
             Ok(OpenDalStorage::Hf {
                 config: Arc::new(config),
+                client,
             })
         }
         unsupported => Err(Error::new(
@@ -335,6 +344,8 @@ impl Storage for OpenDalResolvingStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "opendal-s3")]
+    use crate::OPENDAL_IO_TIMEOUT_MS;
 
     #[cfg(feature = "opendal-s3")]
     #[derive(Debug)]
@@ -375,6 +386,18 @@ mod tests {
             #[cfg(feature = "opendal-s3")]
             customized_credential_load: None,
         }
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[test]
+    fn test_resolve_propagates_io_timeout() {
+        let mut storage = empty_resolving_storage();
+        storage
+            .props
+            .insert(OPENDAL_IO_TIMEOUT_MS.to_string(), "45000".to_string());
+
+        let resolved = storage.resolve("s3://bucket/key").unwrap();
+        assert_eq!(resolved.client().io_timeout_ms(), 45_000);
     }
 
     #[cfg(feature = "opendal-s3")]
