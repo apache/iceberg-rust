@@ -397,6 +397,33 @@ mod tests {
     }
 
     #[test]
+    fn test_assign_fresh_ids_rejects_alias_for_dropped_field() {
+        // `build()` validates `identifier_field_ids` but not `alias_to_id`, so an alias left
+        // pointing at a field the replacement drops reaches `apply_to_aliases`.
+        let base = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "dropped", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        let replacement = Schema::builder()
+            .with_alias(BiHashMap::from_iter([("dropped_alias".to_string(), 2)]))
+            .with_fields(vec![
+                NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let err = assign_fresh_ids(replacement, &base, 3).unwrap_err();
+
+        assert!(
+            err.message()
+                .contains("Field with id 2 for alias dropped_alias not found")
+        );
+    }
+
+    #[test]
     fn test_assign_fresh_ids_assigns_map_ids_before_nested_types() {
         let schema = Schema::builder()
             .with_fields(vec![
