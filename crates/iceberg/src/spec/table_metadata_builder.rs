@@ -1421,6 +1421,7 @@ mod tests {
             .with_order_id(1)
             .with_sort_field(SortField {
                 source_id: 3,
+                source_ids: None,
                 transform: Transform::Bucket(4),
                 direction: SortDirection::Descending,
                 null_order: NullOrder::First,
@@ -1565,6 +1566,7 @@ mod tests {
         let sort_order = SortOrder::builder()
             .with_fields(vec![SortField {
                 source_id: 11,
+                source_ids: None,
                 transform: Transform::Identity,
                 direction: SortDirection::Ascending,
                 null_order: NullOrder::First,
@@ -1606,6 +1608,7 @@ mod tests {
         let expected_sort_order = SortOrder::builder()
             .with_fields(vec![SortField {
                 source_id: 1,
+                source_ids: None,
                 transform: Transform::Identity,
                 direction: SortDirection::Ascending,
                 null_order: NullOrder::First,
@@ -1670,6 +1673,7 @@ mod tests {
                         name: "y".to_string(),
                         transform: Transform::Identity,
                         source_id: 2,
+                        source_ids: None,
                         field_id: Some(1000)
                     })
                     .unwrap()
@@ -1744,6 +1748,7 @@ mod tests {
                     name: "y".to_string(),
                     transform: Transform::Identity,
                     source_id: 2,
+                    source_ids: None,
                     field_id: Some(1000),
                 },
                 UnboundPartitionField {
@@ -1751,6 +1756,7 @@ mod tests {
                     name: "z".to_string(),
                     transform: Transform::Identity,
                     source_id: 3,
+                    source_ids: None,
                     field_id: None,
                 },
             ])
@@ -1771,6 +1777,7 @@ mod tests {
                 name: "y".to_string(),
                 transform: Transform::Identity,
                 source_id: 2,
+                source_ids: None,
                 field_id: Some(1000),
             })
             .unwrap()
@@ -1778,6 +1785,7 @@ mod tests {
                 name: "z".to_string(),
                 transform: Transform::Identity,
                 source_id: 3,
+                source_ids: None,
                 field_id: Some(1001),
             })
             .unwrap()
@@ -1835,6 +1843,7 @@ mod tests {
                 name: "y_bucket[2]".to_string(),
                 transform: Transform::Bucket(2),
                 source_id: 1,
+                source_ids: None,
                 field_id: Some(1001),
             })
             .unwrap()
@@ -1914,6 +1923,7 @@ mod tests {
             .with_order_id(10)
             .with_fields(vec![SortField {
                 source_id: 1,
+                source_ids: None,
                 transform: Transform::Identity,
                 direction: SortDirection::Ascending,
                 null_order: NullOrder::First,
@@ -2405,12 +2415,14 @@ mod tests {
                     name: "y".to_string(),
                     transform: Transform::Identity,
                     source_id: 2,
+                    source_ids: None,
                     field_id: Some(1000),
                 },
                 UnboundPartitionField {
                     name: "z".to_string(),
                     transform: Transform::Identity,
                     source_id: 3,
+                    source_ids: None,
                     field_id: Some(1002),
                 },
             ])

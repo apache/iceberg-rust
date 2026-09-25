@@ -246,6 +246,7 @@ mod tests {
                 .with_spec_id(1)
                 .add_unbound_field(UnboundPartitionField {
                     source_id: 1,
+                    source_ids: None,
                     field_id: None,
                     name: "id_bucket".to_string(),
                     transform: Transform::Identity,
@@ -360,6 +361,7 @@ mod tests {
                 .with_spec_id(1)
                 .add_unbound_field(UnboundPartitionField {
                     source_id: 1,
+                    source_ids: None,
                     field_id: None,
                     name: "id_bucket".to_string(),
                     transform: Transform::Identity,

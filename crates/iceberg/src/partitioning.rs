@@ -151,8 +151,17 @@ fn is_void_transform(field: &PartitionField) -> bool {
 /// `Partitioning.equivalentIgnoringNames`.
 fn equivalent_ignoring_names(field: &PartitionField, other: &PartitionField) -> bool {
     field.field_id == other.field_id
-        && field.source_id == other.source_id
+        && effective_source_ids(field) == effective_source_ids(other)
         && compatible_transforms(&field.transform, &other.transform)
+}
+
+/// The source ids a partition field reads: `source-ids` for a multi-argument transform,
+/// otherwise the single `source-id`.
+fn effective_source_ids(field: &PartitionField) -> &[i32] {
+    match field.source_ids.as_deref() {
+        Some(source_ids) if source_ids.len() > 1 => source_ids,
+        _ => std::slice::from_ref(&field.source_id),
+    }
 }
 
 /// Transforms are compatible if they are equal, or if either is Void (a dropped field).
@@ -203,6 +212,32 @@ mod tests {
                 .unwrap();
         }
         builder.build().bind(schema.clone()).unwrap()
+    }
+
+    #[test]
+    fn test_multi_arg_fields_with_different_source_ids_conflict() {
+        let schema = test_schema();
+
+        // A field carrying both source-id and source-ids keeps its declared transform, so it
+        // reaches the cross-spec compatibility check rather than the unknown-transform guard.
+        let spec1: PartitionSpec = serde_json::from_str(
+            r#"{"spec-id": 1, "fields": [{"source-id": 1, "source-ids": [1, 2], "field-id": 1000, "name": "m", "transform": "identity"}]}"#,
+        )
+        .unwrap();
+        let spec2: PartitionSpec = serde_json::from_str(
+            r#"{"spec-id": 2, "fields": [{"source-id": 1, "source-ids": [1, 4], "field-id": 1000, "name": "m2", "transform": "identity"}]}"#,
+        )
+        .unwrap();
+
+        // Same field id and same first source id, but different source id lists: these are
+        // different partition fields and must not be treated as equivalent.
+        let err =
+            compute_unified_partition_type([&spec1, &spec2].into_iter(), &schema).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Conflicting partition fields for field id 1000"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -263,6 +298,7 @@ mod tests {
             .with_spec_id(0)
             .add_unbound_field(crate::spec::UnboundPartitionField {
                 source_id: 4,
+                source_ids: None,
                 field_id: Some(1000),
                 name: "cat_old".to_string(),
                 transform: Transform::Identity,
@@ -276,6 +312,7 @@ mod tests {
             .with_spec_id(1)
             .add_unbound_field(crate::spec::UnboundPartitionField {
                 source_id: 4,
+                source_ids: None,
                 field_id: Some(1000),
                 name: "cat_new".to_string(),
                 transform: Transform::Identity,
@@ -299,6 +336,7 @@ mod tests {
             .with_spec_id(0)
             .add_unbound_field(crate::spec::UnboundPartitionField {
                 source_id: 4,
+                source_ids: None,
                 field_id: Some(1000),
                 name: "category".to_string(),
                 transform: Transform::Identity,
@@ -312,6 +350,7 @@ mod tests {
             .with_spec_id(1)
             .add_unbound_field(crate::spec::UnboundPartitionField {
                 source_id: 4,
+                source_ids: None,
                 field_id: Some(1000),
                 name: "category_v2".to_string(),
                 transform: Transform::Void,
@@ -373,6 +412,7 @@ mod tests {
             .with_spec_id(1)
             .add_unbound_field(crate::spec::UnboundPartitionField {
                 source_id: 4,
+                source_ids: None,
                 field_id: Some(spec_v0.fields()[0].field_id),
                 name: "category".to_string(),
                 transform: Transform::Identity,
