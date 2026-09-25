@@ -17,6 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use arrow_array::{Array, ArrayRef, Int64Array, StringArray, StructArray};
 use bytes::Bytes;
@@ -25,14 +26,14 @@ use tokio::sync::oneshot::{Receiver, channel};
 
 use super::delete_filter::{DeleteFilter, PosDelLoadAction};
 use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
-use crate::arrow::scan_metrics::ScanMetrics;
+use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics};
 use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
 use crate::encryption::{EncryptedInputFile, StandardKeyMetadata};
 use crate::error::invalid_data;
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Predicate, Reference};
-use crate::io::FileIO;
+use crate::io::{FileIO, FileRead};
 use crate::runtime::Runtime;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
 use crate::spec::{
@@ -421,17 +422,31 @@ impl CachingDeleteFileLoader {
         let input_file = basic_delete_file_loader
             .file_io()
             .new_input(&task.file_path)?;
-        let blob = match task.key_metadata.as_deref() {
+        let reader = match task.key_metadata.as_deref() {
             Some(key_metadata) => {
                 let key_metadata = StandardKeyMetadata::decode(key_metadata)?;
+
                 EncryptedInputFile::new(input_file, key_metadata)
                     .reader()
                     .await?
-                    .read(start..start + len)
-                    .await?
             }
-            None => input_file.reader().await?.read(start..start + len).await?,
+            None => input_file.reader().await?,
         };
+
+        let reader = CountingFileRead::new(
+            reader,
+            basic_delete_file_loader
+                .scan_metrics()
+                .delete_bytes_read_counter()
+                .clone(),
+        );
+
+        basic_delete_file_loader
+            .scan_metrics()
+            .delete_files_opened_counter()
+            .fetch_add(1, Ordering::Relaxed);
+
+        let blob = reader.read(start..start + len).await?;
 
         Ok(DeleteFileContext::DelVec {
             data_file_path,
@@ -1599,7 +1614,9 @@ mod tests {
                 .unwrap(),
         );
 
-        let loader = CachingDeleteFileLoader::new(file_io, 10, Runtime::current());
+        let scan_metrics = ScanMetrics::new();
+        let loader = CachingDeleteFileLoader::new(file_io, 10, Runtime::current())
+            .with_scan_metrics(scan_metrics.clone());
         let delete_filter = loader.load_deletes(&[dv], schema).await.unwrap().unwrap();
 
         let delete_vector = delete_filter
@@ -1608,6 +1625,12 @@ mod tests {
         let mut positions: Vec<u64> = delete_vector.lock().unwrap().iter().collect();
         positions.sort_unstable();
         assert_eq!(positions, vec![0, 1, 5]);
+        assert_eq!(scan_metrics.data_bytes_read(), 0);
+        assert_eq!(scan_metrics.delete_bytes_read(), content_size as u64);
+        assert_eq!(scan_metrics.bytes_read(), content_size as u64);
+        assert_eq!(scan_metrics.data_files_opened(), 0);
+        assert_eq!(scan_metrics.delete_files_opened(), 1);
+        assert_eq!(scan_metrics.rows_emitted(), 0);
     }
 
     #[tokio::test]
@@ -1652,7 +1675,9 @@ mod tests {
                 .unwrap(),
         );
 
-        let loader = CachingDeleteFileLoader::new(file_io, 10, Runtime::current());
+        let scan_metrics = ScanMetrics::new();
+        let loader = CachingDeleteFileLoader::new(file_io, 10, Runtime::current())
+            .with_scan_metrics(scan_metrics.clone());
         let delete_filter = loader.load_deletes(&[dv], schema).await.unwrap().unwrap();
 
         let delete_vector = delete_filter
@@ -1661,6 +1686,12 @@ mod tests {
         let mut positions: Vec<u64> = delete_vector.lock().unwrap().iter().collect();
         positions.sort_unstable();
         assert_eq!(positions, vec![2, 4]);
+        assert_eq!(scan_metrics.data_bytes_read(), 0);
+        assert_eq!(scan_metrics.delete_bytes_read(), plaintext_size as u64);
+        assert_eq!(scan_metrics.bytes_read(), plaintext_size as u64);
+        assert_eq!(scan_metrics.data_files_opened(), 0);
+        assert_eq!(scan_metrics.delete_files_opened(), 1);
+        assert_eq!(scan_metrics.rows_emitted(), 0);
     }
 
     #[tokio::test]
