@@ -19,6 +19,8 @@
 //! `AuthManager`/`AuthSession` API.
 
 mod oauth2;
+#[cfg(feature = "sigv4")]
+mod sigv4;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -27,6 +29,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use iceberg::Result;
 pub use oauth2::OAuth2Manager;
+#[cfg(feature = "sigv4")]
+pub use sigv4::{
+    PayloadHashMode, REST_CATALOG_PROP_ACCESS_KEY_ID, REST_CATALOG_PROP_SECRET_ACCESS_KEY,
+    REST_CATALOG_PROP_SESSION_TOKEN, REST_CATALOG_PROP_SIGNING_NAME,
+    REST_CATALOG_PROP_SIGNING_REGION, SIGNING_NAME_DEFAULT, SigV4AuthManager, SigV4Signer,
+};
 
 use crate::client::HttpClient;
 use crate::request::HttpRequest;
@@ -73,6 +81,14 @@ pub trait AuthManager: Debug + Send + Sync {
         client: &HttpClient,
         props: &HashMap<String, String>,
     ) -> Result<Arc<dyn AuthSession>>;
+
+    /// Whether the sessions this manager builds sign requests, so the catalog
+    /// must not let its HTTP client follow redirects: a redirect would replay a
+    /// signature made for another URL, and across hosts reqwest drops
+    /// `Authorization` while keeping any relocated copy of it.
+    fn signs_requests(&self) -> bool {
+        false
+    }
 }
 
 /// Authenticates outgoing REST catalog requests.
