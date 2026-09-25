@@ -55,6 +55,16 @@
 //! }
 //! ```
 //!
+//! # Pagination
+//!
+//! Both builders support `with_page_size(1000)` to request bounded namespace
+//! and table list responses. Alternatively, set [`REST_CATALOG_PROP_PAGE_SIZE`]
+//! in the properties passed to `load`; this takes precedence over the builder
+//! method. Server `/v1/config` defaults have lower priority than client settings,
+//! and server overrides have the highest priority. No page size is sent if unset.
+//! The effective value must be a positive `u32` and is validated after fetching
+//! server configuration. List operations fetch all pages and return all results.
+//!
 //! # Session catalog API
 //!
 //! ```rust, no_run
