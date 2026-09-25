@@ -25,8 +25,8 @@ use super::_const_schema::{
 };
 use super::_serde::{ManifestFileV1, ManifestFileV2, ManifestFileV3};
 use super::{FormatVersion, ManifestContentType, ManifestFile, UNASSIGNED_SEQUENCE_NUMBER};
-use crate::error::Result;
-use crate::io::FileWrite;
+use crate::error::{Result, invalid_data};
+use crate::io::{FileMetadata, FileWrite};
 use crate::{Error, ErrorKind};
 
 /// A manifest list writer.
@@ -196,24 +196,20 @@ impl ManifestListWriter {
         Ok(())
     }
 
-    /// Write the manifest list to the output file.
-    pub async fn close(mut self) -> Result<()> {
+    /// Write the manifest list and return its stored size.
+    pub async fn close(mut self) -> Result<FileMetadata> {
         let data = self.avro_writer.into_inner()?;
         self.writer.write(Bytes::from(data)).await?;
-        self.writer.close().await?;
-        Ok(())
+        self.writer.close().await
     }
 
     /// Assign sequence numbers to manifest if they are unassigned
     fn assign_sequence_numbers(&self, manifest: &mut ManifestFile) -> Result<()> {
         if manifest.sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
             if manifest.added_snapshot_id != self.snapshot_id {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Found unassigned sequence number for a manifest from snapshot {}.",
-                        manifest.added_snapshot_id
-                    ),
+                return Err(invalid_data!(
+                    "Found unassigned sequence number for a manifest from snapshot {}.",
+                    manifest.added_snapshot_id
                 ));
             }
             manifest.sequence_number = self.sequence_number;
@@ -221,12 +217,9 @@ impl ManifestListWriter {
 
         if manifest.min_sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
             if manifest.added_snapshot_id != self.snapshot_id {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Found unassigned sequence number for a manifest from snapshot {}.",
-                        manifest.added_snapshot_id
-                    ),
+                return Err(invalid_data!(
+                    "Found unassigned sequence number for a manifest from snapshot {}.",
+                    manifest.added_snapshot_id
                 ));
             }
             manifest.min_sequence_number = self.sequence_number;
@@ -265,13 +258,10 @@ impl ManifestListWriter {
                         .checked_add(existing_rows_count)
                         .and_then(|sum| sum.checked_add(added_rows_count))
                         .ok_or_else(|| {
-                            Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
+                            invalid_data!(
                                     "Row ID overflow when computing next row ID for Manifest {}. Next Row ID: {writer_next_row_id}, Existing Rows Count: {existing_rows_count}, Added Rows Count: {added_rows_count}",
                                     manifest.manifest_path
-                                ),
-                            )
+                                )
                         }).map(Some)?;
                     }
                     (None, None) => {
@@ -291,22 +281,16 @@ impl ManifestListWriter {
 
 fn require_row_counts_in_manifest(manifest: &ManifestFile) -> Result<(u64, u64)> {
     let existing_rows_count = manifest.existing_rows_count.ok_or_else(|| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!(
+        invalid_data!(
                 "Cannot include a Manifest without existing-rows-count to a table with row lineage enabled. Manifest path: {}",
                 manifest.manifest_path,
-            ),
-        )
+            )
     })?;
     let added_rows_count = manifest.added_rows_count.ok_or_else(|| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!(
+        invalid_data!(
                 "Cannot include a Manifest without added-rows-count to a table with row lineage enabled. Manifest path: {}",
                 manifest.manifest_path,
-            ),
-        )
+            )
     })?;
     Ok((existing_rows_count, added_rows_count))
 }
@@ -616,7 +600,6 @@ mod test {
         let path = "memory:///manifest_list_v3_encrypted.avro";
 
         let encrypted_output = mgr.encrypt(file_io.new_output(path).unwrap());
-        let key_metadata = encrypted_output.key_metadata().clone();
 
         let snapshot_id = 9_000_000_000_000_001i64;
         let seq_num = 7i64;
@@ -651,7 +634,7 @@ mod test {
         writer
             .add_manifests(expected.entries.clone().into_iter())
             .unwrap();
-        writer.close().await.unwrap();
+        let file_metadata = writer.close().await.unwrap();
 
         let raw_bytes = file_io.new_input(path).unwrap().read().await.unwrap();
         assert!(
@@ -659,6 +642,8 @@ mod test {
             "raw bytes should be ciphertext, not parseable as Avro"
         );
 
+        let key_metadata = encrypted_output.key_metadata_with_saved_file_metadata(&file_metadata);
+        assert_eq!(key_metadata.file_length(), Some(raw_bytes.len() as u64));
         let plaintext = EncryptedInputFile::new(file_io.new_input(path).unwrap(), key_metadata)
             .read()
             .await

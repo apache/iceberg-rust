@@ -37,7 +37,7 @@ use self::id_reassigner::ReassignFieldIds;
 use self::index::{IndexByName, index_by_id, index_parents};
 pub use self::prune_columns::prune_columns;
 use super::NestedField;
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::expr::accessor::StructAccessor;
 use crate::spec::FormatVersion;
 use crate::spec::datatypes::{
@@ -258,11 +258,8 @@ impl SchemaBuilder {
         let id_to_parent = index_parents(r#struct)?;
         for identifier_field_id in identifier_field_ids {
             let field = id_to_field.get(&identifier_field_id).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot add identifier field {identifier_field_id}: field does not exist"
-                    ),
+                invalid_data!(
+                    "Cannot add identifier field {identifier_field_id}: field does not exist"
                 )
             })?;
             ensure_data_valid!(
@@ -277,12 +274,9 @@ impl SchemaBuilder {
                     field.name
                 );
             } else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot add field {} as an identifier field: not a primitive type field",
-                        field.name
-                    ),
+                return Err(invalid_data!(
+                    "Cannot add field {} as an identifier field: not a primitive type field",
+                    field.name
                 ));
             }
 
@@ -504,9 +498,8 @@ impl Schema {
             .sorted_by_key(|(id, _)| *id)
             .map(|(_, msg)| msg)
             .join("\n- ");
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("Invalid schema for {format_version}:\n- {message}"),
+        Err(invalid_data!(
+            "Invalid schema for {format_version}:\n- {message}"
         ))
     }
 }
