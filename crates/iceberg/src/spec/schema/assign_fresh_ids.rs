@@ -134,6 +134,8 @@ impl AssignFreshIds {
                 }))
             }
             Type::Map(map) => {
+                // Key and value ids are resolved before recursing into either, matching Java and
+                // intentionally unlike `ReassignFieldIds`, which recurses the key first.
                 let new_key_id = self.resolve_or_assign_id(map.key_field.id)?;
                 let new_value_id = self.resolve_or_assign_id(map.value_field.id)?;
                 try_insert_field(&mut self.old_to_new_id, map.key_field.id, new_key_id)?;
