@@ -98,15 +98,15 @@ pub(crate) mod timestamptz {
     }
 
     pub(crate) fn microseconds_to_datetimetz(micros: i64) -> DateTime<Utc> {
-        let (secs, rem) = (micros / 1_000_000, micros % 1_000_000);
-
-        DateTime::from_timestamp(secs, rem as u32 * 1_000).unwrap()
+        // Returns None only outside chrono's range (~year -262144 to +262142);
+        // unreachable for any realistic Iceberg timestamp.
+        DateTime::from_timestamp_micros(micros).expect(
+            "timestamp micros outside chrono's representable range (~year -262144..+262142)",
+        )
     }
 
     pub(crate) fn nanoseconds_to_datetimetz(nanos: i64) -> DateTime<Utc> {
-        let (secs, rem) = (nanos / 1_000_000_000, nanos % 1_000_000_000);
-
-        DateTime::from_timestamp(secs, rem as u32).unwrap()
+        DateTime::from_timestamp_nanos(nanos)
     }
 
     /// Nanoseconds since the Unix epoch, or `None` if outside the representable `i64` range
