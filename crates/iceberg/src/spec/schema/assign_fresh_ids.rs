@@ -18,6 +18,17 @@
 use super::utils::try_insert_field;
 use super::*;
 
+/// Reassigns `schema`'s field ids, reusing ids from `base` for fields whose full name is unchanged
+/// and drawing fresh ids from `start_from` upwards for everything else.
+///
+/// `start_from` must be past every id the table has ever assigned, not merely past `base`'s ids:
+/// pass `table_metadata.last_column_id() + 1`, which also reserves the ids of columns already
+/// dropped from `base`. Seeding from a schema's `highest_field_id() + 1` can hand a new column the
+/// id of a dropped one. A reused id does not consume a fresh one, so a `start_from` that is too low
+/// yields duplicate ids, which surface only as a generic error from `build()`.
+///
+/// The returned `schema_id` is carried over unchanged and is not authoritative; it is arbitrated by
+/// [`TableMetadataBuilder::add_schema`](crate::spec::TableMetadataBuilder::add_schema).
 pub(crate) fn assign_fresh_ids(schema: Schema, base: &Schema, start_from: i32) -> Result<Schema> {
     let Schema {
         r#struct,
@@ -61,7 +72,9 @@ impl AssignFreshIds {
         }
     }
 
-    fn id_for(&mut self, old_id: i32) -> Result<i32> {
+    /// Returns `base`'s id when the field's full name is unchanged, otherwise consumes a fresh id by
+    /// advancing `next_field_id`.
+    fn resolve_or_assign_id(&mut self, old_id: i32) -> Result<i32> {
         if let Some(id) = self
             .target_names
             .get(&old_id)
@@ -84,7 +97,7 @@ impl AssignFreshIds {
         let outer_fields = fields
             .into_iter()
             .map(|field| {
-                let new_id = self.id_for(field.id)?;
+                let new_id = self.resolve_or_assign_id(field.id)?;
                 try_insert_field(&mut self.old_to_new_id, field.id, new_id)?;
                 Ok(Arc::new(Arc::unwrap_or_clone(field).with_id(new_id)))
             })
@@ -111,7 +124,7 @@ impl AssignFreshIds {
                 self.assign_fields(r#struct.fields().to_vec())?,
             ))),
             Type::List(list) => {
-                let new_id = self.id_for(list.element_field.id)?;
+                let new_id = self.resolve_or_assign_id(list.element_field.id)?;
                 try_insert_field(&mut self.old_to_new_id, list.element_field.id, new_id)?;
                 let mut element_field = Arc::unwrap_or_clone(list.element_field);
                 element_field.id = new_id;
@@ -121,8 +134,8 @@ impl AssignFreshIds {
                 }))
             }
             Type::Map(map) => {
-                let new_key_id = self.id_for(map.key_field.id)?;
-                let new_value_id = self.id_for(map.value_field.id)?;
+                let new_key_id = self.resolve_or_assign_id(map.key_field.id)?;
+                let new_value_id = self.resolve_or_assign_id(map.value_field.id)?;
                 try_insert_field(&mut self.old_to_new_id, map.key_field.id, new_key_id)?;
                 try_insert_field(&mut self.old_to_new_id, map.value_field.id, new_value_id)?;
 
@@ -357,6 +370,31 @@ mod tests {
         assert_eq!(assigned.identifier_field_ids().collect::<Vec<_>>(), vec![8]);
         assert_eq!(assigned.field_by_alias("a_alias").unwrap().id, 2);
         assert_eq!(assigned.highest_field_id(), 11);
+    }
+
+    #[test]
+    fn test_assign_fresh_ids_does_not_reuse_dropped_column_ids() {
+        // The table once had ids 1..=5; only 1 and 3 are still present in the current schema, so
+        // `highest_field_id()` of 3 would hand a new column the dropped id 4.
+        let base = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(3, "b", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        let replacement = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "fresh", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let assigned = assign_fresh_ids(replacement, &base, 6).unwrap();
+
+        assert_eq!(assigned.field_by_name("a").unwrap().id, 1);
+        assert_eq!(assigned.field_by_name("fresh").unwrap().id, 6);
     }
 
     #[test]
