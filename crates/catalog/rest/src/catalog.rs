@@ -243,7 +243,7 @@ impl RestCatalogConfig {
         self.url_prefixed(&["namespaces", &ns.to_url_string(), "register"])
     }
 
-    fn table_endpoint(&self, table: &TableIdent) -> String {
+    pub(crate) fn table_endpoint(&self, table: &TableIdent) -> String {
         self.url_prefixed(&[
             "namespaces",
             &table.namespace.to_url_string(),
@@ -417,14 +417,14 @@ pub(crate) fn oauth_params_from_props(props: &HashMap<String, String>) -> HashMa
 }
 
 #[derive(Debug)]
-struct RestClient {
+pub(crate) struct RestClient {
     /// Carries the session the auth manager derived from the merged
     /// configuration, so every request below is authenticated.
-    http_client: HttpClient,
+    pub(crate) http_client: HttpClient,
     /// Runtime config is fetched from rest server and stored here.
     ///
     /// It could be different from the user config.
-    config: RestCatalogConfig,
+    pub(crate) config: RestCatalogConfig,
     /// Capabilities the server advertises (see [`RestSessionCatalog::supports_endpoint`]).
     endpoints: HashSet<Endpoint>,
 }
@@ -484,7 +484,7 @@ impl RestClient {
     }
 
     /// Sends `request`, authenticated by the client's session.
-    async fn query_catalog(&self, request: HttpRequest) -> Result<HttpResponse> {
+    pub(crate) async fn query_catalog(&self, request: HttpRequest) -> Result<HttpResponse> {
         self.http_client.query_catalog(request).await
     }
 
@@ -548,7 +548,7 @@ pub struct RestCatalog {
 impl RestCatalog {
     /// Creates a `RestCatalog` from a [`RestCatalogConfig`].
     #[cfg(test)]
-    fn new(
+    pub(crate) fn new(
         context: SessionContext,
         config: RestCatalogConfig,
         auth_manager: Option<Box<dyn AuthManager>>,
@@ -574,9 +574,25 @@ impl RestCatalog {
         }
     }
 
-    #[cfg(test)]
-    async fn client(&self) -> Result<&RestClient> {
+    pub(crate) async fn client(&self) -> Result<&RestClient> {
         self.inner.client().await
+    }
+
+    pub(crate) async fn supports_endpoint(&self, endpoint: &Endpoint) -> Result<bool> {
+        self.inner.supports_endpoint(endpoint).await
+    }
+
+    /// Same catalog identity with an empty HTTP client cache, for fire-and-forget
+    /// work (best-effort plan cancel on drop) that must not borrow `self`.
+    pub(crate) fn clone_uninitialized(&self) -> Self {
+        Self {
+            session_context: self.session_context.clone(),
+            inner: Arc::new(self.inner.clone_uninitialized()),
+        }
+    }
+
+    pub(crate) fn runtime(&self) -> &Runtime {
+        self.inner.runtime()
     }
 }
 
@@ -725,6 +741,22 @@ impl RestSessionCatalog {
         }
     }
 
+    /// Same catalog identity with an empty HTTP client cache, for fire-and-forget
+    /// work (best-effort plan cancel on drop) that must not borrow `self`.
+    pub(crate) fn clone_uninitialized(&self) -> Self {
+        Self::new(
+            self.user_config.clone(),
+            self.auth_manager.clone(),
+            self.storage_factory.clone(),
+            self.runtime.clone(),
+            self.kms_client.clone(),
+        )
+    }
+
+    pub(crate) fn runtime(&self) -> &Runtime {
+        &self.runtime
+    }
+
     /// Sends a DELETE request for the given table, optionally requesting purge.
     async fn delete_table(
         &self,
@@ -812,7 +844,7 @@ impl RestSessionCatalog {
     }
 
     /// Gets the [`RestClient`] from the catalog.
-    async fn client(&self) -> Result<&RestClient> {
+    pub(crate) async fn client(&self) -> Result<&RestClient> {
         self.client
             .get_or_try_init(|| async {
                 RestClient::init(&self.user_config, self.resolve_auth_manager()?).await
