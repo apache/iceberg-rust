@@ -25,9 +25,10 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::transform::Transform;
-use super::{NestedField, Schema, SchemaRef, StructType};
+use super::{NestedField, PrimitiveType, Schema, SchemaRef, StructType};
+use crate::Result;
+use crate::error::invalid_data;
 use crate::spec::Struct;
-use crate::{Error, ErrorKind, Result};
 
 pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
 pub(crate) const DEFAULT_PARTITION_SPEC_ID: i32 = 0;
@@ -103,8 +104,32 @@ impl PartitionSpec {
     }
 
     /// Returns the partition type of this partition spec.
+    /// If a source column is absent, preserves fixed transform result types and uses
+    /// unknown for result types that depend on the source type.
     pub fn partition_type(&self, schema: &Schema) -> Result<StructType> {
-        PartitionSpecBuilder::partition_type(&self.fields, schema)
+        let mut struct_fields = Vec::with_capacity(self.fields.len());
+        for partition_field in &self.fields {
+            let res_type = match schema.field_by_id(partition_field.source_id) {
+                Some(field) => partition_field.transform.result_type(&field.field_type)?,
+                // Historical specs may reference dropped source columns. Retain every
+                // field's position and any result type that is independent of its source.
+                None => match partition_field.transform {
+                    Transform::Bucket(_) | Transform::Year | Transform::Month | Transform::Hour => {
+                        PrimitiveType::Int.into()
+                    }
+                    Transform::Day => PrimitiveType::Date.into(),
+                    Transform::Unknown => PrimitiveType::String.into(),
+                    Transform::Identity | Transform::Truncate(_) | Transform::Void => {
+                        PrimitiveType::Unknown.into()
+                    }
+                },
+            };
+            struct_fields.push(
+                NestedField::optional(partition_field.field_id, &partition_field.name, res_type)
+                    .into(),
+            );
+        }
+        Ok(StructType::new(struct_fields))
     }
 
     /// Convert to unbound partition spec
@@ -463,12 +488,9 @@ impl PartitionSpecBuilder {
             .schema
             .field_by_name(source_name.as_ref())
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot find source column with name: {} in schema",
-                        source_name.as_ref()
-                    ),
+                invalid_data!(
+                    "Cannot find source column with name: {} in schema",
+                    source_name.as_ref()
                 )
             })?
             .id;
@@ -534,12 +556,8 @@ impl PartitionSpecBuilder {
             .collect::<std::collections::HashSet<_>>();
 
         fn _check_add_1(prev: i32) -> Result<i32> {
-            prev.checked_add(1).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot assign more partition ids. Overflow.",
-                )
-            })
+            prev.checked_add(1)
+                .ok_or_else(|| invalid_data!("Cannot assign more partition ids. Overflow."))
         }
 
         let mut bound_fields = Vec::with_capacity(fields.len());
@@ -566,32 +584,6 @@ impl PartitionSpecBuilder {
         Ok(bound_fields)
     }
 
-    /// Returns the partition type of this partition spec.
-    fn partition_type(fields: &Vec<PartitionField>, schema: &Schema) -> Result<StructType> {
-        let mut struct_fields = Vec::with_capacity(fields.len());
-        for partition_field in fields {
-            let field = schema
-                .field_by_id(partition_field.source_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        // This should never occur as check_transform_compatibility
-                        // already ensures that the source field exists in the schema
-                        ErrorKind::Unexpected,
-                        format!(
-                            "No column with source column id {} in schema {:?}",
-                            partition_field.source_id, schema
-                        ),
-                    )
-                })?;
-            let res_type = partition_field.transform.result_type(&field.field_type)?;
-            let field =
-                NestedField::optional(partition_field.field_id, &partition_field.name, res_type)
-                    .into();
-            struct_fields.push(field);
-        }
-        Ok(StructType::new(struct_fields))
-    }
-
     /// Ensure that the partition name is unique among columns in the schema.
     /// Duplicate names are allowed if:
     /// 1. The column is sourced from the column with the same name.
@@ -606,21 +598,17 @@ impl PartitionSpecBuilder {
                     if schema_collision.id == field.source_id {
                         Ok(())
                     } else {
-                        Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Cannot create identity partition sourced from different field in schema. Field name '{}' has id `{}` in schema but partition source id is `{}`",
-                                field.name, schema_collision.id, field.source_id
-                            ),
+                        Err(invalid_data!(
+                            "Cannot create identity partition sourced from different field in schema. Field name '{}' has id `{}` in schema but partition source id is `{}`",
+                            field.name,
+                            schema_collision.id,
+                            field.source_id
                         ))
                     }
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Cannot create partition with name: '{}' that conflicts with schema field and is not an identity transform.",
-                            field.name
-                        ),
+                    Err(invalid_data!(
+                        "Cannot create partition with name: '{}' that conflicts with schema field and is not an identity transform.",
+                        field.name
                     ))
                 }
             }
@@ -632,23 +620,17 @@ impl PartitionSpecBuilder {
     /// in the schema. Implicitly also checks if the source field exists in the schema.
     fn check_transform_compatibility(field: &UnboundPartitionField, schema: &Schema) -> Result<()> {
         let schema_field = schema.field_by_id(field.source_id).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot find partition source field with id `{}` in schema",
-                    field.source_id
-                ),
+            invalid_data!(
+                "Cannot find partition source field with id `{}` in schema",
+                field.source_id
             )
         })?;
 
         if field.transform != Transform::Void {
             if !schema_field.field_type.is_primitive() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot partition by non-primitive source field: '{}'.",
-                        schema_field.field_type
-                    ),
+                return Err(invalid_data!(
+                    "Cannot partition by non-primitive source field: '{}'.",
+                    schema_field.field_type
                 ));
             }
 
@@ -657,13 +639,10 @@ impl PartitionSpecBuilder {
                 .result_type(&schema_field.field_type)
                 .is_err()
             {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Invalid source type: '{}' for transform: '{}'.",
-                        schema_field.field_type,
-                        field.transform.dedup_name()
-                    ),
+                return Err(invalid_data!(
+                    "Invalid source type: '{}' for transform: '{}'.",
+                    schema_field.field_type,
+                    field.transform.dedup_name()
                 ));
             }
         }
@@ -677,16 +656,12 @@ trait CorePartitionSpecValidator {
     /// Ensure that the partition name is unique among the partition fields and is not empty.
     fn check_name_set_and_unique(&self, name: &str) -> Result<()> {
         if name.is_empty() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot use empty partition name",
-            ));
+            return Err(invalid_data!("Cannot use empty partition name"));
         }
 
         if self.fields().iter().any(|f| f.name == name) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot use partition name more than once: {name}"),
+            return Err(invalid_data!(
+                "Cannot use partition name more than once: {name}"
             ));
         }
         Ok(())
@@ -699,14 +674,11 @@ trait CorePartitionSpecValidator {
         });
 
         if let Some(collision) = collision {
-            Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot add redundant partition with source id `{}` and transform `{}`. A partition with the same source id and transform already exists with name `{}`",
-                    source_id,
-                    transform.dedup_name(),
-                    collision.name
-                ),
+            Err(invalid_data!(
+                "Cannot add redundant partition with source id `{}` and transform `{}`. A partition with the same source id and transform already exists with name `{}`",
+                source_id,
+                transform.dedup_name(),
+                collision.name
             ))
         } else {
             Ok(())
@@ -716,9 +688,8 @@ trait CorePartitionSpecValidator {
     /// Check field / partition_id unique within the partition spec if set
     fn check_partition_id_unique(&self, field_id: i32) -> Result<()> {
         if self.fields().iter().any(|f| f.field_id == Some(field_id)) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot use field id more than once in one PartitionSpec: {field_id}"),
+            return Err(invalid_data!(
+                "Cannot use field id more than once in one PartitionSpec: {field_id}"
             ));
         }
 
@@ -743,6 +714,7 @@ impl CorePartitionSpecValidator for UnboundPartitionSpecBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ErrorKind;
     use crate::spec::{Literal, PrimitiveType, Type};
 
     #[test]
@@ -1055,7 +1027,7 @@ mod tests {
     }
 
     #[test]
-    fn test_partition_error() {
+    fn test_partition_type_with_dropped_source_column() {
         let spec = r#"
         {
         "spec-id": 1,
@@ -1087,7 +1059,73 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(partition_spec.partition_type(&schema).is_err());
+        assert_eq!(
+            partition_spec.partition_type(&schema).unwrap(),
+            StructType::new(vec![
+                NestedField::optional(1000, "ts_day", PrimitiveType::Date.into()).into(),
+                NestedField::optional(1001, "id_bucket", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1002, "id_truncate", PrimitiveType::String.into()).into(),
+            ])
+        );
+
+        // Dropping all sources must retain every partition field in its original position.
+        let empty_schema = Schema::builder().build().unwrap();
+        assert_eq!(
+            partition_spec.partition_type(&empty_schema).unwrap(),
+            StructType::new(vec![
+                NestedField::optional(1000, "ts_day", PrimitiveType::Date.into()).into(),
+                NestedField::optional(1001, "id_bucket", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1002, "id_truncate", PrimitiveType::Unknown.into()).into(),
+            ])
+        );
+
+        // Missing sources must not suppress validation of transforms on remaining sources.
+        let incompatible_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", PrimitiveType::Boolean.into()).into(),
+            ])
+            .build()
+            .unwrap();
+        let err = partition_spec
+            .partition_type(&incompatible_schema)
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.message(),
+            "boolean is not a valid input type of bucket transform"
+        );
+    }
+
+    #[test]
+    fn test_partition_type_without_source_type() {
+        let schema = Schema::builder().build().unwrap();
+        for (transform, expected_type) in [
+            (Transform::Identity, PrimitiveType::Unknown),
+            (Transform::Truncate(4), PrimitiveType::Unknown),
+            (Transform::Void, PrimitiveType::Unknown),
+            (Transform::Bucket(16), PrimitiveType::Int),
+            (Transform::Year, PrimitiveType::Int),
+            (Transform::Month, PrimitiveType::Int),
+            (Transform::Day, PrimitiveType::Date),
+            (Transform::Hour, PrimitiveType::Int),
+            (Transform::Unknown, PrimitiveType::String),
+        ] {
+            let spec = PartitionSpec {
+                spec_id: 0,
+                fields: vec![PartitionField {
+                    source_id: 1,
+                    field_id: 1000,
+                    name: "partition".to_string(),
+                    transform,
+                }],
+            };
+            assert_eq!(
+                spec.partition_type(&schema).unwrap(),
+                StructType::new(vec![
+                    NestedField::optional(1000, "partition", expected_type.into()).into(),
+                ])
+            );
+        }
     }
 
     #[test]
@@ -1748,7 +1786,7 @@ mod tests {
 
         assert_eq!(
             spec.partition_to_path(&data, schema.into()),
-            "id=42/name=alice/ts_hour=1000/empty_void=null"
+            "id=42/name=alice/ts_hour=1970-02-11-16/empty_void=null"
         );
     }
 

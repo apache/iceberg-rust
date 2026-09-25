@@ -16,6 +16,11 @@
 // under the License.
 
 #[test]
-fn reports_invalid_property_annotations() {
-    trybuild::TestCases::new().compile_fail("tests/compile-fail/*.rs");
+fn reports_invalid_properties_derive_declarations() {
+    trybuild::TestCases::new().compile_fail("tests/compile-fail/derive-properties/*.rs");
+}
+
+#[test]
+fn reports_invalid_property_view_declarations() {
+    trybuild::TestCases::new().compile_fail("tests/compile-fail/properties-view/*.rs");
 }

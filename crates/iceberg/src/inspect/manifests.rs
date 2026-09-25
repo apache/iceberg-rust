@@ -26,11 +26,12 @@ use arrow_array::types::{Int32Type, Int64Type};
 use arrow_schema::{DataType, Field, Fields};
 use futures::{StreamExt, stream};
 
+use crate::Result;
 use crate::arrow::schema_to_arrow_schema;
+use crate::error::invalid_data;
 use crate::scan::ArrowRecordBatchStream;
 use crate::spec::{Datum, FieldSummary, ListType, NestedField, PrimitiveType, StructType, Type};
 use crate::table::Table;
-use crate::{Error, ErrorKind, Result};
 
 /// Manifests table.
 pub struct ManifestsTable<'a> {
@@ -185,12 +186,10 @@ impl<'a> ManifestsTable<'a> {
                     .metadata()
                     .partition_spec_by_id(manifest.partition_spec_id)
                     .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Partition spec {} for manifest {} is not in table metadata",
-                                manifest.partition_spec_id, manifest.manifest_path
-                            ),
+                        invalid_data!(
+                            "Partition spec {} for manifest {} is not in table metadata",
+                            manifest.partition_spec_id,
+                            manifest.manifest_path
                         )
                     })?;
                 let spec_struct = spec.partition_type(self.table.metadata().current_schema())?;
@@ -260,22 +259,22 @@ impl<'a> ManifestsTable<'a> {
                 .unwrap()
                 .append_option(summary.contains_nan);
 
-            partition_summaries_builder
-                .field_builder::<StringBuilder>(2)
-                .unwrap()
-                .append_option(summary.lower_bound.as_ref().map(|v| {
-                    Datum::try_from_bytes(v, field.field_type.as_primitive_type().unwrap().clone())
-                        .unwrap()
-                        .to_string()
-                }));
-            partition_summaries_builder
-                .field_builder::<StringBuilder>(3)
-                .unwrap()
-                .append_option(summary.upper_bound.as_ref().map(|v| {
-                    Datum::try_from_bytes(v, field.field_type.as_primitive_type().unwrap().clone())
-                        .unwrap()
-                        .to_string()
-                }));
+            let field_type = field.field_type.as_primitive_type().unwrap();
+            for (index, bound) in [(2, &summary.lower_bound), (3, &summary.upper_bound)] {
+                // Bounds cannot be decoded when the source column's type is unknown.
+                let bound = bound
+                    .as_ref()
+                    .filter(|_| *field_type != PrimitiveType::Unknown)
+                    .map(|v| {
+                        Datum::try_from_bytes(v, field_type.clone())
+                            .unwrap()
+                            .to_string()
+                    });
+                partition_summaries_builder
+                    .field_builder::<StringBuilder>(index)
+                    .unwrap()
+                    .append_option(bound);
+            }
             partition_summaries_builder.append(true);
         }
         builder.append(true);
@@ -286,6 +285,7 @@ impl<'a> ManifestsTable<'a> {
 mod tests {
     use std::sync::Arc;
 
+    use arrow_array::{Array, ListArray, StructArray};
     use expect_test::expect;
     use futures::TryStreamExt;
 
@@ -418,9 +418,29 @@ mod tests {
         let metadata: TableMetadata = serde_json::from_value(metadata).unwrap();
         let table = fixture.table.clone().with_metadata(Arc::new(metadata));
 
-        match table.inspect().manifests().scan().await {
-            Err(err) => assert!(err.to_string().contains("No column with source column id")),
-            Ok(_) => panic!("expected scan to fail for a dropped partition source column"),
-        }
+        let batches: Vec<_> = table
+            .inspect()
+            .manifests()
+            .scan()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 1);
+        let summaries = batches[0]
+            .column_by_name("partition_summaries")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        let summary = summaries.value(0);
+        let summary = summary.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(summary.len(), 1);
+        assert!(summary.column_by_name("contains_null").unwrap().is_valid(0));
+        assert!(summary.column_by_name("contains_nan").unwrap().is_valid(0));
+        assert!(summary.column_by_name("lower_bound").unwrap().is_null(0));
+        assert!(summary.column_by_name("upper_bound").unwrap().is_null(0));
     }
 }

@@ -38,6 +38,7 @@ use super::crypto::{AesGcmCipher, AesKeySize, SecureKey};
 use super::io::EncryptedOutputFile;
 use super::key_metadata::StandardKeyMetadata;
 use super::kms::KeyManagementClient;
+use crate::error::invalid_data;
 use crate::io::OutputFile;
 use crate::sensitive::SensitiveBytes;
 use crate::spec::{EncryptedKey, FormatVersion, TableMetadataRef};
@@ -113,8 +114,9 @@ impl EncryptionManager {
             return Ok(None);
         }
 
-        let table_properties = metadata.table_properties()?;
-        let Some(table_key_id) = table_properties.encryption_key_id().as_deref() else {
+        let table_properties = metadata.table_properties();
+        let encryption_key_id = table_properties.encryption_key_id()?;
+        let Some(table_key_id) = encryption_key_id.as_deref() else {
             if kms_client.is_some() {
                 tracing::warn!(
                     "KeyManagementClient provided but table does not have encryption.key-id set"
@@ -157,7 +159,7 @@ impl EncryptionManager {
     ///
     /// Stores the resulting wrapped entry (and any newly created KEK) in the
     /// manager's internal `encryption_keys` map. Callers persist the full set
-    /// at commit time via [`Self::encryption_keys`].
+    /// at commit time via the manager's `encryption_keys`.
     ///
     /// Returns the `key_id` of the wrapped entry, which should be recorded on
     /// the snapshot as `encryption_key_id` so readers can locate it later.
@@ -203,20 +205,12 @@ impl EncryptionManager {
             .expect("encryption_keys lock poisoned")
             .get(encryption_key_id)
             .cloned()
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Encryption key '{encryption_key_id}' not found"),
-                )
-            })?;
+            .ok_or_else(|| invalid_data!("Encryption key '{encryption_key_id}' not found"))?;
 
         let kek_key_id = encrypted_key.encrypted_by_id().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "EncryptedKey '{}' has no encrypted_by_id",
-                    encrypted_key.key_id()
-                ),
+            invalid_data!(
+                "EncryptedKey '{}' has no encrypted_by_id",
+                encrypted_key.key_id()
             )
         })?;
 
@@ -329,12 +323,9 @@ impl EncryptionManager {
             return Ok(cached);
         }
 
-        let master_key_id = kek.encrypted_by_id().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("KEK '{}' has no encrypted_by_id", kek.key_id()),
-            )
-        })?;
+        let master_key_id = kek
+            .encrypted_by_id()
+            .ok_or_else(|| invalid_data!("KEK '{}' has no encrypted_by_id", kek.key_id()))?;
 
         let plaintext = self
             .kms_client
@@ -355,12 +346,7 @@ impl EncryptionManager {
             .expect("encryption_keys lock poisoned")
             .get(kek_key_id)
             .cloned()
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("KEK not found in encryption keys: {kek_key_id}"),
-                )
-            })?;
+            .ok_or_else(|| invalid_data!("KEK not found in encryption keys: {kek_key_id}"))?;
 
         // KEK timestamp as AAD prevents timestamp tampering.
         let aad = Self::kek_timestamp_aad(&kek)?;
@@ -382,13 +368,10 @@ impl EncryptionManager {
             .get(KEK_CREATED_AT_PROPERTY)
             .map(|ts| ts.as_bytes())
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "KEK '{}' is missing required '{}' property",
-                        kek.key_id(),
-                        KEK_CREATED_AT_PROPERTY
-                    ),
+                invalid_data!(
+                    "KEK '{}' is missing required '{}' property",
+                    kek.key_id(),
+                    KEK_CREATED_AT_PROPERTY
                 )
             })
     }
@@ -687,10 +670,14 @@ mod tests {
         let encrypted_output = mgr.encrypt(output);
 
         let plaintext = b"Hello, encrypted Iceberg round-trip!";
-        let serialized_metadata = encrypted_output.key_metadata().encode().unwrap();
-        encrypted_output
+        let file_metadata = encrypted_output
             .write(bytes::Bytes::from(plaintext.to_vec()))
             .await
+            .unwrap();
+
+        let serialized_metadata = encrypted_output
+            .key_metadata_with_saved_file_metadata(&file_metadata)
+            .encode()
             .unwrap();
 
         let input = io.new_input(path).unwrap();

@@ -19,24 +19,25 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::Result;
 use crate::TableUpdate::UpgradeFormatVersion;
+use crate::error::invalid_data;
 use crate::spec::FormatVersion;
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
-use crate::{Error, ErrorKind, Result};
 
 /// A transaction action to upgrade a table's format version.
 ///
 /// This action is used within a transaction to indicate that the
 /// table's format version should be upgraded to a specified version.
-/// The location remains optional until explicitly set via [`set_format_version`].
+/// The location remains optional until explicitly set via [`UpgradeFormatVersionAction::set_format_version`].
 pub struct UpgradeFormatVersionAction {
     format_version: Option<FormatVersion>,
 }
 
 impl UpgradeFormatVersionAction {
     /// Creates a new `UpgradeFormatVersionAction` with no version set.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         UpgradeFormatVersionAction {
             format_version: None,
         }
@@ -57,20 +58,11 @@ impl UpgradeFormatVersionAction {
     }
 }
 
-impl Default for UpgradeFormatVersionAction {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[async_trait]
 impl TransactionAction for UpgradeFormatVersionAction {
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
         let format_version = self.format_version.ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "FormatVersion is not set for UpgradeFormatVersionAction!",
-            )
+            invalid_data!("FormatVersion is not set for UpgradeFormatVersionAction!")
         })?;
 
         Ok(ActionCommit::new(

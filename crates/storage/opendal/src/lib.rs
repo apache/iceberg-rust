@@ -18,8 +18,8 @@
 //! OpenDAL-based storage implementation for Apache Iceberg.
 //!
 //! This crate provides [`OpenDalStorage`] and [`OpenDalStorageFactory`],
-//! which implement the [`Storage`](Storage) and
-//! [`StorageFactory`](StorageFactory) traits from the `iceberg` crate
+//! which implement the [`Storage`] and
+//! [`StorageFactory`] traits from the `iceberg` crate
 //! using [OpenDAL](https://opendal.apache.org/) as the backend.
 
 mod utils;
@@ -104,6 +104,15 @@ pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 ///
 /// Maps scheme to the corresponding OpenDalStorage storage variant.
 /// Use this factory with `FileIOBuilder::new(factory)` to create FileIO instances.
+///
+/// # Serialization
+///
+/// The receiving binary must enable the feature corresponding to the serialized backend variant.
+/// For example, deserializing `OpenDalStorageFactory::S3` requires the `opendal-s3` feature.
+///
+/// Serialization fails when the `OpenDalStorageFactory::S3` variant contains a custom AWS
+/// credential loader because the loader holds process-local state that cannot be reconstructed in
+/// another process. Construct the factory without a custom loader before serializing it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum OpenDalStorageFactory {
     /// Memory storage factory.
@@ -116,7 +125,11 @@ pub enum OpenDalStorageFactory {
     #[cfg(feature = "opendal-s3")]
     S3 {
         /// Custom AWS credential loader.
-        #[serde(skip)]
+        #[serde(
+            skip_deserializing,
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_custom_credential_loader"
+        )]
         customized_credential_load: Option<CustomAwsCredentialLoader>,
     },
     /// GCS storage factory.
@@ -131,6 +144,19 @@ pub enum OpenDalStorageFactory {
     /// HuggingFace Hub storage factory.
     #[cfg(feature = "opendal-hf")]
     Hf,
+}
+
+#[cfg(feature = "opendal-s3")]
+pub(crate) fn serialize_custom_credential_loader<S>(
+    _loader: &Option<CustomAwsCredentialLoader>,
+    _serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    Err(serde::ser::Error::custom(
+        "custom AWS credential loaders cannot be serialized",
+    ))
 }
 
 #[typetag::serde(name = "OpenDalStorageFactory")]
@@ -525,7 +551,7 @@ impl Storage for OpenDalStorage {
 
     async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
         let (op, relative_path) = self.create_operator(&path)?;
-        Ok(Box::new(OpenDalWriter(
+        Ok(Box::new(OpenDalWriter::new(
             op.writer(relative_path).await.map_err(from_opendal_error)?,
         )))
     }
@@ -609,21 +635,51 @@ impl FileRead for OpenDalReader {
 }
 
 /// Wrapper around `opendal::Writer` that implements `FileWrite`.
-pub(crate) struct OpenDalWriter(pub(crate) opendal::Writer);
+pub(crate) struct OpenDalWriter {
+    inner: opendal::Writer,
+    bytes_written: u64,
+}
+
+impl OpenDalWriter {
+    pub(crate) fn new(inner: opendal::Writer) -> Self {
+        Self {
+            inner,
+            bytes_written: 0,
+        }
+    }
+}
 
 #[async_trait]
 impl FileWrite for OpenDalWriter {
     async fn write(&mut self, bs: Bytes) -> Result<()> {
-        Ok(opendal::Writer::write(&mut self.0, bs)
-            .await
-            .map_err(from_opendal_error)?)
-    }
-
-    async fn close(&mut self) -> Result<()> {
-        let _ = opendal::Writer::close(&mut self.0)
+        let len = bs.len() as u64;
+        opendal::Writer::write(&mut self.inner, bs)
             .await
             .map_err(from_opendal_error)?;
+        self.bytes_written += len;
         Ok(())
+    }
+
+    async fn close(&mut self) -> Result<FileMetadata> {
+        let metadata = opendal::Writer::close(&mut self.inner)
+            .await
+            .map_err(from_opendal_error)?;
+
+        // Object stores may omit the size (reported as 0); validate only a reported nonzero size.
+        let reported_size = metadata.content_length();
+        if reported_size != 0 && reported_size != self.bytes_written {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "Wrote {} bytes but storage reports {reported_size}",
+                    self.bytes_written
+                ),
+            ));
+        }
+
+        Ok(FileMetadata {
+            size: self.bytes_written,
+        })
     }
 }
 
@@ -631,11 +687,74 @@ impl FileWrite for OpenDalWriter {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "opendal-s3")]
+    #[derive(Debug)]
+    struct EmptyCredentialLoader;
+
+    #[cfg(feature = "opendal-s3")]
+    impl ProvideCredential for EmptyCredentialLoader {
+        type Credential = AwsCredential;
+
+        async fn provide_credential(
+            &self,
+            _ctx: &reqsign_core::Context,
+        ) -> reqsign_core::Result<Option<AwsCredential>> {
+            Ok(None)
+        }
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[test]
+    fn test_s3_factory_custom_credential_loader_serialization_fails() {
+        let file_io = iceberg::io::FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+            customized_credential_load: Some(CustomAwsCredentialLoader::new(EmptyCredentialLoader)),
+        }))
+        .build();
+
+        let err = file_io.serialize_all().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("custom AWS credential loaders cannot be serialized")
+        );
+    }
+
     #[cfg(feature = "opendal-memory")]
     #[test]
     fn test_default_memory_operator() {
         let op = default_memory_operator();
         assert_eq!(op.info().scheme().to_string(), "memory");
+    }
+
+    #[cfg(feature = "opendal-memory")]
+    #[tokio::test]
+    async fn test_writer_close_returns_stored_size() {
+        use iceberg::encryption::{EncryptedOutputFile, StandardKeyMetadata};
+
+        // Note: the memory service does report a content length, so this only pins the happy
+        // path. The counter in `OpenDalWriter` is what covers services that don't, such as S3.
+        let storage = Arc::new(OpenDalStorage::Memory(default_memory_operator()));
+        let path = "memory:///stored-size";
+        for plaintext in [
+            Bytes::new(),
+            Bytes::from_static(b"test data"),
+            Bytes::from(vec![7; 3 * 1024]),
+        ] {
+            let mut writer = storage.writer(path).await.unwrap();
+            for chunk in plaintext.chunks(1024) {
+                writer.write(Bytes::copy_from_slice(chunk)).await.unwrap();
+            }
+            let metadata = writer.close().await.unwrap();
+            assert_eq!(metadata.size, plaintext.len() as u64);
+            assert_eq!(metadata.size, storage.metadata(path).await.unwrap().size);
+
+            let output = EncryptedOutputFile::new(
+                OutputFile::new(storage.clone(), path.to_string()),
+                StandardKeyMetadata::try_new(b"0123456789abcdef").unwrap(),
+            );
+            let metadata = output.write(plaintext.clone()).await.unwrap();
+            assert!(metadata.size > plaintext.len() as u64);
+            assert_eq!(metadata.size, storage.metadata(path).await.unwrap().size);
+        }
     }
 
     #[cfg(feature = "opendal-memory")]

@@ -18,9 +18,10 @@
 #![doc = include_str!("../README.md")]
 
 use proc_macro::TokenStream;
-use syn::{DeriveInput, parse_macro_input};
+use syn::{DeriveInput, ItemStruct, parse_macro_input};
 
 mod properties;
+mod properties_view;
 
 /// Derives property-map parsing and opt-in read-only accessors for a struct.
 #[proc_macro_derive(Properties, attributes(property))]
@@ -28,6 +29,17 @@ pub fn derive_properties(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     match properties::expand_properties(input) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}
+
+/// Defines a borrowed view that parses properties independently through generated getters.
+#[proc_macro]
+pub fn properties_view(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemStruct);
+
+    match properties_view::expand_properties_view(input) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.into_compile_error().into(),
     }

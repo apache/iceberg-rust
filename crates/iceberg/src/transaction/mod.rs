@@ -73,14 +73,14 @@ use crate::error::Result;
 use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
-use crate::transaction::append::FastAppendAction;
-use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
-use crate::transaction::sort_order::ReplaceSortOrderAction;
-use crate::transaction::update_location::UpdateLocationAction;
-use crate::transaction::update_properties::UpdatePropertiesAction;
-use crate::transaction::update_schema::UpdateSchemaAction;
-use crate::transaction::update_statistics::UpdateStatisticsAction;
-use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
+pub use crate::transaction::append::FastAppendAction;
+pub use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
+pub use crate::transaction::sort_order::ReplaceSortOrderAction;
+pub use crate::transaction::update_location::UpdateLocationAction;
+pub use crate::transaction::update_properties::UpdatePropertiesAction;
+pub use crate::transaction::update_schema::UpdateSchemaAction;
+pub use crate::transaction::update_statistics::UpdateStatisticsAction;
+pub use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
@@ -178,7 +178,7 @@ impl Transaction {
             return Ok(self.table);
         }
 
-        let table_props = self.table.metadata().table_properties()?;
+        let table_props = self.table.metadata().table_properties();
 
         let backoff = Self::build_backoff(table_props)?;
         let tx = self;
@@ -195,14 +195,14 @@ impl Transaction {
         .1
     }
 
-    fn build_backoff(props: TableProperties) -> Result<ExponentialBackoff> {
+    fn build_backoff(props: TableProperties<'_>) -> Result<ExponentialBackoff> {
         Ok(ExponentialBuilder::new()
-            .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms()))
-            .with_max_delay(Duration::from_millis(props.commit_max_retry_wait_ms()))
+            .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms()?))
+            .with_max_delay(Duration::from_millis(props.commit_max_retry_wait_ms()?))
             .with_total_delay(Some(Duration::from_millis(
-                props.commit_total_retry_timeout_ms(),
+                props.commit_total_retry_timeout_ms()?,
             )))
-            .with_max_times(props.commit_num_retries())
+            .with_max_times(props.commit_num_retries()?)
             .with_factor(2.0)
             .build())
     }

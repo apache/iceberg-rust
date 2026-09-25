@@ -40,6 +40,7 @@ use crate::arrow::{
 };
 use crate::compression::CompressionCodec;
 use crate::encryption::{EncryptionManager, StandardKeyMetadata};
+use crate::error::invalid_data;
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
@@ -87,20 +88,27 @@ impl ParquetWriterBuilder {
     /// Build a `ParquetWriterBuilder` from Iceberg table properties and a
     /// schema, translating `write.parquet.*` settings into `WriterProperties`
     /// instead of using parquet-rs defaults.
-    pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Result<Self> {
-        let cdc = table_props.cdc_enabled().then_some(CdcOptions {
-            min_chunk_size: table_props.cdc_min_chunk_size(),
-            max_chunk_size: table_props.cdc_max_chunk_size(),
-            norm_level: table_props.cdc_norm_level(),
-        });
-        let compression = parquet_compression(*table_props.parquet_compression_codec())?;
+    pub fn from_table_properties(
+        table_props: &TableProperties<'_>,
+        schema: SchemaRef,
+    ) -> Result<Self> {
+        let cdc = if table_props.cdc_enabled()? {
+            Some(CdcOptions {
+                min_chunk_size: table_props.cdc_min_chunk_size()?,
+                max_chunk_size: table_props.cdc_max_chunk_size()?,
+                norm_level: table_props.cdc_norm_level()?,
+            })
+        } else {
+            None
+        };
+        let compression = parquet_compression(table_props.parquet_compression_codec()?)?;
         let props = WriterProperties::builder()
             .set_content_defined_chunking(cdc)
             .set_compression(compression)
-            .set_max_row_group_bytes(Some(table_props.parquet_row_group_size_bytes()))
-            .set_data_page_size_limit(table_props.parquet_page_size_bytes())
-            .set_data_page_row_count_limit(table_props.parquet_page_row_limit())
-            .set_dictionary_page_size_limit(table_props.parquet_dict_size_bytes())
+            .set_max_row_group_bytes(Some(table_props.parquet_row_group_size_bytes()?))
+            .set_data_page_size_limit(table_props.parquet_page_size_bytes()?)
+            .set_data_page_row_count_limit(table_props.parquet_page_row_limit()?)
+            .set_dictionary_page_size_limit(table_props.parquet_dict_size_bytes()?)
             .build();
         Ok(Self::new_with_match_mode(props, schema, FieldMatchMode::Id))
     }
@@ -148,11 +156,7 @@ fn parquet_compression(codec: CompressionCodec) -> Result<Compression> {
 }
 
 fn invalid_level_error(codec: &str, source: impl Into<anyhow::Error>) -> Error {
-    Error::new(
-        ErrorKind::DataInvalid,
-        format!("Invalid {codec} compression level"),
-    )
-    .with_source(source)
+    invalid_data!("Invalid {codec} compression level").with_source(source)
 }
 
 impl FileWriterBuilder for ParquetWriterBuilder {
@@ -281,11 +285,8 @@ impl SchemaVisitor for IndexByParquetPathName {
         let full_name = self.field_names.iter().map(String::as_str).join(".");
         let field_id = self.field_id;
         if let Some(existing_field_id) = self.name_to_id.get(full_name.as_str()) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
-                ),
+            return Err(invalid_data!(
+                "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
             ));
         } else {
             self.name_to_id.insert(full_name, field_id);
@@ -353,7 +354,7 @@ impl MinMaxColAggregator {
     }
 
     /// Update statistics
-    fn update(&mut self, field_id: i32, value: Statistics) -> Result<()> {
+    fn update(&mut self, field_id: i32, value: &Statistics) -> Result<()> {
         let Some(ty) = self
             .schema
             .field_by_id(field_id)
@@ -371,7 +372,7 @@ impl MinMaxColAggregator {
         };
 
         if value.min_is_exact() {
-            let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, &value)? else {
+            let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("Statistics {value} is not match with field type {ty}."),
@@ -382,7 +383,7 @@ impl MinMaxColAggregator {
         }
 
         if value.max_is_exact() {
-            let Some(max_datum) = get_parquet_stat_max_as_datum(&ty, &value)? else {
+            let Some(max_datum) = get_parquet_stat_max_as_datum(&ty, value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("Statistics {value} is not match with field type {ty}."),
@@ -419,12 +420,10 @@ impl ParquetWriter {
             let reader = input_file.reader().await?;
 
             let mut parquet_reader = ArrowFileReader::new(file_metadata, reader);
-            let parquet_metadata = parquet_reader.get_metadata(None).await.map_err(|err| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Error reading Parquet metadata: {err}"),
-                )
-            })?;
+            let parquet_metadata = parquet_reader
+                .get_metadata(None)
+                .await
+                .map_err(|err| invalid_data!("Error reading Parquet metadata: {err}"))?;
             let mut builder = ParquetWriter::parquet_to_data_file_builder(
                 table_metadata.current_schema().clone(),
                 parquet_metadata,
@@ -481,7 +480,7 @@ impl ParquetWriter {
                             *per_col_null_val_num.entry(field_id).or_insert(0) += null_count;
                         }
 
-                        min_max_agg.update(field_id, statistics.clone())?;
+                        min_max_agg.update(field_id, statistics)?;
                     }
                 }
             }
@@ -540,22 +539,19 @@ impl ParquetWriter {
                 upper_bounds.get(&field.source_id),
             ) {
                 if !field.transform.preserves_order() {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "cannot infer partition value for non linear partition field (needs to preserve order): {} with transform {}",
-                            field.name, field.transform
-                        ),
+                    return Err(invalid_data!(
+                        "cannot infer partition value for non linear partition field (needs to preserve order): {} with transform {}",
+                        field.name,
+                        field.transform
                     ));
                 }
 
                 if lower != upper {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "multiple partition values for field {}: lower: {:?}, upper: {:?}",
-                            field.name, lower, upper
-                        ),
+                    return Err(invalid_data!(
+                        "multiple partition values for field {}: lower: {:?}, upper: {:?}",
+                        field.name,
+                        lower,
+                        upper
                     ));
                 }
 
@@ -736,9 +732,11 @@ impl ArrowAsyncFileWriter for AsyncFileWriter {
 
     fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
         Box::pin(async {
+            // TODO(encryption): retain the stored file size in data-file key metadata.
             self.0
                 .close()
                 .await
+                .map(|_| ())
                 .map_err(|err| parquet::errors::ParquetError::External(Box::new(err)))
         })
     }
@@ -1046,10 +1044,11 @@ mod tests {
         let output_file = file_io.new_output(
             location_gen.generate_location(None, &file_name_gen.generate_file_name()),
         )?;
-        let table_properties = table_props(HashMap::from([(
+        let raw_properties = HashMap::from([(
             TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
             "test-key".to_string(),
-        )]));
+        )]);
+        let table_properties = TableProperties::new(&raw_properties);
         let mut parquet_writer =
             ParquetWriterBuilder::from_table_properties(&table_properties, iceberg_schema.clone())?
                 .with_encryption_manager(make_encryption_manager("test-key"))
@@ -1088,7 +1087,8 @@ mod tests {
             .with_project_field_ids(vec![1])
             .with_case_sensitive(false)
             .with_key_metadata(data_file.key_metadata().map(Box::from))
-            .build();
+            .build()
+            .unwrap();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let batches: Vec<RecordBatch> = reader
             .read(tasks)
@@ -1489,7 +1489,7 @@ mod tests {
                 (0, Datum::bool(false)),
                 (1, Datum::int(1)),
                 (2, Datum::long(1)),
-                (3, Datum::float(0.5)),
+                (3, Datum::float(0.5_f32)),
                 (4, Datum::double(0.5)),
                 (5, Datum::string("a")),
                 (6, Datum::binary(vec![])),
@@ -1529,7 +1529,7 @@ mod tests {
                 (0, Datum::bool(true)),
                 (1, Datum::int(4)),
                 (2, Datum::long(4)),
-                (3, Datum::float(3.5)),
+                (3, Datum::float(3.5_f32)),
                 (4, Datum::double(3.5)),
                 (5, Datum::string("d")),
                 (6, Datum::binary(vec![122, 122, 122, 122])),
@@ -1938,11 +1938,11 @@ mod tests {
         assert_eq!(*data_file.value_counts(), HashMap::from([(0, 4), (1, 4)]));
         assert_eq!(
             *data_file.lower_bounds(),
-            HashMap::from([(0, Datum::float(1.0)), (1, Datum::double(1.0)),])
+            HashMap::from([(0, Datum::float(1.0_f32)), (1, Datum::double(1.0)),])
         );
         assert_eq!(
             *data_file.upper_bounds(),
-            HashMap::from([(0, Datum::float(2.0)), (1, Datum::double(2.0)),])
+            HashMap::from([(0, Datum::float(2.0_f32)), (1, Datum::double(2.0)),])
         );
         assert_eq!(
             *data_file.null_value_counts(),
@@ -2078,11 +2078,11 @@ mod tests {
         assert_eq!(*data_file.value_counts(), HashMap::from([(4, 4), (7, 4)]));
         assert_eq!(
             *data_file.lower_bounds(),
-            HashMap::from([(4, Datum::float(1.0)), (7, Datum::float(1.0)),])
+            HashMap::from([(4, Datum::float(1.0_f32)), (7, Datum::float(1.0_f32)),])
         );
         assert_eq!(
             *data_file.upper_bounds(),
-            HashMap::from([(4, Datum::float(2.0)), (7, Datum::float(2.0)),])
+            HashMap::from([(4, Datum::float(2.0_f32)), (7, Datum::float(2.0_f32)),])
         );
         assert_eq!(
             *data_file.null_value_counts(),
@@ -2242,11 +2242,11 @@ mod tests {
         assert_eq!(*data_file.value_counts(), HashMap::from([(1, 4), (4, 4)]));
         assert_eq!(
             *data_file.lower_bounds(),
-            HashMap::from([(1, Datum::float(1.0)), (4, Datum::float(1.0))])
+            HashMap::from([(1, Datum::float(1.0_f32)), (4, Datum::float(1.0_f32))])
         );
         assert_eq!(
             *data_file.upper_bounds(),
-            HashMap::from([(1, Datum::float(2.0)), (4, Datum::float(2.0))])
+            HashMap::from([(1, Datum::float(2.0_f32)), (4, Datum::float(2.0_f32))])
         );
         assert_eq!(
             *data_file.null_value_counts(),
@@ -2428,18 +2428,18 @@ mod tests {
             *data_file.lower_bounds(),
             HashMap::from([
                 (1, Datum::int(1)),
-                (2, Datum::float(1.0)),
+                (2, Datum::float(1.0_f32)),
                 (6, Datum::int(1)),
-                (7, Datum::float(1.0))
+                (7, Datum::float(1.0_f32))
             ])
         );
         assert_eq!(
             *data_file.upper_bounds(),
             HashMap::from([
                 (1, Datum::int(4)),
-                (2, Datum::float(2.0)),
+                (2, Datum::float(2.0_f32)),
                 (6, Datum::int(4)),
-                (7, Datum::float(2.0))
+                (7, Datum::float(2.0_f32))
             ])
         );
         assert_eq!(
@@ -2514,16 +2514,16 @@ mod tests {
         let create_statistics =
             |min, max| Statistics::Int32(ValueStatistics::new(min, max, None, None, false));
         min_max_agg
-            .update(0, create_statistics(None, Some(42)))
+            .update(0, &create_statistics(None, Some(42)))
             .unwrap();
         min_max_agg
-            .update(0, create_statistics(Some(0), Some(i32::MAX)))
+            .update(0, &create_statistics(Some(0), Some(i32::MAX)))
             .unwrap();
         min_max_agg
-            .update(0, create_statistics(Some(i32::MIN), None))
+            .update(0, &create_statistics(Some(i32::MIN), None))
             .unwrap();
         min_max_agg
-            .update(0, create_statistics(None, None))
+            .update(0, &create_statistics(None, None))
             .unwrap();
 
         let (lower_bounds, upper_bounds) = min_max_agg.produce();
@@ -2546,20 +2546,18 @@ mod tests {
         )
     }
 
-    fn table_props(entries: HashMap<String, String>) -> TableProperties {
-        TableProperties::try_from(&entries).unwrap()
-    }
-
     #[test]
     fn test_from_table_properties_no_cdc_by_default() {
-        let tp = table_props(HashMap::new());
+        let raw_properties = HashMap::new();
+        let tp = TableProperties::new(&raw_properties);
         let builder = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema()).unwrap();
         assert!(builder.props.content_defined_chunking().is_none());
     }
 
     #[tokio::test]
     async fn test_from_table_properties_without_encryption_writes_plaintext() {
-        let tp = table_props(HashMap::new());
+        let raw_properties = HashMap::new();
+        let tp = TableProperties::new(&raw_properties);
         let tmp = TempDir::new().unwrap();
         let output = FileIO::new_with_fs()
             .new_output(format!("{}/plain.parquet", tmp.path().to_str().unwrap()))
@@ -2589,7 +2587,7 @@ mod tests {
         // written file) keeps this a direct propagation check: every future
         // `write.parquet.*` option just adds an assertion on its corresponding
         // `WriterProperties` getter here.
-        let tp = table_props(HashMap::from([
+        let raw_properties = HashMap::from([
             (
                 TableProperties::PROPERTY_PARQUET_CDC_ENABLED.to_string(),
                 "true".to_string(),
@@ -2606,7 +2604,8 @@ mod tests {
                 TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL.to_string(),
                 "2".to_string(),
             ),
-        ]));
+        ]);
+        let tp = TableProperties::new(&raw_properties);
 
         let tmp = TempDir::new().unwrap();
         let output = FileIO::new_with_fs()
@@ -2632,7 +2631,8 @@ mod tests {
     fn test_from_table_properties_sizing_defaults() {
         // With no properties set, the writer must use Iceberg's defaults (which
         // differ from parquet-rs's own defaults), not parquet-rs's.
-        let tp = table_props(HashMap::new());
+        let raw_properties = HashMap::new();
+        let tp = TableProperties::new(&raw_properties);
         let props = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
             .unwrap()
             .props;
@@ -2662,7 +2662,7 @@ mod tests {
 
     #[test]
     fn test_from_table_properties_sizing_and_compression_overrides() {
-        let tp = table_props(HashMap::from([
+        let raw_properties = HashMap::from([
             (
                 TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES.to_string(),
                 "1048576".to_string(),
@@ -2687,7 +2687,8 @@ mod tests {
                 TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL.to_string(),
                 "9".to_string(),
             ),
-        ]));
+        ]);
+        let tp = TableProperties::new(&raw_properties);
         let props = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
             .unwrap()
             .props;
@@ -2708,7 +2709,11 @@ mod tests {
             TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
             "bogus".to_string(),
         )]);
-        let err = TableProperties::try_from(&entries).unwrap_err();
+        let err = ParquetWriterBuilder::from_table_properties(
+            &TableProperties::new(&entries),
+            cdc_test_schema(),
+        )
+        .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.to_string().contains("bogus"));
     }

@@ -1,0 +1,5 @@
+error: property prefix fields must have type HashMap<String, T>
+  --> tests/compile-fail/derive-properties/prefix_non_map.rs:24:12
+   |
+24 |     value: u64,
+   |            ^^^

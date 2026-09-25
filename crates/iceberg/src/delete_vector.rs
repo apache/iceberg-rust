@@ -22,6 +22,7 @@ use roaring::bitmap::Iter;
 use roaring::treemap::BitmapIter;
 use roaring::{RoaringBitmap, RoaringTreemap};
 
+use crate::error::invalid_data;
 use crate::{Error, ErrorKind, Result};
 
 /// Magic bytes prefixing a serialized `deletion-vector-v1` bitmap, per the Iceberg Puffin spec.
@@ -61,7 +62,6 @@ impl DeleteVector {
     /// # Errors
     ///
     /// Returns an error if the precondition is not met.
-    #[allow(dead_code)]
     pub fn insert_positions(&mut self, positions: &[u64]) -> Result<usize> {
         if let Err(err) = self.inner.append(positions.iter().copied()) {
             return Err(Error::new(
@@ -73,7 +73,6 @@ impl DeleteVector {
         Ok(positions.len())
     }
 
-    #[allow(unused)]
     pub fn len(&self) -> u64 {
         self.inner.len()
     }
@@ -92,25 +91,17 @@ impl DeleteVector {
     /// format: a directory of 32-bit key / 32-bit roaring bitmap pairs, ordered by unsigned
     /// comparison of the keys, one bitmap per key.
     ///
-    /// Cardinality is not checked here. The caller validates the decoded length against the
-    /// delete file's `record_count`, where the manifest metadata is available.
-    ///
     /// # Errors
     ///
     /// Returns [`ErrorKind::DataInvalid`] if the blob is shorter than the minimum, the length
     /// prefix or CRC does not match, the magic is wrong, the roaring bitmap count exceeds the
     /// portable format's maximum, the roaring directory's keys are not ordered by unsigned
     /// comparison, or the roaring payload fails to decode.
-    // Consumed by the scan delete loader once the deletion-vector read path is wired up.
-    #[allow(dead_code)]
     pub fn deserialize(blob: &[u8]) -> Result<Self> {
         if blob.len() < DV_MIN_BLOB_BYTES {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion-vector-v1 blob is {} bytes, shorter than the {DV_MIN_BLOB_BYTES}-byte minimum",
-                    blob.len()
-                ),
+            return Err(invalid_data!(
+                "deletion-vector-v1 blob is {} bytes, shorter than the {DV_MIN_BLOB_BYTES}-byte minimum",
+                blob.len()
             ));
         }
 
@@ -140,12 +131,9 @@ fn verify_length_prefix(mut prefix: &[u8], body: &[u8]) -> Result<()> {
         .with_source(e)
     })? as usize;
     if declared_len != body.len() {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "deletion-vector-v1 length prefix is {declared_len}, expected {}",
-                body.len()
-            ),
+        return Err(invalid_data!(
+            "deletion-vector-v1 length prefix is {declared_len}, expected {}",
+            body.len()
         ));
     }
     Ok(())
@@ -161,11 +149,8 @@ fn verify_crc(body: &[u8], mut crc_bytes: &[u8]) -> Result<()> {
     })?;
     let computed_crc = crc32fast::hash(body);
     if computed_crc != stored_crc {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "deletion-vector-v1 CRC mismatch: computed {computed_crc:#010x}, stored {stored_crc:#010x}"
-            ),
+        return Err(invalid_data!(
+            "deletion-vector-v1 CRC mismatch: computed {computed_crc:#010x}, stored {stored_crc:#010x}"
         ));
     }
     Ok(())
@@ -173,9 +158,8 @@ fn verify_crc(body: &[u8], mut crc_bytes: &[u8]) -> Result<()> {
 
 fn verify_magic(magic: &[u8]) -> Result<()> {
     if magic != DV_MAGIC {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("deletion-vector-v1 magic mismatch: {magic:02x?}, expected {DV_MAGIC:02x?}"),
+        return Err(invalid_data!(
+            "deletion-vector-v1 magic mismatch: {magic:02x?}, expected {DV_MAGIC:02x?}"
         ));
     }
     Ok(())
@@ -189,21 +173,14 @@ fn verify_magic(magic: &[u8]) -> Result<()> {
 // that doesn't match what was actually written.
 fn decode_roaring_directory(mut reader: &[u8]) -> Result<RoaringTreemap> {
     let bitmap_count = reader.try_get_u64_le().map_err(|e| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            "failed to decode deletion-vector-v1 roaring payload",
-        )
-        .with_source(e)
+        invalid_data!("failed to decode deletion-vector-v1 roaring payload").with_source(e)
     })?;
     // The roaring portable format restricts the bitmap count to [0, 2^32 - 1] (it is stored as a
     // u64 with the upper 32 bits reserved as zero padding).
     if bitmap_count > u32::MAX as u64 {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "deletion-vector-v1 roaring bitmap count {bitmap_count} exceeds the {}-key maximum",
-                u32::MAX
-            ),
+        return Err(invalid_data!(
+            "deletion-vector-v1 roaring bitmap count {bitmap_count} exceeds the {}-key maximum",
+            u32::MAX
         ));
     }
 
@@ -211,30 +188,19 @@ fn decode_roaring_directory(mut reader: &[u8]) -> Result<RoaringTreemap> {
     let mut last_key: Option<u32> = None;
     for _ in 0..bitmap_count {
         let key = reader.try_get_u32_le().map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "failed to decode deletion-vector-v1 roaring payload",
-            )
-            .with_source(e)
+            invalid_data!("failed to decode deletion-vector-v1 roaring payload").with_source(e)
         })?;
         if let Some(last) = last_key
             && key <= last
         {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion-vector-v1 roaring keys must be ordered by unsigned comparison, got key {key} after {last}"
-                ),
+            return Err(invalid_data!(
+                "deletion-vector-v1 roaring keys must be ordered by unsigned comparison, got key {key} after {last}"
             ));
         }
         last_key = Some(key);
 
         let bitmap = RoaringBitmap::deserialize_from(&mut reader).map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "failed to decode deletion-vector-v1 roaring payload",
-            )
-            .with_source(e)
+            invalid_data!("failed to decode deletion-vector-v1 roaring payload").with_source(e)
         })?;
         bitmaps.push((key, bitmap));
     }
@@ -316,6 +282,22 @@ impl BitOrAssign for DeleteVector {
     }
 }
 
+// Reproduces Iceberg-Java's `deletion-vector-v1` framing so tests can round-trip through
+// `deserialize` without a Java writer, and so other test modules can build blob fixtures.
+// Cross-implementation golden fixtures produced by Iceberg-Java are tracked separately; this
+// only checks that our decode matches our encode.
+#[cfg(test)]
+pub(crate) fn frame_dv_blob(vector: &[u8]) -> Vec<u8> {
+    let body_len = DV_MAGIC_BYTES + vector.len();
+    let mut blob = Vec::with_capacity(DV_LENGTH_PREFIX_BYTES + body_len + DV_CRC_BYTES);
+    blob.extend_from_slice(&(body_len as u32).to_be_bytes());
+    blob.extend_from_slice(&DV_MAGIC);
+    blob.extend_from_slice(vector);
+    let crc = crc32fast::hash(&blob[DV_LENGTH_PREFIX_BYTES..]);
+    blob.extend_from_slice(&crc.to_be_bytes());
+    blob
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,20 +353,6 @@ mod tests {
         let positions = vec![1, 3, 5, 5];
         let res = dv.insert_positions(&positions);
         assert!(res.is_err());
-    }
-
-    // Reproduces Iceberg-Java's `deletion-vector-v1` framing so tests can round-trip through
-    // `deserialize` without a Java writer. Cross-implementation golden fixtures produced by
-    // Iceberg-Java are tracked separately; this only checks that our decode matches our encode.
-    fn frame_dv_blob(vector: &[u8]) -> Vec<u8> {
-        let body_len = DV_MAGIC_BYTES + vector.len();
-        let mut blob = Vec::with_capacity(DV_LENGTH_PREFIX_BYTES + body_len + DV_CRC_BYTES);
-        blob.extend_from_slice(&(body_len as u32).to_be_bytes());
-        blob.extend_from_slice(&DV_MAGIC);
-        blob.extend_from_slice(vector);
-        let crc = crc32fast::hash(&blob[DV_LENGTH_PREFIX_BYTES..]);
-        blob.extend_from_slice(&crc.to_be_bytes());
-        blob
     }
 
     fn encode_dv_blob(dv: &DeleteVector) -> Vec<u8> {

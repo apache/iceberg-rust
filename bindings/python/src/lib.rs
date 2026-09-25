@@ -18,16 +18,15 @@
 use pyo3::prelude::*;
 
 mod data_file;
-mod datafusion_table_provider;
+mod encryption;
 mod error;
 mod manifest;
-mod runtime;
 mod transform;
 
 #[pymodule]
 fn pyiceberg_core_rust(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    datafusion_table_provider::register_module(py, m)?;
     transform::register_module(py, m)?;
     manifest::register_module(py, m)?;
+    encryption::register_module(py, m)?;
     Ok(())
 }

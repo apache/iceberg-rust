@@ -456,10 +456,11 @@ mod tests {
 
         let schema = make_test_schema()?;
 
-        let table_properties = TableProperties::try_from(&HashMap::from([(
+        let raw_properties = HashMap::from([(
             TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
             "test-key".to_string(),
-        )]))?;
+        )]);
+        let table_properties = TableProperties::new(&raw_properties);
         let parquet_writer_builder =
             ParquetWriterBuilder::from_table_properties(&table_properties, Arc::new(schema))?
                 .with_encryption_manager(make_encryption_manager("test-key"));

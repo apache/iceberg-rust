@@ -34,7 +34,7 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::statistics::Statistics;
 use uuid::Uuid;
 
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::spec::decimal_utils::i128_from_be_bytes;
 use crate::spec::{
     Datum, FIRST_FIELD_ID, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral,
@@ -102,7 +102,7 @@ impl ExtensionType for VariantExtensionType {
 
 /// A post order arrow schema visitor.
 ///
-/// For order of methods called, please refer to [`visit_schema`].
+/// For order of methods called, please refer to the internal `visit_schema` function.
 pub trait ArrowSchemaVisitor {
     /// Return type of this visitor on arrow field.
     type T;
@@ -191,6 +191,7 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
                     | DataType::Utf8
                     | DataType::LargeUtf8
                     | DataType::Utf8View
+                    | DataType::Null
                     | DataType::Binary
                     | DataType::LargeBinary
                     | DataType::BinaryView
@@ -205,10 +206,7 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
         DataType::Map(field, _) => match field.data_type() {
             DataType::Struct(fields) => {
                 if fields.len() != 2 {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "Map field must have exactly 2 fields",
-                    ));
+                    return Err(invalid_data!("Map field must have exactly 2 fields"));
                 }
 
                 let key_field = &fields[0];
@@ -230,17 +228,11 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
 
                 visitor.map(r#type, key_result, value_result)
             }
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Map field must have struct type",
-            )),
+            _ => Err(invalid_data!("Map field must have struct type")),
         },
         DataType::Struct(fields) => visit_struct(fields, visitor),
         DataType::Dictionary(_key_type, value_type) => visit_type(value_type, visitor),
-        other => Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("Cannot visit Arrow data type: {other}"),
-        )),
+        other => Err(invalid_data!("Cannot visit Arrow data type: {other}")),
     }
 }
 
@@ -328,18 +320,12 @@ const ARROW_FIELD_DOC_KEY: &str = "doc";
 pub(super) fn get_field_id_from_metadata(field: &FieldRef) -> Result<i32> {
     if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
         return value.parse::<i32>().map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Failed to parse field id".to_string(),
-            )
-            .with_context("value", value)
-            .with_source(e)
+            invalid_data!("Failed to parse field id")
+                .with_context("value", value)
+                .with_source(e)
         });
     }
-    Err(Error::new(
-        ErrorKind::DataInvalid,
-        "Field id not found in metadata",
-    ))
+    Err(invalid_data!("Field id not found in metadata"))
 }
 
 fn get_field_doc(field: &FieldRef) -> Option<String> {
@@ -438,10 +424,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::LargeList(element_field) => element_field,
             DataType::FixedSizeList(element_field, _) => element_field,
             _ => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "List type must have list data type",
-                ));
+                return Err(invalid_data!("List type must have list data type"));
             }
         };
 
@@ -461,10 +444,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::Map(field, _) => match field.data_type() {
                 DataType::Struct(fields) => {
                     if fields.len() != 2 {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "Map field must have exactly 2 fields",
-                        ));
+                        return Err(invalid_data!("Map field must have exactly 2 fields"));
                     }
 
                     let key_field = &fields[0];
@@ -495,20 +475,15 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
                         value_field,
                     }))
                 }
-                _ => Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Map field must have struct type",
-                )),
+                _ => Err(invalid_data!("Map field must have struct type")),
             },
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Map type must have map data type",
-            )),
+            _ => Err(invalid_data!("Map type must have map data type")),
         }
     }
 
     fn primitive(&mut self, p: &DataType) -> Result<Self::T> {
         match p {
+            DataType::Null => Ok(Type::Primitive(PrimitiveType::Unknown)),
             DataType::Boolean => Ok(Type::Primitive(PrimitiveType::Boolean)),
             DataType::Int8 | DataType::Int16 | DataType::Int32 => {
                 Ok(Type::Primitive(PrimitiveType::Int))
@@ -518,20 +493,14 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::Int64 => Ok(Type::Primitive(PrimitiveType::Long)),
             DataType::UInt64 => {
                 // Block uint64 - no safe casting option
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "UInt64 is not supported. Use Int64 for values ≤ 9,223,372,036,854,775,807 or Decimal(20,0) for full uint64 range.",
+                Err(invalid_data!(
+                    "UInt64 is not supported. Use Int64 for values ≤ 9,223,372,036,854,775,807 or Decimal(20,0) for full uint64 range."
                 ))
             }
             DataType::Float32 => Ok(Type::Primitive(PrimitiveType::Float)),
             DataType::Float64 => Ok(Type::Primitive(PrimitiveType::Double)),
-            DataType::Decimal128(p, s) => Type::decimal(*p as u32, *s as u32).map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Failed to create decimal type".to_string(),
-                )
-                .with_source(e)
-            }),
+            DataType::Decimal128(p, s) => Type::decimal(*p as u32, *s as u32)
+                .map_err(|e| invalid_data!("Failed to create decimal type").with_source(e)),
             DataType::Date32 => Ok(Type::Primitive(PrimitiveType::Date)),
             DataType::Time64(unit) if unit == &TimeUnit::Microsecond => {
                 Ok(Type::Primitive(PrimitiveType::Time))
@@ -563,10 +532,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
                 Ok(Type::Primitive(PrimitiveType::String))
             }
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Unsupported Arrow data type: {p}"),
-            )),
+            _ => Err(invalid_data!("Unsupported Arrow data type: {p}")),
         }
     }
 
@@ -574,9 +540,8 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
         // The extension may only sit on struct storage (mirrors
         // `VariantExtensionType::supports_data_type`).
         if !matches!(field.data_type(), DataType::Struct(_)) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "arrow.parquet.variant extension requires Struct storage",
+            return Err(invalid_data!(
+                "arrow.parquet.variant extension requires Struct storage"
             ));
         }
         // Fold the whole struct into a single logical variant without descending:
@@ -697,6 +662,7 @@ impl SchemaVisitor for ToArrowSchemaConverter {
 
     fn primitive(&mut self, p: &PrimitiveType) -> Result<ArrowSchemaOrFieldOrType> {
         match p {
+            PrimitiveType::Unknown => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Null)),
             PrimitiveType::Boolean => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Boolean)),
             PrimitiveType::Int => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Int32)),
             PrimitiveType::Long => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Int64)),
@@ -705,28 +671,19 @@ impl SchemaVisitor for ToArrowSchemaConverter {
             PrimitiveType::Decimal { precision, scale } => {
                 let (precision, scale) = {
                     let precision: u8 = precision.to_owned().try_into().map_err(|err| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "incompatible precision for decimal type convert",
-                        )
-                        .with_source(err)
+                        invalid_data!("incompatible precision for decimal type convert")
+                            .with_source(err)
                     })?;
                     let scale = scale.to_owned().try_into().map_err(|err| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "incompatible scale for decimal type convert",
-                        )
-                        .with_source(err)
+                        invalid_data!("incompatible scale for decimal type convert")
+                            .with_source(err)
                     })?;
                     (precision, scale)
                 };
                 validate_decimal_precision_and_scale::<Decimal128Type>(precision, scale).map_err(
                     |err| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "incompatible precision and scale for decimal type convert",
-                        )
-                        .with_source(err)
+                        invalid_data!("incompatible precision and scale for decimal type convert")
+                            .with_source(err)
                     },
                 )?;
                 Ok(ArrowSchemaOrFieldOrType::Type(DataType::Decimal128(
@@ -851,7 +808,7 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
         }
         (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(value)) => {
             let array = FixedSizeBinaryArray::try_from_iter(std::iter::once(value.as_slice()))
-                .map_err(|e| Error::new(ErrorKind::DataInvalid, e.to_string()))?;
+                .map_err(|e| invalid_data!("FixedSizeBinary conversion failed").with_source(e))?;
             Ok(Arc::new(Scalar::new(array)))
         }
 
@@ -938,12 +895,10 @@ pub(crate) fn get_parquet_stat_min_as_datum(
             };
             Some(Datum::new(
                 primitive_type.clone(),
-                PrimitiveLiteral::Int128(i128_from_be_bytes(bytes).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Can't convert bytes to i128: {bytes:?}"),
-                    )
-                })?),
+                PrimitiveLiteral::Int128(
+                    i128_from_be_bytes(bytes)
+                        .ok_or_else(|| invalid_data!("Can't convert bytes to i128: {bytes:?}"))?,
+                ),
             ))
         }
         (
@@ -1084,12 +1039,10 @@ pub(crate) fn get_parquet_stat_max_as_datum(
             };
             Some(Datum::new(
                 primitive_type.clone(),
-                PrimitiveLiteral::Int128(i128_from_be_bytes(bytes).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Can't convert bytes to i128: {bytes:?}"),
-                    )
-                })?),
+                PrimitiveLiteral::Int128(
+                    i128_from_be_bytes(bytes)
+                        .ok_or_else(|| invalid_data!("Can't convert bytes to i128: {bytes:?}"))?,
+                ),
             ))
         }
         (
@@ -1209,6 +1162,7 @@ pub(crate) fn primitive_type_to_arrow_type_with_ree(primitive_type: &PrimitiveTy
     };
 
     match primitive_type {
+        PrimitiveType::Unknown => make_ree(DataType::Null),
         PrimitiveType::Boolean => make_ree(DataType::Boolean),
         PrimitiveType::Int => make_ree(DataType::Int32),
         PrimitiveType::Long => make_ree(DataType::Int64),
@@ -2227,6 +2181,13 @@ mod tests {
             assert_eq!(iceberg_type, arrow_type_to_type(&arrow_type).unwrap());
         }
 
+        {
+            let arrow_type = DataType::Null;
+            let iceberg_type = Type::Primitive(PrimitiveType::Unknown);
+            assert_eq!(arrow_type, type_to_arrow_type(&iceberg_type).unwrap());
+            assert_eq!(iceberg_type, arrow_type_to_type(&arrow_type).unwrap());
+        }
+
         // test struct type
         {
             // no metadata will cause error
@@ -2388,7 +2349,7 @@ mod tests {
             assert_eq!(array.value(0), 42);
         }
         {
-            let datum = Datum::float(42.42);
+            let datum = Datum::float(42.42_f32);
             let arrow_datum = get_arrow_datum(&datum).unwrap();
             let (array, is_scalar) = arrow_datum.get();
             let array = array.as_any().downcast_ref::<Float32Array>().unwrap();

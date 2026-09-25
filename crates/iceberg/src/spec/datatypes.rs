@@ -19,7 +19,6 @@
  * Data Types
  */
 use std::collections::HashMap;
-use std::convert::identity;
 use std::fmt;
 use std::ops::Index;
 use std::sync::{Arc, OnceLock};
@@ -134,8 +133,8 @@ impl Type {
     /// Minimum [`FormatVersion`] required to support this type, **without** taking
     /// nested field types into account.
     ///
-    /// `TimestampNs` / `TimestamptzNs` / `Variant` require [`FormatVersion::V3`]; every
-    /// other type is valid from [`FormatVersion::V1`]. Mirrors Java's
+    /// `Unknown` / `TimestampNs` / `TimestamptzNs` / `Variant` require
+    /// [`FormatVersion::V3`]; every other type is valid from [`FormatVersion::V1`]. Mirrors Java's
     /// `Schema.MIN_FORMAT_VERSIONS` (a shallow lookup keyed by type id), so it
     /// intentionally does not recurse: callers needing the floor for a whole schema
     /// iterate its flattened fields (see [`Schema::calc_min_compatible_format`]).
@@ -143,7 +142,9 @@ impl Type {
     /// [`Schema::calc_min_compatible_format`]: crate::spec::Schema::calc_min_compatible_format
     pub(crate) fn min_format_version(&self) -> FormatVersion {
         match self {
-            Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs)
+            Type::Primitive(
+                PrimitiveType::Unknown | PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+            )
             | Type::Variant(_) => FormatVersion::V3,
             _ => FormatVersion::V1,
         }
@@ -167,7 +168,7 @@ impl Type {
         }
     }
 
-    /// Return max precision for decimal given [`num_bytes`] bytes.
+    /// Return max precision for decimal given `num_bytes` bytes.
     #[inline(always)]
     pub fn decimal_max_precision(num_bytes: u32) -> Result<u32> {
         ensure_data_valid!(
@@ -177,7 +178,7 @@ impl Type {
         Ok(MAX_PRECISION[num_bytes as usize - 1])
     }
 
-    /// Returns minimum bytes required for decimal with [`precision`].
+    /// Returns minimum bytes required for decimal with `precision`.
     #[inline(always)]
     pub fn decimal_required_bytes(precision: u32) -> Result<u32> {
         ensure_data_valid!(
@@ -274,6 +275,8 @@ pub enum PrimitiveType {
     Fixed(u64),
     /// Arbitrary-length byte array.
     Binary,
+    /// Default / null column type used when a more specific type is not known.
+    Unknown,
 }
 
 impl PrimitiveType {
@@ -391,6 +394,7 @@ where S: Serializer {
 impl fmt::Display for PrimitiveType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            PrimitiveType::Unknown => write!(f, "unknown"),
             PrimitiveType::Boolean => write!(f, "boolean"),
             PrimitiveType::Int => write!(f, "int"),
             PrimitiveType::Long => write!(f, "long"),
@@ -554,7 +558,7 @@ impl fmt::Display for StructType {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
-#[serde(from = "SerdeNestedField", into = "SerdeNestedField")]
+#[serde(try_from = "SerdeNestedField", into = "SerdeNestedField")]
 /// A struct is a tuple of typed values. Each field in the tuple is named and has an integer id that is unique in the table schema.
 /// Each field can be either optional or required, meaning that values can (or cannot) be null. Fields may be any type.
 /// Fields may have an optional comment or doc string. Fields can have default values.
@@ -591,25 +595,30 @@ struct SerdeNestedField {
     pub write_default: Option<JsonValue>,
 }
 
-impl From<SerdeNestedField> for NestedField {
-    fn from(value: SerdeNestedField) -> Self {
-        NestedField {
+impl TryFrom<SerdeNestedField> for NestedField {
+    type Error = crate::Error;
+
+    fn try_from(value: SerdeNestedField) -> Result<Self> {
+        let initial_default = value
+            .initial_default
+            .map(|default| Literal::try_from_json(default, &value.field_type))
+            .transpose()?
+            .flatten();
+        let write_default = value
+            .write_default
+            .map(|default| Literal::try_from_json(default, &value.field_type))
+            .transpose()?
+            .flatten();
+
+        Ok(NestedField {
             id: value.id,
             name: value.name,
             required: value.required,
-            initial_default: value.initial_default.and_then(|x| {
-                Literal::try_from_json(x, &value.field_type)
-                    .ok()
-                    .and_then(identity)
-            }),
-            write_default: value.write_default.and_then(|x| {
-                Literal::try_from_json(x, &value.field_type)
-                    .ok()
-                    .and_then(identity)
-            }),
+            initial_default,
+            write_default,
             field_type: value.field_type,
             doc: value.doc,
-        }
+        })
     }
 }
 
@@ -936,6 +945,7 @@ mod tests {
     {
         "type": "struct",
         "fields": [
+            {"id": 17, "name": "unknown_field", "required": false, "type": "unknown"},
             {"id": 1, "name": "bool_field", "required": true, "type": "boolean"},
             {"id": 2, "name": "int_field", "required": true, "type": "int"},
             {"id": 3, "name": "long_field", "required": true, "type": "long"},
@@ -960,6 +970,12 @@ mod tests {
             record,
             Type::Struct(StructType {
                 fields: vec![
+                    NestedField::optional(
+                        17,
+                        "unknown_field",
+                        Type::Primitive(PrimitiveType::Unknown),
+                    )
+                    .into(),
                     NestedField::required(1, "bool_field", Type::Primitive(PrimitiveType::Boolean))
                         .into(),
                     NestedField::required(2, "int_field", Type::Primitive(PrimitiveType::Int))
@@ -1341,6 +1357,8 @@ mod tests {
         for (ty, literal) in pairs {
             assert!(ty.compatible(&literal));
         }
+
+        assert!(!PrimitiveType::Unknown.compatible(&PrimitiveLiteral::Int(1)));
     }
 
     #[test]
@@ -1352,6 +1370,31 @@ mod tests {
         let serialized = serde_json::to_string(&field).unwrap();
         let roundtrip: NestedField = serde_json::from_str(&serialized).unwrap();
         assert_eq!(field, roundtrip);
+    }
+
+    #[test]
+    fn nested_field_rejects_invalid_map_defaults() {
+        for default_name in ["initial-default", "write-default"] {
+            let json = format!(
+                r#"{{
+                    "id": 1,
+                    "name": "properties",
+                    "required": false,
+                    "type": {{
+                        "type": "map",
+                        "key-id": 2,
+                        "key": "string",
+                        "value-id": 3,
+                        "value-required": false,
+                        "value": "int"
+                    }},
+                    "{default_name}": {{"keys": ["a", "b"], "values": [1]}}
+                }}"#
+            );
+
+            let error = serde_json::from_str::<NestedField>(&json).unwrap_err();
+            assert!(error.to_string().contains("must have the same length"));
+        }
     }
 
     #[test]
