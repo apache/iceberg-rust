@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 
 use crate::Result;
@@ -24,13 +22,14 @@ use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::invalid_data;
 use crate::spec::FormatVersion;
 use crate::table::Table;
-use crate::transaction::action::{ActionCommit, TransactionAction};
+use crate::transaction::action::{ActionCommit, CommitStatus, TransactionAction};
 
 /// A transaction action to upgrade a table's format version.
 ///
 /// This action is used within a transaction to indicate that the
 /// table's format version should be upgraded to a specified version.
 /// The location remains optional until explicitly set via [`UpgradeFormatVersionAction::set_format_version`].
+#[derive(Clone)]
 pub struct UpgradeFormatVersionAction {
     format_version: Option<FormatVersion>,
 }
@@ -60,7 +59,11 @@ impl UpgradeFormatVersionAction {
 
 #[async_trait]
 impl TransactionAction for UpgradeFormatVersionAction {
-    async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
+    type State = ();
+
+    fn new_state(&self) -> Self::State {}
+
+    async fn commit(&self, _state: &mut (), _table: &Table) -> Result<ActionCommit> {
         let format_version = self.format_version.ok_or_else(|| {
             invalid_data!("FormatVersion is not set for UpgradeFormatVersionAction!")
         })?;
@@ -70,6 +73,8 @@ impl TransactionAction for UpgradeFormatVersionAction {
             vec![],
         ))
     }
+
+    async fn cleanup(self: Box<Self>, _state: (), _table: &Table, _status: CommitStatus) {}
 }
 
 #[cfg(test)]
@@ -78,7 +83,7 @@ mod tests {
 
     use crate::spec::FormatVersion;
     use crate::transaction::Transaction;
-    use crate::transaction::action::ApplyTransactionAction;
+    use crate::transaction::action::{ActionEntry, ApplyTransactionAction};
     use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 
     #[test]
@@ -94,8 +99,9 @@ mod tests {
         assert_eq!(tx.actions.len(), 1);
 
         let action = (*tx.actions[0])
-            .downcast_ref::<UpgradeFormatVersionAction>()
-            .unwrap();
+            .downcast_ref::<ActionEntry<UpgradeFormatVersionAction>>()
+            .unwrap()
+            .action();
 
         assert_eq!(action.format_version, Some(FormatVersion::V2));
     }

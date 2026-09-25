@@ -15,13 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 
 use crate::error::invalid_data;
 use crate::table::Table;
-use crate::transaction::action::{ActionCommit, TransactionAction};
+use crate::transaction::action::{ActionCommit, CommitStatus, TransactionAction};
 use crate::{Result, TableUpdate};
 
 /// A transaction action that sets or updates the location of a table.
@@ -29,6 +27,7 @@ use crate::{Result, TableUpdate};
 /// This action is used to explicitly set a new metadata location during a transaction,
 /// typically as part of advanced commit or recovery flows. The location is optional until
 /// explicitly set via [`UpdateLocationAction::set_location`].
+#[derive(Clone)]
 pub struct UpdateLocationAction {
     location: Option<String>,
 }
@@ -56,7 +55,11 @@ impl UpdateLocationAction {
 
 #[async_trait]
 impl TransactionAction for UpdateLocationAction {
-    async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
+    type State = ();
+
+    fn new_state(&self) -> Self::State {}
+
+    async fn commit(&self, _state: &mut (), _table: &Table) -> Result<ActionCommit> {
         let updates: Vec<TableUpdate>;
         if let Some(location) = self.location.clone() {
             updates = vec![TableUpdate::SetLocation { location }];
@@ -68,6 +71,8 @@ impl TransactionAction for UpdateLocationAction {
 
         Ok(ActionCommit::new(updates, vec![]))
     }
+
+    async fn cleanup(self: Box<Self>, _state: (), _table: &Table, _status: CommitStatus) {}
 }
 
 #[cfg(test)]
@@ -75,7 +80,7 @@ mod tests {
     use as_any::Downcast;
 
     use crate::transaction::Transaction;
-    use crate::transaction::action::ApplyTransactionAction;
+    use crate::transaction::action::{ActionEntry, ApplyTransactionAction};
     use crate::transaction::tests::make_v2_table;
     use crate::transaction::update_location::UpdateLocationAction;
 
@@ -92,8 +97,9 @@ mod tests {
         assert_eq!(tx.actions.len(), 1);
 
         let action = (*tx.actions[0])
-            .downcast_ref::<UpdateLocationAction>()
-            .unwrap();
+            .downcast_ref::<ActionEntry<UpdateLocationAction>>()
+            .unwrap()
+            .action();
 
         assert_eq!(
             action.location,
