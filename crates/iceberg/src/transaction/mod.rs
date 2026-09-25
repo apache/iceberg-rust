@@ -217,7 +217,14 @@ impl Transaction {
             self.table = refreshed.clone();
         }
 
+        // Actions read and write manifests, so they need the credentials the
+        // refresh load vended, whether or not the base was stale. Identical
+        // settings keep the original: a rebuilt FileIO would drop a backend
+        // the table has already initialized.
         let mut current_table = self.table.clone();
+        if !current_table.file_io().same_routing_as(refreshed.file_io()) {
+            current_table = current_table.with_file_io(refreshed.file_io().clone());
+        }
         let mut existing_updates: Vec<TableUpdate> = vec![];
         let mut existing_requirements: Vec<TableRequirement> = vec![];
 
@@ -232,13 +239,33 @@ impl Transaction {
             )?;
         }
 
+        let moves_location = existing_updates
+            .iter()
+            .any(|update| matches!(update, TableUpdate::SetLocation { .. }));
+
         let table_commit = TableCommit::builder()
             .ident(self.table.identifier().to_owned())
             .updates(existing_updates)
             .requirements(existing_requirements)
             .build();
 
-        catalog.update_table(table_commit).await
+        let committed = catalog.update_table(table_commit).await?;
+        // A location change moves metadata/data to a new prefix that the refresh
+        // load's vended credentials do not cover, so it needs a post-commit
+        // reload. Another writer may have moved the table meanwhile: a
+        // property-only commit carries no requirement that would catch that.
+        let location_changed =
+            moves_location || committed.metadata().location() != refreshed.metadata().location();
+        if location_changed {
+            // The new location has its own vended credentials; the reused FileIO is
+            // scoped to the old prefix, so reload the table to pick them up.
+            catalog.load_table(committed.identifier()).await
+        } else {
+            // The commit response carries no credentials. Reuse the FileIO from the
+            // refresh load above (not `self.table`, which is left untouched when the
+            // metadata is unchanged) so freshly vended credentials are not dropped.
+            Ok(committed.with_file_io(refreshed.file_io().clone()))
+        }
     }
 }
 
@@ -250,8 +277,10 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    use async_trait::async_trait;
+
     use crate::catalog::MockCatalog;
-    use crate::io::FileIO;
+    use crate::io::{FileIO, FileIOBuilder, MemoryStorageFactory};
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
@@ -259,8 +288,9 @@ mod tests {
     };
     use crate::table::Table;
     use crate::test_utils::{make_encrypted_table, test_runtime};
+    use crate::transaction::action::{ActionCommit, TransactionAction};
     use crate::transaction::{ApplyTransactionAction, Transaction};
-    use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
+    use crate::{Catalog, Error, ErrorKind, Result, TableCreation, TableIdent};
 
     pub fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -393,6 +423,182 @@ mod tests {
             .set("test.key".to_string(), "test.value".to_string())
             .apply(tx)
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_commit_keeps_the_refreshed_file_io() {
+        // The commit response carries no vended credentials, so the FileIO from
+        // the refresh load has to survive; taking the committed table's own
+        // would silently drop them.
+        let refreshed = make_v2_table().with_file_io(
+            FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+                .with_prefixed_props("memory://warehouse", [("s3.access-key-id", "vended")])
+                .build(),
+        );
+        let mut mock_catalog = MockCatalog::new();
+        mock_catalog.expect_load_table().returning_st(move |_| {
+            let refreshed = refreshed.clone();
+            Box::pin(async move { Ok(refreshed) })
+        });
+        mock_catalog
+            .expect_update_table()
+            .returning_st(|_| Box::pin(async move { Ok(make_v2_table()) }));
+
+        let table = create_test_transaction(&make_v2_table())
+            .commit(&mock_catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            table
+                .file_io()
+                .config_for("memory://warehouse/t/f")
+                .get("s3.access-key-id"),
+            Some(&"vended".to_string()),
+        );
+    }
+
+    fn table_with_marker(marker: &str) -> Table {
+        make_v2_table().with_file_io(
+            FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+                .with_prop("marker", marker)
+                .build(),
+        )
+    }
+
+    fn marker_of(table: &Table) -> String {
+        table
+            .file_io()
+            .config()
+            .get("marker")
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Records which FileIO the action was handed.
+    struct RecordingAction(Arc<std::sync::Mutex<Option<String>>>);
+
+    #[async_trait]
+    impl TransactionAction for RecordingAction {
+        async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+            *self.0.lock().unwrap() = Some(marker_of(table));
+            Ok(ActionCommit::new(vec![], vec![]))
+        }
+    }
+
+    /// The refresh load may carry rotated credentials while the metadata is
+    /// unchanged; actions still have to run with those, not the stale ones.
+    #[tokio::test]
+    async fn test_actions_run_with_the_refreshed_file_io() {
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let mut mock_catalog = MockCatalog::new();
+        mock_catalog
+            .expect_load_table()
+            .returning_st(|_| Box::pin(async { Ok(table_with_marker("refreshed")) }));
+        mock_catalog
+            .expect_update_table()
+            .returning_st(|_| Box::pin(async { Ok(make_v2_table()) }));
+
+        let tx = RecordingAction(seen.clone())
+            .apply(Transaction::new(&table_with_marker("stale")))
+            .unwrap();
+        tx.commit(&mock_catalog).await.unwrap();
+
+        assert_eq!(seen.lock().unwrap().as_deref(), Some("refreshed"));
+    }
+
+    /// A reload that changed nothing must not cost the table its initialized
+    /// backend: `MemoryStorageFactory` builds a fresh, empty store each time.
+    #[tokio::test]
+    async fn test_unchanged_settings_keep_the_initialized_storage() {
+        let table = table_with_marker("same");
+        table
+            .file_io()
+            .new_output("memory://warehouse/manifest")
+            .unwrap()
+            .write("written-before-commit".into())
+            .await
+            .unwrap();
+
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let action_io = seen.clone();
+        let mut mock_catalog = MockCatalog::new();
+        // A reload rebuilds the FileIO, as a REST catalog does.
+        mock_catalog
+            .expect_load_table()
+            .returning_st(|_| Box::pin(async { Ok(table_with_marker("same")) }));
+        mock_catalog
+            .expect_update_table()
+            .returning_st(|_| Box::pin(async { Ok(make_v2_table()) }));
+
+        let tx = ReadingAction(action_io)
+            .apply(Transaction::new(&table))
+            .unwrap();
+        tx.commit(&mock_catalog).await.unwrap();
+
+        assert_eq!(
+            seen.lock().unwrap().as_deref(),
+            Some("written-before-commit")
+        );
+    }
+
+    /// Reads a file the table wrote before the transaction started.
+    struct ReadingAction(Arc<std::sync::Mutex<Option<String>>>);
+
+    #[async_trait]
+    impl TransactionAction for ReadingAction {
+        async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+            let read = table
+                .file_io()
+                .new_input("memory://warehouse/manifest")?
+                .read()
+                .await
+                .ok()
+                .map(|b| String::from_utf8_lossy(&b).to_string());
+            *self.0.lock().unwrap() = read;
+            Ok(ActionCommit::new(vec![], vec![]))
+        }
+    }
+
+    /// Another writer moved the table between our refresh and our commit; the
+    /// committed metadata says so even though we sent no `SetLocation`.
+    #[tokio::test]
+    async fn test_commit_reloads_when_someone_else_moved_the_table() {
+        let loads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut mock_catalog = MockCatalog::new();
+        let counter = loads.clone();
+        mock_catalog.expect_load_table().returning_st(move |_| {
+            let n = counter.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { Ok(table_with_marker(if n == 0 { "first" } else { "second" })) })
+        });
+        mock_catalog.expect_update_table().returning_st(|_| {
+            Box::pin(async {
+                let base = make_v2_table();
+                let moved = base
+                    .metadata()
+                    .clone()
+                    .into_builder(None)
+                    .set_location("s3://moved-by-someone-else/table".to_string())
+                    .build()
+                    .unwrap()
+                    .metadata;
+                Ok(Table::builder()
+                    .identifier(base.identifier().clone())
+                    .metadata(moved)
+                    .file_io(base.file_io().clone())
+                    .runtime(test_runtime())
+                    .build()
+                    .unwrap())
+            })
+        });
+
+        let table = create_test_transaction(&make_v2_table())
+            .commit(&mock_catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(loads.load(Ordering::SeqCst), 2);
+        assert_eq!(marker_of(&table), "second");
     }
 
     /// Helper function to set up a mock catalog with retryable errors
