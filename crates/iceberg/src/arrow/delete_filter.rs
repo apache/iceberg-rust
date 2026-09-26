@@ -163,7 +163,9 @@ impl DeleteFilter {
         }
     }
 
-    /// Retrieve the equality delete predicate for a given eq delete file path
+    /// Retrieve the equality delete predicate for a given eq delete file path.
+    ///
+    /// Returns `None` if the file was never registered, or if its load failed.
     pub(crate) async fn get_equality_delete_predicate_for_delete_file_path(
         &self,
         file_path: &str,
@@ -182,7 +184,9 @@ impl DeleteFilter {
 
         match self.state.read().unwrap().equality_deletes.get(file_path) {
             Some(EqDelState::Loaded(predicate)) => Some(predicate.clone()),
-            _ => unreachable!("Cannot be any other state than loaded"),
+            // Woken without a `Loaded` entry: the load we waited on failed (a retry may have
+            // re-added the entry as `Loading`).
+            _ => None,
         }
     }
 
@@ -261,14 +265,29 @@ impl DeleteFilter {
         let state = self.state.clone();
         let delete_file_path = delete_file_path.to_string();
         self.runtime.cpu().spawn(async move {
-            let eq_del = eq_del.await.unwrap();
-            {
-                let mut state = state.write().unwrap();
-                state
-                    .equality_deletes
-                    .insert(delete_file_path, EqDelState::Loaded(eq_del));
+            match eq_del.await {
+                Ok(predicate) => {
+                    {
+                        let mut state = state.write().unwrap();
+                        state
+                            .equality_deletes
+                            .insert(delete_file_path, EqDelState::Loaded(predicate));
+                    }
+                    notify.notify_waiters();
+                }
+                // The loader dropped the sender without delivering a predicate, which happens
+                // when the equality-delete file fails to parse and the load returns early. Drop
+                // the `Loading` marker so the entry is not stuck forever, then wake any waiters:
+                // on wakeup they find the entry gone and surface an error instead of blocking on
+                // a notification that would otherwise never fire.
+                Err(_) => {
+                    {
+                        let mut state = state.write().unwrap();
+                        state.equality_deletes.remove(&delete_file_path);
+                    }
+                    notify.notify_waiters();
+                }
             }
-            notify.notify_waiters();
         });
     }
 }
@@ -283,8 +302,11 @@ pub(crate) mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::Int32Type;
     use arrow_array::{Int64Array, RecordBatch, StringArray};
     use arrow_schema::Schema as ArrowSchema;
+    use futures::TryStreamExt;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
     use parquet::file::properties::WriterProperties;
@@ -292,8 +314,10 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
+    use crate::arrow::{ArrowReader, ArrowReaderBuilder};
     use crate::expr::Reference;
     use crate::io::FileIO;
+    use crate::scan::FileScanTaskStream;
     use crate::spec::{DataFileFormat, Datum, NestedField, PrimitiveType, Schema, Type};
 
     type ArrowSchemaRef = Arc<ArrowSchema>;
@@ -579,5 +603,133 @@ pub(crate) mod tests {
             result.is_err(),
             "case_sensitive=true should fail when column case mismatches"
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_equality_delete_predicate_resolves_when_load_fails() {
+        // Regression test: when the loader drops the predicate sender without sending (the
+        // equality-delete file failed to parse), a waiter must resolve to `None` instead of
+        // blocking forever on a notification that never fires. Before the fix the loader task
+        // panicked on `RecvError` and left the entry stuck in `Loading`, hanging every waiter.
+        let filter = DeleteFilter::new(Runtime::current());
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<Predicate>();
+        filter.insert_equality_delete("eq-del.parquet", rx);
+
+        // Simulate the failed load by dropping the sender before any predicate is sent.
+        drop(tx);
+
+        let result = tokio::time::timeout(
+            HANG_TIMEOUT,
+            filter.get_equality_delete_predicate_for_delete_file_path("eq-del.parquet"),
+        )
+        .await
+        .expect("waiter hung on a failed equality-delete load");
+
+        assert!(
+            result.is_none(),
+            "a failed equality-delete load must resolve to None instead of hanging"
+        );
+    }
+
+    const HANG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    fn write_ids(path: &str, ids: &[i32]) {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Int32, false).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+            ),
+        ]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(
+            arrow_array::Int32Array::from(ids.to_vec()),
+        )])
+        .unwrap();
+        let mut writer = ArrowWriter::try_new(File::create(path).unwrap(), schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    /// Writes a data file with ids 1..=5 and an equality-delete file deleting id 3, then moves
+    /// the delete file away so loading it fails. Returns the task plus the delete file's real
+    /// and hidden paths.
+    fn setup_unreadable_eq_del(dir: &Path) -> (FileScanTask, String, String) {
+        let dir = dir.to_str().unwrap();
+        let data_path = format!("{dir}/data.parquet");
+        let eq_del_path = format!("{dir}/eq-del.parquet");
+        let hidden_path = format!("{eq_del_path}.hidden");
+        write_ids(&data_path, &[1, 2, 3, 4, 5]);
+        write_ids(&eq_del_path, &[3]);
+        let eq_del_size = std::fs::metadata(&eq_del_path).unwrap().len();
+        std::fs::rename(&eq_del_path, &hidden_path).unwrap();
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&data_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(data_path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema)
+            .with_project_field_ids(vec![1])
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_path(eq_del_path.clone())
+                    .with_file_size_in_bytes(eq_del_size)
+                    .with_file_type(DataContentType::EqualityDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
+                    .with_partition_spec_id(0)
+                    .with_equality_ids(Some(vec![1]))
+                    .build(),
+            ])
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+        (task, eq_del_path, hidden_path)
+    }
+
+    /// Reads `task` and returns the surviving ids, failing the test if the read hangs.
+    async fn read_ids(reader: &ArrowReader, task: &FileScanTask) -> Result<Vec<i32>> {
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task.clone())])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = tokio::time::timeout(
+            HANG_TIMEOUT,
+            reader.clone().read(tasks)?.stream().try_collect(),
+        )
+        .await
+        .expect("read hung on a failed equality-delete load")?;
+        Ok(batches
+            .iter()
+            .flat_map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
+            .collect())
+    }
+
+    #[tokio::test]
+    async fn test_cloned_readers_error_on_failed_equality_delete_load() {
+        let tmp_dir = TempDir::new().unwrap();
+        let (task, _, _) = setup_unreadable_eq_del(tmp_dir.path());
+        // Clones share one `DeleteFilter`, so the second read sees whatever the first left behind.
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let clone = reader.clone();
+
+        assert!(read_ids(&reader, &task).await.is_err());
+        assert!(read_ids(&clone, &task).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_equality_delete_load_retries_after_failure() {
+        let tmp_dir = TempDir::new().unwrap();
+        let (task, eq_del_path, hidden_path) = setup_unreadable_eq_del(tmp_dir.path());
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+
+        assert!(read_ids(&reader, &task).await.is_err());
+
+        std::fs::rename(&hidden_path, &eq_del_path).unwrap();
+        assert_eq!(read_ids(&reader, &task).await.unwrap(), vec![1, 2, 4, 5]);
     }
 }
