@@ -168,17 +168,22 @@ impl DeleteFilter {
         &self,
         file_path: &str,
     ) -> Option<Predicate> {
-        let notifier = {
+        // Build the `Notified` while holding the read lock. `notified_owned()` records tokio's
+        // `notify_waiters_calls` counter at construction and completes on first poll if that
+        // counter has since advanced. Reading the counter under the lock guarantees it is taken
+        // before `insert_equality_delete` can advance it via `notify_waiters()`, so the
+        // notification is never missed even though we `.await` after releasing the lock.
+        let notified = {
             match self.state.read().unwrap().equality_deletes.get(file_path) {
                 None => return None,
-                Some(EqDelState::Loading(notifier)) => notifier.clone(),
+                Some(EqDelState::Loading(notifier)) => notifier.clone().notified_owned(),
                 Some(EqDelState::Loaded(predicate)) => {
                     return Some(predicate.clone());
                 }
             }
         };
 
-        notifier.notified().await;
+        notified.await;
 
         match self.state.read().unwrap().equality_deletes.get(file_path) {
             Some(EqDelState::Loaded(predicate)) => Some(predicate.clone()),
