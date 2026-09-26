@@ -311,10 +311,10 @@ impl Bind for Reference {
 
     fn bind(&self, schema: SchemaRef, case_sensitive: bool) -> crate::Result<Self::Bound> {
         let field = if case_sensitive {
-            schema.field_by_name(&self.name)
+            Ok(schema.field_by_name(&self.name))
         } else {
-            schema.field_by_name_case_insensitive(&self.name)
-        };
+            schema.field_by_name_case_insensitive_checked(&self.name)
+        }?;
 
         let field =
             field.ok_or_else(|| invalid_data!("Field {} not found in schema", self.name))?;
@@ -426,6 +426,23 @@ mod tests {
         );
 
         assert_eq!(expected_ref, reference);
+    }
+
+    #[test]
+    fn test_bind_reference_case_insensitive_ambiguous() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+                    NestedField::optional(2, "ID", PrimitiveType::Int.into()).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let error = Reference::new("Id").bind(schema, false).unwrap_err();
+        assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+        assert!(error.to_string().contains("ambiguous"), "{error}");
     }
 
     #[test]
