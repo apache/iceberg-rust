@@ -74,6 +74,9 @@ bimap = "0.6"
 bytes = "1.11"
 cfg-if = "1"
 chrono = "0.4.41"
+criterion = { version = "0.8.2", default-features = false, features = [
+  "cargo_bench_support",
+] }
 crc32fast = "1"
 derive_builder = "0.20"
 expect-test = "1"

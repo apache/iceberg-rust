@@ -176,6 +176,10 @@ impl RecordBatchProjector {
     }
 
     fn get_column_by_field_index(batch: &[ArrayRef], field_index: &[usize]) -> Result<ArrayRef> {
+        if let [index] = field_index {
+            return Ok(batch[*index].clone());
+        }
+
         let mut rev_iterator = field_index.iter().rev();
         let mut array = batch[*rev_iterator.next().unwrap()].clone();
         let mut null_buffer = array.logical_nulls();
@@ -201,7 +205,7 @@ impl RecordBatchProjector {
 mod test {
     use std::sync::Arc;
 
-    use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray, StructArray};
+    use arrow_array::{Array, ArrayRef, Int32Array, RecordBatch, StringArray, StructArray};
     use arrow_schema::{DataType, Field, Fields, Schema};
 
     use crate::arrow::record_batch_projector::RecordBatchProjector;
@@ -269,6 +273,28 @@ mod test {
 
         assert_eq!(projected_int_array.values(), &[1, 2, 3]);
         assert_eq!(projected_inner_int_array.values(), &[4, 5, 6]);
+    }
+
+    #[test]
+    fn test_record_batch_projector_top_level_nullable_column() {
+        let iceberg_schema = IcebergSchema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        let projector =
+            RecordBatchProjector::from_iceberg_schema(Arc::new(iceberg_schema), &[1]).unwrap();
+        let input = Arc::new(Int32Array::from(vec![Some(10), None, Some(30)])) as ArrayRef;
+
+        let projected = projector.project_column(&[input]).unwrap();
+        let projected_array = projected[0].as_any().downcast_ref::<Int32Array>().unwrap();
+
+        assert_eq!(projected_array.value(0), 10);
+        assert_eq!(projected_array.null_count(), 1);
+        assert!(projected_array.is_null(1));
+        assert_eq!(projected_array.value(2), 30);
     }
 
     #[test]
