@@ -27,37 +27,28 @@ use crate::Error;
 use crate::error::{Result, invalid_data};
 use crate::spec::FieldSummary;
 
+#[cfg(test)]
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(transparent)]
 pub(crate) struct ManifestListV3 {
     entries: Vec<ManifestFileV3>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(transparent)]
 pub(crate) struct ManifestListV2 {
     entries: Vec<ManifestFileV2>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(transparent)]
 pub(crate) struct ManifestListV1 {
     entries: Vec<ManifestFileV1>,
 }
 
-impl ManifestListV3 {
-    /// Converts the [ManifestListV3] into a [ManifestList].
-    pub fn try_into(self) -> Result<super::ManifestList> {
-        Ok(super::ManifestList {
-            entries: self
-                .entries
-                .into_iter()
-                .map(|v| v.try_into())
-                .collect::<Result<Vec<_>>>()?,
-        })
-    }
-}
-
+#[cfg(test)]
 impl TryFrom<super::ManifestList> for ManifestListV3 {
     type Error = Error;
 
@@ -72,19 +63,7 @@ impl TryFrom<super::ManifestList> for ManifestListV3 {
     }
 }
 
-impl ManifestListV2 {
-    /// Converts the [ManifestListV2] into a [ManifestList].
-    pub fn try_into(self) -> Result<super::ManifestList> {
-        Ok(super::ManifestList {
-            entries: self
-                .entries
-                .into_iter()
-                .map(|v| v.try_into())
-                .collect::<Result<Vec<_>>>()?,
-        })
-    }
-}
-
+#[cfg(test)]
 impl TryFrom<super::ManifestList> for ManifestListV2 {
     type Error = Error;
 
@@ -99,19 +78,7 @@ impl TryFrom<super::ManifestList> for ManifestListV2 {
     }
 }
 
-impl ManifestListV1 {
-    /// Converts the [ManifestListV1] into a [ManifestList].
-    pub fn try_into(self) -> Result<super::ManifestList> {
-        Ok(super::ManifestList {
-            entries: self
-                .entries
-                .into_iter()
-                .map(|v| v.try_into())
-                .collect::<Result<Vec<_>>>()?,
-        })
-    }
-}
-
+#[cfg(test)]
 impl TryFrom<super::ManifestList> for ManifestListV1 {
     type Error = Error;
 
