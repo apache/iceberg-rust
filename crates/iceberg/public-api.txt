@@ -2911,10 +2911,12 @@ pub fn iceberg::spec::TableProperties<'properties>::write_target_file_size_bytes
 impl<'properties> core::fmt::Debug for iceberg::spec::TableProperties<'properties>
 pub fn iceberg::spec::TableProperties<'properties>::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::spec::UnboundPartitionField
-pub iceberg::spec::UnboundPartitionField::field_id: core::option::Option<i32>
-pub iceberg::spec::UnboundPartitionField::name: alloc::string::String
-pub iceberg::spec::UnboundPartitionField::source_id: i32
-pub iceberg::spec::UnboundPartitionField::transform: iceberg::spec::Transform
+impl iceberg::spec::UnboundPartitionField
+pub fn iceberg::spec::UnboundPartitionField::field_id(&self) -> core::option::Option<i32>
+pub fn iceberg::spec::UnboundPartitionField::name(&self) -> &str
+pub fn iceberg::spec::UnboundPartitionField::source_id(&self) -> iceberg::Result<i32>
+pub fn iceberg::spec::UnboundPartitionField::source_ids(&self) -> &[i32]
+pub fn iceberg::spec::UnboundPartitionField::transform(&self) -> iceberg::spec::Transform
 impl core::clone::Clone for iceberg::spec::UnboundPartitionField
 pub fn iceberg::spec::UnboundPartitionField::clone(&self) -> iceberg::spec::UnboundPartitionField
 impl core::cmp::Eq for iceberg::spec::UnboundPartitionField
@@ -2925,8 +2927,6 @@ pub fn iceberg::spec::UnboundPartitionField::from(field: iceberg::spec::Partitio
 impl core::fmt::Debug for iceberg::spec::UnboundPartitionField
 pub fn iceberg::spec::UnboundPartitionField::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::spec::UnboundPartitionField
-impl iceberg::spec::UnboundPartitionField
-pub fn iceberg::spec::UnboundPartitionField::builder() -> UnboundPartitionFieldBuilder<((), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::spec::UnboundPartitionField
 pub fn iceberg::spec::UnboundPartitionField::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::UnboundPartitionField
