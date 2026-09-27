@@ -1861,23 +1861,30 @@ mod tests {
             .unwrap();
 
         let mut mocks = Vec::new();
-        for (endpoint, parent, first_body, last_body) in [
+        for (endpoint, parent, first_body, empty_body, last_body) in [
             (
                 "/v1/namespaces",
                 Some("parent\u{1f}child"),
                 json!({"namespaces": [["ns1"]], "next-page-token": "next/+"}),
+                json!({"namespaces": [], "next-page-token": "last"}),
                 json!({"namespaces": [["ns2"]], "next-page-token": null}),
             ),
             (
                 "/v1/namespaces/ns1/tables",
                 None,
                 json!({"identifiers": [{"namespace": ["ns1"], "name": "t1"}], "next-page-token": "next/+"}),
+                json!({"identifiers": [], "next-page-token": "last"}),
                 json!({"identifiers": [{"namespace": ["ns1"], "name": "t2"}]}),
             ),
         ] {
             // Page 1 opts in with an empty token. Later tokens and the multipart
             // parent must survive URL encoding, independent of query parameter order.
-            for (token, body) in [("", first_body), ("next/+", last_body)] {
+            // The empty middle page must not terminate pagination.
+            for (token, body) in [
+                ("", first_body),
+                ("next/+", empty_body),
+                ("last", last_body),
+            ] {
                 let mut query = vec![
                     mockito::Matcher::UrlEncoded("pageSize".into(), "1".into()),
                     mockito::Matcher::UrlEncoded("pageToken".into(), token.into()),
@@ -2016,6 +2023,8 @@ mod tests {
                 let mut config = json!({"defaults": {}, "overrides": {}});
                 let mut props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.url())]);
                 if source == "client" {
+                    // Invalid client values must not fall back to a valid server default.
+                    config["defaults"][REST_CATALOG_PROP_PAGE_SIZE] = json!("1000");
                     props.insert(REST_CATALOG_PROP_PAGE_SIZE.to_string(), value.to_string());
                 } else {
                     config[source][REST_CATALOG_PROP_PAGE_SIZE] = json!(value);
