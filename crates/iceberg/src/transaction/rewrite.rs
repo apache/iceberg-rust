@@ -120,11 +120,18 @@ impl RewriteFilesAction {
     /// fails closed, because a rewritten file carries the deletes of the files
     /// it replaces only if nothing was deleted from them in the meantime.
     async fn validate_no_new_deletes(&self, table: &Table) -> Result<()> {
-        let (Some(starting_snapshot_id), Some(current_snapshot)) = (
-            self.starting_snapshot_id,
-            table.metadata().current_snapshot(),
-        ) else {
+        // Nothing has been committed, so there is nothing to conflict with.
+        // The filter rejects the rewrite for its missing sources instead.
+        let Some(current_snapshot) = table.metadata().current_snapshot() else {
             return Ok(());
+        };
+        // The rewrite was planned against a table without a snapshot, so every
+        // snapshot it has now, deletes included, landed after that.
+        let Some(starting_snapshot_id) = self.starting_snapshot_id else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Cannot rewrite files: the rewrite was planned against a table with no snapshot, and the table has been committed to since.",
+            ));
         };
         let Some(starting_snapshot) = table.metadata().snapshot_by_id(starting_snapshot_id) else {
             // Without the starting snapshot there is no sequence number to
@@ -702,6 +709,33 @@ mod tests {
             err.to_string().contains(&format!(
                 "delete manifest {delete_manifest_path} was added after"
             )),
+            "{err}"
+        );
+    }
+
+    /// A rewrite planned against a table with no snapshot knows nothing about
+    /// what the table holds once something is committed to it.
+    #[tokio::test]
+    async fn test_rewrite_files_rejects_commit_after_empty_starting_table() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // Planned before the table had any snapshot.
+        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
+        let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
+        let tx = Transaction::new(&table);
+        let action = Arc::new(tx.rewrite_files().delete_file(f1.clone()).add_file(merged));
+
+        // The file it wants to replace only exists because of a later commit.
+        let table = append_files(&catalog, &table, vec![f1]).await;
+
+        let Err(err) = action.commit(&table).await else {
+            panic!("a rewrite planned against an empty table must be rejected");
+        };
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string()
+                .contains("planned against a table with no snapshot"),
             "{err}"
         );
     }
