@@ -2926,6 +2926,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "iceberg-storage-common"
+version = "0.10.1"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "futures",
+ "iceberg",
+ "iceberg-storage-opendal",
+ "iceberg_test_utils",
+ "reqsign-core",
+ "reqwest 0.12.28",
+ "rstest",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "iceberg-storage-opendal"
 version = "0.10.1"
 dependencies = [
