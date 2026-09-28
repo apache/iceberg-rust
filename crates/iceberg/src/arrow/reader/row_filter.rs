@@ -1548,13 +1548,28 @@ mod tests {
 
         // person.age != 30 keeps only id=3 (40); the null row is null, not "!= 30".
         let ids = ids_kept_by_predicate(
-            iceberg_schema,
-            arrow_schema,
-            vec![id, person],
+            iceberg_schema.clone(),
+            arrow_schema.clone(),
+            vec![id.clone(), person.clone()],
             Reference::new("person.age").not_equal_to(Datum::int(30)),
         )
         .await;
         assert_eq!(ids, vec![3]);
+
+        // An optional leaf under the null parent reads as null too: person.score < 1000
+        // holds for the stored 100/300 but not the null row.
+        let ids = ids_kept_by_predicate(
+            iceberg_schema,
+            arrow_schema,
+            vec![id, person],
+            Reference::new("person.score").less_than(Datum::int(1000)),
+        )
+        .await;
+        assert_eq!(
+            ids,
+            vec![1, 3],
+            "optional leaf under a null parent must read as null"
+        );
     }
 
     /// The parent-null rule holds through two struct levels: a null outer `person` makes
