@@ -173,8 +173,8 @@ mod tests {
     };
     use crate::table::Table;
     use crate::transaction::tests::{
-        append_files, make_data_file, make_v2_minimal_table_in_catalog,
-        make_v3_minimal_table_in_catalog,
+        append_files, make_data_file, make_v1_minimal_table_in_catalog,
+        make_v2_minimal_table_in_catalog, make_v3_minimal_table_in_catalog,
     };
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, ErrorKind, TableUpdate};
@@ -201,6 +201,13 @@ mod tests {
     async fn test_rewrite_files_compaction() {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        rewrite_files_compaction(&catalog, table).await;
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_files_compaction_on_v1_table() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v1_minimal_table_in_catalog(&catalog).await;
         rewrite_files_compaction(&catalog, table).await;
     }
 
@@ -320,6 +327,13 @@ mod tests {
     async fn test_rewrite_files_partial() {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        rewrite_files_partial(&catalog, table).await;
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_files_partial_on_v1_table() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v1_minimal_table_in_catalog(&catalog).await;
         rewrite_files_partial(&catalog, table).await;
     }
 

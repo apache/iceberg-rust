@@ -359,6 +359,15 @@ mod tests {
             .unwrap()
     }
 
+    pub(crate) async fn make_v1_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+        make_minimal_table_in_catalog(
+            catalog,
+            "TableMetadataV1Valid.json",
+            crate::spec::FormatVersion::V1,
+        )
+        .await
+    }
+
     pub(crate) async fn make_v2_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
         make_minimal_table_in_catalog(
             catalog,
