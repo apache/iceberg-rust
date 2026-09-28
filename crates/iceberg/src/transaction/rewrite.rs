@@ -38,7 +38,7 @@ use crate::{Error, ErrorKind};
 /// A transaction action that rewrites (replaces) data files.
 ///
 /// This is the Rust equivalent of Java's `BaseRewriteFiles`. It uses
-/// [`MergingSnapshotProducer`] to handle manifest filtering and creation,
+/// `MergingSnapshotProducer` to handle manifest filtering and creation,
 /// and commits a snapshot with [`Operation::Replace`].
 ///
 /// # Example
@@ -52,10 +52,27 @@ use crate::{Error, ErrorKind};
 /// let tx = action.apply(tx)?;
 /// let table = tx.commit(&catalog).await?;
 /// ```
+///
+/// # Concurrent deletes
+///
+/// The action records the table's current snapshot when it is created, and
+/// refuses to commit if the table gained a delete manifest after it. Java
+/// narrows that to the files being replaced in
+/// `validateNoNewDeletesForDataFiles`; until that exists here the check is
+/// table-wide, so a delete committed to an unrelated partition while the
+/// rewrite ran also fails the commit with [`ErrorKind::DataInvalid`]. So do a
+/// rewrite planned against a table that had no snapshot yet, and one whose
+/// starting snapshot has since been expired: neither can rule out a delete.
+/// Replan the rewrite against the current table and run it again.
+///
+/// Deletes that were already committed when the rewrite was planned are not
+/// covered by this check. Either apply them while rewriting, or keep them
+/// applicable to the new file with
+/// [`data_sequence_number`](RewriteFilesAction::data_sequence_number).
 pub struct RewriteFilesAction {
     producer: MergingSnapshotProducer,
-    /// The snapshot ID at which this rewrite started reading. Used to
-    /// detect conflicting deletes added after this point.
+    /// The snapshot the rewrite was planned against, if the table had one.
+    /// Deletes newer than it fail the commit.
     starting_snapshot_id: Option<i64>,
 }
 
