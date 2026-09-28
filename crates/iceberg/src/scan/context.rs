@@ -25,14 +25,20 @@ use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
 use crate::scan::{
-    BoundPredicates, ExpressionEvaluatorCache, FileScanTask, ManifestEvaluatorCache,
-    PartitionFilterCache,
+    ExpressionEvaluatorCache, FileScanTask, ManifestEvaluatorCache, PartitionFilterCache,
 };
 use crate::spec::{
     ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
     PartitionSpecRef, SchemaRef, SnapshotRef, SortOrderRef, StructType, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
+
+/// The predicates a manifest entry is evaluated against: one bound to the
+/// manifest's partition spec, one bound to the scan's schema.
+pub(crate) struct BoundPredicates {
+    pub(crate) partition_bound_predicate: BoundPredicate,
+    pub(crate) snapshot_bound_predicate: BoundPredicate,
+}
 
 /// Wraps a [`ManifestFile`] alongside the objects that are needed
 /// to process it in a thread-safe manner
