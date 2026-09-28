@@ -126,10 +126,17 @@ impl RewriteFilesAction {
         ) else {
             return Ok(());
         };
-        let starting_sequence_number = table
-            .metadata()
-            .snapshot_by_id(starting_snapshot_id)
-            .map_or(0, |snapshot| snapshot.sequence_number());
+        let Some(starting_snapshot) = table.metadata().snapshot_by_id(starting_snapshot_id) else {
+            // Without the starting snapshot there is no sequence number to
+            // compare against, so no delete can be ruled out.
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot rewrite files: the starting snapshot {starting_snapshot_id} is no longer in the table, so deletes added since it cannot be ruled out.",
+                ),
+            ));
+        };
+        let starting_sequence_number = starting_snapshot.sequence_number();
 
         let manifest_list = table.manifest_list_reader(current_snapshot).load().await?;
         let conflict = manifest_list.entries().iter().find(|entry| {
@@ -694,6 +701,51 @@ mod tests {
         assert!(
             err.to_string().contains(&format!(
                 "delete manifest {delete_manifest_path} was added after"
+            )),
+            "{err}"
+        );
+    }
+
+    /// A rewrite whose starting snapshot has been expired cannot rule out
+    /// deletes added since, and says so rather than comparing against zero.
+    #[tokio::test]
+    async fn test_rewrite_files_rejects_expired_starting_snapshot() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
+        let f2 = make_data_file(&table, "test/2.parquet", 10, 100);
+        let table = append_files(&catalog, &table, vec![f1.clone()]).await;
+        let starting_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        // Plan the rewrite against this snapshot, then expire it behind us.
+        let tx = Transaction::new(&table);
+        let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
+        let action = Arc::new(tx.rewrite_files().delete_file(f1).add_file(merged));
+
+        let table = append_files(&catalog, &table, vec![f2]).await;
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .expire_snapshots()
+            .expire_snapshot_ids([starting_snapshot_id])
+            .apply(tx)
+            .unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        assert!(
+            table
+                .metadata()
+                .snapshot_by_id(starting_snapshot_id)
+                .is_none(),
+            "the starting snapshot should have been expired"
+        );
+
+        let Err(err) = action.commit(&table).await else {
+            panic!("an expired starting snapshot must be rejected");
+        };
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string().contains(&format!(
+                "the starting snapshot {starting_snapshot_id} is no longer in the table"
             )),
             "{err}"
         );
