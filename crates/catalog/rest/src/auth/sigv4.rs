@@ -120,8 +120,9 @@ impl SigV4Signer {
     ///
     /// `aws_sigv4` traces the headers it is given, and its redaction list does
     /// not cover the `Original-` copy. An installed `tracing` subscriber is
-    /// muted for the call; with no subscriber, `tracing`'s `log` bridge still
-    /// forwards those events, so keep `aws_sigv4` below trace level there.
+    /// muted for the call; with no subscriber, or with `tracing`'s `log-always`
+    /// feature, its `log` bridge still forwards those events, so keep
+    /// `aws_sigv4` below trace level there.
     pub fn sign(
         &self,
         request: &mut crate::HttpRequest,
