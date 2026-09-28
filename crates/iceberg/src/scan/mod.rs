@@ -300,7 +300,7 @@ impl<'a> TableScanBuilder<'a> {
         };
         let field_ids =
             collect_scan_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
-        let snapshot_bound_predicate =
+        let scan_bound_predicate =
             bind_scan_predicate(&schema, self.filter.as_ref(), self.case_sensitive)?;
         let name_mapping = self
             .table
@@ -323,10 +323,10 @@ impl<'a> TableScanBuilder<'a> {
         let plan_context = PlanContext {
             snapshot,
             table_metadata: self.table.metadata_ref(),
-            snapshot_schema: schema,
+            scan_schema: schema,
             case_sensitive: self.case_sensitive,
             predicate: self.filter.map(Arc::new),
-            snapshot_bound_predicate,
+            scan_bound_predicate,
             object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
             name_mapping,

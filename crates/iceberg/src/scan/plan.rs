@@ -199,7 +199,7 @@ async fn process_data_manifest_entry(
 
     if let Some(ref bound_predicates) = manifest_entry_context.bound_predicates {
         let BoundPredicates {
-            snapshot_bound_predicate,
+            scan_bound_predicate,
             partition_bound_predicate,
         } = bound_predicates.as_ref();
 
@@ -218,7 +218,7 @@ async fn process_data_manifest_entry(
 
         // skip any data file whose metrics don't match this scan's filter
         if !InclusiveMetricsEvaluator::eval(
-            snapshot_bound_predicate,
+            scan_bound_predicate,
             manifest_entry_context.manifest_entry.data_file(),
             false,
         )? {
