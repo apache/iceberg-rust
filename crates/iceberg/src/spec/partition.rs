@@ -346,7 +346,8 @@ mod _serde {
     use crate::spec::Transform;
 
     /// Per the spec a single-argument field carries `source-id` and a multi-argument field
-    /// carries `source-ids`. Both spellings are read; the one that matches the field is written.
+    /// carries `source-ids`. Either spelling is read, but not both at once; the one that
+    /// matches the field is written.
     #[derive(Serialize, Deserialize)]
     #[serde(rename_all = "kebab-case")]
     pub(super) struct UnboundPartitionFieldSerde {
@@ -370,17 +371,15 @@ mod _serde {
                 (None, Some(_)) => {
                     return Err(invalid_data!("Empty source-ids is not allowed"));
                 }
-                (Some(source_id), Some(source_ids)) => {
-                    // Tolerated for readers, but the two must agree
-                    if source_ids.first() != Some(&source_id) {
-                        return Err(invalid_data!(
-                            "source-id {source_id} does not match the first entry of source-ids {source_ids:?}"
-                        ));
-                    }
-                    source_ids
+                (Some(_), Some(_)) => {
+                    return Err(invalid_data!(
+                        "source-id and source-ids are mutually exclusive"
+                    ));
                 }
                 (None, None) => {
-                    return Err(invalid_data!("missing field `source-id`"));
+                    return Err(invalid_data!(
+                        "Either `source-id` or `source-ids` must be present"
+                    ));
                 }
             };
 
@@ -746,6 +745,8 @@ impl PartitionSpecBuilder {
     /// Ensure that the transformation of the field is compatible with type of the field
     /// in the schema. Implicitly also checks if the source field exists in the schema.
     fn check_transform_compatibility(field: &UnboundPartitionField, schema: &Schema) -> Result<()> {
+        // A multi-argument field is rejected here on purpose: a bound `PartitionField` has
+        // no place for more than one source id yet.
         let source_id = field.source_id()?;
         let schema_field = schema.field_by_id(source_id).ok_or_else(|| {
             invalid_data!("Cannot find partition source field with id `{source_id}` in schema")
@@ -2026,11 +2027,11 @@ mod tests {
             ),
             (
                 r#"{"name": "m", "transform": "identity"}"#,
-                "missing field `source-id`",
+                "Either `source-id` or `source-ids` must be present",
             ),
             (
-                r#"{"source-id": 1, "source-ids": [2, 3], "name": "m", "transform": "identity"}"#,
-                "does not match the first entry",
+                r#"{"source-id": 1, "source-ids": [1], "name": "m", "transform": "identity"}"#,
+                "mutually exclusive",
             ),
         ] {
             let err = serde_json::from_str::<UnboundPartitionField>(input).unwrap_err();
