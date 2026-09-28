@@ -20,16 +20,17 @@ use std::collections::{HashMap, HashSet};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+use crate::Result;
 use crate::compression::CompressionCodec;
+use crate::error::invalid_data;
 use crate::io::FileRead;
-use crate::{Error, ErrorKind, Result};
 
 /// Human-readable identification of the application writing the file, along with its version.
 /// Example: "Trino version 381"
 pub const CREATED_BY_PROPERTY: &str = "created-by";
 
 /// Metadata about a blob.
-/// For more information, see: https://iceberg.apache.org/puffin-spec/#blobmetadata
+/// For more information, see: <https://iceberg.apache.org/puffin-spec/#blobmetadata>
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "kebab-case")]
 pub struct BlobMetadata {
@@ -49,7 +50,7 @@ pub struct BlobMetadata {
 
 impl BlobMetadata {
     #[inline]
-    /// See blob types: https://iceberg.apache.org/puffin-spec/#blob-types
+    /// See blob types: <https://iceberg.apache.org/puffin-spec/#blob-types>
     pub fn blob_type(&self) -> &str {
         &self.r#type
     }
@@ -119,9 +120,8 @@ impl Flag {
         if Flag::FooterPayloadCompressed.matches(byte_idx, bit_idx) {
             Ok(Flag::FooterPayloadCompressed)
         } else {
-            Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Unknown flag byte {byte_idx} and bit {bit_idx} combination"),
+            Err(invalid_data!(
+                "Unknown flag byte {byte_idx} and bit {bit_idx} combination"
             ))
         }
     }
@@ -129,7 +129,7 @@ impl Flag {
 
 /// Metadata about a puffin file.
 ///
-/// For more information, see: https://iceberg.apache.org/puffin-spec/#filemetadata
+/// For more information, see: <https://iceberg.apache.org/puffin-spec/#filemetadata>
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct FileMetadata {
     pub(crate) blobs: Vec<BlobMetadata>,
@@ -188,13 +188,10 @@ impl FileMetadata {
         if bytes == FileMetadata::MAGIC {
             Ok(())
         } else {
-            Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Bad magic value: {:?} should be {:?}",
-                    bytes,
-                    FileMetadata::MAGIC
-                ),
+            Err(invalid_data!(
+                "Bad magic value: {:?} should be {:?}",
+                bytes,
+                FileMetadata::MAGIC
             ))
         }
     }
@@ -223,11 +220,8 @@ impl FileMetadata {
         let start = input_file_length
             .checked_sub(footer_length)
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Footer length {footer_length} exceeds file length {input_file_length}"
-                    ),
+                invalid_data!(
+                    "Footer length {footer_length} exceeds file length {input_file_length}"
                 )
             })?;
         let end = input_file_length;
@@ -243,9 +237,9 @@ impl FileMetadata {
                 - FileMetadata::FOOTER_STRUCT_FLAGS_LENGTH as usize
                 + byte_idx as usize;
 
-            let flag_byte = *footer_bytes.get(byte_offset).ok_or_else(|| {
-                Error::new(ErrorKind::DataInvalid, "Index range is out of bounds.")
-            })?;
+            let flag_byte = *footer_bytes
+                .get(byte_offset)
+                .ok_or_else(|| invalid_data!("Index range is out of bounds."))?;
 
             for bit_idx in 0..8 {
                 if ((flag_byte >> bit_idx) & 1) != 0 {
@@ -274,32 +268,26 @@ impl FileMetadata {
             FileMetadata::MAGIC_LENGTH as usize + usize::try_from(footer_payload_length)?;
         let footer_payload_bytes = footer_bytes
             .get(start_offset..end_offset)
-            .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Index range is out of bounds."))?;
+            .ok_or_else(|| invalid_data!("Index range is out of bounds."))?;
         let decompressed_footer_payload_bytes =
             footer_compression_codec.decompress(footer_payload_bytes.into())?;
 
-        String::from_utf8(decompressed_footer_payload_bytes).map_err(|src| {
-            Error::new(ErrorKind::DataInvalid, "Footer is not a valid UTF-8 string")
-                .with_source(src)
-        })
+        String::from_utf8(decompressed_footer_payload_bytes)
+            .map_err(|src| invalid_data!("Footer is not a valid UTF-8 string").with_source(src))
     }
 
     fn from_json_str(string: &str) -> Result<FileMetadata> {
-        serde_json::from_str::<FileMetadata>(string).map_err(|src| {
-            Error::new(ErrorKind::DataInvalid, "Given string is not valid JSON").with_source(src)
-        })
+        serde_json::from_str::<FileMetadata>(string)
+            .map_err(|src| invalid_data!("Given string is not valid JSON").with_source(src))
     }
 
     /// Returns the file metadata about a Puffin file
     pub(crate) async fn read(file_read: &dyn FileRead, file_length: u64) -> Result<FileMetadata> {
         if file_length < FileMetadata::MIN_FILE_LENGTH {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "File length {} is too short to be a Puffin file, expected at least {} bytes",
-                    file_length,
-                    FileMetadata::MIN_FILE_LENGTH
-                ),
+            return Err(invalid_data!(
+                "File length {} is too short to be a Puffin file, expected at least {} bytes",
+                file_length,
+                FileMetadata::MIN_FILE_LENGTH
             ));
         }
 

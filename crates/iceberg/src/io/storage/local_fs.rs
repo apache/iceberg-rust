@@ -33,6 +33,7 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
+use crate::error::invalid_data;
 use crate::io::{
     FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
     StorageFactory,
@@ -50,7 +51,6 @@ use crate::{Error, ErrorKind, Result};
 /// - `file:///path/to/file` -> `/path/to/file`
 /// - `file:/path/to/file` -> `/path/to/file`
 /// - `/path/to/file` -> `/path/to/file`
-/// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LocalFsStorage;
 
@@ -99,12 +99,8 @@ impl Storage for LocalFsStorage {
 
     async fn metadata(&self, path: &str) -> Result<FileMetadata> {
         let path = Self::normalize_path(path);
-        let metadata = fs::metadata(&path).map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Failed to get metadata for {}: {}", path.display(), e),
-            )
-        })?;
+        let metadata = fs::metadata(&path)
+            .map_err(|e| invalid_data!("Failed to get metadata for {}: {}", path.display(), e))?;
         Ok(FileMetadata {
             size: metadata.len(),
         })
@@ -112,23 +108,15 @@ impl Storage for LocalFsStorage {
 
     async fn read(&self, path: &str) -> Result<Bytes> {
         let path = Self::normalize_path(path);
-        let content = fs::read(&path).map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Failed to read file {}: {}", path.display(), e),
-            )
-        })?;
+        let content = fs::read(&path)
+            .map_err(|e| invalid_data!("Failed to read file {}: {}", path.display(), e))?;
         Ok(Bytes::from(content))
     }
 
     async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
         let path = Self::normalize_path(path);
-        let file = fs::File::open(&path).map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Failed to open file {}: {}", path.display(), e),
-            )
-        })?;
+        let file = fs::File::open(&path)
+            .map_err(|e| invalid_data!("Failed to open file {}: {}", path.display(), e))?;
         Ok(Box::new(LocalFsFileRead::new(file)))
     }
 
@@ -243,21 +231,13 @@ impl FileRead for LocalFsFileRead {
             )
         })?;
 
-        file.seek(SeekFrom::Start(range.start)).map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Failed to seek to position {}: {}", range.start, e),
-            )
-        })?;
+        file.seek(SeekFrom::Start(range.start))
+            .map_err(|e| invalid_data!("Failed to seek to position {}: {}", range.start, e))?;
 
         let len = (range.end - range.start) as usize;
         let mut buffer = vec![0u8; len];
-        file.read_exact(&mut buffer).map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Failed to read {len} bytes: {e}"),
-            )
-        })?;
+        file.read_exact(&mut buffer)
+            .map_err(|e| invalid_data!("Failed to read {len} bytes: {e}"))?;
 
         Ok(Bytes::from(buffer))
     }
@@ -269,12 +249,16 @@ impl FileRead for LocalFsFileRead {
 #[derive(Debug)]
 pub struct LocalFsFileWrite {
     file: Option<fs::File>,
+    bytes_written: u64,
 }
 
 impl LocalFsFileWrite {
     /// Create a new `LocalFsFileWrite` for the given file.
     pub fn new(file: fs::File) -> Self {
-        Self { file: Some(file) }
+        Self {
+            file: Some(file),
+            bytes_written: 0,
+        }
     }
 }
 
@@ -284,7 +268,7 @@ impl FileWrite for LocalFsFileWrite {
         let file = self
             .file
             .as_mut()
-            .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Cannot write to closed file"))?;
+            .ok_or_else(|| invalid_data!("Cannot write to closed file"))?;
 
         file.write_all(&bs).map_err(|e| {
             Error::new(
@@ -292,20 +276,23 @@ impl FileWrite for LocalFsFileWrite {
                 format!("Failed to write to file: {e}"),
             )
         })?;
+        self.bytes_written += bs.len() as u64;
 
         Ok(())
     }
 
-    async fn close(&mut self) -> Result<()> {
+    async fn close(&mut self) -> Result<FileMetadata> {
         let file = self
             .file
             .take()
-            .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "File already closed"))?;
+            .ok_or_else(|| invalid_data!("File already closed"))?;
 
         file.sync_all()
             .map_err(|e| Error::new(ErrorKind::Unexpected, format!("Failed to sync file: {e}")))?;
 
-        Ok(())
+        Ok(FileMetadata {
+            size: self.bytes_written,
+        })
     }
 }
 
@@ -484,10 +471,11 @@ mod tests {
         let mut writer = storage.writer(path_str).await.unwrap();
         writer.write(Bytes::from("Hello, ")).await.unwrap();
         writer.write(Bytes::from("World!")).await.unwrap();
-        writer.close().await.unwrap();
+        let metadata = writer.close().await.unwrap();
 
         let content = storage.read(path_str).await.unwrap();
         assert_eq!(content, Bytes::from("Hello, World!"));
+        assert_eq!(metadata.size, content.len() as u64);
     }
 
     #[tokio::test]
@@ -514,7 +502,7 @@ mod tests {
         let path_str = path.to_str().unwrap();
 
         let mut writer = storage.writer(path_str).await.unwrap();
-        writer.close().await.unwrap();
+        assert_eq!(writer.close().await.unwrap().size, 0);
 
         // Write after close should fail
         let result = writer.write(Bytes::from("test")).await;

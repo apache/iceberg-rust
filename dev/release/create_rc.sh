@@ -19,6 +19,12 @@
 
 set -Eeuo pipefail
 
+# bash 3.2 (macOS default) does not run the ERR trap for a failing subshell:
+# the script still exits on failure but does not report which step failed.
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+  echo "Warning: bash ${BASH_VERSION} will not print which step failed. Use bash 4 or newer to see it." >&2
+fi
+
 CURRENT_STEP=""
 
 on_error() {
@@ -47,11 +53,10 @@ Arguments:
       Numeric release candidate round.
       Example: 2 creates tag v0.9.1-rc.2 and dist dir apache-iceberg-rust-0.9.1-rc2.
 
-Options:
-  --release_ref <ref>
-      Git commit-ish to archive and tag.
-      Default: HEAD
+The script always archives and tags HEAD, so check out the exact commit to
+release before running it.
 
+Options:
   --dist_dir <dir>
       Directory where RC artifacts are written.
       Relative paths are resolved from the repository root.
@@ -67,6 +72,10 @@ Options:
 
   --check_deps <0|1>
       Whether to run the dependency license check before creating artifacts.
+      Default: 1
+
+  --check_publish <0|1>
+      Whether to dry-run publishing every crate to crates.io before creating artifacts.
       Default: 1
 
   --sign <0|1>
@@ -88,7 +97,7 @@ Examples:
   $0 0.9.1 2
   $0 0.9.1 2 --create_rc_tag 0 --sign 0
   $0 0.9.1 2 --upload_svn 1
-  $0 0.9.1 2 --release_ref abc123 --dist_dir /tmp/iceberg-rust-dist
+  $0 0.9.1 2 --dist_dir /tmp/iceberg-rust-dist
 USAGE
 }
 
@@ -199,11 +208,6 @@ parse_args() {
         usage
         exit 0
         ;;
-      --release_ref | --release-ref)
-        require_option_value "$1" "${2:-}"
-        RELEASE_REF="$2"
-        shift 2
-        ;;
       --dist_dir | --dist-dir)
         require_option_value "$1" "${2:-}"
         RELEASE_DIST_DIR="$2"
@@ -225,6 +229,12 @@ parse_args() {
         require_option_value "$1" "${2:-}"
         validate_bool_option "$1" "$2"
         CHECK_DEPS="$2"
+        shift 2
+        ;;
+      --check_publish | --check-publish)
+        require_option_value "$1" "${2:-}"
+        validate_bool_option "$1" "$2"
+        CHECK_PUBLISH="$2"
         shift 2
         ;;
       --sign)
@@ -295,7 +305,7 @@ derive_release_names() {
 
 check_release_ref() {
   require_command git
-  git -C "${REPO_ROOT}" rev-parse --verify "${RELEASE_REF}^{commit}" >/dev/null
+  git -C "${REPO_ROOT}" rev-parse --verify "HEAD^{commit}" >/dev/null
 }
 
 check_rc_tag_available() {
@@ -315,6 +325,13 @@ check_dependency_licenses() {
   )
 }
 
+# Packages and builds every crate as `cargo publish` would, without uploading,
+# so crates that cannot be published fail RC creation.
+check_crates_publishable() {
+  require_command cargo
+  cargo publish --workspace --all-features --dry-run --manifest-path "${REPO_ROOT}/Cargo.toml"
+}
+
 prepare_output_directory() {
   rm -rf "${RC_DIR}"
   mkdir -p "${RC_DIR}"
@@ -326,7 +343,7 @@ create_source_archive() {
     --format=tar.gz \
     --output="${RC_DIR}/${ARCHIVE_FILE_NAME}" \
     --prefix="${ARCHIVE_BASE_NAME}/" \
-    "${RELEASE_REF}"
+    HEAD
 }
 
 check_license_headers() {
@@ -417,7 +434,7 @@ upload_to_svn() {
 create_rc_tag() {
   require_command git
   require_gpg_secret_key
-  git -C "${REPO_ROOT}" tag -s "${RC_TAG}" "${RELEASE_REF}" -m "Apache Iceberg Rust ${VERSION} RC${RC}"
+  git -C "${REPO_ROOT}" tag -s "${RC_TAG}" HEAD -m "Apache Iceberg Rust ${VERSION} RC${RC}"
 }
 
 print_summary() {
@@ -495,11 +512,11 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 VERSION=""
 RC=""
-RELEASE_REF="HEAD"
 RELEASE_DIST_DIR="dist"
 CREATE_RC_TAG="1"
 CHECK_HEADERS="1"
 CHECK_DEPS="1"
+CHECK_PUBLISH="1"
 SIGN_ARCHIVE="1"
 UPLOAD_SVN="0"
 SVN_DIST_URL="https://dist.apache.org/repos/dist/dev/iceberg"
@@ -509,7 +526,7 @@ run_step "Parse command arguments" parse_args "$@"
 run_step "Validate release arguments" validate_args
 derive_release_names
 
-run_step "Check release reference ${RELEASE_REF}" check_release_ref
+run_step "Check release reference HEAD" check_release_ref
 
 if enabled "${CREATE_RC_TAG}"; then
   run_step "Check RC tag ${RC_TAG} is available" check_rc_tag_available
@@ -521,6 +538,12 @@ if enabled "${CHECK_DEPS}"; then
   run_step "Check dependency licenses" check_dependency_licenses
 else
   skip_step "Check dependency licenses"
+fi
+
+if enabled "${CHECK_PUBLISH}"; then
+  run_step "Check crates can be published" check_crates_publishable
+else
+  skip_step "Check crates can be published"
 fi
 
 run_step "Prepare output directory ${RC_DIR}" prepare_output_directory

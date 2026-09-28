@@ -37,7 +37,7 @@ use zeroize::Zeroizing;
 /// ```
 ///
 /// # Display
-/// [`SensitiveString`] does **not** implement [`Display`] to prevent bugs like:
+/// [`SensitiveString`] does **not** implement [`std::fmt::Display`] to prevent bugs like:
 ///
 /// ```compile_fail
 /// # use iceberg::sensitive::SensitiveString;
@@ -83,7 +83,7 @@ impl From<String> for SensitiveString {
 
 /// Wrapper for sensitive byte data (encryption keys, DEKs, etc.) that:
 /// - Zeroizes memory on drop
-/// - Redacts content in [`Debug`] and [`Display`] output
+/// - Redacts content in [`Debug`] and [`std::fmt::Display`] output
 /// - Provides only `&[u8]` access via [`as_bytes()`](Self::as_bytes)
 /// - Uses `Box<[u8]>` (immutable boxed slice) since key bytes never grow
 ///

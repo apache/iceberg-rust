@@ -19,6 +19,12 @@
 
 set -Eeuo pipefail
 
+# bash 3.2 (macOS default) does not run the ERR trap for a failing subshell:
+# the script still exits on failure but does not report which step failed.
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+  echo "Warning: bash ${BASH_VERSION} will not print which step failed. Use bash 4 or newer to see it." >&2
+fi
+
 # Keep this in sync with CARGO_DENY_VERSION in .github/workflows/dependencies.yml.
 # The generated DEPENDENCIES.rust.tsv files are version-sensitive, so the local
 # cargo-deny must match the version CI uses to avoid spurious diffs.
