@@ -183,6 +183,7 @@ impl TransactionAction for RewriteFilesAction {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use uuid::Uuid;
@@ -190,8 +191,10 @@ mod tests {
     use super::*;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, Literal, ManifestEntryRef, ManifestFile, ManifestListWriter,
-        ManifestStatus, ManifestWriterBuilder, Operation, SnapshotRef, Struct,
+        DataContentType, DataFileBuilder, DataFileFormat, Datum, FormatVersion, Literal,
+        ManifestEntryRef, ManifestFile, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
+        NestedField, Operation, PrimitiveType, Schema, SnapshotRef, Struct, Transform, Type,
+        UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::transaction::tests::{
@@ -199,7 +202,7 @@ mod tests {
         make_v2_minimal_table_in_catalog, make_v3_minimal_table_in_catalog,
     };
     use crate::transaction::{ApplyTransactionAction, Transaction};
-    use crate::{Catalog, ErrorKind, TableUpdate};
+    use crate::{Catalog, ErrorKind, NamespaceIdent, TableCommit, TableCreation, TableUpdate};
 
     /// Read back the manifest entry for `path` from the manifests of `snapshot`.
     async fn find_entry(
@@ -937,5 +940,277 @@ mod tests {
                 .message()
                 .contains("at least one file to add")
         );
+    }
+
+    // Partition-spec evolution: `ts` is identity-partitioned under spec 0, then
+    // `day(ts)` becomes the default spec. Old files keep spec 0 and a
+    // timestamptz partition value; new files carry spec 1 and a date.
+
+    /// 2026-08-24T09:30:00Z and 2026-08-24T17:45:00Z, in microseconds.
+    const TS_MORNING: i64 = 1_787_563_800_000_000;
+    const TS_EVENING: i64 = 1_787_593_500_000_000;
+    /// 2026-08-24, in days since the epoch.
+    const DAY: i32 = 20_689;
+
+    /// A table partitioned by `identity(ts)`, still on its first spec.
+    async fn make_identity_ts_table(
+        catalog: &impl Catalog,
+        format_version: FormatVersion,
+    ) -> Table {
+        let namespace = NamespaceIdent::new(format!("ns1-{}", Uuid::new_v4()));
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "ts", Type::Primitive(PrimitiveType::Timestamptz)).into(),
+            ])
+            .build()
+            .unwrap();
+        let spec = UnboundPartitionSpec::builder()
+            .add_partition_field(2, "ts", Transform::Identity)
+            .unwrap()
+            .build();
+        let creation = TableCreation::builder()
+            .name("events".to_string())
+            .schema(schema)
+            .partition_spec(spec)
+            .format_version(format_version)
+            .build();
+        catalog.create_table(&namespace, creation).await.unwrap()
+    }
+
+    /// Replace `identity(ts)` with `day(ts)` as the default spec.
+    async fn evolve_to_day_ts(catalog: &impl Catalog, table: &Table) -> Table {
+        let spec = UnboundPartitionSpec::builder()
+            .add_partition_field(2, "ts_day", Transform::Day)
+            .unwrap()
+            .build();
+        let commit = TableCommit::builder()
+            .ident(table.identifier().clone())
+            .requirements(vec![])
+            .updates(vec![
+                TableUpdate::AddSpec { spec },
+                TableUpdate::SetDefaultSpec { spec_id: -1 },
+            ])
+            .build();
+        let table = catalog.update_table(commit).await.unwrap();
+        assert_eq!(table.metadata().default_partition_spec_id(), 1);
+        table
+    }
+
+    fn make_file_in_spec(
+        path: &str,
+        records: u64,
+        spec_id: i32,
+        partition_value: Literal,
+    ) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(records * 10)
+            .record_count(records)
+            .partition(Struct::from_iter([Some(partition_value)]))
+            .partition_spec_id(spec_id)
+            .build()
+            .unwrap()
+    }
+
+    /// Live files of the current snapshot, keyed by path, with the spec id of
+    /// the manifest that lists them.
+    async fn live_files_by_manifest_spec(table: &Table) -> Vec<(String, i32)> {
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
+        let mut live = Vec::new();
+        for manifest_file in manifest_list.entries() {
+            let manifest = table.manifest_reader().read(manifest_file).await.unwrap();
+            for entry in manifest.entries().iter().filter(|e| e.is_alive()) {
+                assert_eq!(
+                    entry.data_file().partition_spec_id,
+                    manifest_file.partition_spec_id,
+                    "{} is listed by a manifest of another spec",
+                    entry.file_path()
+                );
+                live.push((
+                    entry.file_path().to_string(),
+                    manifest_file.partition_spec_id,
+                ));
+            }
+        }
+        live.sort();
+        live
+    }
+
+    /// Two old-spec files and one new-spec file; returns the table and the
+    /// snapshot that appended the old-spec files.
+    async fn spec_evolved_table_with_files(
+        catalog: &impl Catalog,
+        format_version: FormatVersion,
+    ) -> (Table, SnapshotRef, [DataFile; 3]) {
+        let table = make_identity_ts_table(catalog, format_version).await;
+        let old_1 = make_file_in_spec(
+            "test/old-1.parquet",
+            10,
+            0,
+            Literal::timestamptz(TS_MORNING),
+        );
+        let old_2 = make_file_in_spec(
+            "test/old-2.parquet",
+            10,
+            0,
+            Literal::timestamptz(TS_EVENING),
+        );
+        let table = append_files(catalog, &table, vec![old_1.clone(), old_2.clone()]).await;
+        let old_snapshot = table.metadata().current_snapshot().unwrap().clone();
+
+        let table = evolve_to_day_ts(catalog, &table).await;
+        let new_1 = make_file_in_spec("test/new-1.parquet", 10, 1, Literal::date(DAY));
+        let table = append_files(catalog, &table, vec![new_1.clone()]).await;
+        (table, old_snapshot, [old_1, old_2, new_1])
+    }
+
+    /// Compacting one old-spec file keeps the other in a manifest written under
+    /// spec 0: its entry, partition value and the manifest's partition summary
+    /// are still those of `identity(ts)`, not re-encoded under `day(ts)`.
+    #[tokio::test]
+    async fn test_rewrite_files_keeps_survivors_on_their_partition_spec() {
+        for format_version in [FormatVersion::V2, FormatVersion::V3] {
+            let catalog = new_memory_catalog().await;
+            let (table, old_snapshot, [old_1, _old_2, _new_1]) =
+                spec_evolved_table_with_files(&catalog, format_version).await;
+
+            let merged = make_file_in_spec("test/merged.parquet", 10, 1, Literal::date(DAY));
+            let tx = Transaction::new(&table);
+            let action = tx.rewrite_files().delete_file(old_1).add_file(merged);
+            let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+            assert_eq!(
+                live_files_by_manifest_spec(&table).await,
+                vec![
+                    ("test/merged.parquet".to_string(), 1),
+                    ("test/new-1.parquet".to_string(), 1),
+                    ("test/old-2.parquet".to_string(), 0),
+                ],
+                "{format_version}"
+            );
+
+            let snapshot = table.metadata().current_snapshot().unwrap();
+            let survivor = find_entry(&table, snapshot, "test/old-2.parquet")
+                .await
+                .unwrap();
+            assert_eq!(survivor.status(), ManifestStatus::Existing);
+            assert_eq!(survivor.snapshot_id(), Some(old_snapshot.snapshot_id()));
+            assert_eq!(
+                survivor.sequence_number(),
+                Some(old_snapshot.sequence_number())
+            );
+            assert_eq!(
+                survivor.data_file().partition,
+                Struct::from_iter([Some(Literal::timestamptz(TS_EVENING))])
+            );
+
+            let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
+            let old_spec_manifest = manifest_list
+                .entries()
+                .iter()
+                .find(|m| m.partition_spec_id == 0)
+                .unwrap();
+            let summary = &old_spec_manifest.partitions.as_ref().unwrap()[0];
+            let evening = Datum::timestamptz_micros(TS_EVENING).to_bytes().unwrap();
+            assert_eq!(summary.lower_bound.as_ref(), Some(&evening));
+            assert_eq!(summary.upper_bound.as_ref(), Some(&evening));
+
+            let totals = &snapshot.summary().additional_properties;
+            assert_eq!(totals.get("total-data-files").unwrap(), "3");
+            assert_eq!(totals.get("total-records").unwrap(), "30");
+        }
+    }
+
+    /// One rewrite removing a file from each spec: both manifests are filtered
+    /// under their own spec and the merged file lands under the default spec.
+    #[tokio::test]
+    async fn test_rewrite_files_across_partition_specs() {
+        for format_version in [FormatVersion::V2, FormatVersion::V3] {
+            let catalog = new_memory_catalog().await;
+            let (table, _, [old_1, _old_2, new_1]) =
+                spec_evolved_table_with_files(&catalog, format_version).await;
+
+            let merged = make_file_in_spec("test/merged.parquet", 20, 1, Literal::date(DAY));
+            let tx = Transaction::new(&table);
+            let action = tx
+                .rewrite_files()
+                .delete_file(old_1)
+                .delete_file(new_1)
+                .add_file(merged);
+            let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+            assert_eq!(
+                live_files_by_manifest_spec(&table).await,
+                vec![
+                    ("test/merged.parquet".to_string(), 1),
+                    ("test/old-2.parquet".to_string(), 0),
+                ],
+                "{format_version}"
+            );
+            let totals = &table
+                .metadata()
+                .current_snapshot()
+                .unwrap()
+                .summary()
+                .additional_properties;
+            assert_eq!(totals.get("deleted-data-files").unwrap(), "2");
+            assert_eq!(totals.get("total-data-files").unwrap(), "2");
+            assert_eq!(totals.get("total-records").unwrap(), "30");
+        }
+    }
+
+    /// A second compaction that removes the last old-spec file drops the spec-0
+    /// manifest, and the totals chained through both rewrites stay exact.
+    #[tokio::test]
+    async fn test_rewrite_files_retires_the_old_spec() {
+        for format_version in [FormatVersion::V2, FormatVersion::V3] {
+            let catalog = new_memory_catalog().await;
+            let (table, _, [old_1, old_2, new_1]) =
+                spec_evolved_table_with_files(&catalog, format_version).await;
+
+            let merged = make_file_in_spec("test/merged-1.parquet", 10, 1, Literal::date(DAY));
+            let tx = Transaction::new(&table);
+            let action = tx.rewrite_files().delete_file(old_1).add_file(merged);
+            let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+            let merged = make_file_in_spec("test/merged-2.parquet", 20, 1, Literal::date(DAY));
+            let tx = Transaction::new(&table);
+            let action = tx
+                .rewrite_files()
+                .delete_file(old_2)
+                .delete_file(new_1)
+                .add_file(merged);
+            let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+            assert_eq!(
+                live_files_by_manifest_spec(&table).await,
+                vec![
+                    ("test/merged-1.parquet".to_string(), 1),
+                    ("test/merged-2.parquet".to_string(), 1),
+                ],
+                "{format_version}"
+            );
+            let snapshot = table.metadata().current_snapshot().unwrap();
+            let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
+            assert!(
+                manifest_list
+                    .entries()
+                    .iter()
+                    .all(|m| m.partition_spec_id == 1),
+                "{format_version}: a spec-0 manifest outlived its last file"
+            );
+            let totals = &snapshot.summary().additional_properties;
+            assert_eq!(totals.get("total-data-files").unwrap(), "2");
+            assert_eq!(totals.get("total-records").unwrap(), "30");
+        }
     }
 }
