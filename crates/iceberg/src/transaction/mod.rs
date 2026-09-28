@@ -259,13 +259,20 @@ impl Transaction {
         if location_changed {
             // The new location has its own vended credentials; the reused FileIO is
             // scoped to the old prefix, so reload the table to pick them up.
-            catalog.load_table(committed.identifier()).await
-        } else {
-            // The commit response carries no credentials. Reuse the FileIO from the
-            // refresh load above (not `self.table`, which is left untouched when the
-            // metadata is unchanged) so freshly vended credentials are not dropped.
-            Ok(committed.with_file_io(refreshed.file_io().clone()))
+            match catalog.load_table(committed.identifier()).await {
+                Ok(reloaded) => return Ok(reloaded),
+                // The commit is already durable: returning this error would let the
+                // retry loop replay it. Keep the old credentials; a reload fixes them.
+                Err(e) => tracing::warn!(
+                    "committed {} but could not reload it for the new location: {e}",
+                    committed.identifier()
+                ),
+            }
         }
+        // The commit response carries no credentials, so keep the FileIO the
+        // actions ran with: the refreshed one, or the original when its settings
+        // were unchanged and it holds an initialized backend.
+        Ok(committed.with_file_io(current_table.file_io().clone()))
     }
 }
 
@@ -534,12 +541,21 @@ mod tests {
         let tx = ReadingAction(action_io)
             .apply(Transaction::new(&table))
             .unwrap();
-        tx.commit(&mock_catalog).await.unwrap();
+        let committed = tx.commit(&mock_catalog).await.unwrap();
 
         assert_eq!(
             seen.lock().unwrap().as_deref(),
             Some("written-before-commit")
         );
+        // The returned table keeps that backend too, not the reload's empty one.
+        let after = committed
+            .file_io()
+            .new_input("memory://warehouse/manifest")
+            .unwrap()
+            .read()
+            .await
+            .unwrap();
+        assert_eq!(&after[..], b"written-before-commit");
     }
 
     /// Reads a file the table wrote before the transaction started.
@@ -560,6 +576,60 @@ mod tests {
         }
     }
 
+    /// What `update_table` returns once the table root has moved.
+    fn moved_table() -> Table {
+        let base = make_v2_table();
+        let moved = base
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .set_location("s3://moved-by-someone-else/table".to_string())
+            .build()
+            .unwrap()
+            .metadata;
+        Table::builder()
+            .identifier(base.identifier().clone())
+            .metadata(moved)
+            .file_io(base.file_io().clone())
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
+    /// The commit is durable before the reload runs, so a failed reload must
+    /// not send the transaction round the retry loop to be committed again.
+    #[tokio::test]
+    async fn test_a_failed_reload_does_not_replay_the_commit() {
+        let loads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut mock_catalog = MockCatalog::new();
+        let counter = loads.clone();
+        mock_catalog.expect_load_table().returning_st(move |_| {
+            let n = counter.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                if n == 1 {
+                    // The post-commit reload.
+                    Err(Error::new(ErrorKind::Unexpected, "503").with_retryable(true))
+                } else {
+                    Ok(make_v2_table())
+                }
+            })
+        });
+        mock_catalog
+            .expect_update_table()
+            .times(1)
+            .returning_st(|_| Box::pin(async { Ok(moved_table()) }));
+
+        let table = create_test_transaction(&make_v2_table())
+            .commit(&mock_catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            table.metadata().location(),
+            "s3://moved-by-someone-else/table"
+        );
+    }
+
     /// Another writer moved the table between our refresh and our commit; the
     /// committed metadata says so even though we sent no `SetLocation`.
     #[tokio::test]
@@ -571,26 +641,9 @@ mod tests {
             let n = counter.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move { Ok(table_with_marker(if n == 0 { "first" } else { "second" })) })
         });
-        mock_catalog.expect_update_table().returning_st(|_| {
-            Box::pin(async {
-                let base = make_v2_table();
-                let moved = base
-                    .metadata()
-                    .clone()
-                    .into_builder(None)
-                    .set_location("s3://moved-by-someone-else/table".to_string())
-                    .build()
-                    .unwrap()
-                    .metadata;
-                Ok(Table::builder()
-                    .identifier(base.identifier().clone())
-                    .metadata(moved)
-                    .file_io(base.file_io().clone())
-                    .runtime(test_runtime())
-                    .build()
-                    .unwrap())
-            })
-        });
+        mock_catalog
+            .expect_update_table()
+            .returning_st(|_| Box::pin(async { Ok(moved_table()) }));
 
         let table = create_test_transaction(&make_v2_table())
             .commit(&mock_catalog)
