@@ -1315,87 +1315,30 @@ mod tests {
         );
 
         // Arrow schema carrying field ids so the reader resolves by id, not position.
-        let age_field = Field::new("age", DataType::Int32, false).with_metadata(HashMap::from([(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            "3".to_string(),
-        )]));
+        let age_field = field_with_id("age", DataType::Int32, 3);
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "1".to_string(),
-            )])),
-            Field::new(
+            field_with_id("id", DataType::Int32, 1),
+            field_with_id(
                 "person",
                 DataType::Struct(Fields::from(vec![age_field.clone()])),
-                false,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "2".to_string(),
-            )])),
+                2,
+            ),
         ]));
-
-        let tmp_dir = TempDir::new().unwrap();
-        let table_location = tmp_dir.path().to_str().unwrap().to_string();
-        let file_path = format!("{table_location}/1.parquet");
 
         let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
         let person = Arc::new(StructArray::from(vec![(
             Arc::new(age_field),
             Arc::new(Int32Array::from(vec![30, 20, 40])) as ArrayRef,
         )])) as ArrayRef;
-        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![id, person]).unwrap();
 
-        let props = WriterProperties::builder()
-            .set_compression(Compression::SNAPPY)
-            .build();
-        let file = File::create(&file_path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        // Predicate targets the nested leaf; project only the top-level `id` so the
-        // predicate's own projection (not the output projection) drives the struct read.
-        let predicate = Reference::new("person.age")
-            .greater_than(Datum::int(25))
-            .bind(iceberg_schema.clone(), false)
-            .unwrap();
-
-        let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
-
-        let task = FileScanTask::builder()
-            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
-            .with_start(0)
-            .with_length(0)
-            .with_data_file_path(file_path.clone())
-            .with_data_file_format(DataFileFormat::Parquet)
-            .with_schema(iceberg_schema.clone())
-            .with_project_field_ids(vec![1])
-            .with_predicate(Some(predicate))
-            .with_case_sensitive(false)
-            .build()
-            .unwrap();
-
-        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-        let batches = reader
-            .read(tasks)
-            .unwrap()
-            .stream()
-            .try_collect::<Vec<RecordBatch>>()
-            .await
-            .unwrap();
-
-        // Rows with person.age > 25 are id=1 (30) and id=3 (40); id=2 (20) is pruned.
-        let ids: Vec<i32> = batches
-            .iter()
-            .flat_map(|b| {
-                b.column(0)
-                    .as_primitive::<arrow_array::types::Int32Type>()
-                    .values()
-                    .to_vec()
-            })
-            .collect();
+        // person.age > 25 keeps id=1 (30) and id=3 (40); id=2 (20) is pruned.
+        let ids = ids_kept_by_predicate(
+            iceberg_schema,
+            arrow_schema,
+            vec![id, person],
+            Reference::new("person.age").greater_than(Datum::int(25)),
+        )
+        .await;
         assert_eq!(ids, vec![1, 3]);
     }
 
@@ -1440,38 +1383,20 @@ mod tests {
                 .unwrap(),
         );
 
-        let zip_field = Field::new("zip", DataType::Int32, false).with_metadata(HashMap::from([(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            "4".to_string(),
-        )]));
-        let address_field = Field::new(
+        let zip_field = field_with_id("zip", DataType::Int32, 4);
+        let address_field = field_with_id(
             "address",
             DataType::Struct(Fields::from(vec![zip_field.clone()])),
-            false,
-        )
-        .with_metadata(HashMap::from([(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            "3".to_string(),
-        )]));
+            3,
+        );
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "1".to_string(),
-            )])),
-            Field::new(
+            field_with_id("id", DataType::Int32, 1),
+            field_with_id(
                 "person",
                 DataType::Struct(Fields::from(vec![address_field.clone()])),
-                false,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "2".to_string(),
-            )])),
+                2,
+            ),
         ]));
-
-        let tmp_dir = TempDir::new().unwrap();
-        let table_location = tmp_dir.path().to_str().unwrap().to_string();
-        let file_path = format!("{table_location}/1.parquet");
 
         let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
         let address = Arc::new(StructArray::from(vec![(
@@ -1480,8 +1405,30 @@ mod tests {
         )])) as ArrayRef;
         let person =
             Arc::new(StructArray::from(vec![(Arc::new(address_field), address)])) as ArrayRef;
-        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![id, person]).unwrap();
 
+        // person.address.zip >= 20002 keeps id=2 (20002) and id=3 (30003).
+        let ids = ids_kept_by_predicate(
+            iceberg_schema,
+            arrow_schema,
+            vec![id, person],
+            Reference::new("person.address.zip").greater_than_or_equal_to(Datum::int(20002)),
+        )
+        .await;
+        assert_eq!(ids, vec![2, 3]);
+    }
+
+    /// Writes `columns` as one Parquet file, pushes `predicate` down while reading it back,
+    /// and returns the surviving rows' `id`s (the file's first column). `predicate` binds
+    /// against `iceberg_schema`. Shared write-then-read scaffolding for the nested-leaf tests.
+    async fn ids_kept_by_predicate(
+        iceberg_schema: SchemaRef,
+        arrow_schema: Arc<ArrowSchema>,
+        columns: Vec<ArrayRef>,
+        predicate: Predicate,
+    ) -> Vec<i32> {
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = format!("{}/1.parquet", tmp_dir.path().to_str().unwrap());
+        let batch = RecordBatch::try_new(arrow_schema.clone(), columns).unwrap();
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
             .build();
@@ -1490,22 +1437,15 @@ mod tests {
         writer.write(&batch).unwrap();
         writer.close().unwrap();
 
-        // person.address.zip >= 20002 keeps id=2 (20002) and id=3 (30003).
-        let predicate = Reference::new("person.address.zip")
-            .greater_than_or_equal_to(Datum::int(20002))
-            .bind(iceberg_schema.clone(), false)
-            .unwrap();
-
-        let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
-
+        let predicate = predicate.bind(iceberg_schema.clone(), false).unwrap();
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
         let task = FileScanTask::builder()
             .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
             .with_start(0)
             .with_length(0)
-            .with_data_file_path(file_path.clone())
+            .with_data_file_path(file_path)
             .with_data_file_format(DataFileFormat::Parquet)
-            .with_schema(iceberg_schema.clone())
+            .with_schema(iceberg_schema)
             .with_project_field_ids(vec![1])
             .with_predicate(Some(predicate))
             .with_case_sensitive(false)
@@ -1520,8 +1460,7 @@ mod tests {
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
-
-        let ids: Vec<i32> = batches
+        batches
             .iter()
             .flat_map(|b| {
                 b.column(0)
@@ -1529,8 +1468,176 @@ mod tests {
                     .values()
                     .to_vec()
             })
-            .collect();
-        assert_eq!(ids, vec![2, 3]);
+            .collect()
+    }
+
+    /// A null parent struct implies null leaves (spec: "if a parent struct column is null it
+    /// implies the leaf column is null"). With `person` optional and a null row, `project_column`
+    /// must carry the parent's validity into the child, so a required leaf reads as null there.
+    /// Before the `flatten` fix these predicates over-returned the null row.
+    #[tokio::test]
+    async fn test_predicate_on_leaf_under_null_parent_struct() {
+        use arrow_array::StructArray;
+        use arrow_buffer::NullBuffer;
+        use arrow_schema::Fields;
+
+        use crate::spec::StructType;
+
+        // id: int (1), person: optional struct<age: required int (3), score: int (4)> (2)
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        2,
+                        "person",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(3, "age", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                            NestedField::optional(4, "score", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let age_field = field_with_id("age", DataType::Int32, 3);
+        let score_field = Field::new("score", DataType::Int32, true).with_metadata(HashMap::from(
+            [(PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string())],
+        ));
+        let person_field = Field::new(
+            "person",
+            DataType::Struct(Fields::from(vec![age_field.clone(), score_field.clone()])),
+            true,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "2".to_string(),
+        )]));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            field_with_id("id", DataType::Int32, 1),
+            person_field,
+        ]));
+
+        // Row id=2 has a null `person`; its stored age/score are placeholders to be masked.
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let person = Arc::new(StructArray::new(
+            Fields::from(vec![age_field, score_field]),
+            vec![
+                Arc::new(Int32Array::from(vec![30, 0, 40])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![Some(100), Some(0), Some(300)])) as ArrayRef,
+            ],
+            Some(NullBuffer::from(vec![true, false, true])),
+        )) as ArrayRef;
+        // person.age < 1000 holds for the stored 30/40 but the null row's age reads as null.
+        let ids = ids_kept_by_predicate(
+            iceberg_schema.clone(),
+            arrow_schema.clone(),
+            vec![id.clone(), person.clone()],
+            Reference::new("person.age").less_than(Datum::int(1000)),
+        )
+        .await;
+        assert_eq!(
+            ids,
+            vec![1, 3],
+            "required leaf under a null parent must read as null"
+        );
+
+        // person.age != 30 keeps only id=3 (40); the null row is null, not "!= 30".
+        let ids = ids_kept_by_predicate(
+            iceberg_schema,
+            arrow_schema,
+            vec![id, person],
+            Reference::new("person.age").not_equal_to(Datum::int(30)),
+        )
+        .await;
+        assert_eq!(ids, vec![3]);
+    }
+
+    /// The parent-null rule holds through two struct levels: a null outer `person` makes
+    /// `person.address.zip` null, since each level merges its own validity into its children.
+    #[tokio::test]
+    async fn test_predicate_on_leaf_under_null_outer_struct_doubly_nested() {
+        use arrow_array::StructArray;
+        use arrow_buffer::NullBuffer;
+        use arrow_schema::Fields;
+
+        use crate::spec::StructType;
+
+        // id: int (1), person: optional struct<address: struct<zip: int (4)> (3)> (2)
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        2,
+                        "person",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(
+                                3,
+                                "address",
+                                Type::Struct(StructType::new(vec![
+                                    NestedField::required(
+                                        4,
+                                        "zip",
+                                        Type::Primitive(PrimitiveType::Int),
+                                    )
+                                    .into(),
+                                ])),
+                            )
+                            .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let zip_field = field_with_id("zip", DataType::Int32, 4);
+        let address_field = field_with_id(
+            "address",
+            DataType::Struct(Fields::from(vec![zip_field.clone()])),
+            3,
+        );
+        let person_field = Field::new(
+            "person",
+            DataType::Struct(Fields::from(vec![address_field.clone()])),
+            true,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "2".to_string(),
+        )]));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            field_with_id("id", DataType::Int32, 1),
+            person_field,
+        ]));
+
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let address = Arc::new(StructArray::from(vec![(
+            Arc::new(zip_field),
+            Arc::new(Int32Array::from(vec![10001, 0, 30003])) as ArrayRef,
+        )])) as ArrayRef;
+        // Row id=2's `person` is null, so `address` and its `zip` under it read as null.
+        let person = Arc::new(StructArray::new(
+            Fields::from(vec![address_field]),
+            vec![address],
+            Some(NullBuffer::from(vec![true, false, true])),
+        )) as ArrayRef;
+
+        // person.address.zip < 100000 holds for the stored 10001/30003 but not the null row.
+        let ids = ids_kept_by_predicate(
+            iceberg_schema,
+            arrow_schema,
+            vec![id, person],
+            Reference::new("person.address.zip").less_than(Datum::int(100000)),
+        )
+        .await;
+        assert_eq!(ids, vec![1, 3]);
     }
 
     /// Fields inside a list or map have no accessor (see `Schema::build_accessors`), so a

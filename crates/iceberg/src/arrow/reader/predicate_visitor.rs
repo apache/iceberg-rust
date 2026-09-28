@@ -222,13 +222,12 @@ impl PredicateConverter<'_> {
         // The leaf column's index in Parquet schema.
         if let Some(column_idx) = self.column_map.get(&reference.field().id) {
             // Confirm the leaf is among the projected columns.
-            self.column_indices
-                .iter()
-                .position(|&idx| idx == *column_idx)
-                .ok_or(invalid_data!(
-                "Leaf column `{}` in predicates cannot be found in the required column indices.",
-                reference.field().name
-            ))?;
+            if !self.column_indices.contains(column_idx) {
+                return Err(invalid_data!(
+                    "Leaf column `{}` in predicates cannot be found in the required column indices.",
+                    reference.field().name
+                ));
+            }
 
             let path: Arc<[String]> = self
                 .parquet_schema
@@ -305,14 +304,15 @@ fn project_column(
                     current.data_type()
                 ))
             })?;
-        current = struct_array
-            .column_by_name(part)
-            .ok_or_else(|| {
-                ArrowError::SchemaError(format!(
-                    "Predicate column nested field `{part}` not found in struct `{current_name}`."
-                ))
-            })?
-            .clone();
+        // `flatten` ANDs the struct's validity into each child, so a leaf under a null
+        // parent struct reads as null (spec: a null parent implies a null leaf).
+        let (fields, mut columns) = struct_array.flatten();
+        let (idx, _) = fields.find(part).ok_or_else(|| {
+            ArrowError::SchemaError(format!(
+                "Predicate column nested field `{part}` not found in struct `{current_name}`."
+            ))
+        })?;
+        current = columns.swap_remove(idx);
         current_name = part;
     }
 
