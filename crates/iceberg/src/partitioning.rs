@@ -20,6 +20,7 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
+use crate::error::invalid_data;
 use crate::spec::{
     NestedField, NestedFieldRef, PartitionField, PartitionSpec, Schema, StructType, Transform, Type,
 };
@@ -68,13 +69,10 @@ pub fn compute_unified_partition_type<'a>(
             // active_field_ids filter below, otherwise an unknown transform could be
             // silently skipped.
             if matches!(field.transform, Transform::Unknown) {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Partition field '{}' uses an unknown transform whose result type \
+                return Err(invalid_data!(
+                    "Partition field '{}' uses an unknown transform whose result type \
                          cannot be determined",
-                        field.name
-                    ),
+                    field.name
                 ));
             }
 
@@ -98,13 +96,11 @@ pub fn compute_unified_partition_type<'a>(
                     // V1 tables do not guarantee field ids are unique across specs, so two
                     // specs may define the same field id. They must be compatible.
                     if !equivalent_ignoring_names(field, existing) {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Conflicting partition fields for field id {field_id}: \
+                        return Err(invalid_data!(
+                            "Conflicting partition fields for field id {field_id}: \
                                  '{}' and '{}'",
-                                field.name, existing.name
-                            ),
+                            field.name,
+                            existing.name
                         ));
                     }
 

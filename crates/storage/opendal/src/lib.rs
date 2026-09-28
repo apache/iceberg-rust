@@ -551,7 +551,7 @@ impl Storage for OpenDalStorage {
 
     async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
         let (op, relative_path) = self.create_operator(&path)?;
-        Ok(Box::new(OpenDalWriter(
+        Ok(Box::new(OpenDalWriter::new(
             op.writer(relative_path).await.map_err(from_opendal_error)?,
         )))
     }
@@ -635,21 +635,51 @@ impl FileRead for OpenDalReader {
 }
 
 /// Wrapper around `opendal::Writer` that implements `FileWrite`.
-pub(crate) struct OpenDalWriter(pub(crate) opendal::Writer);
+pub(crate) struct OpenDalWriter {
+    inner: opendal::Writer,
+    bytes_written: u64,
+}
+
+impl OpenDalWriter {
+    pub(crate) fn new(inner: opendal::Writer) -> Self {
+        Self {
+            inner,
+            bytes_written: 0,
+        }
+    }
+}
 
 #[async_trait]
 impl FileWrite for OpenDalWriter {
     async fn write(&mut self, bs: Bytes) -> Result<()> {
-        Ok(opendal::Writer::write(&mut self.0, bs)
-            .await
-            .map_err(from_opendal_error)?)
-    }
-
-    async fn close(&mut self) -> Result<()> {
-        let _ = opendal::Writer::close(&mut self.0)
+        let len = bs.len() as u64;
+        opendal::Writer::write(&mut self.inner, bs)
             .await
             .map_err(from_opendal_error)?;
+        self.bytes_written += len;
         Ok(())
+    }
+
+    async fn close(&mut self) -> Result<FileMetadata> {
+        let metadata = opendal::Writer::close(&mut self.inner)
+            .await
+            .map_err(from_opendal_error)?;
+
+        // Object stores may omit the size (reported as 0); validate only a reported nonzero size.
+        let reported_size = metadata.content_length();
+        if reported_size != 0 && reported_size != self.bytes_written {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "Wrote {} bytes but storage reports {reported_size}",
+                    self.bytes_written
+                ),
+            ));
+        }
+
+        Ok(FileMetadata {
+            size: self.bytes_written,
+        })
     }
 }
 
@@ -693,6 +723,38 @@ mod tests {
     fn test_default_memory_operator() {
         let op = default_memory_operator();
         assert_eq!(op.info().scheme().to_string(), "memory");
+    }
+
+    #[cfg(feature = "opendal-memory")]
+    #[tokio::test]
+    async fn test_writer_close_returns_stored_size() {
+        use iceberg::encryption::{EncryptedOutputFile, StandardKeyMetadata};
+
+        // Note: the memory service does report a content length, so this only pins the happy
+        // path. The counter in `OpenDalWriter` is what covers services that don't, such as S3.
+        let storage = Arc::new(OpenDalStorage::Memory(default_memory_operator()));
+        let path = "memory:///stored-size";
+        for plaintext in [
+            Bytes::new(),
+            Bytes::from_static(b"test data"),
+            Bytes::from(vec![7; 3 * 1024]),
+        ] {
+            let mut writer = storage.writer(path).await.unwrap();
+            for chunk in plaintext.chunks(1024) {
+                writer.write(Bytes::copy_from_slice(chunk)).await.unwrap();
+            }
+            let metadata = writer.close().await.unwrap();
+            assert_eq!(metadata.size, plaintext.len() as u64);
+            assert_eq!(metadata.size, storage.metadata(path).await.unwrap().size);
+
+            let output = EncryptedOutputFile::new(
+                OutputFile::new(storage.clone(), path.to_string()),
+                StandardKeyMetadata::try_new(b"0123456789abcdef").unwrap(),
+            );
+            let metadata = output.write(plaintext.clone()).await.unwrap();
+            assert!(metadata.size > plaintext.len() as u64);
+            assert_eq!(metadata.size, storage.metadata(path).await.unwrap().size);
+        }
     }
 
     #[cfg(feature = "opendal-memory")]

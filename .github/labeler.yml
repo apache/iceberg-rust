@@ -15,9 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[engines]
-df = { type = "datafusion" }
-
-[[steps]]
-engine = "df"
-slt = "df_test/create_table.slt"
+# Issue and pull request labeler configuration: https://github.com/github/issue-labeler
+# Labels issues and PRs whose title or body matches the regex.
+datafusion:
+  - '/datafusion/i'

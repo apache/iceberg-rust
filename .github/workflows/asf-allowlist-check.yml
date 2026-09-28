@@ -25,9 +25,7 @@ name: "ASF Allowlist Check"
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
+  merge_group:
 
 permissions:
   contents: read

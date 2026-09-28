@@ -21,12 +21,13 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
+use crate::Result;
+use crate::error::invalid_data;
 use crate::expr::BoundPredicate;
 use crate::spec::{
     DataContentType, DataFileFormat, ManifestEntryRef, NameMapping, PartitionSpec, Schema,
-    SchemaRef, Struct, StructType,
+    SchemaRef, SortOrderRef, Struct, StructType,
 };
-use crate::{Error, ErrorKind, Result};
 
 /// A stream of [`FileScanTask`].
 pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;
@@ -115,6 +116,26 @@ pub struct FileScanTask {
     /// metadata. The cost is one Arc clone per task.
     #[builder(default)]
     unified_partition_type: Option<Arc<StructType>>,
+
+    /// The raw `sort_order_id` recorded on the data file (spec field 140), carried through
+    /// unresolved. See [`DataFile::sort_order_id()`](crate::spec::DataFile::sort_order_id).
+    /// `None` if the file has no sort order id.
+    ///
+    /// This preserves the distinction that [`sort_order`](Self::sort_order) collapses: a
+    /// non-zero id that does not resolve against the table's sort orders still marks the file
+    /// as physically sorted, which a consumer such as the DataFusion sorted-scan optimizer
+    /// needs even when the order definition itself is unavailable.
+    #[builder(default)]
+    sort_order_id: Option<i32>,
+
+    /// The sort order that this file's rows are sorted by, resolved from the data file's
+    /// [`sort_order_id`](Self::sort_order_id) against the table's known sort orders. `Some`
+    /// only when the id resolves to an order that has sort fields. `None` if the file has no
+    /// sort order id, the id does not resolve, or it resolves to an order with no sort fields
+    /// (the reserved unsorted order, id 0 per the spec). Use [`sort_order_id`](Self::sort_order_id)
+    /// to tell those cases apart.
+    #[builder(default)]
+    sort_order: Option<SortOrderRef>,
 
     /// Whether this scan task should treat column names as case-sensitive when binding predicates.
     case_sensitive: bool,
@@ -217,6 +238,16 @@ impl FileScanTask {
         self.unified_partition_type.as_ref()
     }
 
+    /// Returns the raw sort order id recorded on the data file, unresolved.
+    pub fn sort_order_id(&self) -> Option<i32> {
+        self.sort_order_id
+    }
+
+    /// Returns the sort order this file's rows are sorted by, if resolved.
+    pub fn sort_order(&self) -> Option<&SortOrderRef> {
+        self.sort_order.as_ref()
+    }
+
     /// Returns whether names are treated as case-sensitive.
     pub fn case_sensitive(&self) -> bool {
         self.case_sensitive
@@ -231,25 +262,20 @@ impl FileScanTask {
         match (self.partition.as_ref(), self.partition_spec.as_deref()) {
             (None, None) => Ok(()),
             (None, Some(partition_spec)) if partition_spec.is_unpartitioned() => Ok(()),
-            (None, Some(_)) => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "FileScanTask with a partitioned spec requires partition values",
+            (None, Some(_)) => Err(invalid_data!(
+                "FileScanTask with a partitioned spec requires partition values"
             )),
             (Some(partition), None) if partition.fields().is_empty() => Ok(()),
-            (Some(_), None) => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Non-empty FileScanTask partition requires a partition spec",
+            (Some(_), None) => Err(invalid_data!(
+                "Non-empty FileScanTask partition requires a partition spec"
             )),
             (Some(partition), Some(partition_spec))
                 if partition.fields().len() != partition_spec.fields().len() =>
             {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "FileScanTask partition has {} fields but partition spec has {} fields",
-                        partition.fields().len(),
-                        partition_spec.fields().len()
-                    ),
+                Err(invalid_data!(
+                    "FileScanTask partition has {} fields but partition spec has {} fields",
+                    partition.fields().len(),
+                    partition_spec.fields().len()
                 ))
             }
             (Some(_), Some(partition_spec)) => {
@@ -370,12 +396,13 @@ mod _serde {
     use serde::{Deserialize, Serialize};
 
     use super::{FileScanTask, FileScanTaskDeleteFile};
+    use crate::error::invalid_data;
     use crate::expr::BoundPredicate;
     use crate::spec::{
-        DataFileFormat, Literal, NameMapping, PartitionSpec, RawLiteral, SchemaRef, StructType,
-        Type,
+        DataFileFormat, Literal, NameMapping, PartitionSpec, RawLiteral, SchemaRef, SortOrderRef,
+        StructType, Type,
     };
-    use crate::{Error, ErrorKind, Result};
+    use crate::{Error, Result};
 
     #[derive(Deserialize)]
     pub(super) struct FileScanTaskSerde {
@@ -399,6 +426,10 @@ mod _serde {
         name_mapping: Option<Arc<NameMapping>>,
         #[serde(default)]
         unified_partition_type: Option<Arc<StructType>>,
+        #[serde(default)]
+        sort_order_id: Option<i32>,
+        #[serde(default)]
+        sort_order: Option<SortOrderRef>,
         case_sensitive: bool,
         #[serde(default)]
         key_metadata: Option<Box<[u8]>>,
@@ -430,6 +461,10 @@ mod _serde {
         name_mapping: Option<&'a Arc<NameMapping>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         unified_partition_type: Option<&'a Arc<StructType>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sort_order_id: Option<i32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sort_order: Option<&'a SortOrderRef>,
         case_sensitive: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         key_metadata: Option<&'a [u8]>,
@@ -477,6 +512,8 @@ mod _serde {
                 partition_spec: value.partition_spec.as_ref(),
                 name_mapping: value.name_mapping.as_ref(),
                 unified_partition_type: value.unified_partition_type.as_ref(),
+                sort_order_id: value.sort_order_id,
+                sort_order: value.sort_order.as_ref(),
                 case_sensitive: value.case_sensitive,
                 key_metadata: value.key_metadata.as_deref(),
             })
@@ -503,10 +540,7 @@ mod _serde {
                         partition_type(value.partition_spec.as_deref(), &value.schema)?;
                     match partition.try_into(&partition_type)? {
                         Some(Literal::Struct(partition)) => Ok(partition),
-                        _ => Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "FileScanTask partition must be a struct",
-                        )),
+                        _ => Err(invalid_data!("FileScanTask partition must be a struct")),
                     }
                 })
                 .transpose()?;
@@ -528,6 +562,8 @@ mod _serde {
                 .with_partition_spec(value.partition_spec)
                 .with_name_mapping(value.name_mapping)
                 .with_unified_partition_type(value.unified_partition_type)
+                .with_sort_order_id(value.sort_order_id)
+                .with_sort_order(value.sort_order)
                 .with_case_sensitive(value.case_sensitive)
                 .with_key_metadata(value.key_metadata)
                 .build()
@@ -647,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn test_file_scan_task_builder_rejects_dropped_partition_source_column() {
+    fn test_file_scan_task_builder_accepts_dropped_partition_source_column() {
         let (_historical_schema, partition_spec) =
             schema_and_spec(PrimitiveType::Long, Transform::Identity);
         let current_schema = Arc::new(
@@ -661,15 +697,12 @@ mod tests {
                 .unwrap(),
         );
 
-        let err = build_file_scan_task(
+        build_file_scan_task(
             current_schema,
             Some(Struct::from_iter([Some(Literal::long(42))])),
             Some(partition_spec),
         )
-        .unwrap_err();
-
-        assert_eq!(err.kind(), ErrorKind::Unexpected);
-        assert!(err.message().contains("No column with source column id 1"));
+        .unwrap();
     }
 
     #[test]

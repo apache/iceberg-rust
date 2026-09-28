@@ -13,18 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM apache/hive:3.1.3
-
-ENV AWSSDK_VERSION=2.20.18
-ENV HADOOP_VERSION=3.1.0
+FROM apache/hive:4.2.1
 
 USER root
 
-RUN apt-get update -qq && apt-get -qq -y install curl && \
-    curl https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/${HADOOP_VERSION}/hadoop-aws-${HADOOP_VERSION}.jar -Lo /opt/hive/lib/hadoop-aws-${HADOOP_VERSION}.jar && \
-    curl https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.11.271/aws-java-sdk-bundle-1.11.271.jar -Lo /opt/hive/lib/aws-java-sdk-bundle-1.11.271.jar && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+# Link the hadoop-aws and AWS SDK jars that the image ships into the metastore classpath
+RUN ln -s /opt/hadoop/share/hadoop/tools/lib/hadoop-aws-*.jar /opt/hive/lib/ && \
+    ln -s /opt/hadoop/share/hadoop/tools/lib/bundle-*.jar /opt/hive/lib/
 
-COPY core-site.xml /opt/hadoop/etc/hadoop/core-site.xml
+# The entrypoint links this directory into the Hive config directory, over its own core-site.xml
+ENV HIVE_CUSTOM_CONF_DIR=/opt/hive/custom-conf
+COPY core-site.xml ${HIVE_CUSTOM_CONF_DIR}/core-site.xml
 
 USER hive

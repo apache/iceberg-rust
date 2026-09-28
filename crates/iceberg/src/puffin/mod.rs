@@ -19,7 +19,8 @@
 
 #![deny(missing_docs)]
 
-use crate::{Error, ErrorKind, Result};
+use crate::Result;
+use crate::error::invalid_data;
 
 mod blob;
 pub use blob::{APACHE_DATASKETCHES_THETA_V1, Blob, DELETION_VECTOR_V1};
@@ -31,15 +32,12 @@ pub use crate::compression::CompressionCodec;
 fn validate_puffin_compression(codec: CompressionCodec) -> Result<()> {
     match codec {
         CompressionCodec::None | CompressionCodec::Lz4 | CompressionCodec::Zstd(_) => Ok(()),
-        other => Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Compression codec {} is not supported for Puffin files. Only {}, {}, and {} are supported.",
-                other.name(),
-                CompressionCodec::None.name(),
-                CompressionCodec::Lz4.name(),
-                CompressionCodec::zstd_default().name()
-            ),
+        other => Err(invalid_data!(
+            "Compression codec {} is not supported for Puffin files. Only {}, {}, and {} are supported.",
+            other.name(),
+            CompressionCodec::None.name(),
+            CompressionCodec::Lz4.name(),
+            CompressionCodec::zstd_default().name()
         )),
     }
 }

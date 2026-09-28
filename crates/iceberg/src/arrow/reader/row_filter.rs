@@ -217,7 +217,8 @@ mod tests {
 
     use arrow_array::cast::AsArray;
     use arrow_array::{
-        ArrayRef, Int32Array, Int64Array, LargeStringArray, RecordBatch, StringArray,
+        ArrayRef, Decimal128Array, Float32Array, Int32Array, Int64Array, LargeStringArray,
+        RecordBatch, StringArray,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
@@ -1279,5 +1280,481 @@ mod tests {
             vec![2, 4, 5],
             "positional deletes must be applied correctly even when page indexes are absent"
         );
+    }
+
+    // Bloom filter pushdown: on-vs-off equivalence
+    // Pushdown must never change results. An encoding bug in the probe shows up as
+    // rows the bloom filter drops and the row filter keeps, so every case below
+    // reads the same file twice and compares. Fixtures spread each row group's
+    // values across the whole domain, so min/max statistics cannot prune and any
+    // reduction in bytes read is attributable to the bloom filter.
+
+    const ROWS_PER_GROUP: i32 = 20_000;
+    const GROUPS: i32 = 3;
+    /// Gap between consecutive values in a row group, so a value can be absent from
+    /// the file yet still sit inside every row group's min/max range.
+    const STRIDE: i32 = 30;
+
+    /// The `i`th value of row group `group`, spread across the whole domain.
+    fn interleaved(group: i32, i: i32) -> i32 {
+        i * STRIDE + group
+    }
+
+    fn field_with_id(name: &str, ty: DataType, id: i32) -> Field {
+        Field::new(name, ty, false).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            id.to_string(),
+        )]))
+    }
+
+    /// Writes one row group per batch, optionally with bloom filters.
+    fn write_row_groups(
+        path: &str,
+        arrow_schema: Arc<ArrowSchema>,
+        row_groups: Vec<RecordBatch>,
+        with_bloom_filters: bool,
+    ) {
+        let mut props = WriterProperties::builder().set_compression(Compression::UNCOMPRESSED);
+        if with_bloom_filters {
+            props = props
+                .set_bloom_filter_enabled(true)
+                .set_bloom_filter_max_ndv(ROWS_PER_GROUP as u64);
+        }
+
+        let file = File::create(path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props.build())).unwrap();
+        for batch in row_groups {
+            writer.write(&batch).unwrap();
+            // Force a row group boundary so each batch is independently prunable.
+            writer.flush().unwrap();
+        }
+        writer.close().unwrap();
+    }
+
+    async fn read_once(
+        file_path: &str,
+        schema: Arc<Schema>,
+        project_field_ids: Vec<i32>,
+        predicate: Predicate,
+        bloom_enabled: bool,
+    ) -> (Vec<RecordBatch>, u64) {
+        let file_io = FileIO::new_with_fs();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
+            .with_bloom_filter_enabled(bloom_enabled)
+            // Keep the fixed footer prefetch small so the byte measurement reflects
+            // row group I/O rather than a constant metadata read.
+            .with_metadata_size_hint(8 * 1024)
+            .build();
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path.to_string())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema.clone())
+            .with_project_field_ids(project_field_ids)
+            .with_predicate(Some(predicate.bind(schema, true).unwrap()))
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let result = reader.read(tasks).unwrap();
+        let metrics = result.metrics().clone();
+        let batches: Vec<RecordBatch> = result.stream().try_collect().await.unwrap();
+
+        (batches, metrics.bytes_read())
+    }
+
+    /// Batch boundaries differ when fewer row groups are read, so collapse to a
+    /// single batch before comparing. `None` means no rows at all.
+    fn collapse(batches: &[RecordBatch]) -> Option<RecordBatch> {
+        let first = batches.first()?;
+        Some(arrow_select::concat::concat_batches(&first.schema(), batches).unwrap())
+    }
+
+    /// Reads the file with pushdown on and off, asserts the rows are identical, and
+    /// returns the rows plus (bytes_on, bytes_off).
+    async fn assert_pushdown_agrees(
+        case: &str,
+        file_path: &str,
+        schema: Arc<Schema>,
+        project_field_ids: Vec<i32>,
+        predicate: Predicate,
+    ) -> (Option<RecordBatch>, u64, u64) {
+        let (off, bytes_off) = read_once(
+            file_path,
+            schema.clone(),
+            project_field_ids.clone(),
+            predicate.clone(),
+            false,
+        )
+        .await;
+        let (on, bytes_on) = read_once(file_path, schema, project_field_ids, predicate, true).await;
+
+        let off = collapse(&off);
+        let on = collapse(&on);
+        assert_eq!(
+            on, off,
+            "{case}: bloom filter pushdown changed the rows returned"
+        );
+
+        (on, bytes_on, bytes_off)
+    }
+
+    fn rows(batch: &Option<RecordBatch>) -> usize {
+        batch.as_ref().map_or(0, |b| b.num_rows())
+    }
+
+    fn value_schema(iceberg_type: Type) -> Arc<Schema> {
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![NestedField::required(1, "v", iceberg_type).into()])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// Writes a single-column file, one row group per group index.
+    fn write_value_fixture(
+        path: &str,
+        data_type: DataType,
+        make_group: impl Fn(i32) -> ArrayRef,
+        with_bloom_filters: bool,
+    ) {
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![field_with_id("v", data_type, 1)]));
+        let row_groups = (0..GROUPS)
+            .map(|g| RecordBatch::try_new(arrow_schema.clone(), vec![make_group(g)]).unwrap())
+            .collect();
+        write_row_groups(path, arrow_schema, row_groups, with_bloom_filters);
+    }
+
+    /// The core check for one physical encoding: a value that is present must
+    /// survive pushdown, and one that is absent must prune every row group. The
+    /// first catches a probe that encodes wrongly and drops real rows; the second
+    /// catches a probe that silently never prunes.
+    async fn assert_prunes_and_agrees(
+        case: &str,
+        file_path: &str,
+        schema: Arc<Schema>,
+        present: Datum,
+        absent: Datum,
+    ) {
+        let (on, bytes_on, bytes_off) = assert_pushdown_agrees(
+            &format!("{case}/present"),
+            file_path,
+            schema.clone(),
+            vec![1],
+            Reference::new("v").equal_to(present),
+        )
+        .await;
+        assert_eq!(rows(&on), 1, "{case}/present: expected one matching row");
+        assert!(
+            bytes_on < bytes_off,
+            "{case}/present: pushdown must skip row groups: {bytes_on} vs {bytes_off}"
+        );
+
+        let (on, bytes_on, bytes_off) = assert_pushdown_agrees(
+            &format!("{case}/absent"),
+            file_path,
+            schema,
+            vec![1],
+            Reference::new("v").equal_to(absent),
+        )
+        .await;
+        assert_eq!(rows(&on), 0, "{case}/absent: expected no matching rows");
+        assert!(
+            bytes_on * 2 < bytes_off,
+            "{case}/absent: pruning every row group should cut reads sharply: \
+             {bytes_on} vs {bytes_off}"
+        );
+    }
+
+    /// Value present in exactly one row group: `interleaved(1, 51)`.
+    const PRESENT_INT: i32 = 51 * STRIDE + 1;
+    /// Not congruent to any group index mod STRIDE, so absent from the file while
+    /// still inside every row group's min/max range.
+    const ABSENT_INT: i32 = 7;
+
+    fn int_group(g: i32) -> ArrayRef {
+        Arc::new(Int32Array::from(
+            (0..ROWS_PER_GROUP)
+                .map(|i| interleaved(g, i))
+                .collect::<Vec<_>>(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn test_bloom_pushdown_int32_eq() {
+        let tmp = TempDir::new().unwrap();
+        let path = format!("{}/int32.parquet", tmp.path().to_str().unwrap());
+        write_value_fixture(&path, DataType::Int32, int_group, true);
+
+        assert_prunes_and_agrees(
+            "int32",
+            &path,
+            value_schema(Type::Primitive(PrimitiveType::Int)),
+            Datum::int(PRESENT_INT),
+            Datum::int(ABSENT_INT),
+        )
+        .await;
+    }
+
+    /// `IN` takes a different evaluator path from `eq`: it must keep the row group
+    /// when any literal might be present, and prune only when all are absent.
+    #[tokio::test]
+    async fn test_bloom_pushdown_int32_in() {
+        let tmp = TempDir::new().unwrap();
+        let path = format!("{}/int32_in.parquet", tmp.path().to_str().unwrap());
+        write_value_fixture(&path, DataType::Int32, int_group, true);
+        let schema = value_schema(Type::Primitive(PrimitiveType::Int));
+
+        // One present literal keeps its row group; the absent one must not suppress it.
+        let (on, bytes_on, bytes_off) = assert_pushdown_agrees(
+            "int32_in/mixed",
+            &path,
+            schema.clone(),
+            vec![1],
+            Reference::new("v").is_in([Datum::int(PRESENT_INT), Datum::int(ABSENT_INT)]),
+        )
+        .await;
+        assert_eq!(rows(&on), 1);
+        assert!(bytes_on < bytes_off, "{bytes_on} vs {bytes_off}");
+
+        // All literals absent: every row group prunes.
+        let (on, bytes_on, bytes_off) = assert_pushdown_agrees(
+            "int32_in/all_absent",
+            &path,
+            schema,
+            vec![1],
+            Reference::new("v").is_in([Datum::int(ABSENT_INT), Datum::int(ABSENT_INT + 1)]),
+        )
+        .await;
+        assert_eq!(rows(&on), 0);
+        assert!(bytes_on * 2 < bytes_off, "{bytes_on} vs {bytes_off}");
+    }
+
+    #[tokio::test]
+    async fn test_bloom_pushdown_string_eq() {
+        let tmp = TempDir::new().unwrap();
+        let path = format!("{}/string.parquet", tmp.path().to_str().unwrap());
+        write_value_fixture(
+            &path,
+            DataType::Utf8,
+            |g| {
+                Arc::new(StringArray::from(
+                    (0..ROWS_PER_GROUP)
+                        .map(|i| format!("{:016}", interleaved(g, i)))
+                        .collect::<Vec<_>>(),
+                ))
+            },
+            true,
+        );
+
+        assert_prunes_and_agrees(
+            "string",
+            &path,
+            value_schema(Type::Primitive(PrimitiveType::String)),
+            Datum::string(format!("{PRESENT_INT:016}")),
+            Datum::string(format!("{ABSENT_INT:016}")),
+        )
+        .await;
+    }
+
+    /// Decimal precision decides the Parquet physical type, and the probe has to be
+    /// encoded to match: precision 9 -> INT32, 15 -> INT64, 25 -> FIXED_LEN_BYTE_ARRAY.
+    /// Each width is a separate arm of `check_in_bloom_filter`.
+    async fn check_decimal_width(name: &str, precision: u32) {
+        const SCALE: u32 = 2;
+        let tmp = TempDir::new().unwrap();
+        let path = format!("{}/{name}.parquet", tmp.path().to_str().unwrap());
+
+        write_value_fixture(
+            &path,
+            DataType::Decimal128(precision as u8, SCALE as i8),
+            |g| {
+                let values: Vec<i128> = (0..ROWS_PER_GROUP)
+                    .map(|i| i128::from(interleaved(g, i)))
+                    .collect();
+                Arc::new(
+                    Decimal128Array::from(values)
+                        .with_precision_and_scale(precision as u8, SCALE as i8)
+                        .unwrap(),
+                )
+            },
+            true,
+        );
+
+        let datum = |mantissa: i32| {
+            Datum::decimal_with_precision(
+                crate::spec::decimal_utils::decimal_from_i128_with_scale(
+                    i128::from(mantissa),
+                    SCALE,
+                ),
+                precision,
+            )
+            .unwrap()
+        };
+
+        assert_prunes_and_agrees(
+            name,
+            &path,
+            value_schema(Type::Primitive(PrimitiveType::Decimal {
+                precision,
+                scale: SCALE,
+            })),
+            datum(PRESENT_INT),
+            datum(ABSENT_INT),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_bloom_pushdown_decimal_int32() {
+        check_decimal_width("decimal_int32", 9).await;
+    }
+
+    #[tokio::test]
+    async fn test_bloom_pushdown_decimal_int64() {
+        check_decimal_width("decimal_int64", 15).await;
+    }
+
+    #[tokio::test]
+    async fn test_bloom_pushdown_decimal_fixed_len_byte_array() {
+        check_decimal_width("decimal_flba", 25).await;
+    }
+
+    /// Widening a decimal's precision does not rewrite existing files, so the file
+    /// keeps its original physical width while the bound literal arrives at the new
+    /// precision. Deriving the probe encoding from the schema instead of the file
+    /// would miss every entry the writer inserted and prune matching row groups.
+    #[tokio::test]
+    async fn test_bloom_pushdown_decimal_widened_precision() {
+        const SCALE: u32 = 2;
+        let tmp = TempDir::new().unwrap();
+        let path = format!("{}/decimal_widened.parquet", tmp.path().to_str().unwrap());
+
+        // File written at precision 9 -> INT32.
+        write_value_fixture(
+            &path,
+            DataType::Decimal128(9, SCALE as i8),
+            |g| {
+                let values: Vec<i128> = (0..ROWS_PER_GROUP)
+                    .map(|i| i128::from(interleaved(g, i)))
+                    .collect();
+                Arc::new(
+                    Decimal128Array::from(values)
+                        .with_precision_and_scale(9, SCALE as i8)
+                        .unwrap(),
+                )
+            },
+            true,
+        );
+
+        // Table schema has since widened to precision 30.
+        let schema = value_schema(Type::Primitive(PrimitiveType::Decimal {
+            precision: 30,
+            scale: SCALE,
+        }));
+        let datum = |mantissa: i32| {
+            Datum::decimal_with_precision(
+                crate::spec::decimal_utils::decimal_from_i128_with_scale(
+                    i128::from(mantissa),
+                    SCALE,
+                ),
+                30,
+            )
+            .unwrap()
+        };
+
+        assert_prunes_and_agrees(
+            "decimal_widened",
+            &path,
+            schema,
+            datum(PRESENT_INT),
+            datum(ABSENT_INT),
+        )
+        .await;
+    }
+
+    /// `Sbbf` hashes raw IEEE bytes, so `-0.0` and `0.0` are distinct entries. Arrow's
+    /// float equality is bitwise too, for an independent reason: `ArrowNativeTypeOp::is_eq`
+    /// implements total-order (`total_cmp`) semantics as `to_bits() == to_bits()`, so
+    /// `-0.0 != 0.0` and `NaN == NaN` there. That agreement is what makes it safe to prune
+    /// a row group holding only the opposite zero: if `is_eq` ever became IEEE-lenient,
+    /// those pruned rows would be rows the row filter should have returned. A probe that
+    /// canonicalized the sign instead only over-keeps, costing pruning rather than
+    /// correctness — but it would also hide such a change from this test.
+    ///
+    /// Each row group pairs its zero with a larger filler value so its min/max range spans
+    /// the other zero. Neither statistics path can prune it, so the bloom-off read really
+    /// does evaluate `is_eq` against `ROWS_PER_GROUP - 1` copies of the opposite zero: that
+    /// arm is the control pinning arrow's semantics, and IEEE-lenient equality would double
+    /// the row count it returns. Pairing with a filler also avoids relying on the writer
+    /// widening a single-value group's bounds to `[-0.0, +0.0]`.
+    #[tokio::test]
+    async fn test_bloom_pushdown_float_signed_zero() {
+        const FILLER: f32 = 5.0;
+        let tmp = TempDir::new().unwrap();
+        let path = format!("{}/float_zero.parquet", tmp.path().to_str().unwrap());
+
+        // Row group 0 holds -0.0 and never +0.0; row group 1 the reverse; row group 2
+        // neither zero.
+        write_value_fixture(
+            &path,
+            DataType::Float32,
+            |g| {
+                let zero = match g {
+                    0 => -0.0f32,
+                    1 => 0.0f32,
+                    _ => 7.5f32,
+                };
+                let mut values = vec![zero; ROWS_PER_GROUP as usize - 1];
+                values.push(FILLER);
+                Arc::new(Float32Array::from(values))
+            },
+            true,
+        );
+
+        let schema = value_schema(Type::Primitive(PrimitiveType::Float));
+        let zero_rows = ROWS_PER_GROUP as usize - 1;
+
+        for (label, probe) in [("positive_zero", 0.0f32), ("negative_zero", -0.0f32)] {
+            let (on, _, _) = assert_pushdown_agrees(
+                label,
+                &path,
+                schema.clone(),
+                vec![1],
+                Reference::new("v").equal_to(Datum::float(probe)),
+            )
+            .await;
+            // Only the group holding this exact zero matches, on both paths.
+            assert_eq!(
+                rows(&on),
+                zero_rows,
+                "{label}: expected only the row group holding this zero to match"
+            );
+        }
+    }
+
+    /// A file with no bloom filters at all must read identically with the option on,
+    /// exercising the conservative might-match path end to end.
+    #[tokio::test]
+    async fn test_bloom_pushdown_file_without_bloom_filters() {
+        let tmp = TempDir::new().unwrap();
+        let path = format!("{}/no_filters.parquet", tmp.path().to_str().unwrap());
+        write_value_fixture(&path, DataType::Int32, int_group, false);
+
+        let (on, _, _) = assert_pushdown_agrees(
+            "no_filters",
+            &path,
+            value_schema(Type::Primitive(PrimitiveType::Int)),
+            vec![1],
+            Reference::new("v").equal_to(Datum::int(PRESENT_INT)),
+        )
+        .await;
+        assert_eq!(rows(&on), 1);
     }
 }

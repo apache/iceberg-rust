@@ -1,3 +1,4 @@
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,14 +15,28 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-[engines]
-df = { type = "datafusion" }
+name: "Issue and Pull Request Labeler"
+on:
+  issues:
+    types: [opened, edited]
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
+    types: [opened, edited]
 
-[[steps]]
-engine = "df"
-slt = "df_test/insert_into.slt"
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
 
-[[steps]]
-engine = "df"
-slt = "df_test/like_predicate_pushdown.slt"
+jobs:
+  triage:
+    if: github.repository_owner == 'apache'
+    runs-on: ubuntu-slim
+    steps:
+    - uses: github/issue-labeler@ccca1e16fcb66762200e616fc29b57b940c1cb67 # v3.5
+      with:
+        configuration-path: .github/labeler.yml  # label -> regex rules
+        enable-versioned-regex: 0  # required; 0 = no versioned configs
+        include-title: 1  # match title
+        include-body: 1  # match body (default)
