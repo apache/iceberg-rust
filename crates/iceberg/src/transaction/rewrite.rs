@@ -1213,4 +1213,65 @@ mod tests {
             assert_eq!(totals.get("total-records").unwrap(), "30");
         }
     }
+
+    /// The summary counts and names the partitions a rewrite changed, each
+    /// under its file's own spec: one `identity(ts)` partition lost a file, one
+    /// `day(ts)` partition gained one.
+    #[tokio::test]
+    async fn test_rewrite_files_summarizes_partitions_of_both_specs() {
+        let catalog = new_memory_catalog().await;
+        let (table, _, [old_1, _old_2, _new_1]) =
+            spec_evolved_table_with_files(&catalog, FormatVersion::V2).await;
+        // Fast append reports the partition it changed.
+        let appended = &table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .summary()
+            .additional_properties;
+        assert_eq!(
+            appended.get("changed-partition-count").map(String::as_str),
+            Some("1")
+        );
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_table_properties()
+            .set(
+                "write.summary.partition-limit".to_string(),
+                "10".to_string(),
+            )
+            .apply(tx)
+            .unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let merged = make_file_in_spec("test/merged.parquet", 10, 1, Literal::date(DAY));
+        let tx = Transaction::new(&table);
+        let action = tx.rewrite_files().delete_file(old_1).add_file(merged);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let summary = &table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .summary()
+            .additional_properties;
+        assert_eq!(
+            summary.get("changed-partition-count").map(String::as_str),
+            Some("2"),
+            "{summary:?}"
+        );
+        // The removed file is named under `identity(ts)`, the added one under
+        // `day(ts)`.
+        let mut partitions: Vec<&str> = summary
+            .keys()
+            .filter_map(|k| k.strip_prefix("partitions."))
+            .collect();
+        partitions.sort();
+        assert_eq!(
+            partitions,
+            vec!["ts=2026-08-24+09%3A30%3A00+UTC", "ts_day=2026-08-24"],
+            "{summary:?}"
+        );
+    }
 }

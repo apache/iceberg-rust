@@ -32,7 +32,7 @@ use crate::io::OutputFile;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, ManifestContentType, ManifestEntry, ManifestFile,
     ManifestStatus, ManifestWriter, ManifestWriterBuilder, Operation, PartitionSpec, SchemaRef,
-    SnapshotSummaryCollector, Summary, update_snapshot_summaries,
+    SnapshotSummaryCollector, Summary, TableProperties, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -431,12 +431,19 @@ impl MergingSnapshotProducer {
         let schema = table_metadata.current_schema().clone();
         let partition_spec = table_metadata.default_partition_spec().clone();
 
-        let mut collector = SnapshotSummaryCollector::default();
+        // Add to the filter's collector rather than merging two: `merge` drops
+        // partition metrics unless both sides trust them, and neither does.
+        let mut collector = removed_collector;
+        collector.set_partition_summary_limit(
+            table_metadata
+                .properties()
+                .get(TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT)
+                .and_then(|limit| limit.parse::<u64>().ok())
+                .unwrap_or(TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT),
+        );
         for file in &self.added_data_files {
             collector.add_file(file, schema.clone(), partition_spec.clone());
         }
-        // Merge removal metrics from the filter manager.
-        collector.merge(removed_collector);
 
         let summary = Summary {
             operation: self.operation.clone(),
