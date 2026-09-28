@@ -25,7 +25,8 @@ if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
   echo "Warning: bash ${BASH_VERSION} will not print which step failed. Use bash 4 or newer to see it." >&2
 fi
 
-# Keep this in sync with CARGO_DENY_VERSION in .github/workflows/dependencies.yml.
+# Keep this in sync with the cargo-deny version in the CI lint install step in
+# .github/workflows/ci.yml and the install-cargo-deny target in Makefile.
 # The generated DEPENDENCIES.rust.tsv files are version-sensitive, so the local
 # cargo-deny must match the version CI uses to avoid spurious diffs.
 EXPECTED_CARGO_DENY_VERSION="0.19.9"
@@ -116,7 +117,7 @@ require_cargo_deny() {
   fi
 
   # The TSV output is sensitive to the cargo-deny version: different versions
-  # resolve the dependency graph differently, producing diffs that CI rejects.
+  # resolve the dependency graph differently, producing spurious diffs.
   # Assert the active binary matches the version CI pins so a shadowed or
   # mismatched install fails loudly instead of generating wrong files.
   local actual_version
