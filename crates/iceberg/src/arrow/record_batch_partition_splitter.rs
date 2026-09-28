@@ -19,12 +19,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, RecordBatch, StructArray};
+use arrow_buffer::BooleanBufferBuilder;
 use arrow_select::filter::filter_record_batch;
 
 use super::arrow_struct_to_literal;
 use super::partition_value_calculator::PartitionValueCalculator;
+use crate::Result;
+use crate::error::invalid_data;
 use crate::spec::{Literal, PartitionKey, PartitionSpecRef, SchemaRef, StructType};
-use crate::{Error, ErrorKind, Result};
 
 /// Column name for the projected partition values struct
 pub const PROJECTED_PARTITION_VALUE_COLUMN: &str = "_partition";
@@ -128,9 +130,8 @@ impl RecordBatchPartitionSplitter {
                     if let Some(Literal::Struct(s)) = s {
                         Ok(s)
                     } else {
-                        Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "Partition value is not a struct literal or is null",
+                        Err(invalid_data!(
+                            "Partition value is not a struct literal or is null"
                         ))
                     }
                 })
@@ -140,23 +141,15 @@ impl RecordBatchPartitionSplitter {
             let partition_column = batch
                 .column_by_name(PROJECTED_PARTITION_VALUE_COLUMN)
                 .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Partition column '{PROJECTED_PARTITION_VALUE_COLUMN}' not found in batch"
-                        ),
+                    invalid_data!(
+                        "Partition column '{PROJECTED_PARTITION_VALUE_COLUMN}' not found in batch"
                     )
                 })?;
 
             let partition_struct_array = partition_column
                 .as_any()
                 .downcast_ref::<StructArray>()
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Partition column is not a StructArray",
-                    )
-                })?;
+                .ok_or_else(|| invalid_data!("Partition column is not a StructArray"))?;
 
             let arrow_struct_array = Arc::new(partition_struct_array.clone()) as ArrayRef;
             let struct_array = arrow_struct_to_literal(&arrow_struct_array, &self.partition_type)?;
@@ -167,9 +160,8 @@ impl RecordBatchPartitionSplitter {
                     if let Some(Literal::Struct(s)) = s {
                         Ok(s)
                     } else {
-                        Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "Partition value is not a struct literal or is null",
+                        Err(invalid_data!(
+                            "Partition value is not a struct literal or is null"
                         ))
                     }
                 })
@@ -179,10 +171,10 @@ impl RecordBatchPartitionSplitter {
         // Group the batch by row value.
         let mut group_ids = HashMap::new();
         partition_structs
-            .iter()
+            .into_iter()
             .enumerate()
             .for_each(|(row_id, row)| {
-                group_ids.entry(row.clone()).or_insert(vec![]).push(row_id);
+                group_ids.entry(row).or_insert(vec![]).push(row_id);
             });
 
         // Partition the batch with same partition partition_values
@@ -190,11 +182,12 @@ impl RecordBatchPartitionSplitter {
         for (row, row_ids) in group_ids.into_iter() {
             // generate the bool filter array from column_ids
             let filter_array: BooleanArray = {
-                let mut filter = vec![false; batch.num_rows()];
-                row_ids.into_iter().for_each(|row_id| {
-                    filter[row_id] = true;
-                });
-                filter.into()
+                let mut builder = BooleanBufferBuilder::new(batch.num_rows());
+                builder.append_n(batch.num_rows(), false);
+                for row_id in row_ids {
+                    builder.set_bit(row_id, true);
+                }
+                BooleanArray::new(builder.finish(), None)
             };
 
             // Create PartitionKey from the partition struct

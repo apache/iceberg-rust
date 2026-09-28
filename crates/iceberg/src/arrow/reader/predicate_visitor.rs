@@ -37,11 +37,10 @@ use fnv::FnvHashSet;
 use parquet::schema::types::SchemaDescriptor;
 
 use crate::arrow::get_arrow_datum;
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::expr::visitors::bound_predicate_visitor::BoundPredicateVisitor;
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::Datum;
-use crate::{Error, ErrorKind};
 
 /// A visitor to collect field ids from bound predicates.
 pub(super) struct CollectFieldIdVisitor {
@@ -226,13 +225,10 @@ impl PredicateConverter<'_> {
             self.column_indices
                 .iter()
                 .position(|&idx| idx == *column_idx)
-                .ok_or(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
+                .ok_or(invalid_data!(
                 "Leaf column `{}` in predicates cannot be found in the required column indices.",
                 reference.field().name
-            ),
-                ))?;
+            ))?;
 
             let path: Arc<[String]> = self
                 .parquet_schema
@@ -252,16 +248,27 @@ impl PredicateConverter<'_> {
     /// Build an Arrow predicate that always returns true.
     fn build_always_true(&self) -> Result<Box<PredicateResult>> {
         Ok(Box::new(|batch| {
-            Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+            Ok(constant_bool_array(true, batch.num_rows()))
         }))
     }
 
     /// Build an Arrow predicate that always returns false.
     fn build_always_false(&self) -> Result<Box<PredicateResult>> {
         Ok(Box::new(|batch| {
-            Ok(BooleanArray::from(vec![false; batch.num_rows()]))
+            Ok(constant_bool_array(false, batch.num_rows()))
         }))
     }
+}
+
+/// Builds a non-null `BooleanArray` of `len` elements all set to `value`.
+fn constant_bool_array(value: bool, len: usize) -> BooleanArray {
+    let buffer = if value {
+        BooleanBuffer::new_set(len)
+    } else {
+        BooleanBuffer::new_unset(len)
+    };
+
+    BooleanArray::new(buffer, None)
 }
 
 /// Walks the Parquet column path (root to leaf) through the projected record batch to
@@ -634,7 +641,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
                 // update this if arrow ever adds a native is_in kernel
                 let left = project_column(&batch, &path)?;
 
-                let mut acc = BooleanArray::from(vec![false; batch.num_rows()]);
+                let mut acc = constant_bool_array(false, batch.num_rows());
                 for literal in &literals {
                     let literal = try_cast_literal(literal, left.data_type())?;
                     acc = or(&acc, &eq(&left, literal.as_ref())?)?
@@ -663,7 +670,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native not_in kernel
                 let left = project_column(&batch, &path)?;
-                let mut acc = BooleanArray::from(vec![true; batch.num_rows()]);
+                let mut acc = constant_bool_array(true, batch.num_rows());
                 for literal in &literals {
                     let literal = try_cast_literal(literal, left.data_type())?;
                     acc = and(&acc, &neq(&left, literal.as_ref())?)?
@@ -709,7 +716,7 @@ mod tests {
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
 
-    use super::{CollectFieldIdVisitor, PredicateConverter};
+    use super::{CollectFieldIdVisitor, PredicateConverter, constant_bool_array};
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, Predicate, Reference};
     use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
@@ -785,6 +792,21 @@ mod tests {
         expected.insert(3);
 
         assert_eq!(visitor.field_ids, expected);
+    }
+
+    #[test]
+    fn test_constant_bool_array() {
+        for len in [0, 8192] {
+            let all_true = constant_bool_array(true, len);
+            assert_eq!(all_true.len(), len);
+            assert_eq!(all_true.null_count(), 0);
+            assert!(all_true.iter().all(|v| v == Some(true)));
+
+            let all_false = constant_bool_array(false, len);
+            assert_eq!(all_false.len(), len);
+            assert_eq!(all_false.null_count(), 0);
+            assert!(all_false.iter().all(|v| v == Some(false)));
+        }
     }
 
     fn apply_predicate_to_batch(

@@ -23,7 +23,7 @@ use super::validate_puffin_compression;
 use crate::Result;
 use crate::compression::CompressionCodec;
 use crate::encryption::EncryptedOutputFile;
-use crate::io::{FileWrite, OutputFile};
+use crate::io::{FileMetadata as IoFileMetadata, FileWrite, OutputFile};
 use crate::puffin::blob::Blob;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata, Flag};
 
@@ -117,12 +117,11 @@ impl PuffinWriter {
         Ok(())
     }
 
-    /// Finalizes the Puffin file
-    pub async fn close(mut self) -> Result<()> {
+    /// Finalizes the Puffin file and returns its stored size.
+    pub async fn close(mut self) -> Result<IoFileMetadata> {
         self.write_header_once().await?;
         self.write_footer().await?;
-        self.writer.close().await?;
-        Ok(())
+        self.writer.close().await
     }
 
     async fn write(&mut self, bytes: Bytes) -> Result<()> {
@@ -409,7 +408,7 @@ mod tests {
         for blob in blobs.clone() {
             writer.add(blob, CompressionCodec::None).await.unwrap();
         }
-        writer.close().await.unwrap();
+        let file_metadata = writer.close().await.unwrap();
 
         // The ciphertext on disk must not equal a plaintext puffin file.
         let raw = file_io.new_input(path).unwrap().read().await.unwrap();
@@ -419,8 +418,10 @@ mod tests {
         );
 
         // Read back through the decrypting reader over plaintext offsets.
+        let key_metadata = encrypted_output.key_metadata_with_saved_file_metadata(&file_metadata);
+        assert_eq!(key_metadata.file_length(), Some(raw.len() as u64));
         let encrypted_input =
-            EncryptedInputFile::new(file_io.new_input(path).unwrap(), key_metadata());
+            EncryptedInputFile::new(file_io.new_input(path).unwrap(), key_metadata);
         let reader = PuffinReader::new_from_encrypted(encrypted_input)
             .await
             .unwrap();

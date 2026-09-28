@@ -24,6 +24,8 @@ use std::sync::{Arc, OnceLock};
 use arrow_array::RecordBatch;
 use expect_test::Expect;
 use itertools::Itertools;
+#[cfg(test)]
+use roaring::RoaringTreemap;
 
 use crate::TableIdent;
 #[cfg(test)]
@@ -118,6 +120,19 @@ pub(crate) fn make_encryption_manager(table_key_id: &str) -> Arc<EncryptionManag
             .table_key_id(table_key_id)
             .build(),
     )
+}
+
+/// Encodes a `deletion-vector-v1` Puffin blob for the given positions, matching the framing in
+/// [`DeleteVector::deserialize`](crate::delete_vector::DeleteVector::deserialize).
+#[cfg(test)]
+pub(crate) fn encode_dv_blob(positions: impl IntoIterator<Item = u64>) -> Vec<u8> {
+    let mut bitmap = RoaringTreemap::new();
+    for pos in positions {
+        bitmap.insert(pos);
+    }
+    let mut vector = Vec::new();
+    bitmap.serialize_into(&mut vector).unwrap();
+    crate::delete_vector::frame_dv_blob(&vector)
 }
 
 /// Build a table backed by the V3 encryption fixture and an in-memory KMS,

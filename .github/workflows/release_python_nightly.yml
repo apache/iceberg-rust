@@ -53,7 +53,7 @@ jobs:
           CURRENT=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[0].version')
           echo "pep440=${CURRENT}.dev${TIMESTAMP}" >> $GITHUB_OUTPUT
 
-      - uses: ./.github/actions/overwrite-package-version
+      - uses: $/.github/actions/overwrite-package-version
         with:
           version: ${{ steps.version.outputs.pep440 }}
 
@@ -99,7 +99,7 @@ jobs:
           CURRENT=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[0].version')
           echo "pep440=${CURRENT}.dev${TIMESTAMP}" >> $GITHUB_OUTPUT
 
-      - uses: ./.github/actions/overwrite-package-version
+      - uses: $/.github/actions/overwrite-package-version
         with:
           version: ${{ steps.version.outputs.pep440 }}
 
@@ -109,10 +109,10 @@ jobs:
 
       - name: Get MSRV
         id: get-msrv
-        uses: ./.github/actions/get-msrv
+        uses: $/.github/actions/get-msrv
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
         with:
           rust-version: ${{ steps.get-msrv.outputs.msrv }}
 

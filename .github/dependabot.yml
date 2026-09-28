@@ -21,8 +21,7 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "sunday"
+      interval: "monthly"
     cooldown:
       default-days: 7
     groups:
@@ -37,8 +36,7 @@ updates:
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "sunday"
+      interval: "monthly"
     open-pull-requests-limit: 50
     versioning-strategy: lockfile-only
     ignore:
@@ -58,7 +56,6 @@ updates:
   - package-ecosystem: "uv"
     directory: "/bindings/python"
     schedule:
-      interval: "weekly"
-      day: "sunday"
+      interval: "monthly"
     cooldown:
       default-days: 7
