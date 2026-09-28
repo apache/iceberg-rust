@@ -140,7 +140,9 @@ impl<'a> SnapshotProducer<'a> {
         for data_file in &self.added_data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {
                 return Err(invalid_data!(
-                    "Only data content type is allowed for fast append"
+                    "Only data content type is allowed in added data files, but {} is {:?}",
+                    data_file.file_path,
+                    data_file.content_type()
                 ));
             }
             // Check if the data file partition spec id matches the table default partition spec id.

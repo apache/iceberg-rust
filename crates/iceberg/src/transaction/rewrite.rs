@@ -774,6 +774,32 @@ mod tests {
         );
     }
 
+    /// A delete file handed to `add_file` is rejected: a rewrite replaces data
+    /// files, and the producer validation names the offending file.
+    #[tokio::test]
+    async fn test_rewrite_files_rejects_non_data_content_type() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
+        let table = append_files(&catalog, &table, vec![f1.clone()]).await;
+
+        let mut deletes = make_data_file(&table, "test/1-deletes.parquet", 1, 100);
+        deletes.content = DataContentType::PositionDeletes;
+        let tx = Transaction::new(&table);
+        let action = tx.rewrite_files().delete_file(f1).add_file(deletes);
+        let tx = action.apply(tx).unwrap();
+        let err = tx.commit(&catalog).await.unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string().contains(
+                "Only data content type is allowed in added data files, but test/1-deletes.parquet is PositionDeletes"
+            ),
+            "{err}"
+        );
+    }
+
     /// An added file that is already live in the current snapshot is rejected.
     #[tokio::test]
     async fn test_rewrite_files_rejects_already_referenced_file() {
