@@ -64,7 +64,7 @@ The RC creation script requires a local GPG secret key when artifact signing or 
 
 Install the release tooling used by the local scripts:
 
-- `cargo-deny`
+- `cargo-deny` (install the version CI uses with `make install-cargo-deny`)
 - `docker`
 - `gpg`
 - `svn`
@@ -179,6 +179,7 @@ dev/release/dependencies.sh generate
 ```
 
 Run the following command to verify the licenses meet the project's policy.
+CI already runs this check on every pull request, so it should pass. Running it here confirms the release branch meets the policy.
 
 ```shell
 dev/release/dependencies.sh check

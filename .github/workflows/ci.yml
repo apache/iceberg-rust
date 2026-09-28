@@ -57,9 +57,10 @@ jobs:
 
       - name: Install lint tools
         # Keep versions in sync with the local install targets in Makefile.
+        # dev/release/dependencies.sh also pins the cargo-deny version.
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
-          tool: taplo@0.9.3,cargo-machete@0.7.0
+          tool: taplo@0.9.3,cargo-machete@0.7.0,cargo-deny@0.19.9
 
       - name: Check License Header
         uses: apache/skywalking-eyes/header@a196742f472feaffafea537ce5a2a4c3c53a8de4 # v0.9.0
@@ -78,6 +79,10 @@ jobs:
 
       - name: Check crates package LICENSE and NOTICE
         run: make check-license-notice
+
+      # Runs the same license check as the release process, against the policy in deny.toml.
+      - name: Check dependency licenses
+        run: dev/release/dependencies.sh check
 
       # Trusted publishing cannot create a crate (https://crates.io/docs/trusted-publishing),
       # so a new publishable crate must be reserved on crates.io before it is merged.

@@ -15,6 +15,15 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Dependency license policy. CI checks it on every pull request, and the
+# release scripts check it again before creating a release candidate. See
+# "Dependencies" in CONTRIBUTING.md for what to do when a license is rejected.
+
+[graph]
+# Also check dependencies that only optional features pull in, such as the
+# OpenDAL storage backends. Otherwise cargo-deny only follows default features.
+all-features = true
+
 [licenses]
 allow = [
   "Apache-2.0",
