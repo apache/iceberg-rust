@@ -995,6 +995,16 @@ fn parquet_write_arrow_field(
 ) -> Result<Option<FieldRef>> {
     let data_type = match field.field_type.as_ref() {
         Type::Primitive(PrimitiveType::Unknown) => return Ok(None),
+        Type::Primitive(_) => arrow_field.data_type().clone(),
+        Type::Variant(_) => {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "Field {} has variant type, which is not yet implemented",
+                    field.id
+                ),
+            ));
+        }
         Type::Struct(struct_type) => {
             let DataType::Struct(arrow_fields) = arrow_field.data_type() else {
                 return Err(Error::new(
@@ -1116,7 +1126,6 @@ fn parquet_write_arrow_field(
             );
             DataType::Map(entries_field, *ordered)
         }
-        Type::Primitive(_) | Type::Variant(_) => arrow_field.data_type().clone(),
     };
 
     Ok(Some(Arc::new(
@@ -2953,13 +2962,13 @@ mod tests {
     fn test_parquet_arrow_schema_omits_unknown_struct_fields() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "unknown", PrimitiveType::Unknown.into()).into(),
+                NestedField::optional(1, "unknown", PrimitiveType::Unknown).into(),
                 NestedField::optional(
                     2,
                     "struct",
                     Type::Struct(StructType::new(vec![
-                        NestedField::optional(3, "unknown", PrimitiveType::Unknown.into()).into(),
-                        NestedField::optional(4, "known", PrimitiveType::Int.into()).into(),
+                        NestedField::optional(3, "unknown", PrimitiveType::Unknown).into(),
+                        NestedField::optional(4, "known", PrimitiveType::Int).into(),
                     ])),
                 )
                 .into(),
@@ -2981,12 +2990,12 @@ mod tests {
     fn test_parquet_arrow_schema_rejects_empty_struct() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "known", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1, "known", PrimitiveType::Int).into(),
                 NestedField::optional(
                     2,
                     "empty_struct",
                     Type::Struct(StructType::new(vec![
-                        NestedField::optional(3, "unknown", PrimitiveType::Unknown.into()).into(),
+                        NestedField::optional(3, "unknown", PrimitiveType::Unknown).into(),
                     ])),
                 )
                 .into(),
@@ -2994,11 +3003,38 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(
-            schema_to_arrow_schema_for_parquet_write(&schema)
-                .unwrap_err()
-                .message()
-                .contains("struct field 2")
+        let err = schema_to_arrow_schema_for_parquet_write(&schema)
+            .expect_err("conversion must fail when a struct has no physical fields");
+        assert_eq!(
+            err.message(),
+            "Cannot write struct field 2 with no Parquet physical fields"
+        );
+    }
+
+    #[test]
+    fn test_parquet_arrow_schema_rejects_empty_schema() {
+        let schema = Schema::builder().build().unwrap();
+        let err = schema_to_arrow_schema_for_parquet_write(&schema)
+            .expect_err("conversion must fail when a schema has no fields");
+        assert_eq!(
+            err.message(),
+            "Cannot write a schema with no Parquet physical fields"
+        );
+    }
+
+    #[test]
+    fn test_parquet_arrow_schema_rejects_variant() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "variant", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+        let err = schema_to_arrow_schema_for_parquet_write(&schema)
+            .expect_err("variant Parquet writes are not supported");
+        assert_eq!(
+            err.message(),
+            "Field 1 has variant type, which is not yet implemented"
         );
     }
 
@@ -3006,16 +3042,16 @@ mod tests {
     fn test_parquet_arrow_schema_rejects_all_unknown_fields() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "unknown", PrimitiveType::Unknown.into()).into(),
+                NestedField::optional(1, "unknown", PrimitiveType::Unknown).into(),
             ])
             .build()
             .unwrap();
 
-        assert!(
-            schema_to_arrow_schema_for_parquet_write(&schema)
-                .unwrap_err()
-                .message()
-                .contains("no Parquet physical fields")
+        let err = schema_to_arrow_schema_for_parquet_write(&schema)
+            .expect_err("conversion must fail when every field is unknown");
+        assert_eq!(
+            err.message(),
+            "Cannot write a schema with no Parquet physical fields"
         );
     }
 
@@ -3027,18 +3063,18 @@ mod tests {
                     1,
                     "list",
                     Type::List(ListType::new(
-                        NestedField::optional(2, "element", PrimitiveType::Unknown.into()).into(),
+                        NestedField::list_element(2, PrimitiveType::Unknown, false).into(),
                     )),
                 )
                 .into(),
             ])
             .build()
             .unwrap();
-        assert!(
-            schema_to_arrow_schema_for_parquet_write(&list_schema)
-                .unwrap_err()
-                .message()
-                .contains("list element")
+        let err = schema_to_arrow_schema_for_parquet_write(&list_schema)
+            .expect_err("conversion must fail for an unknown list element");
+        assert_eq!(
+            err.message(),
+            "Cannot write list element 2 with no Parquet physical fields"
         );
 
         let list_of_empty_struct_schema = Schema::builder()
@@ -3047,13 +3083,12 @@ mod tests {
                     1,
                     "list",
                     Type::List(ListType::new(
-                        NestedField::optional(
+                        NestedField::list_element(
                             2,
-                            "element",
                             Type::Struct(StructType::new(vec![
-                                NestedField::optional(3, "unknown", PrimitiveType::Unknown.into())
-                                    .into(),
+                                NestedField::optional(3, "unknown", PrimitiveType::Unknown).into(),
                             ])),
+                            false,
                         )
                         .into(),
                     )),
@@ -3062,11 +3097,11 @@ mod tests {
             ])
             .build()
             .unwrap();
-        assert!(
-            schema_to_arrow_schema_for_parquet_write(&list_of_empty_struct_schema)
-                .unwrap_err()
-                .message()
-                .contains("struct field 2")
+        let err = schema_to_arrow_schema_for_parquet_write(&list_of_empty_struct_schema)
+            .expect_err("conversion must fail for a list of empty structs");
+        assert_eq!(
+            err.message(),
+            "Cannot write struct field 2 with no Parquet physical fields"
         );
 
         let map_schema = Schema::builder()
@@ -3075,20 +3110,19 @@ mod tests {
                     1,
                     "map",
                     Type::Map(MapType::new(
-                        NestedField::map_key_element(2, PrimitiveType::String.into()).into(),
-                        NestedField::map_value_element(3, PrimitiveType::Unknown.into(), false)
-                            .into(),
+                        NestedField::map_key_element(2, PrimitiveType::String).into(),
+                        NestedField::map_value_element(3, PrimitiveType::Unknown, false).into(),
                     )),
                 )
                 .into(),
             ])
             .build()
             .unwrap();
-        assert!(
-            schema_to_arrow_schema_for_parquet_write(&map_schema)
-                .unwrap_err()
-                .message()
-                .contains("map value")
+        let err = schema_to_arrow_schema_for_parquet_write(&map_schema)
+            .expect_err("conversion must fail for an unknown map value");
+        assert_eq!(
+            err.message(),
+            "Cannot write map value 3 with no Parquet physical fields"
         );
     }
 
