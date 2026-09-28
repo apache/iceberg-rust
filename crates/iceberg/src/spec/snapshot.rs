@@ -25,9 +25,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
-use crate::error::{Result, timestamp_ms_to_utc};
+use crate::error::{Result, invalid_data, timestamp_ms_to_utc};
 use crate::spec::{SchemaId, SchemaRef, TableMetadata};
-use crate::{Error, ErrorKind};
 
 /// The ref name of the main branch of the table.
 pub const MAIN_BRANCH: &str = "main";
@@ -172,12 +171,7 @@ impl Snapshot {
         Ok(match self.schema_id() {
             Some(schema_id) => table_metadata
                 .schema_by_id(schema_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Schema with id {schema_id} not found"),
-                    )
-                })?
+                .ok_or_else(|| invalid_data!("Schema with id {schema_id} not found"))?
                 .clone(),
             None => table_metadata.current_schema().clone(),
         })
@@ -234,9 +228,10 @@ pub(super) mod _serde {
     use serde::{Deserialize, Serialize};
 
     use super::{Operation, Snapshot, Summary};
+    use crate::Error;
+    use crate::error::invalid_data;
     use crate::spec::SchemaId;
     use crate::spec::snapshot::SnapshotRowRange;
-    use crate::{Error, ErrorKind};
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]
@@ -381,15 +376,13 @@ pub(super) mod _serde {
                 manifest_list: match (v1.manifest_list, v1.manifests) {
                     (Some(file), None) => file,
                     (Some(_), Some(_)) => {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "Invalid v1 snapshot, when manifest list provided, manifest files should be omitted",
+                        return Err(invalid_data!(
+                            "Invalid v1 snapshot, when manifest list provided, manifest files should be omitted"
                         ));
                     }
                     (None, _) => {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "Unsupported v1 snapshot, only manifest list is supported",
+                        return Err(invalid_data!(
+                            "Unsupported v1 snapshot, only manifest list is supported"
                         ));
                     }
                 },

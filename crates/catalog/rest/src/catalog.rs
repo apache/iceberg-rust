@@ -128,8 +128,12 @@ impl RestCatalogBuilder {
         self
     }
 
-    /// Injects a custom auth manager, overriding the `rest.auth.type` configuration.
-    pub fn with_auth_manager(mut self, auth_manager: Arc<dyn AuthManager>) -> Self {
+    /// Sets a custom auth manager, overriding the `rest.auth.type` configuration.
+    ///
+    /// The builder takes ownership of the manager. The loaded catalog shares it
+    /// across authentication sessions and requests.
+    pub fn with_auth_manager<M>(mut self, auth_manager: M) -> Self
+    where M: AuthManager + 'static {
         self.inner = self.inner.with_auth_manager(auth_manager);
         self
     }
@@ -547,7 +551,7 @@ impl RestCatalog {
     fn new(
         context: SessionContext,
         config: RestCatalogConfig,
-        auth_manager: Option<Arc<dyn AuthManager>>,
+        auth_manager: Option<Box<dyn AuthManager>>,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
         kms_client: Option<Arc<dyn KeyManagementClient>>,
@@ -706,13 +710,13 @@ impl RestSessionCatalog {
     /// Creates a `RestSessionCatalog` from a [`RestCatalogConfig`].
     fn new(
         config: RestCatalogConfig,
-        auth_manager: Option<Arc<dyn AuthManager>>,
+        auth_manager: Option<Box<dyn AuthManager>>,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
         kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Self {
         Self {
-            auth_manager,
+            auth_manager: auth_manager.map(Arc::from),
             user_config: config,
             client: OnceCell::new(),
             storage_factory,
@@ -1489,7 +1493,7 @@ impl SessionCatalog for RestSessionCatalog {
 #[derive(Debug)]
 pub struct RestSessionCatalogBuilder {
     config: RestCatalogConfig,
-    auth_manager: Option<Arc<dyn AuthManager>>,
+    auth_manager: Option<Box<dyn AuthManager>>,
     storage_factory: Option<Arc<dyn StorageFactory>>,
     kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
@@ -1521,9 +1525,13 @@ impl RestSessionCatalogBuilder {
         self
     }
 
-    /// Injects a custom auth manager, overriding the `rest.auth.type` configuration.
-    pub fn with_auth_manager(mut self, auth_manager: Arc<dyn AuthManager>) -> Self {
-        self.auth_manager = Some(auth_manager);
+    /// Sets a custom auth manager, overriding the `rest.auth.type` configuration.
+    ///
+    /// The builder takes ownership of the manager. The loaded catalog shares it
+    /// across authentication sessions and requests.
+    pub fn with_auth_manager<M>(mut self, auth_manager: M) -> Self
+    where M: AuthManager + 'static {
+        self.auth_manager = Some(Box::new(auth_manager));
         self
     }
 
@@ -1676,14 +1684,18 @@ mod tests {
     use crate::request::HttpRequest;
 
     fn test_catalog(config: RestCatalogConfig) -> RestSessionCatalog {
-        test_catalog_with(config, None)
+        RestSessionCatalog::new(config, None, None, Runtime::current(), None)
     }
 
-    fn test_catalog_with(
-        config: RestCatalogConfig,
-        auth_manager: Option<Arc<dyn AuthManager>>,
-    ) -> RestSessionCatalog {
-        RestSessionCatalog::new(config, auth_manager, None, Runtime::current(), None)
+    fn test_catalog_with<M>(config: RestCatalogConfig, auth_manager: M) -> RestSessionCatalog
+    where M: AuthManager + 'static {
+        RestSessionCatalog::new(
+            config,
+            Some(Box::new(auth_manager)),
+            None,
+            Runtime::current(),
+            None,
+        )
     }
 
     fn test_client() -> HttpClient {
@@ -2410,7 +2422,7 @@ mod tests {
         let catalog = RestCatalog::new(
             SessionContext::empty(),
             RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(manager)),
+            Some(Box::new(manager)),
             Some(Arc::new(LocalFsStorageFactory)),
             Runtime::current(),
             None,
@@ -2587,7 +2599,7 @@ mod tests {
                     "tok-user".to_string(),
                 )]))
                 .build(),
-            Some(Arc::new(CapturingManager(captured.clone()))),
+            Some(Box::new(CapturingManager(captured.clone()))),
             Some(Arc::new(LocalFsStorageFactory)),
             Runtime::current(),
             None,
@@ -2659,7 +2671,7 @@ mod tests {
                 .uri(server.url())
                 .warehouse("client-wh".to_string())
                 .build(),
-            Some(Arc::new(CapturingManager(captured.clone()))),
+            Some(Box::new(CapturingManager(captured.clone()))),
             Some(Arc::new(LocalFsStorageFactory)),
             Runtime::current(),
             None,
@@ -2691,7 +2703,7 @@ mod tests {
                 .uri(server.url())
                 .warehouse("client-wh".to_string())
                 .build(),
-            Some(Arc::new(CapturingManager(captured.clone()))),
+            Some(Box::new(CapturingManager(captured.clone()))),
             Some(Arc::new(LocalFsStorageFactory)),
             Runtime::current(),
             None,
@@ -2767,7 +2779,7 @@ mod tests {
         let catalog = RestCatalog::new(
             SessionContext::empty(),
             RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(GuardManager(dropped.clone()))),
+            Some(Box::new(GuardManager(dropped.clone()))),
             Some(Arc::new(LocalFsStorageFactory)),
             Runtime::current(),
             None,
@@ -2912,7 +2924,7 @@ mod tests {
             .build();
 
         // The unknown auth type is never consulted.
-        let catalog = test_catalog_with(config, Some(Arc::new(StubAuthManager)));
+        let catalog = test_catalog_with(config, StubAuthManager);
         assert!(catalog.resolve_auth_manager().is_ok());
     }
 

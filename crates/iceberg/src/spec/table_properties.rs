@@ -21,12 +21,13 @@ use iceberg_property_macro::properties_view;
 
 use crate::compression::CompressionCodec;
 use crate::encryption::AesKeySize;
-use crate::error::{Error, ErrorKind, Result};
+use crate::error::{Result, invalid_data};
+use crate::spec::NameMapping;
 use crate::util::location::strip_trailing_slash;
 
 fn parse_location_property(path: &str) -> Result<String> {
     if path.is_empty() {
-        return Err(Error::new(ErrorKind::DataInvalid, "path must not be empty"));
+        return Err(invalid_data!("path must not be empty"));
     }
 
     Ok(strip_trailing_slash(path).to_string())
@@ -42,30 +43,22 @@ fn parse_metadata_compression(value: &str) -> Result<CompressionCodec> {
     let lowercase_value = value.to_lowercase();
 
     // Use serde to parse the codec (which has rename_all = "lowercase")
-    let codec: CompressionCodec = serde_json::from_value(serde_json::Value::String(
-        lowercase_value,
-    ))
-    .map_err(|_| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!(
+    let codec: CompressionCodec =
+        serde_json::from_value(serde_json::Value::String(lowercase_value)).map_err(|_| {
+            invalid_data!(
                 "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported.",
                 CompressionCodec::None.name(),
                 CompressionCodec::gzip_default().name()
-            ),
-        )
-    })?;
+            )
+        })?;
 
     // Validate that only None and Gzip are used for metadata
     match codec {
         CompressionCodec::None | CompressionCodec::Gzip(_) => Ok(codec),
-        _ => Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported for metadata files.",
-                CompressionCodec::None.name(),
-                CompressionCodec::gzip_default().name()
-            ),
+        _ => Err(invalid_data!(
+            "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported for metadata files.",
+            CompressionCodec::None.name(),
+            CompressionCodec::gzip_default().name()
         )),
     }
 }
@@ -84,12 +77,9 @@ fn parse_parquet_compression(
         .get(codec_key)
         .map(|value| {
             serde_json::from_value(serde_json::Value::String(value.to_lowercase())).map_err(|_| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Invalid Parquet compression codec: {value}. Supported codecs: \
+                invalid_data!(
+                    "Invalid Parquet compression codec: {value}. Supported codecs: \
                          uncompressed, snappy, gzip, lzo, brotli, lz4, lz4_raw, zstd"
-                    ),
                 )
             })
         })
@@ -99,12 +89,9 @@ fn parse_parquet_compression(
     let level = properties
         .get(level_key)
         .map(|value| {
-            value.parse::<u8>().map_err(|error| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Invalid value for {level_key}: {error}"),
-                )
-            })
+            value
+                .parse::<u8>()
+                .map_err(|error| invalid_data!("Invalid value for {level_key}: {error}"))
         })
         .transpose()?;
 
@@ -336,6 +323,14 @@ pub struct TableProperties {
         getter
     )]
     write_object_storage_partitioned_paths: bool,
+    /// The table's default name mapping, used to assign field ids when reading data files
+    /// that carry no field id metadata. `None` if `schema.name-mapping.default` is not set.
+    #[property(
+        key = Self::PROPERTY_DEFAULT_NAME_MAPPING,
+        default = None,
+        getter
+    )]
+    default_name_mapping: Option<NameMapping>,
 }
 }
 
@@ -431,6 +426,10 @@ impl TableProperties<'_> {
     /// When unset, metadata files default to the `metadata` directory under the table
     /// location.
     pub const PROPERTY_WRITE_METADATA_PATH: &'static str = "write.metadata.path";
+
+    /// Property key for the table's default name mapping, stored as a JSON
+    /// [`NameMapping`] document.
+    pub const PROPERTY_DEFAULT_NAME_MAPPING: &'static str = "schema.name-mapping.default";
 
     /// Compression codec for metadata files (JSON)
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &'static str =
@@ -547,6 +546,7 @@ impl TableProperties<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ErrorKind;
     use crate::compression::CompressionCodec;
 
     #[test]
@@ -1161,5 +1161,50 @@ mod tests {
             let tp = TableProperties::new(&props);
             assert!(tp.write_object_storage_partitioned_paths().unwrap());
         }
+    }
+
+    #[test]
+    fn test_table_properties_default_name_mapping() {
+        // Test unset.
+        let properties = HashMap::new();
+        assert!(
+            TableProperties::new(&properties)
+                .default_name_mapping()
+                .unwrap()
+                .is_none()
+        );
+
+        let properties = HashMap::from([(
+            TableProperties::PROPERTY_DEFAULT_NAME_MAPPING.to_string(),
+            r#"[{"field-id":1,"names":["id","record_id"]}]"#.to_string(),
+        )]);
+        let mapping = TableProperties::new(&properties)
+            .default_name_mapping()
+            .unwrap()
+            .unwrap();
+        assert_eq!(mapping.fields().len(), 1);
+        assert_eq!(mapping.fields()[0].field_id(), Some(1));
+        assert_eq!(mapping.fields()[0].names(), &[
+            "id".to_string(),
+            "record_id".to_string()
+        ]);
+    }
+
+    #[test]
+    fn test_table_properties_malformed_name_mapping() {
+        let properties = HashMap::from([(
+            TableProperties::PROPERTY_DEFAULT_NAME_MAPPING.to_string(),
+            "{ not valid json".to_string(),
+        )]);
+        let error = TableProperties::new(&properties)
+            .default_name_mapping()
+            .unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        // The property key must survive as error context.
+        assert!(
+            format!("{error}").contains(TableProperties::PROPERTY_DEFAULT_NAME_MAPPING),
+            "{error}"
+        );
     }
 }

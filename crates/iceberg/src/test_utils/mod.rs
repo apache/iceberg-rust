@@ -23,12 +23,16 @@
 //! external users. Items only needed within this crate stay `cfg(test)`.
 
 #[cfg(test)]
+mod delete_vector;
+#[cfg(test)]
 mod encryption;
 mod record_batch;
 mod runtime;
 #[cfg(test)]
 pub(crate) mod scan;
 
+#[cfg(test)]
+pub(crate) use delete_vector::encode_dv_blob;
 #[cfg(test)]
 pub(crate) use encryption::{make_encrypted_table, make_encryption_manager};
 pub use record_batch::check_record_batches;
