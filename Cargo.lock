@@ -2946,7 +2946,6 @@ dependencies = [
 name = "iceberg-storage-opendal"
 version = "0.10.1"
 dependencies = [
- "anyhow",
  "async-trait",
  "bytes",
  "cfg-if 1.0.4",

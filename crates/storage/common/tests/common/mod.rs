@@ -243,9 +243,10 @@ pub fn unique_path(harness: &StorageHarness, test_name: &str) -> String {
 
 #[cfg(test)]
 mod endpoint_tests {
-    use super::*;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_endpoint_unreachable_on_closed_port() {

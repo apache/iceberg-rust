@@ -27,6 +27,7 @@ version = { workspace = true }
 categories = ["database"]
 description = "Apache Iceberg Storage Common Test Suite"
 keywords = ["iceberg", "storage"]
+publish = false
 
 [dependencies]
 iceberg = { workspace = true }
