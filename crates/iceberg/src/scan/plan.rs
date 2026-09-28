@@ -46,17 +46,16 @@ pub(crate) async fn plan_tasks(
 
     let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new(runtime.clone());
 
-    let manifest_list = plan_context.get_manifest_list().await?;
-
     // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
     // whose partitions cannot match this
     // scan's filter
-    let manifest_file_contexts = plan_context.build_manifest_file_contexts(
-        manifest_list,
-        manifest_entry_data_ctx_tx,
-        delete_file_idx.clone(),
-        manifest_entry_delete_ctx_tx,
-    )?;
+    let manifest_file_contexts = plan_context
+        .build_manifest_file_contexts(
+            manifest_entry_data_ctx_tx,
+            delete_file_idx.clone(),
+            manifest_entry_delete_ctx_tx,
+        )
+        .await?;
 
     let mut channel_for_manifest_error = file_scan_task_tx.clone();
     let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();

@@ -28,8 +28,8 @@ use crate::scan::{
     ExpressionEvaluatorCache, FileScanTask, ManifestEvaluatorCache, PartitionFilterCache,
 };
 use crate::spec::{
-    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
-    PartitionSpecRef, SchemaRef, SnapshotRef, SortOrderRef, StructType, TableMetadataRef,
+    ManifestContentType, ManifestEntryRef, ManifestFile, NameMapping, PartitionSpecRef, SchemaRef,
+    SnapshotRef, SortOrderRef, StructType, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -184,7 +184,10 @@ impl ManifestEntryContext {
 /// objects that are required to perform a scan file plan.
 #[derive(Debug)]
 pub(crate) struct PlanContext {
-    pub snapshot: SnapshotRef,
+    /// The snapshot to plan against, or `None` for a table that has no
+    /// snapshots yet. Such a table lists no manifests and so plans no files,
+    /// but is still projected and filtered against its current schema.
+    pub snapshot: Option<SnapshotRef>,
 
     pub table_metadata: TableMetadataRef,
     pub snapshot_schema: SchemaRef,
@@ -208,13 +211,6 @@ pub(crate) struct PlanContext {
 }
 
 impl PlanContext {
-    pub(crate) async fn get_manifest_list(&self) -> Result<Arc<ManifestList>> {
-        self.object_cache
-            .as_ref()
-            .get_manifest_list(&self.snapshot, &self.table_metadata)
-            .await
-    }
-
     /// Returns the partition filter for a manifest. See [`PartitionFilterCache::get`] for the
     /// always-true fallback when the manifest's spec cannot be resolved against the scan schema.
     fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
@@ -238,14 +234,27 @@ impl PlanContext {
         Ok(partition_filter)
     }
 
-    pub(crate) fn build_manifest_file_contexts(
+    pub(crate) async fn build_manifest_file_contexts(
         &self,
-        manifest_list: Arc<ManifestList>,
         tx_data: Sender<ManifestEntryContext>,
         delete_file_idx: DeleteFileIndex,
         delete_file_tx: Sender<ManifestEntryContext>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
-        let mut manifest_files = manifest_list.entries().iter().collect::<Vec<_>>();
+        // A table with no snapshots lists no manifests, so the plan is empty.
+        let manifest_list = match self.snapshot.as_ref() {
+            Some(snapshot) => Some(
+                self.object_cache
+                    .get_manifest_list(snapshot, &self.table_metadata)
+                    .await?,
+            ),
+            None => None,
+        };
+
+        let mut manifest_files: Vec<&ManifestFile> = manifest_list
+            .iter()
+            .flat_map(|manifest_list| manifest_list.entries())
+            .collect();
+
         // Sort manifest files to process delete manifests first.
         // This avoids a deadlock where the producer blocks on sending data manifest entries
         // (because the data channel is full) while the delete manifest consumer is waiting

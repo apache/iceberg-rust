@@ -281,33 +281,23 @@ impl<'a> TableScanBuilder<'a> {
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
         let snapshot = match self.snapshot_id {
-            Some(snapshot_id) => self
-                .table
-                .metadata()
-                .snapshot_by_id(snapshot_id)
-                .ok_or_else(|| invalid_data!("Snapshot with id {snapshot_id} not found"))?
-                .clone(),
-            None => {
-                let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
-                    return Ok(TableScan {
-                        batch_size: self.batch_size,
-                        column_names: self.column_names,
-                        file_io: self.table.file_io().clone(),
-                        plan_context: None,
-                        concurrency_limit_data_files: self.concurrency_limit_data_files,
-                        concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
-                        concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
-                        row_group_filtering_enabled: self.row_group_filtering_enabled,
-                        row_selection_enabled: self.row_selection_enabled,
-                        bloom_filter_enabled: self.bloom_filter_enabled,
-                        runtime: self.table.runtime().clone(),
-                    });
-                };
-                current_snapshot_id.clone()
-            }
+            Some(snapshot_id) => Some(
+                self.table
+                    .metadata()
+                    .snapshot_by_id(snapshot_id)
+                    .ok_or_else(|| invalid_data!("Snapshot with id {snapshot_id} not found"))?
+                    .clone(),
+            ),
+            None => self.table.metadata().current_snapshot().cloned(),
         };
 
-        let schema = snapshot.schema(self.table.metadata())?;
+        // A table with no snapshots scans no files, but is still projected and
+        // filtered against its current schema so that an invalid column or
+        // predicate is rejected either way.
+        let schema = match snapshot.as_ref() {
+            Some(snapshot) => snapshot.schema(self.table.metadata())?,
+            None => self.table.metadata().current_schema().clone(),
+        };
         let field_ids =
             collect_scan_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
         let snapshot_bound_predicate =
@@ -351,7 +341,7 @@ impl<'a> TableScanBuilder<'a> {
             batch_size: self.batch_size,
             column_names: self.column_names,
             file_io: self.table.file_io().clone(),
-            plan_context: Some(plan_context),
+            plan_context,
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
@@ -366,10 +356,7 @@ impl<'a> TableScanBuilder<'a> {
 /// Table scan.
 #[derive(Debug)]
 pub struct TableScan {
-    /// A [PlanContext], if this table has at least one snapshot, otherwise None.
-    ///
-    /// If this is None, then the scan contains no rows.
-    plan_context: Option<PlanContext>,
+    plan_context: PlanContext,
     batch_size: Option<usize>,
     file_io: FileIO,
     column_names: Option<Vec<String>>,
@@ -395,12 +382,8 @@ pub struct TableScan {
 impl TableScan {
     /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
-        let Some(plan_context) = self.plan_context.as_ref() else {
-            return Ok(Box::pin(futures::stream::empty()));
-        };
-
         plan_tasks(
-            plan_context,
+            &self.plan_context,
             &self.runtime,
             self.concurrency_limit_manifest_files,
             self.concurrency_limit_manifest_entries,
@@ -434,7 +417,7 @@ impl TableScan {
 
     /// Returns a reference to the snapshot of the table scan.
     pub fn snapshot(&self) -> Option<&SnapshotRef> {
-        self.plan_context.as_ref().map(|x| &x.snapshot)
+        self.plan_context.snapshot.as_ref()
     }
 }
 
@@ -1764,14 +1747,7 @@ pub mod tests {
         let table = TableTestFixture::new().table;
 
         let table_scan = table.scan().build().unwrap();
-        assert!(
-            table_scan
-                .plan_context
-                .as_ref()
-                .unwrap()
-                .name_mapping
-                .is_none()
-        );
+        assert!(table_scan.plan_context.name_mapping.is_none());
     }
 
     #[test]
@@ -1783,8 +1759,6 @@ pub mod tests {
         let table_scan = table.scan().build().unwrap();
         let mapping = table_scan
             .plan_context
-            .as_ref()
-            .unwrap()
             .name_mapping
             .as_ref()
             .expect("name_mapping should be parsed from the table property");
@@ -1956,6 +1930,24 @@ pub mod tests {
         let batch_stream = table.scan().build().unwrap().to_arrow().await.unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
         assert!(batches.is_empty());
+    }
+
+    #[test]
+    fn test_scan_without_any_snapshots_still_validates_projection() {
+        let table = TableTestFixture::new_empty().table;
+
+        table
+            .scan()
+            .select(["x"])
+            .build()
+            .expect("a column of the current schema should be projectable");
+
+        let error = table
+            .scan()
+            .select(["nonexistent"])
+            .build()
+            .expect_err("an absent column should be rejected even with no snapshots");
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
     }
 
     #[tokio::test]
@@ -3265,23 +3257,12 @@ pub mod tests {
                 .build()
                 .unwrap_or_else(|e| panic!("scan of data column `{column_name}` failed: {e}"));
 
-            assert_eq!(
-                table_scan.plan_context.as_ref().unwrap().field_ids.as_ref(),
-                &[2]
-            );
+            assert_eq!(table_scan.plan_context.field_ids.as_ref(), &[2]);
 
             // The default projection (all columns) must resolve to the real field ids
             // too, not shadow the data column with a reserved delete-file id.
             let default_scan = table.scan().build().unwrap();
-            assert_eq!(
-                default_scan
-                    .plan_context
-                    .as_ref()
-                    .unwrap()
-                    .field_ids
-                    .as_ref(),
-                &[1, 2]
-            );
+            assert_eq!(default_scan.plan_context.field_ids.as_ref(), &[1, 2]);
         }
     }
 
