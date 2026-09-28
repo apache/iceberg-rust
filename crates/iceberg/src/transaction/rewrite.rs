@@ -28,12 +28,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::spec::{DataFile, ManifestContentType, Operation};
 use crate::table::Table;
 use crate::transaction::merging::MergingSnapshotProducer;
 use crate::transaction::{ActionCommit, TransactionAction};
-use crate::{Error, ErrorKind};
 
 /// A transaction action that rewrites (replaces) data files.
 ///
@@ -60,7 +59,8 @@ use crate::{Error, ErrorKind};
 /// narrows that to the files being replaced in
 /// `validateNoNewDeletesForDataFiles`; until that exists here the check is
 /// table-wide, so a delete committed to an unrelated partition while the
-/// rewrite ran also fails the commit with [`ErrorKind::DataInvalid`]. So do a
+/// rewrite ran also fails the commit with
+/// [`ErrorKind::DataInvalid`](crate::ErrorKind::DataInvalid). So do a
 /// rewrite planned against a table that had no snapshot yet, and one whose
 /// starting snapshot has since been expired: neither can rule out a delete.
 /// Replan the rewrite against the current table and run it again.
@@ -115,15 +115,13 @@ impl RewriteFilesAction {
 
     fn validate(&self) -> Result<()> {
         if !self.producer.has_deleted_data_files() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Rewrite files requires at least one file to delete",
+            return Err(invalid_data!(
+                "Rewrite files requires at least one file to delete"
             ));
         }
         if !self.producer.has_added_data_files() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Rewrite files requires at least one file to add",
+            return Err(invalid_data!(
+                "Rewrite files requires at least one file to add"
             ));
         }
         Ok(())
@@ -145,19 +143,15 @@ impl RewriteFilesAction {
         // The rewrite was planned against a table without a snapshot, so every
         // snapshot it has now, deletes included, landed after that.
         let Some(starting_snapshot_id) = self.starting_snapshot_id else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot rewrite files: the rewrite was planned against a table with no snapshot, and the table has been committed to since.",
+            return Err(invalid_data!(
+                "Cannot rewrite files: the rewrite was planned against a table with no snapshot, and the table has been committed to since."
             ));
         };
         let Some(starting_snapshot) = table.metadata().snapshot_by_id(starting_snapshot_id) else {
             // Without the starting snapshot there is no sequence number to
             // compare against, so no delete can be ruled out.
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot rewrite files: the starting snapshot {starting_snapshot_id} is no longer in the table, so deletes added since it cannot be ruled out.",
-                ),
+            return Err(invalid_data!(
+                "Cannot rewrite files: the starting snapshot {starting_snapshot_id} is no longer in the table, so deletes added since it cannot be ruled out."
             ));
         };
         let starting_sequence_number = starting_snapshot.sequence_number();
@@ -169,12 +163,9 @@ impl RewriteFilesAction {
         });
 
         match conflict {
-            Some(entry) => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot rewrite files: delete manifest {} was added after the starting snapshot {starting_snapshot_id}.",
-                    entry.manifest_path,
-                ),
+            Some(entry) => Err(invalid_data!(
+                "Cannot rewrite files: delete manifest {} was added after the starting snapshot {starting_snapshot_id}.",
+                entry.manifest_path,
             )),
             None => Ok(()),
         }

@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use uuid::Uuid;
 
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::io::OutputFile;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, ManifestContentType, ManifestEntry, ManifestFile,
@@ -37,7 +37,6 @@ use crate::spec::{
 use crate::table::Table;
 use crate::transaction::ActionCommit;
 use crate::transaction::snapshot::SnapshotProducer;
-use crate::{Error, ErrorKind};
 
 /// Create a manifest writer that handles encryption when available.
 fn new_manifest_writer(
@@ -142,12 +141,9 @@ impl ManifestFilterManager {
                 .metadata()
                 .partition_spec_by_id(manifest_file.partition_spec_id)
                 .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Manifest references unknown partition spec {}",
-                            manifest_file.partition_spec_id,
-                        ),
+                    invalid_data!(
+                        "Manifest references unknown partition spec {}",
+                        manifest_file.partition_spec_id,
                     )
                 })?
                 .clone();
@@ -167,21 +163,15 @@ impl ManifestFilterManager {
                 } else if entry.is_alive() {
                     // Surviving entry — re-emit as EXISTING with original ids preserved.
                     let seq = entry.sequence_number().ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Manifest entry for {} is missing sequence_number",
-                                entry.file_path(),
-                            ),
+                        invalid_data!(
+                            "Manifest entry for {} is missing sequence_number",
+                            entry.file_path(),
                         )
                     })?;
                     let file_seq = entry.file_sequence_number.ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Manifest entry for {} is missing file_sequence_number",
-                                entry.file_path(),
-                            ),
+                        invalid_data!(
+                            "Manifest entry for {} is missing file_sequence_number",
+                            entry.file_path(),
                         )
                     })?;
                     let existing = ManifestEntry::builder()
@@ -240,12 +230,9 @@ impl ManifestFilterManager {
                 .map(String::as_str)
                 .collect();
             if !missing.is_empty() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Failed to find the following files to delete in the current snapshot: {}",
-                        missing.join(", "),
-                    ),
+                return Err(invalid_data!(
+                    "Failed to find the following files to delete in the current snapshot: {}",
+                    missing.join(", "),
                 ));
             }
         }
@@ -321,11 +308,8 @@ impl MergingSnapshotProducer {
         };
         let snapshot_sequence_number = table.metadata().next_sequence_number();
         if sequence_number > snapshot_sequence_number {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Data sequence number {sequence_number} is greater than the snapshot's {snapshot_sequence_number}."
-                ),
+            return Err(invalid_data!(
+                "Data sequence number {sequence_number} is greater than the snapshot's {snapshot_sequence_number}."
             ));
         }
         Ok(())
