@@ -40,3 +40,34 @@ exceptions = [
   { allow = ["MPL-2.0"], crate = "colored" },
   { allow = ["MPL-2.0"], crate = "option-ext" },
 ]
+
+# zstd-sys declares only "MIT/Apache-2.0", covering its Rust wrapper.
+# However, it also includes vendored Zstandard C sources.
+[[licenses.clarify]]
+crate = "zstd-sys"
+# TODO: When workspace upgrades to zstd-sys 2.1 or later,
+# the zstd-sys src and generated buildings will relicense to BSD-3-Clause,
+# removing the first section of the clarification.
+expression = "(MIT OR Apache-2.0) AND BSD-3-Clause AND (GPL-2.0-only OR BSD-3-Clause)"
+license-files = [
+  { path = "LICENSE.Apache-2.0", hash = 0x7b466be4 },
+  { path = "LICENSE.Mit", hash = 0xa237d234 },
+  { path = "LICENSE.BSD-3-Clause", hash = 0xc9f5c4f6 },
+  # BSD-3-Clause of vendored zstd src
+  { path = "zstd/LICENSE", hash = 0x3bfe1fb1 },
+  # GPL-2.0-only of vendored zstd src
+  { path = "zstd/COPYING", hash = 0xeaa66bfd },
+]
+
+# The declared license is inaccurate, as the crate src includes both MIT and BSD-3-Clause licensed code
+# so it is BOTH licenses, not either as originally declared.
+#
+# Note, there's a PR open to address this issue here:
+# https://github.com/dropbox/rust-brotli-decompressor/pull/32
+[[licenses.clarify]]
+crate = "brotli-decompressor"
+expression = "BSD-3-Clause AND MIT"
+license-files = [
+  { path = "LICENSE", hash = 0x1a60a92d }, # BSD-3-Clause
+  # Missing: MIT license, since no license text is included in the crate's repo.
+]

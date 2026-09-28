@@ -134,9 +134,14 @@ git push origin "v0.9.1"
 
 ## Dependencies
 
-Use the dependency helper to update or verify dependency license lists:
+Regenerate each package's `DEPENDENCIES.rust.tsv`:
 
 ```shell
-dev/release/dependencies.sh generate
-dev/release/dependencies.sh check
+dev/release/generate-dependency-tsv-files.sh
+```
+
+Verify that all dependencies meet this project's license policy.
+
+```shell
+python dev/release/licenses.py dependencies check
 ```
