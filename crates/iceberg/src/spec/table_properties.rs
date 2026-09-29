@@ -21,13 +21,13 @@ use iceberg_property_macro::properties_view;
 
 use crate::compression::CompressionCodec;
 use crate::encryption::AesKeySize;
-use crate::error::{Error, ErrorKind, Result};
+use crate::error::{Result, invalid_data};
 use crate::spec::NameMapping;
 use crate::util::location::strip_trailing_slash;
 
 fn parse_location_property(path: &str) -> Result<String> {
     if path.is_empty() {
-        return Err(Error::new(ErrorKind::DataInvalid, "path must not be empty"));
+        return Err(invalid_data!("path must not be empty"));
     }
 
     Ok(strip_trailing_slash(path).to_string())
@@ -43,30 +43,22 @@ fn parse_metadata_compression(value: &str) -> Result<CompressionCodec> {
     let lowercase_value = value.to_lowercase();
 
     // Use serde to parse the codec (which has rename_all = "lowercase")
-    let codec: CompressionCodec = serde_json::from_value(serde_json::Value::String(
-        lowercase_value,
-    ))
-    .map_err(|_| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!(
+    let codec: CompressionCodec =
+        serde_json::from_value(serde_json::Value::String(lowercase_value)).map_err(|_| {
+            invalid_data!(
                 "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported.",
                 CompressionCodec::None.name(),
                 CompressionCodec::gzip_default().name()
-            ),
-        )
-    })?;
+            )
+        })?;
 
     // Validate that only None and Gzip are used for metadata
     match codec {
         CompressionCodec::None | CompressionCodec::Gzip(_) => Ok(codec),
-        _ => Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported for metadata files.",
-                CompressionCodec::None.name(),
-                CompressionCodec::gzip_default().name()
-            ),
+        _ => Err(invalid_data!(
+            "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported for metadata files.",
+            CompressionCodec::None.name(),
+            CompressionCodec::gzip_default().name()
         )),
     }
 }
@@ -85,12 +77,9 @@ fn parse_parquet_compression(
         .get(codec_key)
         .map(|value| {
             serde_json::from_value(serde_json::Value::String(value.to_lowercase())).map_err(|_| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Invalid Parquet compression codec: {value}. Supported codecs: \
+                invalid_data!(
+                    "Invalid Parquet compression codec: {value}. Supported codecs: \
                          uncompressed, snappy, gzip, lzo, brotli, lz4, lz4_raw, zstd"
-                    ),
                 )
             })
         })
@@ -100,12 +89,9 @@ fn parse_parquet_compression(
     let level = properties
         .get(level_key)
         .map(|value| {
-            value.parse::<u8>().map_err(|error| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Invalid value for {level_key}: {error}"),
-                )
-            })
+            value
+                .parse::<u8>()
+                .map_err(|error| invalid_data!("Invalid value for {level_key}: {error}"))
         })
         .transpose()?;
 
@@ -560,6 +546,7 @@ impl TableProperties<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ErrorKind;
     use crate::compression::CompressionCodec;
 
     #[test]

@@ -297,7 +297,11 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             return ROW_GROUP_CANT_MATCH;
         }
 
-        if let Some(lower_bound) = self.min_value(field_id)? {
+        let Some((stats, primitive_type)) = self.stats_and_type_for_field_id(field_id)? else {
+            return ROW_GROUP_MIGHT_MATCH;
+        };
+
+        if let Some(lower_bound) = get_parquet_stat_min_as_datum(&primitive_type, stats)? {
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -307,7 +311,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             }
         }
 
-        if let Some(upper_bound) = self.max_value(field_id)? {
+        if let Some(upper_bound) = get_parquet_stat_max_as_datum(&primitive_type, stats)? {
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -351,7 +355,11 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             ));
         };
 
-        if let Some(lower_bound) = self.min_value(field_id)? {
+        let Some((stats, primitive_type)) = self.stats_and_type_for_field_id(field_id)? else {
+            return ROW_GROUP_MIGHT_MATCH;
+        };
+
+        if let Some(lower_bound) = get_parquet_stat_min_as_datum(&primitive_type, stats)? {
             let PrimitiveLiteral::String(lower_bound) = lower_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
@@ -369,7 +377,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             }
         }
 
-        if let Some(upper_bound) = self.max_value(field_id)? {
+        if let Some(upper_bound) = get_parquet_stat_max_as_datum(&primitive_type, stats)? {
             let PrimitiveLiteral::String(upper_bound) = upper_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
@@ -476,7 +484,11 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             return ROW_GROUP_MIGHT_MATCH;
         }
 
-        if let Some(lower_bound) = self.min_value(field_id)? {
+        let Some((stats, primitive_type)) = self.stats_and_type_for_field_id(field_id)? else {
+            return ROW_GROUP_MIGHT_MATCH;
+        };
+
+        if let Some(lower_bound) = get_parquet_stat_min_as_datum(&primitive_type, stats)? {
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROW_GROUP_MIGHT_MATCH;
@@ -488,7 +500,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             }
         }
 
-        if let Some(upper_bound) = self.max_value(field_id)? {
+        if let Some(upper_bound) = get_parquet_stat_max_as_datum(&primitive_type, stats)? {
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROW_GROUP_MIGHT_MATCH;

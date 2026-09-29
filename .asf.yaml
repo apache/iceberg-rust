@@ -93,6 +93,7 @@ github:
     - c-thiel
     - mbutrovich
     - CTTY
+    - comphead
   ghp_branch: gh-pages
   ghp_path: /
   copilot_code_review:

@@ -112,7 +112,7 @@ site: install-mdbook
 
 # Docker targets for integration tests
 docker-up:
-	docker compose -f dev/docker-compose.yaml up -d --build --wait
+	docker compose -f dev/docker-compose.yaml up -d --build --wait --remove-orphans
 
 docker-down:
 	docker compose -f dev/docker-compose.yaml down -v --remove-orphans --timeout 0

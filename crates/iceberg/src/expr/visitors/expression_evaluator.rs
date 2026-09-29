@@ -280,11 +280,12 @@ mod tests {
             .with_spec_id(1)
             .add_unbound_field(
                 UnboundPartitionField::builder()
-                    .source_id(1)
+                    .source_ids(vec![1])
                     .name("a".to_string())
                     .field_id(1)
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()

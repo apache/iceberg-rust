@@ -26,11 +26,12 @@ use arrow_array::types::{Int32Type, Int64Type};
 use arrow_schema::{DataType, Field, Fields};
 use futures::{StreamExt, stream};
 
+use crate::Result;
 use crate::arrow::schema_to_arrow_schema;
+use crate::error::invalid_data;
 use crate::scan::ArrowRecordBatchStream;
 use crate::spec::{Datum, FieldSummary, ListType, NestedField, PrimitiveType, StructType, Type};
 use crate::table::Table;
-use crate::{Error, ErrorKind, Result};
 
 /// Manifests table.
 pub struct ManifestsTable<'a> {
@@ -185,12 +186,10 @@ impl<'a> ManifestsTable<'a> {
                     .metadata()
                     .partition_spec_by_id(manifest.partition_spec_id)
                     .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Partition spec {} for manifest {} is not in table metadata",
-                                manifest.partition_spec_id, manifest.manifest_path
-                            ),
+                        invalid_data!(
+                            "Partition spec {} for manifest {} is not in table metadata",
+                            manifest.partition_spec_id,
+                            manifest.manifest_path
                         )
                     })?;
                 let spec_struct = spec.partition_type(self.table.metadata().current_schema())?;

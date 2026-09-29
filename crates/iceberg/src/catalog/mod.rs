@@ -42,6 +42,7 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use crate::encryption::kms::KmsClientFactory;
+use crate::error::invalid_data;
 use crate::io::StorageFactory;
 use crate::runtime::Runtime;
 use crate::spec::{
@@ -209,10 +210,7 @@ impl NamespaceIdent {
     /// Create a multi-level namespace identifier from vector.
     pub fn from_vec(names: Vec<String>) -> Result<Self> {
         if names.is_empty() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Namespace identifier can't be empty!",
-            ));
+            return Err(invalid_data!("Namespace identifier can't be empty!"));
         }
         Ok(Self(names))
     }
@@ -322,9 +320,9 @@ impl TableIdent {
     /// Try to create table identifier from an iterator of string.
     pub fn from_strs(iter: impl IntoIterator<Item = impl ToString>) -> Result<Self> {
         let mut vec: Vec<String> = iter.into_iter().map(|s| s.to_string()).collect();
-        let table_name = vec.pop().ok_or_else(|| {
-            Error::new(ErrorKind::DataInvalid, "Table identifier can't be empty!")
-        })?;
+        let table_name = vec
+            .pop()
+            .ok_or_else(|| invalid_data!("Table identifier can't be empty!"))?;
         let namespace_ident = NamespaceIdent::from_vec(vec)?;
 
         Ok(Self {
@@ -1105,8 +1103,8 @@ mod tests {
         PartitionStatisticsFile, PrimitiveType, Schema, Snapshot, SnapshotReference,
         SnapshotRetention, SortDirection, SortField, SortOrder, SqlViewRepresentation,
         StatisticsFile, Summary, TableMetadata, TableMetadataBuilder, Transform, Type,
-        UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations,
-        ViewVersion,
+        UnboundPartitionField, UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation,
+        ViewRepresentations, ViewVersion,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -1661,11 +1659,32 @@ mod tests {
         "#,
             TableUpdate::AddSpec {
                 spec: UnboundPartitionSpec::builder()
-                    .add_partition_field(4, "ts_day".to_string(), Transform::Day)
+                    .add_partition_field(
+                        UnboundPartitionField::builder()
+                            .source_ids(vec![4])
+                            .name("ts_day")
+                            .transform(Transform::Day)
+                            .build()
+                            .unwrap(),
+                    )
                     .unwrap()
-                    .add_partition_field(1, "id_bucket".to_string(), Transform::Bucket(16))
+                    .add_partition_field(
+                        UnboundPartitionField::builder()
+                            .source_ids(vec![1])
+                            .name("id_bucket")
+                            .transform(Transform::Bucket(16))
+                            .build()
+                            .unwrap(),
+                    )
                     .unwrap()
-                    .add_partition_field(2, "id_truncate".to_string(), Transform::Truncate(4))
+                    .add_partition_field(
+                        UnboundPartitionField::builder()
+                            .source_ids(vec![2])
+                            .name("id_truncate")
+                            .transform(Transform::Truncate(4))
+                            .build()
+                            .unwrap(),
+                    )
                     .unwrap()
                     .build(),
             },
