@@ -741,6 +741,8 @@ pub mod tests {
     use crate::util::snapshot::snapshot_id_as_of_time;
     use crate::{ErrorKind, TableIdent};
 
+    const ROWS_PER_FIXTURE_FILE: usize = 1024;
+
     fn render_template(template: &str, ctx: Value) -> String {
         let mut env = Environment::new();
         env.set_auto_escape_callback(|_| AutoEscape::None);
@@ -1324,7 +1326,8 @@ pub mod tests {
                 Arc::new(arrow_schema::Schema::new(fields))
             };
             // x: [1, 1, 1, 1, ...]
-            let col1 = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
+            let col1 =
+                Arc::new(Int64Array::from_iter_values(vec![1; ROWS_PER_FIXTURE_FILE])) as ArrayRef;
 
             let mut values = vec![2; 512];
             values.append(vec![3; 200].as_mut());
@@ -2352,8 +2355,8 @@ pub mod tests {
         assert_eq!(planned_files[0], planned_files[1]);
         assert_eq!(rows[0], vec![100]);
         assert_eq!(rows[0], rows[1]);
-        // Two live fixture files contain 1,024 rows each.
-        assert_eq!(rows[2], vec![1; 2048]);
+        // The current snapshot contains two live fixture files.
+        assert_eq!(rows[2], vec![1; 2 * ROWS_PER_FIXTURE_FILE]);
         assert_eq!(schemas[0], schemas[1]);
         assert_eq!(schemas[0].fields().len(), 1);
         assert_eq!(schemas[2].fields().len(), 8);
