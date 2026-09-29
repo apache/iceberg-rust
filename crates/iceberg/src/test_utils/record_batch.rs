@@ -29,7 +29,7 @@ use itertools::Itertools;
 ///   Check the doc of [`expect_test`] for more details.
 /// - `ignore_check_columns`: Some columns are not stable, so we can skip them.
 /// - `sort_column`: The order of the data might be non-deterministic, so we can sort it by a column.
-pub fn check_record_batches(
+pub(crate) fn check_record_batches(
     record_batches: Vec<RecordBatch>,
     expected_schema: Expect,
     expected_data: Expect,

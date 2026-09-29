@@ -99,8 +99,8 @@ pub use runtime::{JoinHandle, Runtime, RuntimeHandle};
 pub mod arrow;
 pub(crate) mod delete_file_index;
 pub mod encryption;
-#[cfg(any(test, feature = "test-utils"))]
-pub mod test_utils;
+#[cfg(test)]
+mod test_utils;
 pub mod writer;
 
 mod delete_vector;

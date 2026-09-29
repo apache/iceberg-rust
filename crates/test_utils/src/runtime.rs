@@ -15,25 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A shared tokio runtime for tests that build a [`Table`](crate::table::Table).
-//!
-//! Twin of `iceberg_test_utils::test_runtime`, which serves other crates in the
-//! workspace. The two cannot be merged: a dev-dependency links a separate
-//! instance of this crate, so a `Runtime` built there is a distinct type from
-//! `crate::Runtime` here.
+//! A shared tokio runtime for tests that build an [`iceberg::table::Table`].
 
 use std::sync::OnceLock;
 
-use crate::runtime::Runtime;
+use iceberg::Runtime;
 
 /// Returns a process-wide [`Runtime`] suitable for tests that need to construct
-/// a [`Table`](crate::table::Table) outside a tokio context.
+/// a [`Table`](iceberg::table::Table) outside a tokio context.
 ///
 /// The returned [`Runtime`] wraps a single shared multi-thread tokio runtime
 /// that is lazily built on first call and lives until process exit. Cloning is
 /// cheap, so test code can call this every time it needs a runtime to feed
-/// into [`TableBuilder::runtime`](crate::table::TableBuilder::runtime).
-pub(crate) fn test_runtime() -> Runtime {
+/// into [`TableBuilder::runtime`](iceberg::table::TableBuilder::runtime).
+pub fn test_runtime() -> Runtime {
     static TOKIO_RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     let tokio_rt = TOKIO_RT.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()

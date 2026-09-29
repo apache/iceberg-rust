@@ -15,25 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Test utilities.
+//! Test utilities for this crate's own tests.
 //!
-//! Compiled under `cfg(test)`, or behind the `test-utils` feature for other
-//! crates in this workspace that need these fixtures from their own tests.
-//! Not public API: it is subject to change and is not intended to be used by
-//! external users. Items only needed within this crate stay `cfg(test)`.
+//! Compiled under `cfg(test)` only, so nothing here is public API. Fixtures
+//! that other crates in the workspace need from their own tests live in the
+//! `iceberg_test_utils` crate instead.
 
-#[cfg(test)]
 mod delete_vector;
-#[cfg(test)]
 mod encryption;
 mod record_batch;
 mod runtime;
-#[cfg(test)]
 pub(crate) mod scan;
 
-#[cfg(test)]
 pub(crate) use delete_vector::encode_dv_blob;
-#[cfg(test)]
 pub(crate) use encryption::{make_encrypted_table, make_encryption_manager};
-pub use record_batch::check_record_batches;
-pub use runtime::test_runtime;
+pub(crate) use record_batch::check_record_batches;
+pub(crate) use runtime::test_runtime;

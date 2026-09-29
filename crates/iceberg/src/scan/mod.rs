@@ -654,7 +654,6 @@ pub(crate) struct BoundPredicates {
 #[cfg(test)]
 mod tests {
     //! shared tests for the table scan API
-    #![allow(missing_docs)]
 
     use std::collections::HashMap;
     use std::sync::Arc;

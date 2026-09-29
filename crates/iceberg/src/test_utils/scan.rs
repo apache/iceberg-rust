@@ -58,7 +58,7 @@ fn render_template(template: &str, ctx: Value) -> String {
 /// Asserts every row of the `_last_updated_sequence_number` column across all
 /// batches equals `expected` (or is null when `expected` is `None`), decoding
 /// the logical value independent of the physical (run-end) encoding.
-pub fn assert_last_updated_seq_all(batches: &[RecordBatch], expected: Option<i64>) {
+pub(crate) fn assert_last_updated_seq_all(batches: &[RecordBatch], expected: Option<i64>) {
     use arrow_cast::cast;
     use arrow_schema::DataType;
     for batch in batches {
@@ -74,14 +74,14 @@ pub fn assert_last_updated_seq_all(batches: &[RecordBatch], expected: Option<i64
     }
 }
 
-pub struct TableTestFixture {
-    pub table_location: String,
-    pub table: Table,
+pub(crate) struct TableTestFixture {
+    pub(crate) table_location: String,
+    pub(crate) table: Table,
 }
 
 impl TableTestFixture {
     #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().join("table1");
         let manifest_list1_location = table_location.join("metadata/manifests_list_1.avro");
@@ -121,7 +121,7 @@ impl TableTestFixture {
     }
 
     #[allow(clippy::new_without_default)]
-    pub fn new_empty() -> Self {
+    pub(crate) fn new_empty() -> Self {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().join("table1");
         let table_metadata1_location = table_location.join("metadata/v1.json");
@@ -159,7 +159,7 @@ impl TableTestFixture {
     /// Creates a fixture with 5 snapshots chained as:
     ///   S1 (root) -> S2 -> S3 -> S4 -> S5 (current)
     /// Useful for testing snapshot history traversal.
-    pub fn new_with_deep_history() -> Self {
+    pub(crate) fn new_with_deep_history() -> Self {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().join("table1");
         let table_metadata1_location = table_location.join("metadata/v1.json");
@@ -190,7 +190,7 @@ impl TableTestFixture {
         }
     }
 
-    pub fn new_unpartitioned() -> Self {
+    pub(crate) fn new_unpartitioned() -> Self {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().join("table1");
         let manifest_list1_location = table_location.join("metadata/manifests_list_1.avro");
@@ -236,7 +236,7 @@ impl TableTestFixture {
         }
     }
 
-    pub fn new_with_partition_evolution() -> Self {
+    pub(crate) fn new_with_partition_evolution() -> Self {
         let table = Self::new().table;
         let table_location = table.metadata().location.clone();
 
@@ -278,7 +278,7 @@ impl TableTestFixture {
             .unwrap()
     }
 
-    pub async fn setup_manifest_files(&mut self) {
+    pub(crate) async fn setup_manifest_files(&mut self) {
         let current_snapshot = self.table.metadata().current_snapshot().unwrap();
         let parent_snapshot = current_snapshot
             .parent_snapshot(self.table.metadata())
@@ -386,7 +386,7 @@ impl TableTestFixture {
     /// Writes a v3 data manifest with a manifest-level `first_row_id` of 42,
     /// so live entries inherit a per-file `first_row_id` on read. Upgrades the
     /// table to v3 first, so the manifest list is read as v3.
-    pub async fn setup_v3_manifest_files(&mut self) {
+    pub(crate) async fn setup_v3_manifest_files(&mut self) {
         let metadata = TableMetadataBuilder::new_from_metadata(
             self.table.metadata().clone(),
             self.table.metadata_location().map(str::to_string),
@@ -461,7 +461,7 @@ impl TableTestFixture {
         manifest_list_write.close().await.unwrap();
     }
 
-    pub async fn setup_manifest_files_with_partition_evolution(&mut self) {
+    pub(crate) async fn setup_manifest_files_with_partition_evolution(&mut self) {
         let current_snapshot = self.table.metadata().current_snapshot().unwrap();
         let parent_snapshot = current_snapshot
             .parent_snapshot(self.table.metadata())
@@ -692,7 +692,7 @@ impl TableTestFixture {
             .len()
     }
 
-    pub async fn setup_unpartitioned_manifest_files(&mut self) {
+    pub(crate) async fn setup_unpartitioned_manifest_files(&mut self) {
         let current_snapshot = self.table.metadata().current_snapshot().unwrap();
         let parent_snapshot = current_snapshot
             .parent_snapshot(self.table.metadata())
@@ -805,7 +805,7 @@ impl TableTestFixture {
         manifest_list_write.close().await.unwrap();
     }
 
-    pub async fn setup_deadlock_manifests(&mut self) {
+    pub(crate) async fn setup_deadlock_manifests(&mut self) {
         let current_snapshot = self.table.metadata().current_snapshot().unwrap();
         let _parent_snapshot = current_snapshot
             .parent_snapshot(self.table.metadata())
@@ -907,7 +907,7 @@ impl TableTestFixture {
     ///
     /// Used to exercise the `_pos` metadata column through the real `TableScan`
     /// planning path across row-group boundaries and (optionally) positional deletes.
-    pub async fn setup_multi_row_group_manifest(&mut self, delete_positions: &[i64]) {
+    pub(crate) async fn setup_multi_row_group_manifest(&mut self, delete_positions: &[i64]) {
         let current_snapshot = self.table.metadata().current_snapshot().unwrap();
         let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
         let current_partition_spec = self.table.metadata().default_partition_spec();
@@ -1008,7 +1008,7 @@ impl TableTestFixture {
     /// = 100, 200, 300), each with the given `sort_order_id` set on its `DataFile`
     /// (`None` leaves the field unset). Used to test how `sort_order_id` resolution
     /// against the table's sort orders flows into each entry's `FileScanTask`.
-    pub async fn setup_manifest_files_with_sort_order_ids(
+    pub(crate) async fn setup_manifest_files_with_sort_order_ids(
         &mut self,
         sort_order_ids: [Option<i32>; 4],
     ) {
