@@ -250,8 +250,10 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
     }
 }
 
-/// Dispatch a field: fold it into a variant when it carries the
-/// `arrow.parquet.variant` extension type, otherwise visit its data type.
+/// Dispatch a field, and fold it into following extension types when carried:
+///  - `arrow.parquet.variant` -- fold into a variant,
+///  - `arrow.uuid` -- fold it into a UUID type,
+///  - and in all other cases we visit it's data.
 fn visit_field<V: ArrowSchemaVisitor>(field: &FieldRef, visitor: &mut V) -> Result<V::T> {
     if field.extension_type_name() == Some(VariantExtensionType::NAME) {
         visitor.variant(field)
