@@ -1655,6 +1655,83 @@ mod tests {
         assert_eq!(ids, vec![1, 3]);
     }
 
+    /// A predicate that references two leaves of the same struct
+    /// (`person.age > 25 AND person.score < 250`) makes `ProjectionMask::leaves` project the
+    /// struct with more than one child, so `project_column` must find each child by name and
+    /// not by position. The other nested tests project a single child per struct, where the
+    /// lookup always lands on index 0 and would still pass if the child were taken positionally.
+    #[tokio::test]
+    async fn test_predicate_on_two_leaves_of_same_struct() {
+        use arrow_array::StructArray;
+        use arrow_schema::Fields;
+
+        use crate::spec::StructType;
+
+        // id: int (1), person: optional struct<age: required int (3), score: optional int (4)> (2)
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        2,
+                        "person",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(3, "age", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                            NestedField::optional(4, "score", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let age_field = field_with_id("age", DataType::Int32, 3);
+        let score_field = Field::new("score", DataType::Int32, true).with_metadata(HashMap::from(
+            [(PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string())],
+        ));
+        let person_field = Field::new(
+            "person",
+            DataType::Struct(Fields::from(vec![age_field.clone(), score_field.clone()])),
+            true,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "2".to_string(),
+        )]));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            field_with_id("id", DataType::Int32, 1),
+            person_field,
+        ]));
+
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef;
+        let person = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(age_field),
+                Arc::new(Int32Array::from(vec![30, 10, 40, 50, 20, 35])) as ArrayRef,
+            ),
+            (
+                Arc::new(score_field),
+                Arc::new(Int32Array::from(vec![100, 300, 300, 200, 50, 240])) as ArrayRef,
+            ),
+        ])) as ArrayRef;
+
+        // age > 25 AND score < 250. If project_column took the child positionally instead of by
+        // name, the score comparison would read `age` and keep id=3 too (age 40, score 300).
+        let ids = ids_kept_by_predicate(
+            iceberg_schema,
+            arrow_schema,
+            vec![id, person],
+            Reference::new("person.age")
+                .greater_than(Datum::int(25))
+                .and(Reference::new("person.score").less_than(Datum::int(250))),
+        )
+        .await;
+        assert_eq!(ids, vec![1, 4, 6]);
+    }
+
     /// Fields inside a list or map have no accessor (see `Schema::build_accessors`), so a
     /// predicate referencing one fails at bind time and never reaches the row-filter
     /// conversion. This pins the assumption `project_column` relies on: every predicate
