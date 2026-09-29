@@ -599,10 +599,11 @@ mod tests {
 
     use super::*;
     use crate::spec::{
-        DataContentType, DataFileBuilder, Literal, Manifest, NestedField, PartitionSpec,
-        PrimitiveType, Schema, Transform, Type,
+        DataContentType, DataFileBuilder, Literal, Manifest, ManifestStatus, NestedField,
+        PartitionSpec, PrimitiveType, Schema, Transform, Type,
     };
     use crate::transaction::tests::make_v2_minimal_table;
+    use crate::transaction::{Transaction, TransactionAction};
 
     /// An operation that adds no existing manifests and reports one removed data file.
     struct RemoveOneFileOperation {
@@ -628,6 +629,75 @@ mod tests {
         fn removed_data_files(&self) -> &[(DataFile, SchemaRef, PartitionSpecRef)] {
             &self.removed
         }
+    }
+
+    struct RemoveExistingFileOperation {
+        file_path: String,
+        removed: Vec<(DataFile, SchemaRef, PartitionSpecRef)>,
+    }
+
+    impl SnapshotProduceOperation for RemoveExistingFileOperation {
+        fn operation(&self) -> Operation {
+            Operation::Overwrite
+        }
+
+        async fn delete_entries(&self, _: &SnapshotProducer<'_>) -> Result<Vec<ManifestEntry>> {
+            Ok(vec![])
+        }
+
+        async fn existing_manifest(
+            &mut self,
+            producer: &SnapshotProducer<'_>,
+        ) -> Result<Vec<ManifestFile>> {
+            let snapshot = producer.table.metadata().current_snapshot().unwrap();
+            let manifest_list = producer.table.manifest_list_reader(snapshot).load().await?;
+            // The initial append writes both files into one manifest.
+            assert_eq!(manifest_list.entries().len(), 1);
+
+            let manifest = producer
+                .table
+                .manifest_reader()
+                .read(&manifest_list.entries()[0])
+                .await?;
+            let schema = manifest.metadata().schema().clone();
+            let partition_spec = manifest.metadata().partition_spec().clone();
+            let mut writer = producer.new_manifest_writer(
+                ManifestContentType::Data,
+                schema.clone(),
+                partition_spec.clone(),
+            )?;
+
+            let mut removed = Vec::new();
+            for entry in manifest.entries() {
+                if entry.file_path() == self.file_path && entry.is_alive() {
+                    writer.add_delete_entry(entry.as_ref().clone())?;
+                    removed.push((
+                        entry.data_file().clone(),
+                        schema.clone(),
+                        Arc::new(partition_spec.clone()),
+                    ));
+                } else if entry.is_alive() {
+                    writer.add_existing_entry(entry.as_ref().clone())?;
+                }
+            }
+            assert_eq!(removed.len(), 1);
+
+            let rewritten_manifest = writer.write_manifest_file().await?;
+            self.removed.extend(removed);
+            Ok(vec![rewritten_manifest])
+        }
+
+        fn removed_data_files(&self) -> &[(DataFile, SchemaRef, PartitionSpecRef)] {
+            &self.removed
+        }
+    }
+
+    fn apply_commit(table: Table, mut commit: ActionCommit) -> Table {
+        let mut builder = table.metadata().clone().into_builder(None);
+        for update in commit.take_updates() {
+            builder = update.apply(builder).unwrap();
+        }
+        table.with_metadata(Arc::new(builder.build().unwrap().metadata))
     }
 
     fn data_file(table: &Table, path: &str, record_count: u64) -> DataFile {
@@ -675,6 +745,80 @@ mod tests {
         assert_eq!(properties.get("added-records").unwrap(), "3");
         assert_eq!(properties.get("total-data-files").unwrap(), "0");
         assert_eq!(properties.get("total-records").unwrap(), "1");
+    }
+
+    #[tokio::test]
+    async fn test_partial_overwrite_reports_actual_removed_file() {
+        let table = make_v2_minimal_table();
+        let removed = data_file(&table, "test/removed.parquet", 2);
+        let kept = data_file(&table, "test/kept.parquet", 5);
+        let append = Transaction::new(&table)
+            .fast_append()
+            .add_data_files(vec![removed.clone(), kept]);
+        let initial_commit = Arc::new(append).commit(&table).await.unwrap();
+        let table = apply_commit(table, initial_commit);
+
+        let initial_summary = &table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .summary()
+            .additional_properties;
+        assert_eq!(initial_summary.get("total-data-files").unwrap(), "2");
+        assert_eq!(initial_summary.get("total-records").unwrap(), "7");
+
+        let mut replacement = data_file(&table, "test/replacement.parquet", 3);
+        replacement.file_size_in_bytes = 300;
+        let operation = RemoveExistingFileOperation {
+            file_path: removed.file_path.clone(),
+            removed: vec![],
+        };
+        let commit =
+            SnapshotProducer::new(&table, Uuid::now_v7(), HashMap::new(), vec![replacement])
+                .commit(operation, DefaultManifestProcess)
+                .await
+                .unwrap();
+        let table = apply_commit(table, commit);
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let properties = &snapshot.summary().additional_properties;
+
+        assert_eq!(snapshot.summary().operation, Operation::Overwrite);
+        assert_eq!(properties.get("deleted-data-files").unwrap(), "1");
+        assert_eq!(properties.get("deleted-records").unwrap(), "2");
+        assert_eq!(properties.get("added-data-files").unwrap(), "1");
+        assert_eq!(properties.get("added-records").unwrap(), "3");
+        assert_eq!(properties.get("removed-files-size").unwrap(), "100");
+        assert_eq!(properties.get("added-files-size").unwrap(), "300");
+        assert_eq!(properties.get("total-data-files").unwrap(), "2");
+        assert_eq!(properties.get("total-records").unwrap(), "8");
+        assert_eq!(properties.get("total-files-size").unwrap(), "400");
+
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
+        assert_eq!(manifest_list.entries().len(), 2);
+        let mut statuses = HashMap::new();
+        for manifest_file in manifest_list.entries() {
+            let manifest = table.manifest_reader().read(manifest_file).await.unwrap();
+            for entry in manifest.entries() {
+                assert!(
+                    statuses
+                        .insert(entry.file_path().to_string(), entry.status())
+                        .is_none()
+                );
+            }
+        }
+        assert_eq!(statuses.len(), 3);
+        assert_eq!(
+            statuses.get("test/removed.parquet"),
+            Some(&ManifestStatus::Deleted)
+        );
+        assert_eq!(
+            statuses.get("test/kept.parquet"),
+            Some(&ManifestStatus::Existing)
+        );
+        assert_eq!(
+            statuses.get("test/replacement.parquet"),
+            Some(&ManifestStatus::Added)
+        );
     }
 
     #[tokio::test]
@@ -730,5 +874,57 @@ mod tests {
         assert_eq!(metadata.schema().as_ref(), schema.as_ref());
         assert_eq!(metadata.partition_spec().spec_id(), 3);
         assert_eq!(first.partition_spec_id, 3);
+    }
+
+    #[tokio::test]
+    async fn test_removed_file_summary_uses_the_reported_partition_spec() {
+        let table = make_v2_minimal_table();
+        let metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .set_properties(HashMap::from([(
+                TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT.to_string(),
+                "10".to_string(),
+            )]))
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        let table = table.with_metadata(Arc::new(metadata));
+
+        let reported_schema = table.metadata().current_schema().clone();
+        let reported_spec = Arc::new(
+            PartitionSpec::builder(reported_schema.clone())
+                .with_spec_id(1)
+                .add_partition_field("y", "y", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        let added = data_file(&table, "test/added.parquet", 3);
+        let removed = data_file(&table, "test/removed.parquet", 2);
+        let operation = RemoveOneFileOperation {
+            removed: vec![(removed, reported_schema, reported_spec)],
+        };
+
+        let mut action_commit =
+            SnapshotProducer::new(&table, Uuid::now_v7(), HashMap::new(), vec![added])
+                .commit(operation, DefaultManifestProcess)
+                .await
+                .unwrap();
+
+        let updates = action_commit.take_updates();
+        let TableUpdate::AddSnapshot { snapshot } = &updates[0] else {
+            unreachable!()
+        };
+        let properties = &snapshot.summary().additional_properties;
+
+        let removed_partition = properties
+            .get("partitions.y=300")
+            .expect("removal must be summarized under the reported spec's partition path");
+        assert!(removed_partition.contains("deleted-data-files=1"));
+        assert!(properties.contains_key("partitions.x=300"));
     }
 }
