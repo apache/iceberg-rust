@@ -82,8 +82,8 @@ pub fn ancestors_between(
 /// at or before `timestamp_ms` (milliseconds since the Unix epoch), taking the first
 /// entry on ties.
 ///
-/// PyIceberg selects the last qualifying entry in log order, so results can differ
-/// when timestamps tie or entries are out of order.
+/// This matches Java's ordering. PyIceberg takes the last qualifying log entry,
+/// so ties or out-of-order timestamps can produce different results.
 ///
 /// Returns [`ErrorKind::DataInvalid`] if no matching history exists.
 /// The returned snapshot may have expired, so
