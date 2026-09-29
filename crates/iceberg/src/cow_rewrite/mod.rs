@@ -27,6 +27,14 @@
 //! (the planned snapshot's schema) and must preserve each source file's
 //! partition values; this primitive does not repartition rewritten rows.
 //!
+//! Replacement files deliberately mirror their source file's layout instead of
+//! re-optimizing it — a deliberate divergence from Java's RewriteDataFiles and
+//! Spark DML: they are written in the planned snapshot's schema rather than
+//! promoted to the table's current schema, they keep the source file's
+//! partition spec rather than being repartitioned into the table's default
+//! spec, and they stay unsorted since no sort order is applied. An opt-in
+//! promote-to-current-schema rewrite is left for follow-up work.
+//!
 //! The result carries data files only. A commit adapter consuming these file
 //! lists may remove position delete files and deletion vectors only when they
 //! exclusively reference removed data files. Equality delete files must be
@@ -180,6 +188,18 @@ impl<'a> CowRewriteBuilder<'a> {
     }
 
     /// Plans, reads, rewrites, and writes replacement data files.
+    ///
+    /// # Memory usage
+    ///
+    /// Batches read before a file's first changed batch are buffered so that
+    /// no replacement file is emitted for a source file that turns out
+    /// unchanged. A file that never changes — or whose first change sits at
+    /// its very end — therefore buffers its entire decoded contents in
+    /// memory. Files are processed sequentially, so peak usage is one decoded
+    /// source file at a time, but that can still be several GB for a
+    /// compaction-sized file. A size-capped fallback that starts writing the
+    /// replacement once the buffer crosses a threshold is left for follow-up
+    /// work.
     pub async fn rewrite(self) -> Result<CowRewriteResult> {
         let rewriter = self.rewriter.ok_or_else(|| {
             Error::new(
@@ -236,6 +256,11 @@ impl<'a> CowRewriteBuilder<'a> {
             let mut file_input_rows = 0_u64;
             let mut file_output_rows = 0_u64;
             let mut writer: Option<Box<dyn crate::writer::IcebergWriter>> = None;
+            // Debug-only tripwire for the "preserve partition values"
+            // contract; see `DebugPartitionGuard`.
+            #[cfg(debug_assertions)]
+            let partition_guard =
+                DebugPartitionGuard::new(self.table, &old_data_file, &write_schema)?;
 
             // Planning already cleared the row predicate (see
             // `ManifestEntryContext::into_cow_rewrite_file`), so this task
@@ -267,6 +292,14 @@ impl<'a> CowRewriteBuilder<'a> {
                 if changed {
                     file_changed = true;
                     result.stats.changed_batches += 1;
+                }
+
+                // The guard must see every emitted batch, including ones that
+                // are only buffered into the prefix before the file flips to
+                // changed.
+                #[cfg(debug_assertions)]
+                if let (Some(guard), Some(output)) = (&partition_guard, &rewrite.output) {
+                    guard.check(output)?;
                 }
 
                 // A dropped batch can be the first change. Flush any kept
@@ -371,6 +404,71 @@ fn source_partition_key(
         schema.clone(),
         data_file.partition().clone(),
     ))
+}
+
+/// Debug-only tripwire for the rewriter contract that output batches preserve
+/// the source file's partition values: replacement files record the source
+/// partition verbatim, so a rewriter that mutates a partition-source column
+/// would silently write rows under a partition they do not belong to. Compiled
+/// out in release builds, where per-row partition calculation would be too
+/// expensive for the rewrite hot path.
+#[cfg(debug_assertions)]
+struct DebugPartitionGuard {
+    calculator: crate::arrow::PartitionValueCalculator,
+    partition_type: crate::spec::StructType,
+    expected: crate::spec::Struct,
+}
+
+#[cfg(debug_assertions)]
+impl DebugPartitionGuard {
+    /// Builds a guard for one candidate file, or `None` when the source
+    /// file's partition spec is unpartitioned. Mirrors the spec lookup and
+    /// schema binding of [`source_partition_key`].
+    fn new(
+        table: &Table,
+        data_file: &DataFile,
+        schema: &crate::spec::SchemaRef,
+    ) -> Result<Option<Self>> {
+        let spec = table
+            .metadata()
+            .partition_spec_by_id(data_file.partition_spec_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Missing partition spec {} for COW rewrite source file",
+                        data_file.partition_spec_id
+                    ),
+                )
+            })?;
+        if spec.is_unpartitioned() {
+            return Ok(None);
+        }
+
+        Ok(Some(Self {
+            calculator: crate::arrow::PartitionValueCalculator::try_new(spec, schema)?,
+            partition_type: spec.partition_type(schema)?,
+            expected: data_file.partition().clone(),
+        }))
+    }
+
+    /// Asserts that every row in `output` computes to the source file's
+    /// partition under the source spec.
+    fn check(&self, output: &RecordBatch) -> Result<()> {
+        let partition_array = self.calculator.calculate(output)?;
+        let values = crate::arrow::arrow_struct_to_literal(&partition_array, &self.partition_type)?;
+        for value in values {
+            debug_assert_eq!(
+                value,
+                Some(crate::spec::Literal::Struct(self.expected.clone())),
+                "COW rewriter must preserve the source file's partition values: \
+                 replacement files record the source partition verbatim, so \
+                 mutating a partition-source column writes rows under a \
+                 partition they do not belong to"
+            );
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1441,5 +1539,129 @@ mod tests {
         assert_eq!(ids, vec![1, 2, 3, 4]);
 
         Ok(())
+    }
+
+    /// Mutates the identity-partitioned `value` column while flagging the
+    /// batch as changed — a violation of the partition-preservation contract.
+    /// In debug builds the partition guard must trip instead of letting the
+    /// replacement file record a partition that disagrees with its rows.
+    #[cfg(debug_assertions)]
+    struct MutatePartitionColumn;
+
+    #[cfg(debug_assertions)]
+    impl CowBatchRewriter for MutatePartitionColumn {
+        fn rewrite_batch(&self, batch: RecordBatch) -> Result<CowBatchRewrite> {
+            let values = batch
+                .column_by_name("value")
+                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "missing value column"))?
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "value must be Int32"))?;
+            let updated =
+                Int32Array::from_iter((0..values.len()).map(|row| Some(values.value(row) + 100)));
+            let output = RecordBatch::try_new(batch.schema(), vec![
+                batch.column(0).clone(),
+                Arc::new(updated),
+            ])
+            .map_err(|err| Error::new(ErrorKind::Unexpected, err.to_string()))?;
+
+            Ok(CowBatchRewrite {
+                output: Some(output),
+                changed: true,
+            })
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    #[should_panic(expected = "must preserve the source file's partition values")]
+    async fn cow_rewrite_partition_column_mutation_trips_debug_guard() {
+        let temp_dir = TempDir::new().unwrap();
+        let warehouse = format!("file://{}", temp_dir.path().join("warehouse").display());
+        let catalog = MemoryCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load(
+                "memory",
+                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse)]),
+            )
+            .await
+            .unwrap();
+        let namespace = NamespaceIdent::new("ns".to_string());
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "value", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        let partition_spec = crate::spec::PartitionSpec::builder(Arc::new(schema.clone()))
+            .add_partition_field("value", "value", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        let table = catalog
+            .create_table(
+                &namespace,
+                TableCreation::builder()
+                    .name("partition_guard".to_string())
+                    .schema(schema)
+                    .partition_spec(partition_spec.into_unbound())
+                    .build(),
+            )
+            .await
+            .unwrap();
+
+        // One source file whose rows all sit in the `value=1` partition.
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("value", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+        let batch = RecordBatch::try_new(arrow_schema, vec![
+            Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+            Arc::new(Int32Array::from(vec![1, 1])),
+        ])
+        .unwrap();
+        let partition_key = crate::spec::PartitionKey::new(
+            table.metadata().default_partition_spec().as_ref().clone(),
+            table.metadata().current_schema().clone(),
+            Struct::from_iter([Some(Literal::int(1))]),
+        );
+        let data_files = super::writer::write_replacement_batches(
+            &table,
+            table.metadata().current_schema().clone(),
+            Some(partition_key),
+            futures::stream::iter(vec![Ok(batch)]),
+        )
+        .await
+        .unwrap();
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .add_data_files(data_files)
+            .apply(tx)
+            .unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // The rewriter bumps every `value` by 100, so the output batch
+        // computes to a different partition than the source file records.
+        // The debug guard must panic here; without it the rewrite would
+        // silently commit a replacement file under `value=1` holding rows
+        // with `value=101`.
+        let _ = CowRewriteBuilder::new(&table)
+            .with_rewriter(Arc::new(MutatePartitionColumn))
+            .rewrite()
+            .await;
     }
 }
