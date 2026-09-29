@@ -194,7 +194,7 @@ mod tests {
         DataContentType, DataFileBuilder, DataFileFormat, Datum, FormatVersion, Literal,
         ManifestEntryRef, ManifestFile, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
         NestedField, Operation, PrimitiveType, Schema, SnapshotRef, Struct, Transform, Type,
-        UnboundPartitionSpec,
+        UnboundPartitionField, UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::transaction::tests::{
@@ -1003,7 +1003,14 @@ mod tests {
             .build()
             .unwrap();
         let spec = UnboundPartitionSpec::builder()
-            .add_partition_field(2, "ts", Transform::Identity)
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("ts")
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
         let creation = TableCreation::builder()
@@ -1018,7 +1025,14 @@ mod tests {
     /// Replace `identity(ts)` with `day(ts)` as the default spec.
     async fn evolve_to_day_ts(catalog: &impl Catalog, table: &Table) -> Table {
         let spec = UnboundPartitionSpec::builder()
-            .add_partition_field(2, "ts_day", Transform::Day)
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("ts_day")
+                    .transform(Transform::Day)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
         let commit = TableCommit::builder()
