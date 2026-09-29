@@ -165,12 +165,13 @@ mod tests {
             (&[(1000, S1), (2000, S2)], 3000, S2),
             // Rollback records when an existing snapshot becomes current again.
             (&[(1000, S1), (2000, S2), (3000, S1)], 3500, S1),
-            // The first equal maximum wins; max_by_key would pick S3.
+            // Without Reverse(idx), max_by_key would pick S3 on ties.
             (&[(1000, S1), (2000, S2), (2000, S3)], 2000, S2),
             // Clock skew means the log need not be sorted by timestamp.
             (&[(1000, S1), (3000, S2), (2500, S3)], 3500, S2),
             (&[(1000, S1), (3000, S2), (2500, S3)], 2600, S3),
             (&[(-2000, S1), (-1000, S2)], -1500, S1),
+            // max_by_key accepts i64::MIN; Java's sentinel-based lookup returns no match.
             (&[(i64::MIN, S1), (0, S2)], i64::MIN, S1),
             (&[(0, S1), (i64::MAX, S2)], i64::MAX, S2),
         ];
