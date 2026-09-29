@@ -146,6 +146,10 @@ impl AuthManager for OAuth2Manager {
         Ok(Arc::new(self.session_from(client, props).await?))
     }
 
+    /// Like Java, only a `token` in the table config overrides the parent
+    /// session; a table-level `credential` is ignored. Unlike Java, the token is
+    /// used as-is and never refreshed, and token-type exchange keys are ignored,
+    /// because this manager implements neither token refresh nor token exchange.
     async fn table_session(
         &self,
         _client: &HttpClient,

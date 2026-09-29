@@ -26,7 +26,7 @@ use serde::de::DeserializeOwned;
 
 use crate::auth::{AuthSession, NoopSession};
 use crate::catalog::{
-    REST_CATALOG_PROP_DISABLE_HEADER_REDACTION, RestCatalogConfig, explicit_headers_from_props,
+    RestCatalogConfig, disable_header_redaction_from_props, explicit_headers_from_props,
 };
 use crate::request::HttpRequest;
 use crate::response::HttpResponse;
@@ -165,15 +165,11 @@ impl HttpClient {
         }
         extra_headers.extend(table_headers);
 
-        let disable_header_redaction = props
-            .get(REST_CATALOG_PROP_DISABLE_HEADER_REDACTION)
-            .map(|value| value.eq_ignore_ascii_case("true"))
-            .unwrap_or(self.disable_header_redaction);
-
         Ok(Self {
             client: self.client.clone(),
             extra_headers,
-            disable_header_redaction,
+            disable_header_redaction: disable_header_redaction_from_props(props)
+                .unwrap_or(self.disable_header_redaction),
             auth_session,
         })
     }

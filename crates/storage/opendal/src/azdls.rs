@@ -36,8 +36,7 @@ use reqsign_core::{
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::DynamicCredentialScope;
-use crate::utils::{from_opendal_error, system_time_to_timestamp, validate_credential_prefix};
+use crate::utils::{VendedCredentialSource, from_opendal_error};
 
 /// Local version of `ensure_data_valid` macro since the iceberg crate's macro
 /// uses `$crate::error::Error` paths that don't resolve from external crates
@@ -98,15 +97,24 @@ pub(crate) fn azdls_config_parse(mut properties: HashMap<String, String>) -> Res
 pub struct AzdlsSasTokens(HashMap<String, String>);
 
 impl AzdlsSasTokens {
+    /// Collect `adls.sas-token.<host>` properties by storage account. Like
+    /// Java, keys may name the host (`account.dfs.core.windows.net`) or only
+    /// the account.
     pub(crate) fn from_properties(properties: &HashMap<String, String>) -> Self {
+        let mut tokens = properties
+            .iter()
+            .filter_map(|(key, value)| {
+                let account = sas_token_account(key.strip_prefix(ADLS_SAS_TOKEN_PREFIX)?);
+                (!account.is_empty() && !value.is_empty()).then_some((key, account, value))
+            })
+            .collect::<Vec<_>>();
+        // Deterministic choice when several keys name the same account: the
+        // last, host-keyed one wins.
+        tokens.sort();
         Self(
-            properties
-                .iter()
-                .filter_map(|(key, value)| {
-                    let account = key.strip_prefix(ADLS_SAS_TOKEN_PREFIX)?;
-                    (!account.is_empty() && !value.is_empty())
-                        .then(|| (account.to_string(), value.clone()))
-                })
+            tokens
+                .into_iter()
+                .map(|(_, account, value)| (account.to_string(), value.clone()))
                 .collect(),
         )
     }
@@ -114,6 +122,12 @@ impl AzdlsSasTokens {
     fn for_path(&self, path: &AzureStoragePath) -> Option<&str> {
         self.0.get(&path.account_name).map(String::as_str)
     }
+}
+
+/// The storage account named by the suffix of an account-specific SAS token
+/// property: a host such as `account.dfs.core.windows.net`, or the account.
+fn sas_token_account(suffix: &str) -> &str {
+    suffix.split('.').next().unwrap_or(suffix)
 }
 
 impl std::fmt::Debug for AzdlsSasTokens {
@@ -133,7 +147,7 @@ pub(crate) fn azdls_create_operator<'a>(
     config: &AzdlsConfig,
     sas_tokens: &AzdlsSasTokens,
     credential_provider: &Option<Arc<dyn StorageCredentialProvider>>,
-    credential_scope: Option<&DynamicCredentialScope>,
+    credential_location: Option<&str>,
 ) -> Result<(opendal::Operator, &'a str)> {
     let path = absolute_path.parse::<AzureStoragePath>()?;
     match_path_with_config(&path, config)?;
@@ -144,7 +158,7 @@ pub(crate) fn azdls_create_operator<'a>(
         sas_tokens,
         credential_provider,
         absolute_path,
-        credential_scope,
+        credential_location,
     )?;
 
     // Paths to files in ADLS tend to be written in fully qualified form,
@@ -172,11 +186,18 @@ pub enum AzureStorageScheme {
 }
 
 impl AzureStorageScheme {
-    // Iceberg Java accepts the non-secure aliases for compatibility but still
-    // connects over TLS. SAS tokens are query parameters and must not be sent
-    // over a plaintext connection.
+    /// The HTTP scheme of an endpoint derived from a path.
+    ///
+    /// Iceberg Java accepts the non-secure aliases for compatibility but still
+    /// connects over TLS. SAS tokens are query parameters and must not be sent
+    /// over a plaintext connection unless the user configures such an endpoint.
     pub fn as_http_scheme(&self) -> &str {
         "https"
+    }
+
+    /// Whether an explicitly configured endpoint must use TLS.
+    fn requires_tls(&self) -> bool {
+        matches!(self, AzureStorageScheme::Abfss | AzureStorageScheme::Wasbs)
     }
 }
 
@@ -220,12 +241,13 @@ pub(crate) fn match_path_with_config(path: &AzureStoragePath, config: &AzdlsConf
     }
 
     if let Some(ref configured_endpoint) = config.endpoint {
-        let passed_http_scheme = path.scheme.as_http_scheme();
+        // An explicit plaintext endpoint, such as a local emulator, remains
+        // valid for the non-secure schemes.
         ensure_data_valid!(
-            configured_endpoint.starts_with(passed_http_scheme),
-            "Storage::Azdls: Endpoint {} does not use the expected http scheme {}.",
+            !path.scheme.requires_tls() || configured_endpoint.starts_with("https://"),
+            "Storage::Azdls: Endpoint {} does not use https, which the {} scheme requires.",
             configured_endpoint,
-            passed_http_scheme
+            path.scheme
         );
 
         let ends_with_expected_suffix = configured_endpoint
@@ -248,7 +270,7 @@ fn azdls_config_build(
     sas_tokens: &AzdlsSasTokens,
     credential_provider: &Option<Arc<dyn StorageCredentialProvider>>,
     absolute_path: &str,
-    credential_scope: Option<&DynamicCredentialScope>,
+    credential_location: Option<&str>,
 ) -> Result<opendal::Operator> {
     let mut builder = config.clone().into_builder();
 
@@ -262,10 +284,11 @@ fn azdls_config_build(
         .as_ref()
         .filter(|provider| provider.supports_path(absolute_path));
     if let Some(provider) = credential_provider {
-        let chain = ProvideCredentialChain::new().push(VendedAzdlsCredentialProvider::new(
-            Arc::clone(provider),
-            absolute_path.to_string(),
-            credential_scope.cloned(),
+        let chain = ProvideCredentialChain::new().push(VendedAzdlsCredentialProvider(
+            VendedCredentialSource::new(
+                Arc::clone(provider),
+                credential_location.unwrap_or(absolute_path).to_string(),
+            ),
         ));
         builder = builder.credential_provider_chain(chain);
     } else if let Some(sas_token) = sas_tokens.for_path(path) {
@@ -277,58 +300,15 @@ fn azdls_config_build(
 
 /// Adapts a generic [`StorageCredentialProvider`] into a reqsign
 /// [`ProvideCredential`] for expiring Azure SAS tokens.
-struct VendedAzdlsCredentialProvider {
-    provider: Arc<dyn StorageCredentialProvider>,
-    path: String,
-    credential_scope: Option<DynamicCredentialScope>,
-}
-
-impl VendedAzdlsCredentialProvider {
-    fn new(
-        provider: Arc<dyn StorageCredentialProvider>,
-        path: String,
-        credential_scope: Option<DynamicCredentialScope>,
-    ) -> Self {
-        Self {
-            provider,
-            path,
-            credential_scope,
-        }
-    }
-}
-
-impl std::fmt::Debug for VendedAzdlsCredentialProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VendedAzdlsCredentialProvider")
-            .field("path", &self.path)
-            .field("credential_scope", &self.credential_scope)
-            .finish_non_exhaustive()
-    }
-}
+#[derive(Debug)]
+struct VendedAzdlsCredentialProvider(VendedCredentialSource);
 
 impl ProvideCredential for VendedAzdlsCredentialProvider {
     type Credential = AzureCredential;
 
     async fn provide_credential(&self, _ctx: &Context) -> ReqsignResult<Option<AzureCredential>> {
-        let credential = self
-            .provider
-            .load_credential(&self.path)
-            .await
-            .map_err(|error| {
-                ReqsignError::unexpected("failed to load vended ADLS credential").with_source(error)
-            })?;
-        validate_credential_prefix(
-            &self.path,
-            credential.prefix(),
-            self.credential_scope.as_ref(),
-        )?;
-
-        let expires_at = credential
-            .expires_at()
-            .map(system_time_to_timestamp)
-            .transpose()?;
-        match credential.into_kind() {
-            StorageCredentialKind::Azdls(azdls) => {
+        match self.0.load("ADLS").await? {
+            (StorageCredentialKind::Azdls(azdls), expires_at) => {
                 let sas_token = azdls.into_sas_token();
                 Ok(Some(match expires_at {
                     Some(expires_at) => {
@@ -405,13 +385,12 @@ impl FromStr for AzureStoragePath {
     }
 }
 
-pub(crate) fn azdls_batch_key(absolute_path: &str) -> Option<String> {
-    absolute_path.parse::<AzureStoragePath>().ok().map(|path| {
-        format!(
-            "{}://{}@{}.{}",
-            path.scheme, path.filesystem, path.account_name, path.endpoint_suffix
-        )
-    })
+pub(crate) fn azdls_batch_key(absolute_path: &str) -> Result<String> {
+    let path = absolute_path.parse::<AzureStoragePath>()?;
+    Ok(format!(
+        "{}://{}@{}.{}",
+        path.scheme, path.filesystem, path.account_name, path.endpoint_suffix
+    ))
 }
 
 fn parse_azure_storage_endpoint(url: &Url) -> Result<(&str, &str, &str)> {
@@ -482,7 +461,7 @@ mod tests {
 
     use super::{
         AzdlsSasTokens, AzureStoragePath, AzureStorageScheme, VendedAzdlsCredentialProvider,
-        azdls_batch_key, azdls_config_parse, azdls_create_operator,
+        VendedCredentialSource, azdls_batch_key, azdls_config_parse, azdls_create_operator,
     };
 
     #[derive(Debug)]
@@ -582,6 +561,18 @@ mod tests {
                 None,
             ),
             (
+                "plaintext endpoint for a non-secure scheme",
+                (
+                    "abfs://myfs@myaccount.dfs.core.windows.net/path/to/file.parquet",
+                    AzdlsConfig {
+                        account_name: Some("myaccount".to_string()),
+                        endpoint: Some("http://myaccount.dfs.core.windows.net".to_string()),
+                        ..Default::default()
+                    },
+                ),
+                Some(("myfs", "/path/to/file.parquet")),
+            ),
+            (
                 "incompatible scheme for endpoint",
                 (
                     // `abfss` implies https; configured endpoint is plain http.
@@ -662,11 +653,10 @@ mod tests {
         ))
         .with_prefix("abfss://container@account.dfs.core.windows.net/table")
         .with_expiration(expires_at);
-        let provider = VendedAzdlsCredentialProvider::new(
+        let provider = VendedAzdlsCredentialProvider(VendedCredentialSource::new(
             Arc::new(FixedCredentialProvider(credential)),
             path.to_string(),
-            None,
-        );
+        ));
 
         let credential = provider
             .provide_credential(&Context::new())
@@ -681,7 +671,7 @@ mod tests {
                 assert_eq!(token, "sv=2026&sig=secret");
                 assert_eq!(
                     actual_expires_at,
-                    Some(super::system_time_to_timestamp(expires_at).unwrap())
+                    Some(crate::utils::system_time_to_timestamp(expires_at).unwrap())
                 );
             }
             other => panic!("expected SAS token, got {other:?}"),
@@ -708,6 +698,23 @@ mod tests {
         assert_eq!(sas_tokens.for_path(&path), Some("sv=2026&sig=second"));
     }
 
+    #[test]
+    fn host_keyed_sas_tokens_match_java() {
+        let properties = HashMap::from([(
+            format!("{ADLS_SAS_TOKEN_PREFIX}account.dfs.core.windows.net"),
+            "sv=2026&sig=host".to_string(),
+        )]);
+        let sas_tokens = AzdlsSasTokens::from_properties(&properties);
+
+        for location in [
+            "abfss://container@account.dfs.core.windows.net/table/data.parquet",
+            "wasbs://container@account.blob.core.windows.net/table/data.parquet",
+        ] {
+            let path = location.parse::<AzureStoragePath>().unwrap();
+            assert_eq!(sas_tokens.for_path(&path), Some("sv=2026&sig=host"));
+        }
+    }
+
     #[tokio::test]
     async fn vended_provider_rejects_mismatched_prefix() {
         let credential = StorageCredential::new(StorageCredentialKind::Azdls(
@@ -715,11 +722,10 @@ mod tests {
         ))
         .with_prefix("abfss://other@account.dfs.core.windows.net/table")
         .with_expiration(SystemTime::now() + Duration::from_secs(3600));
-        let provider = VendedAzdlsCredentialProvider::new(
+        let provider = VendedAzdlsCredentialProvider(VendedCredentialSource::new(
             Arc::new(FixedCredentialProvider(credential)),
             "abfss://container@account.dfs.core.windows.net/table/data.parquet".to_string(),
-            None,
-        );
+        ));
 
         assert!(provider.provide_credential(&Context::new()).await.is_err());
     }
@@ -730,8 +736,12 @@ mod tests {
         let second = azdls_batch_key("abfss://second@account.dfs.core.windows.net/table/b.parquet");
         let blob = azdls_batch_key("wasbs://first@account.blob.core.windows.net/table/c.parquet");
 
-        assert_ne!(first, second);
-        assert_ne!(first, blob);
+        assert_ne!(first.unwrap(), second.unwrap());
+        assert_ne!(
+            azdls_batch_key("abfss://first@account.dfs.core.windows.net/table/a.parquet").unwrap(),
+            blob.unwrap()
+        );
+        assert!(azdls_batch_key("abfss:///no-account.parquet").is_err());
     }
 
     #[test]

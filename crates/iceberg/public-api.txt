@@ -695,7 +695,7 @@ pub fn iceberg::inspect::SnapshotsTable<'a>::new(table: &'a iceberg::table::Tabl
 pub async fn iceberg::inspect::SnapshotsTable<'a>::scan(&self) -> iceberg::Result<iceberg::scan::ArrowRecordBatchStream>
 pub fn iceberg::inspect::SnapshotsTable<'a>::schema(&self) -> iceberg::spec::Schema
 pub mod iceberg::io
-pub enum iceberg::io::StorageCredentialKind
+#[non_exhaustive] pub enum iceberg::io::StorageCredentialKind
 pub iceberg::io::StorageCredentialKind::Azdls(iceberg::io::AzdlsCredential)
 pub iceberg::io::StorageCredentialKind::Gcs(iceberg::io::GcsCredential)
 pub iceberg::io::StorageCredentialKind::S3(iceberg::io::S3Credential)
@@ -755,6 +755,7 @@ pub fn iceberg::io::FileIO::new_output(&self, path: impl core::convert::AsRef<st
 pub fn iceberg::io::FileIO::new_with_fs() -> Self
 pub fn iceberg::io::FileIO::new_with_memory() -> Self
 pub fn iceberg::io::FileIO::serialize_all(&self) -> iceberg::Result<alloc::vec::Vec<u8>>
+pub fn iceberg::io::FileIO::without_credential_provider(&self) -> Self
 impl core::clone::Clone for iceberg::io::FileIO
 pub fn iceberg::io::FileIO::clone(&self) -> iceberg::io::FileIO
 impl core::fmt::Debug for iceberg::io::FileIO
@@ -1042,6 +1043,7 @@ impl<'de> serde_core::de::Deserialize<'de> for iceberg::io::StorageConfig
 pub fn iceberg::io::StorageConfig::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::io::StorageCredential
 impl iceberg::io::StorageCredential
+pub fn iceberg::io::StorageCredential::covers(&self, location: &str) -> bool
 pub fn iceberg::io::StorageCredential::expires_at(&self) -> core::option::Option<std::time::SystemTime>
 pub fn iceberg::io::StorageCredential::into_kind(self) -> iceberg::io::StorageCredentialKind
 pub fn iceberg::io::StorageCredential::kind(&self) -> &iceberg::io::StorageCredentialKind
@@ -1151,8 +1153,11 @@ pub fn iceberg::io::MemoryStorage::reader<'life0, 'life1, 'async_trait>(&'life0 
 pub fn iceberg::io::MemoryStorage::write<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str, bs: bytes::bytes::Bytes) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::MemoryStorage::writer<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::boxed::Box<dyn iceberg::io::FileWrite>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait iceberg::io::StorageCredentialProvider: core::fmt::Debug + core::marker::Send + core::marker::Sync
+pub fn iceberg::io::StorageCredentialProvider::factory(&self) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProviderFactory>>
 pub fn iceberg::io::StorageCredentialProvider::load_credential<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::io::StorageCredential>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::StorageCredentialProvider::supports_path(&self, _path: &str) -> bool
+pub trait iceberg::io::StorageCredentialProviderFactory: core::fmt::Debug + core::marker::Send + core::marker::Sync + typetag::Serialize + typetag::Deserialize
+pub fn iceberg::io::StorageCredentialProviderFactory::build(&self, config: &iceberg::io::StorageConfig) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProvider>>
 pub trait iceberg::io::StorageFactory: core::fmt::Debug + core::marker::Send + core::marker::Sync + typetag::Serialize + typetag::Deserialize
 pub fn iceberg::io::StorageFactory::build(&self, config: &iceberg::io::StorageConfig) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
 pub fn iceberg::io::StorageFactory::build_with_credentials(&self, config: &iceberg::io::StorageConfig, credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProvider>>) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
@@ -1162,6 +1167,7 @@ pub fn iceberg::io::LocalFsStorageFactory::build_with_credentials(&self, config:
 impl iceberg::io::StorageFactory for iceberg::io::MemoryStorageFactory
 pub fn iceberg::io::MemoryStorageFactory::build(&self, _config: &iceberg::io::StorageConfig) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
 pub fn iceberg::io::MemoryStorageFactory::build_with_credentials(&self, config: &iceberg::io::StorageConfig, credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProvider>>) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
+pub fn iceberg::io::storage_prefix_covers(prefix: &str, location: &str) -> bool
 pub mod iceberg::memory
 pub struct iceberg::memory::MemoryCatalog
 impl core::fmt::Debug for iceberg::memory::MemoryCatalog

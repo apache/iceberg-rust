@@ -143,18 +143,15 @@ pub trait StorageFactory: Debug + Send + Sync {
 
     /// Build a new Storage instance, optionally supplying a credential provider
     /// that the backend can call to obtain and refresh short-lived credentials.
+    ///
+    /// Backends that cannot use the provider ignore it and use the credentials
+    /// in `config`, as they would without one. The default does exactly that.
+    #[allow(unused_variables)]
     fn build_with_credentials(
         &self,
         config: &StorageConfig,
         credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
     ) -> Result<Arc<dyn Storage>> {
-        if credential_provider.is_some() {
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Storage factory does not support refreshable credential providers",
-            ));
-        }
-
         self.build(config)
     }
 }
@@ -188,8 +185,32 @@ pub trait StorageCredentialProvider: Debug + Send + Sync {
     /// `s3://bucket/warehouse/db/table/...`). Providers that vend distinct
     /// credentials per location prefix use it to select the most specific
     /// match. When the selected credential has a declared
-    /// [`StorageCredential::prefix`], it must cover `path`.
+    /// [`StorageCredential::prefix`], it must [cover](StorageCredential::covers) `path`.
     async fn load_credential(&self, path: &str) -> Result<StorageCredential>;
+
+    /// Return a factory that rebuilds an equivalent provider in another process.
+    ///
+    /// [`FileIO::serialize_all`](crate::io::FileIO::serialize_all) serializes this
+    /// factory in place of the provider. The default reports that the provider
+    /// cannot be serialized.
+    fn factory(&self) -> Result<Arc<dyn StorageCredentialProviderFactory>> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "storage credential provider cannot be serialized",
+        ))
+    }
+}
+
+/// Serializable recipe that rebuilds a [`StorageCredentialProvider`] after
+/// [`FileIO`](crate::io::FileIO) deserialization.
+///
+/// Factories are serialized through [`typetag`](https://docs.rs/typetag), so
+/// implementations must use `#[typetag::serde]`, and the receiving binary must
+/// link the concrete implementation.
+#[typetag::serde(tag = "type")]
+pub trait StorageCredentialProviderFactory: Debug + Send + Sync {
+    /// Build a provider for a `FileIO` with the given storage configuration.
+    fn build(&self, config: &StorageConfig) -> Result<Arc<dyn StorageCredentialProvider>>;
 }
 
 /// A vended storage credential together with its scope and expiry.
@@ -232,6 +253,20 @@ impl StorageCredential {
         self.prefix.as_deref()
     }
 
+    /// Return whether this credential applies to `location`.
+    ///
+    /// A credential without a prefix covers every location. Otherwise the
+    /// prefix must match whole path segments of `location`, and scheme
+    /// aliases (`s3a`/`s3n` for `s3`, `gcs` for `gs`, and the plain-text
+    /// Azure schemes for their TLS variants) are treated as equal. A prefix
+    /// that is only a scheme, such as `s3`, covers every location with that
+    /// scheme.
+    pub fn covers(&self, location: &str) -> bool {
+        self.prefix
+            .as_deref()
+            .is_none_or(|prefix| storage_prefix_covers(prefix, location))
+    }
+
     /// Return the backend-specific credential material.
     pub fn kind(&self) -> &StorageCredentialKind {
         &self.kind
@@ -248,8 +283,41 @@ impl StorageCredential {
     }
 }
 
+/// Return whether the storage-location `prefix` covers `location`, with the
+/// matching rules of [`StorageCredential::covers`].
+pub fn storage_prefix_covers(prefix: &str, location: &str) -> bool {
+    let Some((location_scheme, location_rest)) = location.split_once("://") else {
+        return false;
+    };
+    let Some((prefix_scheme, prefix_rest)) = prefix.split_once("://") else {
+        return !prefix.is_empty() && canonical_scheme(prefix) == canonical_scheme(location_scheme);
+    };
+
+    canonical_scheme(prefix_scheme) == canonical_scheme(location_scheme)
+        && location_rest
+            .strip_prefix(prefix_rest)
+            .is_some_and(|remainder| {
+                prefix_rest.is_empty()
+                    || prefix_rest.ends_with('/')
+                    || remainder.is_empty()
+                    || remainder.starts_with('/')
+            })
+}
+
+fn canonical_scheme(scheme: &str) -> String {
+    let scheme = scheme.to_ascii_lowercase();
+    match scheme.as_str() {
+        "s3a" | "s3n" => "s3".to_string(),
+        "gcs" => "gs".to_string(),
+        "abfs" => "abfss".to_string(),
+        "wasb" => "wasbs".to_string(),
+        _ => scheme,
+    }
+}
+
 /// Backend-specific credential material.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum StorageCredentialKind {
     /// Amazon S3 credentials.
     S3(S3Credential),
@@ -377,5 +445,53 @@ impl GcsCredential {
 impl Debug for GcsCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GcsCredential").finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scoped(prefix: &str) -> StorageCredential {
+        StorageCredential::new(StorageCredentialKind::Gcs(GcsCredential::new("token")))
+            .with_prefix(prefix)
+    }
+
+    #[test]
+    fn credential_prefix_matches_whole_segments() {
+        let credential = scoped("s3://bucket/table");
+        assert!(credential.covers("s3://bucket/table"));
+        assert!(credential.covers("s3://bucket/table/data/file.parquet"));
+        assert!(!credential.covers("s3://bucket/table2/data/file.parquet"));
+        assert!(!credential.covers("s3://bucket/tab"));
+        assert!(!credential.covers("s3://other/table/file.parquet"));
+
+        assert!(scoped("s3://bucket/table/").covers("s3://bucket/table/file.parquet"));
+        assert!(scoped("s3://").covers("s3://any/file.parquet"));
+    }
+
+    #[test]
+    fn credential_prefix_treats_scheme_aliases_as_equal() {
+        let credential = scoped("s3://bucket/table");
+        assert!(credential.covers("s3a://bucket/table/file.parquet"));
+        assert!(credential.covers("S3N://bucket/table/file.parquet"));
+        assert!(scoped("gcs://bucket").covers("gs://bucket/file.parquet"));
+        assert!(
+            scoped("abfss://fs@account.dfs.core.windows.net/table")
+                .covers("abfs://fs@account.dfs.core.windows.net/table/file.parquet")
+        );
+        assert!(!credential.covers("gs://bucket/table/file.parquet"));
+    }
+
+    #[test]
+    fn credential_scheme_prefix_covers_the_whole_scheme() {
+        assert!(scoped("s3").covers("s3a://bucket/file.parquet"));
+        assert!(!scoped("s3").covers("gs://bucket/file.parquet"));
+        assert!(!scoped("").covers("s3://bucket/file.parquet"));
+        assert!(!scoped("s3").covers("not-a-url"));
+        assert!(
+            StorageCredential::new(StorageCredentialKind::Gcs(GcsCredential::new("token")))
+                .covers("gs://bucket/file.parquet")
+        );
     }
 }
