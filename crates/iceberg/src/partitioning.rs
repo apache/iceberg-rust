@@ -177,7 +177,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::spec::{NestedField, PrimitiveType, Transform, Type, UnboundPartitionSpec};
+    use crate::spec::{
+        NestedField, PrimitiveType, Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
+    };
 
     fn test_schema() -> Schema {
         Schema::builder()
@@ -199,7 +201,13 @@ mod tests {
         let mut builder = UnboundPartitionSpec::builder().with_spec_id(spec_id);
         for (source_id, name, transform) in fields {
             builder = builder
-                .add_partition_field(source_id, name, transform)
+                .add_partition_field(
+                    UnboundPartitionField::builder()
+                        .source_ids(vec![source_id])
+                        .name(name)
+                        .transform(transform)
+                        .build(),
+                )
                 .unwrap();
         }
         builder.build().bind(schema.clone()).unwrap()
@@ -262,7 +270,7 @@ mod tests {
         let spec_v0 = PartitionSpec::builder(Arc::new(schema.clone()))
             .with_spec_id(0)
             .add_unbound_field(
-                crate::spec::UnboundPartitionField::builder()
+                UnboundPartitionField::builder()
                     .source_ids(vec![4])
                     .field_id(1000)
                     .name("cat_old".to_string())
@@ -277,7 +285,7 @@ mod tests {
         let spec_v1 = PartitionSpec::builder(Arc::new(schema.clone()))
             .with_spec_id(1)
             .add_unbound_field(
-                crate::spec::UnboundPartitionField::builder()
+                UnboundPartitionField::builder()
                     .source_ids(vec![4])
                     .field_id(1000)
                     .name("cat_new".to_string())
@@ -302,7 +310,7 @@ mod tests {
         let spec_v0 = PartitionSpec::builder(Arc::new(schema.clone()))
             .with_spec_id(0)
             .add_unbound_field(
-                crate::spec::UnboundPartitionField::builder()
+                UnboundPartitionField::builder()
                     .source_ids(vec![4])
                     .field_id(1000)
                     .name("category".to_string())
@@ -317,7 +325,7 @@ mod tests {
         let spec_v1 = PartitionSpec::builder(Arc::new(schema.clone()))
             .with_spec_id(1)
             .add_unbound_field(
-                crate::spec::UnboundPartitionField::builder()
+                UnboundPartitionField::builder()
                     .source_ids(vec![4])
                     .field_id(1000)
                     .name("category_v2".to_string())
@@ -380,7 +388,7 @@ mod tests {
         let spec_v1 = PartitionSpec::builder(Arc::new(schema.clone()))
             .with_spec_id(1)
             .add_unbound_field(
-                crate::spec::UnboundPartitionField::builder()
+                UnboundPartitionField::builder()
                     .source_ids(vec![4])
                     .field_id(spec_v0.fields()[0].field_id)
                     .name("category".to_string())

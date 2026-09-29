@@ -265,18 +265,13 @@ impl PartitionKey {
 pub type UnboundPartitionSpecRef = Arc<UnboundPartitionSpec>;
 /// Unbound partition field can be built without a schema and later bound to a schema.
 ///
-/// The fields are private so that an instance is known to be well formed once built: in
-/// particular `source_ids` always holds at least one id. Construct one through
-/// [`UnboundPartitionSpec::builder`], or read one out of a partition spec JSON.
+/// Being unbound, a field built through [`UnboundPartitionField::builder`] is not validated;
+/// it is checked when added to an [`UnboundPartitionSpecBuilder`] and again when bound to a
+/// schema.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, TypedBuilder)]
 #[serde(
     try_from = "self::_serde::UnboundPartitionFieldSerde",
     into = "self::_serde::UnboundPartitionFieldSerde"
-)]
-#[builder(
-    builder_method(vis = "pub(crate)"),
-    builder_type(vis = "pub(crate)"),
-    build_method(vis = "pub(crate)")
 )]
 pub struct UnboundPartitionField {
     /// The source column ids from the table’s schema. A single-argument transform reads one
@@ -287,6 +282,7 @@ pub struct UnboundPartitionField {
     #[builder(default, setter(strip_option(fallback = field_id_opt)))]
     field_id: Option<i32>,
     /// A partition name.
+    #[builder(setter(into))]
     name: String,
     /// A transform that is applied to the source column to produce a partition value.
     transform: Transform,
@@ -308,7 +304,8 @@ impl UnboundPartitionField {
         }
     }
 
-    /// The source column ids this field reads, in order. Never empty.
+    /// The source column ids this field reads, in order. Never empty once the field is part
+    /// of a partition spec.
     pub fn source_ids(&self) -> &[i32] {
         &self.source_ids
     }
@@ -329,7 +326,7 @@ impl UnboundPartitionField {
     }
 
     /// Return this field with the given partition field id assigned.
-    pub(crate) fn with_field_id(self, field_id: i32) -> Self {
+    pub fn with_field_id(self, field_id: i32) -> Self {
         Self {
             field_id: Some(field_id),
             ..self
@@ -394,10 +391,13 @@ mod _serde {
 
     impl From<UnboundPartitionField> for UnboundPartitionFieldSerde {
         fn from(value: UnboundPartitionField) -> Self {
-            let multi_arg = value.source_ids.len() > 1;
+            let (source_id, source_ids) = match value.source_ids.as_slice() {
+                [source_id] => (Some(*source_id), None),
+                _ => (None, Some(value.source_ids)),
+            };
             Self {
-                source_id: (!multi_arg).then(|| value.source_ids[0]),
-                source_ids: multi_arg.then_some(value.source_ids),
+                source_id,
+                source_ids,
                 field_id: value.field_id,
                 name: value.name,
                 transform: value.transform,
@@ -507,19 +507,15 @@ impl UnboundPartitionSpecBuilder {
     }
 
     /// Add a new partition field to the partition spec from an unbound partition field.
-    pub fn add_partition_field(
-        self,
-        source_id: i32,
-        target_name: impl ToString,
-        transformation: Transform,
-    ) -> Result<Self> {
-        let field = UnboundPartitionField {
-            source_ids: vec![source_id],
-            field_id: None,
-            name: target_name.to_string(),
-            transform: transformation,
-        };
-        self.add_partition_field_internal(field)
+    pub fn add_partition_field(mut self, field: UnboundPartitionField) -> Result<Self> {
+        self.check_name_set_and_unique(&field.name)?;
+        self.check_source_ids_set(&field)?;
+        self.check_for_redundant_partitions(&field.source_ids, &field.transform)?;
+        if let Some(partition_field_id) = field.field_id {
+            self.check_partition_id_unique(partition_field_id)?;
+        }
+        self.fields.push(field);
+        Ok(self)
     }
 
     /// Add multiple partition fields to the partition spec.
@@ -529,19 +525,9 @@ impl UnboundPartitionSpecBuilder {
     ) -> Result<Self> {
         let mut builder = self;
         for field in fields {
-            builder = builder.add_partition_field_internal(field)?;
+            builder = builder.add_partition_field(field)?;
         }
         Ok(builder)
-    }
-
-    fn add_partition_field_internal(mut self, field: UnboundPartitionField) -> Result<Self> {
-        self.check_name_set_and_unique(&field.name)?;
-        self.check_for_redundant_partitions(&field.source_ids, &field.transform)?;
-        if let Some(partition_field_id) = field.field_id {
-            self.check_partition_id_unique(partition_field_id)?;
-        }
-        self.fields.push(field);
-        Ok(self)
     }
 
     /// Build the unbound partition spec.
@@ -636,6 +622,7 @@ impl PartitionSpecBuilder {
     /// Otherwise, a new `field_id` is assigned.
     pub fn add_unbound_field(mut self, field: UnboundPartitionField) -> Result<Self> {
         self.check_name_set_and_unique(&field.name)?;
+        self.check_source_ids_set(&field)?;
         self.check_for_redundant_partitions(&field.source_ids, &field.transform)?;
         Self::check_name_does_not_collide_with_schema(&field, &self.schema)?;
         Self::check_transform_compatibility(&field, &self.schema)?;
@@ -788,6 +775,17 @@ trait CorePartitionSpecValidator {
         if self.fields().iter().any(|f| f.name == name) {
             return Err(invalid_data!(
                 "Cannot use partition name more than once: {name}"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Ensure that the partition field reads at least one source column.
+    fn check_source_ids_set(&self, field: &UnboundPartitionField) -> Result<()> {
+        if field.source_ids.is_empty() {
+            return Err(invalid_data!(
+                "Partition field '{}' has no source id",
+                field.name
             ));
         }
         Ok(())
@@ -1014,7 +1012,13 @@ mod tests {
     #[test]
     fn test_unbound_partition_spec_serialization_skips_none_fields() {
         let spec = UnboundPartitionSpec::builder()
-            .add_partition_field(4, "ts_day".to_string(), Transform::Day)
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![4])
+                    .name("ts_day")
+                    .transform(Transform::Day)
+                    .build(),
+            )
             .unwrap()
             .build();
 
@@ -1261,9 +1265,21 @@ mod tests {
     #[test]
     fn test_builder_disallow_duplicate_names() {
         UnboundPartitionSpec::builder()
-            .add_partition_field(1, "ts_day".to_string(), Transform::Day)
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("ts_day")
+                    .transform(Transform::Day)
+                    .build(),
+            )
             .unwrap()
-            .add_partition_field(2, "ts_day".to_string(), Transform::Day)
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("ts_day")
+                    .transform(Transform::Day)
+                    .build(),
+            )
             .unwrap_err();
     }
 
@@ -1522,12 +1538,20 @@ mod tests {
     fn test_builder_disallows_redundant() {
         let err = UnboundPartitionSpec::builder()
             .with_spec_id(1)
-            .add_partition_field(1, "id_bucket[16]".to_string(), Transform::Bucket(16))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("id_bucket[16]")
+                    .transform(Transform::Bucket(16))
+                    .build(),
+            )
             .unwrap()
             .add_partition_field(
-                1,
-                "id_bucket_with_other_name".to_string(),
-                Transform::Bucket(16),
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("id_bucket_with_other_name")
+                    .transform(Transform::Bucket(16))
+                    .build(),
             )
             .unwrap_err();
         assert!(err.message().contains("redundant partition"));
@@ -2062,6 +2086,41 @@ mod tests {
         let err = spec.bind(schema).unwrap_err();
         assert!(
             err.to_string().contains("has no single source id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_unbound_partition_field_without_source_ids() {
+        let field = UnboundPartitionField::builder()
+            .source_ids(vec![])
+            .name("m")
+            .transform(Transform::Identity)
+            .build();
+
+        // Unbound, so building and serializing it does not validate
+        let serialized = serde_json::to_value(&field).unwrap();
+        assert_eq!(Some(&serde_json::json!([])), serialized.get("source-ids"));
+
+        let err = UnboundPartitionSpec::builder()
+            .add_partition_field(field.clone())
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("has no source id"),
+            "unexpected error: {err}"
+        );
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        let err = PartitionSpec::builder(schema)
+            .add_unbound_field(field)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("has no source id"),
             "unexpected error: {err}"
         );
     }

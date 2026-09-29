@@ -2917,6 +2917,7 @@ pub fn iceberg::spec::UnboundPartitionField::name(&self) -> &str
 pub fn iceberg::spec::UnboundPartitionField::source_id(&self) -> iceberg::Result<i32>
 pub fn iceberg::spec::UnboundPartitionField::source_ids(&self) -> &[i32]
 pub fn iceberg::spec::UnboundPartitionField::transform(&self) -> iceberg::spec::Transform
+pub fn iceberg::spec::UnboundPartitionField::with_field_id(self, field_id: i32) -> Self
 impl core::clone::Clone for iceberg::spec::UnboundPartitionField
 pub fn iceberg::spec::UnboundPartitionField::clone(&self) -> iceberg::spec::UnboundPartitionField
 impl core::cmp::Eq for iceberg::spec::UnboundPartitionField
@@ -2927,6 +2928,8 @@ pub fn iceberg::spec::UnboundPartitionField::from(field: iceberg::spec::Partitio
 impl core::fmt::Debug for iceberg::spec::UnboundPartitionField
 pub fn iceberg::spec::UnboundPartitionField::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::spec::UnboundPartitionField
+impl iceberg::spec::UnboundPartitionField
+pub fn iceberg::spec::UnboundPartitionField::builder() -> UnboundPartitionFieldBuilder<((), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::spec::UnboundPartitionField
 pub fn iceberg::spec::UnboundPartitionField::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::UnboundPartitionField
@@ -2956,7 +2959,7 @@ impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::UnboundPartitionSp
 pub fn iceberg::spec::UnboundPartitionSpec::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::spec::UnboundPartitionSpecBuilder
 impl iceberg::spec::UnboundPartitionSpecBuilder
-pub fn iceberg::spec::UnboundPartitionSpecBuilder::add_partition_field(self, source_id: i32, target_name: impl alloc::string::ToString, transformation: iceberg::spec::Transform) -> iceberg::Result<Self>
+pub fn iceberg::spec::UnboundPartitionSpecBuilder::add_partition_field(self, field: iceberg::spec::UnboundPartitionField) -> iceberg::Result<Self>
 pub fn iceberg::spec::UnboundPartitionSpecBuilder::add_partition_fields(self, fields: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::UnboundPartitionField>) -> iceberg::Result<Self>
 pub fn iceberg::spec::UnboundPartitionSpecBuilder::build(self) -> iceberg::spec::UnboundPartitionSpec
 pub fn iceberg::spec::UnboundPartitionSpecBuilder::new() -> Self

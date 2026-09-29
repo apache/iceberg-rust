@@ -4493,7 +4493,13 @@ mod tests {
             schema.clone(),
             UnboundPartitionSpec::builder()
                 .with_spec_id(0)
-                .add_partition_field(2, "y", Transform::Identity)
+                .add_partition_field(
+                    UnboundPartitionField::builder()
+                        .source_ids(vec![2])
+                        .name("y")
+                        .transform(Transform::Identity)
+                        .build(),
+                )
                 .unwrap()
                 .build(),
             SortOrder::unsorted_order(),
@@ -4508,7 +4514,13 @@ mod tests {
         .into_builder(None)
         .add_partition_spec(
             UnboundPartitionSpec::builder()
-                .add_partition_field(3, "z", Transform::Identity)
+                .add_partition_field(
+                    UnboundPartitionField::builder()
+                        .source_ids(vec![3])
+                        .name("z")
+                        .transform(Transform::Identity)
+                        .build(),
+                )
                 .unwrap()
                 .build(),
         )
