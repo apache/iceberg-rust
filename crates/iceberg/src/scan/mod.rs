@@ -753,7 +753,9 @@ mod tests {
         TableProperties, Transform, Type, UnboundPartitionSpec,
     };
     use crate::table::Table;
-    use crate::test_utils::scan::{TableTestFixture, assert_last_updated_seq_all};
+    use crate::test_utils::scan::{
+        ROWS_PER_FIXTURE_FILE, TableTestFixture, assert_last_updated_seq_all,
+    };
     use crate::test_utils::test_runtime;
     use crate::util::snapshot::snapshot_id_as_of_time;
     use crate::{ErrorKind, TableIdent};
@@ -1295,8 +1297,8 @@ mod tests {
         assert_eq!(planned_files[0], planned_files[1]);
         assert_eq!(rows[0], vec![100]);
         assert_eq!(rows[0], rows[1]);
-        // Two live fixture files contain 1,024 rows each.
-        assert_eq!(rows[2], vec![1; 2048]);
+        // The current snapshot contains two live fixture files.
+        assert_eq!(rows[2], vec![1; 2 * ROWS_PER_FIXTURE_FILE]);
         assert_eq!(schemas[0], schemas[1]);
         assert_eq!(schemas[0].fields().len(), 1);
         assert_eq!(schemas[2].fields().len(), 8);
