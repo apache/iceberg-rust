@@ -127,6 +127,7 @@ fn projected_partition_type(
         .map(Some)
 }
 
+/// Selects a snapshot by ID or timestamp.
 enum SnapshotSelection {
     SnapshotId(i64),
     AsOfTime(i64),
