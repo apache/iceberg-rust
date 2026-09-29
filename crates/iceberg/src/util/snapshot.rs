@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Reverse;
 use std::collections::HashSet;
 
 use crate::spec::{SnapshotRef, TableMetadataRef};
@@ -83,25 +84,40 @@ pub fn ancestors_between(
 /// Equal timestamps select the first entry. Returns [`ErrorKind::DataInvalid`]
 /// if no matching history exists. The returned snapshot may have expired, so
 /// [`snapshot_by_id`](crate::spec::TableMetadata::snapshot_by_id) can still return `None`.
+///
+/// ```
+/// # use iceberg::TableIdent;
+/// # use iceberg::io::FileIO;
+/// # use iceberg::table::StaticTable;
+/// use iceberg::util::snapshot::snapshot_id_as_of_time;
+/// # #[tokio::main]
+/// # async fn main() -> iceberg::Result<()> {
+/// # let location = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/example_table_metadata_v2.json");
+/// # let ident = TableIdent::from_strs(["ns", "t"])?;
+/// # let table = StaticTable::from_metadata_file(location, ident, FileIO::new_with_fs()).await?;
+/// let metadata = table.metadata();
+/// // The snapshot log has entries at 1515100955770 and 1555100955770.
+/// let snapshot_id = snapshot_id_as_of_time(&metadata, 1_555_100_955_770)?;
+/// assert_eq!(snapshot_id, 3055729675574597004);
+/// assert!(snapshot_id_as_of_time(&metadata, 1_515_100_955_769).is_err());
+/// # Ok(())
+/// # }
+/// ```
 pub fn snapshot_id_as_of_time(table_metadata: &TableMetadataRef, timestamp_ms: i64) -> Result<i64> {
-    let best = table_metadata
+    table_metadata
         .history()
         .iter()
-        .filter(|entry| entry.timestamp_ms() <= timestamp_ms)
-        .reduce(|best, entry| {
-            // Keep the first entry on ties, matching Java's timestamp selection.
-            if entry.timestamp_ms() > best.timestamp_ms() {
-                entry
-            } else {
-                best
-            }
-        });
-    best.map(|entry| entry.snapshot_id).ok_or_else(|| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!("No snapshot history at or before timestamp {timestamp_ms} ms"),
-        )
-    })
+        .enumerate()
+        .filter(|(_, entry)| entry.timestamp_ms() <= timestamp_ms)
+        // Keep the first entry on ties, matching Java's timestamp selection.
+        .max_by_key(|(idx, entry)| (entry.timestamp_ms(), Reverse(*idx)))
+        .map(|(_, entry)| entry.snapshot_id)
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("No snapshot history at or before timestamp {timestamp_ms} ms"),
+            )
+        })
 }
 
 #[cfg(test)]

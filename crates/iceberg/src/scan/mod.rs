@@ -127,13 +127,17 @@ fn projected_partition_type(
         .map(Some)
 }
 
+enum SnapshotSelection {
+    SnapshotId(i64),
+    AsOfTime(i64),
+}
+
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
     table: &'a Table,
     // Defaults to none which means select all columns
     column_names: Option<Vec<String>>,
-    snapshot_id: Option<i64>,
-    as_of_timestamp_ms: Option<i64>,
+    snapshot_selection: Option<SnapshotSelection>,
     batch_size: Option<usize>,
     case_sensitive: bool,
     filter: Option<Predicate>,
@@ -152,8 +156,7 @@ impl<'a> TableScanBuilder<'a> {
         Self {
             table,
             column_names: None,
-            snapshot_id: None,
-            as_of_timestamp_ms: None,
+            snapshot_selection: None,
             batch_size: None,
             case_sensitive: true,
             filter: None,
@@ -210,21 +213,37 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Set the snapshot to scan. Repeated calls use the last ID.
+    /// Set the snapshot to scan.
     ///
-    /// When neither this nor [`Self::as_of_time`] is set, uses the current snapshot.
-    /// Combining both selectors causes [`Self::build`] to return an error.
+    /// The last call to this or [`Self::as_of_time`] takes precedence.
+    /// If neither is set, uses the current snapshot.
     pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
-        self.snapshot_id = Some(snapshot_id);
+        self.snapshot_selection = Some(SnapshotSelection::SnapshotId(snapshot_id));
         self
     }
 
     /// Select a snapshot at or before a timestamp in milliseconds since the Unix epoch.
     ///
-    /// Uses the table's main history. Repeated calls use the last timestamp.
-    /// Combining this with [`Self::snapshot_id`] causes [`Self::build`] to return an error.
+    /// Uses the table's main history. The last call to this or [`Self::snapshot_id`]
+    /// takes precedence.
+    ///
+    /// ```
+    /// # use iceberg::TableIdent;
+    /// # use iceberg::io::FileIO;
+    /// # use iceberg::table::StaticTable;
+    /// # #[tokio::main]
+    /// # async fn main() -> iceberg::Result<()> {
+    /// # let location = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/example_table_metadata_v2.json");
+    /// # let ident = TableIdent::from_strs(["ns", "t"])?;
+    /// # let table = StaticTable::from_metadata_file(location, ident, FileIO::new_with_fs()).await?;
+    /// // The snapshot log has entries at 1515100955770 and 1555100955770.
+    /// let scan = table.scan().as_of_time(1_555_100_955_769).build()?;
+    /// assert_eq!(scan.snapshot().unwrap().snapshot_id(), 3051729675574597004);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn as_of_time(mut self, timestamp_ms: i64) -> Self {
-        self.as_of_timestamp_ms = Some(timestamp_ms);
+        self.snapshot_selection = Some(SnapshotSelection::AsOfTime(timestamp_ms));
         self
     }
 
@@ -297,19 +316,13 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
-        let snapshot_id = match (self.snapshot_id, self.as_of_timestamp_ms) {
-            (Some(_), Some(_)) => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot combine snapshot_id and as_of_time",
-                ));
-            }
-            (Some(id), None) => Some(id),
-            (None, Some(timestamp_ms)) => Some(snapshot_id_as_of_time(
+        let snapshot_id = match self.snapshot_selection {
+            Some(SnapshotSelection::SnapshotId(id)) => Some(id),
+            Some(SnapshotSelection::AsOfTime(timestamp_ms)) => Some(snapshot_id_as_of_time(
                 &self.table.metadata_ref(),
                 timestamp_ms,
             )?),
-            (None, None) => None,
+            None => None,
         };
         let snapshot = match snapshot_id {
             Some(snapshot_id) => self
@@ -2065,43 +2078,80 @@ pub mod tests {
     }
 
     #[test]
-    fn test_table_scan_as_of_time_conflicts_with_snapshot_id() {
-        for id_first in [true, false] {
-            let table = TableTestFixture::new().table;
-            let entry = &table.metadata().history()[0];
-            let scan = table.scan();
-            let scan = if id_first {
-                scan.snapshot_id(entry.snapshot_id)
-                    .as_of_time(entry.timestamp_ms)
-            } else {
-                scan.as_of_time(entry.timestamp_ms)
-                    .snapshot_id(entry.snapshot_id)
-            };
-            let err = scan.build().unwrap_err();
-            assert_eq!(err.kind(), ErrorKind::DataInvalid);
-            assert_eq!(err.message(), "Cannot combine snapshot_id and as_of_time");
+    fn test_table_scan_last_snapshot_selection_wins() {
+        let table = TableTestFixture::new().table;
+        let first = &table.metadata().history()[0];
+        let last = &table.metadata().history()[1];
+        let cases = [
+            (
+                table
+                    .scan()
+                    .snapshot_id(last.snapshot_id)
+                    .as_of_time(first.timestamp_ms),
+                first.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .as_of_time(first.timestamp_ms)
+                    .snapshot_id(last.snapshot_id),
+                last.snapshot_id,
+            ),
+            // An overwritten selector is not resolved or validated.
+            (
+                table.scan().snapshot_id(-1).as_of_time(first.timestamp_ms),
+                first.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .as_of_time(i64::MIN)
+                    .snapshot_id(last.snapshot_id),
+                last.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .snapshot_id(first.snapshot_id)
+                    .snapshot_id(last.snapshot_id),
+                last.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .as_of_time(i64::MAX)
+                    .as_of_time(first.timestamp_ms),
+                first.snapshot_id,
+            ),
+        ];
+        for (builder, expected) in cases {
+            let scan = builder.build().unwrap();
+            assert_eq!(scan.snapshot().unwrap().snapshot_id(), expected);
         }
     }
 
     #[test]
-    fn test_table_scan_as_of_time_last_timestamp_wins() {
+    fn test_table_scan_invalid_last_snapshot_selection() {
         let table = TableTestFixture::new().table;
         let first = &table.metadata().history()[0];
-        let scan = table
-            .scan()
-            .as_of_time(i64::MAX)
-            .as_of_time(first.timestamp_ms)
-            .build()
-            .unwrap();
-        assert_eq!(scan.snapshot().unwrap().snapshot_id(), first.snapshot_id);
-        // Keep the existing repeated snapshot_id setter behavior as well.
-        let scan = table
-            .scan()
-            .snapshot_id(-1)
-            .snapshot_id(first.snapshot_id)
-            .build()
-            .unwrap();
-        assert_eq!(scan.snapshot().unwrap().snapshot_id(), first.snapshot_id);
+        let cases = [
+            (
+                table
+                    .scan()
+                    .snapshot_id(first.snapshot_id)
+                    .as_of_time(first.timestamp_ms - 1),
+                "No snapshot history",
+            ),
+            (
+                table.scan().as_of_time(first.timestamp_ms).snapshot_id(-1),
+                "Snapshot with id -1 not found",
+            ),
+        ];
+        for (builder, expected) in cases {
+            let err = builder.build().unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.message().contains(expected));
+        }
     }
 
     #[test]
