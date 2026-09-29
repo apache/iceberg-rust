@@ -1753,14 +1753,7 @@ mod tests {
     fn test_arrow_schema_to_schema_should_reject_uuid_when_not_a_fixed_size_binary() {
         // The field must be built correctly, and then changed to the wrong type,
         // to avoid Arrow's own validation and panic.
-        let mut field = simple_field(
-            "incorrect_uuid_field",
-            DataType::FixedSizeBinary(16),
-            false,
-            "1",
-        )
-        .with_extension_type(UuidExtensionType);
-        field = field.with_data_type(DataType::Utf8);
+        let field = simple_field_with_uuid_ext(DataType::Utf8);
 
         let error = arrow_schema_to_schema(&ArrowSchema::new(vec![field])).unwrap_err();
 
@@ -1768,6 +1761,44 @@ mod tests {
             "arrow.uuid extension requires FixedSizeBinary(16) storage, found Utf8",
             error.message()
         );
+    }
+
+    #[test]
+    fn test_arrow_schema_to_schema_should_reject_uuid_when_fixed_size_binary_that_is_less_than_16()
+    {
+        let field = simple_field_with_uuid_ext(DataType::FixedSizeBinary(8));
+        let error = arrow_schema_to_schema(&ArrowSchema::new(vec![field])).unwrap_err();
+
+        pretty_assertions::assert_eq!(
+            "arrow.uuid extension requires FixedSizeBinary(16) storage, found FixedSizeBinary(8)",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn test_arrow_schema_to_schema_should_reject_uuid_when_fixed_size_binary_that_is_more_than_16()
+    {
+        let field = simple_field_with_uuid_ext(DataType::FixedSizeBinary(17));
+        let error = arrow_schema_to_schema(&ArrowSchema::new(vec![field])).unwrap_err();
+
+        pretty_assertions::assert_eq!(
+            "arrow.uuid extension requires FixedSizeBinary(16) storage, found FixedSizeBinary(17)",
+            error.message()
+        );
+    }
+
+    fn simple_field_with_uuid_ext(field_data_type: DataType) -> Field {
+        let mut field = simple_field("uuid_field", DataType::FixedSizeBinary(16), false, "1")
+            .with_extension_type(UuidExtensionType);
+
+        // We want to allow setting a UUID extension to the wrong data type.
+        // This is to test our logic against bad schemas.
+        //
+        // To avoid Arrow's own internal validation and panic, we need to build
+        // the field correctly above, and then manually override the type here.
+        field = field.with_data_type(field_data_type);
+
+        field
     }
 
     fn arrow_schema_for_schema_to_arrow_schema_test() -> ArrowSchema {
