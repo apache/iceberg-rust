@@ -1721,12 +1721,15 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "ts_day".to_string(),
-                transform: Transform::Day,
-                source_id: 4,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![4])
+                    .field_id(1000)
+                    .name("ts_day".to_string())
+                    .transform(Transform::Day)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -1869,12 +1872,15 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "ts_day".to_string(),
-                transform: Transform::Day,
-                source_id: 4,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![4])
+                    .field_id(1000)
+                    .name("ts_day".to_string())
+                    .transform(Transform::Day)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -2945,12 +2951,15 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1000)
+                    .name("x".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -3042,12 +3051,15 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema2.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1000)
+                    .name("x".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -3171,12 +3183,15 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1000)
+                    .name("x".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -3257,12 +3272,15 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1000)
+                    .name("x".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -4481,7 +4499,14 @@ mod tests {
             schema.clone(),
             UnboundPartitionSpec::builder()
                 .with_spec_id(0)
-                .add_partition_field(2, "y", Transform::Identity)
+                .add_partition_field(
+                    UnboundPartitionField::builder()
+                        .source_ids(vec![2])
+                        .name("y")
+                        .transform(Transform::Identity)
+                        .build()
+                        .unwrap(),
+                )
                 .unwrap()
                 .build(),
             SortOrder::unsorted_order(),
@@ -4496,7 +4521,14 @@ mod tests {
         .into_builder(None)
         .add_partition_spec(
             UnboundPartitionSpec::builder()
-                .add_partition_field(3, "z", Transform::Identity)
+                .add_partition_field(
+                    UnboundPartitionField::builder()
+                        .source_ids(vec![3])
+                        .name("z")
+                        .transform(Transform::Identity)
+                        .build()
+                        .unwrap(),
+                )
                 .unwrap()
                 .build(),
         )
