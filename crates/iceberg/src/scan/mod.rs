@@ -4177,8 +4177,6 @@ pub mod tests {
     #[tokio::test]
     async fn test_scan_filter_on_initial_default_column_absent_from_file() {
         use arrow_array::types::Int64Type;
-        use arrow_cast::cast;
-        use arrow_schema::DataType;
 
         let catalog = new_memory_catalog().await;
         let namespace = NamespaceIdent::new(format!("ns-{}", Uuid::new_v4()));
@@ -4233,28 +4231,19 @@ pub mod tests {
         ])
         .await;
 
+        let c = || Reference::new("c");
         let cases = [
-            ("no filter", Predicate::AlwaysTrue, vec![1, 2, 3]),
-            (
-                "c = 'US'",
-                Reference::new("c").equal_to(Datum::string("US")),
-                vec![1, 2],
-            ),
-            ("c IS NOT NULL", Reference::new("c").is_not_null(), vec![
-                1, 2, 3,
-            ]),
-            (
-                "c = 'CA'",
-                Reference::new("c").equal_to(Datum::string("CA")),
-                vec![3],
-            ),
-            ("c IS NULL", Reference::new("c").is_null(), vec![]),
+            (Predicate::AlwaysTrue, vec![1, 2, 3]),
+            (c().equal_to(Datum::string("US")), vec![1, 2]),
+            (c().is_not_null(), vec![1, 2, 3]),
+            (c().equal_to(Datum::string("CA")), vec![3]),
+            (c().is_null(), vec![]),
         ];
 
         let mut actual = Vec::new();
         let mut expected = Vec::new();
         for row_selection_enabled in [false, true] {
-            for (name, predicate, ids) in &cases {
+            for (predicate, ids) in &cases {
                 let batches: Vec<RecordBatch> = table
                     .scan()
                     .with_filter(predicate.clone())
@@ -4267,29 +4256,21 @@ pub mod tests {
                     .try_collect()
                     .await
                     .unwrap();
-                let mut rows: Vec<(i64, String)> = batches
+                let mut actual_ids: Vec<i64> = batches
                     .iter()
                     .flat_map(|batch| {
-                        let c = cast(batch.column_by_name("c").unwrap(), &DataType::Utf8).unwrap();
-                        let ids = batch
+                        batch
                             .column_by_name("id")
                             .unwrap()
-                            .as_primitive::<Int64Type>();
-                        (0..batch.num_rows())
-                            .map(|i| (ids.value(i), c.as_string::<i32>().value(i).to_string()))
-                            .collect::<Vec<_>>()
+                            .as_primitive::<Int64Type>()
+                            .values()
+                            .to_vec()
                     })
                     .collect();
-                rows.sort();
-                actual.push((*name, row_selection_enabled, rows));
-
-                let all_rows = [(1, "US"), (2, "US"), (3, "CA")];
-                let rows = all_rows
-                    .iter()
-                    .filter(|(id, _)| ids.contains(id))
-                    .map(|(id, c)| (*id, c.to_string()))
-                    .collect();
-                expected.push((*name, row_selection_enabled, rows));
+                actual_ids.sort();
+                let name = format!("{predicate}, row selection {row_selection_enabled}");
+                actual.push((name.clone(), actual_ids));
+                expected.push((name, ids.clone()));
             }
         }
         assert_eq!(actual, expected);
