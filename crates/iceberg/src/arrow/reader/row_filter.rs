@@ -211,32 +211,38 @@ impl ArrowReader {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::fs::File;
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
+    use arrow_array::types::Int64Type;
     use arrow_array::{
         ArrayRef, Decimal128Array, Float32Array, Int32Array, Int64Array, LargeStringArray,
         RecordBatch, StringArray,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
+    use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
-    use parquet::file::metadata::{FileMetaData, ParquetMetaData, ParquetMetaDataBuilder};
+    use parquet::file::metadata::{
+        FileMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataBuilder,
+    };
     use parquet::file::properties::{EnabledStatistics, WriterProperties};
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
     use tempfile::TempDir;
 
     use crate::Runtime;
+    use crate::arrow::reader::predicate_visitor::residual_for_missing_fields;
     use crate::arrow::{ArrowReader, ArrowReaderBuilder};
     use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{
-        DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
+        DataContentType, DataFileFormat, Datum, Literal, NestedField, PartitionSpec, PrimitiveType,
+        Schema, SchemaRef, Struct, Transform, Type,
     };
 
     async fn test_perform_read(
@@ -1756,5 +1762,226 @@ mod tests {
         )
         .await;
         assert_eq!(rows(&on), 1);
+    }
+
+    /// A file written before column `b` was added, read with a schema in which `b`
+    /// has `initial-default` 7. Every row reads back as `b = 7`, so each predicate
+    /// must keep or drop all three rows as if `b` were stored as 7.
+    fn setup_absent_column_with_initial_default() -> (Arc<Schema>, String, TempDir) {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "b", Type::Primitive(PrimitiveType::Long))
+                        .with_initial_default(Literal::long(7))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = format!("{}/1.parquet", tmp_dir.path().to_str().unwrap());
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "a",
+            DataType::Int64,
+            1,
+        )]));
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int64Array::from(
+            vec![1, 2, 3],
+        ))])
+        .unwrap();
+        write_row_groups(&file_path, arrow_schema, vec![batch], false);
+
+        (schema, file_path, tmp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_predicate_on_absent_column_uses_initial_default() {
+        let (schema, file_path, _tmp_dir) = setup_absent_column_with_initial_default();
+
+        // Projection applies the default.
+        let (batches, _) = read_once(
+            &file_path,
+            schema.clone(),
+            vec![1, 2],
+            Predicate::AlwaysTrue,
+            false,
+        )
+        .await;
+        assert_eq!(
+            batches[0].column(1).as_primitive::<Int64Type>().values(),
+            &[7, 7, 7]
+        );
+
+        let cases = [
+            ("b = 7", Reference::new("b").equal_to(Datum::long(7)), 3),
+            ("b IS NOT NULL", Reference::new("b").is_not_null(), 3),
+            (
+                "b IN (7, 8)",
+                Reference::new("b").is_in([Datum::long(7), Datum::long(8)]),
+                3,
+            ),
+            ("b > 5", Reference::new("b").greater_than(Datum::long(5)), 3),
+            ("b = 8", Reference::new("b").equal_to(Datum::long(8)), 0),
+            ("b IS NULL", Reference::new("b").is_null(), 0),
+        ];
+
+        let mut actual = Vec::new();
+        for (name, predicate, _) in &cases {
+            let (batches, _) = read_once(
+                &file_path,
+                schema.clone(),
+                vec![1, 2],
+                predicate.clone(),
+                false,
+            )
+            .await;
+            actual.push((
+                *name,
+                batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            ));
+        }
+        let expected: Vec<_> = cases.iter().map(|(name, _, rows)| (*name, *rows)).collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn test_page_index_on_absent_column_uses_initial_default() {
+        let (schema, file_path, _tmp_dir) = setup_absent_column_with_initial_default();
+        let file = File::open(&file_path).unwrap();
+        let metadata = ArrowReaderMetadata::load(
+            &file,
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+        )
+        .unwrap()
+        .metadata()
+        .clone();
+        let field_id_map = HashMap::from([(1, 0)]);
+
+        let cases = [
+            ("b = 7", Reference::new("b").equal_to(Datum::long(7))),
+            ("b IS NOT NULL", Reference::new("b").is_not_null()),
+            (
+                "b IN (7, 8)",
+                Reference::new("b").is_in([Datum::long(7), Datum::long(8)]),
+            ),
+        ];
+
+        // The reader applies the residual before page index pruning.
+        let mut actual = Vec::new();
+        for (name, predicate) in &cases {
+            let predicate = residual_for_missing_fields(
+                predicate.clone().bind(schema.clone(), true).unwrap(),
+                &HashSet::from([2]),
+                &field_id_map,
+                &schema,
+                None,
+                None,
+            )
+            .unwrap();
+            let selection = ArrowReader::get_row_selection_for_filter_predicate(
+                &predicate,
+                &metadata,
+                &None,
+                &field_id_map,
+                &schema,
+            )
+            .unwrap()
+            .expect("the file has a page index");
+            actual.push((*name, selection.row_count()));
+        }
+        let expected: Vec<_> = cases.iter().map(|(name, _)| (*name, 3)).collect();
+        assert_eq!(actual, expected);
+    }
+
+    /// A file that doesn't store its identity partition column `p`, as after a Hive
+    /// migration or `add_files`. Projection reads `p` from the partition value 7, so each
+    /// predicate must keep or drop all three rows as if `p` were stored as 7.
+    #[tokio::test]
+    async fn test_predicate_on_absent_identity_partition_column_uses_partition_value() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "p", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_partition_field("p", "p", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+        let partition = Struct::from_iter([Some(Literal::long(7))]);
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = format!("{}/1.parquet", tmp_dir.path().to_str().unwrap());
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "a",
+            DataType::Int64,
+            1,
+        )]));
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int64Array::from(
+            vec![1, 2, 3],
+        ))])
+        .unwrap();
+        write_row_groups(&file_path, arrow_schema, vec![batch], false);
+
+        let read = async |predicate: Predicate| {
+            let task = FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path.clone())
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1, 2])
+                .with_predicate(Some(predicate.bind(schema.clone(), true).unwrap()))
+                .with_partition_spec(Some(partition_spec.clone()))
+                .with_partition(Some(partition.clone()))
+                .with_case_sensitive(false)
+                .build()
+                .unwrap();
+            let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+            ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                .build()
+                .read(tasks)
+                .unwrap()
+                .stream()
+                .try_collect::<Vec<RecordBatch>>()
+                .await
+                .unwrap()
+        };
+
+        // Projection applies the partition value.
+        let batches = read(Predicate::AlwaysTrue).await;
+        assert_eq!(
+            batches[0].column(1).as_primitive::<Int64Type>().values(),
+            &[7, 7, 7]
+        );
+
+        let cases = [
+            ("p = 7", Reference::new("p").equal_to(Datum::long(7)), 3),
+            ("p IS NOT NULL", Reference::new("p").is_not_null(), 3),
+            ("p = 8", Reference::new("p").equal_to(Datum::long(8)), 0),
+            ("p IS NULL", Reference::new("p").is_null(), 0),
+        ];
+
+        let mut actual = Vec::new();
+        for (name, predicate, _) in &cases {
+            let batches = read(predicate.clone()).await;
+            actual.push((
+                *name,
+                batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            ));
+        }
+        let expected: Vec<_> = cases.iter().map(|(name, _, rows)| (*name, *rows)).collect();
+        assert_eq!(actual, expected);
     }
 }

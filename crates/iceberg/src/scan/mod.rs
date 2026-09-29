@@ -676,9 +676,10 @@ pub mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use crate::arrow::ArrowReaderBuilder;
-    use crate::expr::{BoundPredicate, Reference};
+    use crate::arrow::{ArrowReaderBuilder, schema_to_arrow_schema};
+    use crate::expr::{BoundPredicate, Predicate, Reference};
     use crate::io::{FileIO, OutputFile};
+    use crate::memory::tests::new_memory_catalog;
     use crate::metadata_columns::{
         RESERVED_COL_NAME_DELETE_FILE_PATH, RESERVED_COL_NAME_DELETE_FILE_POS,
         RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
@@ -696,7 +697,15 @@ pub mod tests {
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
-    use crate::{ErrorKind, TableIdent};
+    use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction};
+    use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+    use crate::writer::file_writer::ParquetWriterBuilder;
+    use crate::writer::file_writer::location_generator::{
+        DefaultFileNameGenerator, DefaultLocationGenerator,
+    };
+    use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+    use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+    use crate::{Catalog, ErrorKind, NamespaceIdent, TableCreation, TableIdent};
 
     fn render_template(template: &str, ctx: Value) -> String {
         let mut env = Environment::new();
@@ -4124,5 +4133,165 @@ pub mod tests {
             })
             .collect();
         assert_eq!(y, (1100..1200).collect::<Vec<i64>>());
+    }
+
+    /// Appends one data file holding `columns`, written with the table's current schema.
+    async fn append_data_file(
+        catalog: &impl Catalog,
+        table: Table,
+        columns: Vec<ArrayRef>,
+    ) -> Table {
+        let schema = table.metadata().current_schema().clone();
+        let batch =
+            RecordBatch::try_new(Arc::new(schema_to_arrow_schema(&schema).unwrap()), columns)
+                .unwrap();
+        let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            ParquetWriterBuilder::new(WriterProperties::default(), schema),
+            table.file_io().clone(),
+            DefaultLocationGenerator::new(table.metadata()).unwrap(),
+            DefaultFileNameGenerator::new(
+                Uuid::new_v4().to_string(),
+                None,
+                DataFileFormat::Parquet,
+            ),
+        );
+        let mut writer = DataFileWriterBuilder::new(rolling_file_writer_builder)
+            .build(None)
+            .await
+            .unwrap();
+        writer.write(batch).await.unwrap();
+        let data_files = writer.close().await.unwrap();
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .add_data_files(data_files)
+            .apply(tx)
+            .unwrap();
+        tx.commit(catalog).await.unwrap()
+    }
+
+    /// Mirrors Java's `TestFilterPushDown.testFilterPushdownOnInitialDefaultColumnAbsentFromFile`.
+    /// The first file is written before `c` is added with `initial-default` 'US', so its row
+    /// reads `c` as 'US'. The second file stores `c`.
+    #[tokio::test]
+    async fn test_scan_filter_on_initial_default_column_absent_from_file() {
+        use arrow_array::types::Int64Type;
+        use arrow_cast::cast;
+        use arrow_schema::DataType;
+
+        let catalog = new_memory_catalog().await;
+        let namespace = NamespaceIdent::new(format!("ns-{}", Uuid::new_v4()));
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+        let table = catalog
+            .create_table(
+                &namespace,
+                TableCreation::builder()
+                    .name("t".to_string())
+                    .schema(schema)
+                    .format_version(FormatVersion::V3)
+                    .build(),
+            )
+            .await
+            .unwrap();
+
+        let table = append_data_file(&catalog, table, vec![
+            Arc::new(Int64Array::from(vec![1])),
+            Arc::new(StringArray::from(vec!["Alice"])),
+        ])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_schema()
+            .add_column(
+                AddColumn::builder()
+                    .name("c")
+                    .field_type(Type::Primitive(PrimitiveType::String))
+                    .initial_default(Literal::string("US"))
+                    .write_default(Literal::string("US"))
+                    .build(),
+            )
+            .apply(tx)
+            .unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let table = append_data_file(&catalog, table, vec![
+            Arc::new(Int64Array::from(vec![2, 3])),
+            Arc::new(StringArray::from(vec!["Bob", "Eve"])),
+            Arc::new(StringArray::from(vec!["US", "CA"])),
+        ])
+        .await;
+
+        let cases = [
+            ("no filter", Predicate::AlwaysTrue, vec![1, 2, 3]),
+            (
+                "c = 'US'",
+                Reference::new("c").equal_to(Datum::string("US")),
+                vec![1, 2],
+            ),
+            ("c IS NOT NULL", Reference::new("c").is_not_null(), vec![
+                1, 2, 3,
+            ]),
+            (
+                "c = 'CA'",
+                Reference::new("c").equal_to(Datum::string("CA")),
+                vec![3],
+            ),
+            ("c IS NULL", Reference::new("c").is_null(), vec![]),
+        ];
+
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for row_selection_enabled in [false, true] {
+            for (name, predicate, ids) in &cases {
+                let batches: Vec<RecordBatch> = table
+                    .scan()
+                    .with_filter(predicate.clone())
+                    .with_row_selection_enabled(row_selection_enabled)
+                    .build()
+                    .unwrap()
+                    .to_arrow()
+                    .await
+                    .unwrap()
+                    .try_collect()
+                    .await
+                    .unwrap();
+                let mut rows: Vec<(i64, String)> = batches
+                    .iter()
+                    .flat_map(|batch| {
+                        let c = cast(batch.column_by_name("c").unwrap(), &DataType::Utf8).unwrap();
+                        let ids = batch
+                            .column_by_name("id")
+                            .unwrap()
+                            .as_primitive::<Int64Type>();
+                        (0..batch.num_rows())
+                            .map(|i| (ids.value(i), c.as_string::<i32>().value(i).to_string()))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                rows.sort();
+                actual.push((*name, row_selection_enabled, rows));
+
+                let all_rows = [(1, "US"), (2, "US"), (3, "CA")];
+                let rows = all_rows
+                    .iter()
+                    .filter(|(id, _)| ids.contains(id))
+                    .map(|(id, c)| (*id, c.to_string()))
+                    .collect();
+                expected.push((*name, row_selection_enabled, rows));
+            }
+        }
+        assert_eq!(actual, expected);
     }
 }

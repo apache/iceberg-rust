@@ -54,14 +54,14 @@ impl ExpressionEvaluator {
 /// evaluation logic to different parts of a data structure,
 /// specifically for data file partitions.
 #[derive(Debug)]
-struct ExpressionEvaluatorVisitor<'a> {
+pub(crate) struct ExpressionEvaluatorVisitor<'a> {
     /// Reference to a [`DataFile`]'s partition [`Struct`].
     partition: &'a Struct,
 }
 
 impl<'a> ExpressionEvaluatorVisitor<'a> {
     /// Creates a new [`ExpressionEvaluatorVisitor`].
-    fn new(partition: &'a Struct) -> Self {
+    pub(crate) fn new(partition: &'a Struct) -> Self {
         Self { partition }
     }
 }
