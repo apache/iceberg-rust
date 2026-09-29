@@ -26,6 +26,7 @@ mod utils;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -111,7 +112,7 @@ pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 pub const OPENDAL_IO_TIMEOUT_MS: &str = "opendal.io-timeout-ms";
 
 /// Matches the `opendal::layers::TimeoutLayer` default.
-const DEFAULT_IO_TIMEOUT_MS: u64 = 10_000;
+const DEFAULT_IO_TIMEOUT_MS: NonZeroU64 = NonZeroU64::new(10_000).unwrap();
 
 /// Backend-independent client settings, shared by every [`OpenDalStorage`] variant.
 ///
@@ -127,7 +128,7 @@ pub struct OpenDalClientConfig {
         parse_with = parse_io_timeout_ms,
         getter
     )]
-    io_timeout_ms: u64,
+    io_timeout_ms: NonZeroU64,
 }
 
 impl Default for OpenDalClientConfig {
@@ -140,15 +141,14 @@ impl Default for OpenDalClientConfig {
 
 /// Parses one timeout value; the `Properties` derive adds the property-key context.
 /// Zero is rejected: it would time every operation out before it starts.
-fn parse_io_timeout_ms(value: &str) -> Result<u64> {
-    match value.parse::<u64>() {
-        Ok(ms) if ms > 0 => Ok(ms),
-        _ => Err(Error::new(
+fn parse_io_timeout_ms(value: &str) -> Result<NonZeroU64> {
+    value.parse().map_err(|_| {
+        Error::new(
             ErrorKind::DataInvalid,
             "Expected a positive integer number of milliseconds",
         )
-        .with_context("value", format!("{value:?}"))),
-    }
+        .with_context("value", format!("{value:?}"))
+    })
 }
 
 /// OpenDAL-based storage factory.
@@ -477,10 +477,9 @@ impl OpenDalStorage {
         // failures with exponential backoff. The retry behavior also
         // benefits non-object-store backends.
         let operator = operator
-            .layer(
-                TimeoutLayer::new()
-                    .with_io_timeout(Duration::from_millis(self.client_config().io_timeout_ms())),
-            )
+            .layer(TimeoutLayer::new().with_io_timeout(Duration::from_millis(
+                self.client_config().io_timeout_ms().get(),
+            )))
             .layer(RetryLayer::new());
         Ok((operator, relative_path))
     }
@@ -821,10 +820,21 @@ mod tests {
     #[test]
     fn test_io_timeout_parsing() {
         let unset = OpenDalClientConfig::from_properties(&HashMap::new()).unwrap();
-        assert_eq!(unset.io_timeout_ms(), DEFAULT_IO_TIMEOUT_MS);
-        assert_eq!(client_config("45000").unwrap().io_timeout_ms(), 45_000);
+        assert_eq!(*unset.io_timeout_ms(), DEFAULT_IO_TIMEOUT_MS);
+        assert_eq!(
+            client_config("45000").unwrap().io_timeout_ms().get(),
+            45_000
+        );
+        assert_eq!(client_config("1").unwrap().io_timeout_ms().get(), 1);
+        assert_eq!(
+            client_config(&u64::MAX.to_string())
+                .unwrap()
+                .io_timeout_ms()
+                .get(),
+            u64::MAX
+        );
 
-        for invalid in ["0", "-1", "12.5", "abc", ""] {
+        for invalid in ["0", "-1", "12.5", "abc", "", "18446744073709551616"] {
             let err = client_config(invalid).unwrap_err().to_string();
             assert!(err.contains(OPENDAL_IO_TIMEOUT_MS), "{invalid}");
             assert!(err.contains(&format!("value: {invalid:?}")), "{err}");
@@ -842,9 +852,15 @@ mod tests {
                 TimeoutLayer::new().with_io_timeout(Duration::from_millis(ms))
             )
         };
-        assert_eq!(opendal_default, with_io_timeout(DEFAULT_IO_TIMEOUT_MS));
+        assert_eq!(
+            opendal_default,
+            with_io_timeout(DEFAULT_IO_TIMEOUT_MS.get())
+        );
         // If `Debug` stopped printing `io_timeout`, the check above would pass vacuously.
-        assert_ne!(opendal_default, with_io_timeout(DEFAULT_IO_TIMEOUT_MS + 1));
+        assert_ne!(
+            opendal_default,
+            with_io_timeout(DEFAULT_IO_TIMEOUT_MS.get() + 1)
+        );
     }
 
     #[cfg(feature = "opendal-s3")]
@@ -858,13 +874,18 @@ mod tests {
 
         let mut value = serde_json::to_value(&storage).unwrap();
         let restored: OpenDalStorage = serde_json::from_value(value.clone()).unwrap();
-        assert_eq!(restored.client_config().io_timeout_ms(), 45_000);
+        assert_eq!(restored.client_config().io_timeout_ms().get(), 45_000);
+
+        // Deserializing rejects zero too, not only `from_properties`.
+        let mut zero = value.clone();
+        zero["S3"]["client_config"]["io_timeout_ms"] = 0.into();
+        assert!(serde_json::from_value::<OpenDalStorage>(zero).is_err());
 
         // A payload without `client_config` falls back to the default.
         value["S3"].as_object_mut().unwrap().remove("client_config");
         let restored: OpenDalStorage = serde_json::from_value(value).unwrap();
         assert_eq!(
-            restored.client_config().io_timeout_ms(),
+            *restored.client_config().io_timeout_ms(),
             DEFAULT_IO_TIMEOUT_MS
         );
     }

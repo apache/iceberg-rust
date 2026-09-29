@@ -397,7 +397,7 @@ mod tests {
             .insert(OPENDAL_IO_TIMEOUT_MS.to_string(), "45000".to_string());
 
         let resolved = storage.resolve("s3://bucket/key").unwrap();
-        assert_eq!(resolved.client_config().io_timeout_ms(), 45_000);
+        assert_eq!(resolved.client_config().io_timeout_ms().get(), 45_000);
     }
 
     #[cfg(feature = "opendal-s3")]

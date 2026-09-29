@@ -74,7 +74,7 @@ pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::fmt(&self, f: &mut co
 pub struct iceberg_storage_opendal::OpenDalClientConfig
 impl iceberg_storage_opendal::OpenDalClientConfig
 pub fn iceberg_storage_opendal::OpenDalClientConfig::from_properties(properties: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::error::Result<Self>
-pub fn iceberg_storage_opendal::OpenDalClientConfig::io_timeout_ms(&self) -> u64
+pub fn iceberg_storage_opendal::OpenDalClientConfig::io_timeout_ms(&self) -> &core::num::nonzero::NonZeroU64
 impl core::clone::Clone for iceberg_storage_opendal::OpenDalClientConfig
 pub fn iceberg_storage_opendal::OpenDalClientConfig::clone(&self) -> iceberg_storage_opendal::OpenDalClientConfig
 impl core::default::Default for iceberg_storage_opendal::OpenDalClientConfig
