@@ -211,32 +211,38 @@ impl ArrowReader {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::fs::File;
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
+    use arrow_array::types::Int64Type;
     use arrow_array::{
         ArrayRef, Decimal128Array, Float32Array, Int32Array, Int64Array, LargeStringArray,
         RecordBatch, StringArray,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
+    use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
-    use parquet::file::metadata::{FileMetaData, ParquetMetaData, ParquetMetaDataBuilder};
+    use parquet::file::metadata::{
+        FileMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataBuilder,
+    };
     use parquet::file::properties::{EnabledStatistics, WriterProperties};
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
     use tempfile::TempDir;
 
     use crate::Runtime;
+    use crate::arrow::reader::predicate_visitor::residual_for_missing_fields;
     use crate::arrow::{ArrowReader, ArrowReaderBuilder};
     use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{
-        DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
+        DataContentType, DataFileFormat, Datum, Literal, NestedField, PartitionSpec, PrimitiveType,
+        Schema, SchemaRef, Struct, Transform, Type,
     };
 
     async fn test_perform_read(
@@ -1756,5 +1762,183 @@ mod tests {
         )
         .await;
         assert_eq!(rows(&on), 1);
+    }
+
+    /// Writes a file that stores only field 1 (`a`), with values 1, 2, 3.
+    fn write_file_without_b() -> (String, TempDir) {
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = format!("{}/1.parquet", tmp_dir.path().to_str().unwrap());
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "a",
+            DataType::Int64,
+            1,
+        )]));
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int64Array::from(
+            vec![1, 2, 3],
+        ))])
+        .unwrap();
+        write_row_groups(&file_path, arrow_schema, vec![batch], false);
+        (file_path, tmp_dir)
+    }
+
+    fn schema_with_b(b: NestedField) -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                    b.into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// Reads the file from [`write_file_without_b`], in which `b` reads as 7 on every row through
+    /// `schema` or `partition`, and asserts the rows each predicate keeps. Each predicate must keep
+    /// or drop all three rows as if `b` were stored as 7.
+    async fn assert_absent_b_reads_as_7(
+        schema: SchemaRef,
+        partition: Option<(Arc<PartitionSpec>, Struct)>,
+        cases: Vec<(Predicate, usize)>,
+    ) {
+        let (file_path, _tmp_dir) = write_file_without_b();
+        let read = async |predicate: Predicate| {
+            let task = FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path.clone())
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1, 2])
+                .with_predicate(Some(predicate.bind(schema.clone(), true).unwrap()))
+                .with_partition_spec(partition.as_ref().map(|(spec, _)| spec.clone()))
+                .with_partition(partition.as_ref().map(|(_, data)| data.clone()))
+                .with_case_sensitive(false)
+                .build()
+                .unwrap();
+            let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+            ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                .build()
+                .read(tasks)
+                .unwrap()
+                .stream()
+                .try_collect::<Vec<RecordBatch>>()
+                .await
+                .unwrap()
+        };
+
+        let batches = read(Predicate::AlwaysTrue).await;
+        assert_eq!(
+            batches[0].column(1).as_primitive::<Int64Type>().values(),
+            &[7, 7, 7]
+        );
+
+        let mut actual = Vec::new();
+        for (predicate, _) in &cases {
+            let batches = read(predicate.clone()).await;
+            let rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+            actual.push((predicate.to_string(), rows));
+        }
+        let expected: Vec<_> = cases
+            .iter()
+            .map(|(predicate, rows)| (predicate.to_string(), *rows))
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    /// A file written before column `b` was added with `initial-default` 7.
+    #[tokio::test]
+    async fn test_predicate_on_absent_column_uses_initial_default() {
+        let schema = schema_with_b(
+            NestedField::optional(2, "b", Type::Primitive(PrimitiveType::Long))
+                .with_initial_default(Literal::long(7)),
+        );
+        let b = || Reference::new("b");
+        assert_absent_b_reads_as_7(schema, None, vec![
+            (b().equal_to(Datum::long(7)), 3),
+            (b().is_not_null(), 3),
+            (b().is_in([Datum::long(7), Datum::long(8)]), 3),
+            (b().greater_than(Datum::long(5)), 3),
+            (b().equal_to(Datum::long(8)), 0),
+            (b().is_null(), 0),
+        ])
+        .await;
+    }
+
+    /// A file that doesn't store its identity partition column `b`, as after a Hive migration or
+    /// `add_files`, with partition value 7.
+    #[tokio::test]
+    async fn test_predicate_on_absent_identity_partition_column_uses_partition_value() {
+        let schema = schema_with_b(NestedField::optional(
+            2,
+            "b",
+            Type::Primitive(PrimitiveType::Long),
+        ));
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .add_partition_field("b", "b", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        let partition = Struct::from_iter([Some(Literal::long(7))]);
+        let b = || Reference::new("b");
+        assert_absent_b_reads_as_7(schema, Some((Arc::new(partition_spec), partition)), vec![
+            (b().equal_to(Datum::long(7)), 3),
+            (b().is_not_null(), 3),
+            (b().equal_to(Datum::long(8)), 0),
+            (b().is_null(), 0),
+        ])
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_page_index_on_absent_column_uses_initial_default() {
+        let schema = schema_with_b(
+            NestedField::optional(2, "b", Type::Primitive(PrimitiveType::Long))
+                .with_initial_default(Literal::long(7)),
+        );
+        let (file_path, _tmp_dir) = write_file_without_b();
+        let metadata = ArrowReaderMetadata::load(
+            &File::open(&file_path).unwrap(),
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+        )
+        .unwrap()
+        .metadata()
+        .clone();
+        let field_id_map = HashMap::from([(1, 0)]);
+
+        let b = || Reference::new("b");
+        let predicates = [
+            b().equal_to(Datum::long(7)),
+            b().is_not_null(),
+            b().is_in([Datum::long(7), Datum::long(8)]),
+        ];
+
+        // The reader applies the residual before page index pruning.
+        let mut actual = Vec::new();
+        for predicate in &predicates {
+            let residual = residual_for_missing_fields(
+                predicate.clone().bind(schema.clone(), true).unwrap(),
+                &HashSet::from([2]),
+                &field_id_map,
+                &schema,
+                None,
+                None,
+            )
+            .unwrap();
+            let selection = ArrowReader::get_row_selection_for_filter_predicate(
+                &residual,
+                &metadata,
+                &None,
+                &field_id_map,
+                &schema,
+            )
+            .unwrap()
+            .expect("the file has a page index");
+            actual.push((predicate.to_string(), selection.row_count()));
+        }
+        let expected: Vec<_> = predicates.iter().map(|p| (p.to_string(), 3)).collect();
+        assert_eq!(actual, expected);
     }
 }
