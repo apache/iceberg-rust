@@ -524,20 +524,52 @@ mod tests {
         let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
         let table = append_files(&catalog, &table, vec![f1.clone()]).await;
 
-        // Rewrite: delete f1, add merged → f1's manifest should be omitted.
+        // Rewrite: delete f1, add merged. f1's manifest keeps no live entry,
+        // but it still has to record the removal for this snapshot.
         let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
         let tx = Transaction::new(&table);
-        let action = tx.rewrite_files().delete_file(f1).add_file(merged);
+        let action = tx.rewrite_files().delete_file(f1.clone()).add_file(merged);
         let tx = action.apply(tx).unwrap();
         let table = tx.commit(&catalog).await.unwrap();
 
-        // Verify: only 1 manifest (the new one), not 2.
         let snapshot = table.metadata().current_snapshot().unwrap();
+        let emptied = find_entry(&table, snapshot, "test/1.parquet")
+            .await
+            .expect("the removal has to be recorded somewhere");
+        assert_eq!(emptied.status(), ManifestStatus::Deleted);
+        assert_eq!(emptied.snapshot_id(), Some(snapshot.snapshot_id()));
         let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
-        assert_eq!(
-            manifest_list.entries().len(),
-            1,
-            "empty manifest should be omitted, not kept"
+        assert_eq!(manifest_list.entries().len(), 2);
+        assert!(
+            manifest_list
+                .entries()
+                .iter()
+                .any(|m| !m.has_added_files() && !m.has_existing_files()),
+            "the emptied manifest holds only the deleted entry"
+        );
+
+        // A later rewrite drops it: it has nothing live, and no removal of its
+        // own left to record. An append would carry it along, as in Java,
+        // where only a merging commit rebuilds the manifest list.
+        let merged = find_entry(&table, snapshot, "test/merged.parquet")
+            .await
+            .unwrap()
+            .data_file()
+            .clone();
+        let merged_again = make_data_file(&table, "test/merged-2.parquet", 10, 100);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files()
+            .delete_file(merged)
+            .add_file(merged_again);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        assert!(
+            find_entry(&table, snapshot, "test/1.parquet")
+                .await
+                .is_none(),
+            "an all-deleted manifest should not survive a later rewrite"
         );
     }
 
@@ -1119,9 +1151,12 @@ mod tests {
                 .iter()
                 .find(|m| m.partition_spec_id == 0)
                 .unwrap();
+            // The summary spans the deleted entry as well as the survivor,
+            // as it does in Java, where every entry updates it.
             let summary = &old_spec_manifest.partitions.as_ref().unwrap()[0];
+            let morning = Datum::timestamptz_micros(TS_MORNING).to_bytes().unwrap();
             let evening = Datum::timestamptz_micros(TS_EVENING).to_bytes().unwrap();
-            assert_eq!(summary.lower_bound.as_ref(), Some(&evening));
+            assert_eq!(summary.lower_bound.as_ref(), Some(&morning));
             assert_eq!(summary.upper_bound.as_ref(), Some(&evening));
 
             let totals = &snapshot.summary().additional_properties;
@@ -1205,12 +1240,39 @@ mod tests {
                 manifest_list
                     .entries()
                     .iter()
-                    .all(|m| m.partition_spec_id == 1),
-                "{format_version}: a spec-0 manifest outlived its last file"
+                    .filter(|m| m.partition_spec_id == 0)
+                    .all(|m| !m.has_added_files() && !m.has_existing_files()),
+                "{format_version}: a spec-0 manifest kept a live file"
             );
+
             let totals = &snapshot.summary().additional_properties;
             assert_eq!(totals.get("total-data-files").unwrap(), "2");
             assert_eq!(totals.get("total-records").unwrap(), "30");
+
+            // The spec-0 manifest only carries the removal made by the snapshot
+            // that emptied it. The next rewrite has no reason to keep it.
+            let merged = make_file_in_spec("test/merged-3.parquet", 10, 1, Literal::date(DAY));
+            let tx = Transaction::new(&table);
+            let action = tx
+                .rewrite_files()
+                .delete_file(make_file_in_spec(
+                    "test/merged-1.parquet",
+                    10,
+                    1,
+                    Literal::date(DAY),
+                ))
+                .add_file(merged);
+            let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+            let snapshot = table.metadata().current_snapshot().unwrap();
+            let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
+            assert!(
+                manifest_list
+                    .entries()
+                    .iter()
+                    .all(|m| m.partition_spec_id == 1),
+                "{format_version}: a spec-0 manifest outlived its last file"
+            );
         }
     }
 

@@ -149,8 +149,11 @@ impl ManifestFilterManager {
                 .clone();
             let schema = table.metadata().current_schema().clone();
 
-            // Rewrite: keep surviving entries as EXISTING, drop deleted ones.
+            // Rewrite: keep surviving entries as EXISTING, and record the
+            // removed ones as DELETED so that the file they name can be
+            // cleaned up when this snapshot expires.
             let mut surviving_entries: Vec<ManifestEntry> = Vec::new();
+            let mut removed_entries: Vec<ManifestEntry> = Vec::new();
             for entry in manifest.entries() {
                 if entry.is_alive() && self.deleted_file_paths.contains(entry.file_path()) {
                     // Record removal metrics.
@@ -160,6 +163,7 @@ impl ManifestFilterManager {
                         schema.clone(),
                         manifest_spec.clone(),
                     );
+                    removed_entries.push(entry.as_ref().clone());
                 } else if entry.is_alive() {
                     // Surviving entry — re-emit as EXISTING with original ids preserved.
                     let seq = entry.sequence_number().ok_or_else(|| {
@@ -190,8 +194,8 @@ impl ManifestFilterManager {
                 // Already-deleted entries (status == Deleted) are dropped.
             }
 
-            if surviving_entries.is_empty() {
-                // Manifest is now empty — omit entirely.
+            if surviving_entries.is_empty() && removed_entries.is_empty() {
+                // Nothing left to say about this manifest — omit entirely.
                 continue;
             }
 
@@ -216,6 +220,12 @@ impl ManifestFilterManager {
             )?;
             for entry in surviving_entries {
                 writer.add_existing_entry(entry)?;
+            }
+            for entry in removed_entries {
+                // `add_delete_entry` stamps the removing snapshot on the entry
+                // and keeps the file's own sequence numbers, which is what an
+                // expiring reader needs to attribute the removal.
+                writer.add_delete_entry(entry)?;
             }
             let new_manifest = writer.write_manifest_file().await?;
             result.push(new_manifest);
