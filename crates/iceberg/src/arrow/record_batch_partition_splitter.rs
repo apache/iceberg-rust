@@ -249,7 +249,8 @@ mod tests {
                         .source_ids(vec![1])
                         .name("id_bucket".to_string())
                         .transform(Transform::Identity)
-                        .build(),
+                        .build()
+                        .unwrap(),
                 )
                 .unwrap()
                 .build()
@@ -364,7 +365,8 @@ mod tests {
                         .source_ids(vec![1])
                         .name("id_bucket".to_string())
                         .transform(Transform::Identity)
-                        .build(),
+                        .build()
+                        .unwrap(),
                 )
                 .unwrap()
                 .build()

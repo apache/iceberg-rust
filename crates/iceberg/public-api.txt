@@ -2925,6 +2925,8 @@ impl core::cmp::PartialEq for iceberg::spec::UnboundPartitionField
 pub fn iceberg::spec::UnboundPartitionField::eq(&self, other: &iceberg::spec::UnboundPartitionField) -> bool
 impl core::convert::From<iceberg::spec::PartitionField> for iceberg::spec::UnboundPartitionField
 pub fn iceberg::spec::UnboundPartitionField::from(field: iceberg::spec::PartitionField) -> Self
+impl core::convert::From<iceberg::spec::UnboundPartitionField> for iceberg::Result<iceberg::spec::UnboundPartitionField>
+pub fn iceberg::Result<iceberg::spec::UnboundPartitionField>::from(field: iceberg::spec::UnboundPartitionField) -> Self
 impl core::fmt::Debug for iceberg::spec::UnboundPartitionField
 pub fn iceberg::spec::UnboundPartitionField::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::spec::UnboundPartitionField

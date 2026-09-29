@@ -284,7 +284,8 @@ mod tests {
                     .name("a".to_string())
                     .field_id(1)
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()

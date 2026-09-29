@@ -308,7 +308,8 @@ mod tests {
                     .name("a".to_string())
                     .field_id(1)
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -345,7 +346,8 @@ mod tests {
                     .field_id(1000)
                     .name("year".to_string())
                     .transform(Transform::Year)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .unwrap()
             .build()
@@ -382,7 +384,8 @@ mod tests {
                     .field_id(1000)
                     .name("month".to_string())
                     .transform(Transform::Month)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .unwrap()
             .build()
@@ -419,7 +422,8 @@ mod tests {
                     .field_id(1000)
                     .name("day".to_string())
                     .transform(Transform::Day)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .unwrap()
             .build()
@@ -456,7 +460,8 @@ mod tests {
                     .name("name_truncate".to_string())
                     .field_id(3)
                     .transform(Transform::Truncate(4))
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -496,7 +501,8 @@ mod tests {
                     .name("a_bucket[7]".to_string())
                     .field_id(1)
                     .transform(Transform::Bucket(7))
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()

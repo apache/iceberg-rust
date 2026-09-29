@@ -206,7 +206,8 @@ mod tests {
                         .source_ids(vec![source_id])
                         .name(name)
                         .transform(transform)
-                        .build(),
+                        .build()
+                        .unwrap(),
                 )
                 .unwrap();
         }
@@ -275,7 +276,8 @@ mod tests {
                     .field_id(1000)
                     .name("cat_old".to_string())
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -290,7 +292,8 @@ mod tests {
                     .field_id(1000)
                     .name("cat_new".to_string())
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -315,7 +318,8 @@ mod tests {
                     .field_id(1000)
                     .name("category".to_string())
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -330,7 +334,8 @@ mod tests {
                     .field_id(1000)
                     .name("category_v2".to_string())
                     .transform(Transform::Void)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -393,7 +398,8 @@ mod tests {
                     .field_id(spec_v0.fields()[0].field_id)
                     .name("category".to_string())
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .add_partition_field("ts", "ts_year", Transform::Year)

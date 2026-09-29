@@ -3837,7 +3837,8 @@ mod tests {
                             .source_ids(vec![1])
                             .name("id")
                             .transform(Transform::Truncate(3))
-                            .build(),
+                            .build()
+                            .unwrap(),
                     )
                     .unwrap()
                     .build(),

@@ -1442,7 +1442,8 @@ mod tests {
                     .source_ids(vec![2])
                     .name("y")
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -1684,6 +1685,7 @@ mod tests {
                             .name("y".to_string())
                             .transform(Transform::Identity)
                             .build()
+                            .unwrap()
                     )
                     .unwrap()
                     .build()
@@ -1758,13 +1760,15 @@ mod tests {
                     .field_id(1000)
                     .name("y".to_string())
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
                 // A new field without field id - should still be without field id in changes
                 UnboundPartitionField::builder()
                     .source_ids(vec![3])
                     .name("z".to_string())
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .unwrap()
             .build();
@@ -1785,7 +1789,8 @@ mod tests {
                     .field_id(1000)
                     .name("y".to_string())
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .add_unbound_field(
@@ -1794,7 +1799,8 @@ mod tests {
                     .field_id(1001)
                     .name("z".to_string())
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -1838,7 +1844,8 @@ mod tests {
                     .source_ids(vec![1])
                     .name("y_bucket[2]")
                     .transform(Transform::Bucket(2))
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build();
@@ -1859,7 +1866,8 @@ mod tests {
                     .field_id(1001)
                     .name("y_bucket[2]".to_string())
                     .transform(Transform::Bucket(2))
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -2430,13 +2438,15 @@ mod tests {
                     .field_id(1000)
                     .name("y".to_string())
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
                 UnboundPartitionField::builder()
                     .source_ids(vec![3])
                     .field_id(1002)
                     .name("z".to_string())
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .unwrap()
             .build();
@@ -2766,7 +2776,8 @@ mod tests {
                     .source_ids(vec![1])
                     .name("bucket_data")
                     .transform(Transform::Bucket(16))
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build();
@@ -2831,7 +2842,8 @@ mod tests {
                     .source_ids(vec![1])
                     .name("partition_col")
                     .transform(Transform::Bucket(16))
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build();
@@ -2886,7 +2898,8 @@ mod tests {
                     .source_ids(vec![1])
                     .name("data_bucket")
                     .transform(Transform::Bucket(16))
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build();
@@ -2915,7 +2928,8 @@ mod tests {
                     .source_ids(vec![1])
                     .name("existing_field")
                     .transform(Transform::Bucket(8))
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build();
@@ -2951,7 +2965,8 @@ mod tests {
                     .source_ids(vec![1])
                     .name("bucket_data")
                     .transform(Transform::Bucket(16))
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build();
@@ -3053,7 +3068,8 @@ mod tests {
                     .source_ids(vec![2])
                     .name("partition_data")
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build();
@@ -3108,7 +3124,8 @@ mod tests {
                     .source_ids(vec![1])
                     .name("bucket_data")
                     .transform(Transform::Bucket(16))
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build();
@@ -3164,7 +3181,8 @@ mod tests {
                     .source_ids(vec![1])
                     .name("data_bucket")
                     .transform(Transform::Bucket(16))
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build();
@@ -3194,7 +3212,8 @@ mod tests {
                     .source_ids(vec![2])
                     .name("new_partition_field")
                     .transform(Transform::Bucket(8))
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build();
@@ -3601,7 +3620,8 @@ mod tests {
                     .source_ids(vec![1])
                     .name("id")
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build();
@@ -3626,7 +3646,8 @@ mod tests {
                     .source_ids(vec![2])
                     .name("data_bucket")
                     .transform(Transform::Bucket(10))
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build();
@@ -3642,7 +3663,8 @@ mod tests {
                     .source_ids(vec![1])
                     .name("id")
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ) // Should reuse 1000
             .unwrap()
             .add_partition_field(
@@ -3650,7 +3672,8 @@ mod tests {
                     .source_ids(vec![2])
                     .name("data_bucket")
                     .transform(Transform::Bucket(10))
-                    .build(),
+                    .build()
+                    .unwrap(),
             ) // Should reuse 1001
             .unwrap()
             .add_partition_field(
@@ -3658,7 +3681,8 @@ mod tests {
                     .source_ids(vec![3])
                     .name("year")
                     .transform(Transform::Year)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ) // Should get new 1002
             .unwrap()
             .build();

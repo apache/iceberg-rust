@@ -1727,7 +1727,8 @@ mod tests {
                     .field_id(1000)
                     .name("ts_day".to_string())
                     .transform(Transform::Day)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -1877,7 +1878,8 @@ mod tests {
                     .field_id(1000)
                     .name("ts_day".to_string())
                     .transform(Transform::Day)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -2955,7 +2957,8 @@ mod tests {
                     .field_id(1000)
                     .name("x".to_string())
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -3054,7 +3057,8 @@ mod tests {
                     .field_id(1000)
                     .name("x".to_string())
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -3185,7 +3189,8 @@ mod tests {
                     .field_id(1000)
                     .name("x".to_string())
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -3273,7 +3278,8 @@ mod tests {
                     .field_id(1000)
                     .name("x".to_string())
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -4498,7 +4504,8 @@ mod tests {
                         .source_ids(vec![2])
                         .name("y")
                         .transform(Transform::Identity)
-                        .build(),
+                        .build()
+                        .unwrap(),
                 )
                 .unwrap()
                 .build(),
@@ -4519,7 +4526,8 @@ mod tests {
                         .source_ids(vec![3])
                         .name("z")
                         .transform(Transform::Identity)
-                        .build(),
+                        .build()
+                        .unwrap(),
                 )
                 .unwrap()
                 .build(),

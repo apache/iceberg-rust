@@ -293,7 +293,8 @@ mod tests {
                     .source_ids(vec![2])
                     .name("part")
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build();

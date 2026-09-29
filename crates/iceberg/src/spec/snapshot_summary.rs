@@ -831,7 +831,8 @@ mod tests {
                         .source_ids(vec![2])
                         .name("year".to_string())
                         .transform(Transform::Identity)
-                        .build(),
+                        .build()
+                        .unwrap(),
                 ])
                 .unwrap()
                 .with_spec_id(1)
@@ -981,7 +982,8 @@ mod tests {
                         .source_ids(vec![2])
                         .name("year".to_string())
                         .transform(Transform::Identity)
-                        .build(),
+                        .build()
+                        .unwrap(),
                 ])
                 .unwrap()
                 .with_spec_id(1)

@@ -1664,7 +1664,8 @@ mod tests {
                             .source_ids(vec![4])
                             .name("ts_day")
                             .transform(Transform::Day)
-                            .build(),
+                            .build()
+                            .unwrap(),
                     )
                     .unwrap()
                     .add_partition_field(
@@ -1672,7 +1673,8 @@ mod tests {
                             .source_ids(vec![1])
                             .name("id_bucket")
                             .transform(Transform::Bucket(16))
-                            .build(),
+                            .build()
+                            .unwrap(),
                     )
                     .unwrap()
                     .add_partition_field(
@@ -1680,7 +1682,8 @@ mod tests {
                             .source_ids(vec![2])
                             .name("id_truncate")
                             .transform(Transform::Truncate(4))
-                            .build(),
+                            .build()
+                            .unwrap(),
                     )
                     .unwrap()
                     .build(),
