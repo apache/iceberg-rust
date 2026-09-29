@@ -78,11 +78,15 @@ pub fn ancestors_between(
     })
 }
 
-/// Resolve the snapshot ID from the latest main-history entry at or before
-/// `timestamp_ms` (milliseconds since the Unix epoch).
+/// Resolve the snapshot ID from the main-history entry with the greatest timestamp
+/// at or before `timestamp_ms` (milliseconds since the Unix epoch), taking the first
+/// entry on ties.
 ///
-/// Equal timestamps select the first entry. Returns [`ErrorKind::DataInvalid`]
-/// if no matching history exists. The returned snapshot may have expired, so
+/// PyIceberg selects the last qualifying entry in log order, so results can differ
+/// when timestamps tie or entries are out of order.
+///
+/// Returns [`ErrorKind::DataInvalid`] if no matching history exists.
+/// The returned snapshot may have expired, so
 /// [`snapshot_by_id`](crate::spec::TableMetadata::snapshot_by_id) can still return `None`.
 ///
 /// ```
