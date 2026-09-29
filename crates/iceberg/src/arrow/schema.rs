@@ -1432,7 +1432,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow_schema::extension::Uuid as DataTypeUuidExt;
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
 
     use super::*;
@@ -1743,7 +1742,7 @@ mod tests {
     fn test_converting_uuid_from_arrow_to_iceberg_to_arrow_should_give_uuid() {
         let arrow_schema = ArrowSchema::new(vec![
             simple_field("uuid_field", DataType::FixedSizeBinary(16), false, "1")
-                .with_extension_type(DataTypeUuidExt),
+                .with_extension_type(UuidExtensionType),
         ]);
         let output =
             schema_to_arrow_schema(&arrow_schema_to_schema(&arrow_schema).unwrap()).unwrap();
@@ -1769,7 +1768,7 @@ mod tests {
     fn test_arrow_schema_to_schema_should_convert_uuid_when_fixed_size_binary() {
         let converted_schema = arrow_schema_to_schema(&ArrowSchema::new(vec![
             simple_field("uuid_field", DataType::FixedSizeBinary(16), false, "1")
-                .with_extension_type(DataTypeUuidExt),
+                .with_extension_type(UuidExtensionType),
         ]))
         .unwrap();
 
@@ -1796,7 +1795,7 @@ mod tests {
             false,
             "1",
         )
-        .with_extension_type(DataTypeUuidExt);
+        .with_extension_type(UuidExtensionType);
         field = field.with_data_type(DataType::Utf8);
 
         let error = arrow_schema_to_schema(&ArrowSchema::new(vec![field])).unwrap_err();
@@ -1900,7 +1899,7 @@ mod tests {
             simple_field("map", map, false, "16"),
             simple_field("struct", r#struct, false, "17"),
             simple_field("uuid", DataType::FixedSizeBinary(16), false, "30")
-                .with_extension_type(DataTypeUuidExt),
+                .with_extension_type(UuidExtensionType),
             Field::new(
                 "v",
                 DataType::Struct(Fields::from(vec![
@@ -2625,7 +2624,7 @@ mod tests {
             Field::new("name", DataType::Utf8, true),
             Field::new("price", DataType::Decimal128(10, 2), false),
             Field::new("uuid", DataType::FixedSizeBinary(16), false)
-                .with_extension_type(DataTypeUuidExt),
+                .with_extension_type(UuidExtensionType),
             Field::new(
                 "created_at",
                 DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
