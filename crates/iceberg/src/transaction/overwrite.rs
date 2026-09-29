@@ -298,7 +298,7 @@ mod tests {
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
         ManifestEntryRef, ManifestStatus, Operation, PrimitiveType, SnapshotRef, Struct, Transform,
-        Type, UnboundPartitionSpec,
+        Type, UnboundPartitionField, UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::transaction::tests::{make_v2_minimal_table, make_v3_minimal_table_in_catalog};
@@ -675,7 +675,14 @@ mod tests {
             .into_builder(None)
             .add_default_partition_spec(
                 UnboundPartitionSpec::builder()
-                    .add_partition_field(2, "y", Transform::Identity)
+                    .add_partition_field(
+                        UnboundPartitionField::builder()
+                            .source_ids(vec![2])
+                            .name("y")
+                            .transform(Transform::Identity)
+                            .build()
+                            .unwrap(),
+                    )
                     .unwrap()
                     .build(),
             )
