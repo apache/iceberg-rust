@@ -3840,13 +3840,14 @@ mod tests {
             .properties(HashMap::from([("owner".to_string(), "testx".to_string())]))
             .partition_spec(
                 UnboundPartitionSpec::builder()
-                    .add_partition_fields(vec![
+                    .add_partition_field(
                         UnboundPartitionField::builder()
-                            .source_id(1)
+                            .source_ids(vec![1])
+                            .name("id")
                             .transform(Transform::Truncate(3))
-                            .name("id".to_string())
-                            .build(),
-                    ])
+                            .build()
+                            .unwrap(),
+                    )
                     .unwrap()
                     .build(),
             )
