@@ -3832,648 +3832,649 @@
 <a href=#3832 id=3832 data-nosnippet>3832</a>            .properties(HashMap::from([(<span class="string">"owner"</span>.to_string(), <span class="string">"testx"</span>.to_string())]))
 <a href=#3833 id=3833 data-nosnippet>3833</a>            .partition_spec(
 <a href=#3834 id=3834 data-nosnippet>3834</a>                UnboundPartitionSpec::builder()
-<a href=#3835 id=3835 data-nosnippet>3835</a>                    .add_partition_fields(<span class="macro">vec!</span>[
+<a href=#3835 id=3835 data-nosnippet>3835</a>                    .add_partition_field(
 <a href=#3836 id=3836 data-nosnippet>3836</a>                        UnboundPartitionField::builder()
-<a href=#3837 id=3837 data-nosnippet>3837</a>                            .source_id(<span class="number">1</span>)
-<a href=#3838 id=3838 data-nosnippet>3838</a>                            .transform(Transform::Truncate(<span class="number">3</span>))
-<a href=#3839 id=3839 data-nosnippet>3839</a>                            .name(<span class="string">"id"</span>.to_string())
-<a href=#3840 id=3840 data-nosnippet>3840</a>                            .build(),
-<a href=#3841 id=3841 data-nosnippet>3841</a>                    ])
-<a href=#3842 id=3842 data-nosnippet>3842</a>                    .unwrap()
-<a href=#3843 id=3843 data-nosnippet>3843</a>                    .build(),
-<a href=#3844 id=3844 data-nosnippet>3844</a>            )
-<a href=#3845 id=3845 data-nosnippet>3845</a>            .sort_order(
-<a href=#3846 id=3846 data-nosnippet>3846</a>                SortOrder::builder()
-<a href=#3847 id=3847 data-nosnippet>3847</a>                    .with_sort_field(
-<a href=#3848 id=3848 data-nosnippet>3848</a>                        SortField::builder()
-<a href=#3849 id=3849 data-nosnippet>3849</a>                            .source_id(<span class="number">2</span>)
-<a href=#3850 id=3850 data-nosnippet>3850</a>                            .transform(Transform::Identity)
-<a href=#3851 id=3851 data-nosnippet>3851</a>                            .direction(SortDirection::Ascending)
-<a href=#3852 id=3852 data-nosnippet>3852</a>                            .null_order(NullOrder::First)
-<a href=#3853 id=3853 data-nosnippet>3853</a>                            .build(),
-<a href=#3854 id=3854 data-nosnippet>3854</a>                    )
-<a href=#3855 id=3855 data-nosnippet>3855</a>                    .build_unbound()
-<a href=#3856 id=3856 data-nosnippet>3856</a>                    .unwrap(),
-<a href=#3857 id=3857 data-nosnippet>3857</a>            )
-<a href=#3858 id=3858 data-nosnippet>3858</a>            .build();
-<a href=#3859 id=3859 data-nosnippet>3859</a>
-<a href=#3860 id=3860 data-nosnippet>3860</a>        <span class="kw">let </span>table = catalog
-<a href=#3861 id=3861 data-nosnippet>3861</a>            .create_table(
-<a href=#3862 id=3862 data-nosnippet>3862</a>                <span class="kw-2">&amp;</span>SessionContext::empty(),
-<a href=#3863 id=3863 data-nosnippet>3863</a>                <span class="kw-2">&amp;</span>NamespaceIdent::from_strs([<span class="string">"ns1"</span>]).unwrap(),
-<a href=#3864 id=3864 data-nosnippet>3864</a>                table_creation,
-<a href=#3865 id=3865 data-nosnippet>3865</a>            )
-<a href=#3866 id=3866 data-nosnippet>3866</a>            .<span class="kw">await
-<a href=#3867 id=3867 data-nosnippet>3867</a>            </span>.unwrap();
-<a href=#3868 id=3868 data-nosnippet>3868</a>
-<a href=#3869 id=3869 data-nosnippet>3869</a>        <span class="macro">assert_eq!</span>(
-<a href=#3870 id=3870 data-nosnippet>3870</a>            <span class="kw-2">&amp;</span>TableIdent::from_strs(<span class="macro">vec!</span>[<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap(),
-<a href=#3871 id=3871 data-nosnippet>3871</a>            table.identifier()
-<a href=#3872 id=3872 data-nosnippet>3872</a>        );
-<a href=#3873 id=3873 data-nosnippet>3873</a>        <span class="macro">assert_eq!</span>(
-<a href=#3874 id=3874 data-nosnippet>3874</a>            <span class="string">"s3://warehouse/database/table/metadata.json"</span>,
-<a href=#3875 id=3875 data-nosnippet>3875</a>            table.metadata_location().unwrap()
-<a href=#3876 id=3876 data-nosnippet>3876</a>        );
-<a href=#3877 id=3877 data-nosnippet>3877</a>        <span class="macro">assert_eq!</span>(FormatVersion::V1, table.metadata().format_version());
-<a href=#3878 id=3878 data-nosnippet>3878</a>        <span class="macro">assert_eq!</span>(<span class="string">"s3://warehouse/database/table"</span>, table.metadata().location());
-<a href=#3879 id=3879 data-nosnippet>3879</a>        <span class="macro">assert_eq!</span>(
-<a href=#3880 id=3880 data-nosnippet>3880</a>            <span class="macro">uuid!</span>(<span class="string">"bf289591-dcc0-4234-ad4f-5c3eed811a29"</span>),
-<a href=#3881 id=3881 data-nosnippet>3881</a>            table.metadata().uuid()
-<a href=#3882 id=3882 data-nosnippet>3882</a>        );
-<a href=#3883 id=3883 data-nosnippet>3883</a>        <span class="macro">assert_eq!</span>(
-<a href=#3884 id=3884 data-nosnippet>3884</a>            <span class="number">1657810967051</span>,
-<a href=#3885 id=3885 data-nosnippet>3885</a>            table
-<a href=#3886 id=3886 data-nosnippet>3886</a>                .metadata()
-<a href=#3887 id=3887 data-nosnippet>3887</a>                .last_updated_timestamp()
-<a href=#3888 id=3888 data-nosnippet>3888</a>                .unwrap()
-<a href=#3889 id=3889 data-nosnippet>3889</a>                .timestamp_millis()
-<a href=#3890 id=3890 data-nosnippet>3890</a>        );
-<a href=#3891 id=3891 data-nosnippet>3891</a>        <span class="macro">assert_eq!</span>(
-<a href=#3892 id=3892 data-nosnippet>3892</a>            <span class="macro">vec!</span>[<span class="kw-2">&amp;</span>Arc::new(
-<a href=#3893 id=3893 data-nosnippet>3893</a>                Schema::builder()
-<a href=#3894 id=3894 data-nosnippet>3894</a>                    .with_fields(<span class="macro">vec!</span>[
-<a href=#3895 id=3895 data-nosnippet>3895</a>                        NestedField::optional(<span class="number">1</span>, <span class="string">"foo"</span>, Type::Primitive(PrimitiveType::String))
-<a href=#3896 id=3896 data-nosnippet>3896</a>                            .into(),
-<a href=#3897 id=3897 data-nosnippet>3897</a>                        NestedField::required(<span class="number">2</span>, <span class="string">"bar"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#3898 id=3898 data-nosnippet>3898</a>                        NestedField::optional(<span class="number">3</span>, <span class="string">"baz"</span>, Type::Primitive(PrimitiveType::Boolean))
-<a href=#3899 id=3899 data-nosnippet>3899</a>                            .into(),
-<a href=#3900 id=3900 data-nosnippet>3900</a>                    ])
-<a href=#3901 id=3901 data-nosnippet>3901</a>                    .with_schema_id(<span class="number">0</span>)
-<a href=#3902 id=3902 data-nosnippet>3902</a>                    .with_identifier_field_ids(<span class="macro">vec!</span>[<span class="number">2</span>])
-<a href=#3903 id=3903 data-nosnippet>3903</a>                    .build()
-<a href=#3904 id=3904 data-nosnippet>3904</a>                    .unwrap()
-<a href=#3905 id=3905 data-nosnippet>3905</a>            )],
-<a href=#3906 id=3906 data-nosnippet>3906</a>            table.metadata().schemas_iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#3907 id=3907 data-nosnippet>3907</a>        );
-<a href=#3908 id=3908 data-nosnippet>3908</a>        <span class="macro">assert_eq!</span>(
-<a href=#3909 id=3909 data-nosnippet>3909</a>            <span class="kw-2">&amp;</span>HashMap::from([
-<a href=#3910 id=3910 data-nosnippet>3910</a>                (
-<a href=#3911 id=3911 data-nosnippet>3911</a>                    <span class="string">"write.delete.parquet.compression-codec"</span>.to_string(),
-<a href=#3912 id=3912 data-nosnippet>3912</a>                    <span class="string">"zstd"</span>.to_string()
-<a href=#3913 id=3913 data-nosnippet>3913</a>                ),
-<a href=#3914 id=3914 data-nosnippet>3914</a>                (
-<a href=#3915 id=3915 data-nosnippet>3915</a>                    <span class="string">"write.metadata.compression-codec"</span>.to_string(),
-<a href=#3916 id=3916 data-nosnippet>3916</a>                    <span class="string">"gzip"</span>.to_string()
-<a href=#3917 id=3917 data-nosnippet>3917</a>                ),
-<a href=#3918 id=3918 data-nosnippet>3918</a>                (
-<a href=#3919 id=3919 data-nosnippet>3919</a>                    <span class="string">"write.summary.partition-limit"</span>.to_string(),
-<a href=#3920 id=3920 data-nosnippet>3920</a>                    <span class="string">"100"</span>.to_string()
-<a href=#3921 id=3921 data-nosnippet>3921</a>                ),
-<a href=#3922 id=3922 data-nosnippet>3922</a>                (
-<a href=#3923 id=3923 data-nosnippet>3923</a>                    <span class="string">"write.parquet.compression-codec"</span>.to_string(),
-<a href=#3924 id=3924 data-nosnippet>3924</a>                    <span class="string">"zstd"</span>.to_string()
-<a href=#3925 id=3925 data-nosnippet>3925</a>                ),
-<a href=#3926 id=3926 data-nosnippet>3926</a>            ]),
-<a href=#3927 id=3927 data-nosnippet>3927</a>            table.metadata().properties()
-<a href=#3928 id=3928 data-nosnippet>3928</a>        );
-<a href=#3929 id=3929 data-nosnippet>3929</a>        <span class="macro">assert!</span>(table.metadata().current_snapshot().is_none());
-<a href=#3930 id=3930 data-nosnippet>3930</a>        <span class="macro">assert!</span>(table.metadata().history().is_empty());
-<a href=#3931 id=3931 data-nosnippet>3931</a>        <span class="macro">assert_eq!</span>(
-<a href=#3932 id=3932 data-nosnippet>3932</a>            <span class="macro">vec!</span>[<span class="kw-2">&amp;</span>Arc::new(SortOrder {
-<a href=#3933 id=3933 data-nosnippet>3933</a>                order_id: <span class="number">0</span>,
-<a href=#3934 id=3934 data-nosnippet>3934</a>                fields: <span class="macro">vec!</span>[],
-<a href=#3935 id=3935 data-nosnippet>3935</a>            })],
-<a href=#3936 id=3936 data-nosnippet>3936</a>            table.metadata().sort_orders_iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#3937 id=3937 data-nosnippet>3937</a>        );
-<a href=#3938 id=3938 data-nosnippet>3938</a>
-<a href=#3939 id=3939 data-nosnippet>3939</a>        config_mock.assert_async().<span class="kw">await</span>;
-<a href=#3940 id=3940 data-nosnippet>3940</a>        create_table_mock.assert_async().<span class="kw">await</span>;
-<a href=#3941 id=3941 data-nosnippet>3941</a>    }
-<a href=#3942 id=3942 data-nosnippet>3942</a>
-<a href=#3943 id=3943 data-nosnippet>3943</a>    <span class="attr">#[tokio::test]
-<a href=#3944 id=3944 data-nosnippet>3944</a>    </span><span class="kw">async fn </span>test_create_table_409() {
-<a href=#3945 id=3945 data-nosnippet>3945</a>        <span class="kw">let </span><span class="kw-2">mut </span>server = Server::new_async().<span class="kw">await</span>;
-<a href=#3946 id=3946 data-nosnippet>3946</a>
-<a href=#3947 id=3947 data-nosnippet>3947</a>        <span class="kw">let </span>config_mock = create_config_mock(<span class="kw-2">&amp;mut </span>server).<span class="kw">await</span>;
-<a href=#3948 id=3948 data-nosnippet>3948</a>
-<a href=#3949 id=3949 data-nosnippet>3949</a>        <span class="kw">let </span>create_table_mock = server
-<a href=#3950 id=3950 data-nosnippet>3950</a>            .mock(<span class="string">"POST"</span>, <span class="string">"/v1/namespaces/ns1/tables"</span>)
-<a href=#3951 id=3951 data-nosnippet>3951</a>            .with_status(<span class="number">409</span>)
-<a href=#3952 id=3952 data-nosnippet>3952</a>            .with_body(<span class="string">r#"
-<a href=#3953 id=3953 data-nosnippet>3953</a>{
-<a href=#3954 id=3954 data-nosnippet>3954</a>    "error": {
-<a href=#3955 id=3955 data-nosnippet>3955</a>        "message": "Table already exists: ns1.test1 in warehouse 8bcb0838-50fc-472d-9ddb-8feb89ef5f1e",
-<a href=#3956 id=3956 data-nosnippet>3956</a>        "type": "AlreadyExistsException",
-<a href=#3957 id=3957 data-nosnippet>3957</a>        "code": 409
-<a href=#3958 id=3958 data-nosnippet>3958</a>    }
-<a href=#3959 id=3959 data-nosnippet>3959</a>}
-<a href=#3960 id=3960 data-nosnippet>3960</a>            "#</span>)
-<a href=#3961 id=3961 data-nosnippet>3961</a>            .create_async()
-<a href=#3962 id=3962 data-nosnippet>3962</a>            .<span class="kw">await</span>;
-<a href=#3963 id=3963 data-nosnippet>3963</a>
-<a href=#3964 id=3964 data-nosnippet>3964</a>        <span class="kw">let </span>catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
-<a href=#3965 id=3965 data-nosnippet>3965</a>
-<a href=#3966 id=3966 data-nosnippet>3966</a>        <span class="kw">let </span>table_creation = TableCreation::builder()
-<a href=#3967 id=3967 data-nosnippet>3967</a>            .name(<span class="string">"test1"</span>.to_string())
-<a href=#3968 id=3968 data-nosnippet>3968</a>            .schema(
-<a href=#3969 id=3969 data-nosnippet>3969</a>                Schema::builder()
-<a href=#3970 id=3970 data-nosnippet>3970</a>                    .with_fields(<span class="macro">vec!</span>[
-<a href=#3971 id=3971 data-nosnippet>3971</a>                        NestedField::optional(<span class="number">1</span>, <span class="string">"foo"</span>, Type::Primitive(PrimitiveType::String))
-<a href=#3972 id=3972 data-nosnippet>3972</a>                            .into(),
-<a href=#3973 id=3973 data-nosnippet>3973</a>                        NestedField::required(<span class="number">2</span>, <span class="string">"bar"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#3974 id=3974 data-nosnippet>3974</a>                        NestedField::optional(<span class="number">3</span>, <span class="string">"baz"</span>, Type::Primitive(PrimitiveType::Boolean))
-<a href=#3975 id=3975 data-nosnippet>3975</a>                            .into(),
-<a href=#3976 id=3976 data-nosnippet>3976</a>                    ])
-<a href=#3977 id=3977 data-nosnippet>3977</a>                    .with_schema_id(<span class="number">1</span>)
-<a href=#3978 id=3978 data-nosnippet>3978</a>                    .with_identifier_field_ids(<span class="macro">vec!</span>[<span class="number">2</span>])
-<a href=#3979 id=3979 data-nosnippet>3979</a>                    .build()
-<a href=#3980 id=3980 data-nosnippet>3980</a>                    .unwrap(),
-<a href=#3981 id=3981 data-nosnippet>3981</a>            )
-<a href=#3982 id=3982 data-nosnippet>3982</a>            .properties(HashMap::from([(<span class="string">"owner"</span>.to_string(), <span class="string">"testx"</span>.to_string())]))
-<a href=#3983 id=3983 data-nosnippet>3983</a>            .build();
-<a href=#3984 id=3984 data-nosnippet>3984</a>
-<a href=#3985 id=3985 data-nosnippet>3985</a>        <span class="kw">let </span>table_result = catalog
-<a href=#3986 id=3986 data-nosnippet>3986</a>            .create_table(
-<a href=#3987 id=3987 data-nosnippet>3987</a>                <span class="kw-2">&amp;</span>SessionContext::empty(),
-<a href=#3988 id=3988 data-nosnippet>3988</a>                <span class="kw-2">&amp;</span>NamespaceIdent::from_strs([<span class="string">"ns1"</span>]).unwrap(),
-<a href=#3989 id=3989 data-nosnippet>3989</a>                table_creation,
-<a href=#3990 id=3990 data-nosnippet>3990</a>            )
-<a href=#3991 id=3991 data-nosnippet>3991</a>            .<span class="kw">await</span>;
-<a href=#3992 id=3992 data-nosnippet>3992</a>
-<a href=#3993 id=3993 data-nosnippet>3993</a>        <span class="macro">assert!</span>(table_result.is_err());
-<a href=#3994 id=3994 data-nosnippet>3994</a>        <span class="macro">assert!</span>(
-<a href=#3995 id=3995 data-nosnippet>3995</a>            table_result
-<a href=#3996 id=3996 data-nosnippet>3996</a>                .err()
-<a href=#3997 id=3997 data-nosnippet>3997</a>                .unwrap()
-<a href=#3998 id=3998 data-nosnippet>3998</a>                .message()
-<a href=#3999 id=3999 data-nosnippet>3999</a>                .contains(<span class="string">"already exists"</span>)
-<a href=#4000 id=4000 data-nosnippet>4000</a>        );
-<a href=#4001 id=4001 data-nosnippet>4001</a>
-<a href=#4002 id=4002 data-nosnippet>4002</a>        config_mock.assert_async().<span class="kw">await</span>;
-<a href=#4003 id=4003 data-nosnippet>4003</a>        create_table_mock.assert_async().<span class="kw">await</span>;
-<a href=#4004 id=4004 data-nosnippet>4004</a>    }
-<a href=#4005 id=4005 data-nosnippet>4005</a>
-<a href=#4006 id=4006 data-nosnippet>4006</a>    <span class="attr">#[tokio::test]
-<a href=#4007 id=4007 data-nosnippet>4007</a>    </span><span class="kw">async fn </span>test_update_table() {
-<a href=#4008 id=4008 data-nosnippet>4008</a>        <span class="kw">let </span><span class="kw-2">mut </span>server = Server::new_async().<span class="kw">await</span>;
-<a href=#4009 id=4009 data-nosnippet>4009</a>
-<a href=#4010 id=4010 data-nosnippet>4010</a>        <span class="kw">let </span>config_mock = create_config_mock(<span class="kw-2">&amp;mut </span>server).<span class="kw">await</span>;
-<a href=#4011 id=4011 data-nosnippet>4011</a>
-<a href=#4012 id=4012 data-nosnippet>4012</a>        <span class="kw">let </span>load_table_mock = server
-<a href=#4013 id=4013 data-nosnippet>4013</a>            .mock(<span class="string">"GET"</span>, <span class="string">"/v1/namespaces/ns1/tables/test1"</span>)
-<a href=#4014 id=4014 data-nosnippet>4014</a>            .with_status(<span class="number">200</span>)
-<a href=#4015 id=4015 data-nosnippet>4015</a>            .with_body_from_file(<span class="macro">format!</span>(
-<a href=#4016 id=4016 data-nosnippet>4016</a>                <span class="string">"{}/testdata/{}"</span>,
-<a href=#4017 id=4017 data-nosnippet>4017</a>                <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
-<a href=#4018 id=4018 data-nosnippet>4018</a>                <span class="string">"load_table_response.json"
-<a href=#4019 id=4019 data-nosnippet>4019</a>            </span>))
-<a href=#4020 id=4020 data-nosnippet>4020</a>            .create_async()
-<a href=#4021 id=4021 data-nosnippet>4021</a>            .<span class="kw">await</span>;
-<a href=#4022 id=4022 data-nosnippet>4022</a>
-<a href=#4023 id=4023 data-nosnippet>4023</a>        <span class="kw">let </span>update_table_mock = server
-<a href=#4024 id=4024 data-nosnippet>4024</a>            .mock(<span class="string">"POST"</span>, <span class="string">"/v1/namespaces/ns1/tables/test1"</span>)
-<a href=#4025 id=4025 data-nosnippet>4025</a>            .with_status(<span class="number">200</span>)
-<a href=#4026 id=4026 data-nosnippet>4026</a>            .with_body_from_file(<span class="macro">format!</span>(
-<a href=#4027 id=4027 data-nosnippet>4027</a>                <span class="string">"{}/testdata/{}"</span>,
-<a href=#4028 id=4028 data-nosnippet>4028</a>                <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
-<a href=#4029 id=4029 data-nosnippet>4029</a>                <span class="string">"update_table_response.json"
-<a href=#4030 id=4030 data-nosnippet>4030</a>            </span>))
-<a href=#4031 id=4031 data-nosnippet>4031</a>            .create_async()
-<a href=#4032 id=4032 data-nosnippet>4032</a>            .<span class="kw">await</span>;
-<a href=#4033 id=4033 data-nosnippet>4033</a>
-<a href=#4034 id=4034 data-nosnippet>4034</a>        <span class="kw">let </span>catalog = RestCatalog::new(
-<a href=#4035 id=4035 data-nosnippet>4035</a>            SessionContext::empty(),
-<a href=#4036 id=4036 data-nosnippet>4036</a>            RestCatalogConfig::builder().uri(server.url()).build(),
-<a href=#4037 id=4037 data-nosnippet>4037</a>            <span class="prelude-val">None</span>,
-<a href=#4038 id=4038 data-nosnippet>4038</a>            <span class="prelude-val">Some</span>(Arc::new(LocalFsStorageFactory)),
-<a href=#4039 id=4039 data-nosnippet>4039</a>            Runtime::current(),
-<a href=#4040 id=4040 data-nosnippet>4040</a>            <span class="prelude-val">None</span>,
-<a href=#4041 id=4041 data-nosnippet>4041</a>        );
-<a href=#4042 id=4042 data-nosnippet>4042</a>
-<a href=#4043 id=4043 data-nosnippet>4043</a>        <span class="kw">let </span>table1 = {
-<a href=#4044 id=4044 data-nosnippet>4044</a>            <span class="kw">let </span>file = File::open(<span class="macro">format!</span>(
-<a href=#4045 id=4045 data-nosnippet>4045</a>                <span class="string">"{}/testdata/{}"</span>,
-<a href=#4046 id=4046 data-nosnippet>4046</a>                <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
-<a href=#4047 id=4047 data-nosnippet>4047</a>                <span class="string">"create_table_response.json"
-<a href=#4048 id=4048 data-nosnippet>4048</a>            </span>))
-<a href=#4049 id=4049 data-nosnippet>4049</a>            .unwrap();
-<a href=#4050 id=4050 data-nosnippet>4050</a>            <span class="kw">let </span>reader = BufReader::new(file);
-<a href=#4051 id=4051 data-nosnippet>4051</a>            <span class="kw">let </span>resp = serde_json::from_reader::&lt;<span class="kw">_</span>, LoadTableResult&gt;(reader).unwrap();
-<a href=#4052 id=4052 data-nosnippet>4052</a>
-<a href=#4053 id=4053 data-nosnippet>4053</a>            Table::builder()
-<a href=#4054 id=4054 data-nosnippet>4054</a>                .metadata(resp.metadata)
-<a href=#4055 id=4055 data-nosnippet>4055</a>                .metadata_location(resp.metadata_location.unwrap())
-<a href=#4056 id=4056 data-nosnippet>4056</a>                .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
-<a href=#4057 id=4057 data-nosnippet>4057</a>                .file_io(FileIO::new_with_fs())
-<a href=#4058 id=4058 data-nosnippet>4058</a>                .runtime(test_runtime())
-<a href=#4059 id=4059 data-nosnippet>4059</a>                .build()
-<a href=#4060 id=4060 data-nosnippet>4060</a>                .unwrap()
-<a href=#4061 id=4061 data-nosnippet>4061</a>        };
-<a href=#4062 id=4062 data-nosnippet>4062</a>
-<a href=#4063 id=4063 data-nosnippet>4063</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table1);
-<a href=#4064 id=4064 data-nosnippet>4064</a>        <span class="kw">let </span>table = tx
-<a href=#4065 id=4065 data-nosnippet>4065</a>            .upgrade_table_version()
-<a href=#4066 id=4066 data-nosnippet>4066</a>            .set_format_version(FormatVersion::V2)
-<a href=#4067 id=4067 data-nosnippet>4067</a>            .apply(tx)
-<a href=#4068 id=4068 data-nosnippet>4068</a>            .unwrap()
-<a href=#4069 id=4069 data-nosnippet>4069</a>            .commit(<span class="kw-2">&amp;</span>catalog)
-<a href=#4070 id=4070 data-nosnippet>4070</a>            .<span class="kw">await
-<a href=#4071 id=4071 data-nosnippet>4071</a>            </span>.unwrap();
-<a href=#4072 id=4072 data-nosnippet>4072</a>
-<a href=#4073 id=4073 data-nosnippet>4073</a>        <span class="macro">assert_eq!</span>(
-<a href=#4074 id=4074 data-nosnippet>4074</a>            <span class="kw-2">&amp;</span>TableIdent::from_strs(<span class="macro">vec!</span>[<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap(),
-<a href=#4075 id=4075 data-nosnippet>4075</a>            table.identifier()
-<a href=#4076 id=4076 data-nosnippet>4076</a>        );
-<a href=#4077 id=4077 data-nosnippet>4077</a>        <span class="macro">assert_eq!</span>(
-<a href=#4078 id=4078 data-nosnippet>4078</a>            <span class="string">"s3://warehouse/database/table/metadata.json"</span>,
-<a href=#4079 id=4079 data-nosnippet>4079</a>            table.metadata_location().unwrap()
-<a href=#4080 id=4080 data-nosnippet>4080</a>        );
-<a href=#4081 id=4081 data-nosnippet>4081</a>        <span class="macro">assert_eq!</span>(FormatVersion::V2, table.metadata().format_version());
-<a href=#4082 id=4082 data-nosnippet>4082</a>        <span class="macro">assert_eq!</span>(<span class="string">"s3://warehouse/database/table"</span>, table.metadata().location());
-<a href=#4083 id=4083 data-nosnippet>4083</a>        <span class="macro">assert_eq!</span>(
-<a href=#4084 id=4084 data-nosnippet>4084</a>            <span class="macro">uuid!</span>(<span class="string">"bf289591-dcc0-4234-ad4f-5c3eed811a29"</span>),
-<a href=#4085 id=4085 data-nosnippet>4085</a>            table.metadata().uuid()
-<a href=#4086 id=4086 data-nosnippet>4086</a>        );
-<a href=#4087 id=4087 data-nosnippet>4087</a>        <span class="macro">assert_eq!</span>(
-<a href=#4088 id=4088 data-nosnippet>4088</a>            <span class="number">1657810967051</span>,
-<a href=#4089 id=4089 data-nosnippet>4089</a>            table
-<a href=#4090 id=4090 data-nosnippet>4090</a>                .metadata()
-<a href=#4091 id=4091 data-nosnippet>4091</a>                .last_updated_timestamp()
-<a href=#4092 id=4092 data-nosnippet>4092</a>                .unwrap()
-<a href=#4093 id=4093 data-nosnippet>4093</a>                .timestamp_millis()
-<a href=#4094 id=4094 data-nosnippet>4094</a>        );
-<a href=#4095 id=4095 data-nosnippet>4095</a>        <span class="macro">assert_eq!</span>(
-<a href=#4096 id=4096 data-nosnippet>4096</a>            <span class="macro">vec!</span>[<span class="kw-2">&amp;</span>Arc::new(
-<a href=#4097 id=4097 data-nosnippet>4097</a>                Schema::builder()
-<a href=#4098 id=4098 data-nosnippet>4098</a>                    .with_fields(<span class="macro">vec!</span>[
-<a href=#4099 id=4099 data-nosnippet>4099</a>                        NestedField::optional(<span class="number">1</span>, <span class="string">"foo"</span>, Type::Primitive(PrimitiveType::String))
-<a href=#4100 id=4100 data-nosnippet>4100</a>                            .into(),
-<a href=#4101 id=4101 data-nosnippet>4101</a>                        NestedField::required(<span class="number">2</span>, <span class="string">"bar"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#4102 id=4102 data-nosnippet>4102</a>                        NestedField::optional(<span class="number">3</span>, <span class="string">"baz"</span>, Type::Primitive(PrimitiveType::Boolean))
-<a href=#4103 id=4103 data-nosnippet>4103</a>                            .into(),
-<a href=#4104 id=4104 data-nosnippet>4104</a>                    ])
-<a href=#4105 id=4105 data-nosnippet>4105</a>                    .with_schema_id(<span class="number">0</span>)
-<a href=#4106 id=4106 data-nosnippet>4106</a>                    .with_identifier_field_ids(<span class="macro">vec!</span>[<span class="number">2</span>])
-<a href=#4107 id=4107 data-nosnippet>4107</a>                    .build()
-<a href=#4108 id=4108 data-nosnippet>4108</a>                    .unwrap()
-<a href=#4109 id=4109 data-nosnippet>4109</a>            )],
-<a href=#4110 id=4110 data-nosnippet>4110</a>            table.metadata().schemas_iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#4111 id=4111 data-nosnippet>4111</a>        );
-<a href=#4112 id=4112 data-nosnippet>4112</a>        <span class="macro">assert_eq!</span>(
-<a href=#4113 id=4113 data-nosnippet>4113</a>            <span class="kw-2">&amp;</span>HashMap::from([
-<a href=#4114 id=4114 data-nosnippet>4114</a>                (
-<a href=#4115 id=4115 data-nosnippet>4115</a>                    <span class="string">"write.delete.parquet.compression-codec"</span>.to_string(),
-<a href=#4116 id=4116 data-nosnippet>4116</a>                    <span class="string">"zstd"</span>.to_string()
-<a href=#4117 id=4117 data-nosnippet>4117</a>                ),
-<a href=#4118 id=4118 data-nosnippet>4118</a>                (
-<a href=#4119 id=4119 data-nosnippet>4119</a>                    <span class="string">"write.metadata.compression-codec"</span>.to_string(),
-<a href=#4120 id=4120 data-nosnippet>4120</a>                    <span class="string">"gzip"</span>.to_string()
-<a href=#4121 id=4121 data-nosnippet>4121</a>                ),
-<a href=#4122 id=4122 data-nosnippet>4122</a>                (
-<a href=#4123 id=4123 data-nosnippet>4123</a>                    <span class="string">"write.summary.partition-limit"</span>.to_string(),
-<a href=#4124 id=4124 data-nosnippet>4124</a>                    <span class="string">"100"</span>.to_string()
-<a href=#4125 id=4125 data-nosnippet>4125</a>                ),
-<a href=#4126 id=4126 data-nosnippet>4126</a>                (
-<a href=#4127 id=4127 data-nosnippet>4127</a>                    <span class="string">"write.parquet.compression-codec"</span>.to_string(),
-<a href=#4128 id=4128 data-nosnippet>4128</a>                    <span class="string">"zstd"</span>.to_string()
-<a href=#4129 id=4129 data-nosnippet>4129</a>                ),
-<a href=#4130 id=4130 data-nosnippet>4130</a>            ]),
-<a href=#4131 id=4131 data-nosnippet>4131</a>            table.metadata().properties()
-<a href=#4132 id=4132 data-nosnippet>4132</a>        );
-<a href=#4133 id=4133 data-nosnippet>4133</a>        <span class="macro">assert!</span>(table.metadata().current_snapshot().is_none());
-<a href=#4134 id=4134 data-nosnippet>4134</a>        <span class="macro">assert!</span>(table.metadata().history().is_empty());
-<a href=#4135 id=4135 data-nosnippet>4135</a>        <span class="macro">assert_eq!</span>(
-<a href=#4136 id=4136 data-nosnippet>4136</a>            <span class="macro">vec!</span>[<span class="kw-2">&amp;</span>Arc::new(SortOrder {
-<a href=#4137 id=4137 data-nosnippet>4137</a>                order_id: <span class="number">0</span>,
-<a href=#4138 id=4138 data-nosnippet>4138</a>                fields: <span class="macro">vec!</span>[],
-<a href=#4139 id=4139 data-nosnippet>4139</a>            })],
-<a href=#4140 id=4140 data-nosnippet>4140</a>            table.metadata().sort_orders_iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#4141 id=4141 data-nosnippet>4141</a>        );
-<a href=#4142 id=4142 data-nosnippet>4142</a>
-<a href=#4143 id=4143 data-nosnippet>4143</a>        config_mock.assert_async().<span class="kw">await</span>;
-<a href=#4144 id=4144 data-nosnippet>4144</a>        update_table_mock.assert_async().<span class="kw">await</span>;
-<a href=#4145 id=4145 data-nosnippet>4145</a>        load_table_mock.assert_async().<span class="kw">await
-<a href=#4146 id=4146 data-nosnippet>4146</a>    </span>}
-<a href=#4147 id=4147 data-nosnippet>4147</a>
-<a href=#4148 id=4148 data-nosnippet>4148</a>    <span class="attr">#[tokio::test]
-<a href=#4149 id=4149 data-nosnippet>4149</a>    </span><span class="kw">async fn </span>test_update_table_404() {
-<a href=#4150 id=4150 data-nosnippet>4150</a>        <span class="kw">let </span><span class="kw-2">mut </span>server = Server::new_async().<span class="kw">await</span>;
-<a href=#4151 id=4151 data-nosnippet>4151</a>
-<a href=#4152 id=4152 data-nosnippet>4152</a>        <span class="kw">let </span>config_mock = create_config_mock(<span class="kw-2">&amp;mut </span>server).<span class="kw">await</span>;
-<a href=#4153 id=4153 data-nosnippet>4153</a>
-<a href=#4154 id=4154 data-nosnippet>4154</a>        <span class="kw">let </span>load_table_mock = server
-<a href=#4155 id=4155 data-nosnippet>4155</a>            .mock(<span class="string">"GET"</span>, <span class="string">"/v1/namespaces/ns1/tables/test1"</span>)
-<a href=#4156 id=4156 data-nosnippet>4156</a>            .with_status(<span class="number">200</span>)
-<a href=#4157 id=4157 data-nosnippet>4157</a>            .with_body_from_file(<span class="macro">format!</span>(
-<a href=#4158 id=4158 data-nosnippet>4158</a>                <span class="string">"{}/testdata/{}"</span>,
-<a href=#4159 id=4159 data-nosnippet>4159</a>                <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
-<a href=#4160 id=4160 data-nosnippet>4160</a>                <span class="string">"load_table_response.json"
-<a href=#4161 id=4161 data-nosnippet>4161</a>            </span>))
-<a href=#4162 id=4162 data-nosnippet>4162</a>            .create_async()
-<a href=#4163 id=4163 data-nosnippet>4163</a>            .<span class="kw">await</span>;
-<a href=#4164 id=4164 data-nosnippet>4164</a>
-<a href=#4165 id=4165 data-nosnippet>4165</a>        <span class="kw">let </span>update_table_mock = server
-<a href=#4166 id=4166 data-nosnippet>4166</a>            .mock(<span class="string">"POST"</span>, <span class="string">"/v1/namespaces/ns1/tables/test1"</span>)
-<a href=#4167 id=4167 data-nosnippet>4167</a>            .with_status(<span class="number">404</span>)
-<a href=#4168 id=4168 data-nosnippet>4168</a>            .with_body(
-<a href=#4169 id=4169 data-nosnippet>4169</a>                <span class="string">r#"
-<a href=#4170 id=4170 data-nosnippet>4170</a>{
-<a href=#4171 id=4171 data-nosnippet>4171</a>    "error": {
-<a href=#4172 id=4172 data-nosnippet>4172</a>        "message": "The given table does not exist",
-<a href=#4173 id=4173 data-nosnippet>4173</a>        "type": "NoSuchTableException",
-<a href=#4174 id=4174 data-nosnippet>4174</a>        "code": 404
-<a href=#4175 id=4175 data-nosnippet>4175</a>    }
-<a href=#4176 id=4176 data-nosnippet>4176</a>}
-<a href=#4177 id=4177 data-nosnippet>4177</a>            "#</span>,
-<a href=#4178 id=4178 data-nosnippet>4178</a>            )
-<a href=#4179 id=4179 data-nosnippet>4179</a>            .create_async()
-<a href=#4180 id=4180 data-nosnippet>4180</a>            .<span class="kw">await</span>;
-<a href=#4181 id=4181 data-nosnippet>4181</a>
-<a href=#4182 id=4182 data-nosnippet>4182</a>        <span class="kw">let </span>catalog = RestCatalog::new(
-<a href=#4183 id=4183 data-nosnippet>4183</a>            SessionContext::empty(),
-<a href=#4184 id=4184 data-nosnippet>4184</a>            RestCatalogConfig::builder().uri(server.url()).build(),
-<a href=#4185 id=4185 data-nosnippet>4185</a>            <span class="prelude-val">None</span>,
-<a href=#4186 id=4186 data-nosnippet>4186</a>            <span class="prelude-val">Some</span>(Arc::new(LocalFsStorageFactory)),
-<a href=#4187 id=4187 data-nosnippet>4187</a>            Runtime::current(),
-<a href=#4188 id=4188 data-nosnippet>4188</a>            <span class="prelude-val">None</span>,
-<a href=#4189 id=4189 data-nosnippet>4189</a>        );
-<a href=#4190 id=4190 data-nosnippet>4190</a>
-<a href=#4191 id=4191 data-nosnippet>4191</a>        <span class="kw">let </span>table1 = {
-<a href=#4192 id=4192 data-nosnippet>4192</a>            <span class="kw">let </span>file = File::open(<span class="macro">format!</span>(
-<a href=#4193 id=4193 data-nosnippet>4193</a>                <span class="string">"{}/testdata/{}"</span>,
-<a href=#4194 id=4194 data-nosnippet>4194</a>                <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
-<a href=#4195 id=4195 data-nosnippet>4195</a>                <span class="string">"create_table_response.json"
-<a href=#4196 id=4196 data-nosnippet>4196</a>            </span>))
-<a href=#4197 id=4197 data-nosnippet>4197</a>            .unwrap();
-<a href=#4198 id=4198 data-nosnippet>4198</a>            <span class="kw">let </span>reader = BufReader::new(file);
-<a href=#4199 id=4199 data-nosnippet>4199</a>            <span class="kw">let </span>resp = serde_json::from_reader::&lt;<span class="kw">_</span>, LoadTableResult&gt;(reader).unwrap();
-<a href=#4200 id=4200 data-nosnippet>4200</a>
-<a href=#4201 id=4201 data-nosnippet>4201</a>            Table::builder()
-<a href=#4202 id=4202 data-nosnippet>4202</a>                .metadata(resp.metadata)
-<a href=#4203 id=4203 data-nosnippet>4203</a>                .metadata_location(resp.metadata_location.unwrap())
-<a href=#4204 id=4204 data-nosnippet>4204</a>                .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
-<a href=#4205 id=4205 data-nosnippet>4205</a>                .file_io(FileIO::new_with_fs())
-<a href=#4206 id=4206 data-nosnippet>4206</a>                .runtime(test_runtime())
-<a href=#4207 id=4207 data-nosnippet>4207</a>                .build()
-<a href=#4208 id=4208 data-nosnippet>4208</a>                .unwrap()
-<a href=#4209 id=4209 data-nosnippet>4209</a>        };
-<a href=#4210 id=4210 data-nosnippet>4210</a>
-<a href=#4211 id=4211 data-nosnippet>4211</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table1);
-<a href=#4212 id=4212 data-nosnippet>4212</a>        <span class="kw">let </span>table_result = tx
-<a href=#4213 id=4213 data-nosnippet>4213</a>            .upgrade_table_version()
-<a href=#4214 id=4214 data-nosnippet>4214</a>            .set_format_version(FormatVersion::V2)
-<a href=#4215 id=4215 data-nosnippet>4215</a>            .apply(tx)
-<a href=#4216 id=4216 data-nosnippet>4216</a>            .unwrap()
-<a href=#4217 id=4217 data-nosnippet>4217</a>            .commit(<span class="kw-2">&amp;</span>catalog)
-<a href=#4218 id=4218 data-nosnippet>4218</a>            .<span class="kw">await</span>;
-<a href=#4219 id=4219 data-nosnippet>4219</a>
-<a href=#4220 id=4220 data-nosnippet>4220</a>        <span class="macro">assert!</span>(table_result.is_err());
-<a href=#4221 id=4221 data-nosnippet>4221</a>        <span class="macro">assert!</span>(
-<a href=#4222 id=4222 data-nosnippet>4222</a>            table_result
-<a href=#4223 id=4223 data-nosnippet>4223</a>                .err()
-<a href=#4224 id=4224 data-nosnippet>4224</a>                .unwrap()
-<a href=#4225 id=4225 data-nosnippet>4225</a>                .message()
-<a href=#4226 id=4226 data-nosnippet>4226</a>                .contains(<span class="string">"does not exist"</span>)
-<a href=#4227 id=4227 data-nosnippet>4227</a>        );
-<a href=#4228 id=4228 data-nosnippet>4228</a>
-<a href=#4229 id=4229 data-nosnippet>4229</a>        config_mock.assert_async().<span class="kw">await</span>;
-<a href=#4230 id=4230 data-nosnippet>4230</a>        update_table_mock.assert_async().<span class="kw">await</span>;
-<a href=#4231 id=4231 data-nosnippet>4231</a>        load_table_mock.assert_async().<span class="kw">await</span>;
-<a href=#4232 id=4232 data-nosnippet>4232</a>    }
-<a href=#4233 id=4233 data-nosnippet>4233</a>
-<a href=#4234 id=4234 data-nosnippet>4234</a>    <span class="attr">#[tokio::test]
-<a href=#4235 id=4235 data-nosnippet>4235</a>    </span><span class="kw">async fn </span>test_register_table() {
-<a href=#4236 id=4236 data-nosnippet>4236</a>        <span class="kw">let </span><span class="kw-2">mut </span>server = Server::new_async().<span class="kw">await</span>;
-<a href=#4237 id=4237 data-nosnippet>4237</a>
-<a href=#4238 id=4238 data-nosnippet>4238</a>        <span class="kw">let </span>config_mock = create_config_mock(<span class="kw-2">&amp;mut </span>server).<span class="kw">await</span>;
-<a href=#4239 id=4239 data-nosnippet>4239</a>
-<a href=#4240 id=4240 data-nosnippet>4240</a>        <span class="kw">let </span>register_table_mock = server
-<a href=#4241 id=4241 data-nosnippet>4241</a>            .mock(<span class="string">"POST"</span>, <span class="string">"/v1/namespaces/ns1/register"</span>)
-<a href=#4242 id=4242 data-nosnippet>4242</a>            .with_status(<span class="number">200</span>)
-<a href=#4243 id=4243 data-nosnippet>4243</a>            .with_body_from_file(<span class="macro">format!</span>(
-<a href=#4244 id=4244 data-nosnippet>4244</a>                <span class="string">"{}/testdata/{}"</span>,
-<a href=#4245 id=4245 data-nosnippet>4245</a>                <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
-<a href=#4246 id=4246 data-nosnippet>4246</a>                <span class="string">"load_table_response.json"
-<a href=#4247 id=4247 data-nosnippet>4247</a>            </span>))
-<a href=#4248 id=4248 data-nosnippet>4248</a>            .create_async()
-<a href=#4249 id=4249 data-nosnippet>4249</a>            .<span class="kw">await</span>;
-<a href=#4250 id=4250 data-nosnippet>4250</a>
-<a href=#4251 id=4251 data-nosnippet>4251</a>        <span class="kw">let </span>catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
-<a href=#4252 id=4252 data-nosnippet>4252</a>        <span class="kw">let </span>table_ident =
-<a href=#4253 id=4253 data-nosnippet>4253</a>            TableIdent::new(NamespaceIdent::new(<span class="string">"ns1"</span>.to_string()), <span class="string">"test1"</span>.to_string());
-<a href=#4254 id=4254 data-nosnippet>4254</a>        <span class="kw">let </span>metadata_location = String::from(
-<a href=#4255 id=4255 data-nosnippet>4255</a>            <span class="string">"s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json"</span>,
-<a href=#4256 id=4256 data-nosnippet>4256</a>        );
-<a href=#4257 id=4257 data-nosnippet>4257</a>
-<a href=#4258 id=4258 data-nosnippet>4258</a>        <span class="kw">let </span>table = catalog
-<a href=#4259 id=4259 data-nosnippet>4259</a>            .register_table(<span class="kw-2">&amp;</span>SessionContext::empty(), <span class="kw-2">&amp;</span>table_ident, metadata_location)
-<a href=#4260 id=4260 data-nosnippet>4260</a>            .<span class="kw">await
-<a href=#4261 id=4261 data-nosnippet>4261</a>            </span>.unwrap();
-<a href=#4262 id=4262 data-nosnippet>4262</a>
-<a href=#4263 id=4263 data-nosnippet>4263</a>        <span class="macro">assert_eq!</span>(
-<a href=#4264 id=4264 data-nosnippet>4264</a>            <span class="kw-2">&amp;</span>TableIdent::from_strs(<span class="macro">vec!</span>[<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap(),
-<a href=#4265 id=4265 data-nosnippet>4265</a>            table.identifier()
-<a href=#4266 id=4266 data-nosnippet>4266</a>        );
-<a href=#4267 id=4267 data-nosnippet>4267</a>        <span class="macro">assert_eq!</span>(
-<a href=#4268 id=4268 data-nosnippet>4268</a>            <span class="string">"s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json"</span>,
-<a href=#4269 id=4269 data-nosnippet>4269</a>            table.metadata_location().unwrap()
-<a href=#4270 id=4270 data-nosnippet>4270</a>        );
-<a href=#4271 id=4271 data-nosnippet>4271</a>
-<a href=#4272 id=4272 data-nosnippet>4272</a>        config_mock.assert_async().<span class="kw">await</span>;
-<a href=#4273 id=4273 data-nosnippet>4273</a>        register_table_mock.assert_async().<span class="kw">await</span>;
-<a href=#4274 id=4274 data-nosnippet>4274</a>    }
-<a href=#4275 id=4275 data-nosnippet>4275</a>
-<a href=#4276 id=4276 data-nosnippet>4276</a>    <span class="attr">#[tokio::test]
-<a href=#4277 id=4277 data-nosnippet>4277</a>    </span><span class="kw">async fn </span>test_register_table_404() {
-<a href=#4278 id=4278 data-nosnippet>4278</a>        <span class="kw">let </span><span class="kw-2">mut </span>server = Server::new_async().<span class="kw">await</span>;
-<a href=#4279 id=4279 data-nosnippet>4279</a>
-<a href=#4280 id=4280 data-nosnippet>4280</a>        <span class="kw">let </span>config_mock = create_config_mock(<span class="kw-2">&amp;mut </span>server).<span class="kw">await</span>;
-<a href=#4281 id=4281 data-nosnippet>4281</a>
-<a href=#4282 id=4282 data-nosnippet>4282</a>        <span class="kw">let </span>register_table_mock = server
-<a href=#4283 id=4283 data-nosnippet>4283</a>            .mock(<span class="string">"POST"</span>, <span class="string">"/v1/namespaces/ns1/register"</span>)
-<a href=#4284 id=4284 data-nosnippet>4284</a>            .with_status(<span class="number">404</span>)
-<a href=#4285 id=4285 data-nosnippet>4285</a>            .with_body(
-<a href=#4286 id=4286 data-nosnippet>4286</a>                <span class="string">r#"
-<a href=#4287 id=4287 data-nosnippet>4287</a>{
-<a href=#4288 id=4288 data-nosnippet>4288</a>    "error": {
-<a href=#4289 id=4289 data-nosnippet>4289</a>        "message": "The namespace specified does not exist",
-<a href=#4290 id=4290 data-nosnippet>4290</a>        "type": "NoSuchNamespaceErrorException",
-<a href=#4291 id=4291 data-nosnippet>4291</a>        "code": 404
-<a href=#4292 id=4292 data-nosnippet>4292</a>    }
-<a href=#4293 id=4293 data-nosnippet>4293</a>}
-<a href=#4294 id=4294 data-nosnippet>4294</a>            "#</span>,
-<a href=#4295 id=4295 data-nosnippet>4295</a>            )
-<a href=#4296 id=4296 data-nosnippet>4296</a>            .create_async()
-<a href=#4297 id=4297 data-nosnippet>4297</a>            .<span class="kw">await</span>;
-<a href=#4298 id=4298 data-nosnippet>4298</a>
-<a href=#4299 id=4299 data-nosnippet>4299</a>        <span class="kw">let </span>catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
-<a href=#4300 id=4300 data-nosnippet>4300</a>
-<a href=#4301 id=4301 data-nosnippet>4301</a>        <span class="kw">let </span>table_ident =
-<a href=#4302 id=4302 data-nosnippet>4302</a>            TableIdent::new(NamespaceIdent::new(<span class="string">"ns1"</span>.to_string()), <span class="string">"test1"</span>.to_string());
-<a href=#4303 id=4303 data-nosnippet>4303</a>        <span class="kw">let </span>metadata_location = String::from(
-<a href=#4304 id=4304 data-nosnippet>4304</a>            <span class="string">"s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json"</span>,
-<a href=#4305 id=4305 data-nosnippet>4305</a>        );
-<a href=#4306 id=4306 data-nosnippet>4306</a>        <span class="kw">let </span>table = catalog
-<a href=#4307 id=4307 data-nosnippet>4307</a>            .register_table(<span class="kw-2">&amp;</span>SessionContext::empty(), <span class="kw-2">&amp;</span>table_ident, metadata_location)
-<a href=#4308 id=4308 data-nosnippet>4308</a>            .<span class="kw">await</span>;
-<a href=#4309 id=4309 data-nosnippet>4309</a>
-<a href=#4310 id=4310 data-nosnippet>4310</a>        <span class="macro">assert!</span>(table.is_err());
-<a href=#4311 id=4311 data-nosnippet>4311</a>        <span class="macro">assert!</span>(table.err().unwrap().message().contains(<span class="string">"does not exist"</span>));
-<a href=#4312 id=4312 data-nosnippet>4312</a>
-<a href=#4313 id=4313 data-nosnippet>4313</a>        config_mock.assert_async().<span class="kw">await</span>;
-<a href=#4314 id=4314 data-nosnippet>4314</a>        register_table_mock.assert_async().<span class="kw">await</span>;
-<a href=#4315 id=4315 data-nosnippet>4315</a>    }
-<a href=#4316 id=4316 data-nosnippet>4316</a>
-<a href=#4317 id=4317 data-nosnippet>4317</a>    <span class="attr">#[tokio::test]
-<a href=#4318 id=4318 data-nosnippet>4318</a>    </span><span class="kw">async fn </span>test_create_rest_catalog() {
-<a href=#4319 id=4319 data-nosnippet>4319</a>        <span class="kw">let </span>builder = RestCatalogBuilder::default().with_client(Client::new());
-<a href=#4320 id=4320 data-nosnippet>4320</a>
-<a href=#4321 id=4321 data-nosnippet>4321</a>        <span class="kw">let </span>catalog = builder
-<a href=#4322 id=4322 data-nosnippet>4322</a>            .load(
-<a href=#4323 id=4323 data-nosnippet>4323</a>                <span class="string">"test"</span>,
-<a href=#4324 id=4324 data-nosnippet>4324</a>                HashMap::from([
-<a href=#4325 id=4325 data-nosnippet>4325</a>                    (
-<a href=#4326 id=4326 data-nosnippet>4326</a>                        REST_CATALOG_PROP_URI.to_string(),
-<a href=#4327 id=4327 data-nosnippet>4327</a>                        <span class="string">"http://localhost:8080"</span>.to_string(),
-<a href=#4328 id=4328 data-nosnippet>4328</a>                    ),
-<a href=#4329 id=4329 data-nosnippet>4329</a>                    (<span class="string">"a"</span>.to_string(), <span class="string">"b"</span>.to_string()),
-<a href=#4330 id=4330 data-nosnippet>4330</a>                ]),
-<a href=#4331 id=4331 data-nosnippet>4331</a>            )
-<a href=#4332 id=4332 data-nosnippet>4332</a>            .<span class="kw">await</span>;
-<a href=#4333 id=4333 data-nosnippet>4333</a>
-<a href=#4334 id=4334 data-nosnippet>4334</a>        <span class="macro">assert!</span>(catalog.is_ok());
-<a href=#4335 id=4335 data-nosnippet>4335</a>
-<a href=#4336 id=4336 data-nosnippet>4336</a>        <span class="kw">let </span>catalog = catalog.unwrap();
-<a href=#4337 id=4337 data-nosnippet>4337</a>        <span class="kw">let </span>catalog_config = <span class="kw-2">&amp;</span>catalog.inner.user_config;
-<a href=#4338 id=4338 data-nosnippet>4338</a>        <span class="macro">assert_eq!</span>(catalog_config.name.as_deref(), <span class="prelude-val">Some</span>(<span class="string">"test"</span>));
-<a href=#4339 id=4339 data-nosnippet>4339</a>        <span class="macro">assert_eq!</span>(catalog_config.uri, <span class="string">"http://localhost:8080"</span>);
-<a href=#4340 id=4340 data-nosnippet>4340</a>        <span class="macro">assert_eq!</span>(catalog_config.warehouse, <span class="prelude-val">None</span>);
-<a href=#4341 id=4341 data-nosnippet>4341</a>        <span class="macro">assert!</span>(catalog_config.client.is_some());
-<a href=#4342 id=4342 data-nosnippet>4342</a>
-<a href=#4343 id=4343 data-nosnippet>4343</a>        <span class="macro">assert_eq!</span>(catalog_config.props.get(<span class="string">"a"</span>), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="string">"b"</span>.to_string()));
-<a href=#4344 id=4344 data-nosnippet>4344</a>        <span class="macro">assert!</span>(!catalog_config.props.contains_key(REST_CATALOG_PROP_URI));
-<a href=#4345 id=4345 data-nosnippet>4345</a>    }
-<a href=#4346 id=4346 data-nosnippet>4346</a>
-<a href=#4347 id=4347 data-nosnippet>4347</a>    <span class="attr">#[tokio::test]
-<a href=#4348 id=4348 data-nosnippet>4348</a>    </span><span class="kw">async fn </span>test_create_rest_catalog_no_uri() {
-<a href=#4349 id=4349 data-nosnippet>4349</a>        <span class="kw">let </span>builder = RestCatalogBuilder::default();
-<a href=#4350 id=4350 data-nosnippet>4350</a>
-<a href=#4351 id=4351 data-nosnippet>4351</a>        <span class="kw">let </span>catalog = builder
-<a href=#4352 id=4352 data-nosnippet>4352</a>            .load(
-<a href=#4353 id=4353 data-nosnippet>4353</a>                <span class="string">"test"</span>,
-<a href=#4354 id=4354 data-nosnippet>4354</a>                HashMap::from([(
-<a href=#4355 id=4355 data-nosnippet>4355</a>                    REST_CATALOG_PROP_WAREHOUSE.to_string(),
-<a href=#4356 id=4356 data-nosnippet>4356</a>                    <span class="string">"s3://warehouse"</span>.to_string(),
-<a href=#4357 id=4357 data-nosnippet>4357</a>                )]),
-<a href=#4358 id=4358 data-nosnippet>4358</a>            )
-<a href=#4359 id=4359 data-nosnippet>4359</a>            .<span class="kw">await</span>;
-<a href=#4360 id=4360 data-nosnippet>4360</a>
-<a href=#4361 id=4361 data-nosnippet>4361</a>        <span class="macro">assert!</span>(catalog.is_err());
-<a href=#4362 id=4362 data-nosnippet>4362</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = catalog {
-<a href=#4363 id=4363 data-nosnippet>4363</a>            <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
-<a href=#4364 id=4364 data-nosnippet>4364</a>            <span class="macro">assert_eq!</span>(err.message(), <span class="string">"Catalog uri is required"</span>);
-<a href=#4365 id=4365 data-nosnippet>4365</a>        }
-<a href=#4366 id=4366 data-nosnippet>4366</a>    }
-<a href=#4367 id=4367 data-nosnippet>4367</a>
-<a href=#4368 id=4368 data-nosnippet>4368</a>    <span class="attr">#[tokio::test]
-<a href=#4369 id=4369 data-nosnippet>4369</a>    </span><span class="kw">async fn </span>test_create_session_catalog() {
-<a href=#4370 id=4370 data-nosnippet>4370</a>        <span class="kw">let </span>builder = RestSessionCatalogBuilder::default();
-<a href=#4371 id=4371 data-nosnippet>4371</a>
-<a href=#4372 id=4372 data-nosnippet>4372</a>        <span class="kw">let </span>result = builder
-<a href=#4373 id=4373 data-nosnippet>4373</a>            .load(
-<a href=#4374 id=4374 data-nosnippet>4374</a>                <span class="string">"test"</span>,
-<a href=#4375 id=4375 data-nosnippet>4375</a>                HashMap::from([
-<a href=#4376 id=4376 data-nosnippet>4376</a>                    (
-<a href=#4377 id=4377 data-nosnippet>4377</a>                        REST_CATALOG_PROP_URI.to_string(),
-<a href=#4378 id=4378 data-nosnippet>4378</a>                        <span class="string">"http://localhost:8080"</span>.to_string(),
-<a href=#4379 id=4379 data-nosnippet>4379</a>                    ),
-<a href=#4380 id=4380 data-nosnippet>4380</a>                    (<span class="string">"a"</span>.to_string(), <span class="string">"b"</span>.to_string()),
-<a href=#4381 id=4381 data-nosnippet>4381</a>                ]),
-<a href=#4382 id=4382 data-nosnippet>4382</a>            )
-<a href=#4383 id=4383 data-nosnippet>4383</a>            .<span class="kw">await</span>;
-<a href=#4384 id=4384 data-nosnippet>4384</a>
-<a href=#4385 id=4385 data-nosnippet>4385</a>        <span class="macro">assert!</span>(result.is_ok());
-<a href=#4386 id=4386 data-nosnippet>4386</a>
-<a href=#4387 id=4387 data-nosnippet>4387</a>        <span class="kw">let </span>catalog = result.unwrap();
-<a href=#4388 id=4388 data-nosnippet>4388</a>
-<a href=#4389 id=4389 data-nosnippet>4389</a>        <span class="kw">let </span>catalog_config = catalog.user_config;
-<a href=#4390 id=4390 data-nosnippet>4390</a>        <span class="macro">assert_eq!</span>(catalog_config.name.as_deref(), <span class="prelude-val">Some</span>(<span class="string">"test"</span>));
-<a href=#4391 id=4391 data-nosnippet>4391</a>        <span class="macro">assert_eq!</span>(catalog_config.uri, <span class="string">"http://localhost:8080"</span>);
-<a href=#4392 id=4392 data-nosnippet>4392</a>        <span class="macro">assert_eq!</span>(catalog_config.warehouse, <span class="prelude-val">None</span>);
-<a href=#4393 id=4393 data-nosnippet>4393</a>        <span class="comment">// The default builder sets no client (only `with_client` does).
-<a href=#4394 id=4394 data-nosnippet>4394</a>        </span><span class="macro">assert!</span>(catalog_config.client.is_none());
-<a href=#4395 id=4395 data-nosnippet>4395</a>
-<a href=#4396 id=4396 data-nosnippet>4396</a>        <span class="comment">// `uri` is consumed into its own field; other props are retained.
-<a href=#4397 id=4397 data-nosnippet>4397</a>        </span><span class="macro">assert_eq!</span>(catalog_config.props.get(<span class="string">"a"</span>), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="string">"b"</span>.to_string()));
-<a href=#4398 id=4398 data-nosnippet>4398</a>        <span class="macro">assert!</span>(!catalog_config.props.contains_key(REST_CATALOG_PROP_URI));
-<a href=#4399 id=4399 data-nosnippet>4399</a>    }
-<a href=#4400 id=4400 data-nosnippet>4400</a>
-<a href=#4401 id=4401 data-nosnippet>4401</a>    <span class="attr">#[tokio::test]
-<a href=#4402 id=4402 data-nosnippet>4402</a>    </span><span class="kw">async fn </span>test_create_rest_catalog_with_session() {
-<a href=#4403 id=4403 data-nosnippet>4403</a>        <span class="kw">let </span>context = SessionContext::builder()
-<a href=#4404 id=4404 data-nosnippet>4404</a>            .session_id(<span class="string">"test-id"</span>.to_string())
-<a href=#4405 id=4405 data-nosnippet>4405</a>            .build();
-<a href=#4406 id=4406 data-nosnippet>4406</a>
-<a href=#4407 id=4407 data-nosnippet>4407</a>        <span class="kw">let </span>result = RestCatalogBuilder::default()
-<a href=#4408 id=4408 data-nosnippet>4408</a>            .with_session_context(context)
-<a href=#4409 id=4409 data-nosnippet>4409</a>            .load(
-<a href=#4410 id=4410 data-nosnippet>4410</a>                <span class="string">"test"</span>,
-<a href=#4411 id=4411 data-nosnippet>4411</a>                HashMap::from([(
-<a href=#4412 id=4412 data-nosnippet>4412</a>                    REST_CATALOG_PROP_URI.to_string(),
-<a href=#4413 id=4413 data-nosnippet>4413</a>                    <span class="string">"http://localhost:8080"</span>.to_string(),
-<a href=#4414 id=4414 data-nosnippet>4414</a>                )]),
-<a href=#4415 id=4415 data-nosnippet>4415</a>            )
-<a href=#4416 id=4416 data-nosnippet>4416</a>            .<span class="kw">await</span>;
-<a href=#4417 id=4417 data-nosnippet>4417</a>
-<a href=#4418 id=4418 data-nosnippet>4418</a>        <span class="macro">assert!</span>(result.is_ok());
-<a href=#4419 id=4419 data-nosnippet>4419</a>
-<a href=#4420 id=4420 data-nosnippet>4420</a>        <span class="comment">// The context passed to `with_session_context` is the one the catalog is bound to.
-<a href=#4421 id=4421 data-nosnippet>4421</a>        </span><span class="kw">let </span>catalog = result.unwrap();
-<a href=#4422 id=4422 data-nosnippet>4422</a>        <span class="macro">assert_eq!</span>(catalog.session_context.session_id(), <span class="string">"test-id"</span>);
-<a href=#4423 id=4423 data-nosnippet>4423</a>    }
-<a href=#4424 id=4424 data-nosnippet>4424</a>
-<a href=#4425 id=4425 data-nosnippet>4425</a>    <span class="attr">#[tokio::test]
-<a href=#4426 id=4426 data-nosnippet>4426</a>    </span><span class="kw">async fn </span>test_create_rest_catalog_default_session() {
-<a href=#4427 id=4427 data-nosnippet>4427</a>        <span class="kw">let </span>result = RestCatalogBuilder::default()
-<a href=#4428 id=4428 data-nosnippet>4428</a>            .load(
-<a href=#4429 id=4429 data-nosnippet>4429</a>                <span class="string">"test"</span>,
-<a href=#4430 id=4430 data-nosnippet>4430</a>                HashMap::from([(
-<a href=#4431 id=4431 data-nosnippet>4431</a>                    REST_CATALOG_PROP_URI.to_string(),
-<a href=#4432 id=4432 data-nosnippet>4432</a>                    <span class="string">"http://localhost:8080"</span>.to_string(),
-<a href=#4433 id=4433 data-nosnippet>4433</a>                )]),
-<a href=#4434 id=4434 data-nosnippet>4434</a>            )
-<a href=#4435 id=4435 data-nosnippet>4435</a>            .<span class="kw">await</span>;
-<a href=#4436 id=4436 data-nosnippet>4436</a>
-<a href=#4437 id=4437 data-nosnippet>4437</a>        <span class="macro">assert!</span>(result.is_ok());
-<a href=#4438 id=4438 data-nosnippet>4438</a>
-<a href=#4439 id=4439 data-nosnippet>4439</a>        <span class="comment">// Without `with_session_context`, the catalog falls back to `SessionContext::empty()`,
-<a href=#4440 id=4440 data-nosnippet>4440</a>        // which assigns a fresh v4 UUID.
-<a href=#4441 id=4441 data-nosnippet>4441</a>        </span><span class="kw">let </span>catalog = result.unwrap();
-<a href=#4442 id=4442 data-nosnippet>4442</a>        <span class="macro">assert!</span>(uuid::Uuid::parse_str(catalog.session_context.session_id()).is_ok());
-<a href=#4443 id=4443 data-nosnippet>4443</a>    }
-<a href=#4444 id=4444 data-nosnippet>4444</a>
-<a href=#4445 id=4445 data-nosnippet>4445</a>    <span class="doccomment">/// Smoke test: a [`Catalog`] trait method delegates through the façade to `RestSessionCatalog`.
-<a href=#4446 id=4446 data-nosnippet>4446</a>    </span><span class="attr">#[tokio::test]
-<a href=#4447 id=4447 data-nosnippet>4447</a>    </span><span class="kw">async fn </span>test_rest_catalog_delegates() {
-<a href=#4448 id=4448 data-nosnippet>4448</a>        <span class="kw">let </span><span class="kw-2">mut </span>server = Server::new_async().<span class="kw">await</span>;
-<a href=#4449 id=4449 data-nosnippet>4449</a>        <span class="kw">let </span>config_mock = create_config_mock(<span class="kw-2">&amp;mut </span>server).<span class="kw">await</span>;
-<a href=#4450 id=4450 data-nosnippet>4450</a>        <span class="kw">let </span>list_ns_mock = server
-<a href=#4451 id=4451 data-nosnippet>4451</a>            .mock(<span class="string">"GET"</span>, <span class="string">"/v1/namespaces"</span>)
-<a href=#4452 id=4452 data-nosnippet>4452</a>            .with_body(
-<a href=#4453 id=4453 data-nosnippet>4453</a>                <span class="string">r#"{
-<a href=#4454 id=4454 data-nosnippet>4454</a>                "namespaces": [["ns1"]]
-<a href=#4455 id=4455 data-nosnippet>4455</a>            }"#</span>,
-<a href=#4456 id=4456 data-nosnippet>4456</a>            )
-<a href=#4457 id=4457 data-nosnippet>4457</a>            .create_async()
-<a href=#4458 id=4458 data-nosnippet>4458</a>            .<span class="kw">await</span>;
-<a href=#4459 id=4459 data-nosnippet>4459</a>
-<a href=#4460 id=4460 data-nosnippet>4460</a>        <span class="kw">let </span>catalog = RestCatalog::new(
-<a href=#4461 id=4461 data-nosnippet>4461</a>            SessionContext::empty(),
-<a href=#4462 id=4462 data-nosnippet>4462</a>            RestCatalogConfig::builder().uri(server.url()).build(),
-<a href=#4463 id=4463 data-nosnippet>4463</a>            <span class="prelude-val">None</span>,
-<a href=#4464 id=4464 data-nosnippet>4464</a>            <span class="prelude-val">Some</span>(Arc::new(LocalFsStorageFactory)),
-<a href=#4465 id=4465 data-nosnippet>4465</a>            Runtime::current(),
-<a href=#4466 id=4466 data-nosnippet>4466</a>            <span class="prelude-val">None</span>,
-<a href=#4467 id=4467 data-nosnippet>4467</a>        );
-<a href=#4468 id=4468 data-nosnippet>4468</a>
-<a href=#4469 id=4469 data-nosnippet>4469</a>        <span class="kw">let </span>namespaces = catalog.list_namespaces(<span class="prelude-val">None</span>).<span class="kw">await</span>.unwrap();
-<a href=#4470 id=4470 data-nosnippet>4470</a>
-<a href=#4471 id=4471 data-nosnippet>4471</a>        <span class="macro">assert_eq!</span>(namespaces, <span class="macro">vec!</span>[
-<a href=#4472 id=4472 data-nosnippet>4472</a>            NamespaceIdent::from_vec(<span class="macro">vec!</span>[<span class="string">"ns1"</span>.to_string()]).unwrap()
-<a href=#4473 id=4473 data-nosnippet>4473</a>        ]);
-<a href=#4474 id=4474 data-nosnippet>4474</a>
-<a href=#4475 id=4475 data-nosnippet>4475</a>        config_mock.assert_async().<span class="kw">await</span>;
-<a href=#4476 id=4476 data-nosnippet>4476</a>        list_ns_mock.assert_async().<span class="kw">await</span>;
-<a href=#4477 id=4477 data-nosnippet>4477</a>    }
-<a href=#4478 id=4478 data-nosnippet>4478</a>}
+<a href=#3837 id=3837 data-nosnippet>3837</a>                            .source_ids(<span class="macro">vec!</span>[<span class="number">1</span>])
+<a href=#3838 id=3838 data-nosnippet>3838</a>                            .name(<span class="string">"id"</span>)
+<a href=#3839 id=3839 data-nosnippet>3839</a>                            .transform(Transform::Truncate(<span class="number">3</span>))
+<a href=#3840 id=3840 data-nosnippet>3840</a>                            .build()
+<a href=#3841 id=3841 data-nosnippet>3841</a>                            .unwrap(),
+<a href=#3842 id=3842 data-nosnippet>3842</a>                    )
+<a href=#3843 id=3843 data-nosnippet>3843</a>                    .unwrap()
+<a href=#3844 id=3844 data-nosnippet>3844</a>                    .build(),
+<a href=#3845 id=3845 data-nosnippet>3845</a>            )
+<a href=#3846 id=3846 data-nosnippet>3846</a>            .sort_order(
+<a href=#3847 id=3847 data-nosnippet>3847</a>                SortOrder::builder()
+<a href=#3848 id=3848 data-nosnippet>3848</a>                    .with_sort_field(
+<a href=#3849 id=3849 data-nosnippet>3849</a>                        SortField::builder()
+<a href=#3850 id=3850 data-nosnippet>3850</a>                            .source_id(<span class="number">2</span>)
+<a href=#3851 id=3851 data-nosnippet>3851</a>                            .transform(Transform::Identity)
+<a href=#3852 id=3852 data-nosnippet>3852</a>                            .direction(SortDirection::Ascending)
+<a href=#3853 id=3853 data-nosnippet>3853</a>                            .null_order(NullOrder::First)
+<a href=#3854 id=3854 data-nosnippet>3854</a>                            .build(),
+<a href=#3855 id=3855 data-nosnippet>3855</a>                    )
+<a href=#3856 id=3856 data-nosnippet>3856</a>                    .build_unbound()
+<a href=#3857 id=3857 data-nosnippet>3857</a>                    .unwrap(),
+<a href=#3858 id=3858 data-nosnippet>3858</a>            )
+<a href=#3859 id=3859 data-nosnippet>3859</a>            .build();
+<a href=#3860 id=3860 data-nosnippet>3860</a>
+<a href=#3861 id=3861 data-nosnippet>3861</a>        <span class="kw">let </span>table = catalog
+<a href=#3862 id=3862 data-nosnippet>3862</a>            .create_table(
+<a href=#3863 id=3863 data-nosnippet>3863</a>                <span class="kw-2">&amp;</span>SessionContext::empty(),
+<a href=#3864 id=3864 data-nosnippet>3864</a>                <span class="kw-2">&amp;</span>NamespaceIdent::from_strs([<span class="string">"ns1"</span>]).unwrap(),
+<a href=#3865 id=3865 data-nosnippet>3865</a>                table_creation,
+<a href=#3866 id=3866 data-nosnippet>3866</a>            )
+<a href=#3867 id=3867 data-nosnippet>3867</a>            .<span class="kw">await
+<a href=#3868 id=3868 data-nosnippet>3868</a>            </span>.unwrap();
+<a href=#3869 id=3869 data-nosnippet>3869</a>
+<a href=#3870 id=3870 data-nosnippet>3870</a>        <span class="macro">assert_eq!</span>(
+<a href=#3871 id=3871 data-nosnippet>3871</a>            <span class="kw-2">&amp;</span>TableIdent::from_strs(<span class="macro">vec!</span>[<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap(),
+<a href=#3872 id=3872 data-nosnippet>3872</a>            table.identifier()
+<a href=#3873 id=3873 data-nosnippet>3873</a>        );
+<a href=#3874 id=3874 data-nosnippet>3874</a>        <span class="macro">assert_eq!</span>(
+<a href=#3875 id=3875 data-nosnippet>3875</a>            <span class="string">"s3://warehouse/database/table/metadata.json"</span>,
+<a href=#3876 id=3876 data-nosnippet>3876</a>            table.metadata_location().unwrap()
+<a href=#3877 id=3877 data-nosnippet>3877</a>        );
+<a href=#3878 id=3878 data-nosnippet>3878</a>        <span class="macro">assert_eq!</span>(FormatVersion::V1, table.metadata().format_version());
+<a href=#3879 id=3879 data-nosnippet>3879</a>        <span class="macro">assert_eq!</span>(<span class="string">"s3://warehouse/database/table"</span>, table.metadata().location());
+<a href=#3880 id=3880 data-nosnippet>3880</a>        <span class="macro">assert_eq!</span>(
+<a href=#3881 id=3881 data-nosnippet>3881</a>            <span class="macro">uuid!</span>(<span class="string">"bf289591-dcc0-4234-ad4f-5c3eed811a29"</span>),
+<a href=#3882 id=3882 data-nosnippet>3882</a>            table.metadata().uuid()
+<a href=#3883 id=3883 data-nosnippet>3883</a>        );
+<a href=#3884 id=3884 data-nosnippet>3884</a>        <span class="macro">assert_eq!</span>(
+<a href=#3885 id=3885 data-nosnippet>3885</a>            <span class="number">1657810967051</span>,
+<a href=#3886 id=3886 data-nosnippet>3886</a>            table
+<a href=#3887 id=3887 data-nosnippet>3887</a>                .metadata()
+<a href=#3888 id=3888 data-nosnippet>3888</a>                .last_updated_timestamp()
+<a href=#3889 id=3889 data-nosnippet>3889</a>                .unwrap()
+<a href=#3890 id=3890 data-nosnippet>3890</a>                .timestamp_millis()
+<a href=#3891 id=3891 data-nosnippet>3891</a>        );
+<a href=#3892 id=3892 data-nosnippet>3892</a>        <span class="macro">assert_eq!</span>(
+<a href=#3893 id=3893 data-nosnippet>3893</a>            <span class="macro">vec!</span>[<span class="kw-2">&amp;</span>Arc::new(
+<a href=#3894 id=3894 data-nosnippet>3894</a>                Schema::builder()
+<a href=#3895 id=3895 data-nosnippet>3895</a>                    .with_fields(<span class="macro">vec!</span>[
+<a href=#3896 id=3896 data-nosnippet>3896</a>                        NestedField::optional(<span class="number">1</span>, <span class="string">"foo"</span>, Type::Primitive(PrimitiveType::String))
+<a href=#3897 id=3897 data-nosnippet>3897</a>                            .into(),
+<a href=#3898 id=3898 data-nosnippet>3898</a>                        NestedField::required(<span class="number">2</span>, <span class="string">"bar"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#3899 id=3899 data-nosnippet>3899</a>                        NestedField::optional(<span class="number">3</span>, <span class="string">"baz"</span>, Type::Primitive(PrimitiveType::Boolean))
+<a href=#3900 id=3900 data-nosnippet>3900</a>                            .into(),
+<a href=#3901 id=3901 data-nosnippet>3901</a>                    ])
+<a href=#3902 id=3902 data-nosnippet>3902</a>                    .with_schema_id(<span class="number">0</span>)
+<a href=#3903 id=3903 data-nosnippet>3903</a>                    .with_identifier_field_ids(<span class="macro">vec!</span>[<span class="number">2</span>])
+<a href=#3904 id=3904 data-nosnippet>3904</a>                    .build()
+<a href=#3905 id=3905 data-nosnippet>3905</a>                    .unwrap()
+<a href=#3906 id=3906 data-nosnippet>3906</a>            )],
+<a href=#3907 id=3907 data-nosnippet>3907</a>            table.metadata().schemas_iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#3908 id=3908 data-nosnippet>3908</a>        );
+<a href=#3909 id=3909 data-nosnippet>3909</a>        <span class="macro">assert_eq!</span>(
+<a href=#3910 id=3910 data-nosnippet>3910</a>            <span class="kw-2">&amp;</span>HashMap::from([
+<a href=#3911 id=3911 data-nosnippet>3911</a>                (
+<a href=#3912 id=3912 data-nosnippet>3912</a>                    <span class="string">"write.delete.parquet.compression-codec"</span>.to_string(),
+<a href=#3913 id=3913 data-nosnippet>3913</a>                    <span class="string">"zstd"</span>.to_string()
+<a href=#3914 id=3914 data-nosnippet>3914</a>                ),
+<a href=#3915 id=3915 data-nosnippet>3915</a>                (
+<a href=#3916 id=3916 data-nosnippet>3916</a>                    <span class="string">"write.metadata.compression-codec"</span>.to_string(),
+<a href=#3917 id=3917 data-nosnippet>3917</a>                    <span class="string">"gzip"</span>.to_string()
+<a href=#3918 id=3918 data-nosnippet>3918</a>                ),
+<a href=#3919 id=3919 data-nosnippet>3919</a>                (
+<a href=#3920 id=3920 data-nosnippet>3920</a>                    <span class="string">"write.summary.partition-limit"</span>.to_string(),
+<a href=#3921 id=3921 data-nosnippet>3921</a>                    <span class="string">"100"</span>.to_string()
+<a href=#3922 id=3922 data-nosnippet>3922</a>                ),
+<a href=#3923 id=3923 data-nosnippet>3923</a>                (
+<a href=#3924 id=3924 data-nosnippet>3924</a>                    <span class="string">"write.parquet.compression-codec"</span>.to_string(),
+<a href=#3925 id=3925 data-nosnippet>3925</a>                    <span class="string">"zstd"</span>.to_string()
+<a href=#3926 id=3926 data-nosnippet>3926</a>                ),
+<a href=#3927 id=3927 data-nosnippet>3927</a>            ]),
+<a href=#3928 id=3928 data-nosnippet>3928</a>            table.metadata().properties()
+<a href=#3929 id=3929 data-nosnippet>3929</a>        );
+<a href=#3930 id=3930 data-nosnippet>3930</a>        <span class="macro">assert!</span>(table.metadata().current_snapshot().is_none());
+<a href=#3931 id=3931 data-nosnippet>3931</a>        <span class="macro">assert!</span>(table.metadata().history().is_empty());
+<a href=#3932 id=3932 data-nosnippet>3932</a>        <span class="macro">assert_eq!</span>(
+<a href=#3933 id=3933 data-nosnippet>3933</a>            <span class="macro">vec!</span>[<span class="kw-2">&amp;</span>Arc::new(SortOrder {
+<a href=#3934 id=3934 data-nosnippet>3934</a>                order_id: <span class="number">0</span>,
+<a href=#3935 id=3935 data-nosnippet>3935</a>                fields: <span class="macro">vec!</span>[],
+<a href=#3936 id=3936 data-nosnippet>3936</a>            })],
+<a href=#3937 id=3937 data-nosnippet>3937</a>            table.metadata().sort_orders_iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#3938 id=3938 data-nosnippet>3938</a>        );
+<a href=#3939 id=3939 data-nosnippet>3939</a>
+<a href=#3940 id=3940 data-nosnippet>3940</a>        config_mock.assert_async().<span class="kw">await</span>;
+<a href=#3941 id=3941 data-nosnippet>3941</a>        create_table_mock.assert_async().<span class="kw">await</span>;
+<a href=#3942 id=3942 data-nosnippet>3942</a>    }
+<a href=#3943 id=3943 data-nosnippet>3943</a>
+<a href=#3944 id=3944 data-nosnippet>3944</a>    <span class="attr">#[tokio::test]
+<a href=#3945 id=3945 data-nosnippet>3945</a>    </span><span class="kw">async fn </span>test_create_table_409() {
+<a href=#3946 id=3946 data-nosnippet>3946</a>        <span class="kw">let </span><span class="kw-2">mut </span>server = Server::new_async().<span class="kw">await</span>;
+<a href=#3947 id=3947 data-nosnippet>3947</a>
+<a href=#3948 id=3948 data-nosnippet>3948</a>        <span class="kw">let </span>config_mock = create_config_mock(<span class="kw-2">&amp;mut </span>server).<span class="kw">await</span>;
+<a href=#3949 id=3949 data-nosnippet>3949</a>
+<a href=#3950 id=3950 data-nosnippet>3950</a>        <span class="kw">let </span>create_table_mock = server
+<a href=#3951 id=3951 data-nosnippet>3951</a>            .mock(<span class="string">"POST"</span>, <span class="string">"/v1/namespaces/ns1/tables"</span>)
+<a href=#3952 id=3952 data-nosnippet>3952</a>            .with_status(<span class="number">409</span>)
+<a href=#3953 id=3953 data-nosnippet>3953</a>            .with_body(<span class="string">r#"
+<a href=#3954 id=3954 data-nosnippet>3954</a>{
+<a href=#3955 id=3955 data-nosnippet>3955</a>    "error": {
+<a href=#3956 id=3956 data-nosnippet>3956</a>        "message": "Table already exists: ns1.test1 in warehouse 8bcb0838-50fc-472d-9ddb-8feb89ef5f1e",
+<a href=#3957 id=3957 data-nosnippet>3957</a>        "type": "AlreadyExistsException",
+<a href=#3958 id=3958 data-nosnippet>3958</a>        "code": 409
+<a href=#3959 id=3959 data-nosnippet>3959</a>    }
+<a href=#3960 id=3960 data-nosnippet>3960</a>}
+<a href=#3961 id=3961 data-nosnippet>3961</a>            "#</span>)
+<a href=#3962 id=3962 data-nosnippet>3962</a>            .create_async()
+<a href=#3963 id=3963 data-nosnippet>3963</a>            .<span class="kw">await</span>;
+<a href=#3964 id=3964 data-nosnippet>3964</a>
+<a href=#3965 id=3965 data-nosnippet>3965</a>        <span class="kw">let </span>catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+<a href=#3966 id=3966 data-nosnippet>3966</a>
+<a href=#3967 id=3967 data-nosnippet>3967</a>        <span class="kw">let </span>table_creation = TableCreation::builder()
+<a href=#3968 id=3968 data-nosnippet>3968</a>            .name(<span class="string">"test1"</span>.to_string())
+<a href=#3969 id=3969 data-nosnippet>3969</a>            .schema(
+<a href=#3970 id=3970 data-nosnippet>3970</a>                Schema::builder()
+<a href=#3971 id=3971 data-nosnippet>3971</a>                    .with_fields(<span class="macro">vec!</span>[
+<a href=#3972 id=3972 data-nosnippet>3972</a>                        NestedField::optional(<span class="number">1</span>, <span class="string">"foo"</span>, Type::Primitive(PrimitiveType::String))
+<a href=#3973 id=3973 data-nosnippet>3973</a>                            .into(),
+<a href=#3974 id=3974 data-nosnippet>3974</a>                        NestedField::required(<span class="number">2</span>, <span class="string">"bar"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#3975 id=3975 data-nosnippet>3975</a>                        NestedField::optional(<span class="number">3</span>, <span class="string">"baz"</span>, Type::Primitive(PrimitiveType::Boolean))
+<a href=#3976 id=3976 data-nosnippet>3976</a>                            .into(),
+<a href=#3977 id=3977 data-nosnippet>3977</a>                    ])
+<a href=#3978 id=3978 data-nosnippet>3978</a>                    .with_schema_id(<span class="number">1</span>)
+<a href=#3979 id=3979 data-nosnippet>3979</a>                    .with_identifier_field_ids(<span class="macro">vec!</span>[<span class="number">2</span>])
+<a href=#3980 id=3980 data-nosnippet>3980</a>                    .build()
+<a href=#3981 id=3981 data-nosnippet>3981</a>                    .unwrap(),
+<a href=#3982 id=3982 data-nosnippet>3982</a>            )
+<a href=#3983 id=3983 data-nosnippet>3983</a>            .properties(HashMap::from([(<span class="string">"owner"</span>.to_string(), <span class="string">"testx"</span>.to_string())]))
+<a href=#3984 id=3984 data-nosnippet>3984</a>            .build();
+<a href=#3985 id=3985 data-nosnippet>3985</a>
+<a href=#3986 id=3986 data-nosnippet>3986</a>        <span class="kw">let </span>table_result = catalog
+<a href=#3987 id=3987 data-nosnippet>3987</a>            .create_table(
+<a href=#3988 id=3988 data-nosnippet>3988</a>                <span class="kw-2">&amp;</span>SessionContext::empty(),
+<a href=#3989 id=3989 data-nosnippet>3989</a>                <span class="kw-2">&amp;</span>NamespaceIdent::from_strs([<span class="string">"ns1"</span>]).unwrap(),
+<a href=#3990 id=3990 data-nosnippet>3990</a>                table_creation,
+<a href=#3991 id=3991 data-nosnippet>3991</a>            )
+<a href=#3992 id=3992 data-nosnippet>3992</a>            .<span class="kw">await</span>;
+<a href=#3993 id=3993 data-nosnippet>3993</a>
+<a href=#3994 id=3994 data-nosnippet>3994</a>        <span class="macro">assert!</span>(table_result.is_err());
+<a href=#3995 id=3995 data-nosnippet>3995</a>        <span class="macro">assert!</span>(
+<a href=#3996 id=3996 data-nosnippet>3996</a>            table_result
+<a href=#3997 id=3997 data-nosnippet>3997</a>                .err()
+<a href=#3998 id=3998 data-nosnippet>3998</a>                .unwrap()
+<a href=#3999 id=3999 data-nosnippet>3999</a>                .message()
+<a href=#4000 id=4000 data-nosnippet>4000</a>                .contains(<span class="string">"already exists"</span>)
+<a href=#4001 id=4001 data-nosnippet>4001</a>        );
+<a href=#4002 id=4002 data-nosnippet>4002</a>
+<a href=#4003 id=4003 data-nosnippet>4003</a>        config_mock.assert_async().<span class="kw">await</span>;
+<a href=#4004 id=4004 data-nosnippet>4004</a>        create_table_mock.assert_async().<span class="kw">await</span>;
+<a href=#4005 id=4005 data-nosnippet>4005</a>    }
+<a href=#4006 id=4006 data-nosnippet>4006</a>
+<a href=#4007 id=4007 data-nosnippet>4007</a>    <span class="attr">#[tokio::test]
+<a href=#4008 id=4008 data-nosnippet>4008</a>    </span><span class="kw">async fn </span>test_update_table() {
+<a href=#4009 id=4009 data-nosnippet>4009</a>        <span class="kw">let </span><span class="kw-2">mut </span>server = Server::new_async().<span class="kw">await</span>;
+<a href=#4010 id=4010 data-nosnippet>4010</a>
+<a href=#4011 id=4011 data-nosnippet>4011</a>        <span class="kw">let </span>config_mock = create_config_mock(<span class="kw-2">&amp;mut </span>server).<span class="kw">await</span>;
+<a href=#4012 id=4012 data-nosnippet>4012</a>
+<a href=#4013 id=4013 data-nosnippet>4013</a>        <span class="kw">let </span>load_table_mock = server
+<a href=#4014 id=4014 data-nosnippet>4014</a>            .mock(<span class="string">"GET"</span>, <span class="string">"/v1/namespaces/ns1/tables/test1"</span>)
+<a href=#4015 id=4015 data-nosnippet>4015</a>            .with_status(<span class="number">200</span>)
+<a href=#4016 id=4016 data-nosnippet>4016</a>            .with_body_from_file(<span class="macro">format!</span>(
+<a href=#4017 id=4017 data-nosnippet>4017</a>                <span class="string">"{}/testdata/{}"</span>,
+<a href=#4018 id=4018 data-nosnippet>4018</a>                <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
+<a href=#4019 id=4019 data-nosnippet>4019</a>                <span class="string">"load_table_response.json"
+<a href=#4020 id=4020 data-nosnippet>4020</a>            </span>))
+<a href=#4021 id=4021 data-nosnippet>4021</a>            .create_async()
+<a href=#4022 id=4022 data-nosnippet>4022</a>            .<span class="kw">await</span>;
+<a href=#4023 id=4023 data-nosnippet>4023</a>
+<a href=#4024 id=4024 data-nosnippet>4024</a>        <span class="kw">let </span>update_table_mock = server
+<a href=#4025 id=4025 data-nosnippet>4025</a>            .mock(<span class="string">"POST"</span>, <span class="string">"/v1/namespaces/ns1/tables/test1"</span>)
+<a href=#4026 id=4026 data-nosnippet>4026</a>            .with_status(<span class="number">200</span>)
+<a href=#4027 id=4027 data-nosnippet>4027</a>            .with_body_from_file(<span class="macro">format!</span>(
+<a href=#4028 id=4028 data-nosnippet>4028</a>                <span class="string">"{}/testdata/{}"</span>,
+<a href=#4029 id=4029 data-nosnippet>4029</a>                <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
+<a href=#4030 id=4030 data-nosnippet>4030</a>                <span class="string">"update_table_response.json"
+<a href=#4031 id=4031 data-nosnippet>4031</a>            </span>))
+<a href=#4032 id=4032 data-nosnippet>4032</a>            .create_async()
+<a href=#4033 id=4033 data-nosnippet>4033</a>            .<span class="kw">await</span>;
+<a href=#4034 id=4034 data-nosnippet>4034</a>
+<a href=#4035 id=4035 data-nosnippet>4035</a>        <span class="kw">let </span>catalog = RestCatalog::new(
+<a href=#4036 id=4036 data-nosnippet>4036</a>            SessionContext::empty(),
+<a href=#4037 id=4037 data-nosnippet>4037</a>            RestCatalogConfig::builder().uri(server.url()).build(),
+<a href=#4038 id=4038 data-nosnippet>4038</a>            <span class="prelude-val">None</span>,
+<a href=#4039 id=4039 data-nosnippet>4039</a>            <span class="prelude-val">Some</span>(Arc::new(LocalFsStorageFactory)),
+<a href=#4040 id=4040 data-nosnippet>4040</a>            Runtime::current(),
+<a href=#4041 id=4041 data-nosnippet>4041</a>            <span class="prelude-val">None</span>,
+<a href=#4042 id=4042 data-nosnippet>4042</a>        );
+<a href=#4043 id=4043 data-nosnippet>4043</a>
+<a href=#4044 id=4044 data-nosnippet>4044</a>        <span class="kw">let </span>table1 = {
+<a href=#4045 id=4045 data-nosnippet>4045</a>            <span class="kw">let </span>file = File::open(<span class="macro">format!</span>(
+<a href=#4046 id=4046 data-nosnippet>4046</a>                <span class="string">"{}/testdata/{}"</span>,
+<a href=#4047 id=4047 data-nosnippet>4047</a>                <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
+<a href=#4048 id=4048 data-nosnippet>4048</a>                <span class="string">"create_table_response.json"
+<a href=#4049 id=4049 data-nosnippet>4049</a>            </span>))
+<a href=#4050 id=4050 data-nosnippet>4050</a>            .unwrap();
+<a href=#4051 id=4051 data-nosnippet>4051</a>            <span class="kw">let </span>reader = BufReader::new(file);
+<a href=#4052 id=4052 data-nosnippet>4052</a>            <span class="kw">let </span>resp = serde_json::from_reader::&lt;<span class="kw">_</span>, LoadTableResult&gt;(reader).unwrap();
+<a href=#4053 id=4053 data-nosnippet>4053</a>
+<a href=#4054 id=4054 data-nosnippet>4054</a>            Table::builder()
+<a href=#4055 id=4055 data-nosnippet>4055</a>                .metadata(resp.metadata)
+<a href=#4056 id=4056 data-nosnippet>4056</a>                .metadata_location(resp.metadata_location.unwrap())
+<a href=#4057 id=4057 data-nosnippet>4057</a>                .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
+<a href=#4058 id=4058 data-nosnippet>4058</a>                .file_io(FileIO::new_with_fs())
+<a href=#4059 id=4059 data-nosnippet>4059</a>                .runtime(test_runtime())
+<a href=#4060 id=4060 data-nosnippet>4060</a>                .build()
+<a href=#4061 id=4061 data-nosnippet>4061</a>                .unwrap()
+<a href=#4062 id=4062 data-nosnippet>4062</a>        };
+<a href=#4063 id=4063 data-nosnippet>4063</a>
+<a href=#4064 id=4064 data-nosnippet>4064</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table1);
+<a href=#4065 id=4065 data-nosnippet>4065</a>        <span class="kw">let </span>table = tx
+<a href=#4066 id=4066 data-nosnippet>4066</a>            .upgrade_table_version()
+<a href=#4067 id=4067 data-nosnippet>4067</a>            .set_format_version(FormatVersion::V2)
+<a href=#4068 id=4068 data-nosnippet>4068</a>            .apply(tx)
+<a href=#4069 id=4069 data-nosnippet>4069</a>            .unwrap()
+<a href=#4070 id=4070 data-nosnippet>4070</a>            .commit(<span class="kw-2">&amp;</span>catalog)
+<a href=#4071 id=4071 data-nosnippet>4071</a>            .<span class="kw">await
+<a href=#4072 id=4072 data-nosnippet>4072</a>            </span>.unwrap();
+<a href=#4073 id=4073 data-nosnippet>4073</a>
+<a href=#4074 id=4074 data-nosnippet>4074</a>        <span class="macro">assert_eq!</span>(
+<a href=#4075 id=4075 data-nosnippet>4075</a>            <span class="kw-2">&amp;</span>TableIdent::from_strs(<span class="macro">vec!</span>[<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap(),
+<a href=#4076 id=4076 data-nosnippet>4076</a>            table.identifier()
+<a href=#4077 id=4077 data-nosnippet>4077</a>        );
+<a href=#4078 id=4078 data-nosnippet>4078</a>        <span class="macro">assert_eq!</span>(
+<a href=#4079 id=4079 data-nosnippet>4079</a>            <span class="string">"s3://warehouse/database/table/metadata.json"</span>,
+<a href=#4080 id=4080 data-nosnippet>4080</a>            table.metadata_location().unwrap()
+<a href=#4081 id=4081 data-nosnippet>4081</a>        );
+<a href=#4082 id=4082 data-nosnippet>4082</a>        <span class="macro">assert_eq!</span>(FormatVersion::V2, table.metadata().format_version());
+<a href=#4083 id=4083 data-nosnippet>4083</a>        <span class="macro">assert_eq!</span>(<span class="string">"s3://warehouse/database/table"</span>, table.metadata().location());
+<a href=#4084 id=4084 data-nosnippet>4084</a>        <span class="macro">assert_eq!</span>(
+<a href=#4085 id=4085 data-nosnippet>4085</a>            <span class="macro">uuid!</span>(<span class="string">"bf289591-dcc0-4234-ad4f-5c3eed811a29"</span>),
+<a href=#4086 id=4086 data-nosnippet>4086</a>            table.metadata().uuid()
+<a href=#4087 id=4087 data-nosnippet>4087</a>        );
+<a href=#4088 id=4088 data-nosnippet>4088</a>        <span class="macro">assert_eq!</span>(
+<a href=#4089 id=4089 data-nosnippet>4089</a>            <span class="number">1657810967051</span>,
+<a href=#4090 id=4090 data-nosnippet>4090</a>            table
+<a href=#4091 id=4091 data-nosnippet>4091</a>                .metadata()
+<a href=#4092 id=4092 data-nosnippet>4092</a>                .last_updated_timestamp()
+<a href=#4093 id=4093 data-nosnippet>4093</a>                .unwrap()
+<a href=#4094 id=4094 data-nosnippet>4094</a>                .timestamp_millis()
+<a href=#4095 id=4095 data-nosnippet>4095</a>        );
+<a href=#4096 id=4096 data-nosnippet>4096</a>        <span class="macro">assert_eq!</span>(
+<a href=#4097 id=4097 data-nosnippet>4097</a>            <span class="macro">vec!</span>[<span class="kw-2">&amp;</span>Arc::new(
+<a href=#4098 id=4098 data-nosnippet>4098</a>                Schema::builder()
+<a href=#4099 id=4099 data-nosnippet>4099</a>                    .with_fields(<span class="macro">vec!</span>[
+<a href=#4100 id=4100 data-nosnippet>4100</a>                        NestedField::optional(<span class="number">1</span>, <span class="string">"foo"</span>, Type::Primitive(PrimitiveType::String))
+<a href=#4101 id=4101 data-nosnippet>4101</a>                            .into(),
+<a href=#4102 id=4102 data-nosnippet>4102</a>                        NestedField::required(<span class="number">2</span>, <span class="string">"bar"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#4103 id=4103 data-nosnippet>4103</a>                        NestedField::optional(<span class="number">3</span>, <span class="string">"baz"</span>, Type::Primitive(PrimitiveType::Boolean))
+<a href=#4104 id=4104 data-nosnippet>4104</a>                            .into(),
+<a href=#4105 id=4105 data-nosnippet>4105</a>                    ])
+<a href=#4106 id=4106 data-nosnippet>4106</a>                    .with_schema_id(<span class="number">0</span>)
+<a href=#4107 id=4107 data-nosnippet>4107</a>                    .with_identifier_field_ids(<span class="macro">vec!</span>[<span class="number">2</span>])
+<a href=#4108 id=4108 data-nosnippet>4108</a>                    .build()
+<a href=#4109 id=4109 data-nosnippet>4109</a>                    .unwrap()
+<a href=#4110 id=4110 data-nosnippet>4110</a>            )],
+<a href=#4111 id=4111 data-nosnippet>4111</a>            table.metadata().schemas_iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#4112 id=4112 data-nosnippet>4112</a>        );
+<a href=#4113 id=4113 data-nosnippet>4113</a>        <span class="macro">assert_eq!</span>(
+<a href=#4114 id=4114 data-nosnippet>4114</a>            <span class="kw-2">&amp;</span>HashMap::from([
+<a href=#4115 id=4115 data-nosnippet>4115</a>                (
+<a href=#4116 id=4116 data-nosnippet>4116</a>                    <span class="string">"write.delete.parquet.compression-codec"</span>.to_string(),
+<a href=#4117 id=4117 data-nosnippet>4117</a>                    <span class="string">"zstd"</span>.to_string()
+<a href=#4118 id=4118 data-nosnippet>4118</a>                ),
+<a href=#4119 id=4119 data-nosnippet>4119</a>                (
+<a href=#4120 id=4120 data-nosnippet>4120</a>                    <span class="string">"write.metadata.compression-codec"</span>.to_string(),
+<a href=#4121 id=4121 data-nosnippet>4121</a>                    <span class="string">"gzip"</span>.to_string()
+<a href=#4122 id=4122 data-nosnippet>4122</a>                ),
+<a href=#4123 id=4123 data-nosnippet>4123</a>                (
+<a href=#4124 id=4124 data-nosnippet>4124</a>                    <span class="string">"write.summary.partition-limit"</span>.to_string(),
+<a href=#4125 id=4125 data-nosnippet>4125</a>                    <span class="string">"100"</span>.to_string()
+<a href=#4126 id=4126 data-nosnippet>4126</a>                ),
+<a href=#4127 id=4127 data-nosnippet>4127</a>                (
+<a href=#4128 id=4128 data-nosnippet>4128</a>                    <span class="string">"write.parquet.compression-codec"</span>.to_string(),
+<a href=#4129 id=4129 data-nosnippet>4129</a>                    <span class="string">"zstd"</span>.to_string()
+<a href=#4130 id=4130 data-nosnippet>4130</a>                ),
+<a href=#4131 id=4131 data-nosnippet>4131</a>            ]),
+<a href=#4132 id=4132 data-nosnippet>4132</a>            table.metadata().properties()
+<a href=#4133 id=4133 data-nosnippet>4133</a>        );
+<a href=#4134 id=4134 data-nosnippet>4134</a>        <span class="macro">assert!</span>(table.metadata().current_snapshot().is_none());
+<a href=#4135 id=4135 data-nosnippet>4135</a>        <span class="macro">assert!</span>(table.metadata().history().is_empty());
+<a href=#4136 id=4136 data-nosnippet>4136</a>        <span class="macro">assert_eq!</span>(
+<a href=#4137 id=4137 data-nosnippet>4137</a>            <span class="macro">vec!</span>[<span class="kw-2">&amp;</span>Arc::new(SortOrder {
+<a href=#4138 id=4138 data-nosnippet>4138</a>                order_id: <span class="number">0</span>,
+<a href=#4139 id=4139 data-nosnippet>4139</a>                fields: <span class="macro">vec!</span>[],
+<a href=#4140 id=4140 data-nosnippet>4140</a>            })],
+<a href=#4141 id=4141 data-nosnippet>4141</a>            table.metadata().sort_orders_iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#4142 id=4142 data-nosnippet>4142</a>        );
+<a href=#4143 id=4143 data-nosnippet>4143</a>
+<a href=#4144 id=4144 data-nosnippet>4144</a>        config_mock.assert_async().<span class="kw">await</span>;
+<a href=#4145 id=4145 data-nosnippet>4145</a>        update_table_mock.assert_async().<span class="kw">await</span>;
+<a href=#4146 id=4146 data-nosnippet>4146</a>        load_table_mock.assert_async().<span class="kw">await
+<a href=#4147 id=4147 data-nosnippet>4147</a>    </span>}
+<a href=#4148 id=4148 data-nosnippet>4148</a>
+<a href=#4149 id=4149 data-nosnippet>4149</a>    <span class="attr">#[tokio::test]
+<a href=#4150 id=4150 data-nosnippet>4150</a>    </span><span class="kw">async fn </span>test_update_table_404() {
+<a href=#4151 id=4151 data-nosnippet>4151</a>        <span class="kw">let </span><span class="kw-2">mut </span>server = Server::new_async().<span class="kw">await</span>;
+<a href=#4152 id=4152 data-nosnippet>4152</a>
+<a href=#4153 id=4153 data-nosnippet>4153</a>        <span class="kw">let </span>config_mock = create_config_mock(<span class="kw-2">&amp;mut </span>server).<span class="kw">await</span>;
+<a href=#4154 id=4154 data-nosnippet>4154</a>
+<a href=#4155 id=4155 data-nosnippet>4155</a>        <span class="kw">let </span>load_table_mock = server
+<a href=#4156 id=4156 data-nosnippet>4156</a>            .mock(<span class="string">"GET"</span>, <span class="string">"/v1/namespaces/ns1/tables/test1"</span>)
+<a href=#4157 id=4157 data-nosnippet>4157</a>            .with_status(<span class="number">200</span>)
+<a href=#4158 id=4158 data-nosnippet>4158</a>            .with_body_from_file(<span class="macro">format!</span>(
+<a href=#4159 id=4159 data-nosnippet>4159</a>                <span class="string">"{}/testdata/{}"</span>,
+<a href=#4160 id=4160 data-nosnippet>4160</a>                <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
+<a href=#4161 id=4161 data-nosnippet>4161</a>                <span class="string">"load_table_response.json"
+<a href=#4162 id=4162 data-nosnippet>4162</a>            </span>))
+<a href=#4163 id=4163 data-nosnippet>4163</a>            .create_async()
+<a href=#4164 id=4164 data-nosnippet>4164</a>            .<span class="kw">await</span>;
+<a href=#4165 id=4165 data-nosnippet>4165</a>
+<a href=#4166 id=4166 data-nosnippet>4166</a>        <span class="kw">let </span>update_table_mock = server
+<a href=#4167 id=4167 data-nosnippet>4167</a>            .mock(<span class="string">"POST"</span>, <span class="string">"/v1/namespaces/ns1/tables/test1"</span>)
+<a href=#4168 id=4168 data-nosnippet>4168</a>            .with_status(<span class="number">404</span>)
+<a href=#4169 id=4169 data-nosnippet>4169</a>            .with_body(
+<a href=#4170 id=4170 data-nosnippet>4170</a>                <span class="string">r#"
+<a href=#4171 id=4171 data-nosnippet>4171</a>{
+<a href=#4172 id=4172 data-nosnippet>4172</a>    "error": {
+<a href=#4173 id=4173 data-nosnippet>4173</a>        "message": "The given table does not exist",
+<a href=#4174 id=4174 data-nosnippet>4174</a>        "type": "NoSuchTableException",
+<a href=#4175 id=4175 data-nosnippet>4175</a>        "code": 404
+<a href=#4176 id=4176 data-nosnippet>4176</a>    }
+<a href=#4177 id=4177 data-nosnippet>4177</a>}
+<a href=#4178 id=4178 data-nosnippet>4178</a>            "#</span>,
+<a href=#4179 id=4179 data-nosnippet>4179</a>            )
+<a href=#4180 id=4180 data-nosnippet>4180</a>            .create_async()
+<a href=#4181 id=4181 data-nosnippet>4181</a>            .<span class="kw">await</span>;
+<a href=#4182 id=4182 data-nosnippet>4182</a>
+<a href=#4183 id=4183 data-nosnippet>4183</a>        <span class="kw">let </span>catalog = RestCatalog::new(
+<a href=#4184 id=4184 data-nosnippet>4184</a>            SessionContext::empty(),
+<a href=#4185 id=4185 data-nosnippet>4185</a>            RestCatalogConfig::builder().uri(server.url()).build(),
+<a href=#4186 id=4186 data-nosnippet>4186</a>            <span class="prelude-val">None</span>,
+<a href=#4187 id=4187 data-nosnippet>4187</a>            <span class="prelude-val">Some</span>(Arc::new(LocalFsStorageFactory)),
+<a href=#4188 id=4188 data-nosnippet>4188</a>            Runtime::current(),
+<a href=#4189 id=4189 data-nosnippet>4189</a>            <span class="prelude-val">None</span>,
+<a href=#4190 id=4190 data-nosnippet>4190</a>        );
+<a href=#4191 id=4191 data-nosnippet>4191</a>
+<a href=#4192 id=4192 data-nosnippet>4192</a>        <span class="kw">let </span>table1 = {
+<a href=#4193 id=4193 data-nosnippet>4193</a>            <span class="kw">let </span>file = File::open(<span class="macro">format!</span>(
+<a href=#4194 id=4194 data-nosnippet>4194</a>                <span class="string">"{}/testdata/{}"</span>,
+<a href=#4195 id=4195 data-nosnippet>4195</a>                <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
+<a href=#4196 id=4196 data-nosnippet>4196</a>                <span class="string">"create_table_response.json"
+<a href=#4197 id=4197 data-nosnippet>4197</a>            </span>))
+<a href=#4198 id=4198 data-nosnippet>4198</a>            .unwrap();
+<a href=#4199 id=4199 data-nosnippet>4199</a>            <span class="kw">let </span>reader = BufReader::new(file);
+<a href=#4200 id=4200 data-nosnippet>4200</a>            <span class="kw">let </span>resp = serde_json::from_reader::&lt;<span class="kw">_</span>, LoadTableResult&gt;(reader).unwrap();
+<a href=#4201 id=4201 data-nosnippet>4201</a>
+<a href=#4202 id=4202 data-nosnippet>4202</a>            Table::builder()
+<a href=#4203 id=4203 data-nosnippet>4203</a>                .metadata(resp.metadata)
+<a href=#4204 id=4204 data-nosnippet>4204</a>                .metadata_location(resp.metadata_location.unwrap())
+<a href=#4205 id=4205 data-nosnippet>4205</a>                .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
+<a href=#4206 id=4206 data-nosnippet>4206</a>                .file_io(FileIO::new_with_fs())
+<a href=#4207 id=4207 data-nosnippet>4207</a>                .runtime(test_runtime())
+<a href=#4208 id=4208 data-nosnippet>4208</a>                .build()
+<a href=#4209 id=4209 data-nosnippet>4209</a>                .unwrap()
+<a href=#4210 id=4210 data-nosnippet>4210</a>        };
+<a href=#4211 id=4211 data-nosnippet>4211</a>
+<a href=#4212 id=4212 data-nosnippet>4212</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table1);
+<a href=#4213 id=4213 data-nosnippet>4213</a>        <span class="kw">let </span>table_result = tx
+<a href=#4214 id=4214 data-nosnippet>4214</a>            .upgrade_table_version()
+<a href=#4215 id=4215 data-nosnippet>4215</a>            .set_format_version(FormatVersion::V2)
+<a href=#4216 id=4216 data-nosnippet>4216</a>            .apply(tx)
+<a href=#4217 id=4217 data-nosnippet>4217</a>            .unwrap()
+<a href=#4218 id=4218 data-nosnippet>4218</a>            .commit(<span class="kw-2">&amp;</span>catalog)
+<a href=#4219 id=4219 data-nosnippet>4219</a>            .<span class="kw">await</span>;
+<a href=#4220 id=4220 data-nosnippet>4220</a>
+<a href=#4221 id=4221 data-nosnippet>4221</a>        <span class="macro">assert!</span>(table_result.is_err());
+<a href=#4222 id=4222 data-nosnippet>4222</a>        <span class="macro">assert!</span>(
+<a href=#4223 id=4223 data-nosnippet>4223</a>            table_result
+<a href=#4224 id=4224 data-nosnippet>4224</a>                .err()
+<a href=#4225 id=4225 data-nosnippet>4225</a>                .unwrap()
+<a href=#4226 id=4226 data-nosnippet>4226</a>                .message()
+<a href=#4227 id=4227 data-nosnippet>4227</a>                .contains(<span class="string">"does not exist"</span>)
+<a href=#4228 id=4228 data-nosnippet>4228</a>        );
+<a href=#4229 id=4229 data-nosnippet>4229</a>
+<a href=#4230 id=4230 data-nosnippet>4230</a>        config_mock.assert_async().<span class="kw">await</span>;
+<a href=#4231 id=4231 data-nosnippet>4231</a>        update_table_mock.assert_async().<span class="kw">await</span>;
+<a href=#4232 id=4232 data-nosnippet>4232</a>        load_table_mock.assert_async().<span class="kw">await</span>;
+<a href=#4233 id=4233 data-nosnippet>4233</a>    }
+<a href=#4234 id=4234 data-nosnippet>4234</a>
+<a href=#4235 id=4235 data-nosnippet>4235</a>    <span class="attr">#[tokio::test]
+<a href=#4236 id=4236 data-nosnippet>4236</a>    </span><span class="kw">async fn </span>test_register_table() {
+<a href=#4237 id=4237 data-nosnippet>4237</a>        <span class="kw">let </span><span class="kw-2">mut </span>server = Server::new_async().<span class="kw">await</span>;
+<a href=#4238 id=4238 data-nosnippet>4238</a>
+<a href=#4239 id=4239 data-nosnippet>4239</a>        <span class="kw">let </span>config_mock = create_config_mock(<span class="kw-2">&amp;mut </span>server).<span class="kw">await</span>;
+<a href=#4240 id=4240 data-nosnippet>4240</a>
+<a href=#4241 id=4241 data-nosnippet>4241</a>        <span class="kw">let </span>register_table_mock = server
+<a href=#4242 id=4242 data-nosnippet>4242</a>            .mock(<span class="string">"POST"</span>, <span class="string">"/v1/namespaces/ns1/register"</span>)
+<a href=#4243 id=4243 data-nosnippet>4243</a>            .with_status(<span class="number">200</span>)
+<a href=#4244 id=4244 data-nosnippet>4244</a>            .with_body_from_file(<span class="macro">format!</span>(
+<a href=#4245 id=4245 data-nosnippet>4245</a>                <span class="string">"{}/testdata/{}"</span>,
+<a href=#4246 id=4246 data-nosnippet>4246</a>                <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
+<a href=#4247 id=4247 data-nosnippet>4247</a>                <span class="string">"load_table_response.json"
+<a href=#4248 id=4248 data-nosnippet>4248</a>            </span>))
+<a href=#4249 id=4249 data-nosnippet>4249</a>            .create_async()
+<a href=#4250 id=4250 data-nosnippet>4250</a>            .<span class="kw">await</span>;
+<a href=#4251 id=4251 data-nosnippet>4251</a>
+<a href=#4252 id=4252 data-nosnippet>4252</a>        <span class="kw">let </span>catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+<a href=#4253 id=4253 data-nosnippet>4253</a>        <span class="kw">let </span>table_ident =
+<a href=#4254 id=4254 data-nosnippet>4254</a>            TableIdent::new(NamespaceIdent::new(<span class="string">"ns1"</span>.to_string()), <span class="string">"test1"</span>.to_string());
+<a href=#4255 id=4255 data-nosnippet>4255</a>        <span class="kw">let </span>metadata_location = String::from(
+<a href=#4256 id=4256 data-nosnippet>4256</a>            <span class="string">"s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json"</span>,
+<a href=#4257 id=4257 data-nosnippet>4257</a>        );
+<a href=#4258 id=4258 data-nosnippet>4258</a>
+<a href=#4259 id=4259 data-nosnippet>4259</a>        <span class="kw">let </span>table = catalog
+<a href=#4260 id=4260 data-nosnippet>4260</a>            .register_table(<span class="kw-2">&amp;</span>SessionContext::empty(), <span class="kw-2">&amp;</span>table_ident, metadata_location)
+<a href=#4261 id=4261 data-nosnippet>4261</a>            .<span class="kw">await
+<a href=#4262 id=4262 data-nosnippet>4262</a>            </span>.unwrap();
+<a href=#4263 id=4263 data-nosnippet>4263</a>
+<a href=#4264 id=4264 data-nosnippet>4264</a>        <span class="macro">assert_eq!</span>(
+<a href=#4265 id=4265 data-nosnippet>4265</a>            <span class="kw-2">&amp;</span>TableIdent::from_strs(<span class="macro">vec!</span>[<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap(),
+<a href=#4266 id=4266 data-nosnippet>4266</a>            table.identifier()
+<a href=#4267 id=4267 data-nosnippet>4267</a>        );
+<a href=#4268 id=4268 data-nosnippet>4268</a>        <span class="macro">assert_eq!</span>(
+<a href=#4269 id=4269 data-nosnippet>4269</a>            <span class="string">"s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json"</span>,
+<a href=#4270 id=4270 data-nosnippet>4270</a>            table.metadata_location().unwrap()
+<a href=#4271 id=4271 data-nosnippet>4271</a>        );
+<a href=#4272 id=4272 data-nosnippet>4272</a>
+<a href=#4273 id=4273 data-nosnippet>4273</a>        config_mock.assert_async().<span class="kw">await</span>;
+<a href=#4274 id=4274 data-nosnippet>4274</a>        register_table_mock.assert_async().<span class="kw">await</span>;
+<a href=#4275 id=4275 data-nosnippet>4275</a>    }
+<a href=#4276 id=4276 data-nosnippet>4276</a>
+<a href=#4277 id=4277 data-nosnippet>4277</a>    <span class="attr">#[tokio::test]
+<a href=#4278 id=4278 data-nosnippet>4278</a>    </span><span class="kw">async fn </span>test_register_table_404() {
+<a href=#4279 id=4279 data-nosnippet>4279</a>        <span class="kw">let </span><span class="kw-2">mut </span>server = Server::new_async().<span class="kw">await</span>;
+<a href=#4280 id=4280 data-nosnippet>4280</a>
+<a href=#4281 id=4281 data-nosnippet>4281</a>        <span class="kw">let </span>config_mock = create_config_mock(<span class="kw-2">&amp;mut </span>server).<span class="kw">await</span>;
+<a href=#4282 id=4282 data-nosnippet>4282</a>
+<a href=#4283 id=4283 data-nosnippet>4283</a>        <span class="kw">let </span>register_table_mock = server
+<a href=#4284 id=4284 data-nosnippet>4284</a>            .mock(<span class="string">"POST"</span>, <span class="string">"/v1/namespaces/ns1/register"</span>)
+<a href=#4285 id=4285 data-nosnippet>4285</a>            .with_status(<span class="number">404</span>)
+<a href=#4286 id=4286 data-nosnippet>4286</a>            .with_body(
+<a href=#4287 id=4287 data-nosnippet>4287</a>                <span class="string">r#"
+<a href=#4288 id=4288 data-nosnippet>4288</a>{
+<a href=#4289 id=4289 data-nosnippet>4289</a>    "error": {
+<a href=#4290 id=4290 data-nosnippet>4290</a>        "message": "The namespace specified does not exist",
+<a href=#4291 id=4291 data-nosnippet>4291</a>        "type": "NoSuchNamespaceErrorException",
+<a href=#4292 id=4292 data-nosnippet>4292</a>        "code": 404
+<a href=#4293 id=4293 data-nosnippet>4293</a>    }
+<a href=#4294 id=4294 data-nosnippet>4294</a>}
+<a href=#4295 id=4295 data-nosnippet>4295</a>            "#</span>,
+<a href=#4296 id=4296 data-nosnippet>4296</a>            )
+<a href=#4297 id=4297 data-nosnippet>4297</a>            .create_async()
+<a href=#4298 id=4298 data-nosnippet>4298</a>            .<span class="kw">await</span>;
+<a href=#4299 id=4299 data-nosnippet>4299</a>
+<a href=#4300 id=4300 data-nosnippet>4300</a>        <span class="kw">let </span>catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+<a href=#4301 id=4301 data-nosnippet>4301</a>
+<a href=#4302 id=4302 data-nosnippet>4302</a>        <span class="kw">let </span>table_ident =
+<a href=#4303 id=4303 data-nosnippet>4303</a>            TableIdent::new(NamespaceIdent::new(<span class="string">"ns1"</span>.to_string()), <span class="string">"test1"</span>.to_string());
+<a href=#4304 id=4304 data-nosnippet>4304</a>        <span class="kw">let </span>metadata_location = String::from(
+<a href=#4305 id=4305 data-nosnippet>4305</a>            <span class="string">"s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json"</span>,
+<a href=#4306 id=4306 data-nosnippet>4306</a>        );
+<a href=#4307 id=4307 data-nosnippet>4307</a>        <span class="kw">let </span>table = catalog
+<a href=#4308 id=4308 data-nosnippet>4308</a>            .register_table(<span class="kw-2">&amp;</span>SessionContext::empty(), <span class="kw-2">&amp;</span>table_ident, metadata_location)
+<a href=#4309 id=4309 data-nosnippet>4309</a>            .<span class="kw">await</span>;
+<a href=#4310 id=4310 data-nosnippet>4310</a>
+<a href=#4311 id=4311 data-nosnippet>4311</a>        <span class="macro">assert!</span>(table.is_err());
+<a href=#4312 id=4312 data-nosnippet>4312</a>        <span class="macro">assert!</span>(table.err().unwrap().message().contains(<span class="string">"does not exist"</span>));
+<a href=#4313 id=4313 data-nosnippet>4313</a>
+<a href=#4314 id=4314 data-nosnippet>4314</a>        config_mock.assert_async().<span class="kw">await</span>;
+<a href=#4315 id=4315 data-nosnippet>4315</a>        register_table_mock.assert_async().<span class="kw">await</span>;
+<a href=#4316 id=4316 data-nosnippet>4316</a>    }
+<a href=#4317 id=4317 data-nosnippet>4317</a>
+<a href=#4318 id=4318 data-nosnippet>4318</a>    <span class="attr">#[tokio::test]
+<a href=#4319 id=4319 data-nosnippet>4319</a>    </span><span class="kw">async fn </span>test_create_rest_catalog() {
+<a href=#4320 id=4320 data-nosnippet>4320</a>        <span class="kw">let </span>builder = RestCatalogBuilder::default().with_client(Client::new());
+<a href=#4321 id=4321 data-nosnippet>4321</a>
+<a href=#4322 id=4322 data-nosnippet>4322</a>        <span class="kw">let </span>catalog = builder
+<a href=#4323 id=4323 data-nosnippet>4323</a>            .load(
+<a href=#4324 id=4324 data-nosnippet>4324</a>                <span class="string">"test"</span>,
+<a href=#4325 id=4325 data-nosnippet>4325</a>                HashMap::from([
+<a href=#4326 id=4326 data-nosnippet>4326</a>                    (
+<a href=#4327 id=4327 data-nosnippet>4327</a>                        REST_CATALOG_PROP_URI.to_string(),
+<a href=#4328 id=4328 data-nosnippet>4328</a>                        <span class="string">"http://localhost:8080"</span>.to_string(),
+<a href=#4329 id=4329 data-nosnippet>4329</a>                    ),
+<a href=#4330 id=4330 data-nosnippet>4330</a>                    (<span class="string">"a"</span>.to_string(), <span class="string">"b"</span>.to_string()),
+<a href=#4331 id=4331 data-nosnippet>4331</a>                ]),
+<a href=#4332 id=4332 data-nosnippet>4332</a>            )
+<a href=#4333 id=4333 data-nosnippet>4333</a>            .<span class="kw">await</span>;
+<a href=#4334 id=4334 data-nosnippet>4334</a>
+<a href=#4335 id=4335 data-nosnippet>4335</a>        <span class="macro">assert!</span>(catalog.is_ok());
+<a href=#4336 id=4336 data-nosnippet>4336</a>
+<a href=#4337 id=4337 data-nosnippet>4337</a>        <span class="kw">let </span>catalog = catalog.unwrap();
+<a href=#4338 id=4338 data-nosnippet>4338</a>        <span class="kw">let </span>catalog_config = <span class="kw-2">&amp;</span>catalog.inner.user_config;
+<a href=#4339 id=4339 data-nosnippet>4339</a>        <span class="macro">assert_eq!</span>(catalog_config.name.as_deref(), <span class="prelude-val">Some</span>(<span class="string">"test"</span>));
+<a href=#4340 id=4340 data-nosnippet>4340</a>        <span class="macro">assert_eq!</span>(catalog_config.uri, <span class="string">"http://localhost:8080"</span>);
+<a href=#4341 id=4341 data-nosnippet>4341</a>        <span class="macro">assert_eq!</span>(catalog_config.warehouse, <span class="prelude-val">None</span>);
+<a href=#4342 id=4342 data-nosnippet>4342</a>        <span class="macro">assert!</span>(catalog_config.client.is_some());
+<a href=#4343 id=4343 data-nosnippet>4343</a>
+<a href=#4344 id=4344 data-nosnippet>4344</a>        <span class="macro">assert_eq!</span>(catalog_config.props.get(<span class="string">"a"</span>), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="string">"b"</span>.to_string()));
+<a href=#4345 id=4345 data-nosnippet>4345</a>        <span class="macro">assert!</span>(!catalog_config.props.contains_key(REST_CATALOG_PROP_URI));
+<a href=#4346 id=4346 data-nosnippet>4346</a>    }
+<a href=#4347 id=4347 data-nosnippet>4347</a>
+<a href=#4348 id=4348 data-nosnippet>4348</a>    <span class="attr">#[tokio::test]
+<a href=#4349 id=4349 data-nosnippet>4349</a>    </span><span class="kw">async fn </span>test_create_rest_catalog_no_uri() {
+<a href=#4350 id=4350 data-nosnippet>4350</a>        <span class="kw">let </span>builder = RestCatalogBuilder::default();
+<a href=#4351 id=4351 data-nosnippet>4351</a>
+<a href=#4352 id=4352 data-nosnippet>4352</a>        <span class="kw">let </span>catalog = builder
+<a href=#4353 id=4353 data-nosnippet>4353</a>            .load(
+<a href=#4354 id=4354 data-nosnippet>4354</a>                <span class="string">"test"</span>,
+<a href=#4355 id=4355 data-nosnippet>4355</a>                HashMap::from([(
+<a href=#4356 id=4356 data-nosnippet>4356</a>                    REST_CATALOG_PROP_WAREHOUSE.to_string(),
+<a href=#4357 id=4357 data-nosnippet>4357</a>                    <span class="string">"s3://warehouse"</span>.to_string(),
+<a href=#4358 id=4358 data-nosnippet>4358</a>                )]),
+<a href=#4359 id=4359 data-nosnippet>4359</a>            )
+<a href=#4360 id=4360 data-nosnippet>4360</a>            .<span class="kw">await</span>;
+<a href=#4361 id=4361 data-nosnippet>4361</a>
+<a href=#4362 id=4362 data-nosnippet>4362</a>        <span class="macro">assert!</span>(catalog.is_err());
+<a href=#4363 id=4363 data-nosnippet>4363</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = catalog {
+<a href=#4364 id=4364 data-nosnippet>4364</a>            <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::DataInvalid);
+<a href=#4365 id=4365 data-nosnippet>4365</a>            <span class="macro">assert_eq!</span>(err.message(), <span class="string">"Catalog uri is required"</span>);
+<a href=#4366 id=4366 data-nosnippet>4366</a>        }
+<a href=#4367 id=4367 data-nosnippet>4367</a>    }
+<a href=#4368 id=4368 data-nosnippet>4368</a>
+<a href=#4369 id=4369 data-nosnippet>4369</a>    <span class="attr">#[tokio::test]
+<a href=#4370 id=4370 data-nosnippet>4370</a>    </span><span class="kw">async fn </span>test_create_session_catalog() {
+<a href=#4371 id=4371 data-nosnippet>4371</a>        <span class="kw">let </span>builder = RestSessionCatalogBuilder::default();
+<a href=#4372 id=4372 data-nosnippet>4372</a>
+<a href=#4373 id=4373 data-nosnippet>4373</a>        <span class="kw">let </span>result = builder
+<a href=#4374 id=4374 data-nosnippet>4374</a>            .load(
+<a href=#4375 id=4375 data-nosnippet>4375</a>                <span class="string">"test"</span>,
+<a href=#4376 id=4376 data-nosnippet>4376</a>                HashMap::from([
+<a href=#4377 id=4377 data-nosnippet>4377</a>                    (
+<a href=#4378 id=4378 data-nosnippet>4378</a>                        REST_CATALOG_PROP_URI.to_string(),
+<a href=#4379 id=4379 data-nosnippet>4379</a>                        <span class="string">"http://localhost:8080"</span>.to_string(),
+<a href=#4380 id=4380 data-nosnippet>4380</a>                    ),
+<a href=#4381 id=4381 data-nosnippet>4381</a>                    (<span class="string">"a"</span>.to_string(), <span class="string">"b"</span>.to_string()),
+<a href=#4382 id=4382 data-nosnippet>4382</a>                ]),
+<a href=#4383 id=4383 data-nosnippet>4383</a>            )
+<a href=#4384 id=4384 data-nosnippet>4384</a>            .<span class="kw">await</span>;
+<a href=#4385 id=4385 data-nosnippet>4385</a>
+<a href=#4386 id=4386 data-nosnippet>4386</a>        <span class="macro">assert!</span>(result.is_ok());
+<a href=#4387 id=4387 data-nosnippet>4387</a>
+<a href=#4388 id=4388 data-nosnippet>4388</a>        <span class="kw">let </span>catalog = result.unwrap();
+<a href=#4389 id=4389 data-nosnippet>4389</a>
+<a href=#4390 id=4390 data-nosnippet>4390</a>        <span class="kw">let </span>catalog_config = catalog.user_config;
+<a href=#4391 id=4391 data-nosnippet>4391</a>        <span class="macro">assert_eq!</span>(catalog_config.name.as_deref(), <span class="prelude-val">Some</span>(<span class="string">"test"</span>));
+<a href=#4392 id=4392 data-nosnippet>4392</a>        <span class="macro">assert_eq!</span>(catalog_config.uri, <span class="string">"http://localhost:8080"</span>);
+<a href=#4393 id=4393 data-nosnippet>4393</a>        <span class="macro">assert_eq!</span>(catalog_config.warehouse, <span class="prelude-val">None</span>);
+<a href=#4394 id=4394 data-nosnippet>4394</a>        <span class="comment">// The default builder sets no client (only `with_client` does).
+<a href=#4395 id=4395 data-nosnippet>4395</a>        </span><span class="macro">assert!</span>(catalog_config.client.is_none());
+<a href=#4396 id=4396 data-nosnippet>4396</a>
+<a href=#4397 id=4397 data-nosnippet>4397</a>        <span class="comment">// `uri` is consumed into its own field; other props are retained.
+<a href=#4398 id=4398 data-nosnippet>4398</a>        </span><span class="macro">assert_eq!</span>(catalog_config.props.get(<span class="string">"a"</span>), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="string">"b"</span>.to_string()));
+<a href=#4399 id=4399 data-nosnippet>4399</a>        <span class="macro">assert!</span>(!catalog_config.props.contains_key(REST_CATALOG_PROP_URI));
+<a href=#4400 id=4400 data-nosnippet>4400</a>    }
+<a href=#4401 id=4401 data-nosnippet>4401</a>
+<a href=#4402 id=4402 data-nosnippet>4402</a>    <span class="attr">#[tokio::test]
+<a href=#4403 id=4403 data-nosnippet>4403</a>    </span><span class="kw">async fn </span>test_create_rest_catalog_with_session() {
+<a href=#4404 id=4404 data-nosnippet>4404</a>        <span class="kw">let </span>context = SessionContext::builder()
+<a href=#4405 id=4405 data-nosnippet>4405</a>            .session_id(<span class="string">"test-id"</span>.to_string())
+<a href=#4406 id=4406 data-nosnippet>4406</a>            .build();
+<a href=#4407 id=4407 data-nosnippet>4407</a>
+<a href=#4408 id=4408 data-nosnippet>4408</a>        <span class="kw">let </span>result = RestCatalogBuilder::default()
+<a href=#4409 id=4409 data-nosnippet>4409</a>            .with_session_context(context)
+<a href=#4410 id=4410 data-nosnippet>4410</a>            .load(
+<a href=#4411 id=4411 data-nosnippet>4411</a>                <span class="string">"test"</span>,
+<a href=#4412 id=4412 data-nosnippet>4412</a>                HashMap::from([(
+<a href=#4413 id=4413 data-nosnippet>4413</a>                    REST_CATALOG_PROP_URI.to_string(),
+<a href=#4414 id=4414 data-nosnippet>4414</a>                    <span class="string">"http://localhost:8080"</span>.to_string(),
+<a href=#4415 id=4415 data-nosnippet>4415</a>                )]),
+<a href=#4416 id=4416 data-nosnippet>4416</a>            )
+<a href=#4417 id=4417 data-nosnippet>4417</a>            .<span class="kw">await</span>;
+<a href=#4418 id=4418 data-nosnippet>4418</a>
+<a href=#4419 id=4419 data-nosnippet>4419</a>        <span class="macro">assert!</span>(result.is_ok());
+<a href=#4420 id=4420 data-nosnippet>4420</a>
+<a href=#4421 id=4421 data-nosnippet>4421</a>        <span class="comment">// The context passed to `with_session_context` is the one the catalog is bound to.
+<a href=#4422 id=4422 data-nosnippet>4422</a>        </span><span class="kw">let </span>catalog = result.unwrap();
+<a href=#4423 id=4423 data-nosnippet>4423</a>        <span class="macro">assert_eq!</span>(catalog.session_context.session_id(), <span class="string">"test-id"</span>);
+<a href=#4424 id=4424 data-nosnippet>4424</a>    }
+<a href=#4425 id=4425 data-nosnippet>4425</a>
+<a href=#4426 id=4426 data-nosnippet>4426</a>    <span class="attr">#[tokio::test]
+<a href=#4427 id=4427 data-nosnippet>4427</a>    </span><span class="kw">async fn </span>test_create_rest_catalog_default_session() {
+<a href=#4428 id=4428 data-nosnippet>4428</a>        <span class="kw">let </span>result = RestCatalogBuilder::default()
+<a href=#4429 id=4429 data-nosnippet>4429</a>            .load(
+<a href=#4430 id=4430 data-nosnippet>4430</a>                <span class="string">"test"</span>,
+<a href=#4431 id=4431 data-nosnippet>4431</a>                HashMap::from([(
+<a href=#4432 id=4432 data-nosnippet>4432</a>                    REST_CATALOG_PROP_URI.to_string(),
+<a href=#4433 id=4433 data-nosnippet>4433</a>                    <span class="string">"http://localhost:8080"</span>.to_string(),
+<a href=#4434 id=4434 data-nosnippet>4434</a>                )]),
+<a href=#4435 id=4435 data-nosnippet>4435</a>            )
+<a href=#4436 id=4436 data-nosnippet>4436</a>            .<span class="kw">await</span>;
+<a href=#4437 id=4437 data-nosnippet>4437</a>
+<a href=#4438 id=4438 data-nosnippet>4438</a>        <span class="macro">assert!</span>(result.is_ok());
+<a href=#4439 id=4439 data-nosnippet>4439</a>
+<a href=#4440 id=4440 data-nosnippet>4440</a>        <span class="comment">// Without `with_session_context`, the catalog falls back to `SessionContext::empty()`,
+<a href=#4441 id=4441 data-nosnippet>4441</a>        // which assigns a fresh v4 UUID.
+<a href=#4442 id=4442 data-nosnippet>4442</a>        </span><span class="kw">let </span>catalog = result.unwrap();
+<a href=#4443 id=4443 data-nosnippet>4443</a>        <span class="macro">assert!</span>(uuid::Uuid::parse_str(catalog.session_context.session_id()).is_ok());
+<a href=#4444 id=4444 data-nosnippet>4444</a>    }
+<a href=#4445 id=4445 data-nosnippet>4445</a>
+<a href=#4446 id=4446 data-nosnippet>4446</a>    <span class="doccomment">/// Smoke test: a [`Catalog`] trait method delegates through the façade to `RestSessionCatalog`.
+<a href=#4447 id=4447 data-nosnippet>4447</a>    </span><span class="attr">#[tokio::test]
+<a href=#4448 id=4448 data-nosnippet>4448</a>    </span><span class="kw">async fn </span>test_rest_catalog_delegates() {
+<a href=#4449 id=4449 data-nosnippet>4449</a>        <span class="kw">let </span><span class="kw-2">mut </span>server = Server::new_async().<span class="kw">await</span>;
+<a href=#4450 id=4450 data-nosnippet>4450</a>        <span class="kw">let </span>config_mock = create_config_mock(<span class="kw-2">&amp;mut </span>server).<span class="kw">await</span>;
+<a href=#4451 id=4451 data-nosnippet>4451</a>        <span class="kw">let </span>list_ns_mock = server
+<a href=#4452 id=4452 data-nosnippet>4452</a>            .mock(<span class="string">"GET"</span>, <span class="string">"/v1/namespaces"</span>)
+<a href=#4453 id=4453 data-nosnippet>4453</a>            .with_body(
+<a href=#4454 id=4454 data-nosnippet>4454</a>                <span class="string">r#"{
+<a href=#4455 id=4455 data-nosnippet>4455</a>                "namespaces": [["ns1"]]
+<a href=#4456 id=4456 data-nosnippet>4456</a>            }"#</span>,
+<a href=#4457 id=4457 data-nosnippet>4457</a>            )
+<a href=#4458 id=4458 data-nosnippet>4458</a>            .create_async()
+<a href=#4459 id=4459 data-nosnippet>4459</a>            .<span class="kw">await</span>;
+<a href=#4460 id=4460 data-nosnippet>4460</a>
+<a href=#4461 id=4461 data-nosnippet>4461</a>        <span class="kw">let </span>catalog = RestCatalog::new(
+<a href=#4462 id=4462 data-nosnippet>4462</a>            SessionContext::empty(),
+<a href=#4463 id=4463 data-nosnippet>4463</a>            RestCatalogConfig::builder().uri(server.url()).build(),
+<a href=#4464 id=4464 data-nosnippet>4464</a>            <span class="prelude-val">None</span>,
+<a href=#4465 id=4465 data-nosnippet>4465</a>            <span class="prelude-val">Some</span>(Arc::new(LocalFsStorageFactory)),
+<a href=#4466 id=4466 data-nosnippet>4466</a>            Runtime::current(),
+<a href=#4467 id=4467 data-nosnippet>4467</a>            <span class="prelude-val">None</span>,
+<a href=#4468 id=4468 data-nosnippet>4468</a>        );
+<a href=#4469 id=4469 data-nosnippet>4469</a>
+<a href=#4470 id=4470 data-nosnippet>4470</a>        <span class="kw">let </span>namespaces = catalog.list_namespaces(<span class="prelude-val">None</span>).<span class="kw">await</span>.unwrap();
+<a href=#4471 id=4471 data-nosnippet>4471</a>
+<a href=#4472 id=4472 data-nosnippet>4472</a>        <span class="macro">assert_eq!</span>(namespaces, <span class="macro">vec!</span>[
+<a href=#4473 id=4473 data-nosnippet>4473</a>            NamespaceIdent::from_vec(<span class="macro">vec!</span>[<span class="string">"ns1"</span>.to_string()]).unwrap()
+<a href=#4474 id=4474 data-nosnippet>4474</a>        ]);
+<a href=#4475 id=4475 data-nosnippet>4475</a>
+<a href=#4476 id=4476 data-nosnippet>4476</a>        config_mock.assert_async().<span class="kw">await</span>;
+<a href=#4477 id=4477 data-nosnippet>4477</a>        list_ns_mock.assert_async().<span class="kw">await</span>;
+<a href=#4478 id=4478 data-nosnippet>4478</a>    }
+<a href=#4479 id=4479 data-nosnippet>4479</a>}
 </code></pre></div></section></main></body></html>
