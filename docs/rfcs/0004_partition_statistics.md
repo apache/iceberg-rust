@@ -45,15 +45,7 @@ Computing exact live row counts, automatically generating statistics during ever
 
 Iceberg Rust already models `PartitionStatisticsFile`, including the snapshot ID, file path, and file size. Table metadata can set, retrieve, and remove that descriptor, and snapshot expiration removes descriptors belonging to expired snapshots.
 
-The following pieces are not yet implemented:
-
-- the rows stored inside a partition statistics file;
-- the versioned row schema and conversion to file-format schemas;
-- reading and writing those rows;
-- a partition statistics scan; and
-- computation and registration of a new statistics file.
-
-This RFC fills those gaps without changing the Iceberg table format.
+This RFC adds the missing row model, versioned schemas, file I/O, scan, and computation on top of that metadata support, without changing the Iceberg table format.
 
 ## 3. Terminology and Java Compatibility
 
@@ -74,15 +66,15 @@ The existing Rust descriptor field `statistics_path` is retained. It serializes 
 
 ## 4. Architecture
 
-The computation flow follows Java. The diagram shows nonempty results; errors and no-file outcomes are described in section 7.4.
+The diagram shows Rust's computation flow for nonempty results. Errors and no-file outcomes are described in section 7.4.
 
 ```mermaid
 flowchart TD
     Start["Compute statistics for a snapshot"] --> Previous{"Previous statistics file<br/>in snapshot ancestry?"}
-    Previous -->|No| Full["Full computation<br/>scan current snapshot manifests"]
+    Previous -->|No| Full["Full computation<br/>scan target snapshot manifests"]
     Previous -->|Same snapshot| Existing["Return existing<br/>PartitionStatisticsFile"]
     Previous -->|Older ancestor| Incremental["Incremental computation<br/>read old statistics<br/>apply added and deleted files"]
-    Incremental -->|Old file cannot be read| Full
+    Incremental -->|Unreadable or invalid base| Full
     Full --> Group["Group by<br/>(spec_id, partition)"]
     Incremental --> Group
     Group --> Rows["Build PartitionStatistics rows"]
@@ -95,7 +87,7 @@ Computation and registration are separate responsibilities. The handler computes
 
 ## 5. Partition Statistics Schema
 
-The file contains one row for each unique `(spec_id, partition)` key. Field IDs, types, requiredness, and meanings come from the Iceberg specification.
+The file contains one row for each unique `(spec_id, partition)` key. Field IDs, types, requiredness, and meanings come from the Iceberg specification. The v1/v2 and v3 columns refer to Iceberg table-format versions.
 
 | ID | Stored field | Type | v1/v2 | v3 | Java getter | Description |
 | ---: | --- | --- | --- | --- | --- | --- |
@@ -129,7 +121,11 @@ Rust leaves `total_record_count` as `NULL` in every newly computed full or incre
 
 Partition specs can evolve. As required by the Iceberg specification, Rust uses the full unified partition type: the union of all known partition fields across table specs, including fields whose source columns were dropped. Unified fields are optional, ordered by partition field ID, and use the most recent spec's name for each field.
 
-Java's statistics paths use `Partitioning.partitionType(table)`, which excludes fields whose source columns are absent from the current schema. This differs from the specification's full historical union. Rust writes retain those fields so distinct historical partitions remain distinguishable; Java readers may project them out.
+Resolve each field's output type from its transform and compatible current or retained historical table schemas, using manifest partition schemas when needed. Apply valid Iceberg type promotion when reconciling types. If a required historical type cannot be resolved, return an error rather than substituting `Unknown` or discarding values.
+
+In v1, a field replaced by the `void` transform keeps its historical non-void type. A field that was always void may use `int` when its source type is unavailable. Reject a reused field ID whose source column or non-void transform conflicts across specs.
+
+Java's statistics paths use `Partitioning.partitionType(table)`, which excludes fields whose source columns are absent from the current schema. Rust retains these fields to follow the specification and preserve distinct historical partitions. Java's table-aware scan omits them; if every partition source column has been dropped, it rejects the resulting empty partition type.
 
 ```mermaid
 flowchart TD
@@ -145,7 +141,7 @@ Aggregation keys use `spec_id` and the original tuple for that spec. Two rows wi
 
 ### 7.1 Full Computation
 
-A full computation reads all entries in the target snapshot's manifests. Live entries contribute counters; deleted entries update available history without contributing counters. A partition represented only by deleted entries can therefore produce a zero-count row.
+A full computation reads all entries in the target snapshot's manifests. Live entries (`ADDED` or `EXISTING`) contribute counters; `DELETED` entries update available history without contributing counters. A partition represented only by deleted entries can therefore produce a zero-count row.
 
 Manifests may be processed concurrently, with each task building a local map that is merged after processing.
 
@@ -162,9 +158,9 @@ Update history is best effort. Among the snapshots available for encountered ent
 
 If an ancestor of the target snapshot has a registered statistics file, the handler can read that file as its base. It then examines manifests added by each snapshot between the base and target:
 
-- added live entries increment counters;
-- deleted entries decrement counters; and
-- entries already represented by the base file are not counted again.
+- `ADDED` entries increment counters;
+- `DELETED` entries decrement counters; and
+- `EXISTING` entries are skipped, including files added earlier in the incremental interval.
 
 Rust validates that the base schema, keys, and counters support incremental merging. If reading fails or the base fails validation, the handler falls back to a full computation. Java falls back on failures while reading the base file; semantic base validation is an additional Rust requirement.
 
@@ -208,6 +204,8 @@ PartitionStatisticsFile
 ```
 
 Registration uses the existing `SetPartitionStatistics` table update. The statistics file is valid for readers only after its descriptor is committed to table metadata.
+
+Registration must not commit a descriptor for a target snapshot that expires concurrently. A local existence check alone is insufficient; the catalog commit must enforce this guarantee.
 
 The following owned-artifact and retry-safety rules are Rust-specific requirements based on `0003_stateful_transaction.md`.
 
@@ -300,7 +298,9 @@ The implementation can be delivered in stages:
 4. Add incremental computation with full-computation fallback.
 5. Add remaining supported Rust table data-file formats as extensions beyond current Java statistics I/O.
 
-Files produced by Rust in shared supported formats must be readable by Java, and Java-produced files in those formats must be readable by Rust. Compatibility tests should exchange physical files, not only compare in-memory schemas. Stored field definitions remain compatible. Rust's full historical partition projection follows the specification; its live-record-count invalidation, semantic base validation, and transaction cleanup are additional safety choices.
+Files in shared supported formats must use compatible stored schemas. Test interoperability with exchanged files, including Java-to-Rust reads and Rust-to-Java scans when Java can build a nonempty partition type. Also test Java's historical-field projection and empty-type rejection described in section 6.
+
+Rust's historical-field retention follows the specification; its exact-count invalidation, base validation, and transaction cleanup are additional safety choices.
 
 ## 12. Risks and Mitigations
 
@@ -309,7 +309,7 @@ Files produced by Rust in shared supported formats must be readable by Java, and
 | Incorrect aggregation after partition evolution | Rows from different specs or struct layouts may be merged | Key by both spec ID and partition, and coerce values into the unified type |
 | Corrupted incremental counts | A missing or duplicated delta can create incorrect or negative counters | Compare normalized counter maps with full computation and reject negative final counters |
 | Incorrect delete interpretation | Deletion vectors may be counted as position-delete files | Include DV records in field 6, exclude DVs from field 7, and count them in field 13 |
-| Stale statistics registration | A retry may attempt to attach a file to the wrong snapshot | Validate snapshot identity before commit and preserve it across safe retries |
+| Stale statistics registration | A retry may use the wrong snapshot, or the target may expire concurrently | Preserve snapshot identity across retries and enforce target validity at catalog commit |
 | Orphaned statistics files | File writing happens before the catalog commit | Track generated files as action-owned artifacts and apply terminal cleanup rules |
 | Cross-language drift | Rust names or requiredness may diverge from Java | Test field IDs, types, requiredness, serialized names, and Java-readable fixtures |
 
@@ -324,15 +324,20 @@ Tests should cover:
 - scans and same-snapshot reuse preserving a non-null total from an existing file;
 - update history from live and deleted entries, including unavailable expired snapshots;
 - partition evolution, retained dropped-source fields, and reconstruction of original per-spec keys;
+- historical type recovery from retained schemas or manifest partition schemas, valid type promotion, and errors for unresolved required types;
+- v1 void replacements, void-only fields, and rejection of conflicting field-ID reuse;
 - fallback when a projected base file loses information needed to distinguish historical partitions;
+- Java scan projection after source-column drops and rejection when its active partition type becomes empty;
 - returned projection including filter fields and other unselected fields being `None`;
 - sort order, including null-first behavior;
 - equality of normalized full and incremental counter maps;
+- skipping `EXISTING` entries for files added earlier in the incremental interval;
 - zero-count-row retention and differences in available history between computation paths;
 - fallback when reading a previous statistics file fails or the base fails semantic validation;
 - rejection of negative completed counters;
-- reading Java-produced files and Java reading Rust-produced files;
+- reading Java-produced files and Java reading Rust-produced files where its scan is supported;
 - registration, retry, definitive-failure cleanup, and unknown-result cleanup;
+- concurrent target-snapshot expiration during registration leaving no descriptor for an expired snapshot;
 - snapshots without a registered statistics file;
 - no-file results for no current snapshot or an empty aggregation map;
 - rejection of unknown computation snapshots, tables with no partitioned spec, and empty unified types when writing; and
