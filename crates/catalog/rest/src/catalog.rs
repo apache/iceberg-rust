@@ -1839,11 +1839,9 @@ impl RestSessionCatalogBuilder {
         }
 
         // Collect other remaining properties
-        self.config.props.extend(
-            props
-                .into_iter()
-                .filter(|(k, _)| k != REST_CATALOG_PROP_URI && k != REST_CATALOG_PROP_WAREHOUSE),
-        );
+        self.config.props.extend(props);
+        self.config.props.remove(REST_CATALOG_PROP_URI);
+        self.config.props.remove(REST_CATALOG_PROP_WAREHOUSE);
 
         async move {
             if self.config.name.is_none() {
