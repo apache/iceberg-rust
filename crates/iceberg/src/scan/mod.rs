@@ -46,6 +46,7 @@ use crate::runtime::Runtime;
 use crate::spec::{DataContentType, Schema, SchemaRef, SnapshotRef, SortOrderRef, StructType};
 use crate::table::Table;
 use crate::util::available_parallelism;
+use crate::util::snapshot::snapshot_id_as_of_time;
 use crate::{Error, ErrorKind, Result};
 
 /// A stream of arrow [`RecordBatch`]es.
@@ -126,12 +127,18 @@ fn projected_partition_type(
         .map(Some)
 }
 
+/// Selects a snapshot by ID or timestamp.
+enum SnapshotSelection {
+    SnapshotId(i64),
+    AsOfTime(i64),
+}
+
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
     table: &'a Table,
     // Defaults to none which means select all columns
     column_names: Option<Vec<String>>,
-    snapshot_id: Option<i64>,
+    snapshot_selection: Option<SnapshotSelection>,
     batch_size: Option<usize>,
     case_sensitive: bool,
     filter: Option<Predicate>,
@@ -150,7 +157,7 @@ impl<'a> TableScanBuilder<'a> {
         Self {
             table,
             column_names: None,
-            snapshot_id: None,
+            snapshot_selection: None,
             batch_size: None,
             case_sensitive: true,
             filter: None,
@@ -207,9 +214,37 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Set the snapshot to scan. When not set, it uses current snapshot.
+    /// Set the snapshot to scan.
+    ///
+    /// The last call to this or [`Self::as_of_time`] takes precedence.
+    /// If neither is set, uses the current snapshot.
     pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
-        self.snapshot_id = Some(snapshot_id);
+        self.snapshot_selection = Some(SnapshotSelection::SnapshotId(snapshot_id));
+        self
+    }
+
+    /// Select a snapshot at or before a timestamp in milliseconds since the Unix epoch.
+    ///
+    /// Uses the table's main history. The last call to this or [`Self::snapshot_id`]
+    /// takes precedence.
+    ///
+    /// ```
+    /// # use iceberg::TableIdent;
+    /// # use iceberg::io::FileIO;
+    /// # use iceberg::table::StaticTable;
+    /// # #[tokio::main]
+    /// # async fn main() -> iceberg::Result<()> {
+    /// # let location = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/example_table_metadata_v2.json");
+    /// # let ident = TableIdent::from_strs(["ns", "t"])?;
+    /// # let table = StaticTable::from_metadata_file(location, ident, FileIO::new_with_fs()).await?;
+    /// // The snapshot log has entries at 1515100955770 and 1555100955770.
+    /// let scan = table.scan().as_of_time(1_555_100_955_769).build()?;
+    /// assert_eq!(scan.snapshot().unwrap().snapshot_id(), 3051729675574597004);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn as_of_time(mut self, timestamp_ms: i64) -> Self {
+        self.snapshot_selection = Some(SnapshotSelection::AsOfTime(timestamp_ms));
         self
     }
 
@@ -282,7 +317,15 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
-        let snapshot = match self.snapshot_id {
+        let snapshot_id = match self.snapshot_selection {
+            Some(SnapshotSelection::SnapshotId(id)) => Some(id),
+            Some(SnapshotSelection::AsOfTime(timestamp_ms)) => Some(snapshot_id_as_of_time(
+                &self.table.metadata_ref(),
+                timestamp_ms,
+            )?),
+            None => None,
+        };
+        let snapshot = match snapshot_id {
             Some(snapshot_id) => self
                 .table
                 .metadata()
@@ -696,7 +739,10 @@ pub mod tests {
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
+    use crate::util::snapshot::snapshot_id_as_of_time;
     use crate::{ErrorKind, TableIdent};
+
+    const ROWS_PER_FIXTURE_FILE: usize = 1024;
 
     fn render_template(template: &str, ctx: Value) -> String {
         let mut env = Environment::new();
@@ -1281,7 +1327,8 @@ pub mod tests {
                 Arc::new(arrow_schema::Schema::new(fields))
             };
             // x: [1, 1, 1, 1, ...]
-            let col1 = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
+            let col1 =
+                Arc::new(Int64Array::from_iter_values(vec![1; ROWS_PER_FIXTURE_FILE])) as ArrayRef;
 
             let mut values = vec![2; 512];
             values.append(vec![3; 200].as_mut());
@@ -1954,6 +2001,366 @@ pub mod tests {
             table_scan.snapshot().unwrap().snapshot_id(),
             3051729675574597004
         );
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_after_rollback() {
+        for elapsed_ms in [0, 1000] {
+            let table = TableTestFixture::new().table;
+            let mut metadata = table.metadata().clone();
+            let original = metadata.history()[0].snapshot_id;
+            let previous = metadata.history()[1].clone();
+            let rollback_time = previous.timestamp_ms + elapsed_ms;
+            metadata.snapshot_log.push(crate::spec::SnapshotLog {
+                timestamp_ms: rollback_time,
+                snapshot_id: original,
+            });
+            metadata.current_snapshot_id = Some(original);
+            metadata.refs.get_mut(MAIN_BRANCH).unwrap().snapshot_id = original;
+            let table = table.with_metadata(Arc::new(metadata));
+            let scan = table.scan().as_of_time(rollback_time).build().unwrap();
+            // A rollback at the same timestamp keeps the earlier history entry.
+            let expected = if elapsed_ms == 0 {
+                previous.snapshot_id
+            } else {
+                original
+            };
+            assert_eq!(scan.snapshot().unwrap().snapshot_id(), expected);
+        }
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_rejects_empty_history() {
+        let table = TableTestFixture::new_empty().table;
+        assert!(table.scan().build().unwrap().snapshot().is_none());
+        let err = table.scan().as_of_time(0).build().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("No snapshot history"));
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_rejects_before_history() {
+        let table = TableTestFixture::new().table;
+        let before = table.metadata().history()[0].timestamp_ms - 1;
+        let err = table.scan().as_of_time(before).build().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains(&before.to_string()));
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_rejects_all_qualifying_snapshots_expired() {
+        let table = TableTestFixture::new_with_deep_history().table;
+        let mut metadata = table.metadata().clone();
+        let entry = metadata.history()[3].clone();
+        let expired_ids: Vec<_> = metadata
+            .history()
+            .iter()
+            .filter(|log| log.timestamp_ms <= entry.timestamp_ms)
+            .map(|log| log.snapshot_id)
+            .collect();
+        assert_eq!(expired_ids.len(), 4);
+        for snapshot_id in expired_ids {
+            metadata.snapshots.remove(&snapshot_id);
+        }
+        let table = table.with_metadata(Arc::new(metadata));
+        // History resolution succeeds even though every qualifying snapshot expired.
+        assert_eq!(
+            snapshot_id_as_of_time(&table.metadata_ref(), entry.timestamp_ms).unwrap(),
+            entry.snapshot_id
+        );
+        assert!(table.scan().build().unwrap().snapshot().is_some());
+        let err = table
+            .scan()
+            .as_of_time(entry.timestamp_ms)
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.message(),
+            format!("Snapshot with id {} not found", entry.snapshot_id)
+        );
+    }
+
+    #[test]
+    fn test_table_scan_last_snapshot_selection_wins() {
+        let table = TableTestFixture::new().table;
+        let first = &table.metadata().history()[0];
+        let last = &table.metadata().history()[1];
+        let cases = [
+            (
+                table
+                    .scan()
+                    .snapshot_id(last.snapshot_id)
+                    .as_of_time(first.timestamp_ms),
+                first.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .as_of_time(first.timestamp_ms)
+                    .snapshot_id(last.snapshot_id),
+                last.snapshot_id,
+            ),
+            // An overwritten selector is not resolved or validated.
+            (
+                table.scan().snapshot_id(-1).as_of_time(first.timestamp_ms),
+                first.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .as_of_time(i64::MIN)
+                    .snapshot_id(last.snapshot_id),
+                last.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .snapshot_id(first.snapshot_id)
+                    .snapshot_id(last.snapshot_id),
+                last.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .as_of_time(i64::MAX)
+                    .as_of_time(first.timestamp_ms),
+                first.snapshot_id,
+            ),
+        ];
+        for (builder, expected) in cases {
+            let scan = builder.build().unwrap();
+            assert_eq!(scan.snapshot().unwrap().snapshot_id(), expected);
+        }
+    }
+
+    #[test]
+    fn test_table_scan_invalid_last_snapshot_selection() {
+        let table = TableTestFixture::new().table;
+        let first = &table.metadata().history()[0];
+        let cases = [
+            (
+                table
+                    .scan()
+                    .snapshot_id(first.snapshot_id)
+                    .as_of_time(first.timestamp_ms - 1),
+                "No snapshot history",
+            ),
+            (
+                table.scan().as_of_time(first.timestamp_ms).snapshot_id(-1),
+                "Snapshot with id -1 not found",
+            ),
+        ];
+        for (builder, expected) in cases {
+            let err = builder.build().unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.message().contains(expected));
+        }
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_uses_snapshot_schema() {
+        for select_current in [false, true] {
+            let table = TableTestFixture::new().table;
+            let mut metadata = table.metadata().clone();
+            let entry = metadata.history()[usize::from(select_current)].clone();
+            // Simulate a schema-only update after this snapshot: schema 0 has x only,
+            // while the current table schema also contains y and other columns.
+            Arc::make_mut(metadata.snapshots.get_mut(&entry.snapshot_id).unwrap()).schema_id =
+                Some(0);
+            let table = table.with_metadata(Arc::new(metadata));
+            let scan = table
+                .scan()
+                .as_of_time(entry.timestamp_ms)
+                .select(["x"])
+                .with_filter(Reference::new("x").greater_than(Datum::long(0)))
+                .build()
+                .unwrap();
+            let context = scan.plan_context.as_ref().unwrap();
+            assert_eq!(context.snapshot_schema.schema_id(), 0);
+            assert!(context.snapshot_bound_predicate.is_some());
+            assert!(
+                table
+                    .scan()
+                    .as_of_time(entry.timestamp_ms)
+                    .select(["y"])
+                    .build()
+                    .is_err()
+            );
+            assert!(
+                table
+                    .scan()
+                    .as_of_time(entry.timestamp_ms)
+                    .with_filter(Reference::new("y").greater_than(Datum::long(0)))
+                    .build()
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_schema_compatibility() {
+        let table = TableTestFixture::new().table;
+        let entry = table.metadata().history()[0].clone();
+        // Older snapshots may omit schema-id and use the current-schema fallback.
+        assert!(
+            table
+                .metadata()
+                .snapshot_by_id(entry.snapshot_id)
+                .unwrap()
+                .schema_id()
+                .is_none()
+        );
+        let scan = table.scan().as_of_time(entry.timestamp_ms).build().unwrap();
+        assert_eq!(
+            scan.plan_context.as_ref().unwrap().snapshot_schema,
+            *table.metadata().current_schema()
+        );
+
+        let mut metadata = table.metadata().clone();
+        Arc::make_mut(metadata.snapshots.get_mut(&entry.snapshot_id).unwrap()).schema_id =
+            Some(1234);
+        let table = table.with_metadata(Arc::new(metadata));
+        let err = table
+            .scan()
+            .as_of_time(entry.timestamp_ms)
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("Schema with id 1234 not found"));
+    }
+
+    #[tokio::test]
+    async fn test_table_scan_as_of_time_reads_historical_rows() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let entry = fixture.table.metadata().history()[0].clone();
+
+        // The older snapshot has only x, while the current snapshot has eight columns.
+        let mut metadata = fixture.table.metadata().clone();
+        Arc::make_mut(metadata.snapshots.get_mut(&entry.snapshot_id).unwrap()).schema_id = Some(0);
+        fixture.table = fixture.table.with_metadata(Arc::new(metadata));
+        let snapshot = fixture
+            .table
+            .metadata()
+            .snapshot_by_id(entry.snapshot_id)
+            .unwrap();
+        let schema = snapshot.schema(fixture.table.metadata()).unwrap();
+        let arrow_schema = Arc::new(crate::arrow::schema_to_arrow_schema(&schema).unwrap());
+
+        // Write distinct historical data: x = 100, versus x = 1 in the current files.
+        let path = format!("{}/historical.parquet", fixture.table_location);
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int64Array::from(
+            vec![100],
+        ))])
+        .unwrap();
+        let mut writer =
+            ArrowWriter::try_new(File::create(&path).unwrap(), arrow_schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut manifest_writer = ManifestWriterBuilder::new(
+            fixture.next_manifest_file(),
+            Some(snapshot.snapshot_id()),
+            schema,
+            fixture
+                .table
+                .metadata()
+                .default_partition_spec()
+                .as_ref()
+                .clone(),
+        )
+        .build_v2_data();
+        manifest_writer
+            .add_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFileBuilder::default()
+                            .partition_spec_id(0)
+                            .content(DataContentType::Data)
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(fs::metadata(&path).unwrap().len())
+                            .file_path(path)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(100))]))
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let manifest = manifest_writer.write_manifest_file().await.unwrap();
+        let output = fixture
+            .table
+            .file_io()
+            .new_output(snapshot.manifest_list())
+            .unwrap()
+            .writer()
+            .await
+            .unwrap();
+        let mut list_writer = ManifestListWriter::v2(
+            output,
+            snapshot.snapshot_id(),
+            snapshot.parent_snapshot_id(),
+            snapshot.sequence_number(),
+        );
+        list_writer.add_manifests([manifest].into_iter()).unwrap();
+        list_writer.close().await.unwrap();
+
+        let table = fixture.table;
+        let [by_time, by_id] = [
+            table.scan().as_of_time(entry.timestamp_ms),
+            table.scan().snapshot_id(entry.snapshot_id),
+        ]
+        .map(|scan| {
+            scan.with_filter(Reference::new("x").greater_than_or_equal_to(Datum::long(100)))
+                .build()
+                .unwrap()
+        });
+        let current = table.scan().build().unwrap();
+        let mut planned_files = Vec::new();
+        let mut rows = Vec::new();
+        let mut schemas = Vec::new();
+        for scan in [by_time, by_id, current] {
+            let mut tasks: Vec<_> = scan
+                .plan_files()
+                .await
+                .unwrap()
+                .try_collect()
+                .await
+                .unwrap();
+            tasks.sort_by_key(|task| task.data_file_path().to_string());
+            planned_files.push(tasks);
+            let batches: Vec<_> = scan.to_arrow().await.unwrap().try_collect().await.unwrap();
+            assert!(!batches.is_empty());
+            schemas.push(batches[0].schema());
+            let mut values: Vec<i64> = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column_by_name("x")
+                        .unwrap()
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect();
+            values.sort_unstable();
+            rows.push(values);
+        }
+        assert!(!planned_files[0].is_empty());
+        assert_eq!(planned_files[0], planned_files[1]);
+        assert_eq!(rows[0], vec![100]);
+        assert_eq!(rows[0], rows[1]);
+        // The current snapshot contains two live fixture files.
+        assert_eq!(rows[2], vec![1; 2 * ROWS_PER_FIXTURE_FILE]);
+        assert_eq!(schemas[0], schemas[1]);
+        assert_eq!(schemas[0].fields().len(), 1);
+        assert_eq!(schemas[2].fields().len(), 8);
     }
 
     fn table_with_property(key: &str, value: &str) -> Table {
