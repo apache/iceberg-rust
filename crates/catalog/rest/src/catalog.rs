@@ -1975,7 +1975,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_unset_page_size() {
+    async fn test_page_size_absent() {
         let mut server = Server::new_async().await;
         let config_mock = create_config_mock(&mut server).await;
         let namespaces_mock = server
