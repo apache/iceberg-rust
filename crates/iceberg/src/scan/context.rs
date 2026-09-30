@@ -44,7 +44,7 @@ pub(crate) struct ManifestFileContext {
     field_ids: Arc<Vec<i32>>,
     bound_predicates: Option<Arc<BoundPredicates>>,
     object_cache: Arc<ObjectCache>,
-    scan_schema: SchemaRef,
+    snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     delete_file_index: DeleteFileIndex,
     name_mapping: Option<Arc<NameMapping>>,
@@ -63,7 +63,7 @@ pub(crate) struct ManifestEntryContext {
     pub field_ids: Arc<Vec<i32>>,
     pub bound_predicates: Option<Arc<BoundPredicates>>,
     pub partition_spec_id: i32,
-    pub scan_schema: SchemaRef,
+    pub snapshot_schema: SchemaRef,
     pub delete_file_index: DeleteFileIndex,
     pub name_mapping: Option<Arc<NameMapping>>,
     pub case_sensitive: bool,
@@ -81,7 +81,7 @@ impl ManifestFileContext {
             object_cache,
             manifest_file,
             bound_predicates,
-            scan_schema,
+            snapshot_schema,
             field_ids,
             mut sender,
             expression_evaluator_cache,
@@ -114,7 +114,7 @@ impl ManifestFileContext {
                 field_ids: field_ids.clone(),
                 partition_spec_id: manifest_file.partition_spec_id,
                 bound_predicates: bound_predicates.clone(),
-                scan_schema: scan_schema.clone(),
+                snapshot_schema: snapshot_schema.clone(),
                 delete_file_index: delete_file_index.clone(),
                 name_mapping: name_mapping.clone(),
                 case_sensitive,
@@ -155,7 +155,7 @@ impl ManifestEntryContext {
             .with_data_sequence_number(self.manifest_entry.sequence_number())
             .with_data_file_path(self.manifest_entry.file_path().to_string())
             .with_data_file_format(self.manifest_entry.file_format())
-            .with_schema(self.scan_schema)
+            .with_schema(self.snapshot_schema)
             .with_project_field_ids(self.field_ids.to_vec())
             .with_predicate(
                 self.bound_predicates
@@ -181,9 +181,10 @@ pub(crate) struct PlanContext {
     pub snapshot: SnapshotRef,
 
     pub table_metadata: TableMetadataRef,
-    /// The schema the scan projects: the table's current schema, or for time
-    /// travel, the schema its snapshot was written with.
-    pub scan_schema: SchemaRef,
+    /// The schema the scan projects. For a scan of the current state, this is
+    /// the table's current schema, not the snapshot's; for time travel, it is
+    /// the schema the snapshot was written with.
+    pub snapshot_schema: SchemaRef,
     pub case_sensitive: bool,
     pub predicate: Option<Arc<Predicate>>,
     pub snapshot_bound_predicate: Option<Arc<BoundPredicate>>,
@@ -219,7 +220,7 @@ impl PlanContext {
         let partition_filter = self.partition_filter_cache.get(
             partition_spec_id,
             &self.table_metadata,
-            &self.scan_schema,
+            &self.snapshot_schema,
             self.case_sensitive,
             self.predicate
                 .as_ref()
@@ -228,7 +229,7 @@ impl PlanContext {
                     "Expected a predicate but none present",
                 ))?
                 .as_ref()
-                .bind(self.scan_schema.clone(), self.case_sensitive)?,
+                .bind(self.snapshot_schema.clone(), self.case_sensitive)?,
         )?;
 
         Ok(partition_filter)
@@ -320,7 +321,7 @@ impl PlanContext {
             bound_predicates,
             sender,
             object_cache: self.object_cache.clone(),
-            scan_schema: self.scan_schema.clone(),
+            snapshot_schema: self.snapshot_schema.clone(),
             field_ids: self.field_ids.clone(),
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
             delete_file_index,

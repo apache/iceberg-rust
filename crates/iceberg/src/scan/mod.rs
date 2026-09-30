@@ -342,7 +342,7 @@ impl<'a> TableScanBuilder<'a> {
         let plan_context = PlanContext {
             snapshot,
             table_metadata: self.table.metadata_ref(),
-            scan_schema: schema,
+            snapshot_schema: schema,
             case_sensitive: self.case_sensitive,
             predicate: self.filter.map(Arc::new),
             snapshot_bound_predicate,
