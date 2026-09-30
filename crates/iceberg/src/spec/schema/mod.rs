@@ -346,16 +346,25 @@ impl Schema {
             .and_then(|id| self.field_by_id(*id))
     }
 
-    /// Get field by field name, but in case-insensitive way.
+    /// Get field by field name in a case-insensitive way.
     ///
     /// Both full name and short name could work here.
+    /// Returns `None` if the name is missing or matches multiple fields case-insensitively.
+    /// Use [`Self::field_by_name_case_insensitive_checked`] to distinguish those cases.
     pub fn field_by_name_case_insensitive(&self, field_name: &str) -> Option<&NestedFieldRef> {
         self.lowercase_name_to_id
             .get(&field_name.to_lowercase())
             .and_then(|id| id.and_then(|id| self.field_by_id(id)))
     }
 
-    pub(crate) fn field_by_name_case_insensitive_checked(
+    /// Get field by field name in a case-insensitive way, reporting ambiguous names.
+    ///
+    /// Both full name and short name could work here. Returns `Ok(None)` if the name is
+    /// missing, or an error if it matches multiple fields case-insensitively. A collision
+    /// on another name does not prevent this name from resolving. This differs from Iceberg
+    /// Java, which rejects all case-insensitive lookups after a collision, and PyIceberg,
+    /// which silently keeps one of the colliding fields.
+    pub fn field_by_name_case_insensitive_checked(
         &self,
         field_name: &str,
     ) -> Result<Option<&NestedFieldRef>> {
@@ -363,7 +372,7 @@ impl Schema {
             Some(Some(id)) => Ok(self.field_by_id(*id)),
             Some(None) => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Field name {field_name} is ambiguous when case sensitivity is disabled"),
+                format!("Multiple fields match {field_name} case-insensitively"),
             )),
             None => Ok(None),
         }
@@ -1020,7 +1029,13 @@ table {
             .field_by_name_case_insensitive_checked("Id")
             .unwrap_err();
         assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
-        assert!(error.to_string().contains("ambiguous"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("Multiple fields match Id case-insensitively"),
+            "{error}"
+        );
+        assert!(schema.field_by_name_case_insensitive("Id").is_none());
     }
 
     #[test]

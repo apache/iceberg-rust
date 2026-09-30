@@ -311,10 +311,10 @@ impl Bind for Reference {
 
     fn bind(&self, schema: SchemaRef, case_sensitive: bool) -> crate::Result<Self::Bound> {
         let field = if case_sensitive {
-            Ok(schema.field_by_name(&self.name))
+            schema.field_by_name(&self.name)
         } else {
-            schema.field_by_name_case_insensitive_checked(&self.name)
-        }?;
+            schema.field_by_name_case_insensitive_checked(&self.name)?
+        };
 
         let field =
             field.ok_or_else(|| invalid_data!("Field {} not found in schema", self.name))?;
@@ -442,7 +442,12 @@ mod tests {
 
         let error = Reference::new("Id").bind(schema, false).unwrap_err();
         assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
-        assert!(error.to_string().contains("ambiguous"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("Multiple fields match Id case-insensitively"),
+            "{error}"
+        );
     }
 
     #[test]

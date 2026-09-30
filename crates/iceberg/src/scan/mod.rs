@@ -60,9 +60,8 @@ fn resolve_field_id(
     if case_sensitive {
         Ok(schema.field_id_by_name(column_name))
     } else {
-        Ok(schema
-            .field_by_name_case_insensitive_checked(column_name)?
-            .map(|field| field.id))
+        let field = schema.field_by_name_case_insensitive_checked(column_name)?;
+        Ok(field.map(|field| field.id))
     }
 }
 
@@ -1894,7 +1893,12 @@ pub mod tests {
         assert_eq!(resolve_field_id(&schema, "DATA", false).unwrap(), Some(3));
         let error = resolve_field_id(&schema, "Id", false).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::DataInvalid);
-        assert!(error.to_string().contains("ambiguous"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("Multiple fields match Id case-insensitively"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -1928,7 +1932,12 @@ pub mod tests {
             .build()
             .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::DataInvalid);
-        assert!(error.to_string().contains("ambiguous"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("Multiple fields match Id case-insensitively"),
+            "{error}"
+        );
     }
 
     #[tokio::test]
