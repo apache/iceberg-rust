@@ -24,8 +24,9 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::StorageConfig;
+use crate::error::invalid_data;
 use crate::io::is_truthy;
-use crate::{Error, ErrorKind, Result};
+use crate::{Error, Result};
 
 /// S3 endpoint URL.
 pub const S3_ENDPOINT: &str = "s3.endpoint";
@@ -201,11 +202,8 @@ impl TryFrom<&StorageConfig> for S3Config {
                     cfg.server_side_encryption_customer_key_md5 = props.get(S3_SSE_MD5).cloned();
                 }
                 _ => {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Invalid {S3_SSE_TYPE}: {sse_type}. Expected one of (custom, kms, s3, none)"
-                        ),
+                    return Err(invalid_data!(
+                        "Invalid {S3_SSE_TYPE}: {sse_type}. Expected one of (custom, kms, s3, none)"
                     ));
                 }
             }
