@@ -232,6 +232,16 @@ pub struct LoadTableResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+/// Result returned when a table is successfully unregistered from a catalog.
+pub struct UnregisterTableResult {
+    /// The last committed metadata location for the table.
+    pub metadata_location: String,
+    /// The table's metadata at that location.
+    pub metadata: TableMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// Storage credential for a specific location prefix.
 ///
 /// Indicates a storage location prefix where the credential is relevant. Clients should
@@ -323,6 +333,33 @@ pub struct RegisterTableRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_unregister_table_result_serde() {
+        let loaded: LoadTableResult =
+            serde_json::from_str(include_str!("../testdata/load_table_response.json")).unwrap();
+        let result = UnregisterTableResult {
+            metadata_location: loaded.metadata_location.unwrap(),
+            metadata: loaded.metadata,
+        };
+        let value = serde_json::to_value(&result).unwrap();
+        assert_eq!(value["metadata-location"], result.metadata_location);
+        assert_eq!(
+            value["metadata"],
+            serde_json::to_value(&result.metadata).unwrap()
+        );
+        assert_eq!(
+            serde_json::from_value::<UnregisterTableResult>(value.clone()).unwrap(),
+            result
+        );
+
+        let mut missing_location = value;
+        missing_location
+            .as_object_mut()
+            .unwrap()
+            .remove("metadata-location");
+        assert!(serde_json::from_value::<UnregisterTableResult>(missing_location).is_err());
+    }
 
     #[test]
     fn test_namespace_response_serde() {
