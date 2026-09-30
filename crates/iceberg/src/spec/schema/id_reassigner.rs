@@ -19,49 +19,106 @@ use super::utils::try_insert_field;
 use super::*;
 use crate::error::invalid_data;
 
-pub struct ReassignFieldIds {
-    next_field_id: i32,
-    old_to_new_id: HashMap<i32, i32>,
+/// Rebuilds field trees using a caller-supplied ID assignment strategy.
+///
+/// Schema reassignment visits struct siblings before their children and records
+/// an old-to-new mapping. New columns instead use depth-first traversal and may
+/// contain repeated placeholder IDs, so they do not record a mapping.
+pub(crate) struct ReassignFieldIds<'a> {
+    assign_id: Box<dyn FnMut(i32) -> Result<i32> + 'a>,
+    old_to_new_id: Option<HashMap<i32, i32>>,
+    siblings_first: bool,
+    map_ids_first: bool,
 }
 
-// We are not using the visitor here, as post order traversal is not desired.
-// Instead we want to re-assign all fields on one level first before diving deeper.
-impl ReassignFieldIds {
-    pub fn new(start_from: i32) -> Self {
+impl<'a> ReassignFieldIds<'a> {
+    pub(crate) fn new(mut start_from: i32) -> Self {
+        Self::with_strategy(
+            move |_| {
+                let id = start_from;
+                start_from = start_from
+                    .checked_add(1)
+                    .ok_or_else(|| invalid_data!("Field ID overflowed, cannot add more fields"))?;
+                Ok(id)
+            },
+            false,
+        )
+    }
+
+    /// Use a custom strategy, for example one that reuses IDs from a base schema.
+    /// When `map_ids_first` is true, assign both map IDs before visiting either
+    /// subtree, matching Java's fresh-ID assignment order. Otherwise, visit the
+    /// key subtree before assigning the value ID, preserving schema reassignment.
+    pub(crate) fn with_strategy(
+        assign_id: impl FnMut(i32) -> Result<i32> + 'a,
+        map_ids_first: bool,
+    ) -> Self {
         Self {
-            next_field_id: start_from,
-            old_to_new_id: HashMap::new(),
+            assign_id: Box::new(assign_id),
+            old_to_new_id: Some(HashMap::new()),
+            siblings_first: true,
+            map_ids_first,
         }
     }
 
-    pub fn reassign_field_ids(
+    /// Assign new columns IDs after `last_id`, updating it as IDs are allocated.
+    pub(crate) fn for_new_fields(last_id: &'a mut i32) -> Self {
+        let mut reassigner = Self::with_strategy(
+            move |_| {
+                *last_id = last_id
+                    .checked_add(1)
+                    .ok_or_else(|| invalid_data!("Field ID overflowed, cannot add more fields"))?;
+                Ok(*last_id)
+            },
+            false,
+        );
+        reassigner.old_to_new_id = None;
+        reassigner.siblings_first = false;
+        reassigner
+    }
+
+    pub(crate) fn reassign_field_ids(
         &mut self,
         fields: Vec<NestedFieldRef>,
     ) -> Result<Vec<NestedFieldRef>> {
-        // Visit fields on the same level first
+        if !self.siblings_first {
+            return fields
+                .into_iter()
+                .map(|field| self.reassign_field(field))
+                .collect();
+        }
+
+        // Visit fields on the same level first, then their nested fields.
         let outer_fields = fields
             .into_iter()
-            .map(|field| {
-                try_insert_field(&mut self.old_to_new_id, field.id, self.next_field_id)?;
-                let new_field = Arc::unwrap_or_clone(field).with_id(self.next_field_id);
-                self.increase_next_field_id()?;
-                Ok(Arc::new(new_field))
-            })
+            .map(|field| self.assign_field_id(field))
             .collect::<Result<Vec<_>>>()?;
-
-        // Now visit nested fields
         outer_fields
             .into_iter()
-            .map(|field| {
-                if field.field_type.is_primitive() {
-                    Ok(field)
-                } else {
-                    let mut new_field = Arc::unwrap_or_clone(field);
-                    *new_field.field_type = self.reassign_ids_visit_type(*new_field.field_type)?;
-                    Ok(Arc::new(new_field))
-                }
-            })
+            .map(|field| self.reassign_children(field))
             .collect()
+    }
+
+    fn assign_field_id(&mut self, field: NestedFieldRef) -> Result<NestedFieldRef> {
+        let new_id = (self.assign_id)(field.id)?;
+        if let Some(mapping) = &mut self.old_to_new_id {
+            try_insert_field(mapping, field.id, new_id)?;
+        }
+        Ok(Arc::new(Arc::unwrap_or_clone(field).with_id(new_id)))
+    }
+
+    pub(crate) fn reassign_field(&mut self, field: NestedFieldRef) -> Result<NestedFieldRef> {
+        let field = self.assign_field_id(field)?;
+        self.reassign_children(field)
+    }
+
+    fn reassign_children(&mut self, field: NestedFieldRef) -> Result<NestedFieldRef> {
+        if field.field_type.is_primitive() {
+            return Ok(field);
+        }
+        let mut field = Arc::unwrap_or_clone(field);
+        *field.field_type = self.reassign_ids_visit_type(*field.field_type)?;
+        Ok(Arc::new(field))
     }
 
     fn reassign_ids_visit_type(&mut self, field_type: Type) -> Result<Type> {
@@ -71,57 +128,38 @@ impl ReassignFieldIds {
                 let new_fields = self.reassign_field_ids(s.fields().to_vec())?;
                 Ok(Type::Struct(StructType::new(new_fields)))
             }
-            Type::List(l) => {
-                self.old_to_new_id
-                    .insert(l.element_field.id, self.next_field_id);
-                let mut element_field = Arc::unwrap_or_clone(l.element_field);
-                element_field.id = self.next_field_id;
-                self.increase_next_field_id()?;
-                *element_field.field_type =
-                    self.reassign_ids_visit_type(*element_field.field_type)?;
-                Ok(Type::List(ListType {
-                    element_field: Arc::new(element_field),
-                }))
-            }
+            Type::List(l) => Ok(Type::List(ListType {
+                element_field: self.reassign_field(l.element_field)?,
+            })),
             Type::Map(m) => {
-                self.old_to_new_id
-                    .insert(m.key_field.id, self.next_field_id);
-                let mut key_field = Arc::unwrap_or_clone(m.key_field);
-                key_field.id = self.next_field_id;
-                self.increase_next_field_id()?;
-                *key_field.field_type = self.reassign_ids_visit_type(*key_field.field_type)?;
-
-                self.old_to_new_id
-                    .insert(m.value_field.id, self.next_field_id);
-                let mut value_field = Arc::unwrap_or_clone(m.value_field);
-                value_field.id = self.next_field_id;
-                self.increase_next_field_id()?;
-                *value_field.field_type = self.reassign_ids_visit_type(*value_field.field_type)?;
-
+                let key_field = self.assign_field_id(m.key_field)?;
+                let (key_field, value_field) = if self.map_ids_first {
+                    let value_field = self.assign_field_id(m.value_field)?;
+                    (self.reassign_children(key_field)?, value_field)
+                } else {
+                    // Preserve the legacy order: the entire key subtree gets IDs
+                    // before the value field itself does.
+                    let key_field = self.reassign_children(key_field)?;
+                    (key_field, self.assign_field_id(m.value_field)?)
+                };
                 Ok(Type::Map(MapType {
-                    key_field: Arc::new(key_field),
-                    value_field: Arc::new(value_field),
+                    key_field,
+                    value_field: self.reassign_children(value_field)?,
                 }))
             }
             Type::Variant(v) => Ok(Type::Variant(v)),
         }
     }
 
-    fn increase_next_field_id(&mut self) -> Result<()> {
-        self.next_field_id = self
-            .next_field_id
-            .checked_add(1)
-            .ok_or_else(|| invalid_data!("Field ID overflowed, cannot add more fields"))?;
-        Ok(())
+    fn mapped_id(&self, id: i32) -> Option<i32> {
+        self.old_to_new_id.as_ref()?.get(&id).copied()
     }
 
     pub fn apply_to_identifier_fields(&self, field_ids: HashSet<i32>) -> Result<HashSet<i32>> {
         field_ids
             .into_iter()
             .map(|id| {
-                self.old_to_new_id
-                    .get(&id)
-                    .copied()
+                self.mapped_id(id)
                     .ok_or_else(|| invalid_data!("Identifier Field ID {id} not found"))
             })
             .collect()
@@ -134,9 +172,7 @@ impl ReassignFieldIds {
         alias
             .into_iter()
             .map(|(name, id)| {
-                self.old_to_new_id
-                    .get(&id)
-                    .copied()
+                self.mapped_id(id)
                     .ok_or_else(|| invalid_data!("Field with id {id} for alias {name} not found"))
                     .map(|new_id| (name, new_id))
             })
@@ -148,6 +184,160 @@ impl ReassignFieldIds {
 mod tests {
     use super::*;
     use crate::spec::schema::tests::table_schema_nested;
+
+    #[test]
+    fn test_map_id_assignment_orders() {
+        let fields = vec![
+            NestedField::optional(
+                10,
+                "map",
+                Type::Map(MapType::new(
+                    NestedField::map_key_element(
+                        20,
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(30, "key_child", PrimitiveType::Int.into())
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                    NestedField::map_value_element(
+                        40,
+                        Type::List(ListType::new(
+                            NestedField::list_element(50, PrimitiveType::Int.into(), false).into(),
+                        )),
+                        false,
+                    )
+                    .into(),
+                )),
+            )
+            .into(),
+            NestedField::required(60, "id", PrimitiveType::Int.into()).into(),
+        ];
+
+        // Struct siblings always precede their children. Only the value ID and
+        // nested key ID switch places between the two map traversal orders.
+        for (map_ids_first, key_child_id, value_id) in [(false, 3, 4), (true, 4, 3)] {
+            let mut next_id = 0;
+            let mut reassigner = if map_ids_first {
+                ReassignFieldIds::with_strategy(
+                    move |_| {
+                        let id = next_id;
+                        next_id += 1;
+                        Ok(id)
+                    },
+                    true,
+                )
+            } else {
+                ReassignFieldIds::new(0)
+            };
+            let schema = Schema::builder()
+                .with_fields(reassigner.reassign_field_ids(fields.clone()).unwrap())
+                .build()
+                .unwrap();
+            for (name, id) in [
+                ("map", 0),
+                ("id", 1),
+                ("map.key", 2),
+                ("map.key.key_child", key_child_id),
+                ("map.value", value_id),
+                ("map.value.element", 5),
+            ] {
+                assert_eq!(schema.field_by_name(name).unwrap().id, id, "{name}");
+            }
+            assert_eq!(
+                reassigner
+                    .apply_to_aliases(BiHashMap::from_iter([
+                        ("key_alias".to_string(), 30),
+                        ("value_alias".to_string(), 40),
+                    ]))
+                    .unwrap(),
+                BiHashMap::from_iter([
+                    ("key_alias".to_string(), key_child_id),
+                    ("value_alias".to_string(), value_id),
+                ]),
+            );
+        }
+    }
+
+    #[test]
+    fn test_strategy_reuses_ids_by_name() {
+        let base = Schema::builder()
+            .with_fields([NestedField::required(7, "id", PrimitiveType::Int.into()).into()])
+            .build()
+            .unwrap();
+        let schema = Schema::builder()
+            .with_fields([
+                NestedField::required(10, "id", PrimitiveType::Int.into()).into(),
+                NestedField::optional(20, "new", PrimitiveType::String.into()).into(),
+            ])
+            .build()
+            .unwrap();
+        let mut next_id = base.highest_field_id();
+        let mut reassigner = ReassignFieldIds::with_strategy(
+            |old_id| {
+                let name = schema.name_by_field_id(old_id).unwrap();
+                if let Some(field) = base.field_by_name(name) {
+                    Ok(field.id)
+                } else {
+                    next_id += 1;
+                    Ok(next_id)
+                }
+            },
+            true,
+        );
+        let fields = reassigner
+            .reassign_field_ids(schema.as_struct().fields().to_vec())
+            .unwrap();
+        assert_eq!(fields[0].id, 7);
+        assert_eq!(fields[1].id, 8);
+        assert_eq!(
+            reassigner
+                .apply_to_identifier_fields(HashSet::from([10]))
+                .unwrap(),
+            HashSet::from([7]),
+        );
+        assert_eq!(
+            reassigner
+                .apply_to_aliases(BiHashMap::from_iter([("new_alias".to_string(), 20)]))
+                .unwrap(),
+            BiHashMap::from_iter([("new_alias".to_string(), 8)]),
+        );
+        assert!(
+            reassigner
+                .apply_to_identifier_fields(HashSet::from([99]))
+                .unwrap_err()
+                .message()
+                .contains("Identifier Field ID 99 not found")
+        );
+        assert!(
+            reassigner
+                .apply_to_aliases(BiHashMap::from_iter([("missing".to_string(), 99)]))
+                .unwrap_err()
+                .message()
+                .contains("Field with id 99 for alias missing not found")
+        );
+    }
+
+    #[test]
+    fn test_assignment_overflow() {
+        let field: NestedFieldRef =
+            NestedField::optional(0, "field", PrimitiveType::Int.into()).into();
+        let error = ReassignFieldIds::new(i32::MAX)
+            .reassign_field(field.clone())
+            .unwrap_err();
+        assert!(error.message().contains("Field ID overflowed"));
+
+        let mut last_id = i32::MAX - 1;
+        let assigned = ReassignFieldIds::for_new_fields(&mut last_id)
+            .reassign_field(field.clone())
+            .unwrap();
+        assert_eq!(assigned.id, i32::MAX);
+        let error = ReassignFieldIds::for_new_fields(&mut last_id)
+            .reassign_field(field)
+            .unwrap_err();
+        assert!(error.message().contains("Field ID overflowed"));
+        assert_eq!(last_id, i32::MAX);
+    }
 
     #[test]
     fn test_reassign_ids() {
