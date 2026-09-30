@@ -118,6 +118,25 @@ def declared_clarifications() -> set[CrateName]:
             f"{DENY_TOML} has [[licenses.clarify]] block(s) with no `crate` key, at "
             f"position(s) {', '.join(str(index + 1) for index in unnamed)}."
         )
+
+    pinned = sorted(block["crate"] for block in blocks if "@" in block["crate"])
+    if pinned:
+        raise Failure(
+            textwrap.dedent("""
+                {deny_toml} pins a [[licenses.clarify]] block to a crate version:
+                {specs}
+
+                Version pins are rejected by this script.
+                cargo-deny supports them, but will not report when they become stale.
+                To keep things simple, this script requires that no pinning is used.
+                Where newer versions change licensing, the script will reject the clarification
+                and the deny.toml file should be updated.
+                """).format(
+                deny_toml=DENY_TOML,
+                specs="\n".join(f"  {spec}" for spec in pinned),
+            )
+        )
+
     return {block["crate"] for block in blocks}
 
 
@@ -273,11 +292,14 @@ def require_clarifications_applied(
             A clarification is discarded by cargo-deny when any of its attested license
             files are no longer valid (hash mismatch, etc.).
 
-            Read the file first and check it still says what the block claims.
-            If it does, compute correct hashes for the license files using the following command.
+            Review the clarification, checking all files still exist and the hash matches for each.
+            You can compute the hash for a license file using the following command:
 
             uv run {script} dependencies clarification-hash \\
                 <crate directory above>/<license file>
+
+            If a hash has changed, read the file and ensure the license expression still matches.
+            If it does, the updated deny.toml should be committed.
             """).format(
             deny_toml=DENY_TOML,
             crates="\n".join(error_line_output),
