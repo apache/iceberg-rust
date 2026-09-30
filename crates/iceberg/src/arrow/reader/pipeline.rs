@@ -640,11 +640,14 @@ impl FileScanTaskReader {
         missing_field_ids: bool,
         install_row_number: bool,
     ) -> Result<ArrowReaderMetadata> {
-        // Three-branch schema resolution strategy matching Java's ReadConf constructor.
-        // When Parquet files lack field IDs, apply a name mapping when available and use
-        // position-based fallback IDs otherwise. Files with embedded IDs keep their schema.
-        // The fast path (embedded IDs, no INT96 coercion, no row number) returns early
-        // without materializing an owned schema.
+        // Schema resolution follows the Iceberg Column Projection rule:
+        // "Columns in Iceberg data files are selected by field id."
+        // https://iceberg.apache.org/spec/#column-projection
+        //
+        // This mirrors Java's ReadConf strategy: use embedded IDs with pruneColumns();
+        // otherwise, use applyNameMapping() followed by pruneColumns() when configured, or
+        // addFallbackIds() followed by pruneColumnsFallback() for position-based fallback.
+        // The fast path returns early without materializing an owned schema.
         let arrow_schema = if missing_field_ids {
             let schema = if let Some(name_mapping) = task.name_mapping() {
                 apply_name_mapping_to_arrow_schema(
@@ -686,8 +689,8 @@ impl FileScanTaskReader {
                 ErrorKind::Unexpected,
                 format!(
                     "Failed to create ArrowReaderMetadata with the configured reader options \
-                     (missing_field_ids: {}, install_row_number: {}, schema: {})",
-                    missing_field_ids, install_row_number, arrow_schema,
+                     (missing_field_ids: {missing_field_ids}, \
+                      install_row_number: {install_row_number}, schema: {arrow_schema})"
                 ),
             )
             .with_source(e)
@@ -2862,6 +2865,50 @@ mod tests {
             .column_by_name(RESERVED_COL_NAME_POS)
             .expect("_pos column should be present")
             .as_primitive::<arrow_array::types::Int64Type>();
+        assert_eq!(pos_col.values(), &[0, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn test_read_int96_timestamps_with_field_ids_and_pos() {
+        use arrow_array::TimestampMicrosecondArray;
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                        .into(),
+                    NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let (file_path, expected_micros) =
+            write_int96_parquet_file(&table_location, "with_ids_with_pos.parquet", true);
+
+        let batches =
+            read_int96_batches(&file_path, schema, vec![1, 2, RESERVED_FIELD_ID_POS]).await;
+
+        assert_eq!(batches.len(), 1);
+        let ts_col = batches[0]
+            .column_by_name("ts")
+            .expect("ts column should be present")
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .expect("Expected TimestampMicrosecondArray");
+
+        for (i, expected) in expected_micros.iter().enumerate() {
+            assert_eq!(ts_col.value(i), *expected, "Row {i}");
+        }
+
+        let pos_col = batches[0]
+            .column_by_name(RESERVED_COL_NAME_POS)
+            .expect("_pos column should be present")
+            .as_primitive::<arrow_array::types::Int64Type>();
+
         assert_eq!(pos_col.values(), &[0, 1, 2]);
     }
 
