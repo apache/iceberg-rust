@@ -534,28 +534,28 @@ impl ParquetWriter {
         let mut partition_literals: Vec<Option<Literal>> = Vec::new();
 
         for field in table_spec.fields() {
-            if let (Some(lower), Some(upper)) = (
-                lower_bounds.get(&field.source_id),
-                upper_bounds.get(&field.source_id),
-            ) {
-                if !field.transform.preserves_order() {
+            let source_id = field.source_id()?;
+            if let (Some(lower), Some(upper)) =
+                (lower_bounds.get(&source_id), upper_bounds.get(&source_id))
+            {
+                if !field.transform().preserves_order() {
                     return Err(invalid_data!(
                         "cannot infer partition value for non linear partition field (needs to preserve order): {} with transform {}",
-                        field.name,
-                        field.transform
+                        field.name(),
+                        field.transform()
                     ));
                 }
 
                 if lower != upper {
                     return Err(invalid_data!(
                         "multiple partition values for field {}: lower: {:?}, upper: {:?}",
-                        field.name,
+                        field.name(),
                         lower,
                         upper
                     ));
                 }
 
-                let transform_fn = create_transform_function(&field.transform)?;
+                let transform_fn = create_transform_function(&field.transform())?;
                 let transform_literal =
                     Literal::from(transform_fn.transform_literal_result(lower)?);
 
