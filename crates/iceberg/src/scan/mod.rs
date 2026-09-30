@@ -207,7 +207,9 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Set the snapshot to scan. When not set, it uses current snapshot.
+    /// Set the snapshot to scan. The scan projects the schema that snapshot was
+    /// written with. When not set, the scan reads the current snapshot with the
+    /// table's current schema.
     pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
         self.snapshot_id = Some(snapshot_id);
         self
@@ -309,8 +311,8 @@ impl<'a> TableScanBuilder<'a> {
             }
         };
 
-        // A current-state scan projects the current schema, so a column added since the
-        // last write is visible. Time travel projects the snapshot's own schema instead.
+        // A scan of the current state uses the table's current schema; time travel uses the
+        // schema its snapshot was written with.
         let schema = match self.snapshot_id {
             Some(_) => snapshot.schema(self.table.metadata())?,
             None => self.table.metadata().current_schema().clone(),
@@ -340,7 +342,7 @@ impl<'a> TableScanBuilder<'a> {
         let plan_context = PlanContext {
             snapshot,
             table_metadata: self.table.metadata_ref(),
-            snapshot_schema: schema,
+            scan_schema: schema,
             case_sensitive: self.case_sensitive,
             predicate: self.filter.map(Arc::new),
             snapshot_bound_predicate,
@@ -667,10 +669,10 @@ pub mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::types::Int32Type;
+    use arrow_array::types::{Float64Type, Int32Type};
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, RunArray,
-        StringArray,
+        Array, ArrayRef, ArrowPrimitiveType, BooleanArray, Float64Array, Int32Array, Int64Array,
+        RecordBatch, RunArray, StringArray,
     };
     use futures::{TryStreamExt, stream};
     use minijinja::value::Value;
@@ -690,13 +692,13 @@ pub mod tests {
         RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_DELETE_FILE_PATH,
         RESERVED_FIELD_ID_DELETE_FILE_POS, RESERVED_FIELD_ID_POS,
     };
-    use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
+    use crate::scan::{FileScanTask, FileScanTaskDeleteFile, TableScan};
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, FormatVersion, Literal,
         MAIN_BRANCH, ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
-        MappedField, NameMapping, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType,
-        Schema, Snapshot, SortDirection, SortField, SortOrder, Struct, StructType, Summary,
-        TableMetadata, TableMetadataBuilder, TableProperties, Transform, Type,
+        MappedField, NameMapping, NestedField, NestedFieldRef, NullOrder, Operation, PartitionSpec,
+        PrimitiveType, Schema, Snapshot, SortDirection, SortField, SortOrder, Struct, StructType,
+        Summary, TableMetadata, TableMetadataBuilder, TableProperties, Transform, Type,
         UnboundPartitionSpec,
     };
     use crate::table::Table;
@@ -1961,24 +1963,23 @@ pub mod tests {
         );
     }
 
-    /// `table` with a column added after its last write, so its current schema is
-    /// ahead of the schema its current snapshot was written with.
-    fn with_column_added_after_last_write(table: &Table) -> Table {
+    /// The fixture table with its data files, after `change` is applied to its
+    /// current schema's fields with no write since. Its current snapshot was then
+    /// written with an older schema than its current one.
+    async fn table_with_fields_changed_after_last_write(
+        change: impl FnOnce(&mut Vec<NestedFieldRef>),
+    ) -> Table {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let table = fixture.table;
+
         let mut fields = table
             .metadata()
             .current_schema()
             .as_struct()
             .fields()
             .to_vec();
-        // Beyond the fixture's ids 1..=8.
-        fields.push(
-            NestedField::optional(
-                100,
-                "added_after_write",
-                Type::Primitive(PrimitiveType::Long),
-            )
-            .into(),
-        );
+        change(&mut fields);
         let metadata = TableMetadataBuilder::new_from_metadata(table.metadata().clone(), None)
             .add_schema(Schema::builder().with_fields(fields).build().unwrap())
             .unwrap()
@@ -1998,69 +1999,210 @@ pub mod tests {
             .unwrap()
     }
 
-    #[tokio::test]
-    async fn test_scan_of_current_state_reads_column_added_after_last_write() {
-        let mut fixture = TableTestFixture::new();
-        fixture.setup_manifest_files().await;
-        let table = with_column_added_after_last_write(&fixture.table);
-
-        let batches: Vec<_> = table
-            .scan()
-            .build()
-            .unwrap()
-            .to_arrow()
-            .await
-            .unwrap()
-            .try_collect()
-            .await
-            .unwrap();
-
-        // The loop below is vacuous over an empty scan.
-        assert!(batches.iter().map(RecordBatch::num_rows).sum::<usize>() > 0);
-
-        // Projected because the column is on the table, null because the files predate it.
-        for batch in &batches {
-            let column = batch
-                .column_by_name("added_after_write")
-                .expect("column added after the last write should be projected");
-            assert_eq!(column.null_count(), column.len());
-        }
+    async fn read(scan: TableScan) -> Vec<RecordBatch> {
+        scan.to_arrow().await.unwrap().try_collect().await.unwrap()
     }
 
-    #[test]
-    fn test_time_travel_scan_excludes_column_added_after_last_write() {
-        let table = with_column_added_after_last_write(&TableTestFixture::new().table);
-        let snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+    fn column_names(batches: &[RecordBatch]) -> Vec<String> {
+        let schema = batches[0].schema();
+        schema
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect()
+    }
 
-        // Time travel sees the table as it was, so the column is not part of it.
+    /// The values of column `name` across `batches`, in the order read.
+    fn column_values<T: ArrowPrimitiveType>(
+        batches: &[RecordBatch],
+        name: &str,
+    ) -> Vec<Option<T::Native>> {
+        batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column_by_name(name)
+                    .unwrap()
+                    .as_primitive::<T>()
+                    .iter()
+            })
+            .collect()
+    }
+
+    /// The values of `double` column `name` across `batches`, sorted, since the
+    /// data files are read in no fixed order.
+    fn sorted_double_values(batches: &[RecordBatch], name: &str) -> Vec<Option<f64>> {
+        let mut values = column_values::<Float64Type>(batches, name);
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        values
+    }
+
+    /// The fixture's `dbl` values, sorted. Each of its two data files holds
+    /// 512 × 100.0, 12 × 150.0 and 500 × 200.0.
+    fn fixture_dbl_values() -> Vec<Option<f64>> {
+        [(100.0, 1024), (150.0, 24), (200.0, 1000)]
+            .into_iter()
+            .flat_map(|(value, count)| std::iter::repeat_n(Some(value), count))
+            .collect()
+    }
+
+    fn added_after_write() -> NestedFieldRef {
+        // Beyond the fixture's field ids 1..=8.
+        NestedField::optional(
+            100,
+            "added_after_write",
+            Type::Primitive(PrimitiveType::Long),
+        )
+        .into()
+    }
+
+    #[tokio::test]
+    async fn test_scan_of_current_state_reads_column_added_after_last_write() {
+        let table =
+            table_with_fields_changed_after_last_write(|fields| fields.push(added_after_write()))
+                .await;
+
+        let all = read(table.scan().build().unwrap()).await;
+        assert_eq!(column_names(&all), [
+            "x",
+            "y",
+            "z",
+            "a",
+            "dbl",
+            "i32",
+            "i64",
+            "bool",
+            "added_after_write"
+        ]);
+
+        // Null, as the data files predate the column.
+        let selected = read(table.scan().select(["added_after_write"]).build().unwrap()).await;
+        assert_eq!(column_names(&selected), ["added_after_write"]);
+        assert_eq!(
+            column_values::<arrow_array::types::Int64Type>(&selected, "added_after_write"),
+            vec![None; 2048]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_time_travel_scan_excludes_column_added_after_last_write() {
+        let table =
+            table_with_fields_changed_after_last_write(|fields| fields.push(added_after_write()))
+                .await;
+        let snapshot_id = table.metadata().current_snapshot_id().unwrap();
+
         let error = table
             .scan()
             .snapshot_id(snapshot_id)
             .select(["added_after_write"])
             .build()
             .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::DataInvalid);
-        assert!(
-            error.to_string().contains("added_after_write not found"),
-            "expected a missing-column error, got: {error}"
+        // The error lists the schema the scan resolved against: the snapshot's.
+        assert_eq!(
+            error.to_string(),
+            concat!(
+                "DataInvalid => Column added_after_write not found in table. Schema: table {\n",
+                "  1: x: required long \n",
+                "  2: y: required long comment\n",
+                "  3: z: required long \n",
+                "  4: a: required string \n",
+                "  5: dbl: required double \n",
+                "  6: i32: required int \n",
+                "  7: i64: required long \n",
+                "  8: bool: required boolean \n",
+                "}\n",
+            )
         );
     }
 
-    #[test]
-    fn test_scan_of_current_state_selects_column_added_after_last_write() {
-        let table = with_column_added_after_last_write(&TableTestFixture::new().table);
+    #[tokio::test]
+    async fn test_scan_of_current_state_filters_on_column_added_after_last_write() {
+        let table =
+            table_with_fields_changed_after_last_write(|fields| fields.push(added_after_write()))
+                .await;
+        let filtered = |predicate| async {
+            let scan = table
+                .scan()
+                .select(["added_after_write"])
+                .with_filter(predicate)
+                .build()
+                .unwrap();
+            column_values::<arrow_array::types::Int64Type>(&read(scan).await, "added_after_write")
+        };
 
-        // Against the snapshot's schema this fails outright, rather than reading as null.
-        let scan = table
-            .scan()
-            .select(["added_after_write"])
-            .build()
-            .expect("column added after the last write should be selectable");
+        let is_null = Reference::new("added_after_write").is_null();
+        assert_eq!(filtered(is_null).await, vec![None; 2048]);
+        let equal_to_one = Reference::new("added_after_write").equal_to(Datum::long(1));
+        assert_eq!(filtered(equal_to_one).await, vec![]);
+    }
 
+    /// Columns are matched to data files by field id, so a column dropped and
+    /// added back under the same name reads as null, not as the old column's
+    /// values.
+    #[tokio::test]
+    async fn test_scan_of_current_state_reads_null_for_column_readded_after_last_write() {
+        let table = table_with_fields_changed_after_last_write(|fields| {
+            fields.retain(|field| field.name != "dbl");
+            fields.push(
+                NestedField::optional(100, "dbl", Type::Primitive(PrimitiveType::Double)).into(),
+            );
+        })
+        .await;
+        let snapshot_id = table.metadata().current_snapshot_id().unwrap();
+
+        let current = read(table.scan().select(["dbl"]).build().unwrap()).await;
+        assert_eq!(column_values::<Float64Type>(&current, "dbl"), vec![
+            None;
+            2048
+        ]);
+
+        let pinned = table.scan().snapshot_id(snapshot_id).select(["dbl"]);
+        let pinned = read(pinned.build().unwrap()).await;
+        assert_eq!(sorted_double_values(&pinned, "dbl"), fixture_dbl_values());
+    }
+
+    #[tokio::test]
+    async fn test_scan_of_current_state_reads_column_renamed_after_last_write() {
+        let table = table_with_fields_changed_after_last_write(|fields| {
+            let dbl = fields.iter_mut().find(|field| field.name == "dbl").unwrap();
+            *dbl = NestedField::required(dbl.id, "dbl2", Type::Primitive(PrimitiveType::Double))
+                .into();
+        })
+        .await;
+
+        let current = read(table.scan().select(["dbl2"]).build().unwrap()).await;
+        assert_eq!(sorted_double_values(&current, "dbl2"), fixture_dbl_values());
+    }
+
+    #[tokio::test]
+    async fn test_scan_of_current_state_excludes_column_dropped_after_last_write() {
+        let table = table_with_fields_changed_after_last_write(|fields| {
+            fields.retain(|field| field.name != "dbl")
+        })
+        .await;
+        let snapshot_id = table.metadata().current_snapshot_id().unwrap();
+
+        let error = table.scan().select(["dbl"]).build().unwrap_err();
+        // The error lists the schema the scan resolved against: the current one.
         assert_eq!(
-            scan.plan_context.as_ref().unwrap().field_ids.as_ref(),
-            &vec![100]
+            error.to_string(),
+            concat!(
+                "DataInvalid => Column dbl not found in table. Schema: table {\n",
+                "  1: x: required long \n",
+                "  2: y: required long comment\n",
+                "  3: z: required long \n",
+                "  4: a: required string \n",
+                "  6: i32: required int \n",
+                "  7: i64: required long \n",
+                "  8: bool: required boolean \n",
+                "}\n",
+            )
         );
+
+        // Time travel still reads the table as it was.
+        let pinned = table.scan().snapshot_id(snapshot_id).select(["dbl"]);
+        let pinned = read(pinned.build().unwrap()).await;
+        assert_eq!(sorted_double_values(&pinned, "dbl"), fixture_dbl_values());
     }
 
     fn table_with_property(key: &str, value: &str) -> Table {
