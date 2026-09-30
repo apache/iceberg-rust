@@ -43,13 +43,13 @@ use crate::auth::{AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, AuthManager, NoopAuthManager
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
-use crate::endpoint::{Endpoint, V1_NAMESPACE_EXISTS, V1_TABLE_EXISTS};
+use crate::endpoint::{Endpoint, V1_NAMESPACE_EXISTS, V1_TABLE_EXISTS, V1_UNREGISTER_TABLE};
 use crate::request::HttpRequest;
 use crate::response::HttpResponse;
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
     CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
-    NamespaceResponse, RegisterTableRequest, RenameTableRequest,
+    NamespaceResponse, RegisterTableRequest, RenameTableRequest, UnregisterTableResult,
 };
 
 /// REST catalog URI
@@ -241,6 +241,16 @@ impl RestCatalogConfig {
 
     fn register_table_endpoint(&self, ns: &NamespaceIdent) -> String {
         self.url_prefixed(&["namespaces", &ns.to_url_string(), "register"])
+    }
+
+    fn unregister_table_endpoint(&self, table: &TableIdent) -> String {
+        self.url_prefixed(&[
+            "namespaces",
+            &table.namespace.to_url_string(),
+            "tables",
+            &table.name,
+            "unregister",
+        ])
     }
 
     fn table_endpoint(&self, table: &TableIdent) -> String {
@@ -677,6 +687,12 @@ impl Catalog for RestCatalog {
     ) -> Result<Table> {
         self.inner
             .register_table(&self.session_context, table_ident, metadata_location)
+            .await
+    }
+
+    async fn unregister_table(&self, table_ident: &TableIdent) -> Result<Table> {
+        self.inner
+            .unregister_table(&self.session_context, table_ident)
             .await
     }
 
@@ -1405,6 +1421,60 @@ impl SessionCatalog for RestSessionCatalog {
         table_builder.build()
     }
 
+    async fn unregister_table(
+        &self,
+        _context: &SessionContext,
+        table_ident: &TableIdent,
+    ) -> Result<Table> {
+        if !self.supports_endpoint(&V1_UNREGISTER_TABLE).await? {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "The catalog does not support unregistering tables",
+            ));
+        }
+
+        let client = self.client().await?;
+        let request = HttpRequest::build(client.http_client.request(
+            Method::POST,
+            client.config.unregister_table_endpoint(table_ident),
+        ))?;
+        let http_response = client.query_catalog(request).await?;
+
+        let response: UnregisterTableResult = match http_response.status() {
+            StatusCode::OK => deserialize_catalog_response(http_response).map_err(|error| {
+                Error::new(ErrorKind::DataInvalid, "Invalid unregister table response")
+                    .with_source(error)
+            })?,
+            StatusCode::NOT_FOUND => {
+                return Err(Error::new(
+                    ErrorKind::TableNotFound,
+                    "Tried to unregister a table that does not exist",
+                ));
+            }
+            _ => {
+                return Err(deserialize_unexpected_catalog_error(
+                    http_response,
+                    client.http_client.disable_header_redaction(),
+                ));
+            }
+        };
+
+        let file_io = self
+            .load_file_io(Some(&response.metadata_location), None)
+            .await?;
+        let mut builder = Table::builder()
+            .identifier(table_ident.clone())
+            .metadata(response.metadata)
+            .metadata_location(response.metadata_location)
+            .file_io(file_io)
+            .runtime(self.runtime.clone())
+            .readonly(true);
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
+    }
+
     async fn update_table(
         &self,
         _context: &SessionContext,
@@ -1762,6 +1832,21 @@ mod tests {
                     "warehouse": "s3://iceberg-catalog"
                 },
                 "defaults": {}
+            }"#,
+            )
+            .create_async()
+            .await
+    }
+
+    async fn create_unregister_config_mock(server: &mut ServerGuard) -> Mock {
+        server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(
+                r#"{
+                "overrides": { "warehouse": "s3://iceberg-catalog" },
+                "defaults": {},
+                "endpoints": ["POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/unregister"]
             }"#,
             )
             .create_async()
@@ -4312,6 +4397,105 @@ mod tests {
 
         config_mock.assert_async().await;
         register_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_unregister_table() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_unregister_config_mock(&mut server).await;
+        let loaded: LoadTableResult =
+            serde_json::from_str(include_str!("../testdata/load_table_response.json")).unwrap();
+        let response = UnregisterTableResult {
+            metadata_location: loaded.metadata_location.unwrap(),
+            metadata: loaded.metadata,
+        };
+        let unregister_mock = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/unregister")
+            .with_status(200)
+            .with_body(serde_json::to_string(&response).unwrap())
+            .create_async()
+            .await;
+
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let ident = TableIdent::from_strs(["ns1", "test1"]).unwrap();
+        let table = catalog
+            .unregister_table(&SessionContext::empty(), &ident)
+            .await
+            .unwrap();
+        assert_eq!(table.identifier(), &ident);
+        assert_eq!(
+            table.metadata_location(),
+            Some(response.metadata_location.as_str())
+        );
+        assert_eq!(table.metadata(), &response.metadata);
+        assert!(table.readonly());
+
+        config_mock.assert_async().await;
+        unregister_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_unregister_table_404() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_unregister_config_mock(&mut server).await;
+        let unregister_mock = server
+            .mock("POST", "/v1/namespaces/ns1/tables/missing/unregister")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let ident = TableIdent::from_strs(["ns1", "missing"]).unwrap();
+        let err = catalog
+            .unregister_table(&SessionContext::empty(), &ident)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::TableNotFound);
+
+        config_mock.assert_async().await;
+        unregister_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_unregister_table_requires_metadata_location() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_unregister_config_mock(&mut server).await;
+        let loaded: LoadTableResult =
+            serde_json::from_str(include_str!("../testdata/load_table_response.json")).unwrap();
+        let unregister_mock = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1/unregister")
+            .with_status(200)
+            .with_body(
+                serde_json::to_string(&serde_json::json!({ "metadata": loaded.metadata })).unwrap(),
+            )
+            .create_async()
+            .await;
+
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let ident = TableIdent::from_strs(["ns1", "test1"]).unwrap();
+        let err = catalog
+            .unregister_table(&SessionContext::empty(), &ident)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+
+        config_mock.assert_async().await;
+        unregister_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_unregister_table_unsupported_without_advertised_endpoint() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let ident = TableIdent::from_strs(["ns1", "test1"]).unwrap();
+
+        let err = catalog
+            .unregister_table(&SessionContext::empty(), &ident)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        config_mock.assert_async().await;
     }
 
     #[tokio::test]

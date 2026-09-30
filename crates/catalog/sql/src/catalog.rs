@@ -569,6 +569,46 @@ impl SqlCatalog {
             }
         }
     }
+
+    /// Remove the entry only if it still points to the metadata we read.
+    async fn remove_table_at_location(
+        &self,
+        table_ident: &TableIdent,
+        metadata_location: &str,
+    ) -> Result<()> {
+        let result = self
+            .execute(
+                &format!(
+                    "DELETE FROM {CATALOG_TABLE_NAME}
+                     WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      {}
+                      AND {CATALOG_FIELD_METADATA_LOCATION_PROP} = ?",
+                    self.schema_version.record_type_filter()
+                ),
+                vec![
+                    Some(&self.name),
+                    Some(table_ident.name()),
+                    Some(&table_ident.namespace().join(".")),
+                    Some(metadata_location),
+                ],
+                None,
+            )
+            .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(Error::new(
+                ErrorKind::CatalogCommitConflicts,
+                format!(
+                    "Cannot unregister table {table_ident}: metadata location changed or table was dropped"
+                ),
+            )
+            .with_retryable(true));
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -1168,6 +1208,52 @@ impl Catalog for SqlCatalog {
         Ok(builder.build()?)
     }
 
+    async fn unregister_table(&self, table_ident: &TableIdent) -> Result<Table> {
+        let rows = self
+            .fetch_rows(
+                &format!(
+                    "SELECT {CATALOG_FIELD_METADATA_LOCATION_PROP}
+                     FROM {CATALOG_TABLE_NAME}
+                     WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      {}",
+                    self.schema_version.record_type_filter()
+                ),
+                vec![
+                    Some(&self.name),
+                    Some(table_ident.name()),
+                    Some(&table_ident.namespace().join(".")),
+                ],
+            )
+            .await?;
+        let row = rows.first().ok_or_else(|| {
+            Error::new(
+                ErrorKind::TableNotFound,
+                format!("No such table: {table_ident}"),
+            )
+        })?;
+        let metadata_location = row
+            .try_get::<String, _>(CATALOG_FIELD_METADATA_LOCATION_PROP)
+            .map_err(from_sqlx_error)?;
+
+        self.remove_table_at_location(table_ident, &metadata_location)
+            .await?;
+
+        let metadata = TableMetadata::read_from(&self.fileio, &metadata_location).await?;
+        let mut builder = Table::builder()
+            .identifier(table_ident.clone())
+            .metadata(metadata)
+            .metadata_location(metadata_location)
+            .file_io(self.fileio.clone())
+            .runtime(self.runtime.clone())
+            .readonly(true);
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
+    }
+
     /// Updates an existing table within the SQL catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
         let table_ident = commit.identifier().clone();
@@ -1463,6 +1549,78 @@ mod tests {
         // catalog instantiation should not fail even if tables exist
         new_sql_catalog(warehouse_loc.clone(), Some("iceberg")).await;
         new_sql_catalog(warehouse_loc.clone(), Some("iceberg")).await;
+    }
+
+    #[tokio::test]
+    async fn test_unregister_table() {
+        let catalog = new_sql_catalog(temp_path(), Some("iceberg")).await;
+        let namespace = NamespaceIdent::new("unregister_namespace".into());
+        create_namespace(&catalog, &namespace).await;
+        let table_ident = TableIdent::new(namespace, "unregister_table".into());
+        create_table(&catalog, &table_ident).await;
+
+        let before = catalog.load_table(&table_ident).await.unwrap();
+        let unregistered = catalog.unregister_table(&table_ident).await.unwrap();
+        assert_eq!(unregistered.identifier(), &table_ident);
+        assert_eq!(unregistered.metadata_location(), before.metadata_location());
+        assert_eq!(unregistered.metadata(), before.metadata());
+        assert!(unregistered.readonly());
+        assert!(!catalog.table_exists(&table_ident).await.unwrap());
+
+        let err = catalog.unregister_table(&table_ident).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::TableNotFound);
+    }
+
+    #[tokio::test]
+    async fn test_unregister_table_rejects_changed_metadata_location() {
+        let db_path = temp_path();
+        let uri = format!("sqlite:{db_path}");
+        sqlx::Sqlite::create_database(&uri).await.unwrap();
+        let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load(
+                "iceberg",
+                HashMap::from([
+                    (SQL_CATALOG_PROP_URI.to_string(), uri),
+                    (SQL_CATALOG_PROP_WAREHOUSE.to_string(), temp_path()),
+                ]),
+            )
+            .await
+            .unwrap();
+        let namespace = NamespaceIdent::new("unregister_conflict".into());
+        create_namespace(&catalog, &namespace).await;
+        let table_ident = TableIdent::new(namespace, "table".into());
+        create_table(&catalog, &table_ident).await;
+
+        let stale_location = catalog
+            .load_table(&table_ident)
+            .await
+            .unwrap()
+            .metadata_location()
+            .unwrap()
+            .to_string();
+        catalog
+            .execute(
+                "UPDATE iceberg_tables SET metadata_location = ?
+                 WHERE catalog_name = ? AND table_namespace = ? AND table_name = ?",
+                vec![
+                    Some("new-location"),
+                    Some("iceberg"),
+                    Some("unregister_conflict"),
+                    Some("table"),
+                ],
+                None,
+            )
+            .await
+            .unwrap();
+
+        let err = catalog
+            .remove_table_at_location(&table_ident, &stale_location)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::CatalogCommitConflicts);
+        assert!(err.retryable());
+        assert!(catalog.table_exists(&table_ident).await.unwrap());
     }
 
     async fn new_commit_error_catalog() -> SqlCatalog {

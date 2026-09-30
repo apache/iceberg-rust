@@ -742,6 +742,13 @@ impl Catalog for HmsCatalog {
         ))
     }
 
+    async fn unregister_table(&self, _table_ident: &TableIdent) -> Result<Table> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Unregistering a table is not supported yet",
+        ))
+    }
+
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
         Err(Error::new(
             ErrorKind::FeatureUnsupported,

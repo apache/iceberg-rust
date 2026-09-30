@@ -399,6 +399,26 @@ impl Catalog for MemoryCatalog {
         builder.build()
     }
 
+    async fn unregister_table(&self, table_ident: &TableIdent) -> Result<Table> {
+        let metadata_location = {
+            let mut root_namespace_state = self.root_namespace_state.lock().await;
+            root_namespace_state.remove_existing_table(table_ident)?
+        };
+
+        let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
+        let mut builder = Table::builder()
+            .identifier(table_ident.clone())
+            .metadata(metadata)
+            .metadata_location(metadata_location)
+            .file_io(self.file_io.clone())
+            .runtime(self.runtime.clone())
+            .readonly(true);
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
+    }
+
     /// Update a table in the catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
         let mut root_namespace_state = self.root_namespace_state.lock().await;
@@ -1942,6 +1962,35 @@ pub(crate) mod tests {
             loaded_table.metadata_location().unwrap().to_string(),
             metadata_location
         );
+    }
+
+    #[tokio::test]
+    async fn test_unregister_table() {
+        let catalog = new_memory_catalog().await;
+        let namespace = NamespaceIdent::new("unregister_namespace".into());
+        create_namespace(&catalog, &namespace).await;
+        let table_ident = TableIdent::new(namespace, "unregister_table".into());
+        create_table(&catalog, &table_ident).await;
+
+        let before = catalog.load_table(&table_ident).await.unwrap();
+        let unregistered = catalog.unregister_table(&table_ident).await.unwrap();
+        assert_eq!(unregistered.identifier(), &table_ident);
+        assert_eq!(unregistered.metadata_location(), before.metadata_location());
+        assert_eq!(unregistered.metadata(), before.metadata());
+        assert!(unregistered.readonly());
+        assert!(!catalog.table_exists(&table_ident).await.unwrap());
+
+        let err = catalog.unregister_table(&table_ident).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::TableNotFound);
+
+        catalog
+            .register_table(
+                &table_ident,
+                unregistered.metadata_location().unwrap().to_string(),
+            )
+            .await
+            .unwrap();
+        assert!(catalog.table_exists(&table_ident).await.unwrap());
     }
 
     #[tokio::test]
