@@ -41,11 +41,9 @@ exceptions = []
 
 # zstd-sys declares only "MIT/Apache-2.0", covering its Rust wrapper.
 # However, it also includes vendored Zstandard C sources.
+# TODO: Remove once no longer required https://github.com/apache/iceberg-rust/issues/3307
 [[licenses.clarify]]
 crate = "zstd-sys"
-# TODO: When workspace upgrades to zstd-sys 2.1 or later,
-# the zstd-sys src and generated buildings will relicense to BSD-3-Clause,
-# removing the first section of the clarification.
 expression = "(MIT OR Apache-2.0) AND BSD-3-Clause AND (GPL-2.0-only OR BSD-3-Clause)"
 license-files = [
   { path = "LICENSE.Apache-2.0", hash = 0x7b466be4 },
@@ -57,15 +55,13 @@ license-files = [
   { path = "zstd/COPYING", hash = 0xeaa66bfd },
 ]
 
-# The declared license is inaccurate, as the crate src includes both MIT and BSD-3-Clause licensed code
-# so it is BOTH licenses, not either as originally declared.
-#
-# Note, there's a PR open to address this issue here:
+# Mapped from OR to AND. The following PR should address upstream.
 # https://github.com/dropbox/rust-brotli-decompressor/pull/32
 [[licenses.clarify]]
 crate = "brotli-decompressor"
 expression = "BSD-3-Clause AND MIT"
 license-files = [
   { path = "LICENSE", hash = 0x1a60a92d }, # BSD-3-Clause
-  # Missing: MIT license, since no license text is included in the crate's repo.
+  # Missing: crate is MIT licensed but has no license text to refer to.
+  # If the project drops the MIT licensing, we wouldn't know to update expression above.
 ]
