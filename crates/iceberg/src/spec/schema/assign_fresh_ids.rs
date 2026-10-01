@@ -273,14 +273,18 @@ mod tests {
             let expected = Schema::builder()
                 .with_fields(vec![
                     NestedField::required(11, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(12, "data", test_type).into(),
+                    NestedField::optional(12, "data", test_type.clone()).into(),
                 ])
                 .build()
                 .unwrap();
 
             let assigned = assign_fresh_ids(schema, &empty_schema(), 11).unwrap();
 
-            assert_eq!(assigned.as_struct(), expected.as_struct());
+            assert_eq!(
+                assigned.as_struct(),
+                expected.as_struct(),
+                "failed for type: {test_type:?}"
+            );
         }
     }
 
@@ -385,10 +389,9 @@ mod tests {
         assert_eq!(assigned.highest_field_id(), 11);
     }
 
-    #[test]
-    fn test_assign_fresh_ids_does_not_reuse_dropped_column_ids() {
-        // The table once had ids 1..=5; only 1 and 3 are still present in the current schema, so
-        // `highest_field_id()` of 3 would hand a new column the dropped id 4.
+    /// The table once had ids 1..=5; only 1 and 3 survive in `base`, so 4 and 5 are retired and a
+    /// correct seed is 6, not `base.highest_field_id() + 1`.
+    fn schemas_with_dropped_column_ids() -> (Schema, Schema) {
         let base = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
@@ -403,11 +406,29 @@ mod tests {
             ])
             .build()
             .unwrap();
+        (base, replacement)
+    }
+
+    #[test]
+    fn test_assign_fresh_ids_skips_dropped_column_ids_when_seeded_correctly() {
+        let (base, replacement) = schemas_with_dropped_column_ids();
 
         let assigned = assign_fresh_ids(replacement, &base, 6).unwrap();
 
         assert_eq!(assigned.field_by_name("a").unwrap().id, 1);
         assert_eq!(assigned.field_by_name("fresh").unwrap().id, 6);
+    }
+
+    #[test]
+    fn test_assign_fresh_ids_seeded_too_low_reuses_dropped_column_id() {
+        let (base, replacement) = schemas_with_dropped_column_ids();
+
+        // A seed of 4 clears the `debug_assert` in `new` (base's highest id is 3) and `build()`
+        // sees no duplicates, so the retired id 4 is reused silently: the caller's contract, and
+        // the limit of the assert.
+        let assigned = assign_fresh_ids(replacement, &base, base.highest_field_id() + 1).unwrap();
+
+        assert_eq!(assigned.field_by_name("fresh").unwrap().id, 4);
     }
 
     #[test]
