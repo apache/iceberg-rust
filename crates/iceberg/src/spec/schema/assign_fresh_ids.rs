@@ -172,7 +172,7 @@ impl AssignFreshIds {
                 self.old_to_new_id.get(&id).copied().ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Identifier Field ID {id} not found"),
+                        format!("identifier field id {id} not found"),
                     )
                 })
             })
