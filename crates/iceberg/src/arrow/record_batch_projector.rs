@@ -185,16 +185,14 @@ impl RecordBatchProjector {
                 .as_any()
                 .downcast_ref::<StructArray>()
                 .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Cannot convert Array to StructArray",
-                    )
+                    Error::new(ErrorKind::Unexpected, "Cannot convert Array to StructArray")
                 })?;
             ancestor_nulls = NullBuffer::union(ancestor_nulls.as_ref(), struct_array.nulls());
             array = struct_array.column(*idx);
         }
         let Some(ancestor_nulls) = ancestor_nulls else {
-            // Reuse the leaf as-is instead of materializing its logical nulls.
+            // Iceberg leaf types handled here have logical_nulls() == nulls(), so no null
+            // materialization is needed when no ancestor contributes nulls.
             return Ok(Arc::clone(array));
         };
         let null_buffer = NullBuffer::union(Some(&ancestor_nulls), array.logical_nulls().as_ref());
@@ -318,7 +316,9 @@ mod test {
             RecordBatchProjector::from_iceberg_schema(Arc::new(iceberg_schema), &[1]).unwrap();
         let input = Arc::new(Int32Array::from(vec![Some(10), None, Some(30)])) as ArrayRef;
 
-        let projected = projector.project_column(std::slice::from_ref(&input)).unwrap();
+        let projected = projector
+            .project_column(std::slice::from_ref(&input))
+            .unwrap();
         assert!(Arc::ptr_eq(&projected[0], &input));
         let projected_array = projected[0].as_any().downcast_ref::<Int32Array>().unwrap();
 
@@ -350,12 +350,7 @@ mod test {
     #[test]
     fn test_record_batch_projector_nested_all_valid_slice_reuses_leaf() {
         let (projector, inner_field, leaf_field) = nested_projector();
-        let leaf = Arc::new(Int32Array::from(vec![
-            Some(0),
-            Some(10),
-            None,
-            Some(30),
-        ])) as ArrayRef;
+        let leaf = Arc::new(Int32Array::from(vec![Some(0), Some(10), None, Some(30)])) as ArrayRef;
         let inner = Arc::new(StructArray::new(
             Fields::from(vec![leaf_field]),
             vec![leaf],
