@@ -2972,6 +2972,7 @@ name = "iceberg_test_utils"
 version = "0.10.1"
 dependencies = [
  "iceberg",
+ "tokio",
  "tracing-subscriber",
 ]
 
