@@ -34,7 +34,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use dashmap::DashMap;
-use futures::stream::{BoxStream, FuturesUnordered};
+use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 #[cfg(feature = "object_store-s3")]
 use iceberg::io::S3Config;
@@ -44,10 +44,11 @@ use iceberg::io::{
 };
 use iceberg::{Error, ErrorKind, Result};
 use object_store::path::Path as ObjectStorePath;
-use object_store::{MultipartUpload, ObjectStore, ObjectStoreExt, PutPayload, UploadPart};
+use object_store::{MultipartUpload, ObjectStore, ObjectStoreExt, PutPayload};
 #[cfg(feature = "object_store-s3")]
 use s3::{build_s3_store, parse_s3_url};
 use serde::{Deserialize, Serialize};
+use tokio::task::JoinSet;
 
 /// Convert an `object_store::Error` into an `iceberg::Error`,
 /// dispatching known variants to their corresponding `ErrorKind`.
@@ -185,7 +186,7 @@ impl ObjectStoreStorage {
     fn delete_batch_size(&self) -> usize {
         match self {
             #[cfg(feature = "object_store-s3")]
-            ObjectStoreStorage::S3(s3) => s3.delete_batch_size,
+            ObjectStoreStorage::S3(s3) => s3.delete_batch_size.clamp(1, S3_MAX_DELETE_BATCH_SIZE),
         }
     }
 
@@ -203,14 +204,7 @@ impl ObjectStoreStorage {
                     .value()
                     .clone();
 
-                let object_path =
-                    ObjectStorePath::from_url_path(&parsed.relative).map_err(|e| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Invalid URL path: {}", parsed.relative),
-                        )
-                        .with_source(e)
-                    })?;
+                let object_path = ObjectStorePath::from(parsed.relative.as_str());
 
                 Ok(StoreAndPath {
                     bucket: parsed.bucket,
@@ -282,7 +276,7 @@ impl Storage for ObjectStoreStorage {
         Ok(Box::new(ObjectStoreWriter {
             upload: Some(upload),
             buffer: BytesMut::new(),
-            tasks: FuturesUnordered::new(),
+            tasks: JoinSet::new(),
             parts_submitted: 0,
             bytes_written: 0,
         }))
@@ -392,7 +386,7 @@ const MAX_CONCURRENT_PART_UPLOADS: usize = 8;
 struct ObjectStoreWriter {
     upload: Option<Box<dyn MultipartUpload>>,
     buffer: BytesMut,
-    tasks: FuturesUnordered<UploadPart>,
+    tasks: JoinSet<object_store::Result<()>>,
     parts_submitted: usize,
     bytes_written: u64,
 }
@@ -414,26 +408,46 @@ impl ObjectStoreWriter {
         from_object_store_error(e)
     }
 
+    /// Drains in-flight tasks down below `MAX_CONCURRENT_PART_UPLOADS`.
+    async fn drain_capacity(
+        tasks: &mut JoinSet<object_store::Result<()>>,
+        upload: &mut Box<dyn MultipartUpload>,
+    ) -> Result<()> {
+        while tasks.len() >= MAX_CONCURRENT_PART_UPLOADS {
+            if let Some(res) = tasks.join_next().await {
+                match res {
+                    Ok(Err(e)) => {
+                        return Err(Self::abort_and_wrap(upload, e, "part upload failure").await);
+                    }
+                    Err(join_err) => {
+                        return Err(Error::new(
+                            ErrorKind::Unexpected,
+                            "Part upload task panicked or failed",
+                        )
+                        .with_source(join_err));
+                    }
+                    Ok(Ok(())) => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Flushes any buffered bytes as an in-flight part upload to S3,
     /// throttling concurrency so that at most `MAX_CONCURRENT_PART_UPLOADS`
     /// uploads are in flight at any given time.
     async fn flush_buffer(
         buffer: &mut BytesMut,
-        tasks: &mut FuturesUnordered<UploadPart>,
+        tasks: &mut JoinSet<object_store::Result<()>>,
         parts_submitted: &mut usize,
         upload: &mut Box<dyn MultipartUpload>,
     ) -> Result<()> {
         if !buffer.is_empty() {
-            // Drain in-flight tasks down below cap before queuing the next chunk
-            while tasks.len() >= MAX_CONCURRENT_PART_UPLOADS {
-                if let Some(Err(e)) = tasks.next().await {
-                    return Err(Self::abort_and_wrap(upload, e, "part upload failure").await);
-                }
-            }
+            Self::drain_capacity(tasks, upload).await?;
 
             let part_data = std::mem::take(buffer).freeze();
             let part_fut = upload.put_part(PutPayload::from_bytes(part_data));
-            tasks.push(part_fut);
+            tasks.spawn(part_fut);
             *parts_submitted += 1;
         }
         Ok(())
@@ -442,7 +456,7 @@ impl ObjectStoreWriter {
     /// Accumulates bytes into `buffer`, flushing 5 MiB parts when full.
     async fn append_bytes(
         buffer: &mut BytesMut,
-        tasks: &mut FuturesUnordered<UploadPart>,
+        tasks: &mut JoinSet<object_store::Result<()>>,
         parts_submitted: &mut usize,
         mut bs: Bytes,
         upload: &mut Box<dyn MultipartUpload>,
@@ -497,7 +511,7 @@ impl FileWrite for ObjectStoreWriter {
             )
         })?;
         self.bytes_written += bs.len() as u64;
-        Self::append_bytes(
+        if let Err(e) = Self::append_bytes(
             &mut self.buffer,
             &mut self.tasks,
             &mut self.parts_submitted,
@@ -505,6 +519,11 @@ impl FileWrite for ObjectStoreWriter {
             upload,
         )
         .await
+        {
+            let _ = self.upload.take();
+            return Err(e);
+        }
+        Ok(())
     }
 
     async fn close(&mut self) -> Result<FileMetadata> {
@@ -518,16 +537,27 @@ impl FileWrite for ObjectStoreWriter {
         // Flush any remaining buffered data, or emit an empty part if 0 parts
         // have been sent (S3 requires at least 1 part to complete a multipart upload).
         if !self.buffer.is_empty() || self.parts_submitted == 0 {
+            Self::drain_capacity(&mut self.tasks, &mut upload).await?;
             let part_data = std::mem::take(&mut self.buffer).freeze();
             let part_fut = upload.put_part(PutPayload::from_bytes(part_data));
-            self.tasks.push(part_fut);
+            self.tasks.spawn(part_fut);
             self.parts_submitted += 1;
         }
 
         // Await all in-flight part uploads; abort if any part fails.
-        while let Some(res) = self.tasks.next().await {
-            if let Err(e) = res {
-                return Err(Self::abort_and_wrap(&mut upload, e, "part upload failure").await);
+        while let Some(res) = self.tasks.join_next().await {
+            match res {
+                Ok(Err(e)) => {
+                    return Err(Self::abort_and_wrap(&mut upload, e, "part upload failure").await);
+                }
+                Err(join_err) => {
+                    return Err(Error::new(
+                        ErrorKind::Unexpected,
+                        "Part upload task panicked or failed",
+                    )
+                    .with_source(join_err));
+                }
+                Ok(Ok(())) => {}
             }
         }
 
@@ -631,10 +661,29 @@ mod tests {
             .unwrap();
         assert_eq!(target.path.as_ref(), "data/file.parquet");
 
-        let target_encoded = storage
-            .get_store_and_path("s3://my-bucket/data%20dir/file.parquet")
+        let target_spaces = storage
+            .get_store_and_path("s3://my-bucket/data dir/file.parquet")
             .unwrap();
-        assert_eq!(target_encoded.path.as_ref(), "data dir/file.parquet");
+        assert_eq!(target_spaces.path.as_ref(), "data dir/file.parquet");
+
+        let target_partition = storage
+            .get_store_and_path("s3://my-bucket/dt=a%2Fb/file.parquet")
+            .unwrap();
+        assert_eq!(target_partition.path.as_ref(), "dt=a%252Fb/file.parquet");
+    }
+
+    #[cfg(feature = "object_store-s3")]
+    #[test]
+    fn test_storage_deserialization_clamps_delete_batch_size() {
+        let storage = make_s3_storage();
+        let mut val = serde_json::to_value(&storage).unwrap();
+        val["S3"]["delete_batch_size"] = serde_json::json!(0);
+        let storage_zero: ObjectStoreStorage = serde_json::from_value(val.clone()).unwrap();
+        assert_eq!(storage_zero.delete_batch_size(), 1);
+
+        val["S3"]["delete_batch_size"] = serde_json::json!(5000);
+        let storage_large: ObjectStoreStorage = serde_json::from_value(val).unwrap();
+        assert_eq!(storage_large.delete_batch_size(), S3_MAX_DELETE_BATCH_SIZE);
     }
 
     #[cfg(feature = "object_store-s3")]
@@ -688,7 +737,7 @@ mod tests {
         let mut writer = ObjectStoreWriter {
             upload: None,
             buffer: BytesMut::new(),
-            tasks: FuturesUnordered::new(),
+            tasks: JoinSet::new(),
             parts_submitted: 0,
             bytes_written: 0,
         };
@@ -705,6 +754,7 @@ mod tests {
 
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+    use object_store::UploadPart;
     use object_store::PutResult;
 
     #[derive(Debug)]
@@ -779,7 +829,7 @@ mod tests {
         let writer = ObjectStoreWriter {
             upload: Some(upload),
             buffer: BytesMut::new(),
-            tasks: FuturesUnordered::new(),
+            tasks: JoinSet::new(),
             parts_submitted: 0,
             bytes_written: 0,
         };
@@ -949,7 +999,7 @@ mod tests {
         let mut writer = ObjectStoreWriter {
             upload: Some(upload),
             buffer: BytesMut::new(),
-            tasks: FuturesUnordered::new(),
+            tasks: JoinSet::new(),
             parts_submitted: 0,
             bytes_written: 0,
         };

@@ -74,7 +74,16 @@ pub(crate) fn parse_s3_url(path: &str) -> Result<ParsedS3Url> {
         .with_source(e)
     })?;
 
-    let relative = url.path().strip_prefix('/').unwrap_or(url.path());
+    let relative = match path.find("://") {
+        Some(scheme_end) => {
+            let after_scheme = &path[scheme_end + 3..];
+            match after_scheme.find('/') {
+                Some(idx) => after_scheme[idx..].strip_prefix('/').unwrap_or(""),
+                None => "",
+            }
+        }
+        None => url.path().strip_prefix('/').unwrap_or(url.path()),
+    };
 
     Ok(ParsedS3Url {
         scheme: scheme.to_string(),

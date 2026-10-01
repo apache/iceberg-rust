@@ -42,3 +42,6 @@ impl serde_core::ser::Serialize for iceberg_storage_object_store::S3Storage
 pub fn iceberg_storage_object_store::S3Storage::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_object_store::S3Storage
 pub fn iceberg_storage_object_store::S3Storage::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub const iceberg_storage_object_store::DEFAULT_DELETE_BATCH_SIZE: usize
+pub const iceberg_storage_object_store::S3_DELETE_BATCH_SIZE: &str
+pub const iceberg_storage_object_store::S3_MAX_DELETE_BATCH_SIZE: usize
