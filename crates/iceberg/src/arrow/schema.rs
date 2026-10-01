@@ -1190,29 +1190,36 @@ pub(crate) fn primitive_type_to_arrow_type_with_ree(primitive_type: &PrimitiveTy
 /// including nested struct, list, and map fields. This is useful for schema comparison
 /// where metadata differences should be ignored.
 struct MetadataStripVisitor {
-    /// Name and nullability of each field being visited, innermost last
-    field_stack: Vec<(String, bool)>,
+    /// Fields whose types are still being visited, innermost last
+    pending_fields: Vec<PendingField>,
+}
+
+/// What `MetadataStripVisitor` keeps of a field until its type is visited
+struct PendingField {
+    name: String,
+    nullable: bool,
 }
 
 impl MetadataStripVisitor {
     fn new() -> Self {
         Self {
-            field_stack: Vec::new(),
+            pending_fields: Vec::new(),
         }
     }
 
-    /// Stores a field's name and nullability, to rebuild it once its type has
-    /// been visited.
-    fn push_field(&mut self, field: &FieldRef) -> Result<()> {
-        self.field_stack
-            .push((field.name().clone(), field.is_nullable()));
+    /// Records a field whose type is about to be visited.
+    fn start_field(&mut self, field: &FieldRef) -> Result<()> {
+        self.pending_fields.push(PendingField {
+            name: field.name().clone(),
+            nullable: field.is_nullable(),
+        });
         Ok(())
     }
 
-    /// Rebuilds the innermost field being visited with `data_type` and no
-    /// metadata. `kind` names the type in the error for an unbalanced stack.
-    fn pop_field(&mut self, data_type: DataType, kind: &str) -> Result<Field> {
-        let (name, nullable) = self.field_stack.pop().ok_or_else(|| {
+    /// Builds the innermost pending field with `data_type` and no metadata.
+    /// `kind` names the type in the error for an unbalanced stack.
+    fn finish_field(&mut self, data_type: DataType, kind: &str) -> Result<Field> {
+        let PendingField { name, nullable } = self.pending_fields.pop().ok_or_else(|| {
             Error::new(
                 ErrorKind::Unexpected,
                 format!("Field stack underflow in {kind}"),
@@ -1227,19 +1234,19 @@ impl ArrowSchemaVisitor for MetadataStripVisitor {
     type U = ArrowSchema;
 
     fn before_field(&mut self, field: &FieldRef) -> Result<()> {
-        self.push_field(field)
+        self.start_field(field)
     }
 
     fn before_list_element(&mut self, field: &FieldRef) -> Result<()> {
-        self.push_field(field)
+        self.start_field(field)
     }
 
     fn before_map_key(&mut self, field: &FieldRef) -> Result<()> {
-        self.push_field(field)
+        self.start_field(field)
     }
 
     fn before_map_value(&mut self, field: &FieldRef) -> Result<()> {
-        self.push_field(field)
+        self.start_field(field)
     }
 
     fn schema(&mut self, _schema: &ArrowSchema, values: Vec<Self::T>) -> Result<Self::U> {
@@ -1247,7 +1254,7 @@ impl ArrowSchemaVisitor for MetadataStripVisitor {
     }
 
     fn r#struct(&mut self, _fields: &Fields, results: Vec<Self::T>) -> Result<Self::T> {
-        self.pop_field(DataType::Struct(Fields::from(results)), "struct")
+        self.finish_field(DataType::Struct(Fields::from(results)), "struct")
     }
 
     fn list(&mut self, list: &DataType, value: Self::T) -> Result<Self::T> {
@@ -1263,7 +1270,7 @@ impl ArrowSchemaVisitor for MetadataStripVisitor {
             }
         };
 
-        self.pop_field(list_type, "list")
+        self.finish_field(list_type, "list")
     }
 
     fn map(&mut self, map: &DataType, key_value: Self::T, value: Self::T) -> Result<Self::T> {
@@ -1285,11 +1292,11 @@ impl ArrowSchemaVisitor for MetadataStripVisitor {
             }
         };
 
-        self.pop_field(DataType::Map(Arc::new(struct_field), sorted), "map")
+        self.finish_field(DataType::Map(Arc::new(struct_field), sorted), "map")
     }
 
     fn primitive(&mut self, p: &DataType) -> Result<Self::T> {
-        self.pop_field(p.clone(), "primitive")
+        self.finish_field(p.clone(), "primitive")
     }
 }
 
