@@ -89,9 +89,13 @@ pub struct CowRewriteStats {
     pub unchanged_files: usize,
     /// Visible input row count read from candidate files.
     pub input_rows: u64,
-    /// Output row count emitted by the batch rewriter.
+    /// Output row count written to replacement files.
+    ///
+    /// Rows the rewriter emitted for files that turned out unchanged are not
+    /// counted, so this always matches the row counts of `added_data_files`.
     pub output_rows: u64,
-    /// Number of input batches where the rewriter reported changes.
+    /// Number of input batches that changed, including batches the rewriter
+    /// dropped entirely (`output: None`) even if it did not flag them.
     pub changed_batches: u64,
 }
 
@@ -104,9 +108,10 @@ pub struct CowRewriteResult {
     pub added_data_files: Vec<DataFile>,
     /// Candidate files that were read and left unchanged.
     ///
-    /// This includes files whose visible rows were all removed by delete
-    /// files: with no surviving rows the rewriter never runs, so the file is
-    /// kept as-is rather than dropped.
+    /// Files whose visible rows were all removed by delete files are NOT
+    /// included here: they read as zero rows and are reported in
+    /// `removed_data_files` with no replacement, so a commit adapter can drop
+    /// them together with the delete files that reference them.
     pub unchanged_data_files: Vec<DataFile>,
     /// Rewrite counters.
     pub stats: CowRewriteStats,
@@ -197,28 +202,41 @@ impl<'a> CowRewriteBuilder<'a> {
         };
 
         for file in files {
+            let CowRewriteFile {
+                old_data_file,
+                scan_task,
+            } = file;
             // Schema the rows are read in (the planned snapshot's schema). The
             // replacement files must be written with this schema so that batches
             // remain compatible when the table's current schema has evolved past
             // the snapshot the source files belong to.
-            let write_schema = file.scan_task.schema_ref();
+            let write_schema = scan_task.schema_ref();
+            let has_delete_files = !scan_task.deletes().is_empty();
 
             // Batches produced before the first changed batch. They are buffered
             // rather than written immediately because the primitive must not
             // emit a replacement file for a source file that turns out to be
             // unchanged. Once a changed batch is observed the buffered prefix is
             // flushed to the writer and all subsequent batches stream straight
-            // through, so the in-memory footprint is bounded by the rows that
-            // precede the first change instead of the entire source file.
+            // through.
+            //
+            // Worst-case footprint: for a file that never changes (or whose
+            // first change sits at its very end) the prefix holds the entire
+            // decoded source file in memory. Files are processed sequentially,
+            // so peak usage is one file at a time, but that can still be several
+            // GB for a compaction-sized file. A size-capped fallback that starts
+            // writing the replacement once the buffer crosses a threshold is
+            // left for follow-up work.
             let mut prefix: Vec<RecordBatch> = Vec::new();
             let mut file_changed = false;
+            let mut file_input_rows = 0_u64;
+            let mut file_output_rows = 0_u64;
             let mut writer: Option<Box<dyn crate::writer::IcebergWriter>> = None;
 
             // Planning already cleared the row predicate (see
             // `ManifestEntryContext::into_cow_rewrite_file`), so this task
             // reads every row of the source file.
-            let tasks = Box::pin(futures::stream::iter(vec![Ok(file.scan_task.clone())]))
-                as FileScanTaskStream;
+            let tasks = Box::pin(futures::stream::iter(vec![Ok(scan_task)])) as FileScanTaskStream;
 
             // Each candidate file gets its own reader so the per-file prefix
             // and lazy-writer semantics stay intact; the delete-file cache is
@@ -232,23 +250,28 @@ impl<'a> CowRewriteBuilder<'a> {
             let mut batches = reader_builder.build().read(tasks)?.stream();
             while let Some(batch) = batches.try_next().await? {
                 result.stats.input_rows += batch.num_rows() as u64;
+                file_input_rows += batch.num_rows() as u64;
 
                 let rewrite = rewriter.rewrite_batch(batch)?;
-                if rewrite.changed {
+                // `output: None` means the batch is fully removed, which is
+                // itself a change. Derive the effective flag instead of
+                // trusting every rewriter to keep `changed` consistent with
+                // `output` — otherwise a `{changed: false, output: None}`
+                // batch would silently drop its rows while leaving the file
+                // marked unchanged.
+                let changed = rewrite.changed || rewrite.output.is_none();
+                if changed {
                     file_changed = true;
                     result.stats.changed_batches += 1;
                 }
 
                 if let Some(output) = rewrite.output {
-                    result.stats.output_rows += output.num_rows() as u64;
+                    file_output_rows += output.num_rows() as u64;
 
                     if file_changed {
                         if writer.is_none() {
-                            let partition_key = source_partition_key(
-                                self.table,
-                                &file.old_data_file,
-                                &write_schema,
-                            )?;
+                            let partition_key =
+                                source_partition_key(self.table, &old_data_file, &write_schema)?;
                             writer = Some(
                                 writer::build_replacement_writer(
                                     self.table,
@@ -258,7 +281,9 @@ impl<'a> CowRewriteBuilder<'a> {
                                 .await?,
                             );
                         }
-                        let writer = writer.as_mut().expect("writer just built");
+                        let Some(writer) = writer.as_mut() else {
+                            unreachable!("writer initialized above");
+                        };
                         for prefix_batch in prefix.drain(..) {
                             writer.write(prefix_batch).await?;
                         }
@@ -269,9 +294,18 @@ impl<'a> CowRewriteBuilder<'a> {
                 }
             }
 
-            if file_changed {
+            // A candidate whose visible rows were all removed by its delete
+            // files reads as zero rows and the loop above never runs. Treat it
+            // the same as a rewriter that dropped every batch — changed with
+            // no replacement — so the file and its delete files can be
+            // compacted away instead of being pinned in the table forever.
+            let fully_removed_by_deletes =
+                !file_changed && file_input_rows == 0 && has_delete_files;
+
+            if file_changed || fully_removed_by_deletes {
                 result.stats.rewritten_files += 1;
-                result.removed_data_files.push(file.old_data_file.clone());
+                result.stats.output_rows += file_output_rows;
+                result.removed_data_files.push(old_data_file);
 
                 if let Some(mut writer) = writer {
                     let added_data_files = writer.close().await?;
@@ -282,7 +316,7 @@ impl<'a> CowRewriteBuilder<'a> {
                 // file is written.
             } else {
                 result.stats.unchanged_files += 1;
-                result.unchanged_data_files.push(file.old_data_file);
+                result.unchanged_data_files.push(old_data_file);
                 // `prefix` is dropped here; no replacement file was written.
             }
         }
@@ -310,6 +344,10 @@ fn source_partition_key(
         })?
         .as_ref()
         .clone();
+    // `PartitionKey::new` does not bind the spec to the schema, so validate the
+    // binding here: a spec that is incompatible with the planned snapshot
+    // schema should fail with a clear error instead of producing a bad
+    // partition path when the writer later calls `PartitionKey::to_path`.
     spec.partition_type(schema).map_err(|err| {
         Error::new(
             ErrorKind::DataInvalid,
@@ -726,7 +764,9 @@ mod tests {
         assert_eq!(result.stats.candidate_files, 1);
         assert_eq!(result.stats.unchanged_files, 1);
         assert_eq!(result.stats.input_rows, 3);
-        assert_eq!(result.stats.output_rows, 3);
+        // Nothing was written, so rows emitted for the unchanged file are not
+        // counted as output.
+        assert_eq!(result.stats.output_rows, 0);
 
         Ok(())
     }
@@ -823,7 +863,96 @@ mod tests {
         assert_eq!(result.added_data_files.len(), 0);
         assert_eq!(result.unchanged_data_files.len(), 1);
         assert_eq!(result.stats.input_rows, 2);
+        assert_eq!(result.stats.output_rows, 0);
+
+        Ok(())
+    }
+
+    /// Drops every batch while reporting `changed: false`, violating the
+    /// documented contract. The orchestrator must derive the change from
+    /// `output: None` itself, otherwise the file would be kept as "unchanged"
+    /// while its rows were meant to be dropped.
+    struct SilentFullDrop;
+
+    impl CowBatchRewriter for SilentFullDrop {
+        fn rewrite_batch(&self, _batch: RecordBatch) -> Result<CowBatchRewrite> {
+            Ok(CowBatchRewrite {
+                output: None,
+                changed: false,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn cow_rewrite_none_output_implies_change() -> Result<()> {
+        let fixture = test_table_with_ids(vec![1, 2]).await?;
+
+        let result = CowRewriteBuilder::new(&fixture.table)
+            .with_predicate(crate::expr::Predicate::AlwaysTrue)
+            .with_rewriter(Arc::new(SilentFullDrop))
+            .rewrite()
+            .await?;
+
+        assert!(result.has_changes());
+        assert_eq!(result.removed_data_files.len(), 1);
+        assert_eq!(result.added_data_files.len(), 0);
+        assert!(result.unchanged_data_files.is_empty());
+        assert_eq!(result.stats.rewritten_files, 1);
+        assert_eq!(result.stats.input_rows, 2);
+        assert_eq!(result.stats.output_rows, 0);
+        assert_eq!(result.stats.changed_batches, 1);
+
+        Ok(())
+    }
+
+    /// Returns `output: None` with `changed: false` for the first batch, then
+    /// flags the second batch as changed. The replacement must contain exactly
+    /// the second batch's rows — the silently dropped first batch must not
+    /// resurrect, and the original file must be removed.
+    struct DropFirstBatchSilently {
+        batches_seen: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CowBatchRewriter for DropFirstBatchSilently {
+        fn rewrite_batch(&self, batch: RecordBatch) -> Result<CowBatchRewrite> {
+            let seen = self
+                .batches_seen
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if seen == 0 {
+                Ok(CowBatchRewrite {
+                    output: None,
+                    changed: false,
+                })
+            } else {
+                Ok(CowBatchRewrite {
+                    output: Some(batch),
+                    changed: true,
+                })
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cow_rewrite_silent_drop_before_change_loses_no_rows() -> Result<()> {
+        let fixture = test_table_with_ids(vec![1, 2, 3, 4]).await?;
+
+        let result = CowRewriteBuilder::new(&fixture.table)
+            .with_predicate(crate::expr::Predicate::AlwaysTrue)
+            .with_batch_size(2)
+            .with_rewriter(Arc::new(DropFirstBatchSilently {
+                batches_seen: std::sync::atomic::AtomicUsize::new(0),
+            }))
+            .rewrite()
+            .await?;
+
+        assert!(result.has_changes());
+        assert_eq!(result.removed_data_files.len(), 1);
+        assert_eq!(result.added_data_files.len(), 1);
+        assert_eq!(result.stats.input_rows, 4);
         assert_eq!(result.stats.output_rows, 2);
+
+        let ids = read_ids(&fixture.table, &result.added_data_files).await?;
+        assert_eq!(ids, vec![3, 4]);
 
         Ok(())
     }

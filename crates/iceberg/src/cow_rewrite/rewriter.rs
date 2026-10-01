@@ -20,6 +20,7 @@ use arrow_array::RecordBatch;
 use crate::Result;
 
 /// Result of rewriting a single record batch.
+#[derive(Debug)]
 pub struct CowBatchRewrite {
     /// Rewritten output batch, or `None` when the input batch is fully removed.
     ///
@@ -37,7 +38,19 @@ pub struct CowBatchRewrite {
 }
 
 /// Rewrites record batches for copy-on-write operations.
+///
+/// `rewrite_batch` is synchronous: it runs on the async runtime thread that
+/// drives the read/write pipeline, so implementations must not perform
+/// blocking work — async I/O such as catalog enrichment or cross-table
+/// lookups is not supported in this contract. The method stays sync (rather
+/// than returning a boxed future) so the trait remains object safe for
+/// `Arc<dyn CowBatchRewriter>`.
 pub trait CowBatchRewriter: Send + Sync {
     /// Rewrites a record batch and reports whether it changed.
+    ///
+    /// `output: None` means the batch is fully removed, which is itself a
+    /// change: the orchestrator treats it as changed regardless of the
+    /// `changed` flag, so a rewriter cannot accidentally keep dropped rows
+    /// alive by reporting `changed: false` alongside a `None` output.
     fn rewrite_batch(&self, batch: RecordBatch) -> Result<CowBatchRewrite>;
 }
