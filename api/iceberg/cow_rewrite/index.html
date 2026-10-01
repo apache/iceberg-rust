@@ -1,0 +1,39 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Copy-on-write rewrite primitives."><title>iceberg::cow_rewrite - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.0-nightly (e8e4541ff 2026-04-15)" data-channel="nightly" data-search-js="search-b5634cc7.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module cow_rewrite</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../iceberg/index.html">iceberg</a><span class="version">0.10.1</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module cow_<wbr>rewrite</a></h2><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#traits" title="Traits">Traits</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate iceberg</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">iceberg</a></div><h1>Module <span>cow_<wbr>rewrite</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/iceberg/cow_rewrite/mod.rs.html#18-1667">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Copy-on-write rewrite primitives.</p>
+<p>This module plans candidate data files, reads their visible rows, applies a
+caller-provided batch rewriter, and writes replacement data files. It returns
+old and new file sets that can be committed by an overwrite-style transaction
+action.</p>
+<p>The primitive does not parse SQL and does not commit metadata by itself.
+Rewriters must emit batches compatible with the schema rows were read in
+(the planned snapshot’s schema) and must preserve each source file’s
+partition values; this primitive does not repartition rewritten rows.</p>
+<p>Replacement files deliberately mirror their source file’s layout instead of
+re-optimizing it — a deliberate divergence from Java’s RewriteDataFiles and
+Spark DML: they are written in the planned snapshot’s schema rather than
+promoted to the table’s current schema, they keep the source file’s
+partition spec rather than being repartitioned into the table’s default
+spec, and they stay unsorted since no sort order is applied. An opt-in
+promote-to-current-schema rewrite is left for follow-up work.</p>
+<p>The result carries data files only. A commit adapter consuming these file
+lists may remove position delete files and deletion vectors only when they
+exclusively reference removed data files. Equality delete files must be
+retained while they can still apply to other live data files by sequence
+number.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">struct </span>KeepAll;
+
+<span class="kw">impl </span>CowBatchRewriter <span class="kw">for </span>KeepAll {
+    <span class="kw">fn </span>rewrite_batch(<span class="kw-2">&amp;</span><span class="self">self</span>, batch: RecordBatch) -&gt; <span class="prelude-ty">Result</span>&lt;CowBatchRewrite&gt; {
+        <span class="prelude-val">Ok</span>(CowBatchRewrite {
+            output: <span class="prelude-val">Some</span>(batch),
+            changed: <span class="bool-val">false</span>,
+        })
+    }
+}
+
+<span class="kw">let </span>result = CowRewriteBuilder::new(table)
+    .with_rewriter(Arc::new(KeepAll))
+    .rewrite()
+    .<span class="kw">await</span><span class="question-mark">?</span>;
+
+<span class="macro">assert!</span>(!result.has_changes());</code></pre></div></div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.CowBatchRewrite.html" title="struct iceberg::cow_rewrite::CowBatchRewrite">CowBatch<wbr>Rewrite</a></dt><dd>Result of rewriting a single record batch.</dd><dt><a class="struct" href="struct.CowRewriteBuilder.html" title="struct iceberg::cow_rewrite::CowRewriteBuilder">CowRewrite<wbr>Builder</a></dt><dd>Builder for orchestrating copy-on-write data file rewrites.</dd><dt><a class="struct" href="struct.CowRewriteFile.html" title="struct iceberg::cow_rewrite::CowRewriteFile">CowRewrite<wbr>File</a></dt><dd>A data file selected for COW rewrite.</dd><dt><a class="struct" href="struct.CowRewriteResult.html" title="struct iceberg::cow_rewrite::CowRewriteResult">CowRewrite<wbr>Result</a></dt><dd>Result of a copy-on-write rewrite operation.</dd><dt><a class="struct" href="struct.CowRewriteStats.html" title="struct iceberg::cow_rewrite::CowRewriteStats">CowRewrite<wbr>Stats</a></dt><dd>Counters produced by a copy-on-write rewrite.</dd></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.CowBatchRewriter.html" title="trait iceberg::cow_rewrite::CowBatchRewriter">CowBatch<wbr>Rewriter</a></dt><dd>Rewrites record batches for copy-on-write operations.</dd></dl></section></div></main></body></html>

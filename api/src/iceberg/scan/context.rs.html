@@ -172,165 +172,182 @@
 <a href=#172 id=172 data-nosnippet>172</a>            .with_sort_order(<span class="self">self</span>.sort_order)
 <a href=#173 id=173 data-nosnippet>173</a>            .build()
 <a href=#174 id=174 data-nosnippet>174</a>    }
-<a href=#175 id=175 data-nosnippet>175</a>}
-<a href=#176 id=176 data-nosnippet>176</a>
-<a href=#177 id=177 data-nosnippet>177</a><span class="doccomment">/// PlanContext wraps a [`SnapshotRef`] alongside all the other
-<a href=#178 id=178 data-nosnippet>178</a>/// objects that are required to perform a scan file plan.
-<a href=#179 id=179 data-nosnippet>179</a></span><span class="attr">#[derive(Debug)]
-<a href=#180 id=180 data-nosnippet>180</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>PlanContext {
-<a href=#181 id=181 data-nosnippet>181</a>    <span class="kw">pub </span>snapshot: SnapshotRef,
-<a href=#182 id=182 data-nosnippet>182</a>
-<a href=#183 id=183 data-nosnippet>183</a>    <span class="kw">pub </span>table_metadata: TableMetadataRef,
-<a href=#184 id=184 data-nosnippet>184</a>    <span class="kw">pub </span>snapshot_schema: SchemaRef,
-<a href=#185 id=185 data-nosnippet>185</a>    <span class="kw">pub </span>case_sensitive: bool,
-<a href=#186 id=186 data-nosnippet>186</a>    <span class="kw">pub </span>predicate: <span class="prelude-ty">Option</span>&lt;Arc&lt;Predicate&gt;&gt;,
-<a href=#187 id=187 data-nosnippet>187</a>    <span class="kw">pub </span>snapshot_bound_predicate: <span class="prelude-ty">Option</span>&lt;Arc&lt;BoundPredicate&gt;&gt;,
-<a href=#188 id=188 data-nosnippet>188</a>    <span class="kw">pub </span>object_cache: Arc&lt;ObjectCache&gt;,
-<a href=#189 id=189 data-nosnippet>189</a>    <span class="kw">pub </span>field_ids: Arc&lt;Vec&lt;i32&gt;&gt;,
-<a href=#190 id=190 data-nosnippet>190</a>    <span class="kw">pub </span>name_mapping: <span class="prelude-ty">Option</span>&lt;Arc&lt;NameMapping&gt;&gt;,
-<a href=#191 id=191 data-nosnippet>191</a>
-<a href=#192 id=192 data-nosnippet>192</a>    <span class="kw">pub </span>partition_filter_cache: Arc&lt;PartitionFilterCache&gt;,
-<a href=#193 id=193 data-nosnippet>193</a>    <span class="kw">pub </span>manifest_evaluator_cache: Arc&lt;ManifestEvaluatorCache&gt;,
-<a href=#194 id=194 data-nosnippet>194</a>    <span class="kw">pub </span>expression_evaluator_cache: Arc&lt;ExpressionEvaluatorCache&gt;,
-<a href=#195 id=195 data-nosnippet>195</a>
-<a href=#196 id=196 data-nosnippet>196</a>    <span class="kw">pub </span>unified_partition_type: <span class="prelude-ty">Option</span>&lt;Arc&lt;StructType&gt;&gt;,
-<a href=#197 id=197 data-nosnippet>197</a>
-<a href=#198 id=198 data-nosnippet>198</a>    <span class="doccomment">/// The table's sort orders keyed by id, precomputed once so each
-<a href=#199 id=199 data-nosnippet>199</a>    /// [`ManifestFileContext`] carries only this narrow map rather than the full table
-<a href=#200 id=200 data-nosnippet>200</a>    /// metadata. Mirrors how `unified_partition_type` carries a precomputed value.
-<a href=#201 id=201 data-nosnippet>201</a>    </span><span class="kw">pub </span>sort_orders: Arc&lt;HashMap&lt;i64, SortOrderRef&gt;&gt;,
-<a href=#202 id=202 data-nosnippet>202</a>}
-<a href=#203 id=203 data-nosnippet>203</a>
-<a href=#204 id=204 data-nosnippet>204</a><span class="kw">impl </span>PlanContext {
-<a href=#205 id=205 data-nosnippet>205</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>get_manifest_list(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;ManifestList&gt;&gt; {
-<a href=#206 id=206 data-nosnippet>206</a>        <span class="self">self</span>.object_cache
-<a href=#207 id=207 data-nosnippet>207</a>            .as_ref()
-<a href=#208 id=208 data-nosnippet>208</a>            .get_manifest_list(<span class="kw-2">&amp;</span><span class="self">self</span>.snapshot, <span class="kw-2">&amp;</span><span class="self">self</span>.table_metadata)
-<a href=#209 id=209 data-nosnippet>209</a>            .<span class="kw">await
-<a href=#210 id=210 data-nosnippet>210</a>    </span>}
-<a href=#211 id=211 data-nosnippet>211</a>
-<a href=#212 id=212 data-nosnippet>212</a>    <span class="doccomment">/// Returns the partition filter for a manifest. See [`PartitionFilterCache::get`] for the
-<a href=#213 id=213 data-nosnippet>213</a>    /// always-true fallback when the manifest's spec cannot be resolved against the scan schema.
-<a href=#214 id=214 data-nosnippet>214</a>    </span><span class="kw">fn </span>get_partition_filter(<span class="kw-2">&amp;</span><span class="self">self</span>, manifest_file: <span class="kw-2">&amp;</span>ManifestFile) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;BoundPredicate&gt;&gt; {
-<a href=#215 id=215 data-nosnippet>215</a>        <span class="kw">let </span>partition_spec_id = manifest_file.partition_spec_id;
-<a href=#216 id=216 data-nosnippet>216</a>
-<a href=#217 id=217 data-nosnippet>217</a>        <span class="kw">let </span>partition_filter = <span class="self">self</span>.partition_filter_cache.get(
-<a href=#218 id=218 data-nosnippet>218</a>            partition_spec_id,
-<a href=#219 id=219 data-nosnippet>219</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.table_metadata,
-<a href=#220 id=220 data-nosnippet>220</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.snapshot_schema,
-<a href=#221 id=221 data-nosnippet>221</a>            <span class="self">self</span>.case_sensitive,
-<a href=#222 id=222 data-nosnippet>222</a>            <span class="self">self</span>.predicate
-<a href=#223 id=223 data-nosnippet>223</a>                .as_ref()
-<a href=#224 id=224 data-nosnippet>224</a>                .ok_or(Error::new(
-<a href=#225 id=225 data-nosnippet>225</a>                    ErrorKind::Unexpected,
-<a href=#226 id=226 data-nosnippet>226</a>                    <span class="string">"Expected a predicate but none present"</span>,
-<a href=#227 id=227 data-nosnippet>227</a>                ))<span class="question-mark">?
-<a href=#228 id=228 data-nosnippet>228</a>                </span>.as_ref()
-<a href=#229 id=229 data-nosnippet>229</a>                .bind(<span class="self">self</span>.snapshot_schema.clone(), <span class="self">self</span>.case_sensitive)<span class="question-mark">?</span>,
-<a href=#230 id=230 data-nosnippet>230</a>        )<span class="question-mark">?</span>;
-<a href=#231 id=231 data-nosnippet>231</a>
-<a href=#232 id=232 data-nosnippet>232</a>        <span class="prelude-val">Ok</span>(partition_filter)
-<a href=#233 id=233 data-nosnippet>233</a>    }
-<a href=#234 id=234 data-nosnippet>234</a>
-<a href=#235 id=235 data-nosnippet>235</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>build_manifest_file_contexts(
-<a href=#236 id=236 data-nosnippet>236</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#237 id=237 data-nosnippet>237</a>        manifest_list: Arc&lt;ManifestList&gt;,
-<a href=#238 id=238 data-nosnippet>238</a>        tx_data: Sender&lt;ManifestEntryContext&gt;,
-<a href=#239 id=239 data-nosnippet>239</a>        delete_file_idx: DeleteFileIndex,
-<a href=#240 id=240 data-nosnippet>240</a>        delete_file_tx: Sender&lt;ManifestEntryContext&gt;,
-<a href=#241 id=241 data-nosnippet>241</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">impl </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;ManifestFileContext&gt;&gt; + <span class="lifetime">'static</span>&gt;&gt; {
-<a href=#242 id=242 data-nosnippet>242</a>        <span class="kw">let </span><span class="kw-2">mut </span>manifest_files = manifest_list.entries().iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#243 id=243 data-nosnippet>243</a>        <span class="comment">// Sort manifest files to process delete manifests first.
-<a href=#244 id=244 data-nosnippet>244</a>        // This avoids a deadlock where the producer blocks on sending data manifest entries
-<a href=#245 id=245 data-nosnippet>245</a>        // (because the data channel is full) while the delete manifest consumer is waiting
-<a href=#246 id=246 data-nosnippet>246</a>        // for delete manifest entries (which haven't been produced yet).
-<a href=#247 id=247 data-nosnippet>247</a>        // By processing delete manifests first, we ensure the delete consumer can finish,
-<a href=#248 id=248 data-nosnippet>248</a>        // which then allows the data consumer to start draining the data channel.
-<a href=#249 id=249 data-nosnippet>249</a>        </span>manifest_files.sort_by_key(|m| <span class="kw">match </span>m.content {
-<a href=#250 id=250 data-nosnippet>250</a>            ManifestContentType::Deletes =&gt; <span class="number">0</span>,
-<a href=#251 id=251 data-nosnippet>251</a>            ManifestContentType::Data =&gt; <span class="number">1</span>,
-<a href=#252 id=252 data-nosnippet>252</a>        });
-<a href=#253 id=253 data-nosnippet>253</a>
-<a href=#254 id=254 data-nosnippet>254</a>        <span class="comment">// TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
-<a href=#255 id=255 data-nosnippet>255</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>filtered_mfcs = <span class="macro">vec!</span>[];
-<a href=#256 id=256 data-nosnippet>256</a>        <span class="kw">for </span>manifest_file <span class="kw">in </span>manifest_files {
-<a href=#257 id=257 data-nosnippet>257</a>            <span class="kw">let </span>tx = <span class="kw">if </span>manifest_file.content == ManifestContentType::Deletes {
-<a href=#258 id=258 data-nosnippet>258</a>                delete_file_tx.clone()
-<a href=#259 id=259 data-nosnippet>259</a>            } <span class="kw">else </span>{
-<a href=#260 id=260 data-nosnippet>260</a>                tx_data.clone()
-<a href=#261 id=261 data-nosnippet>261</a>            };
-<a href=#262 id=262 data-nosnippet>262</a>
-<a href=#263 id=263 data-nosnippet>263</a>            <span class="kw">let </span>partition_bound_predicate = <span class="kw">if </span><span class="self">self</span>.predicate.is_some() {
-<a href=#264 id=264 data-nosnippet>264</a>                <span class="kw">let </span>partition_bound_predicate = <span class="self">self</span>.get_partition_filter(manifest_file)<span class="question-mark">?</span>;
-<a href=#265 id=265 data-nosnippet>265</a>
-<a href=#266 id=266 data-nosnippet>266</a>                <span class="comment">// evaluate the ManifestFile against the partition filter. Skip
-<a href=#267 id=267 data-nosnippet>267</a>                // if it cannot contain any matching rows
-<a href=#268 id=268 data-nosnippet>268</a>                </span><span class="kw">if </span>!<span class="self">self
-<a href=#269 id=269 data-nosnippet>269</a>                    </span>.manifest_evaluator_cache
-<a href=#270 id=270 data-nosnippet>270</a>                    .get(
-<a href=#271 id=271 data-nosnippet>271</a>                        manifest_file.partition_spec_id,
-<a href=#272 id=272 data-nosnippet>272</a>                        partition_bound_predicate.clone(),
-<a href=#273 id=273 data-nosnippet>273</a>                    )
-<a href=#274 id=274 data-nosnippet>274</a>                    .eval(manifest_file)<span class="question-mark">?
-<a href=#275 id=275 data-nosnippet>275</a>                </span>{
-<a href=#276 id=276 data-nosnippet>276</a>                    <span class="kw">continue</span>;
-<a href=#277 id=277 data-nosnippet>277</a>                }
-<a href=#278 id=278 data-nosnippet>278</a>
-<a href=#279 id=279 data-nosnippet>279</a>                <span class="prelude-val">Some</span>(partition_bound_predicate)
-<a href=#280 id=280 data-nosnippet>280</a>            } <span class="kw">else </span>{
-<a href=#281 id=281 data-nosnippet>281</a>                <span class="prelude-val">None
-<a href=#282 id=282 data-nosnippet>282</a>            </span>};
-<a href=#283 id=283 data-nosnippet>283</a>
-<a href=#284 id=284 data-nosnippet>284</a>            <span class="kw">let </span>mfc = <span class="self">self</span>.create_manifest_file_context(
-<a href=#285 id=285 data-nosnippet>285</a>                manifest_file,
-<a href=#286 id=286 data-nosnippet>286</a>                partition_bound_predicate,
-<a href=#287 id=287 data-nosnippet>287</a>                tx,
-<a href=#288 id=288 data-nosnippet>288</a>                delete_file_idx.clone(),
-<a href=#289 id=289 data-nosnippet>289</a>            );
-<a href=#290 id=290 data-nosnippet>290</a>
-<a href=#291 id=291 data-nosnippet>291</a>            filtered_mfcs.push(<span class="prelude-val">Ok</span>(mfc));
-<a href=#292 id=292 data-nosnippet>292</a>        }
-<a href=#293 id=293 data-nosnippet>293</a>
-<a href=#294 id=294 data-nosnippet>294</a>        <span class="prelude-val">Ok</span>(Box::new(filtered_mfcs.into_iter()))
-<a href=#295 id=295 data-nosnippet>295</a>    }
-<a href=#296 id=296 data-nosnippet>296</a>
-<a href=#297 id=297 data-nosnippet>297</a>    <span class="kw">fn </span>create_manifest_file_context(
-<a href=#298 id=298 data-nosnippet>298</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#299 id=299 data-nosnippet>299</a>        manifest_file: <span class="kw-2">&amp;</span>ManifestFile,
-<a href=#300 id=300 data-nosnippet>300</a>        partition_filter: <span class="prelude-ty">Option</span>&lt;Arc&lt;BoundPredicate&gt;&gt;,
-<a href=#301 id=301 data-nosnippet>301</a>        sender: Sender&lt;ManifestEntryContext&gt;,
-<a href=#302 id=302 data-nosnippet>302</a>        delete_file_index: DeleteFileIndex,
-<a href=#303 id=303 data-nosnippet>303</a>    ) -&gt; ManifestFileContext {
-<a href=#304 id=304 data-nosnippet>304</a>        <span class="kw">let </span>bound_predicates =
-<a href=#305 id=305 data-nosnippet>305</a>            <span class="kw">if let </span>(<span class="prelude-val">Some</span>(<span class="kw-2">ref </span>partition_bound_predicate), <span class="prelude-val">Some</span>(snapshot_bound_predicate)) =
-<a href=#306 id=306 data-nosnippet>306</a>                (partition_filter, <span class="kw-2">&amp;</span><span class="self">self</span>.snapshot_bound_predicate)
-<a href=#307 id=307 data-nosnippet>307</a>            {
-<a href=#308 id=308 data-nosnippet>308</a>                <span class="prelude-val">Some</span>(Arc::new(BoundPredicates {
-<a href=#309 id=309 data-nosnippet>309</a>                    partition_bound_predicate: partition_bound_predicate.as_ref().clone(),
-<a href=#310 id=310 data-nosnippet>310</a>                    snapshot_bound_predicate: snapshot_bound_predicate.as_ref().clone(),
-<a href=#311 id=311 data-nosnippet>311</a>                }))
-<a href=#312 id=312 data-nosnippet>312</a>            } <span class="kw">else </span>{
-<a href=#313 id=313 data-nosnippet>313</a>                <span class="prelude-val">None
-<a href=#314 id=314 data-nosnippet>314</a>            </span>};
-<a href=#315 id=315 data-nosnippet>315</a>
-<a href=#316 id=316 data-nosnippet>316</a>        ManifestFileContext {
-<a href=#317 id=317 data-nosnippet>317</a>            manifest_file: manifest_file.clone(),
-<a href=#318 id=318 data-nosnippet>318</a>            bound_predicates,
-<a href=#319 id=319 data-nosnippet>319</a>            sender,
-<a href=#320 id=320 data-nosnippet>320</a>            object_cache: <span class="self">self</span>.object_cache.clone(),
-<a href=#321 id=321 data-nosnippet>321</a>            snapshot_schema: <span class="self">self</span>.snapshot_schema.clone(),
-<a href=#322 id=322 data-nosnippet>322</a>            field_ids: <span class="self">self</span>.field_ids.clone(),
-<a href=#323 id=323 data-nosnippet>323</a>            expression_evaluator_cache: <span class="self">self</span>.expression_evaluator_cache.clone(),
-<a href=#324 id=324 data-nosnippet>324</a>            delete_file_index,
-<a href=#325 id=325 data-nosnippet>325</a>            name_mapping: <span class="self">self</span>.name_mapping.clone(),
-<a href=#326 id=326 data-nosnippet>326</a>            case_sensitive: <span class="self">self</span>.case_sensitive,
-<a href=#327 id=327 data-nosnippet>327</a>            partition_spec: <span class="self">self
-<a href=#328 id=328 data-nosnippet>328</a>                </span>.table_metadata
-<a href=#329 id=329 data-nosnippet>329</a>                .partition_spec_by_id(manifest_file.partition_spec_id)
-<a href=#330 id=330 data-nosnippet>330</a>                .cloned(),
-<a href=#331 id=331 data-nosnippet>331</a>            unified_partition_type: <span class="self">self</span>.unified_partition_type.clone(),
-<a href=#332 id=332 data-nosnippet>332</a>            sort_orders: <span class="self">self</span>.sort_orders.clone(),
-<a href=#333 id=333 data-nosnippet>333</a>        }
-<a href=#334 id=334 data-nosnippet>334</a>    }
-<a href=#335 id=335 data-nosnippet>335</a>}
+<a href=#175 id=175 data-nosnippet>175</a>
+<a href=#176 id=176 data-nosnippet>176</a>    <span class="doccomment">/// Consume this `ManifestEntryContext`, returning a COW rewrite file candidate.
+<a href=#177 id=177 data-nosnippet>177</a>    ///
+<a href=#178 id=178 data-nosnippet>178</a>    /// The scan task keeps everything planned for a normal read (projection,
+<a href=#179 id=179 data-nosnippet>179</a>    /// delete files, partition metadata, ...) except the row predicate: the
+<a href=#180 id=180 data-nosnippet>180</a>    /// candidate was already selected by that predicate during planning, and
+<a href=#181 id=181 data-nosnippet>181</a>    /// the rewrite must read the whole file.
+<a href=#182 id=182 data-nosnippet>182</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>into_cow_rewrite_file(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw">crate</span>::cow_rewrite::CowRewriteFile&gt; {
+<a href=#183 id=183 data-nosnippet>183</a>        <span class="kw">let </span>old_data_file = <span class="self">self</span>.manifest_entry.data_file().clone();
+<a href=#184 id=184 data-nosnippet>184</a>        <span class="kw">let </span><span class="kw-2">mut </span>scan_task = <span class="self">self</span>.into_file_scan_task().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#185 id=185 data-nosnippet>185</a>        scan_task.clear_predicate();
+<a href=#186 id=186 data-nosnippet>186</a>
+<a href=#187 id=187 data-nosnippet>187</a>        <span class="prelude-val">Ok</span>(<span class="kw">crate</span>::cow_rewrite::CowRewriteFile {
+<a href=#188 id=188 data-nosnippet>188</a>            old_data_file,
+<a href=#189 id=189 data-nosnippet>189</a>            scan_task,
+<a href=#190 id=190 data-nosnippet>190</a>        })
+<a href=#191 id=191 data-nosnippet>191</a>    }
+<a href=#192 id=192 data-nosnippet>192</a>}
+<a href=#193 id=193 data-nosnippet>193</a>
+<a href=#194 id=194 data-nosnippet>194</a><span class="doccomment">/// PlanContext wraps a [`SnapshotRef`] alongside all the other
+<a href=#195 id=195 data-nosnippet>195</a>/// objects that are required to perform a scan file plan.
+<a href=#196 id=196 data-nosnippet>196</a></span><span class="attr">#[derive(Debug)]
+<a href=#197 id=197 data-nosnippet>197</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>PlanContext {
+<a href=#198 id=198 data-nosnippet>198</a>    <span class="kw">pub </span>snapshot: SnapshotRef,
+<a href=#199 id=199 data-nosnippet>199</a>
+<a href=#200 id=200 data-nosnippet>200</a>    <span class="kw">pub </span>table_metadata: TableMetadataRef,
+<a href=#201 id=201 data-nosnippet>201</a>    <span class="kw">pub </span>snapshot_schema: SchemaRef,
+<a href=#202 id=202 data-nosnippet>202</a>    <span class="kw">pub </span>case_sensitive: bool,
+<a href=#203 id=203 data-nosnippet>203</a>    <span class="kw">pub </span>predicate: <span class="prelude-ty">Option</span>&lt;Arc&lt;Predicate&gt;&gt;,
+<a href=#204 id=204 data-nosnippet>204</a>    <span class="kw">pub </span>snapshot_bound_predicate: <span class="prelude-ty">Option</span>&lt;Arc&lt;BoundPredicate&gt;&gt;,
+<a href=#205 id=205 data-nosnippet>205</a>    <span class="kw">pub </span>object_cache: Arc&lt;ObjectCache&gt;,
+<a href=#206 id=206 data-nosnippet>206</a>    <span class="kw">pub </span>field_ids: Arc&lt;Vec&lt;i32&gt;&gt;,
+<a href=#207 id=207 data-nosnippet>207</a>    <span class="kw">pub </span>name_mapping: <span class="prelude-ty">Option</span>&lt;Arc&lt;NameMapping&gt;&gt;,
+<a href=#208 id=208 data-nosnippet>208</a>
+<a href=#209 id=209 data-nosnippet>209</a>    <span class="kw">pub </span>partition_filter_cache: Arc&lt;PartitionFilterCache&gt;,
+<a href=#210 id=210 data-nosnippet>210</a>    <span class="kw">pub </span>manifest_evaluator_cache: Arc&lt;ManifestEvaluatorCache&gt;,
+<a href=#211 id=211 data-nosnippet>211</a>    <span class="kw">pub </span>expression_evaluator_cache: Arc&lt;ExpressionEvaluatorCache&gt;,
+<a href=#212 id=212 data-nosnippet>212</a>
+<a href=#213 id=213 data-nosnippet>213</a>    <span class="kw">pub </span>unified_partition_type: <span class="prelude-ty">Option</span>&lt;Arc&lt;StructType&gt;&gt;,
+<a href=#214 id=214 data-nosnippet>214</a>
+<a href=#215 id=215 data-nosnippet>215</a>    <span class="doccomment">/// The table's sort orders keyed by id, precomputed once so each
+<a href=#216 id=216 data-nosnippet>216</a>    /// [`ManifestFileContext`] carries only this narrow map rather than the full table
+<a href=#217 id=217 data-nosnippet>217</a>    /// metadata. Mirrors how `unified_partition_type` carries a precomputed value.
+<a href=#218 id=218 data-nosnippet>218</a>    </span><span class="kw">pub </span>sort_orders: Arc&lt;HashMap&lt;i64, SortOrderRef&gt;&gt;,
+<a href=#219 id=219 data-nosnippet>219</a>}
+<a href=#220 id=220 data-nosnippet>220</a>
+<a href=#221 id=221 data-nosnippet>221</a><span class="kw">impl </span>PlanContext {
+<a href=#222 id=222 data-nosnippet>222</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>get_manifest_list(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;ManifestList&gt;&gt; {
+<a href=#223 id=223 data-nosnippet>223</a>        <span class="self">self</span>.object_cache
+<a href=#224 id=224 data-nosnippet>224</a>            .as_ref()
+<a href=#225 id=225 data-nosnippet>225</a>            .get_manifest_list(<span class="kw-2">&amp;</span><span class="self">self</span>.snapshot, <span class="kw-2">&amp;</span><span class="self">self</span>.table_metadata)
+<a href=#226 id=226 data-nosnippet>226</a>            .<span class="kw">await
+<a href=#227 id=227 data-nosnippet>227</a>    </span>}
+<a href=#228 id=228 data-nosnippet>228</a>
+<a href=#229 id=229 data-nosnippet>229</a>    <span class="doccomment">/// Returns the partition filter for a manifest. See [`PartitionFilterCache::get`] for the
+<a href=#230 id=230 data-nosnippet>230</a>    /// always-true fallback when the manifest's spec cannot be resolved against the scan schema.
+<a href=#231 id=231 data-nosnippet>231</a>    </span><span class="kw">fn </span>get_partition_filter(<span class="kw-2">&amp;</span><span class="self">self</span>, manifest_file: <span class="kw-2">&amp;</span>ManifestFile) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;BoundPredicate&gt;&gt; {
+<a href=#232 id=232 data-nosnippet>232</a>        <span class="kw">let </span>partition_spec_id = manifest_file.partition_spec_id;
+<a href=#233 id=233 data-nosnippet>233</a>
+<a href=#234 id=234 data-nosnippet>234</a>        <span class="kw">let </span>partition_filter = <span class="self">self</span>.partition_filter_cache.get(
+<a href=#235 id=235 data-nosnippet>235</a>            partition_spec_id,
+<a href=#236 id=236 data-nosnippet>236</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.table_metadata,
+<a href=#237 id=237 data-nosnippet>237</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.snapshot_schema,
+<a href=#238 id=238 data-nosnippet>238</a>            <span class="self">self</span>.case_sensitive,
+<a href=#239 id=239 data-nosnippet>239</a>            <span class="self">self</span>.predicate
+<a href=#240 id=240 data-nosnippet>240</a>                .as_ref()
+<a href=#241 id=241 data-nosnippet>241</a>                .ok_or(Error::new(
+<a href=#242 id=242 data-nosnippet>242</a>                    ErrorKind::Unexpected,
+<a href=#243 id=243 data-nosnippet>243</a>                    <span class="string">"Expected a predicate but none present"</span>,
+<a href=#244 id=244 data-nosnippet>244</a>                ))<span class="question-mark">?
+<a href=#245 id=245 data-nosnippet>245</a>                </span>.as_ref()
+<a href=#246 id=246 data-nosnippet>246</a>                .bind(<span class="self">self</span>.snapshot_schema.clone(), <span class="self">self</span>.case_sensitive)<span class="question-mark">?</span>,
+<a href=#247 id=247 data-nosnippet>247</a>        )<span class="question-mark">?</span>;
+<a href=#248 id=248 data-nosnippet>248</a>
+<a href=#249 id=249 data-nosnippet>249</a>        <span class="prelude-val">Ok</span>(partition_filter)
+<a href=#250 id=250 data-nosnippet>250</a>    }
+<a href=#251 id=251 data-nosnippet>251</a>
+<a href=#252 id=252 data-nosnippet>252</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>build_manifest_file_contexts(
+<a href=#253 id=253 data-nosnippet>253</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#254 id=254 data-nosnippet>254</a>        manifest_list: Arc&lt;ManifestList&gt;,
+<a href=#255 id=255 data-nosnippet>255</a>        tx_data: Sender&lt;ManifestEntryContext&gt;,
+<a href=#256 id=256 data-nosnippet>256</a>        delete_file_idx: DeleteFileIndex,
+<a href=#257 id=257 data-nosnippet>257</a>        delete_file_tx: Sender&lt;ManifestEntryContext&gt;,
+<a href=#258 id=258 data-nosnippet>258</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">impl </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;ManifestFileContext&gt;&gt; + <span class="lifetime">'static</span>&gt;&gt; {
+<a href=#259 id=259 data-nosnippet>259</a>        <span class="kw">let </span><span class="kw-2">mut </span>manifest_files = manifest_list.entries().iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#260 id=260 data-nosnippet>260</a>        <span class="comment">// Sort manifest files to process delete manifests first.
+<a href=#261 id=261 data-nosnippet>261</a>        // This avoids a deadlock where the producer blocks on sending data manifest entries
+<a href=#262 id=262 data-nosnippet>262</a>        // (because the data channel is full) while the delete manifest consumer is waiting
+<a href=#263 id=263 data-nosnippet>263</a>        // for delete manifest entries (which haven't been produced yet).
+<a href=#264 id=264 data-nosnippet>264</a>        // By processing delete manifests first, we ensure the delete consumer can finish,
+<a href=#265 id=265 data-nosnippet>265</a>        // which then allows the data consumer to start draining the data channel.
+<a href=#266 id=266 data-nosnippet>266</a>        </span>manifest_files.sort_by_key(|m| <span class="kw">match </span>m.content {
+<a href=#267 id=267 data-nosnippet>267</a>            ManifestContentType::Deletes =&gt; <span class="number">0</span>,
+<a href=#268 id=268 data-nosnippet>268</a>            ManifestContentType::Data =&gt; <span class="number">1</span>,
+<a href=#269 id=269 data-nosnippet>269</a>        });
+<a href=#270 id=270 data-nosnippet>270</a>
+<a href=#271 id=271 data-nosnippet>271</a>        <span class="comment">// TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
+<a href=#272 id=272 data-nosnippet>272</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>filtered_mfcs = <span class="macro">vec!</span>[];
+<a href=#273 id=273 data-nosnippet>273</a>        <span class="kw">for </span>manifest_file <span class="kw">in </span>manifest_files {
+<a href=#274 id=274 data-nosnippet>274</a>            <span class="kw">let </span>tx = <span class="kw">if </span>manifest_file.content == ManifestContentType::Deletes {
+<a href=#275 id=275 data-nosnippet>275</a>                delete_file_tx.clone()
+<a href=#276 id=276 data-nosnippet>276</a>            } <span class="kw">else </span>{
+<a href=#277 id=277 data-nosnippet>277</a>                tx_data.clone()
+<a href=#278 id=278 data-nosnippet>278</a>            };
+<a href=#279 id=279 data-nosnippet>279</a>
+<a href=#280 id=280 data-nosnippet>280</a>            <span class="kw">let </span>partition_bound_predicate = <span class="kw">if </span><span class="self">self</span>.predicate.is_some() {
+<a href=#281 id=281 data-nosnippet>281</a>                <span class="kw">let </span>partition_bound_predicate = <span class="self">self</span>.get_partition_filter(manifest_file)<span class="question-mark">?</span>;
+<a href=#282 id=282 data-nosnippet>282</a>
+<a href=#283 id=283 data-nosnippet>283</a>                <span class="comment">// evaluate the ManifestFile against the partition filter. Skip
+<a href=#284 id=284 data-nosnippet>284</a>                // if it cannot contain any matching rows
+<a href=#285 id=285 data-nosnippet>285</a>                </span><span class="kw">if </span>!<span class="self">self
+<a href=#286 id=286 data-nosnippet>286</a>                    </span>.manifest_evaluator_cache
+<a href=#287 id=287 data-nosnippet>287</a>                    .get(
+<a href=#288 id=288 data-nosnippet>288</a>                        manifest_file.partition_spec_id,
+<a href=#289 id=289 data-nosnippet>289</a>                        partition_bound_predicate.clone(),
+<a href=#290 id=290 data-nosnippet>290</a>                    )
+<a href=#291 id=291 data-nosnippet>291</a>                    .eval(manifest_file)<span class="question-mark">?
+<a href=#292 id=292 data-nosnippet>292</a>                </span>{
+<a href=#293 id=293 data-nosnippet>293</a>                    <span class="kw">continue</span>;
+<a href=#294 id=294 data-nosnippet>294</a>                }
+<a href=#295 id=295 data-nosnippet>295</a>
+<a href=#296 id=296 data-nosnippet>296</a>                <span class="prelude-val">Some</span>(partition_bound_predicate)
+<a href=#297 id=297 data-nosnippet>297</a>            } <span class="kw">else </span>{
+<a href=#298 id=298 data-nosnippet>298</a>                <span class="prelude-val">None
+<a href=#299 id=299 data-nosnippet>299</a>            </span>};
+<a href=#300 id=300 data-nosnippet>300</a>
+<a href=#301 id=301 data-nosnippet>301</a>            <span class="kw">let </span>mfc = <span class="self">self</span>.create_manifest_file_context(
+<a href=#302 id=302 data-nosnippet>302</a>                manifest_file,
+<a href=#303 id=303 data-nosnippet>303</a>                partition_bound_predicate,
+<a href=#304 id=304 data-nosnippet>304</a>                tx,
+<a href=#305 id=305 data-nosnippet>305</a>                delete_file_idx.clone(),
+<a href=#306 id=306 data-nosnippet>306</a>            );
+<a href=#307 id=307 data-nosnippet>307</a>
+<a href=#308 id=308 data-nosnippet>308</a>            filtered_mfcs.push(<span class="prelude-val">Ok</span>(mfc));
+<a href=#309 id=309 data-nosnippet>309</a>        }
+<a href=#310 id=310 data-nosnippet>310</a>
+<a href=#311 id=311 data-nosnippet>311</a>        <span class="prelude-val">Ok</span>(Box::new(filtered_mfcs.into_iter()))
+<a href=#312 id=312 data-nosnippet>312</a>    }
+<a href=#313 id=313 data-nosnippet>313</a>
+<a href=#314 id=314 data-nosnippet>314</a>    <span class="kw">fn </span>create_manifest_file_context(
+<a href=#315 id=315 data-nosnippet>315</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#316 id=316 data-nosnippet>316</a>        manifest_file: <span class="kw-2">&amp;</span>ManifestFile,
+<a href=#317 id=317 data-nosnippet>317</a>        partition_filter: <span class="prelude-ty">Option</span>&lt;Arc&lt;BoundPredicate&gt;&gt;,
+<a href=#318 id=318 data-nosnippet>318</a>        sender: Sender&lt;ManifestEntryContext&gt;,
+<a href=#319 id=319 data-nosnippet>319</a>        delete_file_index: DeleteFileIndex,
+<a href=#320 id=320 data-nosnippet>320</a>    ) -&gt; ManifestFileContext {
+<a href=#321 id=321 data-nosnippet>321</a>        <span class="kw">let </span>bound_predicates =
+<a href=#322 id=322 data-nosnippet>322</a>            <span class="kw">if let </span>(<span class="prelude-val">Some</span>(<span class="kw-2">ref </span>partition_bound_predicate), <span class="prelude-val">Some</span>(snapshot_bound_predicate)) =
+<a href=#323 id=323 data-nosnippet>323</a>                (partition_filter, <span class="kw-2">&amp;</span><span class="self">self</span>.snapshot_bound_predicate)
+<a href=#324 id=324 data-nosnippet>324</a>            {
+<a href=#325 id=325 data-nosnippet>325</a>                <span class="prelude-val">Some</span>(Arc::new(BoundPredicates {
+<a href=#326 id=326 data-nosnippet>326</a>                    partition_bound_predicate: partition_bound_predicate.as_ref().clone(),
+<a href=#327 id=327 data-nosnippet>327</a>                    snapshot_bound_predicate: snapshot_bound_predicate.as_ref().clone(),
+<a href=#328 id=328 data-nosnippet>328</a>                }))
+<a href=#329 id=329 data-nosnippet>329</a>            } <span class="kw">else </span>{
+<a href=#330 id=330 data-nosnippet>330</a>                <span class="prelude-val">None
+<a href=#331 id=331 data-nosnippet>331</a>            </span>};
+<a href=#332 id=332 data-nosnippet>332</a>
+<a href=#333 id=333 data-nosnippet>333</a>        ManifestFileContext {
+<a href=#334 id=334 data-nosnippet>334</a>            manifest_file: manifest_file.clone(),
+<a href=#335 id=335 data-nosnippet>335</a>            bound_predicates,
+<a href=#336 id=336 data-nosnippet>336</a>            sender,
+<a href=#337 id=337 data-nosnippet>337</a>            object_cache: <span class="self">self</span>.object_cache.clone(),
+<a href=#338 id=338 data-nosnippet>338</a>            snapshot_schema: <span class="self">self</span>.snapshot_schema.clone(),
+<a href=#339 id=339 data-nosnippet>339</a>            field_ids: <span class="self">self</span>.field_ids.clone(),
+<a href=#340 id=340 data-nosnippet>340</a>            expression_evaluator_cache: <span class="self">self</span>.expression_evaluator_cache.clone(),
+<a href=#341 id=341 data-nosnippet>341</a>            delete_file_index,
+<a href=#342 id=342 data-nosnippet>342</a>            name_mapping: <span class="self">self</span>.name_mapping.clone(),
+<a href=#343 id=343 data-nosnippet>343</a>            case_sensitive: <span class="self">self</span>.case_sensitive,
+<a href=#344 id=344 data-nosnippet>344</a>            partition_spec: <span class="self">self
+<a href=#345 id=345 data-nosnippet>345</a>                </span>.table_metadata
+<a href=#346 id=346 data-nosnippet>346</a>                .partition_spec_by_id(manifest_file.partition_spec_id)
+<a href=#347 id=347 data-nosnippet>347</a>                .cloned(),
+<a href=#348 id=348 data-nosnippet>348</a>            unified_partition_type: <span class="self">self</span>.unified_partition_type.clone(),
+<a href=#349 id=349 data-nosnippet>349</a>            sort_orders: <span class="self">self</span>.sort_orders.clone(),
+<a href=#350 id=350 data-nosnippet>350</a>        }
+<a href=#351 id=351 data-nosnippet>351</a>    }
+<a href=#352 id=352 data-nosnippet>352</a>}
 </code></pre></div></section></main></body></html>

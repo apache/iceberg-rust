@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["CowBatchRewrite","CowRewriteBuilder","CowRewriteFile","CowRewriteResult","CowRewriteStats"],"trait":["CowBatchRewriter"]};
