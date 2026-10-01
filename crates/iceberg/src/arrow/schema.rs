@@ -110,12 +110,16 @@ pub trait ArrowSchemaVisitor {
     /// Return type of this visitor on arrow schema.
     type U;
 
-    /// Called before struct/list/map field.
+    /// Called before each field of the schema or of a struct, whatever its type.
+    /// List elements and map keys and values use [`Self::before_list_element`],
+    /// [`Self::before_map_key`] and [`Self::before_map_value`] instead.
     fn before_field(&mut self, _field: &FieldRef) -> Result<()> {
         Ok(())
     }
 
-    /// Called after struct/list/map field.
+    /// Called after each field of the schema or of a struct, whatever its type.
+    /// List elements and map keys and values use [`Self::after_list_element`],
+    /// [`Self::after_map_key`] and [`Self::after_map_value`] instead.
     fn after_field(&mut self, _field: &FieldRef) -> Result<()> {
         Ok(())
     }
@@ -1309,8 +1313,13 @@ impl ArrowSchemaVisitor for MetadataStripVisitor {
 /// Two other differences are normalized away too, so that schemas that differ only in
 /// them compare equal once stripped:
 /// - A map's entries field is renamed to [`DEFAULT_MAP_FIELD_NAME`] and made non-nullable,
-///   as [`schema_to_arrow_schema`] builds it. Its key and value fields keep their names.
+///   as [`schema_to_arrow_schema`] builds it.
 /// - A dictionary-encoded field becomes a field of the dictionary's value type.
+///
+/// All other field names are kept, including a map's key and value fields and a list's
+/// element field. A list whose element is named `item` (arrow-rs's default) therefore
+/// still differs from a table's, whose element is named
+/// [`LIST_FIELD_NAME`](crate::spec::LIST_FIELD_NAME).
 ///
 /// # Arguments
 /// * `schema` - The Arrow schema to strip metadata from
@@ -2664,7 +2673,8 @@ mod tests {
 
     /// arrow-rs and DataFusion name a map's entries field `entries`, and
     /// `schema_to_arrow_schema` names it `DEFAULT_MAP_FIELD_NAME`. Stripping
-    /// renames it, so a map from either compares equal to a table's.
+    /// renames only the entries field: the key and value fields keep their
+    /// names, such as `keys` and `values` from an arrow-rs `MapBuilder`.
     #[test]
     fn test_strip_metadata_renames_map_entries() {
         let schema = |entries: &str, metadata: HashMap<String, String>| {
