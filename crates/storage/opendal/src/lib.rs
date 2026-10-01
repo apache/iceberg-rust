@@ -136,9 +136,8 @@ pub struct OpenDalClientConfig {
 
 impl Default for OpenDalClientConfig {
     fn default() -> Self {
-        Self {
-            io_timeout_ms: DEFAULT_IO_TIMEOUT_MS,
-        }
+        // Reuse the `#[property]` defaults, so serde and `from_properties` cannot disagree.
+        Self::from_properties(&HashMap::new()).expect("every client setting has a default")
     }
 }
 
@@ -149,8 +148,9 @@ impl OpenDalClientConfig {
     }
 }
 
-/// Parses one timeout value; the `Properties` derive adds the property-key context.
-/// Zero is rejected: it would time every operation out before it starts.
+/// Parses one timeout value. Unlike the derive's built-in parse, the error quotes the value and
+/// names the unit, and the derive adds the property-key context. `NonZeroU64` rejects zero, which
+/// would time every operation out before it starts.
 fn parse_io_timeout_ms(value: &str) -> Result<NonZeroU64> {
     value.parse().map_err(|error| {
         Error::new(
@@ -839,18 +839,15 @@ mod tests {
             unset.io_timeout(),
             Duration::from_millis(OPENDAL_IO_TIMEOUT_MS_DEFAULT)
         );
-        assert_eq!(
-            client_config("45000").unwrap().io_timeout(),
-            Duration::from_secs(45)
-        );
-        assert_eq!(
-            client_config("1").unwrap().io_timeout(),
-            Duration::from_millis(1)
-        );
-        assert_eq!(
-            client_config(&u64::MAX.to_string()).unwrap().io_timeout(),
-            Duration::from_millis(u64::MAX)
-        );
+
+        let max = u64::MAX.to_string();
+        for (valid, ms) in [("45000", 45_000), ("1", 1), (max.as_str(), u64::MAX)] {
+            assert_eq!(
+                client_config(valid).unwrap().io_timeout(),
+                Duration::from_millis(ms),
+                "{valid}"
+            );
+        }
 
         for invalid in ["0", "-1", "12.5", "abc", "", "18446744073709551616"] {
             let err = client_config(invalid).unwrap_err().to_string();
