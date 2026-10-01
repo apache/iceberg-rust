@@ -80,8 +80,23 @@ mod tests {
     #[tokio::test]
     async fn test_file_io_s3_exists() {
         let file_io = get_file_io().await;
-        assert!(!file_io.exists("s3://bucket2/any").await.unwrap());
-        assert!(file_io.exists("s3://bucket1/").await.unwrap());
+        let file_path = format!(
+            "s3://bucket1/{}",
+            normalize_test_name_with_parts!("test_file_io_s3_exists")
+        );
+
+        let _ = file_io.delete(&file_path).await;
+        assert!(!file_io.exists(&file_path).await.unwrap());
+
+        let output_file = file_io.new_output(&file_path).unwrap();
+        output_file
+            .write(Bytes::from_static(b"test_exists"))
+            .await
+            .unwrap();
+        assert!(file_io.exists(&file_path).await.unwrap());
+
+        file_io.delete(&file_path).await.unwrap();
+        assert!(!file_io.exists(&file_path).await.unwrap());
     }
 
     #[tokio::test]
