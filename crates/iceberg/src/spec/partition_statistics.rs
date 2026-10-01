@@ -495,11 +495,11 @@ mod tests {
             .with_position_delete_record_count(100)
             .with_position_delete_file_count(1)
             .with_equality_delete_record_count(20)
-            .with_equality_delete_file_count(1)
+            .with_equality_delete_file_count(3)
             .with_total_record_count(2900)
             .with_last_updated_at(1790640000000)
             .with_last_updated_snapshot_id(8998)
-            .with_dv_count(1)
+            .with_dv_count(4)
             .build();
 
         assert_eq!(row.partition(), Some(&values));
@@ -510,11 +510,11 @@ mod tests {
         assert_eq!(row.position_delete_record_count(), Some(100));
         assert_eq!(row.position_delete_file_count(), Some(1));
         assert_eq!(row.equality_delete_record_count(), Some(20));
-        assert_eq!(row.equality_delete_file_count(), Some(1));
+        assert_eq!(row.equality_delete_file_count(), Some(3));
         assert_eq!(row.total_record_count(), Some(2900));
         assert_eq!(row.last_updated_at(), Some(1790640000000));
         assert_eq!(row.last_updated_snapshot_id(), Some(8998));
-        assert_eq!(row.dv_count(), Some(1));
+        assert_eq!(row.dv_count(), Some(4));
     }
 
     #[test]
