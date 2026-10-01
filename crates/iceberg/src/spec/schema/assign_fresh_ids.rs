@@ -377,7 +377,10 @@ mod tests {
         assert_eq!(assigned.field_by_name("x").unwrap().id, 8);
         assert_eq!(assigned.field_by_name("z").unwrap().id, 10);
         assert_eq!(assigned.field_by_name("nested.b").unwrap().id, 11);
-        assert_eq!(assigned.identifier_field_ids().collect::<Vec<_>>(), vec![8]);
+        assert_eq!(
+            assigned.identifier_field_ids().collect::<HashSet<_>>(),
+            HashSet::from([8])
+        );
         assert_eq!(assigned.field_by_alias("a_alias").unwrap().id, 2);
         assert_eq!(assigned.highest_field_id(), 11);
     }
