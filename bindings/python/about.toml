@@ -1,0 +1,178 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# cargo-about configuration for THIRD-PARTY-LICENSES, the license-text bundle
+# shipped inside the pyiceberg-core wheels. Regenerate with
+# `dev/release/licenses.py wheel generate bindings/python`.
+
+# Dev-dependencies never reach the wheel. Build-dependencies can contribute
+# generated code to the final binary, so they are deliberately not ignored.
+ignore-build-dependencies = false
+ignore-dev-dependencies = true
+
+# ORDER IS SIGNIFICANT. Do not sort this list.
+#
+# When adding any new licenses to this list,
+# please review the script used to generate and validate the produced text files.
+# For example, it may check for any unfilled placeholders (like `<year>`) that cargo-about doesn't fail on.
+#
+# Unlike deny.toml's `allow`, which is a policy gate answering "may we use this
+# crate", this is an ordered preference list that decides *which* license we take
+# for a crate offering a choice -- and therefore which text ships in the wheels.
+# Most Rust crates are "MIT OR Apache-2.0", so the first two entries decide the bulk of the bundle.
+# Alphabetising this list would silently change what the published wheels contain.
+#
+# This must stay a superset of the root deny.toml `allow` list:
+# cargo-deny decides what we may depend on.
+# Note that some licenses can be allowed on a per-crate basis in deny.toml,
+# whereas this list is a broader allowlist.
+# deny.toml should be the source of truth for allowed licenses.
+accepted = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "MIT-0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "CC0-1.0",
+  "Zlib",
+  "CDLA-Permissive-2.0",
+  "bzip2-1.0.6",
+  "0BSD",
+  "Unlicense",
+  # Category-A: https://issues.apache.org/jira/browse/LEGAL-660
+  "Unicode-3.0",
+  # Boost Software License Version 1.0 is allowed (Category-A):
+  # https://www.apache.org/legal/resolved.html#category-a
+  "BSL-1.0",
+  # The MPL license is allowed (binary-only):
+  # https://www.apache.org/legal/resolved.html#category-b
+  "MPL-2.0",
+]
+
+# Workspace crates are ASF-owned and already covered by the wheel's LICENSE and
+# NOTICE, so they are not repeated in the bundle.
+[private]
+ignore = true
+
+# Clarifications
+
+# The clarify sections update the effective license where the crate declared one is not enough.
+# In some cases, the compiled artifacts include other works under different licenses which must be attributed.
+# In rare cases, the license declared on the crate may simply be wrong even for source code.
+# Clarify notices indicate the licenses the artifacts are offered under, while the accepted list above
+# will choose which licenses to use.
+# When adding new clarifications, please include ALL possible licenses that it may be licensed under and allow
+# 'accepted' config to select which license is used.
+
+[zstd-sys.clarify]
+# Crate declares license only fit for Rust wrapper and generated bindings.
+# However, it vendors ZStandard C sources under zstd/ which is then compiled.
+license = "(MIT OR Apache-2.0) AND (GPL-2.0-only OR BSD-3-Clause)"
+
+[[zstd-sys.clarify.files]]
+checksum = "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+license = "Apache-2.0"
+path = "LICENSE.Apache-2.0"
+
+[[zstd-sys.clarify.files]]
+checksum = "129e8edef29e9abcd2ebabe252f4ef1b1289cdca356bf0040284a2fbccfb96c8"
+license = "MIT"
+path = "LICENSE.Mit"
+
+[[zstd-sys.clarify.files]]
+checksum = "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+license = "BSD-3-Clause"
+path = "zstd/LICENSE"
+
+[[zstd-sys.clarify.files]]
+checksum = "f9c375a1be4a41f7b70301dd83c91cb89e41567478859b77eef375a52d782505"
+license = "GPL-2.0-only"
+path = "zstd/COPYING"
+
+# A second distinct BSD-3-Clause notice.
+# This one covers the pre-generated bindings the crate ships
+# (src/bindings_zstd.rs and friends), which are compiled in as well.
+[[zstd-sys.clarify.files]]
+checksum = "48341f685c87304089aa099b23c386f8bacc519ef555aa7a13e239908907b3fd"
+license = "BSD-3-Clause"
+path = "LICENSE.BSD-3-Clause"
+
+# brotli-decompressor clarification is a hard one.
+# The declared license is inaccurate, as the crate src includes both MIT and BSD-3-Clause licensed code
+# so it is BOTH licenses, not either as originally declared.
+# However, the source does not include the original MIT license so we cannot write a clarify rule.
+# To work around this, this clarify statement removes the MIT clause which is later restored
+# by dev/release/licenses.py.
+#
+# Note, there's a PR open to address this issue here:
+# https://github.com/dropbox/rust-brotli-decompressor/pull/32
+[brotli-decompressor.clarify]
+license = "BSD-3-Clause"
+
+[[brotli-decompressor.clarify.files]]
+checksum = "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae"
+path = "LICENSE"
+
+# libm packages its license as LICENSE.txt, which cargo-about does not match by name.
+# The file is upstream's own combined text and is what should be reproduced.
+[libm.clarify]
+license = "MIT"
+
+[[libm.clarify.files]]
+checksum = "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"
+path = "LICENSE.txt"
+
+# The published crate omits the file entirely, so there is nothing on disk to point `files` at.
+# `git` retrieves it from the source repository at the commit the crate was published from.
+[alloc-stdlib.clarify]
+license = "BSD-3-Clause"
+
+[[alloc-stdlib.clarify.git]]
+checksum = "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae"
+path = "LICENSE"
+
+# ring compiles vendored C and assembly,
+# and its licensing is spread across several files that cargo-about does not match by name.
+[ring.clarify]
+license = "Apache-2.0 AND ISC AND (Apache-2.0 OR MIT)"
+
+[[ring.clarify.files]]
+checksum = "f025ccfb7dfb6bdfedc75ca0f67acc69e6fb4998143d834f7c2f38a29989680f"
+license = "ISC"
+path = "LICENSE-other-bits"
+
+[[ring.clarify.files]]
+checksum = "005fc765ddc5115da796cca915baa9557abae13ff35e0a47c47affc56f6c414d"
+license = "Apache-2.0"
+path = "LICENSE-BoringSSL"
+
+[[ring.clarify.files]]
+checksum = "9eacbcb81be660840c714a560a9d65ba07913db98dd4baf969f78dd499fdd60f"
+license = "Apache-2.0"
+path = "third_party/fiat/LICENSE"
+
+[[ring.clarify.files]]
+checksum = "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+license = "Apache-2.0"
+path = "src/polyfill/once_cell/LICENSE-APACHE"
+
+[[ring.clarify.files]]
+checksum = "6ee2ed6c77710de911761acd5fc1ad1da00f476beb1a7ef27e78c2d1858deafc"
+license = "MIT"
+path = "src/polyfill/once_cell/LICENSE-MIT"

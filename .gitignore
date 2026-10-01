@@ -26,3 +26,7 @@ dist/*
 *.pyc
 *.whl
 *.tar.gz
+
+# Generated at build time by dev/release/licenses.py, never checked in.
+/bindings/python/licenses/
+/bindings/python/THIRD-PARTY-LICENSES

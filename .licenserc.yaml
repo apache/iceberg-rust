@@ -27,6 +27,10 @@ header:
     - "**/*.json"
     # Generated content by mdbook
     - "website/book"
+    # Generated content by cargo-about; contains third-party license texts
+    - "**/THIRD-PARTY-LICENSES"
+    # Per-wheel license files
+    - "bindings/python/licenses/"
     # Generated content by cargo-public-api
     - "**/public-api.txt"
     # Generated content by trybuild
