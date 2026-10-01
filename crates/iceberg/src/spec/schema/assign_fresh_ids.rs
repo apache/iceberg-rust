@@ -60,6 +60,13 @@ struct AssignFreshIds {
 
 impl AssignFreshIds {
     fn new(target_names: HashMap<i32, String>, base: &Schema, start_from: i32) -> Self {
+        // Partial guard only: it trips the common `base.highest_field_id() + 1` mistake, but ids
+        // dropped above `base`'s highest still slip through, as that bound lives in `last_column_id`.
+        debug_assert!(
+            start_from > base.highest_field_id(),
+            "start_from must exceed every id the table has assigned; pass last_column_id() + 1"
+        );
+
         Self {
             next_field_id: start_from,
             target_names,
