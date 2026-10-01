@@ -83,7 +83,7 @@ mod tests {
 
     use crate::Result;
     use crate::expr::Predicate;
-    use crate::scan::tests::TableTestFixture;
+    use crate::test_utils::scan::TableTestFixture;
 
     #[tokio::test]
     async fn cow_planner_returns_old_file_and_full_read_task() -> Result<()> {

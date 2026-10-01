@@ -485,13 +485,13 @@ mod tests {
     use crate::cow_rewrite::{CowBatchRewrite, CowBatchRewriter, CowRewriteBuilder};
     use crate::io::LocalFsStorageFactory;
     use crate::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
-    use crate::scan::tests::TableTestFixture;
     use crate::scan::{FileScanTask, FileScanTaskStream};
     use crate::spec::{
         DataFile, Literal, NestedField, PrimitiveType, Schema, Struct, TableProperties, Transform,
         Type,
     };
     use crate::table::Table;
+    use crate::test_utils::scan::TableTestFixture;
     use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction};
     use crate::{Catalog, CatalogBuilder, Error, ErrorKind, NamespaceIdent, Result, TableCreation};
 
