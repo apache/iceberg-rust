@@ -15,9 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Base writer module contains the basic writer provide by iceberg: `DataFileWriter`, `PositionDeleteFileWriter`, `EqualityDeleteFileWriter`.
+//! Test utilities for this crate's own tests.
+//!
+//! Compiled under `cfg(test)` only, so nothing here is public API. Fixtures
+//! that other crates in the workspace need from their own tests live in the
+//! `iceberg_test_utils` crate instead.
 
-pub mod data_file_writer;
-pub mod equality_delete_writer;
-pub(crate) mod position_delete_input;
-pub mod position_delete_writer;
+mod delete_vector;
+mod encryption;
+mod record_batch;
+mod runtime;
+pub(crate) mod scan;
+
+pub(crate) use delete_vector::encode_dv_blob;
+pub(crate) use encryption::{make_encrypted_table, make_encryption_manager};
+pub(crate) use record_batch::check_record_batches;
+pub(crate) use runtime::test_runtime;

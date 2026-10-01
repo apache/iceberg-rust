@@ -15,24 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-edition = { workspace = true }
-homepage = { workspace = true }
-name = "iceberg_test_utils"
-publish = false
-rust-version = { workspace = true }
-version = { workspace = true }
-
-license = { workspace = true }
-repository = { workspace = true }
-
-[dependencies]
-iceberg = { workspace = true }
-tokio = { workspace = true }
-tracing-subscriber = { workspace = true }
-
-[features]
-tests = []
-
-[lints]
-workspace = true
+# Issue and pull request labeler configuration: https://github.com/github/issue-labeler
+# Labels issues and PRs whose title or body matches the regex.
+datafusion:
+  - '/datafusion/i'

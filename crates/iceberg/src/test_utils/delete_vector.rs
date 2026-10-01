@@ -15,9 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Base writer module contains the basic writer provide by iceberg: `DataFileWriter`, `PositionDeleteFileWriter`, `EqualityDeleteFileWriter`.
+//! Fixtures for tests that need encoded deletion vectors.
 
-pub mod data_file_writer;
-pub mod equality_delete_writer;
-pub(crate) mod position_delete_input;
-pub mod position_delete_writer;
+use roaring::RoaringTreemap;
+
+/// Encodes a `deletion-vector-v1` Puffin blob for the given positions, matching the framing in
+/// [`DeleteVector::deserialize`](crate::delete_vector::DeleteVector::deserialize).
+pub(crate) fn encode_dv_blob(positions: impl IntoIterator<Item = u64>) -> Vec<u8> {
+    let mut bitmap = RoaringTreemap::new();
+    for pos in positions {
+        bitmap.insert(pos);
+    }
+    let mut vector = Vec::new();
+    bitmap.serialize_into(&mut vector).unwrap();
+    crate::delete_vector::frame_dv_blob(&vector)
+}
