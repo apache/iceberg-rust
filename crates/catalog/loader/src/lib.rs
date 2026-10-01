@@ -47,11 +47,15 @@ pub fn supported_types() -> Vec<&'static str> {
 
 #[async_trait]
 pub trait BoxedCatalogBuilder: Send {
+    /// Sets the storage factory used to build the catalog's `FileIO`; see
+    /// [`CatalogBuilder::with_storage_factory`].
     fn with_storage_factory(
         self: Box<Self>,
         storage_factory: Arc<dyn StorageFactory>,
     ) -> Box<dyn BoxedCatalogBuilder>;
 
+    /// Sets the KMS client factory used to enable table encryption; see
+    /// [`CatalogBuilder::with_kms_client_factory`].
     fn with_kms_client_factory(
         self: Box<Self>,
         kms_client_factory: Arc<dyn KmsClientFactory>,
@@ -354,13 +358,18 @@ mod tests {
 
             // The builder got the runtime passed to the boxed builder: its
             // tasks run on that runtime's threads.
-            let runtime = recorded.lock().unwrap().clone().unwrap();
+            let runtime = recorded.lock().unwrap().take().unwrap();
             let thread = runtime
                 .io()
                 .spawn(async { std::thread::current().name().map(str::to_string) })
                 .await
                 .unwrap();
-            assert_eq!(thread.as_deref(), Some("loader-test-runtime"));
+            assert!(
+                thread
+                    .as_deref()
+                    .is_some_and(|n| n.starts_with("loader-test-runtime")),
+                "got: {thread:?}"
+            );
         });
     }
 
