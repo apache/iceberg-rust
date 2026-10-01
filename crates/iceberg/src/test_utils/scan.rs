@@ -43,8 +43,8 @@ use crate::metadata_columns::{
 };
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, ManifestEntry,
-    ManifestListWriter, ManifestStatus, ManifestWriterBuilder, PartitionSpec, Struct, StructType,
-    TableMetadata, TableMetadataBuilder,
+    ManifestFile, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, PartitionSpec, Struct,
+    StructType, TableMetadata, TableMetadataBuilder, UNASSIGNED_SEQUENCE_NUMBER,
 };
 use crate::table::Table;
 use crate::test_utils::test_runtime;
@@ -157,22 +157,72 @@ impl TableTestFixture {
     }
 
     /// Creates a fixture with 5 snapshots chained as:
-    ///   S1 (root) -> S2 -> S3 -> S4 -> S5 (current)
-    /// Useful for testing snapshot history traversal.
+    ///   S1 (append) -> S2 (append) -> S3 (append) -> S4 (overwrite) -> S5 (append, current)
+    /// Useful for testing snapshot history traversal and incremental scans
+    /// with non-append operations in the chain.
     pub(crate) fn new_with_deep_history() -> Self {
+        Self::new_from_deep_history_metadata("example_table_metadata_v2_deep_history.json")
+    }
+
+    /// Like [`Self::new_with_deep_history`] but every snapshot references
+    /// the older single-column schema (`schema-id` 0) while the table's
+    /// `current-schema-id` stays at the three-column schema (`schema-id`
+    /// 1). This models a table whose schema evolved *after* the snapshots
+    /// in an incremental range were written, so we can assert that an
+    /// incremental scan projects onto the current schema.
+    pub(crate) fn new_with_deep_history_stale_schema() -> Self {
+        let fixture = Self::new_from_deep_history_metadata(
+            "example_table_metadata_v2_deep_history_stale_schema.json",
+        );
+
+        // Sanity check: current schema (3 cols) differs from the schema the
+        // snapshots reference (1 col), otherwise the test would be vacuous.
+        assert_eq!(fixture.table.metadata().current_schema_id(), 1);
+        fixture
+    }
+
+    /// Like [`Self::new_with_deep_history`] but the S4 snapshot is a
+    /// `replace` (the operation a compaction / `rewrite_data_files`
+    /// commits) rather than an `overwrite`. Used to prove that an
+    /// incremental append scan skips compaction output and never
+    /// double-counts the appended rows against their rewritten copies.
+    pub(crate) fn new_with_deep_history_compaction() -> Self {
+        Self::new_from_deep_history_metadata(
+            "example_table_metadata_v2_deep_history_compaction.json",
+        )
+    }
+
+    /// Builds a deep-history fixture from the named templated metadata file
+    /// in `testdata`. The five snapshot manifest-list paths are rendered to
+    /// point at this fixture's temp directory.
+    fn new_from_deep_history_metadata(metadata_file: &str) -> Self {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().join("table1");
         let table_metadata1_location = table_location.join("metadata/v1.json");
 
+        let manifest_list_s1 = table_location.join("metadata/snap-3051729675574597004.avro");
+        let manifest_list_s2 = table_location.join("metadata/snap-3055729675574597004.avro");
+        let manifest_list_s3 = table_location.join("metadata/snap-3056729675574597004.avro");
+        let manifest_list_s4 = table_location.join("metadata/snap-3057729675574597004.avro");
+        let manifest_list_s5 = table_location.join("metadata/snap-3059729675574597004.avro");
+
         let file_io = FileIO::new_with_fs();
 
         let table_metadata = {
-            let json_str = fs::read_to_string(format!(
-                "{}/testdata/example_table_metadata_v2_deep_history.json",
+            let template_json_str = fs::read_to_string(format!(
+                "{}/testdata/{metadata_file}",
                 env!("CARGO_MANIFEST_DIR")
             ))
             .unwrap();
-            serde_json::from_str::<TableMetadata>(&json_str).unwrap()
+            let metadata_json = render_template(&template_json_str, context! {
+                table_location => &table_location,
+                manifest_list_s1_location => &manifest_list_s1,
+                manifest_list_s2_location => &manifest_list_s2,
+                manifest_list_s3_location => &manifest_list_s3,
+                manifest_list_s4_location => &manifest_list_s4,
+                manifest_list_s5_location => &manifest_list_s5,
+            });
+            serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
         };
 
         let table = Table::builder()
@@ -381,6 +431,296 @@ impl TableTestFixture {
             .add_manifests(vec![data_file_manifest].into_iter())
             .unwrap();
         manifest_list_write.close().await.unwrap();
+    }
+
+    /// Sets up manifest files for the deep history fixture.
+    ///
+    /// Creates one data file per snapshot (s1.parquet through s5.parquet),
+    /// each with a manifest and manifest list. Manifest lists are cumulative
+    /// (each snapshot's list includes all prior manifests), matching real
+    /// Iceberg behavior. The incremental scan should skip s4.parquet
+    /// (added in the overwrite snapshot S4).
+    pub(crate) async fn setup_manifest_files_deep_history(&mut self) {
+        let parquet_file_size = self.write_parquet_data_files_deep_history();
+        let partition_spec = self.table.metadata().default_partition_spec();
+
+        // Snapshot chain: S1 -> S2 -> S3 -> S4 (overwrite) -> S5
+        let snapshot_ids: Vec<i64> = vec![
+            3051729675574597004,
+            3055729675574597004,
+            3056729675574597004,
+            3057729675574597004,
+            3059729675574597004,
+        ];
+
+        // Accumulate manifests across snapshots (each manifest list is cumulative)
+        let mut all_manifests: Vec<ManifestFile> = Vec::new();
+
+        for (i, &snap_id) in snapshot_ids.iter().enumerate() {
+            let snapshot = self
+                .table
+                .metadata()
+                .snapshot_by_id(snap_id)
+                .unwrap()
+                .clone();
+            let schema = snapshot.schema(self.table.metadata()).unwrap();
+
+            let file_name = format!("s{}.parquet", i + 1);
+            let partition_value = (i + 1) as i64 * 100;
+
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(snap_id),
+                schema,
+                partition_spec.as_ref().clone(),
+            )
+            .build_v2_data();
+
+            writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/{}", &self.table_location, file_name))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(parquet_file_size)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(
+                                    partition_value,
+                                ))]))
+                                .key_metadata(None)
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+
+            let mut data_file_manifest = writer.write_manifest_file().await.unwrap();
+            // Assign sequence numbers so the manifest can be included in
+            // later snapshots' cumulative manifest lists without triggering
+            // the "unassigned sequence number" validation.
+            data_file_manifest.sequence_number = snapshot.sequence_number();
+            data_file_manifest.min_sequence_number = snapshot.sequence_number();
+            all_manifests.push(data_file_manifest);
+
+            // Write cumulative manifest list for this snapshot
+            let manifest_list_writer = self
+                .table
+                .file_io()
+                .new_output(snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap();
+            let mut manifest_list_write = ManifestListWriter::v2(
+                manifest_list_writer,
+                snap_id,
+                snapshot.parent_snapshot_id(),
+                snapshot.sequence_number(),
+            );
+            manifest_list_write
+                .add_manifests(all_manifests.clone().into_iter())
+                .unwrap();
+            manifest_list_write.close().await.unwrap();
+        }
+    }
+
+    /// Like [`Self::setup_manifest_files_deep_history`], but the manifest lists
+    /// model writers that *rewrite* manifests rather than carrying every one
+    /// forward verbatim:
+    ///
+    /// ```text
+    /// S1 append     -> [A1]        A1 = {s1 ADDED@S1}
+    /// S2 append     -> [M2]        M2 = {s1 EXISTING@S1, s2 ADDED@S2}   (merge-append: A1 is gone)
+    /// S3 append     -> [M2, A3]    A3 = {s3 ADDED@S3}
+    /// S4 overwrite  -> [C4]        C4 = {s1,s2,s3 EXISTING, s4 ADDED@S4} (rewrite: M2, A3 are gone)
+    /// S5 append     -> [C4, A5]    A5 = {s5 ADDED@S5}
+    /// ```
+    ///
+    /// The surviving copies of the earlier entries are `EXISTING`, not `ADDED`, so
+    /// a scan reading only the to-snapshot's list silently drops them.
+    pub(crate) async fn setup_manifest_files_deep_history_rewritten(&mut self) {
+        let file_size = self.write_parquet_data_files_deep_history();
+
+        let (s1, s2, s3, s4, s5) = (
+            3051729675574597004_i64,
+            3055729675574597004_i64,
+            3056729675574597004_i64,
+            3057729675574597004_i64,
+            3059729675574597004_i64,
+        );
+
+        // (file index, originating snapshot, that snapshot's sequence number)
+        let (f1, f2, f3, f4, f5) = ((1, s1, 0), (2, s2, 1), (3, s3, 2), (4, s4, 3), (5, s5, 4));
+
+        let a1 = self
+            .write_rewritten_manifest(s1, &[f1], &[], file_size)
+            .await;
+        let m2 = self
+            .write_rewritten_manifest(s2, &[f2], &[f1], file_size)
+            .await;
+        let a3 = self
+            .write_rewritten_manifest(s3, &[f3], &[], file_size)
+            .await;
+        let c4 = self
+            .write_rewritten_manifest(s4, &[f4], &[f1, f2, f3], file_size)
+            .await;
+        let a5 = self
+            .write_rewritten_manifest(s5, &[f5], &[], file_size)
+            .await;
+
+        self.write_deep_history_manifest_list(s1, vec![a1]).await;
+        self.write_deep_history_manifest_list(s2, vec![m2.clone()])
+            .await;
+        self.write_deep_history_manifest_list(s3, vec![m2, a3])
+            .await;
+        self.write_deep_history_manifest_list(s4, vec![c4.clone()])
+            .await;
+        self.write_deep_history_manifest_list(s5, vec![c4, a5])
+            .await;
+    }
+
+    /// Writes one data manifest owned by `owner_snapshot_id`.
+    ///
+    /// `added` and `existing` are `(file index, originating snapshot id, sequence
+    /// number)` triples naming `s{index}.parquet`. Added entries take the owning
+    /// snapshot's ID (the writer enforces this); existing entries keep the ID and
+    /// sequence number of the snapshot that first added them.
+    async fn write_rewritten_manifest(
+        &self,
+        owner_snapshot_id: i64,
+        added: &[(usize, i64, i64)],
+        existing: &[(usize, i64, i64)],
+        file_size: u64,
+    ) -> ManifestFile {
+        let snapshot = self
+            .table
+            .metadata()
+            .snapshot_by_id(owner_snapshot_id)
+            .unwrap()
+            .clone();
+        let schema = snapshot.schema(self.table.metadata()).unwrap();
+        let partition_spec = self.table.metadata().default_partition_spec();
+
+        let mut writer = ManifestWriterBuilder::new(
+            self.next_manifest_file(),
+            Some(owner_snapshot_id),
+            schema,
+            partition_spec.as_ref().clone(),
+        )
+        .build_v2_data();
+
+        let data_file = |index: usize| {
+            DataFileBuilder::default()
+                .partition_spec_id(0)
+                .content(DataContentType::Data)
+                .file_path(format!("{}/s{}.parquet", &self.table_location, index))
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(file_size)
+                .record_count(1)
+                .partition(Struct::from_iter([Some(Literal::long(index as i64 * 100))]))
+                .key_metadata(None)
+                .build()
+                .unwrap()
+        };
+
+        for &(index, _, sequence_number) in added {
+            writer.add_file(data_file(index), sequence_number).unwrap();
+        }
+        for &(index, snapshot_id, sequence_number) in existing {
+            writer
+                .add_existing_file(
+                    data_file(index),
+                    snapshot_id,
+                    sequence_number,
+                    Some(sequence_number),
+                )
+                .unwrap();
+        }
+
+        let mut manifest = writer.write_manifest_file().await.unwrap();
+        manifest.sequence_number = snapshot.sequence_number();
+        if manifest.min_sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
+            manifest.min_sequence_number = snapshot.sequence_number();
+        }
+        manifest
+    }
+
+    /// Writes `manifests` as the manifest list of the named snapshot.
+    async fn write_deep_history_manifest_list(
+        &self,
+        snapshot_id: i64,
+        manifests: Vec<ManifestFile>,
+    ) {
+        let snapshot = self
+            .table
+            .metadata()
+            .snapshot_by_id(snapshot_id)
+            .unwrap()
+            .clone();
+
+        let output = self
+            .table
+            .file_io()
+            .new_output(snapshot.manifest_list())
+            .unwrap()
+            .writer()
+            .await
+            .unwrap();
+        let mut writer = ManifestListWriter::v2(
+            output,
+            snapshot_id,
+            snapshot.parent_snapshot_id(),
+            snapshot.sequence_number(),
+        );
+        writer.add_manifests(manifests.into_iter()).unwrap();
+        writer.close().await.unwrap();
+    }
+
+    /// Writes parquet data files for the deep history fixture (3-column schema: x, y, z).
+    fn write_parquet_data_files_deep_history(&self) -> u64 {
+        fs::create_dir_all(&self.table_location).unwrap();
+
+        let schema = {
+            let fields = vec![
+                arrow_schema::Field::new("x", arrow_schema::DataType::Int64, false).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+                ),
+                arrow_schema::Field::new("y", arrow_schema::DataType::Int64, false).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
+                ),
+                arrow_schema::Field::new("z", arrow_schema::DataType::Int64, false).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string())]),
+                ),
+            ];
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+
+        let col1 = Arc::new(Int64Array::from_iter_values(vec![1; 10])) as ArrayRef;
+        let col2 = Arc::new(Int64Array::from_iter_values(vec![2; 10])) as ArrayRef;
+        let col3 = Arc::new(Int64Array::from_iter_values(vec![3; 10])) as ArrayRef;
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![col1, col2, col3]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        for i in 1..=5 {
+            let file = File::create(format!("{}/s{}.parquet", &self.table_location, i)).unwrap();
+            let mut writer =
+                ArrowWriter::try_new(file, batch.schema(), Some(props.clone())).unwrap();
+            writer.write(&batch).expect("Writing batch");
+            writer.close().unwrap();
+        }
+
+        fs::metadata(format!("{}/s1.parquet", &self.table_location))
+            .unwrap()
+            .len()
     }
 
     /// Writes a v3 data manifest with a manifest-level `first_row_id` of 42,

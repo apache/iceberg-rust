@@ -21,6 +21,7 @@ mod cache;
 use cache::*;
 mod context;
 use context::*;
+mod incremental;
 mod task;
 
 use std::collections::HashMap;
@@ -30,6 +31,7 @@ use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
+pub use incremental::{IncrementalAppendScan, IncrementalAppendScanBuilder};
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
@@ -290,11 +292,12 @@ impl<'a> TableScanBuilder<'a> {
                 .ok_or_else(|| invalid_data!("Snapshot with id {snapshot_id} not found"))?
                 .clone(),
             None => {
-                let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
+                let Some(current_snapshot) = self.table.metadata().current_snapshot() else {
                     return Ok(TableScan {
                         batch_size: self.batch_size,
                         column_names: self.column_names,
                         file_io: self.table.file_io().clone(),
+                        snapshot: None,
                         plan_context: None,
                         concurrency_limit_data_files: self.concurrency_limit_data_files,
                         concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
@@ -305,14 +308,14 @@ impl<'a> TableScanBuilder<'a> {
                         runtime: self.table.runtime().clone(),
                     });
                 };
-                current_snapshot_id.clone()
+                current_snapshot.clone()
             }
         };
 
         let schema = snapshot.schema(self.table.metadata())?;
         let field_ids =
             collect_scan_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
-        let snapshot_bound_predicate =
+        let scan_bound_predicate =
             bind_scan_predicate(&schema, self.filter.as_ref(), self.case_sensitive)?;
         let name_mapping = self
             .table
@@ -333,12 +336,11 @@ impl<'a> TableScanBuilder<'a> {
         );
 
         let plan_context = PlanContext {
-            snapshot,
             table_metadata: self.table.metadata_ref(),
-            snapshot_schema: schema,
+            scan_schema: schema,
             case_sensitive: self.case_sensitive,
             predicate: self.filter.map(Arc::new),
-            snapshot_bound_predicate,
+            scan_bound_predicate,
             object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
             name_mapping,
@@ -353,6 +355,7 @@ impl<'a> TableScanBuilder<'a> {
             batch_size: self.batch_size,
             column_names: self.column_names,
             file_io: self.table.file_io().clone(),
+            snapshot: Some(snapshot),
             plan_context: Some(plan_context),
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
@@ -368,9 +371,7 @@ impl<'a> TableScanBuilder<'a> {
 /// Table scan.
 #[derive(Debug)]
 pub struct TableScan {
-    /// A [PlanContext], if this table has at least one snapshot, otherwise None.
-    ///
-    /// If this is None, then the scan contains no rows.
+    snapshot: Option<SnapshotRef>,
     plan_context: Option<PlanContext>,
     batch_size: Option<usize>,
     file_io: FileIO,
@@ -394,126 +395,125 @@ pub struct TableScan {
     runtime: Runtime,
 }
 
-impl TableScan {
-    /// Returns a stream of [`FileScanTask`]s.
-    pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
-        let Some(plan_context) = self.plan_context.as_ref() else {
-            return Ok(Box::pin(futures::stream::empty()));
-        };
+pub(crate) async fn plan_scan_files(
+    plan_context: &PlanContext,
+    selection: ManifestSelection,
+    runtime: &Runtime,
+    concurrency_limit_manifest_files: usize,
+    concurrency_limit_manifest_entries: usize,
+) -> Result<FileScanTaskStream> {
+    let (manifest_entry_data_ctx_tx, manifest_entry_data_ctx_rx) =
+        channel(concurrency_limit_manifest_files);
+    let (manifest_entry_delete_ctx_tx, manifest_entry_delete_ctx_rx) =
+        channel(concurrency_limit_manifest_files);
+    let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
 
-        let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
-        let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
+    let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new(runtime.clone());
 
-        // used to stream ManifestEntryContexts between stages of the file plan operation
-        let (manifest_entry_data_ctx_tx, manifest_entry_data_ctx_rx) =
-            channel(concurrency_limit_manifest_files);
-        let (manifest_entry_delete_ctx_tx, manifest_entry_delete_ctx_rx) =
-            channel(concurrency_limit_manifest_files);
-
-        // used to stream the results back to the caller
-        let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
-
-        let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new(self.runtime.clone());
-
-        let manifest_list = plan_context.get_manifest_list().await?;
-
-        // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
-        // whose partitions cannot match this
-        // scan's filter
-        let manifest_file_contexts = plan_context.build_manifest_file_contexts(
-            manifest_list,
+    let manifest_file_contexts = plan_context
+        .build_manifest_file_contexts(
+            selection,
+            concurrency_limit_manifest_files,
             manifest_entry_data_ctx_tx,
             delete_file_idx.clone(),
             manifest_entry_delete_ctx_tx,
-        )?;
+        )
+        .await?;
 
-        let mut channel_for_manifest_error = file_scan_task_tx.clone();
-        let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
-        let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
+    let mut channel_for_manifest_error = file_scan_task_tx.clone();
+    let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
+    let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
 
-        let rt = self.runtime.clone();
+    let rt = runtime.clone();
 
-        // Concurrently load all [`Manifest`]s and stream their [`ManifestEntry`]s
-        rt.io().spawn(async move {
-            let result = futures::stream::iter(manifest_file_contexts)
-                .try_for_each_concurrent(concurrency_limit_manifest_files, |ctx| async move {
-                    ctx.fetch_manifest_and_stream_manifest_entries().await
-                })
+    rt.io().spawn(async move {
+        let result = futures::stream::iter(manifest_file_contexts)
+            .try_for_each_concurrent(concurrency_limit_manifest_files, |ctx| async move {
+                ctx.fetch_manifest_and_stream_manifest_entries().await
+            })
+            .await;
+
+        if let Err(error) = result {
+            let _ = channel_for_manifest_error.send(Err(error)).await;
+        }
+    });
+
+    {
+        let rt = rt.clone();
+        let rt_inner = rt.clone();
+        rt.cpu().spawn(async move {
+            let result = manifest_entry_delete_ctx_rx
+                .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
+                .try_for_each_concurrent(
+                    concurrency_limit_manifest_entries,
+                    |(manifest_entry_context, tx)| {
+                        let rt_inner = rt_inner.clone();
+                        async move {
+                            rt_inner
+                                .cpu()
+                                .spawn(async move {
+                                    process_delete_manifest_entry(manifest_entry_context, tx).await
+                                })
+                                .await?
+                        }
+                    },
+                )
                 .await;
 
             if let Err(error) = result {
-                let _ = channel_for_manifest_error.send(Err(error)).await;
+                let _ = channel_for_delete_manifest_entry_error
+                    .send(Err(error))
+                    .await;
             }
         });
+    }
 
-        // Process the delete file [`ManifestEntry`] stream in parallel
-        {
-            let rt = rt.clone();
-            let rt_inner = rt.clone();
-            rt.cpu().spawn(async move {
-                let result = manifest_entry_delete_ctx_rx
-                    .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
-                    .try_for_each_concurrent(
-                        concurrency_limit_manifest_entries,
-                        |(manifest_entry_context, tx)| {
-                            let rt_inner = rt_inner.clone();
-                            async move {
-                                rt_inner
-                                    .cpu()
-                                    .spawn(async move {
-                                        Self::process_delete_manifest_entry(
-                                            manifest_entry_context,
-                                            tx,
-                                        )
-                                        .await
-                                    })
-                                    .await?
-                            }
-                        },
-                    )
-                    .await;
+    {
+        let rt_inner = rt.clone();
+        rt.cpu().spawn(async move {
+            let result = manifest_entry_data_ctx_rx
+                .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
+                .try_for_each_concurrent(
+                    concurrency_limit_manifest_entries,
+                    |(manifest_entry_context, tx)| {
+                        let rt_inner = rt_inner.clone();
+                        async move {
+                            rt_inner
+                                .cpu()
+                                .spawn(async move {
+                                    process_data_manifest_entry(manifest_entry_context, tx).await
+                                })
+                                .await?
+                        }
+                    },
+                )
+                .await;
 
-                if let Err(error) = result {
-                    let _ = channel_for_delete_manifest_entry_error
-                        .send(Err(error))
-                        .await;
-                }
-            });
-        }
+            if let Err(error) = result {
+                let _ = channel_for_data_manifest_entry_error.send(Err(error)).await;
+            }
+        });
+    }
 
-        // Process the data file [`ManifestEntry`] stream in parallel
-        {
-            let rt_inner = rt.clone();
-            rt.cpu().spawn(async move {
-                let result = manifest_entry_data_ctx_rx
-                    .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
-                    .try_for_each_concurrent(
-                        concurrency_limit_manifest_entries,
-                        |(manifest_entry_context, tx)| {
-                            let rt_inner = rt_inner.clone();
-                            async move {
-                                rt_inner
-                                    .cpu()
-                                    .spawn(async move {
-                                        Self::process_data_manifest_entry(
-                                            manifest_entry_context,
-                                            tx,
-                                        )
-                                        .await
-                                    })
-                                    .await?
-                            }
-                        },
-                    )
-                    .await;
+    Ok(file_scan_task_rx.boxed())
+}
 
-                if let Err(error) = result {
-                    let _ = channel_for_data_manifest_entry_error.send(Err(error)).await;
-                }
-            });
-        }
-
-        Ok(file_scan_task_rx.boxed())
+impl TableScan {
+    /// Returns a stream of [`FileScanTask`]s.
+    pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
+        let (Some(plan_context), Some(snapshot)) =
+            (self.plan_context.as_ref(), self.snapshot.as_ref())
+        else {
+            return Ok(Box::pin(futures::stream::empty()));
+        };
+        plan_scan_files(
+            plan_context,
+            ManifestSelection::from_snapshot(snapshot.clone()),
+            &self.runtime,
+            self.concurrency_limit_manifest_files,
+            self.concurrency_limit_manifest_entries,
+        )
+        .await
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -542,113 +542,111 @@ impl TableScan {
 
     /// Returns a reference to the snapshot of the table scan.
     pub fn snapshot(&self) -> Option<&SnapshotRef> {
-        self.plan_context.as_ref().map(|x| &x.snapshot)
+        self.snapshot.as_ref()
+    }
+}
+
+async fn process_data_manifest_entry(
+    manifest_entry_context: ManifestEntryContext,
+    mut file_scan_task_tx: Sender<Result<FileScanTask>>,
+) -> Result<()> {
+    // skip processing this manifest entry if it has been marked as deleted
+    if !manifest_entry_context.manifest_entry.is_alive() {
+        return Ok(());
     }
 
-    async fn process_data_manifest_entry(
-        manifest_entry_context: ManifestEntryContext,
-        mut file_scan_task_tx: Sender<Result<FileScanTask>>,
-    ) -> Result<()> {
-        // skip processing this manifest entry if it has been marked as deleted
-        if !manifest_entry_context.manifest_entry.is_alive() {
+    // abort the plan if we encounter a manifest entry for a delete file
+    if manifest_entry_context.manifest_entry.content_type() != DataContentType::Data {
+        return Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Encountered an entry for a delete file in a data file manifest",
+        ));
+    }
+
+    if let Some(ref bound_predicates) = manifest_entry_context.bound_predicates {
+        let BoundPredicates {
+            scan_bound_predicate,
+            partition_bound_predicate,
+        } = bound_predicates.as_ref();
+
+        let expression_evaluator_cache = manifest_entry_context.expression_evaluator_cache.as_ref();
+
+        let expression_evaluator = expression_evaluator_cache.get(
+            manifest_entry_context.partition_spec_id,
+            partition_bound_predicate,
+        )?;
+
+        // skip any data file whose partition data indicates that it can't contain
+        // any data that matches this scan's filter
+        if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
             return Ok(());
         }
 
-        // abort the plan if we encounter a manifest entry for a delete file
-        if manifest_entry_context.manifest_entry.content_type() != DataContentType::Data {
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Encountered an entry for a delete file in a data file manifest",
-            ));
-        }
-
-        if let Some(ref bound_predicates) = manifest_entry_context.bound_predicates {
-            let BoundPredicates {
-                snapshot_bound_predicate,
-                partition_bound_predicate,
-            } = bound_predicates.as_ref();
-
-            let expression_evaluator_cache =
-                manifest_entry_context.expression_evaluator_cache.as_ref();
-
-            let expression_evaluator = expression_evaluator_cache.get(
-                manifest_entry_context.partition_spec_id,
-                partition_bound_predicate,
-            )?;
-
-            // skip any data file whose partition data indicates that it can't contain
-            // any data that matches this scan's filter
-            if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
-                return Ok(());
-            }
-
-            // skip any data file whose metrics don't match this scan's filter
-            if !InclusiveMetricsEvaluator::eval(
-                snapshot_bound_predicate,
-                manifest_entry_context.manifest_entry.data_file(),
-                false,
-            )? {
-                return Ok(());
-            }
-        }
-
-        // congratulations! the manifest entry has made its way through the
-        // entire plan without getting filtered out. Create a corresponding
-        // FileScanTask and push it to the result stream
-        file_scan_task_tx
-            .send(Ok(manifest_entry_context.into_file_scan_task().await?))
-            .await?;
-
-        Ok(())
-    }
-
-    async fn process_delete_manifest_entry(
-        manifest_entry_context: ManifestEntryContext,
-        mut delete_file_ctx_tx: Sender<DeleteFileContext>,
-    ) -> Result<()> {
-        // skip processing this manifest entry if it has been marked as deleted
-        if !manifest_entry_context.manifest_entry.is_alive() {
+        // skip any data file whose metrics don't match this scan's filter
+        if !InclusiveMetricsEvaluator::eval(
+            scan_bound_predicate,
+            manifest_entry_context.manifest_entry.data_file(),
+            false,
+        )? {
             return Ok(());
         }
-
-        // abort the plan if we encounter a manifest entry that is not for a delete file
-        if manifest_entry_context.manifest_entry.content_type() == DataContentType::Data {
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Encountered an entry for a data file in a delete manifest",
-            ));
-        }
-
-        if let Some(ref bound_predicates) = manifest_entry_context.bound_predicates {
-            let expression_evaluator_cache =
-                manifest_entry_context.expression_evaluator_cache.as_ref();
-
-            let expression_evaluator = expression_evaluator_cache.get(
-                manifest_entry_context.partition_spec_id,
-                &bound_predicates.partition_bound_predicate,
-            )?;
-
-            // skip any data file whose partition data indicates that it can't contain
-            // any data that matches this scan's filter
-            if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
-                return Ok(());
-            }
-        }
-
-        delete_file_ctx_tx
-            .send(DeleteFileContext {
-                manifest_entry: manifest_entry_context.manifest_entry.clone(),
-                partition_spec_id: manifest_entry_context.partition_spec_id,
-            })
-            .await?;
-
-        Ok(())
     }
+
+    // congratulations! the manifest entry has made its way through the
+    // entire plan without getting filtered out. Create a corresponding
+    // FileScanTask and push it to the result stream
+    file_scan_task_tx
+        .send(Ok(manifest_entry_context.into_file_scan_task().await?))
+        .await?;
+
+    Ok(())
+}
+
+async fn process_delete_manifest_entry(
+    manifest_entry_context: ManifestEntryContext,
+    mut delete_file_ctx_tx: Sender<DeleteFileContext>,
+) -> Result<()> {
+    // skip processing this manifest entry if it has been marked as deleted
+    if !manifest_entry_context.manifest_entry.is_alive() {
+        return Ok(());
+    }
+
+    // abort the plan if we encounter a manifest entry that is not for a delete file
+    if manifest_entry_context.manifest_entry.content_type() == DataContentType::Data {
+        return Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Encountered an entry for a data file in a delete manifest",
+        ));
+    }
+
+    if let Some(ref bound_predicates) = manifest_entry_context.bound_predicates {
+        let expression_evaluator_cache = manifest_entry_context.expression_evaluator_cache.as_ref();
+
+        let expression_evaluator = expression_evaluator_cache.get(
+            manifest_entry_context.partition_spec_id,
+            &bound_predicates.partition_bound_predicate,
+        )?;
+
+        // skip any data file whose partition data indicates that it can't contain
+        // any data that matches this scan's filter
+        if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
+            return Ok(());
+        }
+    }
+
+    delete_file_ctx_tx
+        .send(DeleteFileContext {
+            manifest_entry: manifest_entry_context.manifest_entry.clone(),
+            partition_spec_id: manifest_entry_context.partition_spec_id,
+        })
+        .await?;
+
+    Ok(())
 }
 
 pub(crate) struct BoundPredicates {
     partition_bound_predicate: BoundPredicate,
-    snapshot_bound_predicate: BoundPredicate,
+    scan_bound_predicate: BoundPredicate,
 }
 
 #[cfg(test)]
@@ -720,6 +718,12 @@ mod tests {
         assert!(table_scan.is_err());
     }
 
+    fn resolved_snapshot_id(scan: &super::TableScan) -> i64 {
+        scan.snapshot()
+            .expect("scan should have a snapshot")
+            .snapshot_id()
+    }
+
     #[test]
     fn test_case_sensitive_scan_rejects_mismatched_column_case() {
         let table = TableTestFixture::new().table;
@@ -789,7 +793,7 @@ mod tests {
         let table_scan = table.scan().build().unwrap();
         assert_eq!(
             table.metadata().current_snapshot().unwrap().snapshot_id(),
-            table_scan.snapshot().unwrap().snapshot_id()
+            resolved_snapshot_id(&table_scan)
         );
     }
 
@@ -811,10 +815,7 @@ mod tests {
             .with_row_selection_enabled(true)
             .build()
             .unwrap();
-        assert_eq!(
-            table_scan.snapshot().unwrap().snapshot_id(),
-            3051729675574597004
-        );
+        assert_eq!(resolved_snapshot_id(&table_scan), 3051729675574597004);
     }
 
     fn table_with_property(key: &str, value: &str) -> Table {
