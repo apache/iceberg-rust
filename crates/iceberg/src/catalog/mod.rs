@@ -1103,8 +1103,8 @@ mod tests {
         PartitionStatisticsFile, PrimitiveType, Schema, Snapshot, SnapshotReference,
         SnapshotRetention, SortDirection, SortField, SortOrder, SqlViewRepresentation,
         StatisticsFile, Summary, TableMetadata, TableMetadataBuilder, Transform, Type,
-        UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations,
-        ViewVersion,
+        UnboundPartitionField, UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation,
+        ViewRepresentations, ViewVersion,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -1659,11 +1659,32 @@ mod tests {
         "#,
             TableUpdate::AddSpec {
                 spec: UnboundPartitionSpec::builder()
-                    .add_partition_field(4, "ts_day".to_string(), Transform::Day)
+                    .add_partition_field(
+                        UnboundPartitionField::builder()
+                            .source_ids(vec![4])
+                            .name("ts_day")
+                            .transform(Transform::Day)
+                            .build()
+                            .unwrap(),
+                    )
                     .unwrap()
-                    .add_partition_field(1, "id_bucket".to_string(), Transform::Bucket(16))
+                    .add_partition_field(
+                        UnboundPartitionField::builder()
+                            .source_ids(vec![1])
+                            .name("id_bucket")
+                            .transform(Transform::Bucket(16))
+                            .build()
+                            .unwrap(),
+                    )
                     .unwrap()
-                    .add_partition_field(2, "id_truncate".to_string(), Transform::Truncate(4))
+                    .add_partition_field(
+                        UnboundPartitionField::builder()
+                            .source_ids(vec![2])
+                            .name("id_truncate")
+                            .transform(Transform::Truncate(4))
+                            .build()
+                            .unwrap(),
+                    )
                     .unwrap()
                     .build(),
             },

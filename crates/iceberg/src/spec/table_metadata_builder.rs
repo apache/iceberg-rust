@@ -741,7 +741,7 @@ impl TableMetadataBuilder {
         for partition_field in unbound_spec.fields() {
             let exists_in_any_schema = self
                 .metadata
-                .name_exists_in_any_schema(&partition_field.name);
+                .name_exists_in_any_schema(partition_field.name());
 
             // Skip if partition field name doesn't conflict with any schema field
             if !exists_in_any_schema {
@@ -749,15 +749,15 @@ impl TableMetadataBuilder {
             }
 
             // If name exists in schemas, validate against current schema rules
-            if let Some(schema_field) = current_schema.field_by_name(&partition_field.name) {
+            if let Some(schema_field) = current_schema.field_by_name(partition_field.name()) {
                 let is_identity_transform =
-                    partition_field.transform == crate::spec::Transform::Identity;
-                let has_matching_source_id = schema_field.id == partition_field.source_id;
+                    partition_field.transform() == crate::spec::Transform::Identity;
+                let has_matching_source_id = schema_field.id == partition_field.source_id()?;
 
                 if !is_identity_transform {
                     return Err(invalid_data!(
                         "Cannot create partition with name '{}' that conflicts with schema field and is not an identity transform.",
-                        partition_field.name
+                        partition_field.name()
                     ));
                 }
 
@@ -765,9 +765,9 @@ impl TableMetadataBuilder {
                     return Err(invalid_data!(
                         "Cannot create identity partition sourced from different field in schema. \
                              Field name '{}' has id `{}` in schema but partition source id is `{}`",
-                        partition_field.name,
+                        partition_field.name(),
                         schema_field.id,
-                        partition_field.source_id
+                        partition_field.source_id()?
                     ));
                 }
             }
@@ -850,21 +850,22 @@ impl TableMetadataBuilder {
             .partition_specs
             .values()
             .flat_map(|spec| spec.fields())
-            .map(|field| ((field.source_id, &field.transform), field.field_id))
+            .map(|field| ((vec![field.source_id], field.transform), field.field_id))
             .collect();
 
         // Create new fields with reused field IDs where possible
         let fields = unbound_spec
             .fields
             .into_iter()
-            .map(|mut field| {
-                if field.field_id.is_none()
+            .map(|field| {
+                if field.field_id().is_none()
                     && let Some(&existing_field_id) =
-                        equivalent_field_ids.get(&(field.source_id, &field.transform))
+                        equivalent_field_ids.get(&(field.source_ids().to_vec(), field.transform()))
                 {
-                    field.field_id = Some(existing_field_id);
+                    field.with_field_id(existing_field_id)
+                } else {
+                    field
                 }
-                field
             })
             .collect();
 
@@ -1228,15 +1229,19 @@ impl TableMetadataBuilder {
         // Re-build partition spec with new ids
         let mut fresh_spec = PartitionSpecBuilder::new(fresh_schema.clone());
         for field in spec.fields() {
-            let source_field_name = previous_id_to_name.get(&field.source_id).ok_or_else(|| {
+            let source_id = field.source_id()?;
+            let source_field_name = previous_id_to_name.get(&source_id).ok_or_else(|| {
                 invalid_data!(
                     "Cannot find source column with id {} for partition column {} in schema.",
-                    field.source_id,
-                    field.name
+                    source_id,
+                    field.name()
                 )
             })?;
-            fresh_spec =
-                fresh_spec.add_partition_field(source_field_name, &field.name, field.transform)?;
+            fresh_spec = fresh_spec.add_partition_field(
+                source_field_name,
+                field.name(),
+                field.transform(),
+            )?;
         }
         let fresh_spec = fresh_spec.build()?;
 
@@ -1432,7 +1437,14 @@ mod tests {
     fn partition_spec() -> UnboundPartitionSpec {
         UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(2, "y", Transform::Identity)
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("y")
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
     }
@@ -1666,12 +1678,15 @@ mod tests {
                 // partition_spec() has None set for field-id
                 spec: PartitionSpec::builder(schema())
                     .with_spec_id(0)
-                    .add_unbound_field(UnboundPartitionField {
-                        name: "y".to_string(),
-                        transform: Transform::Identity,
-                        source_id: 2,
-                        field_id: Some(1000)
-                    })
+                    .add_unbound_field(
+                        UnboundPartitionField::builder()
+                            .source_ids(vec![2])
+                            .field_id(1000)
+                            .name("y".to_string())
+                            .transform(Transform::Identity)
+                            .build()
+                            .unwrap()
+                    )
                     .unwrap()
                     .build()
                     .unwrap()
@@ -1739,20 +1754,21 @@ mod tests {
         let added_spec = UnboundPartitionSpec::builder()
             .with_spec_id(10)
             .add_partition_fields(vec![
-                UnboundPartitionField {
-                    // The previous field - has field_id set
-                    name: "y".to_string(),
-                    transform: Transform::Identity,
-                    source_id: 2,
-                    field_id: Some(1000),
-                },
-                UnboundPartitionField {
-                    // A new field without field id - should still be without field id in changes
-                    name: "z".to_string(),
-                    transform: Transform::Identity,
-                    source_id: 3,
-                    field_id: None,
-                },
+                // The previous field - has field_id set
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .field_id(1000)
+                    .name("y".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+                // A new field without field id - should still be without field id in changes
+                UnboundPartitionField::builder()
+                    .source_ids(vec![3])
+                    .name("z".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
             ])
             .unwrap()
             .build();
@@ -1767,19 +1783,25 @@ mod tests {
         let expected_change = added_spec.with_spec_id(1);
         let expected_spec = PartitionSpec::builder(schema())
             .with_spec_id(1)
-            .add_unbound_field(UnboundPartitionField {
-                name: "y".to_string(),
-                transform: Transform::Identity,
-                source_id: 2,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .field_id(1000)
+                    .name("y".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
-            .add_unbound_field(UnboundPartitionField {
-                name: "z".to_string(),
-                transform: Transform::Identity,
-                source_id: 3,
-                field_id: Some(1001),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![3])
+                    .field_id(1001)
+                    .name("z".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -1817,7 +1839,14 @@ mod tests {
         let schema = builder.get_current_schema().unwrap().clone();
         let added_spec = UnboundPartitionSpec::builder()
             .with_spec_id(10)
-            .add_partition_field(1, "y_bucket[2]", Transform::Bucket(2))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("y_bucket[2]")
+                    .transform(Transform::Bucket(2))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -1831,12 +1860,15 @@ mod tests {
 
         let expected_spec = PartitionSpec::builder(schema)
             .with_spec_id(1)
-            .add_unbound_field(UnboundPartitionField {
-                name: "y_bucket[2]".to_string(),
-                transform: Transform::Bucket(2),
-                source_id: 1,
-                field_id: Some(1001),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1001)
+                    .name("y_bucket[2]".to_string())
+                    .transform(Transform::Bucket(2))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -2401,18 +2433,20 @@ mod tests {
         let added_spec = UnboundPartitionSpec::builder()
             .with_spec_id(10)
             .add_partition_fields(vec![
-                UnboundPartitionField {
-                    name: "y".to_string(),
-                    transform: Transform::Identity,
-                    source_id: 2,
-                    field_id: Some(1000),
-                },
-                UnboundPartitionField {
-                    name: "z".to_string(),
-                    transform: Transform::Identity,
-                    source_id: 3,
-                    field_id: Some(1002),
-                },
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .field_id(1000)
+                    .name("y".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+                UnboundPartitionField::builder()
+                    .source_ids(vec![3])
+                    .field_id(1002)
+                    .name("z".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
             ])
             .unwrap()
             .build();
@@ -2737,7 +2771,14 @@ mod tests {
 
         let partition_spec_with_bucket = UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(1, "bucket_data", Transform::Bucket(16))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("bucket_data")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -2796,7 +2837,14 @@ mod tests {
 
         let partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(1, "partition_col", Transform::Bucket(16))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("partition_col")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -2845,7 +2893,14 @@ mod tests {
 
         let partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(1, "data_bucket", Transform::Bucket(16))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("data_bucket")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -2868,7 +2923,14 @@ mod tests {
 
         let conflicting_partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(1)
-            .add_partition_field(1, "existing_field", Transform::Bucket(8))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("existing_field")
+                    .transform(Transform::Bucket(8))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -2898,7 +2960,14 @@ mod tests {
 
         let partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(1, "bucket_data", Transform::Bucket(16))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("bucket_data")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -2994,7 +3063,14 @@ mod tests {
 
         let partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(2, "partition_data", Transform::Identity)
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("partition_data")
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -3043,7 +3119,14 @@ mod tests {
 
         let partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(1, "bucket_data", Transform::Bucket(16))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("bucket_data")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -3093,7 +3176,14 @@ mod tests {
 
         let partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(1, "data_bucket", Transform::Bucket(16))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("data_bucket")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -3117,7 +3207,14 @@ mod tests {
         // Try to add a partition spec with a field name that does NOT conflict with existing schema fields
         let non_conflicting_partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(1)
-            .add_partition_field(2, "new_partition_field", Transform::Bucket(8))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("new_partition_field")
+                    .transform(Transform::Bucket(8))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -3518,7 +3615,14 @@ mod tests {
 
         // Create initial table with spec 0: identity(id) -> field_id = 1000
         let initial_spec = UnboundPartitionSpec::builder()
-            .add_partition_field(1, "id", Transform::Identity)
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("id")
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -3537,7 +3641,14 @@ mod tests {
 
         // Add spec 1: bucket(data) -> field_id = 1001
         let spec1 = UnboundPartitionSpec::builder()
-            .add_partition_field(2, "data_bucket", Transform::Bucket(10))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("data_bucket")
+                    .transform(Transform::Bucket(10))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
         let builder = metadata.into_builder(Some("s3://bucket/table/metadata/v1.json".to_string()));
@@ -3547,11 +3658,32 @@ mod tests {
         // Add spec 2: identity(id) + bucket(data) + year(timestamp)
         // Should reuse field_id 1000 for identity(id) and 1001 for bucket(data)
         let spec2 = UnboundPartitionSpec::builder()
-            .add_partition_field(1, "id", Transform::Identity) // Should reuse 1000
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("id")
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            ) // Should reuse 1000
             .unwrap()
-            .add_partition_field(2, "data_bucket", Transform::Bucket(10)) // Should reuse 1001
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("data_bucket")
+                    .transform(Transform::Bucket(10))
+                    .build()
+                    .unwrap(),
+            ) // Should reuse 1001
             .unwrap()
-            .add_partition_field(3, "year", Transform::Year) // Should get new 1002
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![3])
+                    .name("year")
+                    .transform(Transform::Year)
+                    .build()
+                    .unwrap(),
+            ) // Should get new 1002
             .unwrap()
             .build();
         let builder = metadata.into_builder(Some("s3://bucket/table/metadata/v2.json".to_string()));
