@@ -52,7 +52,7 @@ impl ReassignFieldIds {
         outer_fields
             .into_iter()
             .map(|field| {
-                if field.field_type.is_primitive() {
+                if !field.field_type.is_nested() {
                     Ok(field)
                 } else {
                     let mut new_field = Arc::unwrap_or_clone(field);

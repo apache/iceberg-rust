@@ -115,7 +115,7 @@ impl AssignFreshIds {
         outer_fields
             .into_iter()
             .map(|field| {
-                if field.field_type.is_primitive() {
+                if !field.field_type.is_nested() {
                     Ok(field)
                 } else {
                     let mut field = Arc::unwrap_or_clone(field);
