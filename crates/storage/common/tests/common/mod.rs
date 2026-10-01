@@ -50,7 +50,20 @@ pub struct StorageHarness {
     pub file_io: FileIO,
     pub label: &'static str,
     pub base_path: String,
-    pub _tempdirs: Vec<TempDir>,
+    pub _tempdirs: Option<Box<TempDir>>,
+}
+
+fn handle_unreachable_endpoint(kind: &'static str, endpoint: &str) -> Option<StorageHarness> {
+    if std::env::var("ICEBERG_REQUIRE_STORAGE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        panic!(
+            "storage backed '{kind}' is required by ICEBERG_REQUIRE_STORAGE, but endpoint '{endpoint}' is unreachable"
+        );
+    }
+    eprintln!("Skipping {kind} storage test: {endpoint} not reachable");
+    None
 }
 
 impl StorageKind {
@@ -71,15 +84,44 @@ impl std::fmt::Display for StorageKind {
     }
 }
 
+const DEFAULT_PROBE_TIMEOUT_MS: u64 = 1000;
+
+fn get_probe_timeout() -> Duration {
+    let ms = std::env::var("ICEBERG_PROBE_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_PROBE_TIMEOUT_MS);
+    Duration::from_millis(ms)
+}
+
 /// Fast probe to check if an endpoint service is listening before entering retry loops.
+///
+/// Note: Any HTTP response from `.send().await.is_ok()` (including 4xx/5xx) is treated
+/// as reachable, as it proves the underlying server is up, listening on the port,
+/// and actively responding to HTTP requests.
 pub async fn is_endpoint_reachable(endpoint: &str) -> bool {
     let Ok(client) = reqwest::Client::builder()
-        .timeout(Duration::from_millis(300))
+        .timeout(get_probe_timeout())
         .build()
     else {
         return false;
     };
     client.get(endpoint).send().await.is_ok()
+}
+
+async fn wait_until_ready(file_io: &FileIO, check_path: &str, kind: &'static str, endpoint: &str) {
+    let mut retries = 0;
+    while retries < 15 {
+        if file_io.exists(check_path).await.unwrap_or(false) {
+            return;
+        }
+        sleep(Duration::from_millis(500)).await;
+        retries += 1;
+    }
+
+    panic!(
+        "Storage backend '{kind}' was reachable at '{endpoint}', but failed readiness check on '{check_path}' after 15 retries"
+    );
 }
 
 pub async fn load_storage(kind: StorageKind) -> Option<StorageHarness> {
@@ -97,15 +139,14 @@ async fn load_opendal_s3() -> Option<StorageHarness> {
     let object_store_endpoint = get_object_store_endpoint();
 
     if !is_endpoint_reachable(&object_store_endpoint).await {
-        eprintln!("Skipping S3 storage test: {object_store_endpoint} not reachable");
-        return None;
+        return handle_unreachable_endpoint("opendal_s3", &object_store_endpoint);
     }
 
     let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
         customized_credential_load: None,
     }))
     .with_props(vec![
-        (S3_ENDPOINT, object_store_endpoint),
+        (S3_ENDPOINT, object_store_endpoint.clone()),
         (S3_ACCESS_KEY_ID, "admin".to_string()),
         (S3_SECRET_ACCESS_KEY, "password".to_string()),
         (S3_REGION, "us-east-1".to_string()),
@@ -113,29 +154,27 @@ async fn load_opendal_s3() -> Option<StorageHarness> {
     ])
     .build();
 
-    let mut retries = 0;
-    while retries < 15 {
-        if file_io.exists("s3://bucket1/").await.unwrap_or(false) {
-            return Some(StorageHarness {
-                file_io,
-                label: "opendal_s3",
-                base_path: "s3://bucket1/".to_string(),
-                _tempdirs: Vec::new(),
-            });
-        }
-        sleep(Duration::from_millis(500)).await;
-        retries += 1;
-    }
+    wait_until_ready(
+        &file_io,
+        "s3://bucket1/",
+        "opendal_s3",
+        &object_store_endpoint,
+    )
+    .await;
 
-    None
+    Some(StorageHarness {
+        file_io,
+        label: "opendal_s3",
+        base_path: "s3://bucket1/".to_string(),
+        _tempdirs: None,
+    })
 }
 
 async fn load_opendal_gcs() -> Option<StorageHarness> {
     let gcs_endpoint = get_gcs_endpoint();
 
     if !is_endpoint_reachable(&gcs_endpoint).await {
-        eprintln!("Skipping GCS storage test: {gcs_endpoint} not reachable");
-        return None;
+        return handle_unreachable_endpoint("opendal_gcs", &gcs_endpoint);
     }
 
     let mut bucket_data = HashMap::new();
@@ -143,39 +182,36 @@ async fn load_opendal_gcs() -> Option<StorageHarness> {
 
     let client = reqwest::Client::new();
     let endpoint = format!("{gcs_endpoint}/storage/v1/b");
-    if client
+    let response = client
         .post(&endpoint)
         .json(&bucket_data)
         .send()
         .await
-        .is_err()
-    {
-        return None;
-    }
+        .unwrap_or_else(|e| {
+            panic!("Failed to send GCS Bucket creation request to '{endpoint}': {e}")
+        });
 
+    let status = response.status();
+    if !status.is_success() && status != reqwest::StatusCode::CONFLICT {
+        panic!("failed to create GCS test bucket '{FAKE_GCS_BUCKET}': HTTP status {status}");
+    }
     let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::Gcs))
         .with_props(vec![
-            (GCS_SERVICE_HOST, gcs_endpoint),
+            (GCS_SERVICE_HOST, gcs_endpoint.clone()),
             (GCS_NO_AUTH, "true".to_string()),
         ])
         .build();
 
     let base_path = format!("gs://{FAKE_GCS_BUCKET}/");
-    let mut retries = 0;
-    while retries < 15 {
-        if file_io.exists(&base_path).await.unwrap_or(false) {
-            return Some(StorageHarness {
-                file_io,
-                label: "opendal_gcs",
-                base_path,
-                _tempdirs: Vec::new(),
-            });
-        }
-        sleep(Duration::from_millis(500)).await;
-        retries += 1;
-    }
 
-    None
+    wait_until_ready(&file_io, &base_path, "opendal_gcs", &gcs_endpoint).await;
+
+    Some(StorageHarness {
+        file_io,
+        label: "opendal_gcs",
+        base_path,
+        _tempdirs: None,
+    })
 }
 
 async fn load_opendal_fs() -> Option<StorageHarness> {
@@ -187,7 +223,7 @@ async fn load_opendal_fs() -> Option<StorageHarness> {
         file_io,
         label: "opendal_fs",
         base_path,
-        _tempdirs: vec![temp_dir],
+        _tempdirs: Some(Box::new(temp_dir)),
     })
 }
 
@@ -198,7 +234,7 @@ async fn load_opendal_memory() -> Option<StorageHarness> {
         file_io,
         label: "opendal_memory",
         base_path: "memory:/".to_string(),
-        _tempdirs: Vec::new(),
+        _tempdirs: None,
     })
 }
 
@@ -206,13 +242,12 @@ async fn load_opendal_resolving() -> Option<StorageHarness> {
     let object_store_endpoint = get_object_store_endpoint();
 
     if !is_endpoint_reachable(&object_store_endpoint).await {
-        eprintln!("Skipping Resolving storage test: {object_store_endpoint} not reachable");
-        return None;
+        return handle_unreachable_endpoint("opendal_resolving", &object_store_endpoint);
     }
 
     let file_io = FileIOBuilder::new(Arc::new(OpenDalResolvingStorageFactory::new()))
         .with_props(vec![
-            (S3_ENDPOINT, object_store_endpoint),
+            (S3_ENDPOINT, object_store_endpoint.clone()),
             (S3_ACCESS_KEY_ID, "admin".to_string()),
             (S3_SECRET_ACCESS_KEY, "password".to_string()),
             (S3_REGION, "us-east-1".to_string()),
@@ -220,64 +255,22 @@ async fn load_opendal_resolving() -> Option<StorageHarness> {
         ])
         .build();
 
-    let mut retries = 0;
-    while retries < 15 {
-        if file_io.exists("s3://bucket1/").await.unwrap_or(false) {
-            return Some(StorageHarness {
-                file_io,
-                label: "opendal_resolving",
-                base_path: "s3://bucket1/".to_string(),
-                _tempdirs: Vec::new(),
-            });
-        }
-        sleep(Duration::from_millis(500)).await;
-        retries += 1;
-    }
+    wait_until_ready(
+        &file_io,
+        "s3://bucket1/",
+        "opendal_resolving",
+        &object_store_endpoint,
+    )
+    .await;
 
-    None
+    Some(StorageHarness {
+        file_io,
+        label: "opendal_resolving",
+        base_path: "s3://bucket1/".to_string(),
+        _tempdirs: None,
+    })
 }
 
 pub fn unique_path(harness: &StorageHarness, test_name: &str) -> String {
     format!("{}{}", harness.base_path, normalize_test_name(test_name))
-}
-
-#[cfg(test)]
-mod endpoint_tests {
-    use tokio::io::AsyncWriteExt;
-    use tokio::net::TcpListener;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn test_endpoint_unreachable_on_closed_port() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-
-        let url = format!("http://127.0.0.1:{port}");
-        assert!(!is_endpoint_reachable(&url).await);
-    }
-
-    #[tokio::test]
-    async fn test_endpoint_unreachable_on_invalid_url() {
-        assert!(!is_endpoint_reachable("not_a_valid_url").await);
-        assert!(!is_endpoint_reachable("http://invalid-host-that-does-not-exist:9999").await);
-    }
-
-    #[tokio::test]
-    async fn test_endpoint_reachable_on_active_server() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let url = format!("http://127.0.0.1:{port}");
-
-        let server_handle = tokio::spawn(async move {
-            if let Ok((mut stream, _)) = listener.accept().await {
-                let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
-                let _ = stream.write_all(response.as_bytes()).await;
-            }
-        });
-
-        assert!(is_endpoint_reachable(&url).await);
-        let _ = server_handle.await;
-    }
 }

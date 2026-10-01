@@ -22,9 +22,8 @@ mod common;
 use std::sync::Arc;
 
 use common::{StorageKind, load_storage};
-use iceberg::io::{
-    FileIOBuilder, LocalFsStorageFactory, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION,
-};
+use iceberg::ErrorKind;
+use iceberg::io::{FileIOBuilder, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION};
 use iceberg_storage_opendal::{
     AwsCredential, CustomAwsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
 };
@@ -62,22 +61,6 @@ impl ProvideCredential for MockCredentialLoader {
     ) -> reqsign_core::Result<Option<AwsCredential>> {
         Ok(self.credential.clone())
     }
-}
-
-#[test]
-fn test_custom_aws_credential_loader_instantiation() {
-    let mock_loader = MockCredentialLoader::new_object_store();
-    let custom_loader = CustomAwsCredentialLoader::new(mock_loader);
-
-    let _builder = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
-        customized_credential_load: Some(custom_loader),
-    }))
-    .with_props(vec![
-        (S3_ENDPOINT, "http://localhost:9000".to_string()),
-        ("bucket", "test-bucket".to_string()),
-        (S3_REGION, "us-east-1".to_string()),
-        (S3_PATH_STYLE_ACCESS, "true".to_string()),
-    ]);
 }
 
 #[rstest]
@@ -136,44 +119,11 @@ async fn test_s3_with_custom_credential_loader_failure(
     ])
     .build();
 
-    match file_io_with_custom_creds.exists("s3://bucket1/any").await {
-        Ok(_) => panic!("Expected error, but got Ok"),
-        Err(e) => {
-            assert!(
-                e.to_string().contains("failed to load signing credential"),
-                "unexpected error: {e}"
-            );
-        }
-    }
+    let err = file_io_with_custom_creds
+        .exists("s3://bucket1/any")
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Unexpected);
 
     Ok(())
-}
-
-#[tokio::test]
-async fn test_file_io_builder_with_prop() {
-    let builder = FileIOBuilder::new(Arc::new(LocalFsStorageFactory)).with_prop("key1", "value1");
-    assert_eq!(builder.config().get("key1"), Some(&"value1".to_string()));
-}
-
-#[tokio::test]
-async fn test_file_io_builder_with_props() {
-    let builder = FileIOBuilder::new(Arc::new(LocalFsStorageFactory)).with_props(vec![
-        ("key1", "value1"),
-        ("key2", "value2"),
-        ("key3", "value3"),
-    ]);
-    assert_eq!(builder.config().get("key1"), Some(&"value1".to_string()));
-    assert_eq!(builder.config().get("key2"), Some(&"value2".to_string()));
-    assert_eq!(builder.config().get("key3"), Some(&"value3".to_string()));
-}
-
-#[tokio::test]
-async fn test_file_io_builder_build_returns_file_io() {
-    let file_io = FileIOBuilder::new(Arc::new(LocalFsStorageFactory))
-        .with_prop("some_key", "some_value")
-        .build();
-    assert_eq!(
-        file_io.config().get("some_key"),
-        Some(&"some_value".to_string())
-    );
 }

@@ -23,20 +23,18 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use common::{StorageKind, load_storage, unique_path};
-use iceberg::io::{FileIOBuilder, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION};
+use iceberg::io::{FileIO, FileIOBuilder, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION};
 use iceberg_storage_opendal::{
     AwsCredential, CustomAwsCredentialLoader, OpenDalResolvingStorageFactory, ProvideCredential,
 };
 use iceberg_test_utils::{get_object_store_endpoint, set_up};
 use reqsign_core::Context;
 use rstest::rstest;
+use tempfile::TempDir;
 
-fn temp_fs_path(name: &str) -> String {
-    let dir = std::env::temp_dir().join("iceberg_resolving_tests");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(name);
-    let _ = std::fs::remove_file(&path);
-    format!("file:/{}", path.display())
+fn roundtrip_file_io(file_io: &FileIO) -> FileIO {
+    let serialized = file_io.serialize_all().unwrap();
+    FileIO::deserialize_all(&serialized).unwrap()
 }
 
 #[rstest]
@@ -48,7 +46,11 @@ async fn test_mixed_scheme_write_and_read(#[case] kind: StorageKind) -> iceberg:
     };
 
     let s3_path = unique_path(&harness, "test_mixed_scheme_write_and_read");
-    let fs_path = temp_fs_path("mixed_write_and_read.txt");
+    let temp_dir = TempDir::new().unwrap();
+    let fs_path = format!(
+        "file:{}/mixed_write_and_read.txt",
+        temp_dir.path().display()
+    );
     let mem_path = "memory://test_mixed_scheme_write_and_read";
 
     // Write to all three schemes
@@ -106,6 +108,9 @@ async fn test_mixed_scheme_write_and_read(#[case] kind: StorageKind) -> iceberg:
         Bytes::from("from_memory")
     );
 
+    let _ = harness.file_io.delete(&s3_path).await;
+    let _ = harness.file_io.delete(mem_path).await;
+
     Ok(())
 }
 
@@ -118,7 +123,11 @@ async fn test_mixed_scheme_exists_independently(#[case] kind: StorageKind) -> ic
     };
 
     let s3_path = unique_path(&harness, "test_mixed_scheme_exists_independently");
-    let fs_path = temp_fs_path("mixed_exists_independently.txt");
+    let temp_dir = TempDir::new().unwrap();
+    let fs_path = format!(
+        "file:{}/mixed_exists_independently.txt",
+        temp_dir.path().display()
+    );
     let mem_path = "memory://test_mixed_scheme_exists_independently";
 
     // Clean up S3 from previous runs
@@ -143,6 +152,8 @@ async fn test_mixed_scheme_exists_independently(#[case] kind: StorageKind) -> ic
     assert!(harness.file_io.exists(&fs_path).await.unwrap());
     assert!(!harness.file_io.exists(mem_path).await.unwrap());
 
+    let _ = harness.file_io.delete(&fs_path).await;
+
     Ok(())
 }
 
@@ -157,7 +168,11 @@ async fn test_mixed_scheme_delete_one_keeps_others(
     };
 
     let s3_path = unique_path(&harness, "test_mixed_scheme_delete_one_keeps_others");
-    let fs_path = temp_fs_path("mixed_delete_one_keeps_others.txt");
+    let temp_dir = TempDir::new().unwrap();
+    let fs_path = format!(
+        "file:{}/mixed_delete_one_keeps_others.txt",
+        temp_dir.path().display()
+    );
     let mem_path = "memory://test_mixed_scheme_delete_one_keeps_others";
 
     // Write to all three
@@ -212,6 +227,9 @@ async fn test_mixed_scheme_delete_one_keeps_others(
         Bytes::from("mem")
     );
 
+    let _ = harness.file_io.delete(&s3_path).await;
+    let _ = harness.file_io.delete(mem_path).await;
+
     Ok(())
 }
 
@@ -226,7 +244,8 @@ async fn test_mixed_scheme_interleaved_operations(
     };
 
     let s3_path = unique_path(&harness, "test_mixed_scheme_interleaved");
-    let fs_path = temp_fs_path("mixed_interleaved.txt");
+    let temp_dir = TempDir::new().unwrap();
+    let fs_path = format!("file:{}/mixed_interleaved.txt", temp_dir.path().display());
     let mem_path = "memory://test_mixed_scheme_interleaved";
 
     // Interleave: write fs, write memory, write s3
@@ -283,6 +302,9 @@ async fn test_mixed_scheme_interleaved_operations(
             .unwrap(),
         Bytes::from("fs_data")
     );
+
+    let _ = harness.file_io.delete(&s3_path).await;
+    let _ = harness.file_io.delete(mem_path).await;
 
     Ok(())
 }
@@ -366,5 +388,31 @@ async fn test_resolving_with_custom_credential_loader(
 
     assert!(file_io.exists("s3://bucket1/").await.unwrap());
 
+    Ok(())
+}
+
+#[rstest]
+#[case::opendal_resolving(StorageKind::OpenDalResolving)]
+#[tokio::test]
+async fn test_resolving_serialization_roundtrip(#[case] kind: StorageKind) -> iceberg::Result<()> {
+    let Some(harness) = load_storage(kind).await else {
+        return Ok(());
+    };
+    let file_io = roundtrip_file_io(&harness.file_io);
+    let s3_path = unique_path(&harness, "test_resolving_serialization_roundtrip");
+
+    let _ = file_io.delete(&s3_path).await;
+    file_io
+        .new_output(&s3_path)
+        .unwrap()
+        .write(Bytes::from_static(b"resolving_roundtrip"))
+        .await
+        .unwrap();
+    assert_eq!(
+        file_io.new_input(&s3_path).unwrap().read().await.unwrap(),
+        Bytes::from_static(b"resolving_roundtrip")
+    );
+    file_io.delete(&s3_path).await.unwrap();
+    assert!(!file_io.exists(&s3_path).await.unwrap());
     Ok(())
 }

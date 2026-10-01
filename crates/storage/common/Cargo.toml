@@ -29,9 +29,6 @@ description = "Apache Iceberg Storage Common Test Suite"
 keywords = ["iceberg", "storage"]
 publish = false
 
-[dependencies]
-iceberg = { workspace = true }
-
 [dev-dependencies]
 anyhow = { workspace = true }
 bytes = { workspace = true }
@@ -39,7 +36,7 @@ futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg-storage-opendal = { workspace = true, features = ["opendal-all"] }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-reqsign-core = { version = "3.0.0" }
+reqsign-core = { workspace = true }
 reqwest = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }

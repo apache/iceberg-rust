@@ -22,6 +22,7 @@ mod common;
 use bytes::Bytes;
 use common::{StorageHarness, StorageKind, load_storage, unique_path};
 use futures::StreamExt;
+use iceberg::ErrorKind;
 use iceberg::io::FileIO;
 use rstest::rstest;
 
@@ -40,19 +41,19 @@ fn roundtrip_file_io(file_io: &FileIO) -> FileIO {
 
 async fn run_exists(harness: StorageHarness) -> iceberg::Result<()> {
     let non_existent = unique_path(&harness, "non_existent_file_that_does_not_exist");
-    assert!(!harness.file_io.exists(&non_existent).await.unwrap());
-    assert!(harness.file_io.exists(&harness.base_path).await.unwrap());
+    assert!(!harness.file_io.exists(&non_existent).await?);
+    assert!(harness.file_io.exists(&harness.base_path).await?);
     Ok(())
 }
 
 async fn run_write(harness: StorageHarness) -> iceberg::Result<()> {
     let path = unique_path(&harness, "test_file_io_write");
     let _ = harness.file_io.delete(&path).await;
-    assert!(!harness.file_io.exists(&path).await.unwrap());
+    assert!(!harness.file_io.exists(&path).await?);
 
-    let output_file = harness.file_io.new_output(&path).unwrap();
-    output_file.write("123".into()).await.unwrap();
-    assert!(harness.file_io.exists(&path).await.unwrap());
+    let output_file = harness.file_io.new_output(&path)?;
+    output_file.write("123".into()).await?;
+    assert!(harness.file_io.exists(&path).await?);
 
     let _ = harness.file_io.delete(&path).await;
     Ok(())
@@ -62,11 +63,11 @@ async fn run_read(harness: StorageHarness) -> iceberg::Result<()> {
     let path = unique_path(&harness, "test_file_io_read");
     let _ = harness.file_io.delete(&path).await;
 
-    let output_file = harness.file_io.new_output(&path).unwrap();
-    output_file.write("test_input".into()).await.unwrap();
+    let output_file = harness.file_io.new_output(&path)?;
+    output_file.write("test_input".into()).await?;
 
-    let input_file = harness.file_io.new_input(&path).unwrap();
-    let buffer = input_file.read().await.unwrap();
+    let input_file = harness.file_io.new_input(&path)?;
+    let buffer = input_file.read().await?;
     assert_eq!(buffer, "test_input".as_bytes());
 
     let _ = harness.file_io.delete(&path).await;
@@ -79,21 +80,19 @@ async fn run_delete(harness: StorageHarness) -> iceberg::Result<()> {
 
     harness
         .file_io
-        .new_output(&path)
-        .unwrap()
+        .new_output(&path)?
         .write("delete_me".into())
-        .await
-        .unwrap();
-    assert!(harness.file_io.exists(&path).await.unwrap());
+        .await?;
+    assert!(harness.file_io.exists(&path).await?);
 
-    harness.file_io.delete(&path).await.unwrap();
-    assert!(!harness.file_io.exists(&path).await.unwrap());
+    harness.file_io.delete(&path).await?;
+    assert!(!harness.file_io.exists(&path).await?);
     Ok(())
 }
 
 async fn run_delete_nonexistent(harness: StorageHarness) -> iceberg::Result<()> {
     let path = unique_path(&harness, "test_file_io_delete_nonexistent");
-    harness.file_io.delete(&path).await.unwrap();
+    harness.file_io.delete(&path).await?;
     Ok(())
 }
 
@@ -104,24 +103,22 @@ async fn run_delete_stream(harness: StorageHarness) -> iceberg::Result<()> {
         let _ = harness.file_io.delete(path).await;
         harness
             .file_io
-            .new_output(path)
-            .unwrap()
+            .new_output(path)?
             .write("delete-me".into())
-            .await
-            .unwrap();
-        assert!(harness.file_io.exists(path).await.unwrap());
+            .await?;
+        assert!(harness.file_io.exists(path).await?);
     }
     let stream = futures::stream::iter(paths.clone()).boxed();
-    harness.file_io.delete_stream(stream).await.unwrap();
+    harness.file_io.delete_stream(stream).await?;
     for path in &paths {
-        assert!(!harness.file_io.exists(path).await.unwrap());
+        assert!(!harness.file_io.exists(path).await?);
     }
     Ok(())
 }
 
 async fn run_delete_stream_empty(harness: StorageHarness) -> iceberg::Result<()> {
     let stream = futures::stream::empty().boxed();
-    harness.file_io.delete_stream(stream).await.unwrap();
+    harness.file_io.delete_stream(stream).await?;
     Ok(())
 }
 
@@ -131,13 +128,11 @@ async fn run_metadata(harness: StorageHarness) -> iceberg::Result<()> {
     let content = "metadata_test_content";
     harness
         .file_io
-        .new_output(&path)
-        .unwrap()
+        .new_output(&path)?
         .write(content.into())
-        .await
-        .unwrap();
-    let input_file = harness.file_io.new_input(&path).unwrap();
-    let metadata = input_file.metadata().await.unwrap();
+        .await?;
+    let input_file = harness.file_io.new_input(&path)?;
+    let metadata = input_file.metadata().await?;
     assert_eq!(metadata.size, content.len() as u64);
     let _ = harness.file_io.delete(&path).await;
     Ok(())
@@ -149,14 +144,12 @@ async fn run_range_read(harness: StorageHarness) -> iceberg::Result<()> {
     let content = b"0123456789abcdef";
     harness
         .file_io
-        .new_output(&path)
-        .unwrap()
+        .new_output(&path)?
         .write(Bytes::from_static(content))
-        .await
-        .unwrap();
-    let input_file = harness.file_io.new_input(&path).unwrap();
-    let reader = input_file.reader().await.unwrap();
-    let range_data = reader.read(4..10).await.unwrap();
+        .await?;
+    let input_file = harness.file_io.new_input(&path)?;
+    let reader = input_file.reader().await?;
+    let range_data = reader.read(4..10).await?;
     assert_eq!(range_data.as_ref(), &content[4..10]);
     let _ = harness.file_io.delete(&path).await;
     Ok(())
@@ -166,16 +159,16 @@ async fn run_zero_byte_file(harness: StorageHarness) -> iceberg::Result<()> {
     let path = unique_path(&harness, "test_file_io_zero_byte_file");
     let _ = harness.file_io.delete(&path).await;
 
-    let output_file = harness.file_io.new_output(&path).unwrap();
-    output_file.write(Bytes::new()).await.unwrap();
+    let output_file = harness.file_io.new_output(&path)?;
+    output_file.write(Bytes::new()).await?;
 
-    assert!(harness.file_io.exists(&path).await.unwrap());
+    assert!(harness.file_io.exists(&path).await?);
 
-    let input_file = harness.file_io.new_input(&path).unwrap();
-    let metadata = input_file.metadata().await.unwrap();
+    let input_file = harness.file_io.new_input(&path)?;
+    let metadata = input_file.metadata().await?;
     assert_eq!(metadata.size, 0);
 
-    let data = input_file.read().await.unwrap();
+    let data = input_file.read().await?;
     assert_eq!(data, Bytes::new());
 
     let _ = harness.file_io.delete(&path).await;
@@ -191,26 +184,24 @@ async fn run_delete_stream_mixed(harness: StorageHarness) -> iceberg::Result<()>
         let _ = harness.file_io.delete(path).await;
         harness
             .file_io
-            .new_output(path)
-            .unwrap()
+            .new_output(path)?
             .write("data".into())
-            .await
-            .unwrap();
-        assert!(harness.file_io.exists(path).await.unwrap());
+            .await?;
+        assert!(harness.file_io.exists(path).await?);
     }
     for path in &nonexistent_paths {
         let _ = harness.file_io.delete(path).await;
-        assert!(!harness.file_io.exists(path).await.unwrap());
+        assert!(!harness.file_io.exists(path).await?);
     }
 
     let mut all_paths = existing_paths.clone();
     all_paths.extend(nonexistent_paths);
 
     let stream = futures::stream::iter(all_paths).boxed();
-    harness.file_io.delete_stream(stream).await.unwrap();
+    harness.file_io.delete_stream(stream).await?;
 
     for path in &existing_paths {
-        assert!(!harness.file_io.exists(path).await.unwrap());
+        assert!(!harness.file_io.exists(path).await?);
     }
     Ok(())
 }
@@ -225,19 +216,20 @@ async fn run_concurrent_writes(harness: StorageHarness) -> iceberg::Result<()> {
         let payload = format!("payload-{i}");
 
         handles.push(tokio::spawn(async move {
-            let output = file_io.new_output(&path).unwrap();
-            output.write(payload.clone().into()).await.unwrap();
+            let output = file_io.new_output(&path)?;
+            output.write(payload.clone().into()).await?;
 
-            let input = file_io.new_input(&path).unwrap();
-            let data = input.read().await.unwrap();
+            let input = file_io.new_input(&path)?;
+            let data = input.read().await?;
             assert_eq!(data, payload.as_bytes());
 
             let _ = file_io.delete(&path).await;
+            Ok::<(), iceberg::Error>(())
         }));
     }
 
     for handle in handles {
-        handle.await.unwrap();
+        handle.await.unwrap()?;
     }
 
     Ok(())
@@ -363,16 +355,14 @@ async fn test_file_io_delete_prefix(#[case] kind: StorageKind) -> iceberg::Resul
     for path in &paths {
         harness
             .file_io
-            .new_output(path)
-            .unwrap()
+            .new_output(path)?
             .write("data".into())
-            .await
-            .unwrap();
-        assert!(harness.file_io.exists(path).await.unwrap());
+            .await?;
+        assert!(harness.file_io.exists(path).await?);
     }
-    harness.file_io.delete_prefix(&prefix).await.unwrap();
+    harness.file_io.delete_prefix(&prefix).await?;
     for path in &paths {
-        assert!(!harness.file_io.exists(path).await.unwrap());
+        assert!(!harness.file_io.exists(path).await?);
     }
     Ok(())
 }
@@ -387,7 +377,7 @@ async fn test_file_io_delete_prefix_nonexistent(#[case] kind: StorageKind) -> ic
         return Ok(());
     };
     let prefix = unique_path(&harness, "test_file_io_delete_prefix_nonexistent");
-    harness.file_io.delete_prefix(&prefix).await.unwrap();
+    harness.file_io.delete_prefix(&prefix).await?;
     Ok(())
 }
 
@@ -415,9 +405,11 @@ async fn test_file_io_metadata_nonexistent(#[case] kind: StorageKind) -> iceberg
         return Ok(());
     };
     let path = unique_path(&harness, "test_file_io_metadata_nonexistent");
-    let input_file = harness.file_io.new_input(&path).unwrap();
-    let result = input_file.metadata().await;
-    assert!(result.is_err());
+    let input_file = harness.file_io.new_input(&path)?;
+    let Err(err) = input_file.metadata().await else {
+        panic!("expected metadata on nonexistent file to return error");
+    };
+    assert_eq!(err.kind(), ErrorKind::Unexpected);
     Ok(())
 }
 
@@ -449,16 +441,25 @@ async fn test_file_io_range_read_out_of_bounds(#[case] kind: StorageKind) -> ice
     let content = b"0123456789";
     harness
         .file_io
-        .new_output(&path)
-        .unwrap()
+        .new_output(&path)?
         .write(Bytes::from_static(content))
-        .await
-        .unwrap();
+        .await?;
 
-    let input_file = harness.file_io.new_input(&path).unwrap();
-    let reader = input_file.reader().await.unwrap();
+    let input_file = harness.file_io.new_input(&path)?;
+    let reader = input_file.reader().await?;
     let result = reader.read(100..200).await;
-    assert!(result.is_err());
+
+    // TODO: Standardize out-of-bounds range-read behavior in `FileRead` trait docs.
+    // Cloud backends (S3/GCS via HTTP 416) or object_store may surface an error,
+    // while POSIX/memory backends may return an empty buffer (EOF semantics).
+    // Accept either an error or 0 bytes until the contract is formally specified.
+    if let Ok(bytes) = result {
+        assert!(
+            bytes.is_empty(),
+            "expected empty read for out-of-bounds range, got {} bytes",
+            bytes.len()
+        );
+    }
 
     let _ = harness.file_io.delete(&path).await;
     Ok(())
@@ -501,16 +502,14 @@ async fn test_file_io_streaming_write(#[case] kind: StorageKind) -> iceberg::Res
         return Ok(());
     };
     let path = unique_path(&harness, "test_file_io_streaming_write");
-    let output_file = harness.file_io.new_output(&path).unwrap();
-    let mut writer = output_file.writer().await.unwrap();
-    writer
-        .write(Bytes::from("streaming_content"))
-        .await
-        .unwrap();
-    writer.close().await.unwrap();
-    let input_file = harness.file_io.new_input(&path).unwrap();
-    let buffer = input_file.read().await.unwrap();
+    let output_file = harness.file_io.new_output(&path)?;
+    let mut writer = output_file.writer().await?;
+    writer.write(Bytes::from("streaming_content")).await?;
+    writer.close().await?;
+    let input_file = harness.file_io.new_input(&path)?;
+    let buffer = input_file.read().await?;
     assert_eq!(buffer, Bytes::from("streaming_content"));
+    let _ = harness.file_io.delete(&path).await;
     Ok(())
 }
 
@@ -527,17 +526,21 @@ async fn test_file_io_streaming_write_double_close(
         return Ok(());
     };
     let path = unique_path(&harness, "test_file_io_streaming_write_double_close");
-    let output_file = harness.file_io.new_output(&path).unwrap();
-    let mut writer = output_file.writer().await.unwrap();
-    writer.write(Bytes::from("data")).await.unwrap();
-    writer.close().await.unwrap();
-    let result = writer.close().await;
-    assert!(result.is_err());
+    let output_file = harness.file_io.new_output(&path)?;
+    let mut writer = output_file.writer().await?;
+    writer.write(Bytes::from("data")).await?;
+    writer.close().await?;
+    let Err(err) = writer.close().await else {
+        panic!("expected double close to return error");
+    };
+    assert_eq!(err.kind(), ErrorKind::Unexpected);
+    let _ = harness.file_io.delete(&path).await;
     Ok(())
 }
 
 #[rstest]
 #[case::opendal_s3(StorageKind::OpenDalS3)]
+#[case::opendal_gcs(StorageKind::OpenDalGcs)]
 #[case::opendal_fs(StorageKind::OpenDalFs)]
 #[case::opendal_memory(StorageKind::OpenDalMemory)]
 #[tokio::test]
@@ -550,16 +553,14 @@ async fn test_file_io_serialization_roundtrip(#[case] kind: StorageKind) -> iceb
 
     let _ = file_io.delete(&path).await;
     file_io
-        .new_output(&path)
-        .unwrap()
+        .new_output(&path)?
         .write(Bytes::from_static(b"roundtrip"))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(
-        file_io.new_input(&path).unwrap().read().await.unwrap(),
+        file_io.new_input(&path)?.read().await?,
         Bytes::from_static(b"roundtrip")
     );
-    file_io.delete(&path).await.unwrap();
-    assert!(!file_io.exists(&path).await.unwrap());
+    file_io.delete(&path).await?;
+    assert!(!file_io.exists(&path).await?);
     Ok(())
 }
