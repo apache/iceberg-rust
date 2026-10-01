@@ -2630,6 +2630,31 @@ mod tests {
         pretty_assertions::assert_eq!(strip_metadata_from_schema(&input).unwrap(), expected);
     }
 
+    /// Fields are rebuilt in nesting order, not looked up by name, so a path
+    /// that repeats names (`a.b.a.b`) keeps each level's name and nullability.
+    #[test]
+    fn test_strip_metadata_with_repeated_nested_names() {
+        let schema = |with_metadata: bool| {
+            let field = |name: &str, ty: DataType, nullable: bool| {
+                let metadata = if with_metadata {
+                    HashMap::from([("k".to_string(), name.to_string())])
+                } else {
+                    HashMap::new()
+                };
+                Field::new(name, ty, nullable).with_metadata(metadata)
+            };
+            let struct_of = |child: Field| DataType::Struct(Fields::from(vec![child]));
+            let inner_b = field("b", DataType::Int32, true);
+            let inner_a = field("a", struct_of(inner_b), false);
+            let outer_b = field("b", struct_of(inner_a), false);
+            ArrowSchema::new(vec![field("a", struct_of(outer_b), true)])
+        };
+
+        let (input, expected) = (schema(true), schema(false));
+        assert_ne!(input, expected);
+        pretty_assertions::assert_eq!(strip_metadata_from_schema(&input).unwrap(), expected);
+    }
+
     /// arrow-rs and DataFusion name a map's entries field `entries`, and
     /// `schema_to_arrow_schema` names it `DEFAULT_MAP_FIELD_NAME`. Stripping
     /// renames it, so a map from either compares equal to a table's.
