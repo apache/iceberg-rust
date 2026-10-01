@@ -1,3 +1,4 @@
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,25 +15,28 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-[package]
-edition = { workspace = true }
-homepage = { workspace = true }
-name = "iceberg_test_utils"
-publish = false
-rust-version = { workspace = true }
-version = { workspace = true }
+name: "Issue and Pull Request Labeler"
+on:
+  issues:
+    types: [opened, edited]
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
+    types: [opened, edited]
 
-license = { workspace = true }
-repository = { workspace = true }
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
 
-[dependencies]
-iceberg = { workspace = true }
-tokio = { workspace = true }
-tracing-subscriber = { workspace = true }
-
-[features]
-tests = []
-
-[lints]
-workspace = true
+jobs:
+  triage:
+    if: github.repository_owner == 'apache'
+    runs-on: ubuntu-slim
+    steps:
+    - uses: github/issue-labeler@ccca1e16fcb66762200e616fc29b57b940c1cb67 # v3.5
+      with:
+        configuration-path: .github/labeler.yml  # label -> regex rules
+        enable-versioned-regex: 0  # required; 0 = no versioned configs
+        include-title: 1  # match title
+        include-body: 1  # match body (default)
