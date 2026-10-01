@@ -17,7 +17,7 @@
 
 //! Incremental append scan for reading only newly added data between snapshots.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::arrow::ArrowReaderBuilder;
@@ -26,10 +26,12 @@ use crate::io::FileIO;
 use crate::runtime::Runtime;
 use crate::scan::{
     ArrowRecordBatchStream, ExpressionEvaluatorCache, FileScanTaskStream, ManifestEvaluatorCache,
-    ManifestSelection, PartitionFilterCache, PlanContext, bind_scan_predicate, plan_scan_files,
-    projected_field_ids, projected_partition_type, table_name_mapping,
+    ManifestSelection, PartitionFilterCache, PlanContext, bind_scan_predicate,
+    collect_scan_field_ids, plan_scan_files, projected_partition_type,
 };
-use crate::spec::{ManifestContentType, ManifestStatus, Operation, SnapshotRef, TableMetadataRef};
+use crate::spec::{
+    ManifestContentType, ManifestStatus, Operation, SnapshotRef, SortOrderRef, TableMetadataRef,
+};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::util::snapshot::ancestors_between;
@@ -375,11 +377,24 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
 
         let schema = self.table.metadata().current_schema().clone();
         let field_ids =
-            projected_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
+            collect_scan_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
         let scan_bound_predicate =
             bind_scan_predicate(&schema, self.filter.as_ref(), self.case_sensitive)?;
-        let name_mapping = table_name_mapping(self.table)?;
+        let name_mapping = self
+            .table
+            .metadata()
+            .table_properties()
+            .default_name_mapping()?
+            .map(Arc::new);
         let unified_partition_type = projected_partition_type(self.table, &schema, &field_ids)?;
+
+        let sort_orders = Arc::new(
+            self.table
+                .metadata()
+                .sort_orders_iter()
+                .map(|order| (order.order_id, order.clone()))
+                .collect::<HashMap<i64, SortOrderRef>>(),
+        );
 
         let plan_context = PlanContext {
             table_metadata: self.table.metadata_ref(),
@@ -394,6 +409,7 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
             unified_partition_type,
+            sort_orders,
         };
 
         Ok(IncrementalAppendScan {
@@ -414,10 +430,58 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use futures::TryStreamExt;
 
     use super::{AppendRange, IncrementalAppendScan};
-    use crate::scan::test_utils::TableTestFixture;
+    use crate::spec::SortOrder;
+    use crate::test_utils::scan::TableTestFixture;
+
+    #[tokio::test]
+    async fn test_incremental_scan_carries_sort_orders_into_file_scan_tasks() {
+        let mut fixture = TableTestFixture::new();
+        let mut metadata = fixture.table.metadata().clone();
+        metadata
+            .sort_orders
+            .insert(0, Arc::new(SortOrder::unsorted_order()));
+        fixture.table = fixture.table.with_metadata(Arc::new(metadata));
+        fixture
+            .setup_manifest_files_with_sort_order_ids([Some(3), None, Some(99), Some(0)])
+            .await;
+
+        let snapshot_id = fixture
+            .table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .snapshot_id();
+        let mut tasks: Vec<_> = fixture
+            .table
+            .incremental_append_scan_inclusive(Some(snapshot_id), Some(snapshot_id))
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        tasks.sort_by(|a, b| a.data_file_path().cmp(b.data_file_path()));
+
+        assert_eq!(tasks.len(), 4);
+        for (task, expected_id) in tasks.iter().zip([Some(3), None, Some(99), Some(0)]) {
+            assert_eq!(task.sort_order_id(), expected_id);
+            assert_eq!(
+                task.sort_order(),
+                if expected_id == Some(3) {
+                    fixture.table.metadata().sort_order_by_id(3)
+                } else {
+                    None
+                }
+            );
+        }
+    }
 
     /// Sorted base names of the data files `scan` yields. Duplicates are kept so
     /// double-counting is visible.
@@ -433,10 +497,10 @@ mod tests {
         let mut names: Vec<String> = tasks
             .iter()
             .map(|task| {
-                task.data_file_path
+                task.data_file_path()
                     .rsplit('/')
                     .next()
-                    .unwrap_or(&task.data_file_path)
+                    .unwrap_or(task.data_file_path())
                     .to_string()
             })
             .collect();
@@ -775,7 +839,7 @@ mod tests {
             "Incremental scan should return exactly 1 file"
         );
         assert_eq!(
-            tasks[0].data_file_path,
+            tasks[0].data_file_path(),
             format!("{}/1.parquet", &fixture.table_location),
             "Should only return the file added in S2"
         );
@@ -943,7 +1007,7 @@ mod tests {
             .unwrap();
 
         // Sort by path for deterministic assertions
-        tasks.sort_by(|a, b| a.data_file_path.cmp(&b.data_file_path));
+        tasks.sort_by(|a, b| a.data_file_path().cmp(b.data_file_path()));
 
         assert_eq!(
             tasks.len(),
@@ -954,10 +1018,10 @@ mod tests {
         let file_names: Vec<&str> = tasks
             .iter()
             .map(|t| {
-                t.data_file_path
+                t.data_file_path()
                     .rsplit('/')
                     .next()
-                    .unwrap_or(&t.data_file_path)
+                    .unwrap_or(t.data_file_path())
             })
             .collect();
 
@@ -993,9 +1057,9 @@ mod tests {
 
         assert_eq!(tasks.len(), 1, "Should return exactly 1 file");
         assert!(
-            tasks[0].data_file_path.ends_with("s3.parquet"),
+            tasks[0].data_file_path().ends_with("s3.parquet"),
             "Should return s3.parquet, got: {}",
-            tasks[0].data_file_path
+            tasks[0].data_file_path()
         );
     }
 
@@ -1161,7 +1225,7 @@ mod tests {
             .await
             .unwrap();
 
-        tasks.sort_by(|a, b| a.data_file_path.cmp(&b.data_file_path));
+        tasks.sort_by(|a, b| a.data_file_path().cmp(b.data_file_path()));
 
         assert_eq!(
             tasks.len(),
@@ -1172,10 +1236,10 @@ mod tests {
         let file_names: Vec<&str> = tasks
             .iter()
             .map(|t| {
-                t.data_file_path
+                t.data_file_path()
                     .rsplit('/')
                     .next()
-                    .unwrap_or(&t.data_file_path)
+                    .unwrap_or(t.data_file_path())
             })
             .collect();
 

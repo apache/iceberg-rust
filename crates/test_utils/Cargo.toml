@@ -28,6 +28,7 @@ repository = { workspace = true }
 
 [dependencies]
 iceberg = { workspace = true }
+tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [features]

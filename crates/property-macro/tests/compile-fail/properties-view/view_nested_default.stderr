@@ -1,0 +1,6 @@
+error: nested fields obtain defaults from their own property annotations and cannot declare default in #[property(...)]
+  --> tests/compile-fail/properties-view/view_nested_default.rs:29:9
+   |
+29 | /         #[property(nested, default = unreachable!())]
+30 | |         inner: Inner<'_>,
+   | |________________________^

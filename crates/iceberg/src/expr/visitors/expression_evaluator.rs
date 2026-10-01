@@ -280,11 +280,12 @@ mod tests {
             .with_spec_id(1)
             .add_unbound_field(
                 UnboundPartitionField::builder()
-                    .source_id(1)
+                    .source_ids(vec![1])
                     .name("a".to_string())
                     .field_id(1)
                     .transform(Transform::Identity)
-                    .build(),
+                    .build()
+                    .unwrap(),
             )
             .unwrap()
             .build()
@@ -330,7 +331,7 @@ mod tests {
     }
 
     fn create_data_file_float() -> DataFile {
-        let partition = Struct::from_iter([Some(Literal::float(1.0))]);
+        let partition = Struct::from_iter([Some(Literal::float(1.0_f32))]);
 
         DataFile {
             content: DataContentType::Data,
@@ -393,12 +394,12 @@ mod tests {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThan,
             Reference::new("a"),
-            Datum::float(1.0),
+            Datum::float(1.0_f32),
         ))
         .or(Predicate::Binary(BinaryExpression::new(
             PredicateOperator::GreaterThanOrEq,
             Reference::new("a"),
-            Datum::float(0.4),
+            Datum::float(0.4_f32),
         )))
         .bind(schema.clone(), case_sensitive)?;
 
@@ -422,12 +423,12 @@ mod tests {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThan,
             Reference::new("a"),
-            Datum::float(1.1),
+            Datum::float(1.1_f32),
         ))
         .and(Predicate::Binary(BinaryExpression::new(
             PredicateOperator::GreaterThanOrEq,
             Reference::new("a"),
-            Datum::float(0.4),
+            Datum::float(0.4_f32),
         )))
         .bind(schema.clone(), case_sensitive)?;
 
@@ -451,7 +452,11 @@ mod tests {
         let predicate = Predicate::Set(SetExpression::new(
             PredicateOperator::NotIn,
             Reference::new("a"),
-            FnvHashSet::from_iter([Datum::float(0.9), Datum::float(1.2), Datum::float(2.4)]),
+            FnvHashSet::from_iter([
+                Datum::float(0.9_f32),
+                Datum::float(1.2_f32),
+                Datum::float(2.4_f32),
+            ]),
         ))
         .bind(schema.clone(), case_sensitive)?;
 
@@ -475,7 +480,11 @@ mod tests {
         let predicate = Predicate::Set(SetExpression::new(
             PredicateOperator::In,
             Reference::new("a"),
-            FnvHashSet::from_iter([Datum::float(1.0), Datum::float(1.2), Datum::float(2.4)]),
+            FnvHashSet::from_iter([
+                Datum::float(1.0_f32),
+                Datum::float(1.2_f32),
+                Datum::float(2.4_f32),
+            ]),
         ))
         .bind(schema.clone(), case_sensitive)?;
 
@@ -547,7 +556,7 @@ mod tests {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::NotEq,
             Reference::new("a"),
-            Datum::float(0.9),
+            Datum::float(0.9_f32),
         ))
         .bind(schema.clone(), case_sensitive)?;
 
@@ -571,7 +580,7 @@ mod tests {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::Eq,
             Reference::new("a"),
-            Datum::float(1.0),
+            Datum::float(1.0_f32),
         ))
         .bind(schema.clone(), case_sensitive)?;
 
@@ -595,7 +604,7 @@ mod tests {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::GreaterThanOrEq,
             Reference::new("a"),
-            Datum::float(1.0),
+            Datum::float(1.0_f32),
         ))
         .bind(schema.clone(), case_sensitive)?;
 
@@ -619,7 +628,7 @@ mod tests {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::GreaterThan,
             Reference::new("a"),
-            Datum::float(0.9),
+            Datum::float(0.9_f32),
         ))
         .bind(schema.clone(), case_sensitive)?;
 
@@ -643,7 +652,7 @@ mod tests {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThanOrEq,
             Reference::new("a"),
-            Datum::float(1.0),
+            Datum::float(1.0_f32),
         ))
         .bind(schema.clone(), case_sensitive)?;
 
@@ -667,7 +676,7 @@ mod tests {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThan,
             Reference::new("a"),
-            Datum::float(1.1),
+            Datum::float(1.1_f32),
         ))
         .bind(schema.clone(), case_sensitive)?;
 

@@ -79,7 +79,7 @@ pub fn ancestors_between(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scan::test_utils::TableTestFixture;
+    use crate::test_utils::scan::TableTestFixture;
 
     // Five snapshots chained as: S1 (root) -> S2 -> S3 -> S4 -> S5 (current)
     const S1: i64 = 3051729675574597004;

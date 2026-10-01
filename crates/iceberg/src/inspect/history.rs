@@ -126,9 +126,9 @@ mod tests {
 
     use crate::TableIdent;
     use crate::io::FileIO;
-    use crate::scan::test_utils::TableTestFixture;
     use crate::spec::TableMetadata;
     use crate::table::Table;
+    use crate::test_utils::scan::TableTestFixture;
     use crate::test_utils::{check_record_batches, test_runtime};
 
     fn table_from_metadata_json(metadata_json: &str) -> Table {
