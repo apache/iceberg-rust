@@ -74,7 +74,8 @@ pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::fmt(&self, f: &mut co
 pub struct iceberg_storage_opendal::OpenDalClientConfig
 impl iceberg_storage_opendal::OpenDalClientConfig
 pub fn iceberg_storage_opendal::OpenDalClientConfig::from_properties(properties: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::error::Result<Self>
-pub fn iceberg_storage_opendal::OpenDalClientConfig::io_timeout_ms(&self) -> &core::num::nonzero::NonZeroU64
+impl iceberg_storage_opendal::OpenDalClientConfig
+pub fn iceberg_storage_opendal::OpenDalClientConfig::io_timeout(&self) -> core::time::Duration
 impl core::clone::Clone for iceberg_storage_opendal::OpenDalClientConfig
 pub fn iceberg_storage_opendal::OpenDalClientConfig::clone(&self) -> iceberg_storage_opendal::OpenDalClientConfig
 impl core::default::Default for iceberg_storage_opendal::OpenDalClientConfig
@@ -121,3 +122,4 @@ pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::serialize<__S>(&
 impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_opendal::OpenDalResolvingStorageFactory
 pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub const iceberg_storage_opendal::OPENDAL_IO_TIMEOUT_MS: &str
+pub const iceberg_storage_opendal::OPENDAL_IO_TIMEOUT_MS_DEFAULT: u64

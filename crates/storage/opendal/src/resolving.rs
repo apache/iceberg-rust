@@ -343,8 +343,9 @@ impl Storage for OpenDalResolvingStorage {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
-    #[cfg(feature = "opendal-s3")]
     use crate::OPENDAL_IO_TIMEOUT_MS;
 
     #[cfg(feature = "opendal-s3")]
@@ -388,7 +389,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "opendal-s3")]
     #[test]
     fn test_resolve_propagates_io_timeout() {
         let mut storage = empty_resolving_storage();
@@ -396,8 +396,31 @@ mod tests {
             .props
             .insert(OPENDAL_IO_TIMEOUT_MS.to_string(), "45000".to_string());
 
-        let resolved = storage.resolve("s3://bucket/key").unwrap();
-        assert_eq!(resolved.client_config().io_timeout_ms().get(), 45_000);
+        // The property is parsed before the scheme match, so every scheme must see it.
+        let paths: &[&str] = &[
+            #[cfg(feature = "opendal-memory")]
+            "memory:/key",
+            #[cfg(feature = "opendal-fs")]
+            "file:/key",
+            #[cfg(feature = "opendal-s3")]
+            "s3://bucket/key",
+            #[cfg(feature = "opendal-gcs")]
+            "gs://bucket/key",
+            #[cfg(feature = "opendal-oss")]
+            "oss://bucket/key",
+            #[cfg(feature = "opendal-azdls")]
+            "abfss://myfs@myaccount.dfs.core.windows.net/key",
+            #[cfg(feature = "opendal-hf")]
+            "hf://datasets/user/repo/key",
+        ];
+        for path in paths {
+            let resolved = storage.resolve(path).unwrap();
+            assert_eq!(
+                resolved.client_config().io_timeout(),
+                Duration::from_secs(45),
+                "{path}"
+            );
+        }
     }
 
     #[cfg(feature = "opendal-s3")]

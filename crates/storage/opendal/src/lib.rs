@@ -105,14 +105,18 @@ pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 
 /// Deadline in milliseconds for one IO operation, and for every method call on a returned
 /// reader, writer, lister or deleter. Honored by every [`OpenDalStorage`] backend, where it
-/// defaults to 10000 to match OpenDAL's `TimeoutLayer`.
+/// defaults to [`OPENDAL_IO_TIMEOUT_MS_DEFAULT`].
 ///
 /// Each retry attempt is bounded separately, so it is a per-attempt budget, not a total one.
 /// Control operations such as `stat` and `rename` are bounded by a separate, fixed budget.
 pub const OPENDAL_IO_TIMEOUT_MS: &str = "opendal.io-timeout-ms";
 
-/// Matches the `opendal::layers::TimeoutLayer` default.
-const DEFAULT_IO_TIMEOUT_MS: NonZeroU64 = NonZeroU64::new(10_000).unwrap();
+/// Default for [`OPENDAL_IO_TIMEOUT_MS`]. Matches the IO timeout default of OpenDAL's
+/// `TimeoutLayer`.
+pub const OPENDAL_IO_TIMEOUT_MS_DEFAULT: u64 = 10_000;
+
+/// [`OPENDAL_IO_TIMEOUT_MS_DEFAULT`] as the field type. A zero default fails to compile.
+const DEFAULT_IO_TIMEOUT_MS: NonZeroU64 = NonZeroU64::new(OPENDAL_IO_TIMEOUT_MS_DEFAULT).unwrap();
 
 /// Backend-independent client settings, shared by every [`OpenDalStorage`] variant.
 ///
@@ -125,8 +129,7 @@ pub struct OpenDalClientConfig {
     #[property(
         key = OPENDAL_IO_TIMEOUT_MS,
         default = DEFAULT_IO_TIMEOUT_MS,
-        parse_with = parse_io_timeout_ms,
-        getter
+        parse_with = parse_io_timeout_ms
     )]
     io_timeout_ms: NonZeroU64,
 }
@@ -139,15 +142,23 @@ impl Default for OpenDalClientConfig {
     }
 }
 
+impl OpenDalClientConfig {
+    /// Per-attempt deadline for one IO operation, set by [`OPENDAL_IO_TIMEOUT_MS`].
+    pub fn io_timeout(&self) -> Duration {
+        Duration::from_millis(self.io_timeout_ms.get())
+    }
+}
+
 /// Parses one timeout value; the `Properties` derive adds the property-key context.
 /// Zero is rejected: it would time every operation out before it starts.
 fn parse_io_timeout_ms(value: &str) -> Result<NonZeroU64> {
-    value.parse().map_err(|_| {
+    value.parse().map_err(|error| {
         Error::new(
             ErrorKind::DataInvalid,
             "Expected a positive integer number of milliseconds",
         )
         .with_context("value", format!("{value:?}"))
+        .with_source(error)
     })
 }
 
@@ -275,6 +286,12 @@ fn default_memory_operator() -> Operator {
 }
 
 /// OpenDAL-based storage implementation.
+///
+/// # Serialization
+///
+/// As with [`FileIO::serialize_all`](iceberg::io::FileIO::serialize_all), the serialized form is
+/// not a stable format and may change between crate versions. Do not rely on it for long-term
+/// storage or exchange it between incompatible versions of this crate.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum OpenDalStorage {
     /// Memory storage variant.
@@ -477,9 +494,7 @@ impl OpenDalStorage {
         // failures with exponential backoff. The retry behavior also
         // benefits non-object-store backends.
         let operator = operator
-            .layer(TimeoutLayer::new().with_io_timeout(Duration::from_millis(
-                self.client_config().io_timeout_ms().get(),
-            )))
+            .layer(TimeoutLayer::new().with_io_timeout(self.client_config().io_timeout()))
             .layer(RetryLayer::new());
         Ok((operator, relative_path))
     }
@@ -820,24 +835,30 @@ mod tests {
     #[test]
     fn test_io_timeout_parsing() {
         let unset = OpenDalClientConfig::from_properties(&HashMap::new()).unwrap();
-        assert_eq!(*unset.io_timeout_ms(), DEFAULT_IO_TIMEOUT_MS);
         assert_eq!(
-            client_config("45000").unwrap().io_timeout_ms().get(),
-            45_000
+            unset.io_timeout(),
+            Duration::from_millis(OPENDAL_IO_TIMEOUT_MS_DEFAULT)
         );
-        assert_eq!(client_config("1").unwrap().io_timeout_ms().get(), 1);
         assert_eq!(
-            client_config(&u64::MAX.to_string())
-                .unwrap()
-                .io_timeout_ms()
-                .get(),
-            u64::MAX
+            client_config("45000").unwrap().io_timeout(),
+            Duration::from_secs(45)
+        );
+        assert_eq!(
+            client_config("1").unwrap().io_timeout(),
+            Duration::from_millis(1)
+        );
+        assert_eq!(
+            client_config(&u64::MAX.to_string()).unwrap().io_timeout(),
+            Duration::from_millis(u64::MAX)
         );
 
         for invalid in ["0", "-1", "12.5", "abc", "", "18446744073709551616"] {
             let err = client_config(invalid).unwrap_err().to_string();
             assert!(err.contains(OPENDAL_IO_TIMEOUT_MS), "{invalid}");
             assert!(err.contains(&format!("value: {invalid:?}")), "{err}");
+            // The parse error is kept as the source, so the message says why it was rejected.
+            let reason = invalid.parse::<NonZeroU64>().unwrap_err().to_string();
+            assert!(err.contains(&reason), "{err}");
         }
     }
 
@@ -854,12 +875,12 @@ mod tests {
         };
         assert_eq!(
             opendal_default,
-            with_io_timeout(DEFAULT_IO_TIMEOUT_MS.get())
+            with_io_timeout(OPENDAL_IO_TIMEOUT_MS_DEFAULT)
         );
         // If `Debug` stopped printing `io_timeout`, the check above would pass vacuously.
         assert_ne!(
             opendal_default,
-            with_io_timeout(DEFAULT_IO_TIMEOUT_MS.get() + 1)
+            with_io_timeout(OPENDAL_IO_TIMEOUT_MS_DEFAULT + 1)
         );
     }
 
@@ -874,7 +895,10 @@ mod tests {
 
         let mut value = serde_json::to_value(&storage).unwrap();
         let restored: OpenDalStorage = serde_json::from_value(value.clone()).unwrap();
-        assert_eq!(restored.client_config().io_timeout_ms().get(), 45_000);
+        assert_eq!(
+            restored.client_config().io_timeout(),
+            Duration::from_secs(45)
+        );
 
         // Deserializing rejects zero too, not only `from_properties`.
         let mut zero = value.clone();
@@ -885,8 +909,8 @@ mod tests {
         value["S3"].as_object_mut().unwrap().remove("client_config");
         let restored: OpenDalStorage = serde_json::from_value(value).unwrap();
         assert_eq!(
-            *restored.client_config().io_timeout_ms(),
-            DEFAULT_IO_TIMEOUT_MS
+            restored.client_config().io_timeout(),
+            Duration::from_millis(OPENDAL_IO_TIMEOUT_MS_DEFAULT)
         );
     }
 
@@ -897,6 +921,27 @@ mod tests {
 
         let err = OpenDalStorageFactory::Memory.build(&config).unwrap_err();
         assert!(err.to_string().contains(OPENDAL_IO_TIMEOUT_MS));
+    }
+
+    #[cfg(feature = "opendal-memory")]
+    #[tokio::test(start_paused = true)]
+    async fn test_io_timeout_reaches_timeout_layer() {
+        use opendal::layers::ConcurrentLimitLayer;
+
+        // A concurrency limit of zero never grants a permit, so every IO call stalls until
+        // `TimeoutLayer` gives up. Paused time skips the timeouts and the retry backoff.
+        let storage = OpenDalStorage::Memory {
+            operator: default_memory_operator().layer(ConcurrentLimitLayer::new(0)),
+            client_config: client_config("45000").unwrap(),
+        };
+
+        let err = storage
+            .read("memory:/stalled")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("io operation timeout reached"), "{err}");
+        assert!(err.contains("timeout: 45"), "{err}");
     }
 
     #[cfg(feature = "opendal-s3")]
