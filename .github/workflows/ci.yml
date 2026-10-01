@@ -61,6 +61,12 @@ jobs:
         with:
           tool: taplo@0.9.3,cargo-machete@0.7.0,cargo-deny@0.19.9
 
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # dev/release/licenses.py needs 3.11+ for tomllib. Pinned rather than relying
+          # on the runner's system interpreter.
+          python-version: 3.12
+
       - name: Check License Header
         uses: apache/skywalking-eyes/header@a196742f472feaffafea537ce5a2a4c3c53a8de4 # v0.9.0
 
@@ -80,7 +86,7 @@ jobs:
         run: make check-license-notice
 
       - name: Check dependency licenses
-        run: dev/release/dependencies.sh check
+        run: python3 ./dev/release/licenses.py dependencies check
 
       # Trusted publishing cannot create a crate (https://crates.io/docs/trusted-publishing),
       # so a new publishable crate must be reserved on crates.io before it is merged.
