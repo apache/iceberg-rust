@@ -2391,6 +2391,35 @@ pub fn iceberg::spec::PartitionSpecBuilder::with_last_assigned_field_id(self, la
 pub fn iceberg::spec::PartitionSpecBuilder::with_spec_id(self, spec_id: i32) -> Self
 impl core::fmt::Debug for iceberg::spec::PartitionSpecBuilder
 pub fn iceberg::spec::PartitionSpecBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg::spec::PartitionStatistics
+impl iceberg::spec::PartitionStatistics
+pub fn iceberg::spec::PartitionStatistics::data_file_count(&self) -> core::option::Option<i32>
+pub fn iceberg::spec::PartitionStatistics::data_record_count(&self) -> core::option::Option<i64>
+pub fn iceberg::spec::PartitionStatistics::dv_count(&self) -> core::option::Option<i32>
+pub fn iceberg::spec::PartitionStatistics::equality_delete_file_count(&self) -> core::option::Option<i32>
+pub fn iceberg::spec::PartitionStatistics::equality_delete_record_count(&self) -> core::option::Option<i64>
+pub fn iceberg::spec::PartitionStatistics::last_updated_at(&self) -> core::option::Option<i64>
+pub fn iceberg::spec::PartitionStatistics::last_updated_snapshot_id(&self) -> core::option::Option<i64>
+pub fn iceberg::spec::PartitionStatistics::new_for_computation(partition: iceberg::spec::Struct, spec_id: i32) -> Self
+pub fn iceberg::spec::PartitionStatistics::partition(&self) -> core::option::Option<&iceberg::spec::Struct>
+pub fn iceberg::spec::PartitionStatistics::position_delete_file_count(&self) -> core::option::Option<i32>
+pub fn iceberg::spec::PartitionStatistics::position_delete_record_count(&self) -> core::option::Option<i64>
+pub fn iceberg::spec::PartitionStatistics::schema(partition_type: iceberg::spec::StructType, format_version: iceberg::spec::FormatVersion) -> iceberg::Result<iceberg::spec::Schema>
+pub fn iceberg::spec::PartitionStatistics::spec_id(&self) -> core::option::Option<i32>
+pub fn iceberg::spec::PartitionStatistics::total_data_file_size_in_bytes(&self) -> core::option::Option<i64>
+pub fn iceberg::spec::PartitionStatistics::total_record_count(&self) -> core::option::Option<i64>
+impl core::clone::Clone for iceberg::spec::PartitionStatistics
+pub fn iceberg::spec::PartitionStatistics::clone(&self) -> iceberg::spec::PartitionStatistics
+impl core::cmp::Eq for iceberg::spec::PartitionStatistics
+impl core::cmp::PartialEq for iceberg::spec::PartitionStatistics
+pub fn iceberg::spec::PartitionStatistics::eq(&self, other: &iceberg::spec::PartitionStatistics) -> bool
+impl core::default::Default for iceberg::spec::PartitionStatistics
+pub fn iceberg::spec::PartitionStatistics::default() -> iceberg::spec::PartitionStatistics
+impl core::fmt::Debug for iceberg::spec::PartitionStatistics
+pub fn iceberg::spec::PartitionStatistics::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::spec::PartitionStatistics
+impl iceberg::spec::PartitionStatistics
+pub fn iceberg::spec::PartitionStatistics::builder() -> PartitionStatisticsBuilder<((), (), (), (), (), (), (), (), (), (), (), (), ())>
 pub struct iceberg::spec::PartitionStatisticsFile
 pub iceberg::spec::PartitionStatisticsFile::file_size_in_bytes: i64
 pub iceberg::spec::PartitionStatisticsFile::snapshot_id: i64
