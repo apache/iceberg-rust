@@ -20,6 +20,13 @@
 all-features = true
 
 [licenses]
+# An allow entry matching nothing is usually just a license the graph no longer
+# contains, so it stays a warning. An unused *exception* is different: exceptions are
+# per-crate, so one that matches nothing means the crate was dropped or renamed and the
+# narrowest grant in this file is silently covering nothing.
+unused-allowed-license = "allow"
+unused-license-exception = "deny"
+
 allow = [
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
@@ -43,3 +50,63 @@ exceptions = [
   { allow = ["MPL-2.0"], crate = "colored" },
   { allow = ["MPL-2.0"], crate = "option-ext" },
 ]
+
+# Clarifications correct a crate whose own manifest does not describe what it ships.
+# Each one is attested by the hash of every license file it relies on, and cargo-deny
+# discards the whole block if any hash stops matching -- silently, at warning level, so
+# `licenses.py dependencies check` cross-checks that each block actually applied.
+#
+# Recompute a hash with:
+#   uv run dev/release/licenses.py dependencies clarification-hash <file>
+
+# zstd-sys declares only "MIT/Apache-2.0", which covers its Rust wrapper and the
+# pre-generated bindings. It also vendors Zstandard's C sources under zstd/, which are
+# compiled in, and those are dual BSD-3-Clause / GPL-2.0-only. The allow list above has
+# no GPL entry: the BSD-3-Clause half of that choice is what makes this acceptable.
+#
+# TODO: zstd-sys 2.1 relicensed the wrapper and bindings to BSD-3-Clause, so the
+# (MIT OR Apache-2.0) clause and its two files drop out once the graph moves to it.
+# Reachable today -- zstd-safe's `zstd-sys ^2.0.15` admits 2.1 -- and tracked in
+# https://github.com/apache/iceberg-rust/issues/3307
+[[licenses.clarify]]
+crate = "zstd-sys"
+expression = "(MIT OR Apache-2.0) AND BSD-3-Clause AND (GPL-2.0-only OR BSD-3-Clause)"
+license-files = [
+  { path = "LICENSE.Apache-2.0", hash = 0x7b466be4 },
+  { path = "LICENSE.Mit", hash = 0xa237d234 },
+  # BSD-3-Clause of the pre-generated bindings the crate ships.
+  { path = "LICENSE.BSD-3-Clause", hash = 0xc9f5c4f6 },
+  # BSD-3-Clause of the vendored zstd sources.
+  { path = "zstd/LICENSE", hash = 0x3bfe1fb1 },
+  # GPL-2.0-only of the vendored zstd sources.
+  { path = "zstd/COPYING", hash = 0xeaa66bfd },
+]
+
+# brotli-decompressor declares "BSD-3-Clause/MIT", the legacy slash form, which reads as
+# a choice. It is not one: src/context.rs is Google's Brotli code under MIT and is
+# compiled in, so both licenses apply at once and Dropbox cannot offer that file under
+# BSD-3-Clause. Upstream took the same position in the sibling crate, which declares
+# "BSD-3-Clause AND MIT" since dropbox/rust-brotli#218.
+#
+# Not cosmetic: under the declared OR, BSD-3-Clause alone satisfies the allow list, so
+# removing MIT from it would greenlight this crate while its MIT code still shipped.
+#
+# https://github.com/dropbox/rust-brotli-decompressor/pull/32 fixes this upstream.
+[[licenses.clarify]]
+crate = "brotli-decompressor"
+expression = "BSD-3-Clause AND MIT"
+license-files = [
+  { path = "LICENSE", hash = 0x1a60a92d }, # BSD-3-Clause
+  # No MIT entry: the crate ships no MIT text to attest. A consequence worth knowing --
+  # if upstream drops the MIT code, nothing here would tell us the AND is now wrong.
+]
+
+# Not clarified, recorded so the next audit does not repeat the work:
+#
+# libsqlite3-sys declares MIT and vendors SQLite's C sources, which is the same shape as
+# zstd-sys. SQLite is public domain, so it adds no license to satisfy and no attribution
+# to carry.
+#
+# aws-lc-sys already declares every license of everything it vendors, including an
+# MIT-0 alternative absent from the allow list above -- harmless, because it appears
+# only inside an OR with Apache-2.0 and ISC.
