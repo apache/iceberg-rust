@@ -23,9 +23,11 @@ use super::*;
 ///
 /// `start_from` must be past every id the table has ever assigned, not merely past `base`'s ids:
 /// pass `table_metadata.last_column_id() + 1`, which also reserves the ids of columns already
-/// dropped from `base`. Seeding from a schema's `highest_field_id() + 1` can hand a new column the
-/// id of a dropped one. A reused id does not consume a fresh one, so a `start_from` that is too low
-/// yields duplicate ids, which surface only as a generic error from `build()`.
+/// dropped from `base`. A reused id does not consume a fresh one, so a too-low `start_from` fails in
+/// one of two ways. Colliding with an id still present in `base` yields duplicate ids and a generic
+/// error from `build()`. Landing on the id of a column already dropped from `base` is worse: nothing
+/// here or in `build()` notices, and a new column silently inherits a retired id. Seeding from a
+/// schema's `highest_field_id() + 1` is the usual way to hit the latter.
 ///
 /// The returned `schema_id` is carried over unchanged and is not authoritative; it is arbitrated by
 /// [`TableMetadataBuilder::add_schema`](crate::spec::TableMetadataBuilder::add_schema).
