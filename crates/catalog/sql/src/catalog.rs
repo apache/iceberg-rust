@@ -31,7 +31,7 @@ use iceberg::{
 };
 use iceberg_property_macro::Properties;
 use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
-use sqlx::{Any, AnyPool, Column, Executor, Row, Transaction};
+use sqlx::{Any, AnyPool, Executor, Row, Transaction};
 
 use crate::error::{
     from_sqlx_error, no_such_namespace_err, no_such_table_err, table_already_exists_err,
@@ -338,22 +338,35 @@ pub enum SchemaVersion {
 impl SchemaVersion {
     /// Detect the schema version of an existing catalog table by introspecting its columns.
     async fn detect(pool: &AnyPool) -> Result<Self> {
-        let catalog_table_description = pool
+        let mut connection = pool.acquire().await.map_err(from_sqlx_error)?;
+        let v1_probe =
+            format!("SELECT {CATALOG_FIELD_RECORD_TYPE} FROM {CATALOG_TABLE_NAME} WHERE 1 = 0");
+        match connection.describe(&v1_probe).await {
+            Ok(_) => return Ok(SchemaVersion::V1),
+            Err(error) if Self::is_missing_record_type_column(&error) => {}
+            Err(error) => return Err(from_sqlx_error(error)),
+        }
+
+        // Distinguish a V0 schema from a missing or inaccessible catalog table.
+        connection
             .describe(&format!("SELECT * FROM {CATALOG_TABLE_NAME}"))
             .await
             .map_err(from_sqlx_error)?;
+        Ok(SchemaVersion::V0)
+    }
 
-        let has_type_column = catalog_table_description.columns().iter().any(|column| {
-            column
-                .name()
-                .eq_ignore_ascii_case(CATALOG_FIELD_RECORD_TYPE)
-        });
+    fn is_missing_record_type_column(error: &sqlx::Error) -> bool {
+        let sqlx::Error::Database(error) = error else {
+            return false;
+        };
 
-        Ok(if has_type_column {
-            SchemaVersion::V1
-        } else {
-            SchemaVersion::V0
-        })
+        match error.code().as_deref() {
+            // PostgreSQL undefined_column and MySQL/MariaDB ER_BAD_FIELD_ERROR.
+            Some("42703" | "42S22") => true,
+            // SQLite uses SQLITE_ERROR for many failures, so also check the exact message.
+            Some("1") => error.message() == format!("no such column: {CATALOG_FIELD_RECORD_TYPE}"),
+            _ => false,
+        }
     }
 
     /// The trailing SQL `AND` clause used to exclude view rows when querying for tables.
@@ -380,6 +393,37 @@ impl SchemaVersion {
                 "ALTER TABLE {CATALOG_TABLE_NAME} ADD COLUMN {CATALOG_FIELD_RECORD_TYPE} VARCHAR(5)"
             )),
             SchemaVersion::V0 => None,
+        }
+    }
+
+    /// Migrates the catalog table to this schema version.
+    ///
+    /// Another catalog instance may complete the same migration after version detection but
+    /// before this statement runs. In that case, accept the statement error once re-detection
+    /// confirms that the requested version is already installed.
+    async fn migrate(self, pool: &AnyPool) -> Result<()> {
+        let Some(migration_sql) = self.migration_sql() else {
+            return Ok(());
+        };
+
+        match sqlx::query(&migration_sql).execute(pool).await {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                // A competing DDL statement may still be committing when this statement fails.
+                // Re-acquiring a connection for each probe lets schema-lock and duplicate-column
+                // races converge on the installed version instead of failing initialization.
+                for delay_ms in [50, 100, 200] {
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    if matches!(Self::detect(pool).await, Ok(detected) if detected == self) {
+                        tracing::info!(
+                            error = %error,
+                            "catalog schema migration to {self} was completed concurrently"
+                        );
+                        return Ok(());
+                    }
+                }
+                Err(from_sqlx_error(error))
+            }
         }
     }
 }
@@ -466,12 +510,7 @@ impl SqlCatalog {
                     detected_schema_version,
                     expected_schema_version,
                 );
-                if let Some(migration_sql) = SchemaVersion::V1.migration_sql() {
-                    sqlx::query(&migration_sql)
-                        .execute(&pool)
-                        .await
-                        .map_err(from_sqlx_error)?;
-                }
+                SchemaVersion::V1.migrate(&pool).await?;
                 SchemaVersion::V1
             }
             (SchemaVersion::V0, Some(SchemaVersion::V0) | None) => {
@@ -1222,9 +1261,13 @@ impl Catalog for SqlCatalog {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
     use std::collections::{HashMap, HashSet};
+    use std::error::Error as _;
     use std::hash::Hash;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
 
     use iceberg::io::LocalFsStorageFactory;
     use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
@@ -1234,7 +1277,7 @@ mod tests {
     };
     use itertools::Itertools;
     use regex::Regex;
-    use sqlx::any::install_default_drivers;
+    use sqlx::any::{AnyPoolOptions, install_default_drivers};
     use sqlx::migrate::MigrateDatabase;
     use sqlx::{Column, Executor};
     use tempfile::TempDir;
@@ -1248,6 +1291,77 @@ mod tests {
     use crate::{SchemaVersion, SqlBindStyle, SqlCatalog, SqlCatalogBuilder};
 
     const UUID_REGEX_STR: &str = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+
+    #[derive(Debug)]
+    struct ProbeError {
+        code: &'static str,
+        message: &'static str,
+    }
+
+    impl std::fmt::Display for ProbeError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}: {}", self.code, self.message)
+        }
+    }
+
+    impl std::error::Error for ProbeError {}
+
+    impl sqlx::error::DatabaseError for ProbeError {
+        fn message(&self) -> &str {
+            self.message
+        }
+
+        fn code(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed(self.code))
+        }
+
+        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+
+        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+
+        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+            self
+        }
+
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            sqlx::error::ErrorKind::Other
+        }
+    }
+
+    #[test]
+    fn test_missing_record_type_column_errors() {
+        for (code, message, missing_column) in [
+            ("42703", "column does not exist", true),
+            ("42S22", "Unknown column", true),
+            ("1", "no such column: iceberg_type", true),
+            ("1", "no such column: another_column", false),
+            ("1", "no such table: iceberg_tables", false),
+            ("1", "near SELECT: syntax error", false),
+            ("42501", "permission denied", false),
+            ("42000", "SELECT command denied", false),
+            ("08006", "connection failure", false),
+            ("5", "database is locked", false),
+        ] {
+            let error = sqlx::Error::Database(Box::new(ProbeError { code, message }));
+            assert_eq!(
+                SchemaVersion::is_missing_record_type_column(&error),
+                missing_column,
+                "{error}"
+            );
+        }
+
+        for error in [
+            sqlx::Error::Io(std::io::Error::from(std::io::ErrorKind::ConnectionReset)),
+            sqlx::Error::PoolTimedOut,
+            sqlx::Error::PoolClosed,
+        ] {
+            assert!(!SchemaVersion::is_missing_record_type_column(&error));
+        }
+    }
 
     fn temp_path() -> String {
         let temp_dir = TempDir::new().unwrap();
@@ -2697,6 +2811,133 @@ mod tests {
             record_type_column_exists(&uri).await,
             "iceberg_type column should exist when sql.schema-version=V1 was set",
         );
+    }
+
+    #[tokio::test]
+    async fn test_v0_schema_migration_preserves_ddl_error() {
+        install_default_drivers();
+
+        let (uri, _temp_dir) = create_v0_sqlite_db().await;
+        let pool = AnyPoolOptions::new()
+            .max_connections(1)
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    connection.execute("PRAGMA query_only = ON").await?;
+                    Ok(())
+                })
+            })
+            .connect(&uri)
+            .await
+            .unwrap();
+
+        let error = SchemaVersion::V1.migrate(&pool).await.unwrap_err();
+        let cause = error
+            .source()
+            .unwrap()
+            .downcast_ref::<sqlx::Error>()
+            .unwrap();
+        let database_error = cause.as_database_error().unwrap();
+        assert_eq!(database_error.code().as_deref(), Some("8"));
+        assert_eq!(
+            database_error.message(),
+            "attempt to write a readonly database"
+        );
+        assert_eq!(
+            SchemaVersion::detect(&pool).await.unwrap(),
+            SchemaVersion::V0
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn test_v0_schema_migration_waits_for_later_probe() {
+        install_default_drivers();
+
+        let (uri, _temp_dir) = create_v0_sqlite_db().await;
+        let writer = sqlx::AnyPool::connect(&uri).await.unwrap();
+        let acquisitions = Arc::new(AtomicUsize::new(0));
+        let pool = AnyPoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    // Force the original DDL to fail while schema probes still work.
+                    connection.execute("PRAGMA query_only = ON").await?;
+                    Ok(())
+                })
+            })
+            .before_acquire({
+                let acquisitions = acquisitions.clone();
+                let writer = writer.clone();
+                move |_, _| {
+                    let acquisition = acquisitions.fetch_add(1, Ordering::SeqCst);
+                    let writer = writer.clone();
+                    Box::pin(async move {
+                        // Acquisition 0 executes DDL; acquisition 1 probes V0. Only make
+                        // the competing migration visible when the second probe starts.
+                        if acquisition == 2 {
+                            sqlx::query(&SchemaVersion::V1.migration_sql().unwrap())
+                                .execute(&writer)
+                                .await?;
+                        }
+                        Ok(true)
+                    })
+                }
+            })
+            .connect(&uri)
+            .await
+            .unwrap();
+
+        // Pool initialization may acquire a connection internally.
+        acquisitions.store(0, Ordering::SeqCst);
+        let started = Instant::now();
+        SchemaVersion::V1.migrate(&pool).await.unwrap();
+        assert_eq!(acquisitions.load(Ordering::SeqCst), 3);
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        assert_eq!(
+            SchemaVersion::detect(&pool).await.unwrap(),
+            SchemaVersion::V1
+        );
+        pool.close().await;
+        writer.close().await;
+    }
+
+    #[tokio::test]
+    async fn test_v0_schema_migration_is_concurrent_safe() {
+        install_default_drivers();
+
+        let (uri, _temp_dir) = create_v0_sqlite_db().await;
+        let pool1 = sqlx::AnyPool::connect(&uri).await.unwrap();
+        let pool2 = sqlx::AnyPool::connect(&uri).await.unwrap();
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+        let migrate1 = async {
+            assert_eq!(
+                SchemaVersion::detect(&pool1).await.unwrap(),
+                SchemaVersion::V0
+            );
+            barrier.wait().await;
+            SchemaVersion::V1.migrate(&pool1).await
+        };
+        let migrate2 = async {
+            assert_eq!(
+                SchemaVersion::detect(&pool2).await.unwrap(),
+                SchemaVersion::V0
+            );
+            barrier.wait().await;
+            SchemaVersion::V1.migrate(&pool2).await
+        };
+
+        let (result1, result2) = tokio::join!(migrate1, migrate2);
+        assert!(result1.is_ok(), "first migration failed: {result1:?}");
+        assert!(result2.is_ok(), "second migration failed: {result2:?}");
+        assert_eq!(
+            SchemaVersion::detect(&pool1).await.unwrap(),
+            SchemaVersion::V1
+        );
+
+        pool1.close().await;
+        pool2.close().await;
     }
 
     #[tokio::test]
