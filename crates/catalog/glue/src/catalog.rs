@@ -897,6 +897,13 @@ impl Catalog for GlueCatalog {
         Ok(builder.build()?)
     }
 
+    async fn unregister_table(&self, _table_ident: &TableIdent) -> Result<Table> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Unregistering a table is not supported yet",
+        ))
+    }
+
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
         let table_ident = commit.identifier().clone();
         let table_namespace = validate_namespace(table_ident.namespace())?;
