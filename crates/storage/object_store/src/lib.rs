@@ -420,11 +420,16 @@ impl ObjectStoreWriter {
                         return Err(Self::abort_and_wrap(upload, e, "part upload failure").await);
                     }
                     Err(join_err) => {
-                        return Err(Error::new(
-                            ErrorKind::Unexpected,
-                            "Part upload task panicked or failed",
-                        )
-                        .with_source(join_err));
+                        if let Err(abort_err) = upload.abort().await {
+                            tracing::warn!(
+                                error = %abort_err,
+                                "Failed to abort multipart upload after task panic"
+                            );
+                        }
+                        return Err(
+                            Error::new(ErrorKind::Unexpected, "Part upload task panicked")
+                                .with_source(join_err),
+                        );
                     }
                     Ok(Ok(())) => {}
                 }
@@ -551,11 +556,16 @@ impl FileWrite for ObjectStoreWriter {
                     return Err(Self::abort_and_wrap(&mut upload, e, "part upload failure").await);
                 }
                 Err(join_err) => {
-                    return Err(Error::new(
-                        ErrorKind::Unexpected,
-                        "Part upload task panicked or failed",
-                    )
-                    .with_source(join_err));
+                    if let Err(abort_err) = upload.abort().await {
+                        tracing::warn!(
+                            error = %abort_err,
+                            "Failed to abort multipart upload after task panic"
+                        );
+                    }
+                    return Err(
+                        Error::new(ErrorKind::Unexpected, "Part upload task panicked")
+                            .with_source(join_err),
+                    );
                 }
                 Ok(Ok(())) => {}
             }
@@ -1015,6 +1025,87 @@ mod tests {
             "max concurrent in-flight uploads exceeded {} (was {})",
             MAX_CONCURRENT_PART_UPLOADS,
             max_in_flight.load(Ordering::SeqCst)
+        );
+    }
+
+    #[derive(Debug)]
+    struct PanickingMockUpload {
+        aborted: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl MultipartUpload for PanickingMockUpload {
+        fn put_part(&mut self, _data: PutPayload) -> UploadPart {
+            Box::pin(async move {
+                panic!("simulated part upload panic");
+            })
+        }
+
+        async fn complete(&mut self) -> object_store::Result<PutResult> {
+            Ok(PutResult {
+                e_tag: None,
+                version: None,
+            })
+        }
+
+        async fn abort(&mut self) -> object_store::Result<()> {
+            self.aborted.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_writer_task_panic_in_close_aborts() {
+        let aborted = Arc::new(AtomicBool::new(false));
+        let upload = Box::new(PanickingMockUpload {
+            aborted: aborted.clone(),
+        });
+        let mut writer = ObjectStoreWriter {
+            upload: Some(upload),
+            buffer: BytesMut::new(),
+            tasks: JoinSet::new(),
+            parts_submitted: 0,
+            bytes_written: 0,
+        };
+        writer
+            .write(Bytes::from(vec![0u8; 6 * 1024 * 1024]))
+            .await
+            .unwrap();
+        let close_res = writer.close().await;
+        assert!(close_res.is_err());
+        let err = close_res.err().unwrap();
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert_eq!(err.message(), "Part upload task panicked");
+        assert!(
+            aborted.load(Ordering::SeqCst),
+            "abort() MUST be called when part upload task panics during close"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_writer_task_panic_in_write_drain_aborts() {
+        let aborted = Arc::new(AtomicBool::new(false));
+        let upload = Box::new(PanickingMockUpload {
+            aborted: aborted.clone(),
+        });
+        let mut writer = ObjectStoreWriter {
+            upload: Some(upload),
+            buffer: BytesMut::new(),
+            tasks: JoinSet::new(),
+            parts_submitted: 0,
+            bytes_written: 0,
+        };
+        // Writing 10 parts (> MAX_CONCURRENT_PART_UPLOADS of 8) forces drain_capacity inside write()
+        let write_res = writer
+            .write(Bytes::from(vec![0u8; 10 * 5 * 1024 * 1024]))
+            .await;
+        assert!(write_res.is_err());
+        let err = write_res.err().unwrap();
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert_eq!(err.message(), "Part upload task panicked");
+        assert!(
+            aborted.load(Ordering::SeqCst),
+            "abort() MUST be called when part upload task panics during write drain"
         );
     }
 }

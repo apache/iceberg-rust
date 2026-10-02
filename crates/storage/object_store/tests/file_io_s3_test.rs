@@ -245,6 +245,43 @@ mod tests {
         assert!(!file_io.exists(&file_path).await.unwrap());
     }
 
+    #[tokio::test]
+    async fn test_file_io_s3_encoded_partition_path() {
+        set_up();
+        let endpoint = get_object_store_endpoint();
+
+        let file_io = FileIOBuilder::new(Arc::new(ObjectStoreStorageFactory::S3))
+            .with_props(vec![
+                (S3_ENDPOINT, endpoint),
+                (S3_ACCESS_KEY_ID, "admin".to_string()),
+                (S3_SECRET_ACCESS_KEY, "password".to_string()),
+                (S3_REGION, "us-east-1".to_string()),
+                (S3_PATH_STYLE_ACCESS, "true".to_string()),
+            ])
+            .build();
+
+        let file_path = format!(
+            "s3://bucket1/{}/dt=a%2Fb/data.parquet",
+            normalize_test_name_with_parts!("test_file_io_s3_encoded_partition_path")
+        );
+
+        let _ = file_io.delete(&file_path).await;
+        file_io
+            .new_output(&file_path)
+            .unwrap()
+            .write(Bytes::from_static(b"partition-data"))
+            .await
+            .unwrap();
+
+        assert!(file_io.exists(&file_path).await.unwrap());
+
+        let content = file_io.new_input(&file_path).unwrap().read().await.unwrap();
+        assert_eq!(content, Bytes::from_static(b"partition-data"));
+
+        file_io.delete(&file_path).await.unwrap();
+        assert!(!file_io.exists(&file_path).await.unwrap());
+    }
+
     fn assert_minio_kms_rejection(err: &iceberg::Error) {
         let err_str = err.to_string();
         assert!(
