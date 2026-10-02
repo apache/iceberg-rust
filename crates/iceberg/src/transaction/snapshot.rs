@@ -83,25 +83,15 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
     /// - **Overwrite operations**: May exclude manifests for partitions being overwritten
     /// - **Delete operations**: May exclude manifests for partitions being deleted
     fn existing_manifest(
-        &mut self,
+        &self,
         snapshot_produce: &SnapshotProducer<'_>,
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
 
-    /// Returns the data files this operation marked deleted in the manifests it wrote.
-    ///
-    /// Only populated once [`Self::existing_manifest`] has run, so the snapshot summary counts
-    /// what was really removed rather than what the caller asked to remove.
-    fn removed_data_files(&self) -> &[RemovedDataFile] {
-        &[]
+    /// Returns whether the snapshot summary resets the table totals. Defaults to every
+    /// overwrite; an operation that overwrites only some files returns `false`.
+    fn truncate_full_table(&self) -> bool {
+        self.operation() == Operation::Overwrite
     }
-}
-
-/// A data file an operation removed, with the schema and partition spec of the manifest that
-/// recorded it.
-pub(crate) struct RemovedDataFile {
-    pub(crate) data_file: DataFile,
-    pub(crate) schema: SchemaRef,
-    pub(crate) partition_spec: PartitionSpecRef,
 }
 
 pub(crate) struct DefaultManifestProcess;
@@ -130,6 +120,7 @@ pub(crate) struct SnapshotProducer<'a> {
     commit_uuid: Uuid,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
+    deleted_data_files: Vec<DataFile>,
     // Numbers this commit's manifest files. Atomic so `new_manifest_writer` can take `&self`.
     manifest_counter: AtomicU64,
 }
@@ -140,6 +131,7 @@ impl<'a> SnapshotProducer<'a> {
         commit_uuid: Uuid,
         snapshot_properties: HashMap<String, String>,
         added_data_files: Vec<DataFile>,
+        deleted_data_files: Vec<DataFile>,
     ) -> Self {
         Self {
             table,
@@ -147,6 +139,7 @@ impl<'a> SnapshotProducer<'a> {
             commit_uuid,
             snapshot_properties,
             added_data_files,
+            deleted_data_files,
             manifest_counter: AtomicU64::new(0),
         }
     }
@@ -244,26 +237,22 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
-    /// Returns the path for the next manifest file of this commit.
-    fn new_manifest_path(&self) -> Result<String> {
-        Ok(format!(
-            "{}/{}-m{}.{}",
-            self.table.metadata().metadata_location()?,
-            self.commit_uuid,
-            self.manifest_counter.fetch_add(1, Ordering::Relaxed),
-            DataFileFormat::Avro
-        ))
-    }
-
-    /// Returns a writer for the next manifest file of this commit, routed through the table's
-    /// encryption manager when one is configured.
+    /// Returns a writer for the next manifest file of this commit, written under the given
+    /// schema and partition spec.
     pub(crate) fn new_manifest_writer(
         &self,
         content: ManifestContentType,
         schema: SchemaRef,
         partition_spec: PartitionSpecRef,
     ) -> Result<ManifestWriter> {
-        let output_file = self.table.file_io().new_output(self.new_manifest_path()?)?;
+        let new_manifest_path = format!(
+            "{}/{}-m{}.{}",
+            self.table.metadata().metadata_location()?,
+            self.commit_uuid,
+            self.manifest_counter.fetch_add(1, Ordering::Relaxed),
+            DataFileFormat::Avro
+        );
+        let output_file = self.table.file_io().new_output(new_manifest_path)?;
         let partition_spec = partition_spec.as_ref().clone();
 
         let builder = if let Some(em) = self.table.encryption_manager() {
@@ -358,7 +347,7 @@ impl<'a> SnapshotProducer<'a> {
     /// and collects all of the manifests to be included in the new snapshot as [ManifestFile] entries.
     async fn produce_manifests<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         &mut self,
-        snapshot_produce_operation: &mut OP,
+        snapshot_produce_operation: &OP,
         manifest_process: &MP,
     ) -> Result<Vec<ManifestFile>> {
         // Assert current snapshot producer contains new content to add to new snapshot.
@@ -366,10 +355,13 @@ impl<'a> SnapshotProducer<'a> {
         // TODO: Allowing snapshot property setup with no added data files is a workaround.
         // We should clean it up after all necessary actions are supported.
         // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
-        if self.added_data_files.is_empty() && self.snapshot_properties.is_empty() {
+        if self.added_data_files.is_empty()
+            && self.deleted_data_files.is_empty()
+            && self.snapshot_properties.is_empty()
+        {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
-                "No added data files or added snapshot properties found when write a manifest file",
+                "No added or deleted data files or added snapshot properties found when write a manifest file",
             ));
         }
 
@@ -385,23 +377,15 @@ impl<'a> SnapshotProducer<'a> {
         // # TODO
         // Support process delete entries.
 
-        debug_assert_eq!(
-            manifest_files
-                .iter()
-                .filter(|m| m.added_snapshot_id == self.snapshot_id
-                    && m.content == ManifestContentType::Data)
-                .filter_map(|m| m.deleted_files_count)
-                .sum::<u32>() as usize,
-            snapshot_produce_operation.removed_data_files().len(),
-            "an operation must report exactly the data files it marked deleted"
-        );
-
         let manifest_files = manifest_process.process_manifests(self, manifest_files);
         Ok(manifest_files)
     }
 
-    // Collects the added files, before `produce_manifests` takes them.
-    fn added_files_summary(&self) -> SnapshotSummaryCollector {
+    // Returns a `Summary` of the current snapshot
+    fn summary<OP: SnapshotProduceOperation>(
+        &self,
+        snapshot_produce_operation: &OP,
+    ) -> Result<Summary> {
         let mut summary_collector = SnapshotSummaryCollector::default();
         let table_metadata = self.table.metadata_ref();
 
@@ -427,22 +411,17 @@ impl<'a> SnapshotProducer<'a> {
                 table_metadata.default_partition_spec().clone(),
             );
         }
-        summary_collector
-    }
 
-    // Returns a `Summary` of the current snapshot
-    fn summary<OP: SnapshotProduceOperation>(
-        &self,
-        mut summary_collector: SnapshotSummaryCollector,
-        snapshot_produce_operation: &OP,
-    ) -> Result<Summary> {
-        let table_metadata = self.table.metadata_ref();
-
-        for removed in snapshot_produce_operation.removed_data_files() {
+        for data_file in &self.deleted_data_files {
+            let partition_spec = table_metadata
+                .partition_spec_by_id(data_file.partition_spec_id)
+                .ok_or_else(|| {
+                    invalid_data!("Unknown partition spec id {}", data_file.partition_spec_id)
+                })?;
             summary_collector.remove_file(
-                &removed.data_file,
-                removed.schema.clone(),
-                removed.partition_spec.clone(),
+                data_file,
+                table_metadata.current_schema().clone(),
+                partition_spec.clone(),
             );
         }
 
@@ -461,7 +440,11 @@ impl<'a> SnapshotProducer<'a> {
             additional_properties,
         };
 
-        update_snapshot_summaries(summary, previous_snapshot.map(|s| s.summary()))
+        update_snapshot_summaries(
+            summary,
+            previous_snapshot.map(|s| s.summary()),
+            snapshot_produce_operation.truncate_full_table(),
+        )
     }
 
     fn generate_manifest_list_file_path(&self, attempt: i64) -> Result<String> {
@@ -478,7 +461,7 @@ impl<'a> SnapshotProducer<'a> {
     /// Finished building the action and return the [`ActionCommit`] to the transaction.
     pub(crate) async fn commit<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         mut self,
-        mut snapshot_produce_operation: OP,
+        snapshot_produce_operation: OP,
         process: MP,
     ) -> Result<ActionCommit> {
         let manifest_list_path = self.generate_manifest_list_file_path(0)?;
@@ -518,19 +501,16 @@ impl<'a> SnapshotProducer<'a> {
             ),
         };
 
-        // The manifests are produced before the summary is finished so it can count the entries
-        // the operation actually marked Deleted.
-        let summary_collector = self.added_files_summary();
-        let new_manifests = self
-            .produce_manifests(&mut snapshot_produce_operation, &process)
-            .await?;
+        // Calling self.summary() before self.produce_manifests() is important because self.added_data_files
+        // will be set to an empty vec after self.produce_manifests() returns, resulting in an empty summary
+        // being generated.
+        let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
+            Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
+        })?;
 
-        let summary = self
-            .summary(summary_collector, &snapshot_produce_operation)
-            .map_err(|err| {
-                Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.")
-                    .with_source(err)
-            })?;
+        let new_manifests = self
+            .produce_manifests(&snapshot_produce_operation, &process)
+            .await?;
 
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
         let writer_next_row_id = manifest_list_writer.next_row_id();
@@ -617,18 +597,14 @@ mod tests {
 
     use super::*;
     use crate::spec::{
-        DataContentType, DataFileBuilder, Literal, Manifest, ManifestStatus, NestedField,
-        PartitionSpec, PrimitiveType, Schema, Transform, Type,
+        DataContentType, DataFileBuilder, Literal, Manifest, NestedField, PartitionSpec,
+        PrimitiveType, Schema, Transform, Type,
     };
     use crate::transaction::tests::make_v2_minimal_table;
-    use crate::transaction::{Transaction, TransactionAction};
 
-    /// An operation that writes each of its removed files as a deleted entry in its own manifest.
-    struct RemoveOneFileOperation {
-        removed: Vec<RemovedDataFile>,
-    }
+    struct DeleteOperation;
 
-    impl SnapshotProduceOperation for RemoveOneFileOperation {
+    impl SnapshotProduceOperation for DeleteOperation {
         fn operation(&self) -> Operation {
             Operation::Delete
         }
@@ -637,216 +613,34 @@ mod tests {
             Ok(vec![])
         }
 
-        async fn existing_manifest(
-            &mut self,
-            producer: &SnapshotProducer<'_>,
-        ) -> Result<Vec<ManifestFile>> {
-            let mut manifests = vec![];
-            for removed in &self.removed {
-                let mut writer = producer.new_manifest_writer(
-                    ManifestContentType::Data,
-                    removed.schema.clone(),
-                    removed.partition_spec.clone(),
-                )?;
-                writer.add_delete_file(removed.data_file.clone(), 0, Some(0))?;
-                manifests.push(writer.write_manifest_file().await?);
-            }
-            Ok(manifests)
-        }
-
-        fn removed_data_files(&self) -> &[RemovedDataFile] {
-            &self.removed
-        }
-    }
-
-    struct RemoveExistingFileOperation {
-        file_path: String,
-        removed: Vec<RemovedDataFile>,
-    }
-
-    impl SnapshotProduceOperation for RemoveExistingFileOperation {
-        fn operation(&self) -> Operation {
-            Operation::Overwrite
-        }
-
-        async fn delete_entries(&self, _: &SnapshotProducer<'_>) -> Result<Vec<ManifestEntry>> {
+        async fn existing_manifest(&self, _: &SnapshotProducer<'_>) -> Result<Vec<ManifestFile>> {
             Ok(vec![])
         }
-
-        async fn existing_manifest(
-            &mut self,
-            producer: &SnapshotProducer<'_>,
-        ) -> Result<Vec<ManifestFile>> {
-            let snapshot = producer.table.metadata().current_snapshot().unwrap();
-            let manifest_list = producer.table.manifest_list_reader(snapshot).load().await?;
-            // The initial append writes both files into one manifest.
-            assert_eq!(manifest_list.entries().len(), 1);
-
-            let manifest = producer
-                .table
-                .manifest_reader()
-                .read(&manifest_list.entries()[0])
-                .await?;
-            let schema = manifest.metadata().schema().clone();
-            let partition_spec = Arc::new(manifest.metadata().partition_spec().clone());
-            let mut writer = producer.new_manifest_writer(
-                ManifestContentType::Data,
-                schema.clone(),
-                partition_spec.clone(),
-            )?;
-
-            let mut removed = Vec::new();
-            for entry in manifest.entries() {
-                if entry.file_path() == self.file_path && entry.is_alive() {
-                    writer.add_delete_entry(entry.as_ref().clone())?;
-                    removed.push(RemovedDataFile {
-                        data_file: entry.data_file().clone(),
-                        schema: schema.clone(),
-                        partition_spec: partition_spec.clone(),
-                    });
-                } else if entry.is_alive() {
-                    writer.add_existing_entry(entry.as_ref().clone())?;
-                }
-            }
-            assert_eq!(removed.len(), 1);
-
-            let rewritten_manifest = writer.write_manifest_file().await?;
-            self.removed.extend(removed);
-            Ok(vec![rewritten_manifest])
-        }
-
-        fn removed_data_files(&self) -> &[RemovedDataFile] {
-            &self.removed
-        }
     }
 
-    fn apply_commit(table: Table, mut commit: ActionCommit) -> Table {
-        let mut builder = table.metadata().clone().into_builder(None);
-        for update in commit.take_updates() {
-            builder = update.apply(builder).unwrap();
-        }
-        table.with_metadata(Arc::new(builder.build().unwrap().metadata))
-    }
-
-    fn data_file(table: &Table, path: &str, record_count: u64) -> DataFile {
-        DataFileBuilder::default()
+    #[test]
+    fn test_summary_counts_deleted_data_files() {
+        let table = make_v2_minimal_table();
+        let deleted = DataFileBuilder::default()
             .content(DataContentType::Data)
-            .file_path(path.to_string())
+            .file_path("test/deleted.parquet".to_string())
             .file_format(DataFileFormat::Parquet)
             .file_size_in_bytes(100)
-            .record_count(record_count)
+            .record_count(2)
             .partition_spec_id(table.metadata().default_partition_spec_id())
             .partition(Struct::from_iter([Some(Literal::long(300))]))
             .build()
-            .unwrap()
-    }
+            .unwrap();
 
-    #[tokio::test]
-    async fn test_summary_counts_files_the_operation_reports_as_removed() {
-        let table = make_v2_minimal_table();
-        let added = data_file(&table, "test/added.parquet", 3);
-        let removed = data_file(&table, "test/removed.parquet", 2);
-
-        let operation = RemoveOneFileOperation {
-            removed: vec![RemovedDataFile {
-                data_file: removed,
-                schema: table.metadata().current_schema().clone(),
-                partition_spec: table.metadata().default_partition_spec().clone(),
-            }],
-        };
-
-        let mut action_commit =
-            SnapshotProducer::new(&table, Uuid::now_v7(), HashMap::new(), vec![added])
-                .commit(operation, DefaultManifestProcess)
-                .await
-                .unwrap();
-
-        let updates = action_commit.take_updates();
-        let TableUpdate::AddSnapshot { snapshot } = &updates[0] else {
-            unreachable!()
-        };
-        let properties = &snapshot.summary().additional_properties;
+        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), HashMap::new(), vec![], vec![
+            deleted,
+        ]);
+        let summary = producer.summary(&DeleteOperation).unwrap();
+        let properties = &summary.additional_properties;
 
         assert_eq!(properties.get("deleted-data-files").unwrap(), "1");
         assert_eq!(properties.get("deleted-records").unwrap(), "2");
-        assert_eq!(properties.get("added-data-files").unwrap(), "1");
-        assert_eq!(properties.get("added-records").unwrap(), "3");
-        assert_eq!(properties.get("total-data-files").unwrap(), "0");
-        assert_eq!(properties.get("total-records").unwrap(), "1");
-    }
-
-    #[tokio::test]
-    async fn test_partial_overwrite_reports_actual_removed_file() {
-        let table = make_v2_minimal_table();
-        let removed = data_file(&table, "test/removed.parquet", 2);
-        let kept = data_file(&table, "test/kept.parquet", 5);
-        let append = Transaction::new(&table)
-            .fast_append()
-            .add_data_files(vec![removed.clone(), kept]);
-        let initial_commit = Arc::new(append).commit(&table).await.unwrap();
-        let table = apply_commit(table, initial_commit);
-
-        let initial_summary = &table
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .summary()
-            .additional_properties;
-        assert_eq!(initial_summary.get("total-data-files").unwrap(), "2");
-        assert_eq!(initial_summary.get("total-records").unwrap(), "7");
-
-        let mut replacement = data_file(&table, "test/replacement.parquet", 3);
-        replacement.file_size_in_bytes = 300;
-        let operation = RemoveExistingFileOperation {
-            file_path: removed.file_path.clone(),
-            removed: vec![],
-        };
-        let commit =
-            SnapshotProducer::new(&table, Uuid::now_v7(), HashMap::new(), vec![replacement])
-                .commit(operation, DefaultManifestProcess)
-                .await
-                .unwrap();
-        let table = apply_commit(table, commit);
-        let snapshot = table.metadata().current_snapshot().unwrap();
-        let properties = &snapshot.summary().additional_properties;
-
-        assert_eq!(snapshot.summary().operation, Operation::Overwrite);
-        assert_eq!(properties.get("deleted-data-files").unwrap(), "1");
-        assert_eq!(properties.get("deleted-records").unwrap(), "2");
-        assert_eq!(properties.get("added-data-files").unwrap(), "1");
-        assert_eq!(properties.get("added-records").unwrap(), "3");
         assert_eq!(properties.get("removed-files-size").unwrap(), "100");
-        assert_eq!(properties.get("added-files-size").unwrap(), "300");
-        assert_eq!(properties.get("total-data-files").unwrap(), "2");
-        assert_eq!(properties.get("total-records").unwrap(), "8");
-        assert_eq!(properties.get("total-files-size").unwrap(), "400");
-
-        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
-        assert_eq!(manifest_list.entries().len(), 2);
-        let mut statuses = HashMap::new();
-        for manifest_file in manifest_list.entries() {
-            let manifest = table.manifest_reader().read(manifest_file).await.unwrap();
-            for entry in manifest.entries() {
-                assert!(
-                    statuses
-                        .insert(entry.file_path().to_string(), entry.status())
-                        .is_none()
-                );
-            }
-        }
-        assert_eq!(statuses.len(), 3);
-        assert_eq!(
-            statuses.get("test/removed.parquet"),
-            Some(&ManifestStatus::Deleted)
-        );
-        assert_eq!(
-            statuses.get("test/kept.parquet"),
-            Some(&ManifestStatus::Existing)
-        );
-        assert_eq!(
-            statuses.get("test/replacement.parquet"),
-            Some(&ManifestStatus::Added)
-        );
     }
 
     #[tokio::test]
@@ -870,7 +664,8 @@ mod tests {
                 .unwrap(),
         );
 
-        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), HashMap::new(), vec![]);
+        let producer =
+            SnapshotProducer::new(&table, Uuid::now_v7(), HashMap::new(), vec![], vec![]);
         let first = producer
             .new_manifest_writer(
                 ManifestContentType::Data,
@@ -904,61 +699,5 @@ mod tests {
         assert_eq!(metadata.schema().as_ref(), schema.as_ref());
         assert_eq!(metadata.partition_spec().spec_id(), 3);
         assert_eq!(first.partition_spec_id, 3);
-    }
-
-    #[tokio::test]
-    async fn test_removed_file_summary_uses_the_reported_partition_spec() {
-        let table = make_v2_minimal_table();
-        let metadata = table
-            .metadata()
-            .clone()
-            .into_builder(None)
-            .set_properties(HashMap::from([(
-                TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT.to_string(),
-                "10".to_string(),
-            )]))
-            .unwrap()
-            .build()
-            .unwrap()
-            .metadata;
-        let table = table.with_metadata(Arc::new(metadata));
-
-        let reported_schema = table.metadata().current_schema().clone();
-        let reported_spec = Arc::new(
-            PartitionSpec::builder(reported_schema.clone())
-                .with_spec_id(1)
-                .add_partition_field("y", "y", Transform::Identity)
-                .unwrap()
-                .build()
-                .unwrap(),
-        );
-
-        let added = data_file(&table, "test/added.parquet", 3);
-        let removed = data_file(&table, "test/removed.parquet", 2);
-        let operation = RemoveOneFileOperation {
-            removed: vec![RemovedDataFile {
-                data_file: removed,
-                schema: reported_schema,
-                partition_spec: reported_spec,
-            }],
-        };
-
-        let mut action_commit =
-            SnapshotProducer::new(&table, Uuid::now_v7(), HashMap::new(), vec![added])
-                .commit(operation, DefaultManifestProcess)
-                .await
-                .unwrap();
-
-        let updates = action_commit.take_updates();
-        let TableUpdate::AddSnapshot { snapshot } = &updates[0] else {
-            unreachable!()
-        };
-        let properties = &snapshot.summary().additional_properties;
-
-        let removed_partition = properties
-            .get("partitions.y=300")
-            .expect("removal must be summarized under the reported spec's partition path");
-        assert!(removed_partition.contains("deleted-data-files=1"));
-        assert!(properties.contains_key("partitions.x=300"));
     }
 }

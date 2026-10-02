@@ -93,6 +93,7 @@ impl TransactionAction for FastAppendAction {
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
             self.snapshot_properties.clone(),
             self.dedupe_added_files(),
+            vec![],
         );
 
         // validate added files
@@ -124,7 +125,7 @@ impl SnapshotProduceOperation for FastAppendOperation {
     }
 
     async fn existing_manifest(
-        &mut self,
+        &self,
         snapshot_produce: &SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestFile>> {
         let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
