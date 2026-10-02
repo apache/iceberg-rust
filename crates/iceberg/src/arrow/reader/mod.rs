@@ -35,6 +35,8 @@ const DEFAULT_RANGE_FETCH_CONCURRENCY: usize = 10;
 const DEFAULT_METADATA_SIZE_HINT: usize = 512 * 1024;
 
 mod file_reader;
+#[cfg(test)]
+mod flow_control_tests;
 mod options;
 mod pipeline;
 mod positional_deletes;

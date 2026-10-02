@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use arrow_schema::{DataType, Field};
-use futures::{StreamExt, TryStreamExt};
+use futures::{StreamExt, TryFutureExt, TryStreamExt};
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::{
     PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder, ProjectionMask, RowNumber,
@@ -91,14 +91,23 @@ impl ArrowReader {
                     .try_flatten(),
             )
         } else {
+            // Open each file inside the stream that reads it. A file opened
+            // ahead of the flatten can sit unread, and on one HTTP/2
+            // connection an unread response stops the server sending for
+            // every other read on that connection.
             Box::pin(
                 tasks
-                    .map_ok(move |task| task_reader.clone().process(task))
+                    .map_ok(move |task| {
+                        task_reader
+                            .clone()
+                            .process(task)
+                            .try_flatten_stream()
+                            .boxed()
+                    })
                     .map_err(|err| {
                         Error::new(ErrorKind::Unexpected, "file scan task generate failed")
                             .with_source(err)
                     })
-                    .try_buffer_unordered(concurrency_limit_data_files)
                     .try_flatten_unordered(concurrency_limit_data_files),
             )
         };
