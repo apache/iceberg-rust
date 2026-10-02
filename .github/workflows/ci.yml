@@ -57,7 +57,7 @@ jobs:
 
       - name: Install lint tools
         # Keep versions in sync with the local install targets in Makefile.
-        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         with:
           tool: taplo@0.9.3,cargo-machete@0.7.0
 
@@ -235,7 +235,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: matrix.test-suite.name == 'default'
-        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         with:
           tool: cargo-nextest
 
