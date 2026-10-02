@@ -344,7 +344,6 @@ pub(crate) fn update_snapshot_summaries(
         ));
     }
 
-
     update_totals(
         &mut summary,
         previous_summary,

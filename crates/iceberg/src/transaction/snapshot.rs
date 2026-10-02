@@ -130,9 +130,7 @@ pub(crate) struct SnapshotProducer<'a> {
     commit_uuid: Uuid,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
-    // A counter used to generate unique manifest file names.
-    // It starts from 0 and increments for each new manifest file.
-    // Note: This counter is limited to the range of (0..u64::MAX).
+    // Numbers this commit's manifest files. Atomic so `new_manifest_writer` can take `&self`.
     manifest_counter: AtomicU64,
 }
 
@@ -394,6 +392,17 @@ impl<'a> SnapshotProducer<'a> {
         // # TODO
         // Support process delete entries.
 
+        debug_assert_eq!(
+            manifest_files
+                .iter()
+                .filter(|m| m.added_snapshot_id == self.snapshot_id
+                    && m.content == ManifestContentType::Data)
+                .filter_map(|m| m.deleted_files_count)
+                .sum::<u32>() as usize,
+            snapshot_produce_operation.removed_data_files().len(),
+            "an operation must report exactly the data files it marked deleted"
+        );
+
         let manifest_files = manifest_process.process_manifests(self, manifest_files);
         Ok(manifest_files)
     }
@@ -612,7 +621,7 @@ mod tests {
     use crate::transaction::tests::make_v2_minimal_table;
     use crate::transaction::{Transaction, TransactionAction};
 
-    /// An operation that adds no existing manifests and reports one removed data file.
+    /// An operation that writes each of its removed files as a deleted entry in its own manifest.
     struct RemoveOneFileOperation {
         removed: Vec<RemovedDataFile>,
     }
@@ -628,9 +637,19 @@ mod tests {
 
         async fn existing_manifest(
             &mut self,
-            _: &SnapshotProducer<'_>,
+            producer: &SnapshotProducer<'_>,
         ) -> Result<Vec<ManifestFile>> {
-            Ok(vec![])
+            let mut manifests = vec![];
+            for removed in &self.removed {
+                let mut writer = producer.new_manifest_writer(
+                    ManifestContentType::Data,
+                    removed.schema.clone(),
+                    removed.partition_spec.clone(),
+                )?;
+                writer.add_delete_file(removed.data_file.clone(), 0, Some(0))?;
+                manifests.push(writer.write_manifest_file().await?);
+            }
+            Ok(manifests)
         }
 
         fn removed_data_files(&self) -> &[RemovedDataFile] {
