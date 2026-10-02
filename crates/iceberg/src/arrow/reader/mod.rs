@@ -34,6 +34,8 @@ const DEFAULT_RANGE_FETCH_CONCURRENCY: usize = 10;
 /// Matches DataFusion's default `ParquetOptions::metadata_size_hint`.
 const DEFAULT_METADATA_SIZE_HINT: usize = 512 * 1024;
 
+#[cfg(test)]
+mod delete_application;
 mod file_reader;
 mod options;
 mod pipeline;
