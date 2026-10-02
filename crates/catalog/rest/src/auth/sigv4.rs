@@ -36,8 +36,13 @@ pub enum PayloadHashMode {
     /// header is replaced, and moved to `Original-x-amz-content-sha256` when it
     /// differed. Java replaces it too for a bodiless request, but signs the
     /// caller's value when a body is present.
+    ///
+    /// The base64 header comes from how Java configures the AWS SDK, not from
+    /// SigV4. Signatures verify either way, but a server that checks the
+    /// header against the body's hex hash rejects it.
     IcebergRest,
-    /// Standard AWS SigV4 style: hex everywhere (e.g. AWS Glue).
+    /// Standard AWS SigV4 style, as botocore (and so PyIceberg) signs: hex
+    /// everywhere.
     StandardAws,
 }
 
@@ -112,6 +117,10 @@ impl SigV4Signer {
     /// Signs `request` in place, rewriting it as signing requires: an existing
     /// `Authorization` becomes `Original-Authorization`, userinfo leaves the
     /// URL, and a `+` in the query becomes `%20`.
+    ///
+    /// Signs with exactly the `credentials` given and never refreshes them:
+    /// resolve temporary ones (STS, IRSA, an instance role) afresh for each
+    /// call, as Java does per request.
     ///
     /// A `+` is therefore taken to be an encoded space; write a literal plus as
     /// `%2B`.
