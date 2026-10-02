@@ -31,8 +31,7 @@ repository = { workspace = true }
 
 [features]
 default = []
-# SigV4 request signing, for catalogs that authenticate the AWS way. Off by
-# default so the AWS crates are not pulled in unless they are used.
+# SigV4 request signing. Off by default to keep the AWS crates out.
 sigv4 = ["dep:aws-credential-types", "dep:aws-sigv4", "dep:base64", "dep:sha2"]
 
 [dependencies]

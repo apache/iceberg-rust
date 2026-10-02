@@ -29,18 +29,12 @@ const EMPTY_BODY_HEX_SHA256: &str =
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PayloadHashMode {
-    /// Iceberg Java's RESTSigV4 style: base64 header when there is a body, hex
-    /// when there is none; the canonical request always uses hex. A caller-set
-    /// header is replaced, and moved to `Original-x-amz-content-sha256` when it
-    /// differed. Java replaces it too for a bodiless request, but signs the
-    /// caller's value when a body is present.
-    ///
-    /// The base64 header comes from how Java configures the AWS SDK, not from
-    /// SigV4. A verifier that hashes the body itself accepts it; one that
-    /// takes the payload hash from the header, or checks the header against
-    /// the hex hash, rejects it.
+    /// Iceberg Java's style: a base64 header when there is a body, hex when
+    /// there is none, and hex in the canonical request. The base64 comes from
+    /// how Java configures the AWS SDK, not from SigV4, so a verifier that
+    /// trusts the header instead of hashing the body rejects it.
     IcebergRest,
-    /// Standard AWS SigV4 style: hex everywhere.
+    /// Standard SigV4: hex everywhere.
     StandardAws,
 }
 
@@ -56,8 +50,7 @@ fn base64_encode(bytes: &[u8]) -> String {
     base64::engine::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
 }
 
-/// The `x-amz-content-sha256` value. `None` means no body at all, which the
-/// two modes encode differently.
+/// The `x-amz-content-sha256` value; `None` is no body at all.
 fn content_sha256_header(body: Option<&[u8]>, mode: PayloadHashMode) -> String {
     match mode {
         PayloadHashMode::StandardAws => hex_sha256(body.unwrap_or_default()),
@@ -91,29 +84,27 @@ impl SigV4Signer {
         }
     }
 
-    /// Signs `request` in place, rewriting it as signing requires: an existing
-    /// `Authorization` becomes `Original-Authorization`, userinfo leaves the
-    /// URL, and a `+` in the query becomes `%20`.
+    /// Signs `request` in place. An existing `Authorization` moves to
+    /// `Original-Authorization`, and a caller's `x-amz-date`,
+    /// `x-amz-content-sha256` or `x-amz-security-token` that the signer
+    /// overwrites moves to `Original-<name>` (Java keeps a caller's content
+    /// hash when there is a body). Userinfo leaves the URL, and a `+` in the
+    /// query becomes `%20`, so write a literal plus as `%2B`.
     ///
-    /// A `+` is therefore taken to be an encoded space; write a literal plus as
-    /// `%2B`.
+    /// Uses `credentials` as given and never refreshes them: resolve temporary
+    /// ones from their provider before each call.
     ///
-    /// Signs with exactly the `credentials` given and never refreshes them:
-    /// with temporary ones (STS, IRSA, an instance role), resolve them from
-    /// their provider before each call, as Java's session does per request.
-    ///
-    /// Fails rather than sign a streaming body or a non-UTF-8 header, neither
-    /// of which canonicalizes faithfully.
+    /// Fails on a streaming body or a non-UTF-8 header, which cannot be
+    /// canonicalized faithfully.
     ///
     /// Send the result through a client that does not follow redirects: a
-    /// redirect replays a signature made for another URL, and across hosts
-    /// reqwest drops `Authorization` but keeps `Original-Authorization`.
+    /// redirect replays the signature, and across hosts reqwest drops
+    /// `Authorization` but keeps `Original-Authorization`.
     ///
-    /// `aws_sigv4` traces the headers it is given, and its redaction list does
-    /// not cover the `Original-` copy. A `tracing` subscriber that could record
-    /// that is muted for the call; with no subscriber, or with `tracing`'s
-    /// `log-always` feature, its `log` bridge still forwards those events, so
-    /// keep `aws_sigv4` below trace level there.
+    /// `aws_sigv4` traces requests without redacting `Original-Authorization`.
+    /// A `tracing` subscriber is muted for the call, but the `log` bridge (no
+    /// subscriber, or `log-always`) still forwards those events, so keep
+    /// `aws_sigv4` below trace level there.
     pub fn sign(
         &self,
         request: &mut crate::HttpRequest,
@@ -177,12 +168,10 @@ impl SigV4Signer {
             Error::new(ErrorKind::DataInvalid, "request is not signable").with_source(e)
         })?;
 
-        // The crate traces what it signs, and redacts `authorization` but not
-        // the `Original-` copy, so a bearer token would be logged verbatim.
-        // Mute it only when a subscriber could record trace events (the max
-        // level stays `OFF` until one is registered): `with_default` marks a
-        // dispatcher as set for good, which would silently divert every later
-        // event away from an app's `log` bridge.
+        // `aws_sigv4` traces the request, `Original-Authorization` included.
+        // Mute it only when a subscriber could record that (the max level is
+        // `OFF` until one is registered): `with_default` marks tracing as in
+        // use for good, which turns off its `log` fallback process-wide.
         let signed = if LevelFilter::current() == LevelFilter::TRACE {
             tracing::subscriber::with_default(NoSubscriber::default(), || sign(signable, &params))
         } else {
@@ -196,8 +185,7 @@ impl SigV4Signer {
     }
 }
 
-/// The body to sign. Java branches on `encodedBody() == null`, so an absent
-/// body and an empty one hash differently.
+/// The body to sign; as in Java, an absent body and an empty one differ.
 fn signable_body(request: &crate::HttpRequest) -> Result<Option<Vec<u8>>> {
     match request.body() {
         crate::HttpRequestBody::Empty => Ok(None),
@@ -209,8 +197,8 @@ fn signable_body(request: &crate::HttpRequest) -> Result<Option<Vec<u8>>> {
     }
 }
 
-/// The headers to sign. Skipping a non-UTF-8 one would leave it unsigned but
-/// still on the wire, which AWS rejects for `x-amz-*` and is hard to diagnose.
+/// The headers to sign. A non-UTF-8 one is an error: skipping it would send
+/// it unsigned.
 fn signable_headers(request: &crate::HttpRequest) -> Result<Vec<(&str, &str)>> {
     request
         .headers()
@@ -229,8 +217,8 @@ fn signable_headers(request: &crate::HttpRequest) -> Result<Vec<(&str, &str)>> {
 }
 
 /// Drops userinfo, which the wire `Host` never carries, and rewrites `+` in the
-/// query. Both AWS and Java read `+` as a space, so the signature is unchanged;
-/// this makes the sent URL agree with an RFC 3986 verifier too.
+/// query as `%20`: a space to AWS and Java either way, but unambiguous to any
+/// verifier.
 fn rewrite_url_for_signing(request: &mut crate::HttpRequest) {
     if !request.url().username().is_empty() || request.url().password().is_some() {
         let url = request.url_mut();
@@ -253,22 +241,19 @@ fn signing_settings() -> aws_sigv4::http_request::SigningSettings {
     let mut settings = SigningSettings::default();
     settings.percent_encoding_mode = PercentEncodingMode::Double;
     settings.uri_path_normalization_mode = UriPathNormalizationMode::Enabled;
-    // The header is ours to set: IcebergRest puts base64 there, while the
-    // canonical request keeps hex.
+    // We set the header ourselves: base64 for IcebergRest.
     settings.payload_checksum_kind = PayloadChecksumKind::NoHeader;
     let mut excluded = settings.excluded_headers.take().unwrap_or_default();
     excluded.extend([
-        // Java's list, spelled out even where the crate's defaults overlap, so
-        // a minor release cannot start signing a header a proxy rewrites.
+        // Java's list, spelled out rather than left to the crate's defaults.
         "connection".into(),
         "expect".into(),
         "transfer-encoding".into(),
         "user-agent".into(),
         "x-amzn-trace-id".into(),
-        // Not on Java's list, but a proxy appends to it as well.
+        // Not Java's, but proxies append to it too.
         "x-forwarded-for".into(),
-        // Relocation appends to these after signing, so a caller-supplied one
-        // would otherwise be signed and then changed on the wire.
+        // Relocation appends to these after signing.
         "original-x-amz-date".into(),
         "original-x-amz-content-sha256".into(),
         "original-x-amz-security-token".into(),
@@ -277,8 +262,8 @@ fn signing_settings() -> aws_sigv4::http_request::SigningSettings {
     settings
 }
 
-/// Java's `convertHeaders`: renames `Authorization` so SigV4 can take the
-/// name. Runs before signing, so the relocated copy is signed too.
+/// Java's `convertHeaders`: moves `Authorization` aside before signing, so the
+/// moved copy is signed.
 fn convert_headers(request: &mut crate::HttpRequest) {
     let displaced: Vec<_> = request
         .headers()
@@ -296,8 +281,8 @@ fn convert_headers(request: &mut crate::HttpRequest) {
     }
 }
 
-/// Java's `updateRequestHeaders`: installs the signed headers, moving a
-/// conflicting caller value aside rather than dropping it.
+/// Java's `updateRequestHeaders`: installs the signed headers, moving
+/// conflicting caller values aside.
 fn update_request_headers(
     request: &mut crate::HttpRequest,
     instructions: aws_sigv4::http_request::SigningInstructions,
@@ -354,8 +339,7 @@ fn relocated_name(name: &str) -> Option<reqwest::header::HeaderName> {
     }
 }
 
-/// Moves `name`'s values aside when they differ from the one about to be
-/// signed, so a caller's header is not silently dropped.
+/// Moves `name`'s values that differ from `signed` to `relocated`.
 fn relocate_conflicting(
     headers: &mut reqwest::header::HeaderMap,
     name: &str,
@@ -369,7 +353,7 @@ fn relocate_conflicting(
         .cloned()
         .collect();
     for mut value in conflicting {
-        // The original may carry a credential (e.g. a session token).
+        // It may carry a credential, e.g. a session token.
         value.set_sensitive(true);
         headers.append(relocated.clone(), value);
     }
@@ -396,8 +380,7 @@ mod tests {
     fn signing_rewrites_an_ambiguous_plus_out_of_the_query() {
         use chrono::TimeZone;
 
-        // reqwest writes a space as `+`, which verifiers read either as a
-        // literal plus or as a space. Signing rewrites it to `%20`.
+        // reqwest writes a space as `+`; signing makes it `%20`.
         let mut request = HttpRequest::new(
             reqwest::Client::new()
                 .get("https://rest.example.com/v1/namespaces")
@@ -413,7 +396,6 @@ mod tests {
             .sign_at(&mut request, &test_credentials(), now)
             .unwrap();
 
-        // The request that goes out no longer carries the ambiguous form.
         let query = request.url().query().unwrap();
         assert!(!query.contains('+'), "{query}");
         assert!(query.contains("my%20ns"), "{query}");
@@ -431,8 +413,7 @@ mod tests {
         assert_eq!(e, EMPTY_HEX);
     }
 
-    /// Java branches on `encodedBody() == null`, so a body that is present but
-    /// empty is hashed like any other rather than taking the absent-body path.
+    /// As in Java, an empty body is hashed, unlike an absent one.
     #[test]
     fn content_sha256_header_separates_an_empty_body_from_an_absent_one() {
         let empty = content_sha256_header(Some(b""), PayloadHashMode::IcebergRest);
@@ -443,8 +424,7 @@ mod tests {
         );
     }
 
-    /// The same distinction, but through `sign_at`, so that collapsing the two
-    /// while reading the body off the request cannot go unnoticed.
+    /// The same, through `sign_at`.
     #[test]
     fn signing_separates_an_empty_body_from_an_absent_one() {
         use chrono::TimeZone;
@@ -480,8 +460,8 @@ mod tests {
         );
     }
 
-    /// Pins a signature this crate produced, so a change in canonicalization
-    /// is caught; `signatures_match_iceberg_java` is the check against Java.
+    /// Pins a signature this crate produced; `signatures_match_iceberg_java`
+    /// checks against Java.
     fn assert_signature_is(req: &HttpRequest, expected: &str) {
         let auth = req
             .headers()
@@ -500,7 +480,7 @@ mod tests {
         aws_credential_types::Credentials::new("ak", "sk", None::<String>, None, "test")
     }
 
-    /// Collects every event field a subscriber would have been handed.
+    /// Records every event field.
     #[derive(Clone, Default)]
     struct CapturedLog(std::sync::Arc<std::sync::Mutex<String>>);
 
@@ -526,8 +506,7 @@ mod tests {
         fn exit(&self, _: &tracing::Id) {}
     }
 
-    /// `aws_sigv4` traces the headers it is given, and its redaction list does
-    /// not cover the `Original-` copy of a relocated bearer token.
+    /// `aws_sigv4` does not redact `Original-Authorization` itself.
     #[test]
     fn signing_does_not_trace_a_relocated_bearer_token() {
         use chrono::TimeZone;
@@ -556,8 +535,7 @@ mod tests {
                     Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
                 )
                 .unwrap();
-            // Without this the assertion below would pass even if nothing was
-            // ever captured.
+            // Proves the capture works.
             tracing::trace!(canary = "subscriber-is-live");
         });
 
@@ -595,8 +573,8 @@ mod tests {
         assert!(err.message().contains("x-amz-meta-tenant"), "{err}");
     }
 
-    /// A caller-supplied `Original-x-amz-*` must not be signed: relocation
-    /// appends to it afterwards, which would change a signed value on the wire.
+    /// Relocation appends to a caller's `Original-x-amz-*` after signing, so it
+    /// must stay unsigned.
     #[test]
     fn a_caller_supplied_relocation_header_is_not_signed() {
         use chrono::TimeZone;
@@ -652,8 +630,7 @@ mod tests {
     fn userinfo_is_stripped_before_signing() {
         use chrono::TimeZone;
 
-        // `HttpRequest::new` is public, so a hand-built request can carry
-        // userinfo that the wire Host never has.
+        // A hand-built request can carry userinfo; the wire `Host` never does.
         let signer = test_signer(PayloadHashMode::StandardAws);
         let mut req = HttpRequest::new(reqwest::Request::new(
             reqwest::Method::GET,
@@ -678,8 +655,8 @@ mod tests {
     fn a_doubled_slash_in_the_path_is_normalized() {
         use chrono::TimeZone;
 
-        // A catalog URI with a trailing slash produces `//v1/...`; the signed
-        // path has to collapse it the way `Aws4Signer` does.
+        // A trailing slash on the catalog URI gives `//v1/...`, which
+        // `Aws4Signer` collapses.
         let signer = test_signer(PayloadHashMode::StandardAws);
         let mut req = HttpRequest::new(reqwest::Request::new(
             reqwest::Method::GET,
@@ -699,8 +676,7 @@ mod tests {
     fn caller_headers_the_signer_overwrites_are_relocated() {
         use chrono::TimeZone;
 
-        // Java's `updateRequestHeaders` moves a conflicting caller value to
-        // `Original-<name>` rather than dropping it, credentials included.
+        // As in Java, conflicting caller values move to `Original-<name>`.
         let creds = aws_credential_types::Credentials::new(
             "ak".to_string(),
             "sk".to_string(),
@@ -762,9 +738,8 @@ mod tests {
     fn an_existing_authorization_is_never_signed() {
         use chrono::TimeZone;
 
-        // `authorization` must stay out of `SignedHeaders`: the signer replaces
-        // it, so signing the caller's value would guarantee a mismatch. The
-        // crate's own defaults carry that exclusion.
+        // The signer replaces `authorization`, and a proxy may rewrite
+        // `user-agent`, so neither is signed.
         let signer = test_signer(PayloadHashMode::StandardAws);
         let mut req = HttpRequest::new(
             reqwest::Client::new()
@@ -799,16 +774,14 @@ mod tests {
         for excluded in ["authorization", "user-agent"] {
             assert!(!signed.split(';').any(|h| h == excluded), "{signed}");
         }
-        // The relocated copy, on the other hand, is signed over — that is the
-        // point of renaming it before signing rather than after.
+        // The relocated copy is signed: it is renamed before signing.
         assert!(
             signed.split(';').any(|h| h == "original-authorization"),
             "{signed}"
         );
     }
 
-    /// Java groups all `Authorization` values under the relocated name, so
-    /// repeated credentials must survive together and stay redacted.
+    /// As in Java, every `Authorization` value is relocated, and stays redacted.
     #[test]
     fn every_repeated_authorization_is_relocated_and_kept_sensitive() {
         use chrono::TimeZone;
@@ -846,9 +819,7 @@ mod tests {
     fn hop_by_hop_headers_are_not_signed() {
         use chrono::TimeZone;
 
-        // A proxy or an HTTP/2 hop may drop or rewrite these, so signing them
-        // would make the request fail verification. Java's `AbstractAws4Signer`
-        // ignores the first two as well.
+        // A proxy may drop or rewrite these, so they are not signed.
         let signer = test_signer(PayloadHashMode::StandardAws);
         let mut req = HttpRequest::new(
             reqwest::Client::new()
@@ -892,8 +863,7 @@ mod tests {
     fn signed_credentials_are_marked_sensitive() {
         use chrono::TimeZone;
 
-        // Both carry a credential, so a `Debug`-formatted request must not
-        // print them.
+        // Both carry a credential, so `Debug` must not print them.
         let creds = aws_credential_types::Credentials::new(
             "ak".to_string(),
             "sk".to_string(),
@@ -932,8 +902,7 @@ mod tests {
     fn a_caller_content_hash_is_relocated_not_dropped() {
         use chrono::TimeZone;
 
-        // The signer overwrites `x-amz-content-sha256`; the caller's value
-        // moves aside instead of vanishing, after signing as Java does.
+        // The caller's value moves aside rather than vanishing.
         let signer = test_signer(PayloadHashMode::StandardAws);
         let mut req = HttpRequest::new(
             reqwest::Client::new()
@@ -965,8 +934,8 @@ mod tests {
     fn signs_with_a_non_default_service_and_session_token() {
         use chrono::TimeZone;
 
-        // What a non-AWS S3-compatible catalog vends: its own signing name
-        // rather than `execute-api`, its own region, and STS credentials.
+        // As a non-AWS catalog might vend: its own signing name, and STS
+        // credentials.
         let creds = aws_credential_types::Credentials::new(
             "STS.EXAMPLEACCESSKEYID",
             "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
@@ -1052,8 +1021,8 @@ mod tests {
         );
     }
 
-    /// Empty body uses the hex constant and existing headers are signed too
-    /// (mirrors Java's `TestRESTSigV4AuthSession::authenticateWithoutBody`).
+    /// An empty body hashes to the hex constant, and caller headers are signed
+    /// (Java's `authenticateWithoutBody`).
     #[test]
     fn signs_empty_body_and_all_headers() {
         use chrono::TimeZone;
@@ -1098,20 +1067,9 @@ mod tests {
         );
     }
 
-    /// The signed `host` must include an explicit non-default port, matching
-    /// what reqwest/hyper put on the wire and what the AWS SDK signs.
     #[test]
     fn iceberg_mode_signs_the_hex_payload_hash_not_the_base64_header() {
-        // The IcebergRest split: `x-amz-content-sha256` carries base64, but the
-        // canonical request must hash in hex. A body is required to tell them
-        // apart — every other signing test uses an empty one, where the header
-        // is the hex constant and the two values coincide.
-        //
-        // Java has no counterpart: there the split lives inside the AWS SDK
-        // (`SignerChecksumParams` puts a base64 checksum in the header while
-        // `Aws4Signer` canonicalizes hex), so `TestRESTSigV4Signer` only checks
-        // that the header is present. Reimplementing the signer makes the
-        // invariant ours to keep.
+        // Needs a body: without one the header is the hex constant too.
         use chrono::TimeZone;
 
         let creds = aws_credential_types::Credentials::new(
@@ -1149,10 +1107,8 @@ mod tests {
         );
     }
 
-    /// What Iceberg Java's `RESTSigV4AuthSession` (iceberg-aws 1.10.1, AWS SDK
-    /// 2.29.52, an `AuthSession.EMPTY` delegate, these credentials as `rest.*`
-    /// properties) sent for the same requests: a check against an independent
-    /// implementation, where the other pins in this file only catch changes.
+    /// What Iceberg Java's `RESTSigV4AuthSession` (iceberg-aws 1.10.1) sent for
+    /// these requests, given these credentials as `rest.*` properties.
     #[test]
     fn signatures_match_iceberg_java() {
         use chrono::TimeZone;
@@ -1207,6 +1163,7 @@ mod tests {
         );
     }
 
+    /// The signed `host` keeps a non-default port, as on the wire.
     #[test]
     fn signs_host_with_non_default_port() {
         use chrono::TimeZone;
@@ -1235,9 +1192,8 @@ mod tests {
         );
     }
 
-    /// AWS SDK v2 parity (`doubleUrlEncode`): the canonical URI encodes the
-    /// serialized path once more — literal `,` becomes `%2C`, an encoded
-    /// `%2C` becomes `%252C` — while plain paths stay byte-identical.
+    /// Like `Aws4Signer`, the canonical path is encoded again: `,` becomes `%2C`
+    /// and `%2C` becomes `%252C`.
     #[test]
     fn canonical_uri_is_aws_double_encoded() {
         use chrono::TimeZone;
@@ -1266,8 +1222,8 @@ mod tests {
         );
     }
 
-    /// The AWS SigV4 test suite's `post-x-www-form-urlencoded` case, which
-    /// signs a hex `x-amz-content-sha256` as this mode does.
+    /// The AWS SigV4 test suite's `post-x-www-form-urlencoded`, which signs a
+    /// hex `x-amz-content-sha256` like this mode.
     #[test]
     fn standard_mode_matches_the_aws_test_suite() {
         use chrono::TimeZone;

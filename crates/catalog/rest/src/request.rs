@@ -56,8 +56,7 @@ impl HttpRequest {
         self.inner.url()
     }
 
-    /// The mutable request URL, for signers that must rewrite it before
-    /// canonicalizing, e.g. to drop userinfo the wire `Host` never carries.
+    /// The mutable request URL, for signers that rewrite it.
     #[cfg(feature = "sigv4")]
     pub(crate) fn url_mut(&mut self) -> &mut Url {
         self.inner.url_mut()
