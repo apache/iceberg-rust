@@ -98,6 +98,8 @@ iceberg-property-macro = { version = "0.10.0", path = "./crates/property-macro" 
 iceberg-storage-opendal = { version = "0.10.0", path = "./crates/storage/opendal" }
 itertools = "0.13"
 linkedbytes = "0.1.8"
+log = "0.4.28"
+lz4_flex = "0.13"
 metainfo = "0.7.14"
 minijinja = "2.12.0"
 mockall = "0.13.1"
