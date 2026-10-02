@@ -1951,11 +1951,7 @@ mod tests {
     async fn an_injected_signer_survives_the_catalog_properties() {
         let manager = SigV4AuthManager::new(
             Arc::new(RecordingManager::default()),
-            SigV4Signer::new(
-                "ap-south-1".into(),
-                "custom".into(),
-                PayloadHashMode::StandardAws,
-            ),
+            SigV4Signer::new("ap-south-1", "custom", PayloadHashMode::StandardAws),
             test_credentials_provider(),
         );
         let overriding = props(&[

@@ -1713,11 +1713,7 @@ mod tests {
 
         SigV4AuthManager::new(
             Arc::new(NoopAuthManager),
-            SigV4Signer::new(
-                "us-east-1".into(),
-                "execute-api".into(),
-                PayloadHashMode::IcebergRest,
-            ),
+            SigV4Signer::new("us-east-1", "execute-api", PayloadHashMode::IcebergRest),
             SharedCredentialsProvider::new(aws_credential_types::Credentials::new(
                 "ak",
                 "sk",
