@@ -155,9 +155,7 @@ impl<'a> SnapshotProducer<'a> {
     pub(crate) fn validate_added_data_files(&self) -> Result<()> {
         for data_file in &self.added_data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {
-                return Err(invalid_data!(
-                    "Only data content type is allowed"
-                ));
+                return Err(invalid_data!("Only data content type is allowed"));
             }
             // Check if the data file partition spec id matches the table default partition spec id.
             if self.table.metadata().default_partition_spec_id() != data_file.partition_spec_id {
