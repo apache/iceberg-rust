@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use itertools::Itertools;
 
 use super::{DataContentType, DataFile, PartitionSpecRef};
+use crate::error::invalid_data;
 use crate::spec::{ManifestContentType, ManifestFile, Operation, SchemaRef, Summary};
 use crate::{Error, ErrorKind, Result};
 
@@ -338,10 +339,7 @@ pub(crate) fn update_snapshot_summaries(
         && summary.operation != Operation::Overwrite
         && summary.operation != Operation::Delete
     {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Operation is not supported.",
-        ));
+        return Err(invalid_data!("Operation is not supported."));
     }
 
     update_totals(
@@ -563,10 +561,11 @@ mod tests {
             PartitionSpec::builder(schema.clone())
                 .add_unbound_fields(vec![
                     UnboundPartitionField::builder()
-                        .source_id(2)
+                        .source_ids(vec![2])
                         .name("year".to_string())
                         .transform(Transform::Identity)
-                        .build(),
+                        .build()
+                        .unwrap(),
                 ])
                 .unwrap()
                 .with_spec_id(1)
@@ -713,10 +712,11 @@ mod tests {
             PartitionSpec::builder(schema.clone())
                 .add_unbound_fields(vec![
                     UnboundPartitionField::builder()
-                        .source_id(2)
+                        .source_ids(vec![2])
                         .name("year".to_string())
                         .transform(Transform::Identity)
-                        .build(),
+                        .build()
+                        .unwrap(),
                 ])
                 .unwrap()
                 .with_spec_id(1)

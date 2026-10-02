@@ -21,13 +21,13 @@ use iceberg_property_macro::properties_view;
 
 use crate::compression::CompressionCodec;
 use crate::encryption::AesKeySize;
-use crate::error::{Error, ErrorKind, Result};
+use crate::error::{Result, invalid_data};
 use crate::spec::NameMapping;
 use crate::util::location::strip_trailing_slash;
 
 fn parse_location_property(path: &str) -> Result<String> {
     if path.is_empty() {
-        return Err(Error::new(ErrorKind::DataInvalid, "path must not be empty"));
+        return Err(invalid_data!("path must not be empty"));
     }
 
     Ok(strip_trailing_slash(path).to_string())
@@ -43,30 +43,22 @@ fn parse_metadata_compression(value: &str) -> Result<CompressionCodec> {
     let lowercase_value = value.to_lowercase();
 
     // Use serde to parse the codec (which has rename_all = "lowercase")
-    let codec: CompressionCodec = serde_json::from_value(serde_json::Value::String(
-        lowercase_value,
-    ))
-    .map_err(|_| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!(
+    let codec: CompressionCodec =
+        serde_json::from_value(serde_json::Value::String(lowercase_value)).map_err(|_| {
+            invalid_data!(
                 "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported.",
                 CompressionCodec::None.name(),
                 CompressionCodec::gzip_default().name()
-            ),
-        )
-    })?;
+            )
+        })?;
 
     // Validate that only None and Gzip are used for metadata
     match codec {
         CompressionCodec::None | CompressionCodec::Gzip(_) => Ok(codec),
-        _ => Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported for metadata files.",
-                CompressionCodec::None.name(),
-                CompressionCodec::gzip_default().name()
-            ),
+        _ => Err(invalid_data!(
+            "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported for metadata files.",
+            CompressionCodec::None.name(),
+            CompressionCodec::gzip_default().name()
         )),
     }
 }
@@ -85,12 +77,9 @@ fn parse_parquet_compression(
         .get(codec_key)
         .map(|value| {
             serde_json::from_value(serde_json::Value::String(value.to_lowercase())).map_err(|_| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Invalid Parquet compression codec: {value}. Supported codecs: \
+                invalid_data!(
+                    "Invalid Parquet compression codec: {value}. Supported codecs: \
                          uncompressed, snappy, gzip, lzo, brotli, lz4, lz4_raw, zstd"
-                    ),
                 )
             })
         })
@@ -100,12 +89,9 @@ fn parse_parquet_compression(
     let level = properties
         .get(level_key)
         .map(|value| {
-            value.parse::<u8>().map_err(|error| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Invalid value for {level_key}: {error}"),
-                )
-            })
+            value
+                .parse::<u8>()
+                .map_err(|error| invalid_data!("Invalid value for {level_key}: {error}"))
         })
         .transpose()?;
 
@@ -330,6 +316,14 @@ pub struct TableProperties {
         getter
     )]
     write_object_storage_location: Option<String>,
+    /// Whether new data files use the object storage location layout, which
+    /// injects hash entropy into file paths to spread object-store prefixes.
+    #[property(
+        key = Self::PROPERTY_WRITE_OBJECT_STORAGE_ENABLED,
+        default = Self::PROPERTY_WRITE_OBJECT_STORAGE_ENABLED_DEFAULT,
+        getter
+    )]
+    write_object_storage_enabled: bool,
     /// Whether partition values are included in object storage paths.
     #[property(
         key = Self::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS,
@@ -544,6 +538,10 @@ impl TableProperties<'_> {
     pub const PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &'static str = "write.folder-storage.path";
     /// Property key for deprecated object storage path, kept as a fallback for compatibility.
     pub const PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &'static str = "write.object-storage.path";
+    /// Property key for enabling the object storage location layout for new data files.
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_ENABLED: &'static str = "write.object-storage.enabled";
+    /// Default value for [`TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_ENABLED`]
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_ENABLED_DEFAULT: bool = false;
     /// Property key for controlling whether partition values are included in object storage paths.
     pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &'static str =
         "write.object-storage.partitioned-paths";
@@ -560,6 +558,7 @@ impl TableProperties<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ErrorKind;
     use crate::compression::CompressionCodec;
 
     #[test]
