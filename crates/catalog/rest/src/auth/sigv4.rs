@@ -266,7 +266,7 @@ fn rewrite_url_for_signing(request: &mut crate::HttpRequest) {
 }
 
 /// `Aws4Signer`'s settings: normalized double-encoded path, and Java's ignore
-/// list, which the crate's defaults cover only in part.
+/// list.
 fn signing_settings() -> aws_sigv4::http_request::SigningSettings {
     use aws_sigv4::http_request::{
         PayloadChecksumKind, PercentEncodingMode, SigningSettings, UriPathNormalizationMode,
@@ -280,8 +280,14 @@ fn signing_settings() -> aws_sigv4::http_request::SigningSettings {
     settings.payload_checksum_kind = PayloadChecksumKind::NoHeader;
     let mut excluded = settings.excluded_headers.take().unwrap_or_default();
     excluded.extend([
-        "expect".into(),
+        // Java's list, spelled out even where the crate's defaults overlap, so
+        // a minor release cannot start signing a header a proxy rewrites.
         "connection".into(),
+        "expect".into(),
+        "transfer-encoding".into(),
+        "user-agent".into(),
+        "x-amzn-trace-id".into(),
+        // Not on Java's list, but a proxy appends to it as well.
         "x-forwarded-for".into(),
         // Relocation appends to these after signing, so a caller-supplied one
         // would otherwise be signed and then changed on the wire.
@@ -859,7 +865,7 @@ mod tests {
 
         // A proxy or an HTTP/2 hop may drop or rewrite these, so signing them
         // would make the request fail verification. Java's `AbstractAws4Signer`
-        // ignores them too.
+        // ignores the first two as well.
         let signer = test_signer(PayloadHashMode::StandardAws);
         let mut req = HttpRequest::new(
             reqwest::Client::new()
