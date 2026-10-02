@@ -27,6 +27,10 @@ on:
   schedule:
     - cron: '16 4 * * 1'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
