@@ -1282,6 +1282,524 @@ mod tests {
         );
     }
 
+    /// End-to-end regression for issue #2432: a predicate on a primitive leaf nested in a
+    /// struct (`person.age > 25`) must build a row filter and prune rows, rather than
+    /// failing because the leaf's Parquet column root is a group. Reads a real Parquet
+    /// file so the projected `RecordBatch` shape (a `StructArray` holding the leaf) comes
+    /// from arrow-rs, not a hand-built batch.
+    #[tokio::test]
+    async fn test_predicate_on_nested_struct_leaf_reads_real_parquet() {
+        use arrow_array::StructArray;
+        use arrow_schema::Fields;
+
+        use crate::spec::StructType;
+
+        // Schema: id: int (1), person: struct<age: int (3)> (2)
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(
+                        2,
+                        "person",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(3, "age", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Arrow schema carrying field ids so the reader resolves by id, not position.
+        let age_field = field_with_id("age", DataType::Int32, 3);
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            field_with_id("id", DataType::Int32, 1),
+            field_with_id(
+                "person",
+                DataType::Struct(Fields::from(vec![age_field.clone()])),
+                2,
+            ),
+        ]));
+
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let person = Arc::new(StructArray::from(vec![(
+            Arc::new(age_field),
+            Arc::new(Int32Array::from(vec![30, 20, 40])) as ArrayRef,
+        )])) as ArrayRef;
+
+        // person.age > 25 keeps id=1 (30) and id=3 (40); id=2 (20) is pruned.
+        let ids = ids_kept_by_predicate(
+            iceberg_schema,
+            arrow_schema,
+            vec![id, person],
+            Reference::new("person.age").greater_than(Datum::int(25)),
+        )
+        .await;
+        assert_eq!(ids, vec![1, 3]);
+    }
+
+    /// A predicate on a field nested two structs deep (`person.address.zip`) must resolve
+    /// through both struct levels. This exercises `project_column`'s descent loop more than
+    /// once, which the single-level `person.age` case does not. Regression for issue #2432.
+    #[tokio::test]
+    async fn test_predicate_on_doubly_nested_struct_leaf() {
+        use arrow_array::StructArray;
+        use arrow_schema::Fields;
+
+        use crate::spec::StructType;
+
+        // Schema: id: int (1), person: struct<address: struct<zip: int (4)> (3)> (2)
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(
+                        2,
+                        "person",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(
+                                3,
+                                "address",
+                                Type::Struct(StructType::new(vec![
+                                    NestedField::required(
+                                        4,
+                                        "zip",
+                                        Type::Primitive(PrimitiveType::Int),
+                                    )
+                                    .into(),
+                                ])),
+                            )
+                            .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let zip_field = field_with_id("zip", DataType::Int32, 4);
+        let address_field = field_with_id(
+            "address",
+            DataType::Struct(Fields::from(vec![zip_field.clone()])),
+            3,
+        );
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            field_with_id("id", DataType::Int32, 1),
+            field_with_id(
+                "person",
+                DataType::Struct(Fields::from(vec![address_field.clone()])),
+                2,
+            ),
+        ]));
+
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let address = Arc::new(StructArray::from(vec![(
+            Arc::new(zip_field),
+            Arc::new(Int32Array::from(vec![10001, 20002, 30003])) as ArrayRef,
+        )])) as ArrayRef;
+        let person =
+            Arc::new(StructArray::from(vec![(Arc::new(address_field), address)])) as ArrayRef;
+
+        // person.address.zip >= 20002 keeps id=2 (20002) and id=3 (30003).
+        let ids = ids_kept_by_predicate(
+            iceberg_schema,
+            arrow_schema,
+            vec![id, person],
+            Reference::new("person.address.zip").greater_than_or_equal_to(Datum::int(20002)),
+        )
+        .await;
+        assert_eq!(ids, vec![2, 3]);
+    }
+
+    /// Writes `columns` as one Parquet file, pushes `predicate` down while reading it back,
+    /// and returns the surviving rows' `id`s (the file's first column). `predicate` binds
+    /// against `iceberg_schema`. Shared write-then-read scaffolding for the nested-leaf tests.
+    async fn ids_kept_by_predicate(
+        iceberg_schema: SchemaRef,
+        arrow_schema: Arc<ArrowSchema>,
+        columns: Vec<ArrayRef>,
+        predicate: Predicate,
+    ) -> Vec<i32> {
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = format!("{}/1.parquet", tmp_dir.path().to_str().unwrap());
+        let batch = RecordBatch::try_new(arrow_schema.clone(), columns).unwrap();
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let predicate = predicate.bind(iceberg_schema.clone(), false).unwrap();
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(iceberg_schema)
+            .with_project_field_ids(vec![1])
+            .with_predicate(Some(predicate))
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+        batches
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_primitive::<arrow_array::types::Int32Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect()
+    }
+
+    /// A null parent struct implies null leaves (spec: "if a parent struct column is null it
+    /// implies the leaf column is null"). With `person` optional and a null row, `project_column`
+    /// must carry the parent's validity into the child, so a required leaf reads as null there.
+    /// Before the `flatten` fix these predicates over-returned the null row.
+    #[tokio::test]
+    async fn test_predicate_on_leaf_under_null_parent_struct() {
+        use arrow_array::StructArray;
+        use arrow_buffer::NullBuffer;
+        use arrow_schema::Fields;
+
+        use crate::spec::StructType;
+
+        // id: int (1), person: optional struct<age: required int (3), score: int (4)> (2)
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        2,
+                        "person",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(3, "age", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                            NestedField::optional(4, "score", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let age_field = field_with_id("age", DataType::Int32, 3);
+        let score_field = Field::new("score", DataType::Int32, true).with_metadata(HashMap::from(
+            [(PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string())],
+        ));
+        let person_field = Field::new(
+            "person",
+            DataType::Struct(Fields::from(vec![age_field.clone(), score_field.clone()])),
+            true,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "2".to_string(),
+        )]));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            field_with_id("id", DataType::Int32, 1),
+            person_field,
+        ]));
+
+        // Row id=2 has a null `person`; its stored age/score are placeholders to be masked.
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let person = Arc::new(StructArray::new(
+            Fields::from(vec![age_field, score_field]),
+            vec![
+                Arc::new(Int32Array::from(vec![30, 0, 40])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![Some(100), Some(0), Some(300)])) as ArrayRef,
+            ],
+            Some(NullBuffer::from(vec![true, false, true])),
+        )) as ArrayRef;
+        // person.age < 1000 holds for the stored 30/40 but the null row's age reads as null.
+        let ids = ids_kept_by_predicate(
+            iceberg_schema.clone(),
+            arrow_schema.clone(),
+            vec![id.clone(), person.clone()],
+            Reference::new("person.age").less_than(Datum::int(1000)),
+        )
+        .await;
+        assert_eq!(
+            ids,
+            vec![1, 3],
+            "required leaf under a null parent must read as null"
+        );
+
+        // person.age != 30 keeps only id=3 (40); the null row is null, not "!= 30".
+        let ids = ids_kept_by_predicate(
+            iceberg_schema.clone(),
+            arrow_schema.clone(),
+            vec![id.clone(), person.clone()],
+            Reference::new("person.age").not_equal_to(Datum::int(30)),
+        )
+        .await;
+        assert_eq!(ids, vec![3]);
+
+        // An optional leaf under the null parent reads as null too: person.score < 1000
+        // holds for the stored 100/300 but not the null row.
+        let ids = ids_kept_by_predicate(
+            iceberg_schema,
+            arrow_schema,
+            vec![id, person],
+            Reference::new("person.score").less_than(Datum::int(1000)),
+        )
+        .await;
+        assert_eq!(
+            ids,
+            vec![1, 3],
+            "optional leaf under a null parent must read as null"
+        );
+    }
+
+    /// The parent-null rule holds through two struct levels: a null outer `person` makes
+    /// `person.address.zip` null, since each level merges its own validity into its children.
+    #[tokio::test]
+    async fn test_predicate_on_leaf_under_null_outer_struct_doubly_nested() {
+        use arrow_array::StructArray;
+        use arrow_buffer::NullBuffer;
+        use arrow_schema::Fields;
+
+        use crate::spec::StructType;
+
+        // id: int (1), person: optional struct<address: struct<zip: int (4)> (3)> (2)
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        2,
+                        "person",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(
+                                3,
+                                "address",
+                                Type::Struct(StructType::new(vec![
+                                    NestedField::required(
+                                        4,
+                                        "zip",
+                                        Type::Primitive(PrimitiveType::Int),
+                                    )
+                                    .into(),
+                                ])),
+                            )
+                            .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let zip_field = field_with_id("zip", DataType::Int32, 4);
+        let address_field = field_with_id(
+            "address",
+            DataType::Struct(Fields::from(vec![zip_field.clone()])),
+            3,
+        );
+        let person_field = Field::new(
+            "person",
+            DataType::Struct(Fields::from(vec![address_field.clone()])),
+            true,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "2".to_string(),
+        )]));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            field_with_id("id", DataType::Int32, 1),
+            person_field,
+        ]));
+
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let address = Arc::new(StructArray::from(vec![(
+            Arc::new(zip_field),
+            Arc::new(Int32Array::from(vec![10001, 0, 30003])) as ArrayRef,
+        )])) as ArrayRef;
+        // Row id=2's `person` is null, so `address` and its `zip` under it read as null.
+        let person = Arc::new(StructArray::new(
+            Fields::from(vec![address_field]),
+            vec![address],
+            Some(NullBuffer::from(vec![true, false, true])),
+        )) as ArrayRef;
+
+        // person.address.zip < 100000 holds for the stored 10001/30003 but not the null row.
+        let ids = ids_kept_by_predicate(
+            iceberg_schema,
+            arrow_schema,
+            vec![id, person],
+            Reference::new("person.address.zip").less_than(Datum::int(100000)),
+        )
+        .await;
+        assert_eq!(ids, vec![1, 3]);
+    }
+
+    /// A predicate that references two leaves of the same struct
+    /// (`person.age > 25 AND person.score < 250`) makes `ProjectionMask::leaves` project the
+    /// struct with more than one child, so `project_column` must find each child by name and
+    /// not by position. The other nested tests project a single child per struct, where the
+    /// lookup always lands on index 0 and would still pass if the child were taken positionally.
+    #[tokio::test]
+    async fn test_predicate_on_two_leaves_of_same_struct() {
+        use arrow_array::StructArray;
+        use arrow_schema::Fields;
+
+        use crate::spec::StructType;
+
+        // id: int (1), person: optional struct<age: required int (3), score: optional int (4)> (2)
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        2,
+                        "person",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(3, "age", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                            NestedField::optional(4, "score", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let age_field = field_with_id("age", DataType::Int32, 3);
+        let score_field = Field::new("score", DataType::Int32, true).with_metadata(HashMap::from(
+            [(PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string())],
+        ));
+        let person_field = Field::new(
+            "person",
+            DataType::Struct(Fields::from(vec![age_field.clone(), score_field.clone()])),
+            true,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "2".to_string(),
+        )]));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            field_with_id("id", DataType::Int32, 1),
+            person_field,
+        ]));
+
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef;
+        let person = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(age_field),
+                Arc::new(Int32Array::from(vec![30, 10, 40, 50, 20, 35])) as ArrayRef,
+            ),
+            (
+                Arc::new(score_field),
+                Arc::new(Int32Array::from(vec![100, 300, 300, 200, 50, 240])) as ArrayRef,
+            ),
+        ])) as ArrayRef;
+
+        // age > 25 AND score < 250. If project_column took the child positionally instead of by
+        // name, the score comparison would read `age` and keep id=3 too (age 40, score 300).
+        let ids = ids_kept_by_predicate(
+            iceberg_schema,
+            arrow_schema,
+            vec![id, person],
+            Reference::new("person.age")
+                .greater_than(Datum::int(25))
+                .and(Reference::new("person.score").less_than(Datum::int(250))),
+        )
+        .await;
+        assert_eq!(ids, vec![1, 4, 6]);
+    }
+
+    /// Fields inside a list or map have no accessor (see `Schema::build_accessors`), so a
+    /// predicate referencing one fails at bind time and never reaches the row-filter
+    /// conversion. This pins the assumption `project_column` relies on: every predicate
+    /// path segment before the leaf is a struct, never a list/map interior.
+    #[test]
+    fn test_predicate_on_list_and_map_interior_fails_to_bind() {
+        use crate::spec::{ListType, MapType, StructType};
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    // tags: list<struct<name: string (4)>> (2, element 3)
+                    NestedField::required(
+                        2,
+                        "tags",
+                        Type::List(ListType::new(
+                            NestedField::required(
+                                3,
+                                "element",
+                                Type::Struct(StructType::new(vec![
+                                    NestedField::required(
+                                        4,
+                                        "name",
+                                        Type::Primitive(PrimitiveType::String),
+                                    )
+                                    .into(),
+                                ])),
+                            )
+                            .into(),
+                        )),
+                    )
+                    .into(),
+                    // props: map<string (6), int (7)> (5)
+                    NestedField::required(
+                        5,
+                        "props",
+                        Type::Map(MapType::new(
+                            NestedField::required(6, "key", Type::Primitive(PrimitiveType::String))
+                                .into(),
+                            NestedField::required(7, "value", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        )),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // A field inside the list element and a map value: both must fail to bind.
+        assert!(
+            Reference::new("tags.element.name")
+                .is_null()
+                .bind(schema.clone(), false)
+                .is_err(),
+            "a predicate on a field inside a list must not bind"
+        );
+        assert!(
+            Reference::new("props.value")
+                .greater_than(Datum::int(0))
+                .bind(schema.clone(), false)
+                .is_err(),
+            "a predicate on a map value must not bind"
+        );
+    }
+
     // Bloom filter pushdown: on-vs-off equivalence
     // Pushdown must never change results. An encoding bug in the probe shows up as
     // rows the bloom filter drops and the row filter keeps, so every case below
