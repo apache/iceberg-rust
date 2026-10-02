@@ -451,7 +451,10 @@ fn update_totals(
         return;
     };
 
-    let new_total = (previous_total + added).saturating_sub(removed);
+    // Like Java, a total that would go negative is omitted rather than written as a false basis.
+    let Some(new_total) = previous_total.saturating_add(added).checked_sub(removed) else {
+        return;
+    };
     summary
         .additional_properties
         .insert(total_property.to_string(), new_total.to_string());
@@ -1007,7 +1010,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_totals_saturates_when_removed_exceeds_previous_total() {
+    fn test_update_totals_omits_total_when_removed_exceeds_previous_total() {
         let prev_props: HashMap<String, String> = [
             (TOTAL_DATA_FILES, "2"),
             (TOTAL_RECORDS, "10"),
@@ -1039,8 +1042,8 @@ mod tests {
         let updated = update_snapshot_summaries(summary, Some(&previous_summary)).unwrap();
         let props = &updated.additional_properties;
 
-        assert_eq!(props.get(TOTAL_DATA_FILES).unwrap(), "0");
-        assert_eq!(props.get(TOTAL_RECORDS).unwrap(), "0");
-        assert_eq!(props.get(TOTAL_FILE_SIZE).unwrap(), "0");
+        assert!(!props.contains_key(TOTAL_DATA_FILES));
+        assert!(!props.contains_key(TOTAL_RECORDS));
+        assert!(!props.contains_key(TOTAL_FILE_SIZE));
     }
 }
