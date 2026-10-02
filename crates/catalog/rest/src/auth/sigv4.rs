@@ -1043,6 +1043,8 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
 
     #[test]
     fn signs_request_iceberg_mode() {
+        use chrono::TimeZone;
+
         let creds = aws_credential_types::Credentials::new(
             "AKIDEXAMPLE",
             "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
@@ -1060,7 +1062,13 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
                 .unwrap(),
         );
 
-        signer.sign(&mut req, &creds).unwrap();
+        signer
+            .sign_at(
+                &mut req,
+                &creds,
+                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
+            )
+            .unwrap();
 
         let h = req.headers();
         assert!(
@@ -1070,16 +1078,22 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
                 .unwrap()
                 .starts_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/")
         );
-        assert!(h.contains_key("x-amz-date"));
+        assert_eq!(h.get("x-amz-date").unwrap(), "20150830T123600Z");
         assert_eq!(h.get("x-amz-security-token").unwrap(), "SESSIONTOKEN");
         let csha = h.get("x-amz-content-sha256").unwrap().to_str().unwrap();
         assert_eq!(csha, "RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=");
+        assert_signature_is(
+            &req,
+            "effad6acde583dd14ba7aff52b2b83776a54421c010fe82067f166819057cb32",
+        );
     }
 
     /// Empty body uses the hex constant and existing headers are signed too
     /// (mirrors Java's `TestRESTSigV4AuthSession::authenticateWithoutBody`).
     #[test]
     fn signs_empty_body_and_all_headers() {
+        use chrono::TimeZone;
+
         let creds = aws_credential_types::Credentials::new(
             "AKIDEXAMPLE",
             "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
@@ -1098,7 +1112,13 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
                 .unwrap(),
         );
 
-        signer.sign(&mut req, &creds).unwrap();
+        signer
+            .sign_at(
+                &mut req,
+                &creds,
+                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
+            )
+            .unwrap();
 
         let h = req.headers();
         assert_eq!(h.get("x-amz-content-sha256").unwrap(), EMPTY_HEX);
@@ -1108,6 +1128,10 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
         assert!(auth.contains(
             "SignedHeaders=content-encoding;content-type;host;x-amz-content-sha256;x-amz-date"
         ));
+        assert_signature_is(
+            &req,
+            "eaef7eb88d9cd810031684748671d8a3c9394ea5168622a212ed041b670b9777",
+        );
     }
 
     /// The signed `host` must include an explicit non-default port, matching
@@ -1278,6 +1302,8 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
 
     #[test]
     fn signs_request_standard_mode_uses_hex_header() {
+        use chrono::TimeZone;
+
         let creds = aws_credential_types::Credentials::new(
             "AKIDEXAMPLE",
             "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
@@ -1295,12 +1321,44 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
                 .unwrap(),
         );
 
-        signer.sign(&mut req, &creds).unwrap();
+        signer
+            .sign_at(
+                &mut req,
+                &creds,
+                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
+            )
+            .unwrap();
 
         // StandardAws keeps the header in hex.
         assert_eq!(
             req.headers().get("x-amz-content-sha256").unwrap(),
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         );
+        assert_signature_is(
+            &req,
+            "3531ce95a486df958b89f812277d764ea1e0bba4ad674b03ca137fdb59de1eac",
+        );
+    }
+
+    /// The one test on the live clock: everything else pins the time.
+    #[test]
+    fn sign_stamps_the_current_time() {
+        let signer = test_signer(PayloadHashMode::IcebergRest);
+        let mut req = HttpRequest::new(
+            reqwest::Client::new()
+                .get("https://rest.example.com/v1/config")
+                .build()
+                .unwrap(),
+        );
+        let before = Utc::now();
+
+        signer.sign(&mut req, &test_credentials()).unwrap();
+
+        let date = req.headers().get("x-amz-date").unwrap().to_str().unwrap();
+        let stamped = chrono::NaiveDateTime::parse_from_str(date, "%Y%m%dT%H%M%SZ")
+            .unwrap()
+            .and_utc();
+        assert_eq!(date.len(), "YYYYMMDDTHHMMSSZ".len(), "{date}");
+        assert!((stamped - before).num_seconds().abs() < 60, "{date}");
     }
 }
