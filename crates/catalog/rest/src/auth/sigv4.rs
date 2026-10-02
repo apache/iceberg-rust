@@ -1300,8 +1300,10 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
         );
     }
 
+    /// The AWS SigV4 test suite's `post-x-www-form-urlencoded` case, which
+    /// signs a hex `x-amz-content-sha256` as this mode does.
     #[test]
-    fn signs_request_standard_mode_uses_hex_header() {
+    fn standard_mode_matches_the_aws_test_suite() {
         use chrono::TimeZone;
 
         let creds = aws_credential_types::Credentials::new(
@@ -1311,12 +1313,13 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
             None,
             "test",
         );
-        let signer = SigV4Signer::new("us-east-1", "glue", PayloadHashMode::StandardAws);
-        let client = reqwest::Client::new();
+        let signer = SigV4Signer::new("us-east-1", "service", PayloadHashMode::StandardAws);
         let mut req = HttpRequest::new(
-            client
-                .post("https://rest.example.com/v1/namespaces")
-                .body("hello")
+            reqwest::Client::new()
+                .post("https://example.amazonaws.com/")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("content-length", "13")
+                .body("Param1=value1")
                 .build()
                 .unwrap(),
         );
@@ -1329,14 +1332,15 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
             )
             .unwrap();
 
-        // StandardAws keeps the header in hex.
         assert_eq!(
             req.headers().get("x-amz-content-sha256").unwrap(),
-            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+            "9095672bbd1f56dfc5b65f3e153adc8731a4a654192329106275f4c7b24d0b6e"
         );
-        assert_signature_is(
-            &req,
-            "3531ce95a486df958b89f812277d764ea1e0bba4ad674b03ca137fdb59de1eac",
+        assert_eq!(
+            req.headers().get("authorization").unwrap(),
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, \
+             SignedHeaders=content-length;content-type;host;x-amz-content-sha256;x-amz-date, \
+             Signature=d3875051da38690788ef43de4db0d8f280229d82040bfac253562e56c3f20e0b"
         );
     }
 
