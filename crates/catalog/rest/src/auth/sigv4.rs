@@ -1313,6 +1313,8 @@ mod tests {
     /// The one test on the live clock: everything else pins the time.
     #[test]
     fn sign_stamps_the_current_time() {
+        use chrono::SubsecRound;
+
         let signer = test_signer(PayloadHashMode::IcebergRest);
         let mut req = HttpRequest::new(
             reqwest::Client::new()
@@ -1321,14 +1323,18 @@ mod tests {
                 .unwrap(),
         );
         let before = Utc::now();
-
         signer.sign(&mut req, &test_credentials()).unwrap();
+        let after = Utc::now();
 
         let date = req.headers().get("x-amz-date").unwrap().to_str().unwrap();
         let stamped = chrono::NaiveDateTime::parse_from_str(date, "%Y%m%dT%H%M%SZ")
             .unwrap()
             .and_utc();
         assert_eq!(date.len(), "YYYYMMDDTHHMMSSZ".len(), "{date}");
-        assert!((stamped - before).num_seconds().abs() < 60, "{date}");
+        // The header drops sub-seconds, so compare against a truncated start.
+        assert!(
+            before.trunc_subsecs(0) <= stamped && stamped <= after,
+            "{date}"
+        );
     }
 }
