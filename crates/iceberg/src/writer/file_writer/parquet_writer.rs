@@ -2497,6 +2497,79 @@ mod tests {
         assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 0);
     }
 
+    #[tokio::test]
+    async fn test_parquet_writer_uuid_logical_type() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+        let output_file = file_io
+            .new_output(location_gen.generate_location(None, &file_name_gen.generate_file_name()))
+            .unwrap();
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(0, "uuid", Type::Primitive(PrimitiveType::Uuid)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema: ArrowSchemaRef = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let col = Arc::new(
+            arrow_array::FixedSizeBinaryArray::try_from_iter(
+                [Uuid::from_u128(0), Uuid::from_u128(1)]
+                    .into_iter()
+                    .map(|uuid| uuid.into_bytes()),
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let to_write = RecordBatch::try_new(arrow_schema, vec![col]).unwrap();
+
+        let mut pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema)
+            .build(output_file)
+            .await
+            .unwrap();
+        pw.write(&to_write).await.unwrap();
+        let data_file = pw
+            .close()
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .content(DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        let raw = file_io
+            .new_input(data_file.file_path.clone())
+            .unwrap()
+            .read()
+            .await
+            .unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(raw).unwrap();
+        let column = reader.metadata().file_metadata().schema_descr().column(0);
+        assert_eq!(
+            (
+                column.physical_type(),
+                column.type_length(),
+                column.logical_type_ref()
+            ),
+            (
+                parquet::basic::Type::FIXED_LEN_BYTE_ARRAY,
+                16,
+                Some(&parquet::basic::LogicalType::Uuid)
+            )
+        );
+    }
+
     #[test]
     fn test_min_max_aggregator() {
         let schema = Arc::new(

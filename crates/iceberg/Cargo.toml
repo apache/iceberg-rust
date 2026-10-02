@@ -42,7 +42,7 @@ arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-cast = { workspace = true }
 arrow-ord = { workspace = true }
-arrow-schema = { workspace = true }
+arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 arrow-select = { workspace = true }
 arrow-string = { workspace = true }
 as-any = { workspace = true }
@@ -65,7 +65,7 @@ moka = { version = "0.12.10", features = ["future"] }
 murmur3 = { workspace = true }
 once_cell = { workspace = true }
 ordered-float = { workspace = true }
-parquet = { workspace = true, features = ["async", "encryption"] }
+parquet = { workspace = true, features = ["async", "encryption", "arrow_canonical_extension_types"] }
 rand = { workspace = true }
 reqwest = { workspace = true }
 roaring = { workspace = true }
