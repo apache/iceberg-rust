@@ -34,24 +34,104 @@ pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
 pub(crate) const DEFAULT_PARTITION_SPEC_ID: i32 = 0;
 
 /// Partition fields capture the transform from table data to partition values.
+///
+/// The fields are private so that an instance is always well formed: `source_ids` holds at
+/// least one id, and a field reading several source columns always carries
+/// [`Transform::Unknown`], because multi-argument transforms cannot be evaluated yet and the
+/// spec requires v3 readers to read such tables while ignoring them.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, TypedBuilder)]
-#[serde(rename_all = "kebab-case")]
+#[serde(
+    try_from = "self::_serde::PartitionFieldSerde",
+    into = "self::_serde::PartitionFieldSerde"
+)]
+#[builder(
+    builder_method(vis = "pub(crate)"),
+    builder_type(vis = "pub(crate)"),
+    build_method(vis = "pub(crate)", into = Result<PartitionField>)
+)]
 pub struct PartitionField {
-    /// A source column id from the table’s schema
-    pub source_id: i32,
+    /// The source column ids from the table’s schema. A single-argument transform reads one
+    /// id; a v3 multi-argument transform reads several.
+    source_ids: Vec<i32>,
     /// A partition field id that is used to identify a partition field and is unique within a partition spec.
     /// In v2 table metadata, it is unique across all partition specs.
-    pub field_id: i32,
+    field_id: i32,
     /// A partition name.
-    pub name: String,
+    #[builder(setter(into))]
+    name: String,
     /// A transform that is applied to the source column to produce a partition value.
-    pub transform: Transform,
+    transform: Transform,
 }
 
 impl PartitionField {
+    /// The single source column id this field reads.
+    ///
+    /// Returns an error for a multi-argument field, which reads several columns and therefore
+    /// has no single source id. Use [`Self::source_ids`] to handle both shapes.
+    pub fn source_id(&self) -> Result<i32> {
+        match self.source_ids.as_slice() {
+            [source_id] => Ok(*source_id),
+            source_ids => Err(invalid_data!(
+                "Partition field '{}' reads {} source columns and has no single source id",
+                self.name,
+                source_ids.len()
+            )),
+        }
+    }
+
+    /// The source column ids this field reads, in order. Never empty.
+    pub fn source_ids(&self) -> &[i32] {
+        &self.source_ids
+    }
+
+    /// The partition field id.
+    pub fn field_id(&self) -> i32 {
+        self.field_id
+    }
+
+    /// The partition name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The transform applied to the source columns to produce a partition value.
+    pub fn transform(&self) -> Transform {
+        self.transform
+    }
+
     /// To unbound partition field
     pub fn into_unbound(self) -> UnboundPartitionField {
         self.into()
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.source_ids.is_empty() {
+            return Err(invalid_data!("Empty source-ids is not allowed"));
+        }
+        if self.source_ids.len() > 1 && self.transform != Transform::Unknown {
+            return Err(invalid_data!(
+                "Partition field '{}' reads several source columns, so its transform must be unknown",
+                self.name
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl From<PartitionField> for Result<PartitionField> {
+    fn from(field: PartitionField) -> Self {
+        field.validate()?;
+        Ok(field)
+    }
+}
+
+/// The transform a bound field carries: a multi-argument transform cannot be evaluated yet, so
+/// it is read as [`Transform::Unknown`].
+fn bound_transform(source_ids: &[i32], transform: Transform) -> Transform {
+    if source_ids.len() > 1 {
+        Transform::Unknown
+    } else {
+        transform
     }
 }
 
@@ -109,7 +189,11 @@ impl PartitionSpec {
     pub fn partition_type(&self, schema: &Schema) -> Result<StructType> {
         let mut struct_fields = Vec::with_capacity(self.fields.len());
         for partition_field in &self.fields {
-            let res_type = match schema.field_by_id(partition_field.source_id) {
+            let source_field = match partition_field.source_ids.as_slice() {
+                [source_id] => schema.field_by_id(*source_id),
+                _ => None,
+            };
+            let res_type = match source_field {
                 Some(field) => partition_field.transform.result_type(&field.field_type)?,
                 // Historical specs may reference dropped source columns. Retain every
                 // field's position and any result type that is independent of its source.
@@ -169,7 +253,7 @@ impl PartitionSpec {
         }
 
         for (this_field, other_field) in self.fields.iter().zip(other.fields.iter()) {
-            if this_field.source_id != other_field.source_id
+            if this_field.source_ids != other_field.source_ids
                 || this_field.name != other_field.name
                 || this_field.transform != other_field.transform
             {
@@ -351,10 +435,76 @@ impl From<UnboundPartitionField> for Result<UnboundPartitionField> {
 mod _serde {
     use serde::{Deserialize, Serialize};
 
-    use super::UnboundPartitionField;
+    use super::{PartitionField, UnboundPartitionField, bound_transform};
     use crate::Error;
     use crate::error::invalid_data;
     use crate::spec::Transform;
+
+    /// Resolve the `source-id` / `source-ids` pair read from a field's JSON.
+    fn read_source_ids(
+        source_id: Option<i32>,
+        source_ids: Option<Vec<i32>>,
+    ) -> Result<Vec<i32>, Error> {
+        match (source_id, source_ids) {
+            (Some(source_id), None) => Ok(vec![source_id]),
+            (None, Some(source_ids)) => Ok(source_ids),
+            (Some(_), Some(_)) => Err(invalid_data!(
+                "source-id and source-ids are mutually exclusive"
+            )),
+            (None, None) => Err(invalid_data!(
+                "Either `source-id` or `source-ids` must be present"
+            )),
+        }
+    }
+
+    /// Write `source-id` for a single-argument field and `source-ids` otherwise.
+    fn write_source_ids(source_ids: Vec<i32>) -> (Option<i32>, Option<Vec<i32>>) {
+        match source_ids.as_slice() {
+            [source_id] => (Some(*source_id), None),
+            _ => (None, Some(source_ids)),
+        }
+    }
+
+    /// Same spelling rules as [`UnboundPartitionFieldSerde`], with a required `field-id`.
+    #[derive(Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub(super) struct PartitionFieldSerde {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_id: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_ids: Option<Vec<i32>>,
+        field_id: i32,
+        name: String,
+        transform: Transform,
+    }
+
+    impl TryFrom<PartitionFieldSerde> for PartitionField {
+        type Error = Error;
+
+        fn try_from(value: PartitionFieldSerde) -> Result<Self, Error> {
+            let source_ids = read_source_ids(value.source_id, value.source_ids)?;
+            let transform = bound_transform(&source_ids, value.transform);
+            PartitionField::builder()
+                .source_ids(source_ids)
+                .field_id(value.field_id)
+                .name(value.name)
+                .transform(transform)
+                .build()
+        }
+    }
+
+    impl From<PartitionField> for PartitionFieldSerde {
+        fn from(value: PartitionField) -> Self {
+            let (source_id, source_ids) = write_source_ids(value.source_ids);
+            Self {
+                source_id,
+                source_ids,
+                field_id: value.field_id,
+                name: value.name,
+                transform: value.transform,
+            }
+        }
+    }
 
     /// Per the spec a single-argument field carries `source-id` and a multi-argument field
     /// carries `source-ids`. Either spelling is read, but not both at once; the one that
@@ -376,21 +526,7 @@ mod _serde {
         type Error = Error;
 
         fn try_from(value: UnboundPartitionFieldSerde) -> Result<Self, Error> {
-            let source_ids = match (value.source_id, value.source_ids) {
-                (Some(source_id), None) => vec![source_id],
-                (None, Some(source_ids)) => source_ids,
-                (Some(_), Some(_)) => {
-                    return Err(invalid_data!(
-                        "source-id and source-ids are mutually exclusive"
-                    ));
-                }
-                (None, None) => {
-                    return Err(invalid_data!(
-                        "Either `source-id` or `source-ids` must be present"
-                    ));
-                }
-            };
-
+            let source_ids = read_source_ids(value.source_id, value.source_ids)?;
             UnboundPartitionField::builder()
                 .source_ids(source_ids)
                 .field_id_opt(value.field_id)
@@ -402,10 +538,7 @@ mod _serde {
 
     impl From<UnboundPartitionField> for UnboundPartitionFieldSerde {
         fn from(value: UnboundPartitionField) -> Self {
-            let (source_id, source_ids) = match value.source_ids.as_slice() {
-                [source_id] => (Some(*source_id), None),
-                _ => (None, Some(value.source_ids)),
-            };
+            let (source_id, source_ids) = write_source_ids(value.source_ids);
             Self {
                 source_id,
                 source_ids,
@@ -478,7 +611,7 @@ fn has_sequential_ids(field_ids: impl Iterator<Item = i32>) -> bool {
 impl From<PartitionField> for UnboundPartitionField {
     fn from(field: PartitionField) -> Self {
         UnboundPartitionField {
-            source_ids: vec![field.source_id],
+            source_ids: field.source_ids,
             field_id: Some(field.field_id),
             name: field.name,
             transform: field.transform,
@@ -695,11 +828,12 @@ impl PartitionSpecBuilder {
                 last_assigned_field_id
             };
 
+            let transform = bound_transform(&field.source_ids, field.transform);
             bound_fields.push(PartitionField {
-                source_id: field.source_id()?,
+                source_ids: field.source_ids,
                 field_id: partition_field_id,
                 name: field.name,
-                transform: field.transform,
+                transform,
             })
         }
 
@@ -741,12 +875,18 @@ impl PartitionSpecBuilder {
     /// Ensure that the transformation of the field is compatible with type of the field
     /// in the schema. Implicitly also checks if the source field exists in the schema.
     fn check_transform_compatibility(field: &UnboundPartitionField, schema: &Schema) -> Result<()> {
-        // A multi-argument field is rejected here on purpose: a bound `PartitionField` has
-        // no place for more than one source id yet.
-        let source_id = field.source_id()?;
-        let schema_field = schema.field_by_id(source_id).ok_or_else(|| {
-            invalid_data!("Cannot find partition source field with id `{source_id}` in schema")
-        })?;
+        let mut schema_fields = Vec::with_capacity(field.source_ids.len());
+        for &source_id in &field.source_ids {
+            schema_fields.push(schema.field_by_id(source_id).ok_or_else(|| {
+                invalid_data!("Cannot find partition source field with id `{source_id}` in schema")
+            })?);
+        }
+
+        // A multi-argument field is bound with an unknown transform, which is not evaluated,
+        // so beyond its source columns existing there is nothing to check.
+        let [schema_field] = schema_fields.as_slice() else {
+            return Ok(());
+        };
 
         if field.transform != Transform::Void {
             if !schema_field.field_type.is_primitive() {
@@ -868,17 +1008,17 @@ mod tests {
         "#;
 
         let partition_spec: PartitionSpec = serde_json::from_str(spec).unwrap();
-        assert_eq!(4, partition_spec.fields[0].source_id);
+        assert_eq!(4, partition_spec.fields[0].source_id().unwrap());
         assert_eq!(1000, partition_spec.fields[0].field_id);
         assert_eq!("ts_day", partition_spec.fields[0].name);
         assert_eq!(Transform::Day, partition_spec.fields[0].transform);
 
-        assert_eq!(1, partition_spec.fields[1].source_id);
+        assert_eq!(1, partition_spec.fields[1].source_id().unwrap());
         assert_eq!(1001, partition_spec.fields[1].field_id);
         assert_eq!("id_bucket", partition_spec.fields[1].name);
         assert_eq!(Transform::Bucket(16), partition_spec.fields[1].transform);
 
-        assert_eq!(2, partition_spec.fields[2].source_id);
+        assert_eq!(2, partition_spec.fields[2].source_id().unwrap());
         assert_eq!(1002, partition_spec.fields[2].field_id);
         assert_eq!("id_truncate", partition_spec.fields[2].name);
         assert_eq!(Transform::Truncate(4), partition_spec.fields[2].transform);
@@ -1249,12 +1389,15 @@ mod tests {
         ] {
             let spec = PartitionSpec {
                 spec_id: 0,
-                fields: vec![PartitionField {
-                    source_id: 1,
-                    field_id: 1000,
-                    name: "partition".to_string(),
-                    transform,
-                }],
+                fields: vec![
+                    PartitionField::builder()
+                        .source_ids(vec![1])
+                        .field_id(1000)
+                        .name("partition")
+                        .transform(transform)
+                        .build()
+                        .unwrap(),
+                ],
             };
             assert_eq!(
                 spec.partition_type(&schema).unwrap(),
@@ -1380,12 +1523,15 @@ mod tests {
 
         assert_eq!(spec, PartitionSpec {
             spec_id: 1,
-            fields: vec![PartitionField {
-                source_id: 1,
-                field_id: 1000,
-                name: "id_bucket[16]".to_string(),
-                transform: Transform::Bucket(16),
-            }],
+            fields: vec![
+                PartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1000)
+                    .name("id_bucket[16]")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap()
+            ],
         });
         assert_eq!(
             spec.partition_type(&schema).unwrap(),
@@ -2074,7 +2220,7 @@ mod tests {
     }
 
     #[test]
-    fn test_binding_a_multi_argument_field_fails_loudly() {
+    fn test_binding_a_multi_argument_field() {
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
@@ -2088,13 +2234,134 @@ mod tests {
         )
         .unwrap();
 
-        // A bound PartitionField still carries a single source id, so binding has to refuse
-        // rather than quietly keep the first one.
+        // Every id is kept, and the transform, which cannot be evaluated, binds as unknown
+        let bound = spec.bind(schema.clone()).unwrap();
+        let field = &bound.fields()[0];
+        assert_eq!([1, 2], field.source_ids());
+        assert_eq!(Transform::Unknown, field.transform());
+        assert_eq!(
+            bound.partition_type(&schema).unwrap(),
+            StructType::new(vec![
+                NestedField::optional(1000, "m", Type::Primitive(PrimitiveType::String)).into()
+            ])
+        );
+
+        // and the ids survive the way back to an unbound field
+        assert_eq!([1, 2], bound.into_unbound().fields()[0].source_ids());
+
+        // A source column that is not in the schema is still rejected
+        let spec: UnboundPartitionSpec = serde_json::from_str(
+            r#"{"spec-id": 1, "fields": [{"source-ids": [1, 3], "field-id": 1000, "name": "m", "transform": "bucket[4]"}]}"#,
+        )
+        .unwrap();
         let err = spec.bind(schema).unwrap_err();
         assert!(
-            err.to_string().contains("has no single source id"),
+            err.to_string()
+                .contains("Cannot find partition source field with id `3`"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn test_partition_field_reads_source_ids() {
+        let field: PartitionField = serde_json::from_str(
+            r#"{"source-ids": [1, 2], "field-id": 1000, "name": "m", "transform": "bucket[4]"}"#,
+        )
+        .unwrap();
+        assert_eq!([1, 2], field.source_ids());
+        assert_eq!(Transform::Unknown, field.transform());
+        assert!(
+            field
+                .source_id()
+                .unwrap_err()
+                .to_string()
+                .contains("has no single source id")
+        );
+
+        // A multi-argument field writes source-ids only
+        let serialized = serde_json::to_value(&field).unwrap();
+        assert_eq!(
+            Some(&serde_json::json!([1, 2])),
+            serialized.get("source-ids")
+        );
+        assert!(serialized.get("source-id").is_none());
+
+        // A single-argument field keeps writing source-id, including one read from source-ids
+        for input in [
+            r#"{"source-id": 1, "field-id": 1000, "name": "m", "transform": "bucket[4]"}"#,
+            r#"{"source-ids": [1], "field-id": 1000, "name": "m", "transform": "bucket[4]"}"#,
+        ] {
+            let field: PartitionField = serde_json::from_str(input).unwrap();
+            assert_eq!(1, field.source_id().unwrap());
+            assert_eq!(Transform::Bucket(4), field.transform());
+            let serialized = serde_json::to_value(&field).unwrap();
+            assert_eq!(Some(&serde_json::json!(1)), serialized.get("source-id"));
+            assert!(serialized.get("source-ids").is_none());
+        }
+    }
+
+    #[test]
+    fn test_partition_field_rejects_malformed_source_ids() {
+        for (input, expected) in [
+            (
+                r#"{"source-ids": [], "field-id": 1000, "name": "m", "transform": "identity"}"#,
+                "Empty source-ids is not allowed",
+            ),
+            (
+                r#"{"field-id": 1000, "name": "m", "transform": "identity"}"#,
+                "Either `source-id` or `source-ids` must be present",
+            ),
+            (
+                r#"{"source-id": 1, "source-ids": [1], "field-id": 1000, "name": "m", "transform": "identity"}"#,
+                "mutually exclusive",
+            ),
+        ] {
+            let err = serde_json::from_str::<PartitionField>(input).unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "unexpected error for {input}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_partition_field_builder_validates() {
+        let err = PartitionField::builder()
+            .source_ids(vec![])
+            .field_id(1000)
+            .name("m")
+            .transform(Transform::Identity)
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Empty source-ids is not allowed"),
+            "unexpected error: {err}"
+        );
+
+        let err = PartitionField::builder()
+            .source_ids(vec![1, 2])
+            .field_id(1000)
+            .name("m")
+            .transform(Transform::Bucket(4))
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("its transform must be unknown"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_is_compatible_with_compares_every_source_id() {
+        let spec = |source_ids: &str| -> PartitionSpec {
+            serde_json::from_str(&format!(
+                r#"{{"spec-id": 1, "fields": [{{"source-ids": {source_ids}, "field-id": 1000, "name": "m", "transform": "bucket[4]"}}]}}"#
+            ))
+            .unwrap()
+        };
+
+        assert!(spec("[1, 2]").is_compatible_with(&spec("[1, 2]")));
+        assert!(!spec("[1, 2]").is_compatible_with(&spec("[1, 3]")));
     }
 
     #[test]

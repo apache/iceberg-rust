@@ -158,7 +158,7 @@ impl TableMetadata {
     pub(crate) fn partition_name_exists(&self, name: &str) -> bool {
         self.partition_specs
             .values()
-            .any(|spec| spec.fields().iter().any(|pf| pf.name == name))
+            .any(|spec| spec.fields().iter().any(|pf| pf.name() == name))
     }
 
     /// Check if a field name exists in any schema.
@@ -563,15 +563,18 @@ impl TableMetadata {
         for field in self.default_spec.fields() {
             // Historical specs may reference dropped columns, but active default-spec
             // fields need a source for new writes. Void fields do not read their source.
-            if field.transform != Transform::Void
-                && self.current_schema().field_by_id(field.source_id).is_none()
-            {
-                return Err(invalid_data!(
-                    "Default partition spec {} references missing source field {} in current schema {}",
-                    self.default_spec.spec_id(),
-                    field.source_id,
-                    self.current_schema_id
-                ));
+            if field.transform() == Transform::Void {
+                continue;
+            }
+            for &source_id in field.source_ids() {
+                if self.current_schema().field_by_id(source_id).is_none() {
+                    return Err(invalid_data!(
+                        "Default partition spec {} references missing source field {} in current schema {}",
+                        self.default_spec.spec_id(),
+                        source_id,
+                        self.current_schema_id
+                    ));
+                }
             }
         }
 
@@ -3421,9 +3424,9 @@ mod tests {
         let default_spec = &desered_type.default_spec;
         assert_eq!(default_spec.spec_id(), 2);
         assert_eq!(default_spec.fields().len(), 1);
-        assert_eq!(default_spec.fields()[0].name, "y");
-        assert_eq!(default_spec.fields()[0].transform, Transform::Identity);
-        assert_eq!(default_spec.fields()[0].source_id, 2);
+        assert_eq!(default_spec.fields()[0].name(), "y");
+        assert_eq!(default_spec.fields()[0].transform(), Transform::Identity);
+        assert_eq!(default_spec.fields()[0].source_id().unwrap(), 2);
     }
 
     #[test]
