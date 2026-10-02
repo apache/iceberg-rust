@@ -87,7 +87,7 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
         snapshot_produce: &SnapshotProducer<'_>,
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
 
-    /// Returns the data files this operation actually removed.
+    /// Returns the data files this operation marked deleted in the manifests it wrote.
     ///
     /// Only populated once [`Self::existing_manifest`] has run, so the snapshot summary counts
     /// what was really removed rather than what the caller asked to remove.
