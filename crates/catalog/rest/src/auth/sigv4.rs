@@ -154,9 +154,10 @@ impl SigV4Signer {
             .filter(|v| v.as_bytes() != content_header.as_bytes())
             .cloned()
             .collect();
-        request
-            .headers_mut()
-            .insert(CONTENT_SHA256, content_header.parse().unwrap());
+        let content_value = content_header.parse().map_err(|e| {
+            Error::new(ErrorKind::Unexpected, "invalid x-amz-content-sha256 value").with_source(e)
+        })?;
+        request.headers_mut().insert(CONTENT_SHA256, content_value);
 
         rewrite_url_for_signing(request);
 
