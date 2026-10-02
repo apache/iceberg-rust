@@ -110,10 +110,10 @@ impl SigV4Signer {
     /// reqwest drops `Authorization` but keeps `Original-Authorization`.
     ///
     /// `aws_sigv4` traces the headers it is given, and its redaction list does
-    /// not cover the `Original-` copy. An installed `tracing` subscriber is
-    /// muted for the call; with no subscriber, or with `tracing`'s `log-always`
-    /// feature, its `log` bridge still forwards those events, so keep
-    /// `aws_sigv4` below trace level there.
+    /// not cover the `Original-` copy. A `tracing` subscriber that could record
+    /// that is muted for the call; with no subscriber, or with `tracing`'s
+    /// `log-always` feature, its `log` bridge still forwards those events, so
+    /// keep `aws_sigv4` below trace level there.
     pub fn sign(
         &self,
         request: &mut crate::HttpRequest,
@@ -130,6 +130,7 @@ impl SigV4Signer {
     ) -> Result<()> {
         use aws_sigv4::http_request::{SignableBody, SignableRequest, sign};
         use aws_sigv4::sign::v4;
+        use tracing::level_filters::LevelFilter;
         use tracing::subscriber::NoSubscriber;
 
         let body = signable_body(request)?;
@@ -178,11 +179,11 @@ impl SigV4Signer {
 
         // The crate traces what it signs, and redacts `authorization` but not
         // the `Original-` copy, so a bearer token would be logged verbatim.
-        // Only when a subscriber exists. `with_default` sets tracing's global
-        // "a dispatcher was installed" flag for good, so doing it unasked would
-        // silently divert every later event away from an app's `log` bridge —
-        // a worse trade than a trace-level exposure the operator opted into.
-        let signed = if tracing::dispatcher::has_been_set() {
+        // Mute it only when a subscriber could record trace events (the max
+        // level stays `OFF` until one is registered): `with_default` marks a
+        // dispatcher as set for good, which would silently divert every later
+        // event away from an app's `log` bridge.
+        let signed = if LevelFilter::current() == LevelFilter::TRACE {
             tracing::subscriber::with_default(NoSubscriber::default(), || sign(signable, &params))
         } else {
             sign(signable, &params)
@@ -543,6 +544,11 @@ mod tests {
 
         let log = CapturedLog::default();
         tracing::subscriber::with_default(log.clone(), || {
+            // `sign_at` mutes only at this level, which is what is under test.
+            assert_eq!(
+                tracing::level_filters::LevelFilter::current(),
+                tracing::level_filters::LevelFilter::TRACE
+            );
             signer
                 .sign_at(
                     &mut req,
@@ -1175,7 +1181,8 @@ mod tests {
         assert_eq!(
             post.headers().get("authorization").unwrap(),
             "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261002/us-east-1/execute-api/aws4_request, \
-             SignedHeaders=content-type;host;original-authorization;x-amz-content-sha256;x-amz-date;x-amz-security-token, \
+             SignedHeaders=content-type;host;original-authorization;\
+             x-amz-content-sha256;x-amz-date;x-amz-security-token, \
              Signature=c5d6bfcecd19c5421e8696c67465f6909b5e09398608d8e79a9eb391e04de556"
         );
         assert_eq!(
