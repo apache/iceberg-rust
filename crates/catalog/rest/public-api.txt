@@ -14,7 +14,7 @@ impl<'a> core::fmt::Debug for iceberg_catalog_rest::HttpRequestBody<'a>
 pub fn iceberg_catalog_rest::HttpRequestBody<'a>::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::Copy for iceberg_catalog_rest::HttpRequestBody<'a>
 impl<'a> core::marker::StructuralPartialEq for iceberg_catalog_rest::HttpRequestBody<'a>
-pub enum iceberg_catalog_rest::PayloadHashMode
+#[non_exhaustive] pub enum iceberg_catalog_rest::PayloadHashMode
 pub iceberg_catalog_rest::PayloadHashMode::IcebergRest
 pub iceberg_catalog_rest::PayloadHashMode::StandardAws
 impl core::clone::Clone for iceberg_catalog_rest::PayloadHashMode
@@ -345,7 +345,7 @@ impl core::fmt::Debug for iceberg_catalog_rest::RestSessionCatalogBuilder
 pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg_catalog_rest::SigV4Signer
 impl iceberg_catalog_rest::SigV4Signer
-pub fn iceberg_catalog_rest::SigV4Signer::new(region: alloc::string::String, service: alloc::string::String, mode: iceberg_catalog_rest::PayloadHashMode) -> Self
+pub fn iceberg_catalog_rest::SigV4Signer::new(region: impl core::convert::Into<alloc::string::String>, service: impl core::convert::Into<alloc::string::String>, mode: iceberg_catalog_rest::PayloadHashMode) -> Self
 pub fn iceberg_catalog_rest::SigV4Signer::sign(&self, request: &mut iceberg_catalog_rest::HttpRequest, credentials: &aws_credential_types::credentials_impl::Credentials) -> iceberg::error::Result<()>
 impl core::clone::Clone for iceberg_catalog_rest::SigV4Signer
 pub fn iceberg_catalog_rest::SigV4Signer::clone(&self) -> iceberg_catalog_rest::SigV4Signer
