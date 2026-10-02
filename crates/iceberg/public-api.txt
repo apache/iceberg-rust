@@ -2472,6 +2472,7 @@ pub fn iceberg::spec::Schema::field_by_alias(&self, alias: &str) -> core::option
 pub fn iceberg::spec::Schema::field_by_id(&self, field_id: i32) -> core::option::Option<&iceberg::spec::NestedFieldRef>
 pub fn iceberg::spec::Schema::field_by_name(&self, field_name: &str) -> core::option::Option<&iceberg::spec::NestedFieldRef>
 pub fn iceberg::spec::Schema::field_by_name_case_insensitive(&self, field_name: &str) -> core::option::Option<&iceberg::spec::NestedFieldRef>
+pub fn iceberg::spec::Schema::field_by_name_case_insensitive_checked(&self, field_name: &str) -> iceberg::Result<core::option::Option<&iceberg::spec::NestedFieldRef>>
 pub fn iceberg::spec::Schema::field_id_by_name(&self, name: &str) -> core::option::Option<i32>
 pub fn iceberg::spec::Schema::field_id_to_fields(&self) -> &std::collections::hash::map::HashMap<i32, iceberg::spec::NestedFieldRef>
 pub fn iceberg::spec::Schema::field_id_to_name_map(&self) -> &std::collections::hash::map::HashMap<i32, alloc::string::String>
