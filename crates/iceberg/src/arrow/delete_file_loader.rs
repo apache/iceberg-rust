@@ -443,6 +443,7 @@ mod tests {
     }
 
     fn write_plain_parquet_batches(path: &str, batches: &[RecordBatch], row_group_size: usize) {
+        assert!(!batches.is_empty());
         let file = File::create(path).unwrap();
         let properties = WriterProperties::builder()
             .set_max_row_group_row_count(Some(row_group_size))
