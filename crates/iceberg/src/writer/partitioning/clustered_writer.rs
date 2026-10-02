@@ -145,13 +145,14 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow_array::{Int32Array, RecordBatch, StringArray};
+    use arrow_array::{Float64Array, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
     use super::*;
+    use crate::arrow::schema_to_arrow_schema;
     use crate::io::FileIO;
     use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Type};
     use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
@@ -505,6 +506,87 @@ mod tests {
             error.to_string().contains("The input is not sorted"),
             "Expected 'input is not sorted' error, got: {error}"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_clustered_writer_signed_zero_partitions() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let schema = Arc::new(
+            crate::spec::Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "d", Type::Primitive(PrimitiveType::Double)).into(),
+                ])
+                .build()?,
+        );
+        let partition_spec = crate::spec::PartitionSpec::builder(schema.clone())
+            .add_partition_field("d", "d", crate::spec::Transform::Identity)?
+            .build()?;
+
+        let partition_value = |d: f64| Struct::from_iter([Some(crate::spec::Literal::double(d))]);
+        let partition_key =
+            |d: f64| PartitionKey::new(partition_spec.clone(), schema.clone(), partition_value(d));
+
+        let arrow_schema = Arc::new(schema_to_arrow_schema(&schema)?);
+        let batch = |id: i32, d: f64| {
+            RecordBatch::try_new(arrow_schema.clone(), vec![
+                Arc::new(Int32Array::from(vec![id])),
+                Arc::new(Float64Array::from(vec![d])),
+            ])
+        };
+
+        let parquet_writer_builder =
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone());
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            parquet_writer_builder,
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
+
+        // -0.0 and 0.0 are different partition values, as in iceberg-java, so 0.0 right
+        // after -0.0 starts a new data file.
+        let mut writer =
+            ClusteredWriter::new(DataFileWriterBuilder::new(rolling_writer_builder.clone()));
+        writer.write(partition_key(-0.0), batch(1, -0.0)?).await?;
+        writer.write(partition_key(0.0), batch(2, 0.0)?).await?;
+        let partitions_written: Vec<Struct> = writer
+            .close()
+            .await?
+            .into_iter()
+            .map(|data_file| data_file.partition)
+            .collect();
+        assert_eq!(partitions_written, vec![
+            partition_value(-0.0),
+            partition_value(0.0)
+        ]);
+
+        // 0.0 is not the closed -0.0 partition, so this input is still sorted.
+        let mut writer = ClusteredWriter::new(DataFileWriterBuilder::new(rolling_writer_builder));
+        writer.write(partition_key(-0.0), batch(1, -0.0)?).await?;
+        writer.write(partition_key(1.0), batch(3, 1.0)?).await?;
+        writer.write(partition_key(0.0), batch(2, 0.0)?).await?;
+        let partitions_written: Vec<Struct> = writer
+            .close()
+            .await?
+            .into_iter()
+            .map(|data_file| data_file.partition)
+            .collect();
+        assert_eq!(partitions_written, vec![
+            partition_value(-0.0),
+            partition_value(1.0),
+            partition_value(0.0)
+        ]);
 
         Ok(())
     }

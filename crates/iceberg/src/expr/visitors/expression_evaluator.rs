@@ -597,6 +597,38 @@ mod tests {
     }
 
     #[test]
+    fn test_expr_eq_signed_zero() -> Result<()> {
+        let case_sensitive = true;
+        let (partition_spec, schema) = create_partition_spec(PrimitiveType::Float)?;
+
+        let data_file = DataFile {
+            partition: Struct::from_iter([Some(Literal::float(-0.0_f32))]),
+            ..create_data_file_float()
+        };
+
+        // -0.0 and 0.0 are different values, as in iceberg-java's evaluator.
+        for (literal, expected) in [(0.0_f32, false), (-0.0_f32, true)] {
+            let predicate = Predicate::Binary(BinaryExpression::new(
+                PredicateOperator::Eq,
+                Reference::new("a"),
+                Datum::float(literal),
+            ))
+            .bind(schema.clone(), case_sensitive)?;
+
+            let expression_evaluator = create_expression_evaluator(
+                partition_spec.clone(),
+                &schema,
+                &predicate,
+                case_sensitive,
+            )?;
+
+            assert_eq!(expression_evaluator.eval(&data_file)?, expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_expr_greater_than_or_eq() -> Result<()> {
         let case_sensitive = true;
         let (partition_spec, schema) = create_partition_spec(PrimitiveType::Float)?;
