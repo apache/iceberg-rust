@@ -330,9 +330,7 @@ impl<'a> SnapshotProducer<'a> {
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
-        // Cloned rather than taken: the summary is built after the manifests, so the added
-        // files must still be here.
-        let added_data_files = self.added_data_files.clone();
+        let added_data_files = std::mem::take(&mut self.added_data_files);
         if added_data_files.is_empty() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
@@ -400,11 +398,8 @@ impl<'a> SnapshotProducer<'a> {
         Ok(manifest_files)
     }
 
-    // Returns a `Summary` of the current snapshot
-    fn summary<OP: SnapshotProduceOperation>(
-        &self,
-        snapshot_produce_operation: &OP,
-    ) -> Result<Summary> {
+    // Collects the added files, before `produce_manifests` takes them.
+    fn added_files_summary(&self) -> SnapshotSummaryCollector {
         let mut summary_collector = SnapshotSummaryCollector::default();
         let table_metadata = self.table.metadata_ref();
 
@@ -430,6 +425,16 @@ impl<'a> SnapshotProducer<'a> {
                 table_metadata.default_partition_spec().clone(),
             );
         }
+        summary_collector
+    }
+
+    // Returns a `Summary` of the current snapshot
+    fn summary<OP: SnapshotProduceOperation>(
+        &self,
+        mut summary_collector: SnapshotSummaryCollector,
+        snapshot_produce_operation: &OP,
+    ) -> Result<Summary> {
+        let table_metadata = self.table.metadata_ref();
 
         for removed in snapshot_produce_operation.removed_data_files() {
             summary_collector.remove_file(
@@ -511,15 +516,19 @@ impl<'a> SnapshotProducer<'a> {
             ),
         };
 
-        // The manifests are produced first so the summary can count the entries the operation
-        // actually marked Deleted.
+        // The manifests are produced before the summary is finished so it can count the entries
+        // the operation actually marked Deleted.
+        let summary_collector = self.added_files_summary();
         let new_manifests = self
             .produce_manifests(&mut snapshot_produce_operation, &process)
             .await?;
 
-        let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
-        })?;
+        let summary = self
+            .summary(summary_collector, &snapshot_produce_operation)
+            .map_err(|err| {
+                Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.")
+                    .with_source(err)
+            })?;
 
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
         let writer_next_row_id = manifest_list_writer.next_row_id();
