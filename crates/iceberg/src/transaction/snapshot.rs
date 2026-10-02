@@ -95,12 +95,6 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
     fn removed_data_files(&self) -> &[(DataFile, SchemaRef, PartitionSpecRef)] {
         &[]
     }
-
-    /// Returns whether this operation replaces the whole table, dropping the previous totals
-    /// from the snapshot summary. A partial overwrite must return `false`.
-    fn truncate_full_table(&self) -> bool {
-        false
-    }
 }
 
 pub(crate) struct DefaultManifestProcess;
@@ -452,11 +446,7 @@ impl<'a> SnapshotProducer<'a> {
             additional_properties,
         };
 
-        update_snapshot_summaries(
-            summary,
-            previous_snapshot.map(|s| s.summary()),
-            snapshot_produce_operation.truncate_full_table(),
-        )
+        update_snapshot_summaries(summary, previous_snapshot.map(|s| s.summary()))
     }
 
     fn generate_manifest_list_file_path(&self, attempt: i64) -> Result<String> {
