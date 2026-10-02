@@ -2836,7 +2836,6 @@ dependencies = [
  "bytes",
  "chrono",
  "futures",
- "hmac 0.12.1",
  "http 1.5.0",
  "iceberg",
  "iceberg_test_utils",

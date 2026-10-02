@@ -18,8 +18,6 @@
 //! AWS SigV4 request signing for the REST catalog.
 
 use chrono::{DateTime, Utc};
-#[cfg(test)]
-use hmac::{Hmac, Mac};
 use iceberg::{Error, ErrorKind, Result};
 use sha2::{Digest, Sha256};
 
@@ -46,21 +44,8 @@ pub enum PayloadHashMode {
     StandardAws,
 }
 
-/// Derives the AWS SigV4 signing key.
-#[cfg(test)]
-fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC takes a key of any size");
-    mac.update(data);
-    mac.finalize().into_bytes().to_vec()
-}
-
 fn hex_sha256(data: &[u8]) -> String {
     encode_hex(&Sha256::digest(data))
-}
-
-#[cfg(test)]
-fn hex_hmac_sha256(key: &[u8], data: &[u8]) -> String {
-    encode_hex(&hmac_sha256(key, data))
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -69,14 +54,6 @@ fn encode_hex(bytes: &[u8]) -> String {
 
 fn base64_encode(bytes: &[u8]) -> String {
     base64::engine::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
-}
-
-#[cfg(test)]
-fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
-    let k_date = hmac_sha256(format!("AWS4{secret}").as_bytes(), date.as_bytes());
-    let k_region = hmac_sha256(&k_date, region.as_bytes());
-    let k_service = hmac_sha256(&k_region, service.as_bytes());
-    hmac_sha256(&k_service, b"aws4_request")
 }
 
 /// The `x-amz-content-sha256` value. `None` means no body at all, which the
@@ -1019,25 +996,6 @@ mod tests {
         assert_eq!(
             req.headers().get("x-amz-security-token").unwrap(),
             "example-session-token"
-        );
-    }
-
-    #[test]
-    fn signing_key_and_signature_match_aws_vector() {
-        let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
-        let date = "20150830";
-        let region = "us-east-1";
-        let service = "service";
-        let key = signing_key(secret, date, region, service);
-
-        let string_to_sign = "AWS4-HMAC-SHA256\n\
-20150830T123600Z\n\
-20150830/us-east-1/service/aws4_request\n\
-bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
-        let sig = hex_hmac_sha256(&key, string_to_sign.as_bytes());
-        assert_eq!(
-            sig,
-            "5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"
         );
     }
 
