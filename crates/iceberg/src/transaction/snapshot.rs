@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
+use itertools::Itertools;
 use uuid::Uuid;
 
 use crate::error::{Result, invalid_data};
@@ -138,8 +139,15 @@ impl<'a> SnapshotProducer<'a> {
             snapshot_id: Self::generate_unique_snapshot_id(table),
             commit_uuid,
             snapshot_properties,
-            added_data_files,
-            deleted_data_files,
+            // Collapsed to the first file per path, so a manifest never references a file twice.
+            added_data_files: added_data_files
+                .into_iter()
+                .unique_by(|f| f.file_path.clone())
+                .collect(),
+            deleted_data_files: deleted_data_files
+                .into_iter()
+                .unique_by(|f| f.file_path.clone())
+                .collect(),
             manifest_counter: AtomicU64::new(0),
         }
     }
@@ -148,7 +156,7 @@ impl<'a> SnapshotProducer<'a> {
         for data_file in &self.added_data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {
                 return Err(invalid_data!(
-                    "Only data content type is allowed for fast append"
+                    "Only data content type is allowed"
                 ));
             }
             // Check if the data file partition spec id matches the table default partition spec id.
