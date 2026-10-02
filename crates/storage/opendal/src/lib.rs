@@ -108,7 +108,9 @@ pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 /// defaults to [`OPENDAL_IO_TIMEOUT_MS_DEFAULT`].
 ///
 /// Each retry attempt is bounded separately, so it is a per-attempt budget, not a total one.
-/// Control operations such as `stat` and `rename` are bounded by a separate, fixed budget.
+/// Control operations such as `stat` and `rename` keep OpenDAL's separate 60-second budget,
+/// which this property does not change. Here that covers `Storage::exists` and
+/// `Storage::metadata`, while reads, writes, listing and deletes use this timeout.
 pub const OPENDAL_IO_TIMEOUT_MS: &str = "opendal.io-timeout-ms";
 
 /// Default for [`OPENDAL_IO_TIMEOUT_MS`]. Matches the IO timeout default of OpenDAL's
@@ -136,8 +138,9 @@ pub struct OpenDalClientConfig {
 
 impl Default for OpenDalClientConfig {
     fn default() -> Self {
-        // Reuse the `#[property]` defaults, so serde and `from_properties` cannot disagree.
-        Self::from_properties(&HashMap::new()).expect("every client setting has a default")
+        Self {
+            io_timeout_ms: DEFAULT_IO_TIMEOUT_MS,
+        }
     }
 }
 
@@ -860,24 +863,39 @@ mod tests {
     }
 
     #[test]
-    fn test_default_io_timeout_matches_opendal() {
-        // `TimeoutLayer` has no getters, so compare through `Debug`. An OpenDAL upgrade that
-        // changes its default fails here instead of silently diverging from it.
-        let opendal_default = format!("{:?}", TimeoutLayer::new());
-        let with_io_timeout = |ms| {
+    fn test_default_matches_property_defaults() {
+        // Serde fills missing settings from `Default`, and `from_properties` from the
+        // `#[property]` defaults. `Debug` covers every field, including ones added later.
+        assert_eq!(
+            format!("{:?}", OpenDalClientConfig::default()),
             format!(
                 "{:?}",
-                TimeoutLayer::new().with_io_timeout(Duration::from_millis(ms))
+                OpenDalClientConfig::from_properties(&HashMap::new()).unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn test_default_timeouts_match_opendal() {
+        // `TimeoutLayer` has no getters, so compare through `Debug`. An OpenDAL upgrade that
+        // changes either default stated in the `OPENDAL_IO_TIMEOUT_MS` doc fails here.
+        let opendal_default = format!("{:?}", TimeoutLayer::new());
+        let layer = |timeout, io_timeout| {
+            format!(
+                "{:?}",
+                TimeoutLayer::new()
+                    .with_timeout(timeout)
+                    .with_io_timeout(io_timeout)
             )
         };
-        assert_eq!(
-            opendal_default,
-            with_io_timeout(OPENDAL_IO_TIMEOUT_MS_DEFAULT)
-        );
-        // If `Debug` stopped printing `io_timeout`, the check above would pass vacuously.
+        let control = Duration::from_secs(60);
+        let io = Duration::from_millis(OPENDAL_IO_TIMEOUT_MS_DEFAULT);
+        assert_eq!(opendal_default, layer(control, io));
+        // If `Debug` stopped printing either field, the check above would pass vacuously.
+        assert_ne!(opendal_default, layer(control + Duration::from_secs(1), io));
         assert_ne!(
             opendal_default,
-            with_io_timeout(OPENDAL_IO_TIMEOUT_MS_DEFAULT + 1)
+            layer(control, io + Duration::from_millis(1))
         );
     }
 
@@ -911,6 +929,19 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "opendal-fs", feature = "opendal-memory"))]
+    #[test]
+    fn test_old_unit_variant_forms_are_rejected() {
+        // `LocalFs` and `Memory` used to serialize as bare strings, and `Memory` also accepted
+        // `null`. As struct variants they reject all three, which is an intended format change.
+        for old in [r#""LocalFs""#, r#""Memory""#, r#"{"Memory":null}"#] {
+            assert!(
+                serde_json::from_str::<OpenDalStorage>(old).is_err(),
+                "{old}"
+            );
+        }
+    }
+
     #[cfg(feature = "opendal-memory")]
     #[test]
     fn test_factory_rejects_invalid_io_timeout() {
@@ -938,7 +969,8 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("io operation timeout reached"), "{err}");
-        assert!(err.contains("timeout: 45"), "{err}");
+        // OpenDAL reports the budget in plain seconds, as `context: { timeout: 45 }`.
+        assert!(err.contains("{ timeout: 45 }"), "{err}");
     }
 
     #[cfg(feature = "opendal-s3")]
