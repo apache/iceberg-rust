@@ -530,7 +530,10 @@ fn update_totals(
         return;
     };
 
-    let new_total = (previous_total + added).saturating_sub(removed);
+    // Like Java, a total that would go negative is omitted rather than written as a false basis.
+    let Some(new_total) = previous_total.saturating_add(added).checked_sub(removed) else {
+        return;
+    };
     summary
         .additional_properties
         .insert(total_property.to_string(), new_total.to_string());
@@ -1273,5 +1276,24 @@ mod tests {
         assert_eq!(props.get(TOTAL_FILE_SIZE).unwrap(), "800");
         assert_eq!(props.get(TOTAL_POSITION_DELETES).unwrap(), "2");
         assert_eq!(props.get(TOTAL_EQUALITY_DELETES).unwrap(), "1");
+    }
+
+    #[test]
+    fn test_update_totals_omits_total_when_removed_exceeds_previous_total() {
+        let previous_summary = Summary {
+            operation: Operation::Append,
+            additional_properties: HashMap::from([(TOTAL_DATA_FILES.to_string(), "2".to_string())]),
+        };
+        let summary = Summary {
+            operation: Operation::Delete,
+            additional_properties: HashMap::from([(
+                DELETED_DATA_FILES.to_string(),
+                "3".to_string(),
+            )]),
+        };
+
+        let updated = update_snapshot_summaries(summary, Some(&previous_summary), false).unwrap();
+
+        assert!(!updated.additional_properties.contains_key(TOTAL_DATA_FILES));
     }
 }
