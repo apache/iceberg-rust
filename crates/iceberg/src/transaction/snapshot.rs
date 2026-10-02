@@ -27,7 +27,7 @@ use crate::error::Result;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
     ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation,
-    PartitionSpec, PartitionSpecRef, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
+    PartitionSpecRef, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
     SnapshotSummaryCollector, Struct, StructType, Summary, TableProperties,
     update_snapshot_summaries,
 };
@@ -87,14 +87,21 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
         snapshot_produce: &SnapshotProducer<'_>,
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
 
-    /// Returns the data files this operation actually removed, each with the schema and
-    /// partition spec of the manifest that recorded it.
+    /// Returns the data files this operation actually removed.
     ///
     /// Only populated once [`Self::existing_manifest`] has run, so the snapshot summary counts
     /// what was really removed rather than what the caller asked to remove.
-    fn removed_data_files(&self) -> &[(DataFile, SchemaRef, PartitionSpecRef)] {
+    fn removed_data_files(&self) -> &[RemovedDataFile] {
         &[]
     }
+}
+
+/// A data file an operation removed, with the schema and partition spec of the manifest that
+/// recorded it.
+pub(crate) struct RemovedDataFile {
+    pub(crate) data_file: DataFile,
+    pub(crate) schema: SchemaRef,
+    pub(crate) partition_spec: PartitionSpecRef,
 }
 
 pub(crate) struct DefaultManifestProcess;
@@ -261,9 +268,10 @@ impl<'a> SnapshotProducer<'a> {
         &self,
         content: ManifestContentType,
         schema: SchemaRef,
-        partition_spec: PartitionSpec,
+        partition_spec: PartitionSpecRef,
     ) -> Result<ManifestWriter> {
         let output_file = self.table.file_io().new_output(self.new_manifest_path()?)?;
+        let partition_spec = partition_spec.as_ref().clone();
 
         let builder = if let Some(em) = self.table.encryption_manager() {
             ManifestWriterBuilder::new_from_encrypted(
@@ -349,11 +357,7 @@ impl<'a> SnapshotProducer<'a> {
         let mut writer = self.new_manifest_writer(
             ManifestContentType::Data,
             self.table.metadata().current_schema().clone(),
-            self.table
-                .metadata()
-                .default_partition_spec()
-                .as_ref()
-                .clone(),
+            self.table.metadata().default_partition_spec().clone(),
         )?;
         for entry in manifest_entries {
             writer.add_entry(entry)?;
@@ -427,8 +431,12 @@ impl<'a> SnapshotProducer<'a> {
             );
         }
 
-        for (data_file, schema, partition_spec) in snapshot_produce_operation.removed_data_files() {
-            summary_collector.remove_file(data_file, schema.clone(), partition_spec.clone());
+        for removed in snapshot_produce_operation.removed_data_files() {
+            summary_collector.remove_file(
+                &removed.data_file,
+                removed.schema.clone(),
+                removed.partition_spec.clone(),
+            );
         }
 
         let previous_snapshot = table_metadata.current_snapshot();
@@ -597,7 +605,7 @@ mod tests {
 
     /// An operation that adds no existing manifests and reports one removed data file.
     struct RemoveOneFileOperation {
-        removed: Vec<(DataFile, SchemaRef, PartitionSpecRef)>,
+        removed: Vec<RemovedDataFile>,
     }
 
     impl SnapshotProduceOperation for RemoveOneFileOperation {
@@ -616,14 +624,14 @@ mod tests {
             Ok(vec![])
         }
 
-        fn removed_data_files(&self) -> &[(DataFile, SchemaRef, PartitionSpecRef)] {
+        fn removed_data_files(&self) -> &[RemovedDataFile] {
             &self.removed
         }
     }
 
     struct RemoveExistingFileOperation {
         file_path: String,
-        removed: Vec<(DataFile, SchemaRef, PartitionSpecRef)>,
+        removed: Vec<RemovedDataFile>,
     }
 
     impl SnapshotProduceOperation for RemoveExistingFileOperation {
@@ -650,7 +658,7 @@ mod tests {
                 .read(&manifest_list.entries()[0])
                 .await?;
             let schema = manifest.metadata().schema().clone();
-            let partition_spec = manifest.metadata().partition_spec().clone();
+            let partition_spec = Arc::new(manifest.metadata().partition_spec().clone());
             let mut writer = producer.new_manifest_writer(
                 ManifestContentType::Data,
                 schema.clone(),
@@ -661,11 +669,11 @@ mod tests {
             for entry in manifest.entries() {
                 if entry.file_path() == self.file_path && entry.is_alive() {
                     writer.add_delete_entry(entry.as_ref().clone())?;
-                    removed.push((
-                        entry.data_file().clone(),
-                        schema.clone(),
-                        Arc::new(partition_spec.clone()),
-                    ));
+                    removed.push(RemovedDataFile {
+                        data_file: entry.data_file().clone(),
+                        schema: schema.clone(),
+                        partition_spec: partition_spec.clone(),
+                    });
                 } else if entry.is_alive() {
                     writer.add_existing_entry(entry.as_ref().clone())?;
                 }
@@ -677,7 +685,7 @@ mod tests {
             Ok(vec![rewritten_manifest])
         }
 
-        fn removed_data_files(&self) -> &[(DataFile, SchemaRef, PartitionSpecRef)] {
+        fn removed_data_files(&self) -> &[RemovedDataFile] {
             &self.removed
         }
     }
@@ -710,11 +718,11 @@ mod tests {
         let removed = data_file(&table, "test/removed.parquet", 2);
 
         let operation = RemoveOneFileOperation {
-            removed: vec![(
-                removed,
-                table.metadata().current_schema().clone(),
-                table.metadata().default_partition_spec().clone(),
-            )],
+            removed: vec![RemovedDataFile {
+                data_file: removed,
+                schema: table.metadata().current_schema().clone(),
+                partition_spec: table.metadata().default_partition_spec().clone(),
+            }],
         };
 
         let mut action_commit =
@@ -823,12 +831,14 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let partition_spec = PartitionSpec::builder(schema.clone())
-            .with_spec_id(3)
-            .add_partition_field("a", "a", Transform::Identity)
-            .unwrap()
-            .build()
-            .unwrap();
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .with_spec_id(3)
+                .add_partition_field("a", "a", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
 
         let producer = SnapshotProducer::new(&table, Uuid::now_v7(), HashMap::new(), vec![]);
         let first = producer
@@ -896,7 +906,11 @@ mod tests {
         let added = data_file(&table, "test/added.parquet", 3);
         let removed = data_file(&table, "test/removed.parquet", 2);
         let operation = RemoveOneFileOperation {
-            removed: vec![(removed, reported_schema, reported_spec)],
+            removed: vec![RemovedDataFile {
+                data_file: removed,
+                schema: reported_schema,
+                partition_spec: reported_spec,
+            }],
         };
 
         let mut action_commit =
