@@ -754,8 +754,7 @@ mod tests {
 
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    use object_store::UploadPart;
-    use object_store::PutResult;
+    use object_store::{PutResult, UploadPart};
 
     #[derive(Debug)]
     struct MockMultipartUpload {
