@@ -175,13 +175,14 @@ The changelog should reflect a summary of each commit in the new release.
 Run the following command to update the dependencies list of every package:
 
 ```shell
-dev/release/dependencies.sh generate
+dev/release/generate-dependency-tsv-files.sh
 ```
 
 Run the following command to verify the licenses meet the project's policy.
+This also runs in CI, so it should already be passing.
 
 ```shell
-dev/release/dependencies.sh check
+python dev/release/licenses.py dependencies check
 ```
 
 #### Open pull request

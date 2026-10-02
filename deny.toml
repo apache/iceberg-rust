@@ -16,6 +16,9 @@
 # under the License.
 
 [licenses]
+unused-allowed-license = "allow"
+unused-license-exception = "deny"
+
 allow = [
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
@@ -34,9 +37,31 @@ allow = [
   "BSL-1.0",
 ]
 
-exceptions = [
-  # The MPL license is allowed (binary-only):
-  # https://www.apache.org/legal/resolved.html#category-b
-  { allow = ["MPL-2.0"], crate = "colored" },
-  { allow = ["MPL-2.0"], crate = "option-ext" },
+exceptions = []
+
+# zstd-sys declares only "MIT/Apache-2.0", covering its Rust wrapper.
+# However, it also includes vendored Zstandard C sources.
+# TODO: Remove once no longer required https://github.com/apache/iceberg-rust/issues/3307
+[[licenses.clarify]]
+crate = "zstd-sys"
+expression = "(MIT OR Apache-2.0) AND BSD-3-Clause AND (GPL-2.0-only OR BSD-3-Clause)"
+license-files = [
+  { path = "LICENSE.Apache-2.0", hash = 0x7b466be4 },
+  { path = "LICENSE.Mit", hash = 0xa237d234 },
+  { path = "LICENSE.BSD-3-Clause", hash = 0xc9f5c4f6 },
+  # BSD-3-Clause of vendored zstd src
+  { path = "zstd/LICENSE", hash = 0x3bfe1fb1 },
+  # GPL-2.0-only of vendored zstd src
+  { path = "zstd/COPYING", hash = 0xeaa66bfd },
+]
+
+# Mapped from OR to AND. The following PR should address upstream.
+# https://github.com/dropbox/rust-brotli-decompressor/pull/32
+[[licenses.clarify]]
+crate = "brotli-decompressor"
+expression = "BSD-3-Clause AND MIT"
+license-files = [
+  { path = "LICENSE", hash = 0x1a60a92d }, # BSD-3-Clause
+  # Missing: crate is MIT licensed but has no license text to refer to.
+  # If the project drops the MIT licensing, we wouldn't know to update expression above.
 ]
