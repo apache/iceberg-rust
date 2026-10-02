@@ -502,8 +502,8 @@ mod tests {
         );
     }
 
-    /// The signature the previous hand-rolled signer produced for this case,
-    /// pinned so a change in canonicalization is caught.
+    /// Pins a signature this crate produced, so a change in canonicalization
+    /// is caught; `signatures_match_iceberg_java` is the check against Java.
     fn assert_signature_is(req: &HttpRequest, expected: &str) {
         let auth = req
             .headers()
@@ -1158,6 +1158,62 @@ bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63";
         assert_signature_is(
             &req,
             "c68682c26cab6a781256f83b0076f50014f4922c3907f4ff09c204a74d61fc1d",
+        );
+    }
+
+    /// What Iceberg Java's `RESTSigV4AuthSession` (iceberg-aws 1.10.1, AWS SDK
+    /// 2.29.52) sent for the same requests: a check against an independent
+    /// implementation, where the other pins in this file only catch changes.
+    #[test]
+    fn signatures_match_iceberg_java() {
+        use chrono::TimeZone;
+
+        let creds = aws_credential_types::Credentials::new(
+            "AKIDEXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            Some("example-session-token".to_string()),
+            None,
+            "test",
+        );
+        let signer = test_signer(PayloadHashMode::IcebergRest);
+        let now = Utc.with_ymd_and_hms(2026, 10, 2, 11, 40, 30).unwrap();
+        let client = reqwest::Client::new();
+
+        // A body, so the header carries base64, and a token to relocate.
+        let mut post = HttpRequest::new(
+            client
+                .post("https://rest.example.com/v1/namespaces")
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer delegate-token")
+                .body(r#"{"namespace":["a","b"],"properties":{}}"#)
+                .build()
+                .unwrap(),
+        );
+        signer.sign_at(&mut post, &creds, now).unwrap();
+        assert_eq!(
+            post.headers().get("authorization").unwrap(),
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261002/us-east-1/execute-api/aws4_request, \
+             SignedHeaders=content-type;host;original-authorization;x-amz-content-sha256;x-amz-date;x-amz-security-token, \
+             Signature=c5d6bfcecd19c5421e8696c67465f6909b5e09398608d8e79a9eb391e04de556"
+        );
+        assert_eq!(
+            post.headers().get("x-amz-content-sha256").unwrap(),
+            "n1CB8Yl4L77sBwHTc5qTpUEhlsHHOXFzg0dV0fbOwXs="
+        );
+
+        // No body, a multi-level namespace and an encoded query.
+        let mut get = HttpRequest::new(
+            client
+                .get("https://rest.example.com/v1/namespaces/a%1Fb/tables/x,y?pageToken=a%20b%2Fc")
+                .build()
+                .unwrap(),
+        );
+        signer.sign_at(&mut get, &creds, now).unwrap();
+        assert_eq!(
+            get.headers().get("authorization").unwrap(),
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261002/us-east-1/execute-api/aws4_request, \
+             SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, \
+             Signature=5f6832ec82fc821b08cd3eac3a86ffc3e0c333571fd0a5796e43f2534f23329f"
         );
     }
 
