@@ -118,12 +118,12 @@ impl SigV4Signer {
     /// `Authorization` becomes `Original-Authorization`, userinfo leaves the
     /// URL, and a `+` in the query becomes `%20`.
     ///
+    /// A `+` is therefore taken to be an encoded space; write a literal plus as
+    /// `%2B`.
+    ///
     /// Signs with exactly the `credentials` given and never refreshes them:
     /// resolve temporary ones (STS, IRSA, an instance role) afresh for each
     /// call, as Java does per request.
-    ///
-    /// A `+` is therefore taken to be an encoded space; write a literal plus as
-    /// `%2B`.
     ///
     /// Fails rather than sign a streaming body or a non-UTF-8 header, neither
     /// of which canonicalizes faithfully.
