@@ -36,11 +36,11 @@ pub enum PayloadHashMode {
     /// caller's value when a body is present.
     ///
     /// The base64 header comes from how Java configures the AWS SDK, not from
-    /// SigV4. Signatures verify either way, but a server that checks the
-    /// header against the body's hex hash rejects it.
+    /// SigV4. A verifier that hashes the body itself accepts it; one that
+    /// takes the payload hash from the header, or checks the header against
+    /// the hex hash, rejects it.
     IcebergRest,
-    /// Standard AWS SigV4 style, as botocore (and so PyIceberg) signs: hex
-    /// everywhere.
+    /// Standard AWS SigV4 style: hex everywhere.
     StandardAws,
 }
 
@@ -99,8 +99,8 @@ impl SigV4Signer {
     /// `%2B`.
     ///
     /// Signs with exactly the `credentials` given and never refreshes them:
-    /// resolve temporary ones (STS, IRSA, an instance role) afresh for each
-    /// call, as Java does per request.
+    /// with temporary ones (STS, IRSA, an instance role), resolve them from
+    /// their provider before each call, as Java's session does per request.
     ///
     /// Fails rather than sign a streaming body or a non-UTF-8 header, neither
     /// of which canonicalizes faithfully.
@@ -1150,7 +1150,8 @@ mod tests {
     }
 
     /// What Iceberg Java's `RESTSigV4AuthSession` (iceberg-aws 1.10.1, AWS SDK
-    /// 2.29.52) sent for the same requests: a check against an independent
+    /// 2.29.52, an `AuthSession.EMPTY` delegate, these credentials as `rest.*`
+    /// properties) sent for the same requests: a check against an independent
     /// implementation, where the other pins in this file only catch changes.
     #[test]
     fn signatures_match_iceberg_java() {
