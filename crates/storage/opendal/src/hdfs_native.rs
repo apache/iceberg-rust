@@ -20,13 +20,17 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use iceberg::io::{HDFS_HADOOP_CONF_PREFIX, HDFS_NAME_NODE};
+use iceberg::io::{HDFS_HADOOP_CONF_PREFIX, HDFS_HOST, HDFS_NAME_NODE, HDFS_PORT};
 use iceberg::{Error, ErrorKind, Result};
 use opendal::Operator;
 use opendal::services::HdfsNativeConfig;
 use url::Url;
 
 use crate::utils::from_opendal_error;
+
+/// Hadoop's default filesystem, which serves authority-less paths.
+const FS_DEFAULT_FS: &str = "fs.defaultFS";
+const HDFS_DEFAULT_PORT: u16 = 8020;
 
 /// Parse iceberg properties to [`HdfsNativeConfig`].
 pub(crate) fn hdfs_native_config_parse(mut m: HashMap<String, String>) -> Result<HdfsNativeConfig> {
@@ -51,13 +55,39 @@ pub(crate) fn hdfs_native_config_parse(mut m: HashMap<String, String>) -> Result
         cfg.name_node = Some(name_node);
     }
 
-    let options: HashMap<String, String> = m
+    let host = m.remove(HDFS_HOST).map(|s| s.trim().to_string());
+    let port = m.remove(HDFS_PORT).map(|s| s.trim().to_string());
+
+    let mut options: HashMap<String, String> = m
         .into_iter()
         .filter_map(|(key, value)| {
             key.strip_prefix(HDFS_HADOOP_CONF_PREFIX)
                 .map(|stripped| (stripped.to_string(), value))
         })
         .collect();
+    // PyIceberg's `hdfs.host`/`hdfs.port` name the filesystem for
+    // authority-less paths, which is what Hadoop's `fs.defaultFS` means; an
+    // explicit `hadoop.fs.defaultFS` wins.
+    if let Some(host) = host.filter(|s| !s.is_empty()) {
+        let port = match port.filter(|s| !s.is_empty()) {
+            Some(port) => port.parse::<u16>().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid `{HDFS_PORT}`: {port}: {e}"),
+                )
+            })?,
+            None => HDFS_DEFAULT_PORT,
+        };
+        // An IPv6 literal needs brackets in a URI authority.
+        let host = if host.contains(':') && !host.starts_with('[') {
+            format!("[{host}]")
+        } else {
+            host
+        };
+        options
+            .entry(FS_DEFAULT_FS.to_string())
+            .or_insert_with(|| format!("hdfs://{host}:{port}"));
+    }
     if !options.is_empty() {
         cfg.options = Some(options);
     }
@@ -102,9 +132,9 @@ pub(crate) fn hdfs_native_parse_path(path: &str) -> Result<(Option<String>, &str
 }
 
 /// Resolves the effective NameNode for a path — the configured
-/// `hdfs.name-node` when set, else the path authority — plus the relative
-/// path. The operator cache, `delete_stream` batching and `relativize_path`
-/// all go through this, so they cannot drift apart.
+/// `hdfs.name-node` when set, else the path authority, else `fs.defaultFS` —
+/// plus the relative path. The operator cache, `delete_stream` batching and
+/// `relativize_path` all go through this, so they cannot drift apart.
 pub(crate) fn hdfs_native_effective_name_node<'a>(
     config: &HdfsNativeConfig,
     path: &'a str,
@@ -114,15 +144,30 @@ pub(crate) fn hdfs_native_effective_name_node<'a>(
         .name_node
         .clone()
         .or(authority_name_node)
+        .or_else(|| hdfs_native_default_fs(config))
         .ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
                 format!(
-                    "Invalid hdfs path: {path}, authority-less paths require the `{HDFS_NAME_NODE}` property"
+                    "Invalid hdfs path: {path}, authority-less paths require `{HDFS_NAME_NODE}` or `{HDFS_HOST}`"
                 ),
             )
         })?;
     Ok((name_node, relative_path))
+}
+
+/// `fs.defaultFS` from the forwarded options, when it is an HDFS URI.
+fn hdfs_native_default_fs(config: &HdfsNativeConfig) -> Option<String> {
+    config
+        .options
+        .as_ref()?
+        .get(FS_DEFAULT_FS)
+        .map(|s| s.trim().trim_end_matches('/'))
+        .filter(|s| {
+            s.strip_prefix("hdfs://")
+                .is_some_and(|rest| !rest.is_empty())
+        })
+        .map(str::to_string)
 }
 
 /// Operators cached per effective NameNode: each holds an `hdfs-native`
@@ -265,24 +310,98 @@ mod tests {
     }
 
     #[test]
+    fn test_hdfs_native_config_parse_host_port_as_default_fs() {
+        let parse = |props: &[(&str, &str)]| {
+            let props = props
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            hdfs_native_config_parse(props)
+                .map(|cfg| cfg.options.and_then(|o| o.get(FS_DEFAULT_FS).cloned()))
+        };
+
+        assert_eq!(
+            parse(&[(HDFS_HOST, "nn"), (HDFS_PORT, " 9000 ")])
+                .unwrap()
+                .as_deref(),
+            Some("hdfs://nn:9000")
+        );
+        assert_eq!(
+            parse(&[(HDFS_HOST, " nn ")]).unwrap().as_deref(),
+            Some("hdfs://nn:8020")
+        );
+        assert_eq!(
+            parse(&[(HDFS_HOST, "::1")]).unwrap().as_deref(),
+            Some("hdfs://[::1]:8020")
+        );
+        // An explicit `hadoop.fs.defaultFS` wins.
+        assert_eq!(
+            parse(&[
+                (HDFS_HOST, "nn"),
+                ("hadoop.fs.defaultFS", "hdfs://explicit:8020")
+            ])
+            .unwrap()
+            .as_deref(),
+            Some("hdfs://explicit:8020")
+        );
+        // An empty host is unset; a port without a host has nothing to apply to.
+        assert_eq!(
+            parse(&[(HDFS_HOST, " "), (HDFS_PORT, "9000")]).unwrap(),
+            None
+        );
+        assert_eq!(parse(&[(HDFS_PORT, "9000")]).unwrap(), None);
+        let err = parse(&[(HDFS_HOST, "nn"), (HDFS_PORT, "x")]).unwrap_err();
+        assert!(err.to_string().contains(HDFS_PORT));
+    }
+
+    #[test]
+    fn test_hdfs_native_default_fs_must_be_hdfs() {
+        let parse = |default_fs: &str| {
+            hdfs_native_config_parse(HashMap::from([(
+                "hadoop.fs.defaultFS".to_string(),
+                default_fs.to_string(),
+            )]))
+            .unwrap()
+        };
+
+        let (nn, _) =
+            hdfs_native_effective_name_node(&parse("hdfs://nn:8020/"), "hdfs:///a").unwrap();
+        assert_eq!(nn, "hdfs://nn:8020");
+        for default_fs in ["viewfs://cluster/", "hdfs://", ""] {
+            assert!(hdfs_native_effective_name_node(&parse(default_fs), "hdfs:///a").is_err());
+        }
+    }
+
+    #[test]
     fn test_hdfs_native_effective_name_node_precedence() {
-        let configured = hdfs_native_config_parse(HashMap::from([(
-            HDFS_NAME_NODE.to_string(),
-            "hdfs://nn1:8020,hdfs://nn2:8020".to_string(),
-        )]))
+        let configured = hdfs_native_config_parse(HashMap::from([
+            (
+                HDFS_NAME_NODE.to_string(),
+                "hdfs://nn1:8020,hdfs://nn2:8020".to_string(),
+            ),
+            (HDFS_HOST.to_string(), "ignored".to_string()),
+        ]))
         .unwrap();
+        let default_fs =
+            hdfs_native_config_parse(HashMap::from([(HDFS_HOST.to_string(), "nn".to_string())]))
+                .unwrap();
         let unconfigured = HdfsNativeConfig::default();
 
-        // Configured wins over the authority, including for authority-less paths.
+        // Configured wins over the authority and `hdfs.host`, including for
+        // authority-less paths.
         for path in ["hdfs://ns-a/x", "hdfs:///y"] {
             let (nn, _) = hdfs_native_effective_name_node(&configured, path).unwrap();
             assert_eq!(nn, "hdfs://nn1:8020,hdfs://nn2:8020");
         }
-        // Otherwise the authority, including its port.
-        let (nn, rel) =
-            hdfs_native_effective_name_node(&unconfigured, "hdfs://nn:9000/a/b").unwrap();
-        assert_eq!((nn.as_str(), rel), ("hdfs://nn:9000", "a/b"));
-        // Neither: a pointed error.
+        // Otherwise the authority, including its port, even with `hdfs.host`.
+        for config in [&unconfigured, &default_fs] {
+            let (nn, rel) = hdfs_native_effective_name_node(config, "hdfs://nn:9000/a/b").unwrap();
+            assert_eq!((nn.as_str(), rel), ("hdfs://nn:9000", "a/b"));
+        }
+        // Then `fs.defaultFS`, here from `hdfs.host`, for authority-less paths.
+        let (nn, rel) = hdfs_native_effective_name_node(&default_fs, "hdfs:///y").unwrap();
+        assert_eq!((nn.as_str(), rel), ("hdfs://nn:8020", "y"));
+        // None of them: a pointed error.
         let err = hdfs_native_effective_name_node(&unconfigured, "hdfs:///a").unwrap_err();
         assert!(err.to_string().contains(HDFS_NAME_NODE));
     }

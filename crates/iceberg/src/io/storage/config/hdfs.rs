@@ -18,10 +18,20 @@
 //! HDFS storage configuration.
 
 /// HDFS NameNode RPC endpoint(s), e.g. `hdfs://namenode:8020`; a
-/// comma-separated list enables HA failover. When unset, the NameNode is
-/// derived from the path authority.
+/// comma-separated list enables HA failover. Takes precedence over the path
+/// authority; when unset, the NameNode is derived from the path authority.
 pub const HDFS_NAME_NODE: &str = "hdfs.name-node";
-/// Prefix for properties forwarded to the HDFS client configuration, e.g.
-/// `hadoop.dfs.client.failover.random.order`. Forwarded values (prefix
-/// stripped) override those loaded from `$HADOOP_CONF_DIR`.
+/// NameNode host for authority-less paths, as in PyIceberg; paths that carry
+/// an authority ignore it, as they do there. Combined with [`HDFS_PORT`] into
+/// Hadoop's `fs.defaultFS`. PyIceberg's `hdfs.user` and `hdfs.kerberos_ticket`
+/// have no equivalent: the client reads `HADOOP_USER_NAME` and the default
+/// Kerberos credential cache.
+pub const HDFS_HOST: &str = "hdfs.host";
+/// NameNode port for [`HDFS_HOST`]; defaults to `8020`.
+pub const HDFS_PORT: &str = "hdfs.port";
+/// Prefix for properties forwarded to the HDFS client configuration with the
+/// prefix stripped: `hadoop.dfs.client.failover.random.order` is forwarded as
+/// `dfs.client.failover.random.order`. Forwarded values override those loaded
+/// from `$HADOOP_CONF_DIR`; `hadoop.fs.defaultFS` also serves authority-less
+/// paths.
 pub const HDFS_HADOOP_CONF_PREFIX: &str = "hadoop.";
