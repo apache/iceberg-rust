@@ -29,7 +29,9 @@ use crate::ErrorKind;
 use crate::avro::schema_to_avro_schema;
 use crate::spec::Schema;
 use crate::spec::Type::Primitive;
-use crate::spec::datatypes::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
+use crate::spec::datatypes::{
+    ListType, MapType, NestedField, PrimitiveType, StructType, Type, VariantType,
+};
 use crate::spec::values::datum::{INT_MAX, INT_MIN, LONG_MAX, LONG_MIN};
 use crate::spec::values::{Datum, Literal, Map, PrimitiveLiteral, RawLiteral, Struct};
 
@@ -813,6 +815,151 @@ fn test_raw_literal_bytes_decimal_wrong_length_too_few() {
 fn test_raw_literal_bytes_unsupported_type() {
     let bytes = vec![1u8, 2u8, 3u8, 4u8];
     check_raw_literal_bytes_error_via_avro(bytes, &Primitive(PrimitiveType::Int));
+}
+
+#[test]
+fn raw_literal_boolean_round_trip() {
+    for value in [false, true] {
+        let ty = Primitive(PrimitiveType::Boolean);
+        check_raw_literal_json_serde(Literal::bool(value), &ty);
+        check_convert_with_avro(Literal::bool(value), &ty);
+
+        for json in [
+            serde_json::json!({"type": "boolean", "literal": value}),
+            serde_json::json!(["boolean", value]),
+        ] {
+            assert_eq!(
+                serde_json::from_value::<Datum>(json).unwrap(),
+                Datum::bool(value)
+            );
+        }
+    }
+}
+
+#[test]
+fn datum_json_boolean_rejects_type_mismatch() {
+    for ty in ["int", "long", "string", "unknown"] {
+        for value in [false, true] {
+            for json in [
+                serde_json::json!({"type": ty, "literal": value}),
+                serde_json::json!([ty, value]),
+            ] {
+                let error = serde_json::from_value::<Datum>(json).unwrap_err();
+                assert!(error.to_string().contains("raw literal (boolean)"));
+                assert!(error.to_string().contains("type mismatch"));
+            }
+        }
+    }
+}
+
+#[test]
+fn raw_literal_boolean_null() {
+    let ty = Primitive(PrimitiveType::Boolean);
+    let avro_literal: RawLiteral = apache_avro::from_value(&Value::Null).unwrap();
+    let json_literal: RawLiteral = serde_json::from_str("null").unwrap();
+
+    for literal in [avro_literal, json_literal] {
+        assert_eq!(literal.try_into(&ty).unwrap(), None);
+    }
+}
+
+#[test]
+fn raw_literal_boolean_rejects_type_mismatch() {
+    let types = [
+        Primitive(PrimitiveType::Int),
+        Primitive(PrimitiveType::Long),
+        Primitive(PrimitiveType::Float),
+        Primitive(PrimitiveType::Double),
+        Primitive(PrimitiveType::Decimal {
+            precision: 9,
+            scale: 2,
+        }),
+        Primitive(PrimitiveType::Date),
+        Primitive(PrimitiveType::Time),
+        Primitive(PrimitiveType::Timestamp),
+        Primitive(PrimitiveType::Timestamptz),
+        Primitive(PrimitiveType::TimestampNs),
+        Primitive(PrimitiveType::TimestamptzNs),
+        Primitive(PrimitiveType::String),
+        Primitive(PrimitiveType::Uuid),
+        Primitive(PrimitiveType::Fixed(1)),
+        Primitive(PrimitiveType::Binary),
+        Primitive(PrimitiveType::Unknown),
+        Type::Struct(StructType::new(vec![])),
+        Type::List(ListType::new(
+            NestedField::list_element(1, Primitive(PrimitiveType::Boolean), false).into(),
+        )),
+        Type::Map(MapType::new(
+            NestedField::map_key_element(1, Primitive(PrimitiveType::String)).into(),
+            NestedField::map_value_element(2, Primitive(PrimitiveType::Boolean), false).into(),
+        )),
+        Type::Variant(VariantType),
+    ];
+
+    for value in [false, true] {
+        for ty in &types {
+            let avro_literal: RawLiteral = apache_avro::from_value(&Value::Boolean(value)).unwrap();
+            let json_literal: RawLiteral =
+                serde_json::from_value(serde_json::json!(value)).unwrap();
+
+            for literal in [avro_literal, json_literal] {
+                let error = literal.try_into(ty).unwrap_err();
+                assert_eq!(error.kind(), ErrorKind::DataInvalid);
+                assert!(error.to_string().contains("raw literal (boolean)"));
+                assert!(error.to_string().contains("type mismatch"));
+            }
+        }
+    }
+}
+
+#[test]
+fn raw_literal_boolean_rejects_nested_type_mismatch() {
+    let cases = [
+        (
+            serde_json::json!({"col": true}),
+            Value::Record(vec![("col".to_string(), Value::Boolean(true))]),
+            Type::Struct(StructType::new(vec![
+                NestedField::required(1, "col", Primitive(PrimitiveType::Int)).into(),
+            ])),
+        ),
+        (
+            serde_json::json!([false]),
+            Value::Array(vec![Value::Boolean(false)]),
+            Type::List(ListType::new(
+                NestedField::list_element(1, Primitive(PrimitiveType::Int), false).into(),
+            )),
+        ),
+        (
+            serde_json::json!({"key": true}),
+            Value::Map([("key".to_string(), Value::Boolean(true))].into()),
+            Type::Map(MapType::new(
+                NestedField::map_key_element(1, Primitive(PrimitiveType::String)).into(),
+                NestedField::map_value_element(2, Primitive(PrimitiveType::Int), false).into(),
+            )),
+        ),
+        (
+            serde_json::json!([{"key": false, "value": 1}]),
+            Value::Array(vec![Value::Record(vec![
+                ("key".to_string(), Value::Boolean(false)),
+                ("value".to_string(), Value::Int(1)),
+            ])]),
+            Type::Map(MapType::new(
+                NestedField::map_key_element(1, Primitive(PrimitiveType::Int)).into(),
+                NestedField::map_value_element(2, Primitive(PrimitiveType::Int), false).into(),
+            )),
+        ),
+    ];
+
+    for (json_value, avro_value, ty) in cases {
+        let avro_literal: RawLiteral = apache_avro::from_value(&avro_value).unwrap();
+        let json_literal: RawLiteral = serde_json::from_value(json_value).unwrap();
+
+        for literal in [avro_literal, json_literal] {
+            let error = literal.try_into(&ty).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::DataInvalid);
+            assert!(error.to_string().contains("raw literal (boolean)"));
+        }
+    }
 }
 
 #[test]
