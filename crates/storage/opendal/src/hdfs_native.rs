@@ -181,8 +181,10 @@ fn hdfs_native_default_fs(config: &HdfsNativeConfig) -> Option<String> {
 
 /// Operators cached per effective NameNode: each holds an `hdfs-native`
 /// client with live RPC connections, whose tasks run on the tokio runtime
-/// current when it was built. The cache lives as long as the storage that
-/// owns it (clones share it) and never evicts.
+/// current when it was built (a private one when built outside any). The
+/// cache lives as long as the storage that owns it (clones share it) and
+/// never evicts, so the storage must not be used from another runtime once
+/// the building one is dropped: `hdfs-native` panics on a dead runtime.
 #[derive(Clone, Debug, Default)]
 pub struct HdfsNativeOperatorCache(Arc<RwLock<HashMap<String, Operator>>>);
 
@@ -539,6 +541,8 @@ mod tests {
         assert_eq!(hdfs_native_batch_key(&config, "hdfs:///a"), "hdfs:///a");
     }
 
+    // The operator tests are plain `#[test]`s on purpose: building an
+    // operator must not need a runtime, as the siblings' tests also assume.
     #[test]
     fn test_hdfs_native_create_operator_configured_name_node_wins() {
         let config = hdfs_native_config_parse(HashMap::from([(
