@@ -55,7 +55,7 @@ mod common {
     pub const DEFAULT_HMS_PORT: u16 = 9083;
     pub const DEFAULT_GLUE_PORT: u16 = 5001;
     pub const DEFAULT_GCS_PORT: u16 = 4443;
-    pub const DEFAULT_HDFS_NN_PORT: u16 = 8020;
+    pub const DEFAULT_HDFS_PORT: u16 = 8020;
 
     /// Returns the S3-compatible object store endpoint.
     /// Checks ICEBERG_TEST_OBJECT_STORE_ENDPOINT env var, otherwise returns localhost default.
@@ -95,7 +95,7 @@ mod common {
     /// Checks ICEBERG_TEST_HDFS_ENDPOINT env var, otherwise returns localhost default.
     pub fn get_hdfs_endpoint() -> String {
         std::env::var(ENV_HDFS_ENDPOINT)
-            .unwrap_or_else(|_| format!("hdfs://localhost:{DEFAULT_HDFS_NN_PORT}"))
+            .unwrap_or_else(|_| format!("hdfs://localhost:{DEFAULT_HDFS_PORT}"))
     }
 
     /// Helper to clean up a namespace and its tables before a test runs.
