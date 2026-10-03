@@ -29,7 +29,9 @@ use crate::ErrorKind;
 use crate::avro::schema_to_avro_schema;
 use crate::spec::Schema;
 use crate::spec::Type::Primitive;
-use crate::spec::datatypes::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
+use crate::spec::datatypes::{
+    ListType, MapType, NestedField, PrimitiveType, StructType, Type, VariantType,
+};
 use crate::spec::values::datum::{INT_MAX, INT_MIN, LONG_MAX, LONG_MIN};
 use crate::spec::values::{Datum, Literal, Map, PrimitiveLiteral, RawLiteral, Struct};
 
@@ -482,6 +484,128 @@ fn json_map_rejects_mismatched_key_value_lengths() {
 
         assert_eq!(error.kind(), ErrorKind::DataInvalid);
         assert!(error.to_string().contains("must have the same length"));
+    }
+}
+
+fn nullable_nested_json_types() -> [Type; 4] {
+    [
+        Type::Struct(StructType::new(vec![
+            NestedField::optional(2, "id", Primitive(PrimitiveType::Int)).into(),
+        ])),
+        Type::List(ListType::new(
+            NestedField::list_element(2, Primitive(PrimitiveType::Int), false).into(),
+        )),
+        Type::Map(MapType::optional(
+            2,
+            Primitive(PrimitiveType::String),
+            3,
+            Primitive(PrimitiveType::Int),
+        )),
+        Type::Variant(VariantType),
+    ]
+}
+
+#[test]
+fn json_null_nested_values() {
+    for data_type in nullable_nested_json_types() {
+        assert_eq!(
+            Literal::try_from_json(JsonValue::Null, &data_type).unwrap(),
+            None
+        );
+    }
+}
+
+#[test]
+fn json_null_nested_struct_fields() {
+    for data_type in nullable_nested_json_types() {
+        check_json_serde(
+            r#"{"1": null}"#,
+            Literal::Struct(Struct::from_iter([None])),
+            &Type::Struct(StructType::new(vec![
+                NestedField::optional(1, "nested", data_type).into(),
+            ])),
+        );
+    }
+}
+
+#[test]
+fn json_null_nested_list_elements() {
+    for data_type in nullable_nested_json_types() {
+        check_json_serde(
+            "[null]",
+            Literal::List(vec![None]),
+            &Type::List(ListType::new(
+                NestedField::list_element(1, data_type, false).into(),
+            )),
+        );
+    }
+}
+
+#[test]
+fn json_null_nested_map_values() {
+    for data_type in nullable_nested_json_types() {
+        check_json_serde(
+            r#"{"keys": ["a"], "values": [null]}"#,
+            Literal::Map(Map::from([(Literal::string("a"), None)])),
+            &Type::Map(MapType::optional(
+                0,
+                Primitive(PrimitiveType::String),
+                1,
+                data_type,
+            )),
+        );
+    }
+}
+
+#[test]
+fn json_null_nested_field_defaults() {
+    for data_type in nullable_nested_json_types() {
+        let expected = NestedField::optional(
+            1,
+            "nested",
+            Type::List(ListType::new(
+                NestedField::list_element(4, data_type, false).into(),
+            )),
+        )
+        .with_initial_default(Literal::List(vec![None]))
+        .with_write_default(Literal::List(vec![None]));
+
+        let json = serde_json::to_value(&expected).unwrap();
+        assert_eq!(json["initial-default"], serde_json::json!([null]));
+        assert_eq!(json["write-default"], serde_json::json!([null]));
+        let actual: NestedField = serde_json::from_value(json).unwrap();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn json_null_nested_map_keys_are_rejected() {
+    for data_type in nullable_nested_json_types() {
+        let error = Literal::try_from_json(
+            serde_json::json!({"keys": [null], "values": [1]}),
+            &Type::Map(MapType::required(
+                1,
+                data_type,
+                4,
+                Primitive(PrimitiveType::Int),
+            )),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(error.message().contains("Key of map cannot be null"));
+    }
+}
+
+#[test]
+fn json_variant_non_null_values_are_rejected() {
+    for value in [
+        serde_json::json!(1),
+        serde_json::json!({}),
+        serde_json::json!([]),
+    ] {
+        let error = Literal::try_from_json(value, &Type::Variant(VariantType)).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(error.message().contains("Variant type is not supported"));
     }
 }
 
