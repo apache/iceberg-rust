@@ -165,7 +165,13 @@ pub(crate) mod _serde {
                 /// Used in json
                 fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
                 where E: serde::de::Error {
-                    Ok(RawLiteralEnum::Long(v as i64))
+                    let v = i64::try_from(v).map_err(|_| {
+                        E::invalid_value(
+                            serde::de::Unexpected::Unsigned(v),
+                            &"a signed 64-bit integer",
+                        )
+                    })?;
+                    Ok(RawLiteralEnum::Long(v))
                 }
 
                 fn visit_f32<E>(self, v: f32) -> Result<Self::Value, E>
