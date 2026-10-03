@@ -1164,24 +1164,6 @@ mod tests {
     }
 
     #[test]
-    fn test_deletion_vector_builder_rejects_missing_referenced_data_file() {
-        let err = FileScanTaskDeleteFile::builder()
-            .with_file_path("deletes.puffin".to_string())
-            .with_file_size_in_bytes(60)
-            .with_file_type(DataContentType::PositionDeletes)
-            .with_file_format(DataFileFormat::Puffin)
-            .with_partition_spec_id(0)
-            .with_content_offset(Some(4))
-            .with_content_size_in_bytes(Some(40))
-            .with_record_count(Some(1))
-            .build()
-            .unwrap_err();
-
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("missing referenced_data_file"));
-    }
-
-    #[test]
     fn test_deletion_vector_index_rejects_missing_referenced_data_file() {
         let malformed_dv = DataFileBuilder::default()
             .file_path("deletes.puffin".to_string())
@@ -1207,17 +1189,43 @@ mod tests {
     }
 
     #[test]
-    fn test_deletion_vector_builder_rejects_missing_coordinates() {
-        let err = FileScanTaskDeleteFile::builder()
-            .with_file_path("deletes.puffin".to_string())
-            .with_file_size_in_bytes(60)
-            .with_file_type(DataContentType::PositionDeletes)
-            .with_file_format(DataFileFormat::Puffin)
-            .with_partition_spec_id(0)
-            .with_referenced_data_file(Some("data.parquet".to_string()))
-            .with_content_size_in_bytes(Some(40))
-            .with_record_count(Some(1))
+    fn test_deletion_vector_index_rejects_missing_coordinates() {
+        // The missing-coordinate check fires in `get_deletes_for_data_file`, where the
+        // manifest entry is converted into a task. `PopulatedDeleteFileIndex::new` only
+        // needs `referenced_data_file` as its map key, so a DV that carries it but omits
+        // `content_offset` survives construction and is rejected when the data file is
+        // resolved against it.
+        let data_file = DataFileBuilder::default()
+            .file_path("target-data.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .content(DataContentType::Data)
+            .record_count(100)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .file_size_in_bytes(100)
             .build()
+            .unwrap();
+
+        let malformed_dv = DataFileBuilder::default()
+            .file_path("deletes.puffin".to_string())
+            .file_format(DataFileFormat::Puffin)
+            .content(DataContentType::PositionDeletes)
+            .record_count(1)
+            .referenced_data_file(Some("target-data.parquet".to_string()))
+            .content_size_in_bytes(Some(40))
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .file_size_in_bytes(60)
+            .build()
+            .unwrap();
+        let contexts = vec![DeleteFileContext {
+            manifest_entry: build_added_manifest_entry(5, &malformed_dv).into(),
+            partition_spec_id: 0,
+        }];
+
+        let delete_file_index = PopulatedDeleteFileIndex::new(contexts).unwrap();
+        let err = delete_file_index
+            .get_deletes_for_data_file(&data_file, Some(0))
             .unwrap_err();
 
         assert_eq!(err.kind(), ErrorKind::DataInvalid);

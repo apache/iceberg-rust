@@ -868,22 +868,23 @@ mod tests {
     use crate::test_utils::encode_dv_blob;
 
     #[test]
-    fn test_validate_deserialized_deletion_vector_rejects_missing_fields() {
-        let task: FileScanTaskDeleteFile = serde_json::from_value(serde_json::json!({
+    fn test_deserialized_deletion_vector_rejects_missing_fields() {
+        // A deletion vector that omits its required coordinates fails validation
+        // during deserialization (the try_from mirror routes through `build()`),
+        // before the loader ever sees the task.
+        let err = serde_json::from_value::<FileScanTaskDeleteFile>(serde_json::json!({
             "file_path": "dv.puffin",
             "file_size_in_bytes": 100,
             "file_type": "PositionDeletes",
             "file_format": "Puffin",
             "partition_spec_id": 0
         }))
-        .unwrap();
-        assert_eq!(task.file_type(), DataContentType::PositionDeletes);
-        assert_eq!(task.file_format(), DataFileFormat::Puffin);
+        .unwrap_err();
 
-        let err = CachingDeleteFileLoader::validate_deletion_vector_task(&task).unwrap_err();
-
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("missing content_offset"));
+        assert!(
+            err.to_string().contains("missing referenced_data_file"),
+            "expected a missing-field validation error, got `{err}`"
+        );
     }
 
     #[tokio::test]
@@ -1756,10 +1757,9 @@ mod tests {
         )
     }
 
-    // A negative byte offset cannot be deserialized at all now that these fields are
-    // u64, so a hand-written or corrupted scan plan is rejected before any loader code
-    // runs. That is strictly stronger than the previous runtime check, which only fired
-    // once the task reached this function.
+    // The coordinate fields are unsigned, so a negative byte offset is rejected during
+    // deserialization: a hand-written or corrupted scan plan fails before any loader
+    // code runs.
     #[test]
     fn test_deserializing_negative_content_offset_is_rejected() {
         let mut task = serde_json::to_value(valid_dv_task()).unwrap();

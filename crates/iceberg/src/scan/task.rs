@@ -324,6 +324,7 @@ impl TryFrom<&DeleteFileContext> for FileScanTaskDeleteFile {
 
 /// A task to scan part of file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TypedBuilder)]
+#[serde(try_from = "crate::scan::task::_serde::FileScanTaskDeleteFileSerde")]
 #[builder(
     field_defaults(setter(prefix = "with_")),
     build_method(into = Result<FileScanTaskDeleteFile>)
@@ -403,8 +404,8 @@ mod _serde {
     use super::{FileScanTask, FileScanTaskDeleteFile};
     use crate::expr::BoundPredicate;
     use crate::spec::{
-        DataFileFormat, Literal, NameMapping, PartitionSpec, RawLiteral, SchemaRef, StructType,
-        Type,
+        DataContentType, DataFileFormat, Literal, NameMapping, PartitionSpec, RawLiteral,
+        SchemaRef, StructType, Type,
     };
     use crate::{Error, ErrorKind, Result};
 
@@ -564,6 +565,46 @@ mod _serde {
                 .build()
         }
     }
+
+    #[derive(Deserialize)]
+    pub(super) struct FileScanTaskDeleteFileSerde {
+        file_path: String,
+        file_size_in_bytes: u64,
+        file_type: DataContentType,
+        file_format: DataFileFormat,
+        partition_spec_id: i32,
+        equality_ids: Option<Vec<i32>>,
+        #[serde(default)]
+        referenced_data_file: Option<String>,
+        #[serde(default)]
+        content_offset: Option<u64>,
+        #[serde(default)]
+        content_size_in_bytes: Option<u64>,
+        #[serde(default)]
+        record_count: Option<u64>,
+        #[serde(default)]
+        key_metadata: Option<Box<[u8]>>,
+    }
+
+    impl TryFrom<FileScanTaskDeleteFileSerde> for FileScanTaskDeleteFile {
+        type Error = Error;
+
+        fn try_from(value: FileScanTaskDeleteFileSerde) -> Result<Self> {
+            Self::builder()
+                .with_file_path(value.file_path)
+                .with_file_size_in_bytes(value.file_size_in_bytes)
+                .with_file_type(value.file_type)
+                .with_file_format(value.file_format)
+                .with_partition_spec_id(value.partition_spec_id)
+                .with_equality_ids(value.equality_ids)
+                .with_referenced_data_file(value.referenced_data_file)
+                .with_content_offset(value.content_offset)
+                .with_content_size_in_bytes(value.content_size_in_bytes)
+                .with_record_count(value.record_count)
+                .with_key_metadata(value.key_metadata)
+                .build()
+        }
+    }
 }
 
 impl FileScanTaskDeleteFile {
@@ -629,9 +670,22 @@ impl FileScanTaskDeleteFile {
 
     fn validate(&self) -> Result<()> {
         // Negative offsets/sizes are unrepresentable: both fields are u64, and the
-        // conversion from the manifest entry's i64 rejects a negative there. So the
-        // only thing left to check is presence, and only for deletion vectors --
-        // other delete files legitimately carry none of these.
+        // conversion from the manifest entry's i64 rejects a negative there.
+
+        // Spec: `content_size_in_bytes` is required whenever `content_offset` is
+        // present, for every delete-file kind (not only deletion vectors).
+        if self.content_offset.is_some() && self.content_size_in_bytes.is_none() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "delete file {} is missing content_size_in_bytes while content_offset is present",
+                    self.file_path
+                ),
+            ));
+        }
+
+        // Presence of the deletion-vector coordinates is required only for
+        // deletion vectors; other delete files legitimately carry none of these.
         if !self.is_deletion_vector() {
             return Ok(());
         }
@@ -937,7 +991,7 @@ mod tests {
                 .with_content_offset(Some(7))
                 .with_record_count(Some(3))
                 .build(),
-            "deletion vector dv.puffin is missing content_size_in_bytes",
+            "delete file dv.puffin is missing content_size_in_bytes while content_offset is present",
         );
     }
 
@@ -955,6 +1009,24 @@ mod tests {
                 .with_content_size_in_bytes(Some(11))
                 .build(),
             "deletion vector dv.puffin is missing record_count",
+        );
+    }
+
+    #[test]
+    fn test_delete_file_builder_rejects_non_dv_offset_without_size() {
+        // Spec pairing rule applies to every delete-file kind: a Parquet
+        // position-delete file that carries a content_offset must also carry a
+        // content_size_in_bytes, even though it is not a deletion vector.
+        assert_delete_file_builder_error(
+            FileScanTaskDeleteFile::builder()
+                .with_file_path("position-deletes.parquet".to_string())
+                .with_file_size_in_bytes(100)
+                .with_file_type(DataContentType::PositionDeletes)
+                .with_file_format(DataFileFormat::Parquet)
+                .with_partition_spec_id(0)
+                .with_content_offset(Some(7))
+                .build(),
+            "delete file position-deletes.parquet is missing content_size_in_bytes while content_offset is present",
         );
     }
 
@@ -1008,9 +1080,9 @@ mod tests {
         }
     }
 
-    /// A negative byte offset is now unrepresentable in `FileScanTaskDeleteFile`
-    /// (`content_offset` / `content_size_in_bytes` are `u64`), so the rejection has
-    /// moved to the single place the i64-typed manifest value crosses into the task.
+    /// The manifest entry supplies `content_offset` / `content_size_in_bytes` as
+    /// `i64`; the conversion into a task rejects a negative value as it enters,
+    /// since the task fields are `u64`.
     #[test]
     fn test_delete_context_rejects_negative_dv_offset() {
         assert_delete_context_error(
@@ -1027,8 +1099,8 @@ mod tests {
         );
     }
 
-    /// The check applies to every delete-file kind, not only deletion vectors --
-    /// this is the non-DV case the previous validate() had to special-case.
+    /// The negative-coordinate check applies to every delete-file kind, including
+    /// a Parquet position-delete file rather than only deletion vectors.
     #[test]
     fn test_delete_context_rejects_negative_coordinates_for_non_dv() {
         assert_delete_context_error(
