@@ -2776,6 +2776,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-glue",
  "iceberg",
+ "iceberg-property-macro",
  "iceberg-storage-opendal",
  "iceberg_test_utils",
  "serde_json",
