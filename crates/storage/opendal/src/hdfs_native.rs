@@ -94,8 +94,8 @@ pub(crate) fn hdfs_native_parse_path(path: &str) -> Result<(Option<String>, &str
 
 /// Resolves the effective NameNode for a path — the configured
 /// `hdfs.name-node` when set, else the path authority — plus the relative
-/// path. Both the operator cache and `delete_stream` batching key on this,
-/// so they cannot drift apart.
+/// path. The operator cache, `delete_stream` batching and `relativize_path`
+/// all go through this, so they cannot drift apart.
 pub(crate) fn hdfs_native_effective_name_node<'a>(
     config: &HdfsNativeConfig,
     path: &'a str,

@@ -500,8 +500,8 @@ impl OpenDalStorage {
                 }
             }
             #[cfg(feature = "opendal-hdfs-native")]
-            OpenDalStorage::HdfsNative { .. } => {
-                let (_, relative_path) = hdfs_native_parse_path(path)?;
+            OpenDalStorage::HdfsNative { config, .. } => {
+                let (_, relative_path) = hdfs_native_effective_name_node(config, path)?;
                 Ok(relative_path)
             }
             #[cfg(feature = "opendal-oss")]
@@ -944,8 +944,17 @@ mod tests {
     #[cfg(feature = "opendal-hdfs-native")]
     #[test]
     fn test_relativize_path_hdfs_native_authority_less() {
-        let storage = hdfs_native_test_storage();
+        use iceberg::io::HDFS_NAME_NODE;
 
+        // Same rule as `create_operator`: usable only with `hdfs.name-node` set.
+        let storage = hdfs_native_test_storage();
+        assert!(storage.relativize_path("hdfs:///a/b").is_err());
+
+        let props = HashMap::from([(HDFS_NAME_NODE.to_string(), "hdfs://nn:8020".to_string())]);
+        let storage = OpenDalStorage::HdfsNative {
+            config: Arc::new(hdfs_native_config_parse(props).unwrap()),
+            operators: HdfsNativeOperatorCache::default(),
+        };
         assert_eq!(storage.relativize_path("hdfs:///a/b").unwrap(), "a/b");
     }
 
