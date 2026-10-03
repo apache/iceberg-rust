@@ -260,8 +260,23 @@ impl FromStr for AzureStoragePath {
             filesystem: filesystem.to_string(),
             account_name: account_name.to_string(),
             endpoint_suffix: endpoint_suffix.to_string(),
-            path: url.path().to_string(),
+            path: raw_path(path).to_string(),
         })
+    }
+}
+
+/// The path portion of `path`, taken from the input rather than from
+/// [`Url::path`].
+///
+/// Both consumers of [`AzureStoragePath::path`] recover the relative path by slicing that many
+/// bytes off the end of the original string, so it has to stay byte-for-byte identical to the
+/// input. `Url::path` is percent-encoded, which makes it longer than the input whenever the path
+/// contains a space or a non-ASCII character.
+fn raw_path(path: &str) -> &str {
+    let after_scheme = path.find("://").map_or(0, |i| i + 3);
+    match path[after_scheme..].find('/') {
+        Some(i) => &path[after_scheme + i..],
+        None => "",
     }
 }
 
@@ -460,6 +475,30 @@ mod tests {
                     },
                 ),
                 Some(("myfs", "/path/to/file.parquet")),
+            ),
+            (
+                "non-ascii path segment",
+                (
+                    "abfss://myfs@myaccount.dfs.core.windows.net/\u{4ed3}\u{5e93}/db/t/v1.json",
+                    AzdlsConfig {
+                        account_name: Some("myaccount".to_string()),
+                        endpoint: Some("https://myaccount.dfs.core.windows.net".to_string()),
+                        ..Default::default()
+                    },
+                ),
+                Some(("myfs", "/\u{4ed3}\u{5e93}/db/t/v1.json")),
+            ),
+            (
+                "space in path segment",
+                (
+                    "abfss://myfs@myaccount.dfs.core.windows.net/my dir/file.parquet",
+                    AzdlsConfig {
+                        account_name: Some("myaccount".to_string()),
+                        endpoint: Some("https://myaccount.dfs.core.windows.net".to_string()),
+                        ..Default::default()
+                    },
+                ),
+                Some(("myfs", "/my dir/file.parquet")),
             ),
         ];
 
