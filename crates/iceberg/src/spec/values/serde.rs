@@ -379,7 +379,10 @@ pub(crate) mod _serde {
             };
             match self {
                 RawLiteralEnum::Null => Ok(None),
-                RawLiteralEnum::Boolean(v) => Ok(Some(Literal::bool(v))),
+                RawLiteralEnum::Boolean(v) => match ty {
+                    Type::Primitive(PrimitiveType::Boolean) => Ok(Some(Literal::bool(v))),
+                    _ => Err(invalid_err("boolean")),
+                },
                 RawLiteralEnum::Int(v) => match ty {
                     Type::Primitive(PrimitiveType::Int) => Ok(Some(Literal::int(v))),
                     Type::Primitive(PrimitiveType::Long) => Ok(Some(Literal::long(i64::from(v)))),
