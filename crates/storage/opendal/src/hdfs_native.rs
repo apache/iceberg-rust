@@ -288,6 +288,13 @@ mod tests {
     }
 
     #[test]
+    fn test_hdfs_native_parse_path_ipv6_authority_keeps_brackets() {
+        let (nn, rel) = hdfs_native_parse_path("hdfs://[::1]:8020/a/b").unwrap();
+        assert_eq!(nn.as_deref(), Some("hdfs://[::1]:8020"));
+        assert_eq!(rel, "a/b");
+    }
+
+    #[test]
     fn test_hdfs_native_parse_path_with_authority_no_path() {
         let (nn, rel) = hdfs_native_parse_path("hdfs://nameservice1").unwrap();
 
