@@ -694,3 +694,175 @@ mod test_row_lineage {
         assert_eq!(manifest_file.first_row_id, Some(30));
     }
 }
+
+#[cfg(test)]
+mod test_commit_against_memory_catalog {
+    use crate::memory::tests::new_memory_catalog;
+    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+    use crate::transaction::{ApplyTransactionAction, Transaction};
+    use crate::{Catalog, ErrorKind};
+
+    #[tokio::test]
+    async fn test_update_properties_commit_round_trip() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        assert!(!table.metadata().properties().contains_key("owner"));
+        assert!(!table.metadata().properties().contains_key("team"));
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_table_properties()
+            .set("owner".to_string(), "iceberg-rust".to_string())
+            .set("team".to_string(), "storage".to_string())
+            .apply(tx)
+            .unwrap();
+
+        let committed = tx.commit(&catalog).await.unwrap();
+
+        assert_eq!(
+            committed
+                .metadata()
+                .properties()
+                .get("owner")
+                .map(String::as_str),
+            Some("iceberg-rust")
+        );
+        assert_eq!(
+            committed
+                .metadata()
+                .properties()
+                .get("team")
+                .map(String::as_str),
+            Some("storage")
+        );
+
+        // A fresh load proves the commit was persisted, not just applied in-memory.
+        let reloaded = catalog.load_table(committed.identifier()).await.unwrap();
+        assert_eq!(
+            reloaded
+                .metadata()
+                .properties()
+                .get("owner")
+                .map(String::as_str),
+            Some("iceberg-rust")
+        );
+        assert_eq!(
+            reloaded
+                .metadata()
+                .properties()
+                .get("team")
+                .map(String::as_str),
+            Some("storage")
+        );
+
+        assert_ne!(
+            committed.metadata_location(),
+            table.metadata_location(),
+            "commit should advance the metadata pointer"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_location_commit_round_trip() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let new_location = format!("{}/relocated", table.metadata().location());
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_location()
+            .set_location(new_location.clone())
+            .apply(tx)
+            .unwrap();
+
+        let committed = tx.commit(&catalog).await.unwrap();
+        assert_eq!(committed.metadata().location(), new_location);
+
+        let reloaded = catalog.load_table(committed.identifier()).await.unwrap();
+        assert_eq!(reloaded.metadata().location(), new_location);
+    }
+
+    #[tokio::test]
+    async fn test_chained_actions_commit_atomically() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let initial_metadata_log_len = table.metadata().metadata_log().len();
+        let new_location = format!("{}/relocated", table.metadata().location());
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_table_properties()
+            .set("owner".to_string(), "iceberg-rust".to_string())
+            .apply(tx)
+            .unwrap();
+        let tx = tx
+            .update_location()
+            .set_location(new_location.clone())
+            .apply(tx)
+            .unwrap();
+
+        let committed = tx.commit(&catalog).await.unwrap();
+        let reloaded = catalog.load_table(committed.identifier()).await.unwrap();
+
+        assert_eq!(
+            reloaded
+                .metadata()
+                .properties()
+                .get("owner")
+                .map(String::as_str),
+            Some("iceberg-rust")
+        );
+        assert_eq!(reloaded.metadata().location(), new_location);
+        // Both actions collapse into a single new metadata-log entry.
+        assert_eq!(
+            reloaded.metadata().metadata_log().len(),
+            initial_metadata_log_len + 1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_failing_chained_actions_do_not_commit() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let initial_location = table.metadata().location().to_string();
+        let initial_metadata_location = table.metadata_location().map(str::to_string);
+        let initial_metadata_log_len = table.metadata().metadata_log().len();
+        let new_location = format!("{initial_location}/relocated");
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_table_properties()
+            .set("owner".to_string(), "iceberg-rust".to_string())
+            .apply(tx)
+            .unwrap();
+        let tx = tx
+            .update_location()
+            .set_location(new_location)
+            .apply(tx)
+            .unwrap();
+        // Deleting a non-existent column makes the schema action fail at commit time.
+        let tx = tx
+            .update_schema()
+            .delete_column("nonexistent")
+            .apply(tx)
+            .unwrap();
+
+        let error = tx.commit(&catalog).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::PreconditionFailed);
+        assert!(error.message().contains("nonexistent"));
+
+        // None of the earlier actions in the transaction leaked into the catalog.
+        let reloaded = catalog.load_table(table.identifier()).await.unwrap();
+        assert!(!reloaded.metadata().properties().contains_key("owner"));
+        assert_eq!(reloaded.metadata().location(), initial_location);
+        assert_eq!(
+            reloaded.metadata_location(),
+            initial_metadata_location.as_deref()
+        );
+        assert_eq!(
+            reloaded.metadata().metadata_log().len(),
+            initial_metadata_log_len
+        );
+    }
+}
