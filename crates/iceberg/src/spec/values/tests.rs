@@ -583,6 +583,67 @@ fn avro_bytes_decimal_expect_error() {
     }
 }
 
+#[test]
+fn test_raw_double_to_float_overflow() {
+    for value in [1e39, -1e39, f64::MAX, f64::MIN] {
+        let raw: RawLiteral = apache_avro::from_value(&Value::Double(value)).unwrap();
+        let error = raw.try_into(&Primitive(PrimitiveType::Float)).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+
+        let json = serde_json::to_string(&value).unwrap();
+        let raw: RawLiteral = serde_json::from_str(&json).unwrap();
+        let error = raw.try_into(&Primitive(PrimitiveType::Float)).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+
+        let datum_json = format!(r#"{{"type":"float","literal":{json}}}"#);
+        assert!(serde_json::from_str::<Datum>(&datum_json).is_err());
+    }
+}
+
+#[test]
+fn test_raw_double_to_float_finite_values() {
+    for value in [
+        f32::MAX,
+        f32::MIN,
+        f32::MIN_POSITIVE,
+        -f32::MIN_POSITIVE,
+        f32::from_bits(1),
+        -f32::from_bits(1),
+        0.0,
+        -0.0,
+        1.25,
+        -1.25,
+    ] {
+        let raw: RawLiteral = apache_avro::from_value(&Value::Double(f64::from(value))).unwrap();
+        let Some(Literal::Primitive(PrimitiveLiteral::Float(result))) =
+            raw.try_into(&Primitive(PrimitiveType::Float)).unwrap()
+        else {
+            panic!("Expected a float literal for {value}");
+        };
+        assert_eq!(result.0.to_bits(), value.to_bits());
+    }
+}
+
+#[test]
+fn test_raw_double_to_float_non_finite_values() {
+    for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        let raw: RawLiteral = apache_avro::from_value(&Value::Double(value)).unwrap();
+        assert_eq!(
+            raw.try_into(&Primitive(PrimitiveType::Float)).unwrap(),
+            Some(Literal::float(value as f32))
+        );
+    }
+}
+
+#[test]
+fn test_raw_double_to_float_precision_loss() {
+    for value in [123.456789, -123.456789, 123456789.0, -123456789.0] {
+        let raw: RawLiteral = apache_avro::from_value(&Value::Double(value)).unwrap();
+        let error = raw.try_into(&Primitive(PrimitiveType::Float)).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+    }
+}
+
 fn check_raw_literal_bytes_serde_via_avro(
     input_bytes: Vec<u8>,
     expected_literal: Literal,
