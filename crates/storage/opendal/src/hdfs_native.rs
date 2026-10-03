@@ -32,11 +32,20 @@ use crate::utils::from_opendal_error;
 pub(crate) fn hdfs_native_config_parse(mut m: HashMap<String, String>) -> Result<HdfsNativeConfig> {
     let mut cfg = HdfsNativeConfig::default();
 
-    // `Operator::from_config` bypasses the builder's empty-string guard, and
-    // `Some("")` would shadow the path-authority fallback below.
+    // Entries are trimmed one by one: opendal splits the list on `,` as is,
+    // so a space after a comma would break failover to that NameNode. An
+    // empty result is dropped because `Operator::from_config` bypasses the
+    // builder's empty-string guard and `Some("")` would shadow the
+    // path-authority fallback below.
     if let Some(name_node) = m
         .remove(HDFS_NAME_NODE)
-        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .map(|s| {
+            s.split(',')
+                .map(|entry| entry.trim().trim_end_matches('/'))
+                .filter(|entry| !entry.is_empty())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
         .filter(|s| !s.is_empty())
     {
         cfg.name_node = Some(name_node);
@@ -243,10 +252,15 @@ mod tests {
         // Empty must not shadow the path-authority fallback.
         assert_eq!(parse(""), None);
         assert_eq!(parse("  "), None);
-        // Trailing `/` would otherwise yield a second cache entry for one cluster.
+        assert_eq!(parse(" , "), None);
         assert_eq!(
             parse(" hdfs://nn:8020/ ").as_deref(),
             Some("hdfs://nn:8020")
+        );
+        // Per entry: a space after the comma would break failover to nn2.
+        assert_eq!(
+            parse("hdfs://nn1:8020/, hdfs://nn2:8020/,").as_deref(),
+            Some("hdfs://nn1:8020,hdfs://nn2:8020")
         );
     }
 
@@ -371,17 +385,24 @@ mod tests {
     fn test_hdfs_native_create_operator_configured_name_node_wins() {
         let config = hdfs_native_config_parse(HashMap::from([(
             HDFS_NAME_NODE.to_string(),
-            "hdfs://configured:8020".to_string(),
+            "hdfs://nn1:8020/,hdfs://nn2:8020/".to_string(),
         )]))
         .unwrap();
         let operators = HdfsNativeOperatorCache::default();
 
         let (_, rel) =
             hdfs_native_create_operator("hdfs://from-path:9000/a/b", &config, &operators).unwrap();
+        hdfs_native_create_operator("hdfs://nn1:8020/c", &config, &operators).unwrap();
 
+        // The configured list is the single key, whatever authority the paths carry.
         assert_eq!(rel, "a/b");
-        assert!(operators.get("hdfs://configured:8020").unwrap().is_some());
-        assert!(operators.get("hdfs://from-path:9000").unwrap().is_none());
+        assert_eq!(operators.len(), 1);
+        assert!(
+            operators
+                .get("hdfs://nn1:8020,hdfs://nn2:8020")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
