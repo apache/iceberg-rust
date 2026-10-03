@@ -162,9 +162,10 @@ pub(crate) fn hdfs_native_create_operator<'a>(
         return Ok((op, relative_path));
     }
 
-    // Built outside the lock: the build reads the Hadoop XML config
-    // synchronously. A racing first caller may build too; the loser is
-    // dropped before opening any connection.
+    // The build reads the Hadoop XML config synchronously (~0.1 ms, once
+    // per NameNode), so it runs outside the lock and is not worth a
+    // blocking-thread hop. A racing first caller may build too; the loser
+    // is dropped before opening any connection.
     let op = hdfs_native_operator_build(config, &name_node)?;
     Ok((operators.insert(name_node, op)?, relative_path))
 }
