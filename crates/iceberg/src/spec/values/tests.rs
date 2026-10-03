@@ -31,7 +31,7 @@ use crate::spec::Schema;
 use crate::spec::Type::Primitive;
 use crate::spec::datatypes::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
 use crate::spec::values::datum::{INT_MAX, INT_MIN, LONG_MAX, LONG_MIN};
-use crate::spec::values::{Datum, Literal, Map, PrimitiveLiteral, RawLiteral, Struct};
+use crate::spec::values::{Datum, Decimal, Literal, Map, PrimitiveLiteral, RawLiteral, Struct};
 
 fn check_json_serde(json: &str, expected_literal: Literal, expected_type: &Type) {
     let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();
@@ -1567,6 +1567,94 @@ fn test_date_from_json_as_number() {
     );
 
     // Both formats should produce the same Literal value
+}
+
+#[test]
+fn test_decimal_from_str_rejects_non_finite_values() {
+    for input in [
+        "NaN",
+        "nan",
+        "NAN",
+        "Inf",
+        "inf",
+        "+Inf",
+        "-Inf",
+        "Infinity",
+        "+Infinity",
+        "-Infinity",
+        "infinity",
+        "INFINITY",
+    ] {
+        assert_eq!(
+            Datum::decimal_from_str(input).unwrap_err().kind(),
+            ErrorKind::DataInvalid,
+            "{input}"
+        );
+        assert_eq!(
+            Literal::decimal_from_str(input).unwrap_err().kind(),
+            ErrorKind::DataInvalid,
+            "{input}"
+        );
+    }
+}
+
+#[test]
+fn test_decimal_constructors_reject_non_finite_values() {
+    for value in [Decimal::NAN, Decimal::INFINITY, Decimal::NEG_INFINITY] {
+        assert_eq!(
+            Datum::decimal(value).unwrap_err().kind(),
+            ErrorKind::DataInvalid
+        );
+        assert_eq!(
+            Datum::decimal_with_precision(value, 9).unwrap_err().kind(),
+            ErrorKind::DataInvalid
+        );
+    }
+}
+
+#[test]
+fn test_decimal_from_json_rejects_non_finite_values() {
+    let decimal_type = Type::decimal(9, 2).unwrap();
+    for input in ["NaN", "Infinity", "-Infinity"] {
+        assert_eq!(
+            Literal::try_from_json(JsonValue::String(input.to_string()), &decimal_type)
+                .unwrap_err()
+                .kind(),
+            ErrorKind::DataInvalid,
+            "{input}"
+        );
+    }
+}
+
+#[test]
+fn test_decimal_constructors_accept_finite_values() {
+    for (input, mantissa, scale) in [
+        ("0", 0, 0),
+        ("-0", 0, 0),
+        ("0.00", 0, 2),
+        ("-0.00", 0, 2),
+        ("123.45", 12345, 2),
+        ("-123.45", -12345, 2),
+    ] {
+        let datum = Datum::decimal_from_str(input).unwrap();
+        assert_eq!(datum.literal(), &PrimitiveLiteral::Int128(mantissa));
+        assert_eq!(datum.data_type(), &PrimitiveType::Decimal {
+            precision: 38,
+            scale,
+        });
+        assert_eq!(
+            Literal::decimal_from_str(input).unwrap(),
+            Literal::decimal(mantissa)
+        );
+        let value = Decimal::from_str(input, fastnum::decimal::Context::default()).unwrap();
+        assert_eq!(Datum::decimal(value).unwrap(), datum);
+        let datum = Datum::decimal_with_precision(value, 9).unwrap();
+        assert_eq!(datum.literal(), &PrimitiveLiteral::Int128(mantissa));
+        assert_eq!(datum.data_type(), &PrimitiveType::Decimal {
+            precision: 9,
+            scale,
+        });
+    }
 }
 
 #[test]
