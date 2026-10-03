@@ -118,7 +118,8 @@ pub(crate) fn hdfs_native_effective_name_node<'a>(
 
 /// Operators cached per effective NameNode: each holds an `hdfs-native`
 /// client with live RPC connections, whose tasks run on the tokio runtime
-/// current when it was built.
+/// current when it was built. The cache lives as long as the storage that
+/// owns it (clones share it) and never evicts.
 #[derive(Clone, Debug, Default)]
 pub struct HdfsNativeOperatorCache(Arc<RwLock<HashMap<String, Operator>>>);
 
