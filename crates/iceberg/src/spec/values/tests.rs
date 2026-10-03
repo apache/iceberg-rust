@@ -343,6 +343,23 @@ fn json_fixed() {
 }
 
 #[test]
+fn json_unknown_only_accepts_null() {
+    let unknown = Primitive(PrimitiveType::Unknown);
+
+    assert_eq!(
+        Literal::try_from_json(JsonValue::Null, &unknown).unwrap(),
+        None
+    );
+    let error = Literal::try_from_json(serde_json::json!(1), &unknown).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::DataInvalid);
+    assert!(
+        error
+            .message()
+            .contains("Unknown type only supports null default values")
+    );
+}
+
+#[test]
 fn test_should_parse_json_binary_if_hex_uses_uppercase_digits() {
     let result = Literal::try_from_json(
         serde_json::json!("00010FFF"),
@@ -1104,6 +1121,38 @@ fn test_parse_timestamptz() {
     assert!(
         value.is_err(),
         "Parse timestamptz with invalid input should fail!"
+    );
+}
+
+#[test]
+fn test_pre_epoch_timestamptz_formatting() {
+    assert_eq!(
+        Datum::timestamptz_micros(-1).to_string(),
+        "1969-12-31 23:59:59.999999 UTC"
+    );
+    assert_eq!(
+        Datum::timestamptz_nanos(-1).to_string(),
+        "1969-12-31 23:59:59.999999999 UTC"
+    );
+    assert_eq!(
+        Datum::timestamptz_micros(-1_500_000).to_string(),
+        "1969-12-31 23:59:58.500 UTC"
+    );
+
+    check_json_serde(
+        r#""1969-12-31T23:59:59.999999+00:00""#,
+        Literal::long(-1),
+        &Primitive(PrimitiveType::Timestamptz),
+    );
+    check_json_serde(
+        r#""1969-12-31T23:59:58.500+00:00""#,
+        Literal::long(-1_500_000),
+        &Primitive(PrimitiveType::Timestamptz),
+    );
+    check_json_serde(
+        r#""1969-12-31T23:59:59.999999999+00:00""#,
+        Literal::long(-1),
+        &Primitive(PrimitiveType::TimestamptzNs),
     );
 }
 

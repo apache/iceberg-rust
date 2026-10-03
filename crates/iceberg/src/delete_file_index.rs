@@ -23,11 +23,12 @@ use futures::StreamExt;
 use futures::channel::mpsc::{Sender, channel};
 use tokio::sync::Notify;
 
+use crate::error::invalid_data;
 use crate::metadata_columns::RESERVED_FIELD_ID_DELETE_FILE_PATH;
 use crate::runtime::Runtime;
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
 use crate::spec::{DataContentType, DataFile, DataFileFormat, PrimitiveLiteral, Struct};
-use crate::{Error, ErrorKind, Result};
+use crate::{Error, Result};
 
 /// Index of delete files
 #[derive(Debug, Clone)]
@@ -214,13 +215,12 @@ impl PopulatedDeleteFileIndex {
                     // A deletion vector is a position delete stored as a Puffin blob. The file
                     // format is what distinguishes it from a position delete parquet file.
                     if data_file.file_format() == DataFileFormat::Puffin {
+                        // referenced_data_file is the map key the index needs; the offset/size/
+                        // record_count invariants are enforced centrally when the task is built.
                         let path = data_file.referenced_data_file().ok_or_else(|| {
-                            Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
-                                    "deletion vector {} is missing referenced_data_file",
-                                    data_file.file_path()
-                                ),
+                            invalid_data!(
+                                "deletion vector {} is missing referenced_data_file",
+                                data_file.file_path()
                             )
                         })?;
 
@@ -228,13 +228,10 @@ impl PopulatedDeleteFileIndex {
                             dvs_by_referenced_data_file.insert(path.clone(), arc_ctx)
                         {
                             let inserted = &dvs_by_referenced_data_file[&path];
-                            return Err(Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
-                                    "found multiple deletion vectors for data file {path}: {} and {}",
-                                    existing.manifest_entry.file_path(),
-                                    inserted.manifest_entry.file_path()
-                                ),
+                            return Err(invalid_data!(
+                                "found multiple deletion vectors for data file {path}: {} and {}",
+                                existing.manifest_entry.file_path(),
+                                inserted.manifest_entry.file_path()
                             ));
                         }
                         continue;
@@ -321,29 +318,23 @@ impl PopulatedDeleteFileIndex {
             if data_file.partition() != dv_data_file.partition()
                 || data_file.partition_spec_id != dv.partition_spec_id
             {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "deletion vector {} references data file {} but its partition (spec {}, {:?}) does not match the data file's partition (spec {}, {:?})",
-                        dv.manifest_entry.file_path(),
-                        data_file.file_path(),
-                        dv.partition_spec_id,
-                        dv_data_file.partition(),
-                        data_file.partition_spec_id,
-                        data_file.partition()
-                    ),
+                return Err(invalid_data!(
+                    "deletion vector {} references data file {} but its partition (spec {}, {:?}) does not match the data file's partition (spec {}, {:?})",
+                    dv.manifest_entry.file_path(),
+                    data_file.file_path(),
+                    dv.partition_spec_id,
+                    dv_data_file.partition(),
+                    data_file.partition_spec_id,
+                    data_file.partition()
                 ));
             }
 
             if let Some(seq_num) = seq_num {
                 let dv_seq = dv.manifest_entry.sequence_number();
                 if dv_seq < Some(seq_num) {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "deletion vector {} has data sequence number {dv_seq:?}, which must be >= the data file's sequence number {seq_num}",
-                            dv.manifest_entry.file_path()
-                        ),
+                    return Err(invalid_data!(
+                        "deletion vector {} has data sequence number {dv_seq:?}, which must be >= the data file's sequence number {seq_num}",
+                        dv.manifest_entry.file_path()
                     ));
                 }
             }
@@ -392,6 +383,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::ErrorKind;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
         ManifestStatus, Struct,

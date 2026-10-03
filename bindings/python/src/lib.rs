@@ -18,6 +18,7 @@
 use pyo3::prelude::*;
 
 mod data_file;
+mod encryption;
 mod error;
 mod manifest;
 mod transform;
@@ -26,5 +27,6 @@ mod transform;
 fn pyiceberg_core_rust(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     transform::register_module(py, m)?;
     manifest::register_module(py, m)?;
+    encryption::register_module(py, m)?;
     Ok(())
 }
