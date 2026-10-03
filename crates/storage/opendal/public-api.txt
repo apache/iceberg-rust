@@ -6,6 +6,9 @@ pub iceberg_storage_opendal::OpenDalStorage::Azdls
 pub iceberg_storage_opendal::OpenDalStorage::Azdls::config: alloc::sync::Arc<opendal_service_azdls::config::AzdlsConfig>
 pub iceberg_storage_opendal::OpenDalStorage::Gcs
 pub iceberg_storage_opendal::OpenDalStorage::Gcs::config: alloc::sync::Arc<opendal_service_gcs::config::GcsConfig>
+pub iceberg_storage_opendal::OpenDalStorage::HdfsNative
+pub iceberg_storage_opendal::OpenDalStorage::HdfsNative::config: alloc::sync::Arc<opendal_service_hdfs_native::config::HdfsNativeConfig>
+pub iceberg_storage_opendal::OpenDalStorage::HdfsNative::operators: iceberg_storage_opendal::HdfsNativeOperatorCache
 pub iceberg_storage_opendal::OpenDalStorage::Hf
 pub iceberg_storage_opendal::OpenDalStorage::Hf::config: alloc::sync::Arc<opendal_service_hf::config::HfConfig>
 pub iceberg_storage_opendal::OpenDalStorage::LocalFs
@@ -39,6 +42,7 @@ pub enum iceberg_storage_opendal::OpenDalStorageFactory
 pub iceberg_storage_opendal::OpenDalStorageFactory::Azdls
 pub iceberg_storage_opendal::OpenDalStorageFactory::Fs
 pub iceberg_storage_opendal::OpenDalStorageFactory::Gcs
+pub iceberg_storage_opendal::OpenDalStorageFactory::HdfsNative
 pub iceberg_storage_opendal::OpenDalStorageFactory::Hf
 pub iceberg_storage_opendal::OpenDalStorageFactory::Memory
 pub iceberg_storage_opendal::OpenDalStorageFactory::Oss
@@ -61,6 +65,13 @@ impl core::clone::Clone for iceberg_storage_opendal::CustomAwsCredentialLoader
 pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::clone(&self) -> Self
 impl core::fmt::Debug for iceberg_storage_opendal::CustomAwsCredentialLoader
 pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg_storage_opendal::HdfsNativeOperatorCache(_)
+impl core::clone::Clone for iceberg_storage_opendal::HdfsNativeOperatorCache
+pub fn iceberg_storage_opendal::HdfsNativeOperatorCache::clone(&self) -> iceberg_storage_opendal::HdfsNativeOperatorCache
+impl core::default::Default for iceberg_storage_opendal::HdfsNativeOperatorCache
+pub fn iceberg_storage_opendal::HdfsNativeOperatorCache::default() -> iceberg_storage_opendal::HdfsNativeOperatorCache
+impl core::fmt::Debug for iceberg_storage_opendal::HdfsNativeOperatorCache
+pub fn iceberg_storage_opendal::HdfsNativeOperatorCache::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg_storage_opendal::OpenDalResolvingStorage
 impl core::fmt::Debug for iceberg_storage_opendal::OpenDalResolvingStorage
 pub fn iceberg_storage_opendal::OpenDalResolvingStorage::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result

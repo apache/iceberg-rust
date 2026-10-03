@@ -241,6 +241,9 @@ jobs:
 
       - name: Start Docker containers
         if: matrix.test-suite.name == 'default'
+        env:
+          # The HDFS fixture needs host networking; opt in here (Linux only).
+          COMPOSE_PROFILES: hdfs
         run: make docker-up
 
       - name: Run tests
@@ -251,6 +254,9 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_BUCKET: ${{ secrets.HF_BUCKET }}
           HF_DATASET: ${{ secrets.HF_DATASET }}
+          # HDFS integration tests self-skip when unset; see
+          # crates/storage/opendal/tests/file_io_hdfs_test.rs
+          ICEBERG_TEST_HDFS_ENDPOINT: hdfs://localhost:8020
         run: |
           if [ "${{ matrix.test-suite.name }}" = "default" ]; then
             cargo nextest run ${{ matrix.test-suite.args }}
