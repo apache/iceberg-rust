@@ -41,18 +41,27 @@ pub(crate) fn hdfs_native_config_parse(mut m: HashMap<String, String>) -> Result
     // empty result is dropped because `Operator::from_config` bypasses the
     // builder's empty-string guard and `Some("")` would shadow the
     // path-authority fallback below.
-    if let Some(name_node) = m
-        .remove(HDFS_NAME_NODE)
-        .map(|s| {
-            s.split(',')
-                .map(|entry| entry.trim().trim_end_matches('/'))
-                .filter(|entry| !entry.is_empty())
-                .collect::<Vec<_>>()
-                .join(",")
-        })
-        .filter(|s| !s.is_empty())
-    {
-        cfg.name_node = Some(name_node);
+    if let Some(name_node) = m.remove(HDFS_NAME_NODE) {
+        let entries: Vec<&str> = name_node
+            .split(',')
+            .map(|entry| entry.trim().trim_end_matches('/'))
+            .filter(|entry| !entry.is_empty())
+            .collect();
+        // hdfs-native dials each entry as `host:port` (`hdfs://` optional);
+        // without a port it fails only at the first I/O.
+        if let Some(entry) = entries.iter().find(|entry| {
+            entry
+                .rsplit_once(':')
+                .is_none_or(|(_, port)| port.parse::<u16>().is_err())
+        }) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid `{HDFS_NAME_NODE}` entry: {entry}, expected host:port"),
+            ));
+        }
+        if !entries.is_empty() {
+            cfg.name_node = Some(entries.join(","));
+        }
     }
 
     let host = m.remove(HDFS_HOST).map(|s| s.trim().to_string());
@@ -352,6 +361,36 @@ mod tests {
         assert_eq!(parse(&[(HDFS_PORT, "9000")]).unwrap(), None);
         let err = parse(&[(HDFS_HOST, "nn"), (HDFS_PORT, "x")]).unwrap_err();
         assert!(err.to_string().contains(HDFS_PORT));
+    }
+
+    #[test]
+    fn test_hdfs_native_config_parse_name_node_requires_port() {
+        let parse = |value: &str| {
+            hdfs_native_config_parse(HashMap::from([(
+                HDFS_NAME_NODE.to_string(),
+                value.to_string(),
+            )]))
+        };
+
+        // `hdfs://` is optional: Hadoop's own rpc-address format is bare.
+        for value in [
+            "nn:8020",
+            "hdfs://nn:8020",
+            "[::1]:8020",
+            "hdfs://nn1:8020,nn2:8020",
+        ] {
+            assert!(parse(value).is_ok(), "{value}");
+        }
+        for value in [
+            "hdfs://ns1",
+            "nn",
+            "nn:x",
+            "hdfs://[::1]",
+            "hdfs://nn1:8020,nn2",
+        ] {
+            let err = parse(value).unwrap_err().to_string();
+            assert!(err.contains(HDFS_NAME_NODE), "{value}: {err}");
+        }
     }
 
     #[test]
