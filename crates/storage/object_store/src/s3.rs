@@ -166,7 +166,7 @@ pub(crate) fn build_s3_store(config: &S3Config, bucket: &str) -> Result<Arc<dyn 
         ));
     }
 
-    let mut builder = AmazonS3Builder::new().with_bucket_name(bucket);
+    let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket);
 
     if let Some(ref endpoint) = config.endpoint {
         builder = builder.with_endpoint(endpoint);

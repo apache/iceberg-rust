@@ -25,13 +25,16 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use futures::StreamExt;
+    use futures::{StreamExt, TryStreamExt};
     use iceberg::io::{
         FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION,
         S3_SECRET_ACCESS_KEY, S3_SSE_KEY, S3_SSE_TYPE,
     };
     use iceberg_storage_object_store::ObjectStoreStorageFactory;
     use iceberg_test_utils::{get_object_store_endpoint, normalize_test_name_with_parts, set_up};
+    use object_store::aws::AmazonS3Builder;
+    use object_store::path::Path as ObjectStorePath;
+    use object_store::ObjectStore;
 
     async fn get_file_io() -> FileIO {
         set_up();
@@ -252,7 +255,7 @@ mod tests {
 
         let file_io = FileIOBuilder::new(Arc::new(ObjectStoreStorageFactory::S3))
             .with_props(vec![
-                (S3_ENDPOINT, endpoint),
+                (S3_ENDPOINT, endpoint.clone()),
                 (S3_ACCESS_KEY_ID, "admin".to_string()),
                 (S3_SECRET_ACCESS_KEY, "password".to_string()),
                 (S3_REGION, "us-east-1".to_string()),
@@ -260,10 +263,8 @@ mod tests {
             ])
             .build();
 
-        let file_path = format!(
-            "s3://bucket1/{}/dt=a%2Fb/data.parquet",
-            normalize_test_name_with_parts!("test_file_io_s3_encoded_partition_path")
-        );
+        let prefix = normalize_test_name_with_parts!("test_file_io_s3_encoded_partition_path");
+        let file_path = format!("s3://bucket1/{prefix}/dt=a%2Fb/data.parquet");
 
         let _ = file_io.delete(&file_path).await;
         file_io
@@ -278,6 +279,32 @@ mod tests {
         let content = file_io.new_input(&file_path).unwrap().read().await.unwrap();
         assert_eq!(content, Bytes::from_static(b"partition-data"));
 
+        // Direct S3 client listing assertion: verify the raw key in S3 is literally `dt=a%2Fb/data.parquet` and NOT double-encoded (`dt=a%252Fb/data.parquet`)
+        let raw_store = AmazonS3Builder::new()
+            .with_endpoint(&endpoint)
+            .with_allow_http(true)
+            .with_access_key_id("admin")
+            .with_secret_access_key("password")
+            .with_region("us-east-1")
+            .with_bucket_name("bucket1")
+            .with_virtual_hosted_style_request(false)
+            .build()
+            .unwrap();
+
+        let raw_prefix = ObjectStorePath::parse(format!("{prefix}/dt=a%2Fb")).unwrap();
+        let listed_keys: Vec<String> = raw_store
+            .list(Some(&raw_prefix))
+            .map_ok(|meta| meta.location.to_string())
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            listed_keys,
+            vec![format!("{prefix}/dt=a%2Fb/data.parquet")],
+            "Expected raw S3 key with single percent encoding, found double-encoded or wrong key!"
+        );
+
         file_io.delete(&file_path).await.unwrap();
         assert!(!file_io.exists(&file_path).await.unwrap());
     }
@@ -288,8 +315,8 @@ mod tests {
             err_str.contains("501")
                 || err_str.contains("NotImplemented")
                 || err_str.contains("KMS is not configured")
-                || err_str.contains("kms")
-                || err_str.contains("ServerNotInitialized"),
+                || err_str.contains("ServerNotInitialized")
+                || err_str.contains("A header you provided implies functionality that is not implemented"),
             "Expected KMS rejection from KES-less MinIO confirming SSE header was sent, got: {err_str}"
         );
     }
@@ -456,6 +483,7 @@ mod tests {
         }
 
         // Assert the 2 other_prefix files still exist
+        //  6 7
         for path in &keep_paths {
             assert!(
                 file_io.exists(path).await.unwrap(),
@@ -538,26 +566,16 @@ mod tests {
         );
 
         let _ = file_io.delete(&file_path).await;
-        match file_io
+        // MinIO without KES does not configure server-side encryption; asserting that MinIO returns 501 / KMS error
+        // verifies that the SSE-S3 AES256 header was attached (an unencrypted PUT would succeed).
+        let err = file_io
             .new_output(&file_path)
             .unwrap()
             .write(Bytes::from_static(b"aes256-encrypted-data"))
             .await
-        {
-            Ok(_) => {
-                assert!(file_io.exists(&file_path).await.unwrap());
-                let content = file_io.new_input(&file_path).unwrap().read().await.unwrap();
-                assert_eq!(content, Bytes::from_static(b"aes256-encrypted-data"));
-                file_io.delete(&file_path).await.unwrap();
-            }
-            Err(e)
-                if e.to_string().contains("501")
-                    || e.to_string().contains("NotImplemented")
-                    || e.to_string().contains("KMS is not configured") =>
-            {
-                // MinIO without KES does not configure server-side encryption; passing 501 verifies header was sent
-            }
-            Err(e) => panic!("Unexpected error: {e:?}"),
-        }
+            .expect_err(
+                "MinIO without KES must reject SSE-S3 AES256 requests, proving SSE header was sent",
+            );
+        assert_minio_kms_rejection(&err);
     }
 }
