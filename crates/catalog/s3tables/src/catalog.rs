@@ -35,14 +35,29 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     Runtime, TableCommit, TableCreation, TableIdent,
 };
-use iceberg_storage_opendal::OpenDalStorageFactory;
-
-use crate::utils::create_sdk_config;
+use iceberg_aws::{
+    AWS_ASSUME_ROLE_ARN, AwsSdkCredentialProvider, create_sdk_config, has_explicit_s3_credentials,
+    map_aws_to_s3_properties, remove_assume_role_properties,
+};
+use iceberg_storage_opendal::{CustomAwsCredentialLoader, OpenDalStorageFactory};
 
 /// S3Tables table bucket ARN property
 pub const S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN: &str = "table_bucket_arn";
 /// S3Tables endpoint URL property
 pub const S3TABLES_CATALOG_PROP_ENDPOINT_URL: &str = "endpoint_url";
+const DEFAULT_ASSUME_ROLE_SESSION_NAME: &str = "iceberg-s3tables-catalog";
+
+fn file_io_properties(
+    properties: &HashMap<String, String>,
+    resolved_region: Option<&str>,
+) -> HashMap<String, String> {
+    map_aws_to_s3_properties(
+        properties,
+        None,
+        DEFAULT_ASSUME_ROLE_SESSION_NAME,
+        resolved_region,
+    )
+}
 
 /// S3Tables catalog configuration.
 #[derive(Debug)]
@@ -219,21 +234,44 @@ impl S3TablesCatalog {
         runtime: Runtime,
         kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
+        let aws_config = create_sdk_config(
+            &config.props,
+            config.endpoint_url.as_deref(),
+            DEFAULT_ASSUME_ROLE_SESSION_NAME,
+        )
+        .await;
         let s3tables_client = if let Some(client) = config.client.clone() {
             client
         } else {
-            let aws_config = create_sdk_config(&config.props, config.endpoint_url.clone()).await;
             aws_sdk_s3tables::Client::new(&aws_config)
         };
 
+        // The S3Tables endpoint is a control-plane endpoint, not an S3 object
+        // storage endpoint. FileIO only honors an explicit `s3.endpoint`.
+        let mut file_io_props =
+            file_io_properties(&config.props, aws_config.region().map(AsRef::as_ref));
+
         // Use provided factory or default to OpenDalStorageFactory::S3
         let factory = storage_factory.unwrap_or_else(|| {
+            let customized_credential_load = if config.props.contains_key(AWS_ASSUME_ROLE_ARN)
+                && !has_explicit_s3_credentials(&config.props)
+            {
+                let provider = AwsSdkCredentialProvider::from_sdk_config(&aws_config)
+                    .map(CustomAwsCredentialLoader::new);
+                if provider.is_some() {
+                    remove_assume_role_properties(&mut file_io_props);
+                }
+                provider
+            } else {
+                None
+            };
             Arc::new(OpenDalStorageFactory::S3 {
-                customized_credential_load: None,
+                customized_credential_load,
             })
         });
+
         let file_io = FileIOBuilder::new(factory)
-            .with_props(&config.props)
+            .with_props(file_io_props)
             .build();
 
         Ok(Self {
@@ -1019,11 +1057,68 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[test]
+    fn test_file_io_endpoint_is_only_set_by_s3_property() {
+        let control_plane_endpoint = "http://s3tables.example";
+        let storage_endpoint = "http://s3.example";
+        let properties = HashMap::from([
+            (
+                S3TABLES_CATALOG_PROP_ENDPOINT_URL.to_string(),
+                control_plane_endpoint.to_string(),
+            ),
+            (
+                iceberg::io::S3_ENDPOINT.to_string(),
+                storage_endpoint.to_string(),
+            ),
+        ]);
+
+        let mapped = file_io_properties(&properties, None);
+
+        assert_eq!(
+            mapped.get(iceberg::io::S3_ENDPOINT).map(String::as_str),
+            Some(storage_endpoint)
+        );
+
+        let mapped_without_s3_endpoint = file_io_properties(
+            &HashMap::from([(
+                S3TABLES_CATALOG_PROP_ENDPOINT_URL.to_string(),
+                control_plane_endpoint.to_string(),
+            )]),
+            None,
+        );
+        assert!(!mapped_without_s3_endpoint.contains_key(iceberg::io::S3_ENDPOINT));
+    }
+
+    #[test]
+    fn test_file_io_region_falls_back_to_resolved_region() {
+        // No `region_name`/`s3.region` property is set: FileIO should still learn the
+        // region actually resolved onto the SDK config (e.g. via an AWS profile or IMDS).
+        let mapped = file_io_properties(&HashMap::new(), Some("eu-central-1"));
+        assert_eq!(
+            mapped.get(iceberg::io::S3_REGION).map(String::as_str),
+            Some("eu-central-1")
+        );
+
+        // An explicit `region_name` property still takes precedence.
+        let mapped_with_explicit_region = file_io_properties(
+            &HashMap::from([(
+                iceberg_aws::AWS_REGION_NAME.to_string(),
+                "ap-southeast-2".to_string(),
+            )]),
+            Some("eu-central-1"),
+        );
+        assert_eq!(
+            mapped_with_explicit_region
+                .get(iceberg::io::S3_REGION)
+                .map(String::as_str),
+            Some("ap-southeast-2")
+        );
+    }
+
     #[tokio::test]
     async fn test_builder_with_client_ok() {
-        use aws_config::BehaviorVersion;
-
-        let sdk_config = aws_config::defaults(BehaviorVersion::latest()).load().await;
+        let sdk_config =
+            create_sdk_config(&HashMap::new(), None, DEFAULT_ASSUME_ROLE_SESSION_NAME).await;
         let client = aws_sdk_s3tables::Client::new(&sdk_config);
 
         let builder = S3TablesCatalogBuilder::default().with_client(client);
