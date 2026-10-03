@@ -177,6 +177,44 @@ mod tests {
         }
     }
 
+    /// Paths are batched per effective NameNode; two spellings of the fixture's
+    /// NameNode drive two batches through one stream. The fixture is one
+    /// cluster, so the keying itself is pinned by the unit tests.
+    #[tokio::test]
+    async fn test_file_io_hdfs_delete_stream_two_name_nodes() {
+        require_hdfs!();
+        let file_io = get_file_io();
+        let dir = test_path("test_file_io_hdfs_delete_stream_two_name_nodes");
+        let alt_dir = dir.replacen("localhost", "127.0.0.1", 1);
+
+        let paths = vec![format!("{dir}/a"), format!("{alt_dir}/b")];
+        for path in &paths {
+            let _ = file_io.delete(path).await;
+            file_io
+                .new_output(path)
+                .unwrap()
+                .write("delete-me".into())
+                .await
+                .unwrap();
+        }
+        // Both spellings reach the same cluster.
+        assert!(file_io.exists(&format!("{alt_dir}/a")).await.unwrap());
+        assert!(file_io.exists(&format!("{dir}/b")).await.unwrap());
+
+        let stream = futures::stream::iter(paths.clone()).boxed();
+        file_io.delete_stream(stream).await.unwrap();
+
+        // Both batches ran.
+        for path in [
+            format!("{dir}/a"),
+            format!("{dir}/b"),
+            format!("{alt_dir}/a"),
+            format!("{alt_dir}/b"),
+        ] {
+            assert!(!file_io.exists(&path).await.unwrap(), "{path}");
+        }
+    }
+
     #[tokio::test]
     async fn test_file_io_hdfs_delete_stream_empty() {
         require_hdfs!();

@@ -592,6 +592,38 @@ mod tests {
     }
 
     #[test]
+    fn test_hdfs_native_operator_cache_keeps_first_insert() {
+        let operators = HdfsNativeOperatorCache::default();
+        let build = |root: &str| {
+            let mut config = hdfs_native_config_parse(HashMap::new()).unwrap();
+            config.root = Some(root.to_string());
+            hdfs_native_operator_build(&config, "hdfs://nn:8020").unwrap()
+        };
+
+        // Two callers racing for one NameNode: the first insert wins and both
+        // get the cached operator.
+        let first = operators
+            .insert("hdfs://nn:8020".to_string(), build("/first"))
+            .unwrap();
+        let second = operators
+            .insert("hdfs://nn:8020".to_string(), build("/second"))
+            .unwrap();
+        assert_eq!(first.info().root(), "/first/");
+        assert_eq!(second.info().root(), "/first/");
+        assert_eq!(operators.len(), 1);
+
+        let config = HdfsNativeConfig::default();
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    hdfs_native_create_operator("hdfs://other:8020/a", &config, &operators).unwrap()
+                });
+            }
+        });
+        assert_eq!(operators.len(), 2);
+    }
+
+    #[test]
     fn test_hdfs_native_create_operator_authority_less_without_config_errors() {
         let config = HdfsNativeConfig::default();
         let operators = HdfsNativeOperatorCache::default();
