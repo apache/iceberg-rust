@@ -246,6 +246,7 @@ jobs:
       - name: Run tests
         shell: bash
         env:
+          ICEBERG_REQUIRE_STORAGE: 1
           # HuggingFace Hub integration tests self-skip when these are unset
           # (e.g. PRs from forks); see crates/storage/opendal/tests/file_io_hf_test.rs
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
