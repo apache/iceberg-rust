@@ -77,6 +77,7 @@ jobs:
       matrix:
         include:
           - { os: windows-latest }
+          - { os: windows-11-arm }
           - { os: macos-latest, target: "universal2-apple-darwin" }
           - { os: ubuntu-latest, target: "x86_64" }
           - {
