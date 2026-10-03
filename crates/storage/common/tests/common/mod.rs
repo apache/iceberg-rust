@@ -21,18 +21,19 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use iceberg::io::{
-    FileIO, FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_HOST, S3_ACCESS_KEY_ID, S3_ENDPOINT,
+    FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_HOST, S3_ACCESS_KEY_ID, S3_ENDPOINT,
     S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
 };
-use iceberg_storage_opendal::{OpenDalResolvingStorageFactory, OpenDalStorageFactory};
-use iceberg_test_utils::{
-    get_gcs_endpoint, get_object_store_endpoint, normalize_test_name, set_up,
+#[allow(unused_imports)]
+pub use iceberg_storage_common::{
+    StorageHarness, handle_unreachable_endpoint, is_endpoint_reachable, unique_path,
+    wait_until_ready,
 };
+use iceberg_storage_opendal::{OpenDalResolvingStorageFactory, OpenDalStorageFactory};
+use iceberg_test_utils::{get_gcs_endpoint, get_object_store_endpoint, set_up};
 use tempfile::TempDir;
-use tokio::time::sleep;
 
 static FAKE_GCS_BUCKET: &str = "test-bucket";
 
@@ -44,26 +45,6 @@ pub enum StorageKind {
     OpenDalMemory,
     OpenDalResolving,
     // TODO: Wire ObjectStoreStorage::S3 once PR #3165 is merged (https://github.com/apache/iceberg-rust/pull/3165)
-}
-
-pub struct StorageHarness {
-    pub file_io: FileIO,
-    pub label: &'static str,
-    pub base_path: String,
-    pub _tempdirs: Option<Box<TempDir>>,
-}
-
-fn handle_unreachable_endpoint(kind: &'static str, endpoint: &str) -> Option<StorageHarness> {
-    if std::env::var("ICEBERG_REQUIRE_STORAGE")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-    {
-        panic!(
-            "storage backed '{kind}' is required by ICEBERG_REQUIRE_STORAGE, but endpoint '{endpoint}' is unreachable"
-        );
-    }
-    eprintln!("Skipping {kind} storage test: {endpoint} not reachable");
-    None
 }
 
 impl StorageKind {
@@ -82,46 +63,6 @@ impl std::fmt::Display for StorageKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
     }
-}
-
-const DEFAULT_PROBE_TIMEOUT_MS: u64 = 1000;
-
-fn get_probe_timeout() -> Duration {
-    let ms = std::env::var("ICEBERG_PROBE_TIMEOUT_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(DEFAULT_PROBE_TIMEOUT_MS);
-    Duration::from_millis(ms)
-}
-
-/// Fast probe to check if an endpoint service is listening before entering retry loops.
-///
-/// Note: Any HTTP response from `.send().await.is_ok()` (including 4xx/5xx) is treated
-/// as reachable, as it proves the underlying server is up, listening on the port,
-/// and actively responding to HTTP requests.
-pub async fn is_endpoint_reachable(endpoint: &str) -> bool {
-    let Ok(client) = reqwest::Client::builder()
-        .timeout(get_probe_timeout())
-        .build()
-    else {
-        return false;
-    };
-    client.get(endpoint).send().await.is_ok()
-}
-
-async fn wait_until_ready(file_io: &FileIO, check_path: &str, kind: &'static str, endpoint: &str) {
-    let mut retries = 0;
-    while retries < 15 {
-        if file_io.exists(check_path).await.unwrap_or(false) {
-            return;
-        }
-        sleep(Duration::from_millis(500)).await;
-        retries += 1;
-    }
-
-    panic!(
-        "Storage backend '{kind}' was reachable at '{endpoint}', but failed readiness check on '{check_path}' after 15 retries"
-    );
 }
 
 pub async fn load_storage(kind: StorageKind) -> Option<StorageHarness> {
@@ -162,12 +103,7 @@ async fn load_opendal_s3() -> Option<StorageHarness> {
     )
     .await;
 
-    Some(StorageHarness {
-        file_io,
-        label: "opendal_s3",
-        base_path: "s3://bucket1/".to_string(),
-        _tempdirs: None,
-    })
+    Some(StorageHarness::new(file_io, "s3://bucket1/", "opendal_s3"))
 }
 
 async fn load_opendal_gcs() -> Option<StorageHarness> {
@@ -206,36 +142,22 @@ async fn load_opendal_gcs() -> Option<StorageHarness> {
 
     wait_until_ready(&file_io, &base_path, "opendal_gcs", &gcs_endpoint).await;
 
-    Some(StorageHarness {
-        file_io,
-        label: "opendal_gcs",
-        base_path,
-        _tempdirs: None,
-    })
+    Some(StorageHarness::new(file_io, base_path, "opendal_gcs"))
 }
 
 async fn load_opendal_fs() -> Option<StorageHarness> {
-    let temp_dir = TempDir::new().ok()?;
+    let temp_dir = TempDir::new()
+        .unwrap_or_else(|e| panic!("Failed to create temporary directory for fs storage: {e}"));
     let base_path = format!("file:{}/", temp_dir.path().display());
     let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::Fs)).build();
 
-    Some(StorageHarness {
-        file_io,
-        label: "opendal_fs",
-        base_path,
-        _tempdirs: Some(Box::new(temp_dir)),
-    })
+    Some(StorageHarness::new(file_io, base_path, "opendal_fs").with_tempdir(temp_dir))
 }
 
 async fn load_opendal_memory() -> Option<StorageHarness> {
     let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::Memory)).build();
 
-    Some(StorageHarness {
-        file_io,
-        label: "opendal_memory",
-        base_path: "memory:/".to_string(),
-        _tempdirs: None,
-    })
+    Some(StorageHarness::new(file_io, "memory:/", "opendal_memory"))
 }
 
 async fn load_opendal_resolving() -> Option<StorageHarness> {
@@ -263,14 +185,9 @@ async fn load_opendal_resolving() -> Option<StorageHarness> {
     )
     .await;
 
-    Some(StorageHarness {
+    Some(StorageHarness::new(
         file_io,
-        label: "opendal_resolving",
-        base_path: "s3://bucket1/".to_string(),
-        _tempdirs: None,
-    })
-}
-
-pub fn unique_path(harness: &StorageHarness, test_name: &str) -> String {
-    format!("{}{}", harness.base_path, normalize_test_name(test_name))
+        "s3://bucket1/",
+        "opendal_resolving",
+    ))
 }

@@ -17,5 +17,13 @@
 
 //! Shared storage test suite for Apache Iceberg.
 //!
-//! Defines parameterized integration tests that validate [`iceberg::io::FileIO`]
-//! and storage backend contracts across all implementations.
+//! Provides reusable contract test suites, harnesses, and utilities that validate
+//! [`iceberg::io::FileIO`] and storage backend implementations across the workspace.
+
+pub mod endpoint_probe;
+pub mod file_io;
+pub mod harness;
+
+pub use endpoint_probe::{handle_unreachable_endpoint, is_endpoint_reachable, wait_until_ready};
+pub use file_io::*;
+pub use harness::{StorageHarness, unique_path};

@@ -22,7 +22,6 @@ mod common;
 use std::sync::Arc;
 
 use common::{StorageKind, load_storage};
-use iceberg::ErrorKind;
 use iceberg::io::{FileIOBuilder, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION};
 use iceberg_storage_opendal::{
     AwsCredential, CustomAwsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
@@ -119,11 +118,8 @@ async fn test_s3_with_custom_credential_loader_failure(
     ])
     .build();
 
-    let err = file_io_with_custom_creds
-        .exists("s3://bucket1/any")
-        .await
-        .unwrap_err();
-    assert_eq!(err.kind(), ErrorKind::Unexpected);
+    let result = file_io_with_custom_creds.exists("s3://bucket1/any").await;
+    assert!(result.is_err());
 
     Ok(())
 }

@@ -17,6 +17,8 @@
 
 .EXPORT_ALL_VARIABLES:
 
+ICEBERG_REQUIRE_STORAGE ?= 1
+
 build:
 	cargo build --all-targets --all-features --workspace
 
