@@ -29,13 +29,11 @@ the code they describe or they are wrong.
 
 - Comment only what the code cannot say: invariants, non-obvious
   constraints, links to external behavior. Do not restate the code.
-- If a comment would need editing after a behavior-preserving refactor, it
-  describes internals; leave it out.
 - Do not describe how the code changed or explain review history
   ("previously", "instead of", "unlike X"). Put that in the commit message
   or PR description.
-- Public items get a one-line doc summary of what they do for the caller.
-  Expand only for contract the caller must know.
+- Public items get a one-line doc summary of what they do for the caller,
+  not how. Expand only for contract the caller must know.
 - Test names say what they check. Do not narrate asserts.
 - Do not rename, reformat, or reorder code unrelated to the change.
 - Prefer `pub(crate)`. Make items `pub` only when something outside the
