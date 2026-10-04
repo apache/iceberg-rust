@@ -26,6 +26,7 @@ use apache_avro::schema::{
 use itertools::{Either, Itertools};
 use serde_json::{Number, Value};
 
+use crate::error::invalid_data;
 use crate::spec::{
     ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
     StructType, Type, VariantType, visit_schema,
@@ -401,9 +402,8 @@ pub(crate) fn visit<V: AvroSchemaVisitor>(schema: &AvroSchema, visitor: &mut V) 
                         let value = visit(&record_schema.fields[1].schema, visitor)?;
                         return visitor.map_array(record_schema, key, value);
                     } else {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "Can't convert avro map schema, item is not a record.",
+                        return Err(invalid_data!(
+                            "Can't convert avro map schema, item is not a record."
                         ));
                     }
                 } else {
@@ -437,25 +437,16 @@ impl AvroSchemaToSchema {
     ) -> Result<i32> {
         attributes
             .get(name)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Can't convert avro array schema, missing element id.",
-                )
-            })?
+            .ok_or_else(|| invalid_data!("Can't convert avro array schema, missing element id."))?
             .as_i64()
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Can't convert avro array schema, element id is not a valid i64 number.",
+                invalid_data!(
+                    "Can't convert avro array schema, element id is not a valid i64 number."
                 )
             })?
             .try_into()
             .map_err(|_| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Can't convert avro array schema, element id is not a valid i32.",
-                )
+                invalid_data!("Can't convert avro array schema, element id is not a valid i32.")
             })
     }
 }
@@ -580,12 +571,8 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
         key: Option<Type>,
         value: Option<Type>,
     ) -> Result<Self::T> {
-        let key = key.ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Can't convert avro map schema, missing key schema.",
-            )
-        })?;
+        let key =
+            key.ok_or_else(|| invalid_data!("Can't convert avro map schema, missing key schema."))?;
         let value = unwrap_or_unknown(value);
         let key_id = Self::get_element_id_from_attributes(
             &array.fields[0].custom_attributes,
@@ -628,9 +615,8 @@ pub(crate) fn avro_schema_to_schema(avro_schema: &AvroSchema) -> Result<Schema> 
             ))
         }
     } else {
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Can't convert non record avro schema to iceberg schema: {avro_schema}",
+        Err(invalid_data!(
+            "Can't convert non record avro schema to iceberg schema: {avro_schema}"
         ))
     }
 }
@@ -1240,6 +1226,23 @@ mod tests {
         };
 
         assert!(avro_schema_to_schema(&avro_schema).is_err());
+    }
+
+    #[test]
+    fn test_non_record_schema_error_interpolates_schema() {
+        let err = avro_schema_to_schema(&AvroSchema::String).unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            !err.message().contains("{avro_schema}"),
+            "message should interpolate the schema, got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().ends_with(&AvroSchema::String.to_string()),
+            "message should end with the rendered schema, got: {}",
+            err.message()
+        );
     }
 
     #[test]

@@ -23,7 +23,8 @@
 use fastnum::D128;
 use fastnum::decimal::Context;
 
-use crate::{Error, ErrorKind, Result};
+use crate::Result;
+use crate::error::invalid_data;
 
 /// Re-export D128 as the Decimal type for use throughout the crate.
 pub type Decimal = D128;
@@ -92,8 +93,7 @@ pub fn decimal_new(mantissa: i64, scale: u32) -> Decimal {
 ///
 /// This is equivalent to rust_decimal's `Decimal::from_str_exact`.
 pub fn decimal_from_str_exact(s: &str) -> Result<Decimal> {
-    D128::from_str(s, Context::default())
-        .map_err(|e| Error::new(ErrorKind::DataInvalid, format!("Can't parse decimal: {e}")))
+    D128::from_str(s, Context::default()).map_err(|e| invalid_data!("Can't parse decimal: {e}"))
 }
 
 /// Get the mantissa (unscaled coefficient) as i128.
