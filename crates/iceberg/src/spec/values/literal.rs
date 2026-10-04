@@ -406,6 +406,10 @@ impl Literal {
     ///
     /// See [this spec](https://iceberg.apache.org/spec/#json-single-value-serialization) for reference.
     pub fn try_from_json(value: JsonValue, data_type: &Type) -> Result<Option<Self>> {
+        if value.is_null() {
+            return Ok(None);
+        }
+
         match data_type {
             Type::Primitive(primitive) => match (primitive, value) {
                 (PrimitiveType::Boolean, JsonValue::Bool(bool)) => {
@@ -521,10 +525,9 @@ impl Literal {
                         decimal_mantissa(&rescaled),
                     ))))
                 }
-                (PrimitiveType::Unknown, value) if !value.is_null() => Err(invalid_data!(
+                (PrimitiveType::Unknown, _) => Err(invalid_data!(
                     "Unknown type only supports null default values"
                 )),
-                (_, JsonValue::Null) => Ok(None),
                 (i, j) => Err(invalid_data!(
                     "The json value {j} doesn't fit to the iceberg type {i}."
                 )),
