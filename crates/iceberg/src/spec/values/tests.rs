@@ -542,14 +542,14 @@ fn avro_bytes_string() {
 }
 
 #[test]
-fn geospatial_binary_deserialization_is_not_yet_supported() {
-    for primitive_type in [
-        PrimitiveType::Geometry(Default::default()),
-        PrimitiveType::Geography(Default::default()),
-    ] {
-        let err = Datum::try_from_bytes(&[1, 2, 3], primitive_type).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
-    }
+fn avro_bytes_geometry() {
+    let bytes = vec![1u8, 2u8, 3u8, 4u8];
+    let ty = PrimitiveType::Geometry(Default::default());
+    check_avro_bytes_serde(
+        bytes.clone(),
+        Datum::new(ty.clone(), PrimitiveLiteral::Binary(bytes)),
+        &ty,
+    );
 }
 
 #[test]
