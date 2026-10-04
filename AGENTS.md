@@ -37,8 +37,7 @@ the code they describe or they are wrong.
 - Test names say what they check. Do not narrate asserts.
 - Do not add tests that duplicate existing coverage.
 - Do not rename, reformat, or reorder code unrelated to the change.
-- Reuse or extend existing helpers and types before adding new ones. Do
-  not add an abstraction just to save a few lines.
+- Reuse existing helpers and types before adding new ones.
 - Use the narrowest visibility that works. Make items `pub` only when they
   are part of the API the change intends to expose; `public-api.txt`
   changes show API growth.
