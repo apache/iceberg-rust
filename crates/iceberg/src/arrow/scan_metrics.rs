@@ -52,23 +52,74 @@ impl<F: FileRead> FileRead for CountingFileRead<F> {
 /// Metrics collected during an Iceberg scan.
 #[derive(Clone, Debug)]
 pub struct ScanMetrics {
-    bytes_read: Arc<AtomicU64>,
+    data_bytes_read: Arc<AtomicU64>,
+    delete_bytes_read: Arc<AtomicU64>,
+    data_files_opened: Arc<AtomicU64>,
+    delete_files_opened: Arc<AtomicU64>,
+    rows_emitted: Arc<AtomicU64>,
 }
 
 impl ScanMetrics {
     pub(crate) fn new() -> Self {
         Self {
-            bytes_read: Arc::new(AtomicU64::new(0)),
+            data_bytes_read: Arc::new(AtomicU64::new(0)),
+            delete_bytes_read: Arc::new(AtomicU64::new(0)),
+            data_files_opened: Arc::new(AtomicU64::new(0)),
+            delete_files_opened: Arc::new(AtomicU64::new(0)),
+            rows_emitted: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    pub(crate) fn bytes_read_counter(&self) -> &Arc<AtomicU64> {
-        &self.bytes_read
+    pub(crate) fn data_bytes_read_counter(&self) -> &Arc<AtomicU64> {
+        &self.data_bytes_read
+    }
+
+    pub(crate) fn delete_bytes_read_counter(&self) -> &Arc<AtomicU64> {
+        &self.delete_bytes_read
+    }
+
+    pub(crate) fn data_files_opened_counter(&self) -> &Arc<AtomicU64> {
+        &self.data_files_opened
+    }
+
+    pub(crate) fn delete_files_opened_counter(&self) -> &Arc<AtomicU64> {
+        &self.delete_files_opened
+    }
+
+    pub(crate) fn rows_emitted_counter(&self) -> &Arc<AtomicU64> {
+        &self.rows_emitted
     }
 
     /// Total bytes read from storage during this scan, including data files and delete files.
     pub fn bytes_read(&self) -> u64 {
-        self.bytes_read.load(Ordering::Relaxed)
+        self.data_bytes_read() + self.delete_bytes_read()
+    }
+
+    /// Total bytes read from data files in storage during this scan.
+    pub fn data_bytes_read(&self) -> u64 {
+        self.data_bytes_read.load(Ordering::Relaxed)
+    }
+
+    /// Total bytes read from delete files in storage during this scan.
+    pub fn delete_bytes_read(&self) -> u64 {
+        self.delete_bytes_read.load(Ordering::Relaxed)
+    }
+
+    /// Total number of data files opened during this scan
+    pub fn data_files_opened(&self) -> u64 {
+        self.data_files_opened.load(Ordering::Relaxed)
+    }
+
+    /// Total number of delete files opened during this scan
+    /// Delete files can be reused/shared across multiple data file scans
+    /// This does *not* include delete files that were reused from cache
+    pub fn delete_files_opened(&self) -> u64 {
+        self.delete_files_opened.load(Ordering::Relaxed)
+    }
+
+    /// Total number of rows emitted from this scan
+    pub fn rows_emitted(&self) -> u64 {
+        self.rows_emitted.load(Ordering::Relaxed)
     }
 }
 
