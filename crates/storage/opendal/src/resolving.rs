@@ -396,7 +396,6 @@ mod tests {
             .props
             .insert(OPENDAL_IO_TIMEOUT_MS.to_string(), "45000".to_string());
 
-        // The property is parsed before the scheme match, so every scheme must see it.
         let paths: &[&str] = &[
             #[cfg(feature = "opendal-memory")]
             "memory:/key",

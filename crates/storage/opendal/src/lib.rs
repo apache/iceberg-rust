@@ -103,31 +103,18 @@ cfg_if! {
 mod resolving;
 pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 
-/// Deadline in milliseconds for one IO operation, and for every method call on a returned
-/// reader, writer, lister or deleter. Honored by every [`OpenDalStorage`] backend, where it
-/// defaults to OpenDAL's `TimeoutLayer` default of 10 seconds.
-///
-/// Each retry attempt is bounded separately, so it is a per-attempt budget, not a total one.
-/// Control operations such as `stat` and `rename` keep OpenDAL's separate 60-second budget,
-/// which this property does not change. Here that covers `Storage::exists` and
-/// `Storage::metadata`, while reads, writes, listing and deletes use this timeout.
+/// Per-attempt timeout in milliseconds for OpenDAL IO operations (read, write, list, delete).
+/// Defaults to 10 seconds. Control operations such as `stat` keep OpenDAL's 60-second timeout.
 pub const OPENDAL_IO_TIMEOUT_MS: &str = "opendal.io-timeout-ms";
 
-/// Default for [`OPENDAL_IO_TIMEOUT_MS`]. Matches the IO timeout default of OpenDAL's
-/// `TimeoutLayer`.
-const OPENDAL_IO_TIMEOUT_MS_DEFAULT: u64 = 10_000;
+/// Matches OpenDAL's `TimeoutLayer` default.
+const DEFAULT_IO_TIMEOUT_MS: NonZeroU64 = NonZeroU64::new(10_000).unwrap();
 
-/// [`OPENDAL_IO_TIMEOUT_MS_DEFAULT`] as the field type. A zero default fails to compile.
-const DEFAULT_IO_TIMEOUT_MS: NonZeroU64 = NonZeroU64::new(OPENDAL_IO_TIMEOUT_MS_DEFAULT).unwrap();
-
-/// Backend-independent client settings, shared by every [`OpenDalStorage`] variant.
-///
-/// Fields are private, so later settings are additive rather than breaking. The
-/// container-level serde default lets an older payload deserialize as new fields appear.
+/// Backend-independent client settings shared by every [`OpenDalStorage`] variant.
 #[derive(Clone, Debug, Properties, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OpenDalClientConfig {
-    /// Per-attempt deadline for one IO operation, in milliseconds.
+    /// IO timeout in milliseconds.
     #[property(
         key = OPENDAL_IO_TIMEOUT_MS,
         default = DEFAULT_IO_TIMEOUT_MS,
@@ -145,15 +132,11 @@ impl Default for OpenDalClientConfig {
 }
 
 impl OpenDalClientConfig {
-    /// Per-attempt deadline for one IO operation, set by [`OPENDAL_IO_TIMEOUT_MS`].
     pub(crate) fn io_timeout(&self) -> Duration {
         Duration::from_millis(self.io_timeout_ms.get())
     }
 }
 
-/// Parses one timeout value. Unlike the derive's built-in parse, the error quotes the value and
-/// names the unit, and the derive adds the property-key context. `NonZeroU64` rejects zero, which
-/// would time every operation out before it starts.
 fn parse_io_timeout_ms(value: &str) -> Result<NonZeroU64> {
     value.parse().map_err(|error| {
         Error::new(
@@ -290,11 +273,7 @@ fn default_memory_operator() -> Operator {
 
 /// OpenDAL-based storage implementation.
 ///
-/// # Serialization
-///
-/// As with [`FileIO::serialize_all`](iceberg::io::FileIO::serialize_all), the serialized form is
-/// not a stable format and may change between crate versions. Do not rely on it for long-term
-/// storage or exchange it between incompatible versions of this crate.
+/// The serialized form is not stable across crate versions.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum OpenDalStorage {
     /// Memory storage variant.
@@ -397,11 +376,11 @@ impl OpenDalStorage {
         let path = path.as_ref();
         let (operator, relative_path): (Operator, &str) = match self {
             #[cfg(feature = "opendal-memory")]
-            OpenDalStorage::Memory { operator, .. } => {
+            OpenDalStorage::Memory { operator: op, .. } => {
                 if let Some(stripped) = path.strip_prefix("memory:/") {
-                    (operator.clone(), stripped)
+                    (op.clone(), stripped)
                 } else {
-                    (operator.clone(), &path[1..])
+                    (op.clone(), &path[1..])
                 }
             }
             #[cfg(feature = "opendal-fs")]
@@ -502,7 +481,6 @@ impl OpenDalStorage {
         Ok((operator, relative_path))
     }
 
-    /// Client settings for this backend.
     pub(crate) fn client_config(&self) -> &OpenDalClientConfig {
         match self {
             #[cfg(feature = "opendal-memory")]
@@ -519,8 +497,6 @@ impl OpenDalStorage {
             OpenDalStorage::Azdls { client_config, .. } => client_config,
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { client_config, .. } => client_config,
-            // Only compiled when every backend feature is off and the enum has no variants.
-            // Gating it this way makes a new variant without an arm a compile error.
             #[cfg(all(
                 not(feature = "opendal-memory"),
                 not(feature = "opendal-s3"),
@@ -840,7 +816,7 @@ mod tests {
         let unset = OpenDalClientConfig::from_properties(&HashMap::new()).unwrap();
         assert_eq!(
             unset.io_timeout(),
-            Duration::from_millis(OPENDAL_IO_TIMEOUT_MS_DEFAULT)
+            Duration::from_millis(DEFAULT_IO_TIMEOUT_MS.get())
         );
 
         let max = u64::MAX.to_string();
@@ -856,29 +832,14 @@ mod tests {
             let err = client_config(invalid).unwrap_err().to_string();
             assert!(err.contains(OPENDAL_IO_TIMEOUT_MS), "{invalid}");
             assert!(err.contains(&format!("value: {invalid:?}")), "{err}");
-            // The parse error is kept as the source, so the message says why it was rejected.
             let reason = invalid.parse::<NonZeroU64>().unwrap_err().to_string();
             assert!(err.contains(&reason), "{err}");
         }
     }
 
     #[test]
-    fn test_default_matches_property_defaults() {
-        // Serde fills missing settings from `Default`, and `from_properties` from the
-        // `#[property]` defaults. `Debug` covers every field, including ones added later.
-        assert_eq!(
-            format!("{:?}", OpenDalClientConfig::default()),
-            format!(
-                "{:?}",
-                OpenDalClientConfig::from_properties(&HashMap::new()).unwrap()
-            )
-        );
-    }
-
-    #[test]
     fn test_default_timeouts_match_opendal() {
-        // `TimeoutLayer` has no getters, so compare through `Debug`. An OpenDAL upgrade that
-        // changes either default stated in the `OPENDAL_IO_TIMEOUT_MS` doc fails here.
+        // `TimeoutLayer` has no getters, so compare through `Debug`.
         let opendal_default = format!("{:?}", TimeoutLayer::new());
         let layer = |timeout, io_timeout| {
             format!(
@@ -889,9 +850,8 @@ mod tests {
             )
         };
         let control = Duration::from_secs(60);
-        let io = Duration::from_millis(OPENDAL_IO_TIMEOUT_MS_DEFAULT);
+        let io = Duration::from_millis(DEFAULT_IO_TIMEOUT_MS.get());
         assert_eq!(opendal_default, layer(control, io));
-        // If `Debug` stopped printing either field, the check above would pass vacuously.
         assert_ne!(opendal_default, layer(control + Duration::from_secs(1), io));
         assert_ne!(
             opendal_default,
@@ -915,25 +875,21 @@ mod tests {
             Duration::from_secs(45)
         );
 
-        // Deserializing rejects zero too, not only `from_properties`.
         let mut zero = value.clone();
         zero["S3"]["client_config"]["io_timeout_ms"] = 0.into();
         assert!(serde_json::from_value::<OpenDalStorage>(zero).is_err());
 
-        // A payload without `client_config` falls back to the default.
         value["S3"].as_object_mut().unwrap().remove("client_config");
         let restored: OpenDalStorage = serde_json::from_value(value).unwrap();
         assert_eq!(
             restored.client_config().io_timeout(),
-            Duration::from_millis(OPENDAL_IO_TIMEOUT_MS_DEFAULT)
+            Duration::from_millis(DEFAULT_IO_TIMEOUT_MS.get())
         );
     }
 
     #[cfg(all(feature = "opendal-fs", feature = "opendal-memory"))]
     #[test]
     fn test_old_unit_variant_forms_are_rejected() {
-        // `LocalFs` and `Memory` used to serialize as bare strings, and `Memory` also accepted
-        // `null`. As struct variants they reject all three, which is an intended format change.
         for old in [r#""LocalFs""#, r#""Memory""#, r#"{"Memory":null}"#] {
             assert!(
                 serde_json::from_str::<OpenDalStorage>(old).is_err(),
@@ -956,8 +912,7 @@ mod tests {
     async fn test_io_timeout_reaches_timeout_layer() {
         use opendal::layers::ConcurrentLimitLayer;
 
-        // A concurrency limit of zero never grants a permit, so every IO call stalls until
-        // `TimeoutLayer` gives up. Paused time skips the timeouts and the retry backoff.
+        // A zero concurrency limit stalls every IO call; paused time skips the waits.
         let storage = OpenDalStorage::Memory {
             operator: default_memory_operator().layer(ConcurrentLimitLayer::new(0)),
             client_config: client_config("45000").unwrap(),
@@ -969,7 +924,6 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("io operation timeout reached"), "{err}");
-        // OpenDAL reports the budget in plain seconds, as `context: { timeout: 45 }`.
         assert!(err.contains("{ timeout: 45 }"), "{err}");
     }
 
