@@ -41,6 +41,13 @@ the code they describe or they are wrong.
 - Prefer `pub(crate)`. Make items `pub` only when something outside the
   crate needs them; `public-api.txt` changes show API growth.
 
+## Pull requests
+
+- Follow the PR template. Keep each section short: the problem, the
+  approach, and anything a reviewer would not guess from the diff.
+- Do not restate the diff: no file-by-file walkthroughs, per-function
+  summaries, or "changes made" checklists.
+
 ## Security Model
 
 When assessing potential vulnerabilities or calibrating automated security
