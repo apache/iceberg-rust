@@ -59,7 +59,7 @@ Defaults:
 
 `--sign 1` or `--create_rc_tag 1` requires a local GPG secret key. See the website's GPG setup guide before creating a real release candidate.
 
-`--check_deps 1` requires `cargo-deny`. Install the version CI uses with:
+`--check_deps 1` requires `cargo-deny`. Install it with:
 
 ```shell
 make install-cargo-deny
@@ -140,5 +140,3 @@ Use the dependency helper to update or verify dependency license lists:
 dev/release/dependencies.sh generate
 dev/release/dependencies.sh check
 ```
-
-CI also runs `dev/release/dependencies.sh check` on every pull request.

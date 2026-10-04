@@ -15,13 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Dependency license policy. CI checks it on every pull request, and the
-# release scripts check it again before creating a release candidate. See
-# "Dependencies" in CONTRIBUTING.md for what to do when a license is rejected.
-
 [graph]
-# Also check dependencies that only optional features pull in, such as the
-# OpenDAL storage backends. Otherwise cargo-deny only follows default features.
+# Include dependencies from optional features.
 all-features = true
 
 [licenses]
@@ -35,7 +30,6 @@ allow = [
   "CC0-1.0",
   "Zlib",
   "CDLA-Permissive-2.0",
-  "bzip2-1.0.6",
   # Category-A: https://issues.apache.org/jira/browse/LEGAL-660
   "Unicode-3.0",
   # Boost Software License Version 1.0 is allowed (Category-A):

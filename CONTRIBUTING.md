@@ -118,18 +118,13 @@ tested in CI and developers have reproducible builds.
 In `Cargo.toml`, we specify the minimum version required to use iceberg-rust. This allows users to choose their
 dependency versions without always upgrading to the latest.
 
-Every dependency must have a license that is compatible with the
-[ASF 3rd Party License Policy](https://www.apache.org/legal/resolved.html). `deny.toml` lists the allowed licenses
-and the per-crate exceptions. CI checks every pull request against it with `cargo deny`, and you can run the same
-check locally with `make check-dependency-licenses`.
+Dependency licenses must comply with the [ASF 3rd Party License Policy](https://www.apache.org/legal/resolved.html).
+CI checks them against `deny.toml` with `cargo deny`; run `make check-dependency-licenses` to check locally. If a
+license is rejected, find its category in the policy:
 
-If the check rejects a license, look up its category in the ASF policy:
-
-- Category A licenses can be added to `allow` in `deny.toml`.
-- Category B licenses are added to `exceptions` in `deny.toml`, with one entry per crate that uses them.
-- Category X licenses are not allowed, so the dependency must be replaced.
-
-Explain any change to `deny.toml` in the pull request description.
+- Category A: add the license to `allow`.
+- Category B: add a per-crate entry to `exceptions`.
+- Category X: not allowed by ASF policy; do not take the dependency.
 
 ## Code of Conduct
 

@@ -117,7 +117,7 @@ require_cargo_deny() {
   fi
 
   # The TSV output is sensitive to the cargo-deny version: different versions
-  # resolve the dependency graph differently, producing spurious diffs.
+  # resolve the dependency graph differently, producing diffs that CI rejects.
   # Assert the active binary matches the version CI pins so a shadowed or
   # mismatched install fails loudly instead of generating wrong files.
   local actual_version
