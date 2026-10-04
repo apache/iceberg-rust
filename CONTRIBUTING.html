@@ -258,6 +258,14 @@ cargo 1.69.0 (6e9a83356 2023-04-12)
 tested in CI and developers have reproducible builds.</p>
 <p>In <code>Cargo.toml</code>, we specify the minimum version required to use iceberg-rust. This allows users to choose their
 dependency versions without always upgrading to the latest.</p>
+<p>Dependency licenses must comply with the <a href="https://www.apache.org/legal/resolved.html">ASF 3rd Party License Policy</a>.
+CI checks them against <code>deny.toml</code> with <code>cargo deny</code>; run <code>make check-dependency-licenses</code> to check locally. If a
+license is rejected, find its category in the policy:</p>
+<ul>
+<li>Category A: add the license to <code>allow</code>.</li>
+<li>Category B: add a per-crate entry to <code>exceptions</code>.</li>
+<li>Category X: not allowed by ASF policy; do not take the dependency.</li>
+</ul>
 <h2 id="code-of-conduct"><a class="header" href="#code-of-conduct">Code of Conduct</a></h2>
 <p>We expect all community members to follow our <a href="https://www.apache.org/foundation/policies/conduct.html">Code of Conduct</a>.</p>
 
