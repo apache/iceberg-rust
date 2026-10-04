@@ -910,6 +910,41 @@ mod tests {
         assert!(err.to_string().contains(OPENDAL_IO_TIMEOUT_MS));
     }
 
+    #[test]
+    fn test_factory_propagates_io_timeout() {
+        let config = StorageConfig::new().with_prop(OPENDAL_IO_TIMEOUT_MS, "45000");
+        let factories = [
+            #[cfg(feature = "opendal-memory")]
+            OpenDalStorageFactory::Memory,
+            #[cfg(feature = "opendal-fs")]
+            OpenDalStorageFactory::Fs,
+            #[cfg(feature = "opendal-s3")]
+            OpenDalStorageFactory::S3 {
+                customized_credential_load: None,
+            },
+            #[cfg(feature = "opendal-gcs")]
+            OpenDalStorageFactory::Gcs,
+            #[cfg(feature = "opendal-oss")]
+            OpenDalStorageFactory::Oss,
+            #[cfg(feature = "opendal-azdls")]
+            OpenDalStorageFactory::Azdls,
+            #[cfg(feature = "opendal-hf")]
+            OpenDalStorageFactory::Hf,
+        ];
+        for factory in factories {
+            // `build` returns `dyn Storage`, so read the config back from its serialized form.
+            let storage = factory.build(&config).unwrap();
+            let json = serde_json::to_value(&*storage).unwrap();
+            let client_config = json
+                .as_object()
+                .unwrap()
+                .values()
+                .find_map(|variant| variant.get("client_config"))
+                .unwrap_or_else(|| panic!("{json}"));
+            assert_eq!(client_config["io_timeout_ms"], 45_000, "{factory:?}");
+        }
+    }
+
     #[cfg(feature = "opendal-memory")]
     #[tokio::test(start_paused = true)]
     async fn test_io_timeout_reaches_timeout_layer() {
