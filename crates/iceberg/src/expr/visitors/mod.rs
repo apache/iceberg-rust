@@ -17,7 +17,7 @@
 
 use fnv::FnvHashSet;
 
-use crate::spec::Datum;
+use crate::spec::{Datum, PrimitiveType};
 
 pub(crate) mod bloom_filter_evaluator;
 pub(crate) mod bound_predicate_visitor;
@@ -31,6 +31,16 @@ pub(crate) mod rewrite_not;
 pub(crate) mod row_group_metrics_evaluator;
 pub(crate) mod strict_metrics_evaluator;
 pub(crate) mod strict_projection;
+
+fn scalar_bound(bound: Option<&Datum>) -> Option<&Datum> {
+    // Geospatial bounds encode bounding-box coordinates, not ordered column values.
+    bound.filter(|datum| {
+        !matches!(
+            datum.data_type(),
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_)
+        )
+    })
+}
 
 /// Returns true if every literal is provably outside the inclusive `[lower, upper]`
 /// range, so rows cannot match. Missing bounds are treated as unbounded on that side.
