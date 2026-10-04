@@ -1009,6 +1009,7 @@ impl Datum {
     /// assert_eq!(&format!("{t}"), "1.23");
     /// ```
     pub fn decimal(value: Decimal) -> Result<Self> {
+        ensure_data_valid!(value.is_finite(), "Decimal value must be finite: {}", value);
         let scale = decimal_scale(&value);
 
         let r#type = Type::decimal(MAX_DECIMAL_PRECISION, scale)?;
@@ -1028,6 +1029,7 @@ impl Datum {
     /// which is useful when you need to control the storage requirements.
     /// Use [`Datum::decimal`] if you want to use the maximum precision (38).
     pub fn decimal_with_precision(value: Decimal, precision: u32) -> Result<Self> {
+        ensure_data_valid!(value.is_finite(), "Decimal value must be finite: {}", value);
         let scale = decimal_scale(&value);
         let mantissa = decimal_mantissa(&value);
 
