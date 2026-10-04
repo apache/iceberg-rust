@@ -105,7 +105,7 @@ pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 
 /// Deadline in milliseconds for one IO operation, and for every method call on a returned
 /// reader, writer, lister or deleter. Honored by every [`OpenDalStorage`] backend, where it
-/// defaults to [`OPENDAL_IO_TIMEOUT_MS_DEFAULT`].
+/// defaults to OpenDAL's `TimeoutLayer` default of 10 seconds.
 ///
 /// Each retry attempt is bounded separately, so it is a per-attempt budget, not a total one.
 /// Control operations such as `stat` and `rename` keep OpenDAL's separate 60-second budget,
@@ -115,7 +115,7 @@ pub const OPENDAL_IO_TIMEOUT_MS: &str = "opendal.io-timeout-ms";
 
 /// Default for [`OPENDAL_IO_TIMEOUT_MS`]. Matches the IO timeout default of OpenDAL's
 /// `TimeoutLayer`.
-pub const OPENDAL_IO_TIMEOUT_MS_DEFAULT: u64 = 10_000;
+const OPENDAL_IO_TIMEOUT_MS_DEFAULT: u64 = 10_000;
 
 /// [`OPENDAL_IO_TIMEOUT_MS_DEFAULT`] as the field type. A zero default fails to compile.
 const DEFAULT_IO_TIMEOUT_MS: NonZeroU64 = NonZeroU64::new(OPENDAL_IO_TIMEOUT_MS_DEFAULT).unwrap();
@@ -146,7 +146,7 @@ impl Default for OpenDalClientConfig {
 
 impl OpenDalClientConfig {
     /// Per-attempt deadline for one IO operation, set by [`OPENDAL_IO_TIMEOUT_MS`].
-    pub fn io_timeout(&self) -> Duration {
+    pub(crate) fn io_timeout(&self) -> Duration {
         Duration::from_millis(self.io_timeout_ms.get())
     }
 }
@@ -503,7 +503,7 @@ impl OpenDalStorage {
     }
 
     /// Client settings for this backend.
-    pub fn client_config(&self) -> &OpenDalClientConfig {
+    pub(crate) fn client_config(&self) -> &OpenDalClientConfig {
         match self {
             #[cfg(feature = "opendal-memory")]
             OpenDalStorage::Memory { client_config, .. } => client_config,
