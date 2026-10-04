@@ -32,13 +32,16 @@ use arrow_schema::{
 };
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::statistics::Statistics;
+use parquet_geospatial::{WkbEdges, WkbMetadata, WkbType, WkbTypeHint};
 use uuid::Uuid;
 
 use crate::error::{Result, invalid_data};
 use crate::spec::decimal_utils::i128_from_be_bytes;
+use crate::spec::geospatial::EdgeInterpolationAlgorithm;
 use crate::spec::{
-    Datum, FIRST_FIELD_ID, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral,
-    PrimitiveType, Schema, SchemaVisitor, StructType, Type, VariantType,
+    Datum, FIRST_FIELD_ID, GeographyType, GeometryType, ListType, MapType, NestedField,
+    NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema, SchemaVisitor, StructType, Type,
+    VariantType,
 };
 use crate::{Error, ErrorKind};
 
@@ -46,6 +49,7 @@ use crate::{Error, ErrorKind};
 pub const DEFAULT_MAP_FIELD_NAME: &str = "key_value";
 /// UTC time zone for Arrow timestamp type.
 pub const UTC_TIME_ZONE: &str = "+00:00";
+const UNSET_GEOSPATIAL_CRS: &str = "srid:0";
 
 /// The canonical Arrow [`arrow.parquet.variant`] extension type.
 ///
@@ -97,6 +101,59 @@ impl ExtensionType for VariantExtensionType {
     ) -> std::result::Result<Self, ArrowError> {
         Self.supports_data_type(data_type)?;
         Ok(Self)
+    }
+}
+
+fn to_arrow_wkb_edges(algorithm: EdgeInterpolationAlgorithm) -> WkbEdges {
+    match algorithm {
+        EdgeInterpolationAlgorithm::Spherical => WkbEdges::Spherical,
+        EdgeInterpolationAlgorithm::Vincenty => WkbEdges::Vincenty,
+        EdgeInterpolationAlgorithm::Thomas => WkbEdges::Thomas,
+        EdgeInterpolationAlgorithm::Andoyer => WkbEdges::Andoyer,
+        EdgeInterpolationAlgorithm::Karney => WkbEdges::Karney,
+    }
+}
+
+impl From<WkbEdges> for EdgeInterpolationAlgorithm {
+    fn from(edges: WkbEdges) -> Self {
+        match edges {
+            WkbEdges::Spherical => Self::Spherical,
+            WkbEdges::Vincenty => Self::Vincenty,
+            WkbEdges::Thomas => Self::Thomas,
+            WkbEdges::Andoyer => Self::Andoyer,
+            WkbEdges::Karney => Self::Karney,
+        }
+    }
+}
+
+fn iceberg_crs_from_wkb_metadata(metadata: &WkbMetadata) -> Result<String> {
+    match metadata.crs.as_ref() {
+        None => Ok(UNSET_GEOSPATIAL_CRS.to_string()),
+        Some(serde_json::Value::String(crs)) => Ok(crs.clone()),
+        Some(serde_json::Value::Object(crs)) => {
+            let id = crs.get("id");
+            let authority = id
+                .and_then(|id| id.get("authority"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|authority| !authority.is_empty());
+            let code = match id.and_then(|id| id.get("code")) {
+                Some(serde_json::Value::String(code)) => Some(code.clone()),
+                Some(serde_json::Value::Number(code)) => Some(code.to_string()),
+                _ => None,
+            };
+
+            match (authority, code) {
+                (Some(authority), Some(code)) => Ok(format!("{authority}:{code}")),
+                _ => Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Cannot determine Iceberg geospatial type from PROJJSON CRS without an embedded authority/code",
+                )),
+            }
+        }
+        Some(_) => Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Geospatial CRS metadata must be a string or PROJJSON object",
+        )),
     }
 }
 
@@ -382,7 +439,7 @@ impl ArrowSchemaConverter {
         let mut results = Vec::with_capacity(fields.len());
         for i in 0..fields.len() {
             let field = &fields[i];
-            let field_type = &field_results[i];
+            let field_type = self.apply_arrow_extension(field, field_results[i].clone())?;
             let id = self.get_field_id(field)?;
             let doc = get_field_doc(field);
             let nested_field = NestedField {
@@ -390,13 +447,58 @@ impl ArrowSchemaConverter {
                 doc,
                 name: field.name().clone(),
                 required: !field.is_nullable(),
-                field_type: Box::new(field_type.clone()),
+                field_type: Box::new(field_type),
                 initial_default: None,
                 write_default: None,
             };
             results.push(Arc::new(nested_field));
         }
         Ok(results)
+    }
+
+    fn apply_arrow_extension(&self, arrow_field: &FieldRef, iceberg_type: Type) -> Result<Type> {
+        if arrow_field.extension_type_name() != Some(WkbType::NAME) {
+            return Ok(iceberg_type);
+        }
+
+        if !matches!(&iceberg_type, Type::Primitive(PrimitiveType::Binary)) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "WKB extension type on field {} requires binary storage, got {iceberg_type}",
+                    arrow_field.name()
+                ),
+            ));
+        }
+
+        let wkb_type = arrow_field.try_extension_type::<WkbType>().map_err(|err| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid geospatial Arrow extension metadata for field {}",
+                    arrow_field.name()
+                ),
+            )
+            .with_source(err)
+        })?;
+
+        let crs = iceberg_crs_from_wkb_metadata(wkb_type.metadata())?;
+
+        match wkb_type.metadata().type_hint() {
+            WkbTypeHint::Geometry => Ok(Type::Primitive(PrimitiveType::Geometry(
+                GeometryType::new(Some(crs))?,
+            ))),
+            WkbTypeHint::Geography => Ok(Type::Primitive(PrimitiveType::Geography(
+                GeographyType::new(
+                    Some(crs),
+                    wkb_type
+                        .metadata()
+                        .algorithm
+                        .unwrap_or(WkbEdges::Spherical)
+                        .into(),
+                )?,
+            ))),
+        }
     }
 }
 
@@ -428,6 +530,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             }
         };
 
+        let value = self.apply_arrow_extension(element_field, value)?;
         let id = self.get_field_id(element_field)?;
         let doc = get_field_doc(element_field);
         let mut element_field =
@@ -449,6 +552,8 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
 
                     let key_field = &fields[0];
                     let value_field = &fields[1];
+                    let key_value = self.apply_arrow_extension(key_field, key_value)?;
+                    let value = self.apply_arrow_extension(value_field, value)?;
 
                     let key_id = self.get_field_id(key_field)?;
                     let key_doc = get_field_doc(key_field);
@@ -593,15 +698,29 @@ impl SchemaVisitor for ToArrowSchemaConverter {
         } else {
             HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string())])
         };
-        let arrow_field =
+        let mut arrow_field =
             Field::new(field.name.clone(), ty, !field.required).with_metadata(metadata);
-        // A variant column's storage is a struct; tag the field with the canonical
-        // `arrow.parquet.variant` extension type so consumers read it as a Variant, not a struct.
-        let arrow_field = if field.field_type.is_variant() {
-            arrow_field.with_extension_type(VariantExtensionType)
-        } else {
-            arrow_field
-        };
+
+        match field.field_type.as_ref() {
+            Type::Variant(_) => {
+                // A variant column's storage is a struct; tag the field with the canonical
+                // `arrow.parquet.variant` extension type so consumers read it as a Variant, not a struct.
+                arrow_field.try_with_extension_type(VariantExtensionType)?;
+            }
+            Type::Primitive(PrimitiveType::Geometry(geometry)) => {
+                let metadata = WkbMetadata::new(Some(geometry.crs()), None);
+                arrow_field.try_with_extension_type(WkbType::new(Some(metadata)))?;
+            }
+            Type::Primitive(PrimitiveType::Geography(geography)) => {
+                let metadata = WkbMetadata::new(
+                    Some(geography.crs()),
+                    Some(to_arrow_wkb_edges(geography.algorithm())),
+                );
+                arrow_field.try_with_extension_type(WkbType::new(Some(metadata)))?;
+            }
+            _ => {}
+        }
+
         Ok(ArrowSchemaOrFieldOrType::Field(arrow_field))
     }
 
@@ -720,7 +839,9 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                     .map(DataType::FixedSizeBinary)
                     .unwrap_or(DataType::LargeBinary),
             )),
-            PrimitiveType::Binary => Ok(ArrowSchemaOrFieldOrType::Type(DataType::LargeBinary)),
+            PrimitiveType::Binary | PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+                Ok(ArrowSchemaOrFieldOrType::Type(DataType::LargeBinary))
+            }
         }
     }
 
@@ -1178,6 +1299,7 @@ pub(crate) fn primitive_type_to_arrow_type_with_ree(primitive_type: &PrimitiveTy
         PrimitiveType::Uuid => make_ree(DataType::Binary),
         PrimitiveType::Fixed(_) => make_ree(DataType::Binary),
         PrimitiveType::Binary => make_ree(DataType::Binary),
+        PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => make_ree(DataType::LargeBinary),
         PrimitiveType::Decimal { precision, scale } => {
             make_ree(DataType::Decimal128(*precision as u8, *scale as i8))
         }
@@ -1353,10 +1475,15 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use arrow_schema::extension::ExtensionType;
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+    use parquet_geospatial::WkbEdges;
 
     use super::*;
     use crate::spec::decimal_utils::decimal_new;
+    use crate::spec::geospatial::{
+        DEFAULT_GEOSPATIAL_CRS, EdgeInterpolationAlgorithm as IcebergEdgeInterpolationAlgorithm,
+    };
     use crate::spec::{Literal, Schema};
 
     /// Create a simple field with metadata.
@@ -2169,6 +2296,186 @@ mod tests {
             err.to_string().contains("requires Struct storage"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn test_geospatial_arrow_schema_roundtrip() {
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "geom",
+                    Type::Primitive(PrimitiveType::Geometry(
+                        GeometryType::new(Some("EPSG:3857".to_string())).unwrap(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(
+                    2,
+                    "geog",
+                    Type::Primitive(PrimitiveType::Geography(
+                        GeographyType::new(
+                            Some("OGC:CRS27".to_string()),
+                            IcebergEdgeInterpolationAlgorithm::Karney,
+                        )
+                        .unwrap(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(
+                    3,
+                    "geom_list",
+                    Type::List(ListType::new(
+                        NestedField::list_element(
+                            4,
+                            Type::Primitive(PrimitiveType::Geometry(GeometryType::default())),
+                            true,
+                        )
+                        .into(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let arrow_schema = schema_to_arrow_schema(&schema).unwrap();
+        let geom = arrow_schema.field(0);
+        assert_eq!(geom.data_type(), &DataType::LargeBinary);
+
+        let geog = arrow_schema.field(1);
+        let geog_wkb = geog.try_extension_type::<WkbType>().unwrap();
+        assert_eq!(geog_wkb.metadata().algorithm, Some(WkbEdges::Karney));
+        let geog_metadata: serde_json::Value =
+            serde_json::from_str(&geog_wkb.serialize_metadata().unwrap()).unwrap();
+        assert_eq!(geog_metadata.get("edges").unwrap(), "karney");
+        assert!(geog_metadata.get("algorithm").is_none());
+
+        let list = arrow_schema.field(2);
+        let DataType::List(element) = list.data_type() else {
+            panic!("Expected list field");
+        };
+        assert!(
+            matches!(
+                element
+                    .try_extension_type::<WkbType>()
+                    .unwrap()
+                    .metadata()
+                    .type_hint(),
+                WkbTypeHint::Geometry
+            ),
+            "Expected list element to retain WKB extension metadata"
+        );
+        assert_eq!(
+            element
+                .try_extension_type::<WkbType>()
+                .unwrap()
+                .metadata()
+                .crs
+                .as_ref()
+                .and_then(serde_json::Value::as_str),
+            Some(DEFAULT_GEOSPATIAL_CRS)
+        );
+
+        let converted = arrow_schema_to_schema(&arrow_schema).unwrap();
+        assert_eq!(converted.as_struct().fields(), schema.as_struct().fields());
+    }
+
+    #[test]
+    fn test_geospatial_arrow_crs_import() {
+        let mut geom = simple_field("geom", DataType::LargeBinary, true, "1");
+        geom.try_with_extension_type(WkbType::new(Some(WkbMetadata::new(
+            Some(r#"{"id":{"authority":"EPSG","code":3857}}"#),
+            None,
+        ))))
+        .unwrap();
+        let mut unset_geom = simple_field("unset_geom", DataType::LargeBinary, true, "2");
+        unset_geom
+            .try_with_extension_type(WkbType::new(Some(WkbMetadata::new(None, None))))
+            .unwrap();
+
+        let arrow_schema = ArrowSchema::new(vec![geom, unset_geom]);
+        let schema = arrow_schema_to_schema(&arrow_schema).unwrap();
+
+        assert_eq!(
+            schema.field_by_id(1).unwrap().field_type.as_ref(),
+            &Type::Primitive(PrimitiveType::Geometry(
+                GeometryType::new(Some("EPSG:3857".to_string())).unwrap()
+            ))
+        );
+        assert_eq!(
+            schema.field_by_id(2).unwrap().field_type.as_ref(),
+            &Type::Primitive(PrimitiveType::Geometry(
+                GeometryType::new(Some(UNSET_GEOSPATIAL_CRS.to_string())).unwrap()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_geospatial_arrow_invalid_crs_is_rejected() {
+        for crs in [r#"{}"#, "42"] {
+            let mut field = simple_field("geom", DataType::LargeBinary, true, "1");
+            field
+                .try_with_extension_type(WkbType::new(Some(WkbMetadata::new(Some(crs), None))))
+                .unwrap();
+
+            let err = arrow_schema_to_schema(&ArrowSchema::new(vec![field])).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid, "{err}");
+        }
+    }
+
+    #[test]
+    fn test_geospatial_arrow_extension_requires_binary_storage() {
+        use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
+
+        let metadata = WkbType::new(Some(WkbMetadata::new(None, None)))
+            .serialize_metadata()
+            .unwrap();
+        let field =
+            simple_field("geom", DataType::Int32, true, "1").with_metadata(HashMap::from([
+                (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+                (
+                    EXTENSION_TYPE_NAME_KEY.to_string(),
+                    WkbType::NAME.to_string(),
+                ),
+                (EXTENSION_TYPE_METADATA_KEY.to_string(), metadata),
+            ]));
+
+        let err = arrow_schema_to_schema(&ArrowSchema::new(vec![field])).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid, "{err}");
+        assert!(
+            err.message().contains("requires binary storage"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_geospatial_parquet_statistics_are_ignored() {
+        use parquet::data_type::ByteArray;
+        use parquet::file::statistics::ValueStatistics;
+
+        let stats = Statistics::ByteArray(ValueStatistics::new(
+            Some(ByteArray::from(vec![1, 2, 3])),
+            Some(ByteArray::from(vec![4, 5, 6])),
+            None,
+            None,
+            false,
+        ));
+
+        for primitive_type in [
+            PrimitiveType::Geometry(GeometryType::default()),
+            PrimitiveType::Geography(GeographyType::default()),
+        ] {
+            assert_eq!(
+                get_parquet_stat_min_as_datum(&primitive_type, &stats).unwrap(),
+                None
+            );
+            assert_eq!(
+                get_parquet_stat_max_as_datum(&primitive_type, &stats).unwrap(),
+                None
+            );
+        }
     }
 
     #[test]

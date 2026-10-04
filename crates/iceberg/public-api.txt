@@ -1464,6 +1464,73 @@ pub fn iceberg::sensitive::SensitiveString::fmt(&self, f: &mut core::fmt::Format
 impl core::marker::StructuralPartialEq for iceberg::sensitive::SensitiveString
 pub mod iceberg::spec
 pub use iceberg::spec::ByteBuf
+pub mod iceberg::spec::geospatial
+pub enum iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+pub iceberg::spec::geospatial::EdgeInterpolationAlgorithm::Andoyer
+pub iceberg::spec::geospatial::EdgeInterpolationAlgorithm::Karney
+pub iceberg::spec::geospatial::EdgeInterpolationAlgorithm::Spherical
+pub iceberg::spec::geospatial::EdgeInterpolationAlgorithm::Thomas
+pub iceberg::spec::geospatial::EdgeInterpolationAlgorithm::Vincenty
+impl core::clone::Clone for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+pub fn iceberg::spec::geospatial::EdgeInterpolationAlgorithm::clone(&self) -> iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+impl core::cmp::Eq for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+impl core::cmp::PartialEq for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+pub fn iceberg::spec::geospatial::EdgeInterpolationAlgorithm::eq(&self, other: &iceberg::spec::geospatial::EdgeInterpolationAlgorithm) -> bool
+impl core::convert::From<parquet_geospatial::types::Edges> for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+pub fn iceberg::spec::geospatial::EdgeInterpolationAlgorithm::from(edges: parquet_geospatial::types::Edges) -> Self
+impl core::default::Default for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+pub fn iceberg::spec::geospatial::EdgeInterpolationAlgorithm::default() -> iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+impl core::fmt::Debug for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+pub fn iceberg::spec::geospatial::EdgeInterpolationAlgorithm::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+pub fn iceberg::spec::geospatial::EdgeInterpolationAlgorithm::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+impl core::marker::StructuralPartialEq for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+impl serde_core::ser::Serialize for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+pub fn iceberg::spec::geospatial::EdgeInterpolationAlgorithm::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+pub fn iceberg::spec::geospatial::EdgeInterpolationAlgorithm::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::spec::geospatial::GeographyType
+impl iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::algorithm(&self) -> iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+pub fn iceberg::spec::geospatial::GeographyType::crs(&self) -> &str
+pub fn iceberg::spec::geospatial::GeographyType::new(crs: core::option::Option<alloc::string::String>, algorithm: iceberg::spec::geospatial::EdgeInterpolationAlgorithm) -> iceberg::Result<Self>
+impl core::clone::Clone for iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::clone(&self) -> iceberg::spec::geospatial::GeographyType
+impl core::cmp::Eq for iceberg::spec::geospatial::GeographyType
+impl core::cmp::PartialEq for iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::eq(&self, other: &iceberg::spec::geospatial::GeographyType) -> bool
+impl core::default::Default for iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::default() -> Self
+impl core::fmt::Debug for iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::StructuralPartialEq for iceberg::spec::geospatial::GeographyType
+impl serde_core::ser::Serialize for iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::spec::geospatial::GeometryType
+impl iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::crs(&self) -> &str
+pub fn iceberg::spec::geospatial::GeometryType::new(crs: core::option::Option<alloc::string::String>) -> iceberg::Result<Self>
+impl core::clone::Clone for iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::clone(&self) -> iceberg::spec::geospatial::GeometryType
+impl core::cmp::Eq for iceberg::spec::geospatial::GeometryType
+impl core::cmp::PartialEq for iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::eq(&self, other: &iceberg::spec::geospatial::GeometryType) -> bool
+impl core::default::Default for iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::default() -> iceberg::spec::geospatial::GeometryType
+impl core::fmt::Debug for iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::StructuralPartialEq for iceberg::spec::geospatial::GeometryType
+impl serde_core::ser::Serialize for iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub enum iceberg::spec::DataContentType
 pub iceberg::spec::DataContentType::Data = 0
 pub iceberg::spec::DataContentType::EqualityDeletes = 2
@@ -1710,6 +1777,8 @@ pub iceberg::spec::PrimitiveType::Decimal::scale: u32
 pub iceberg::spec::PrimitiveType::Double
 pub iceberg::spec::PrimitiveType::Fixed(u64)
 pub iceberg::spec::PrimitiveType::Float
+pub iceberg::spec::PrimitiveType::Geography(iceberg::spec::geospatial::GeographyType)
+pub iceberg::spec::PrimitiveType::Geometry(iceberg::spec::geospatial::GeometryType)
 pub iceberg::spec::PrimitiveType::Int
 pub iceberg::spec::PrimitiveType::Long
 pub iceberg::spec::PrimitiveType::String
@@ -2087,6 +2156,47 @@ impl serde_core::ser::Serialize for iceberg::spec::FieldSummary
 pub fn iceberg::spec::FieldSummary::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::FieldSummary
 pub fn iceberg::spec::FieldSummary::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::spec::GeographyType
+impl iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::algorithm(&self) -> iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+pub fn iceberg::spec::geospatial::GeographyType::crs(&self) -> &str
+pub fn iceberg::spec::geospatial::GeographyType::new(crs: core::option::Option<alloc::string::String>, algorithm: iceberg::spec::geospatial::EdgeInterpolationAlgorithm) -> iceberg::Result<Self>
+impl core::clone::Clone for iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::clone(&self) -> iceberg::spec::geospatial::GeographyType
+impl core::cmp::Eq for iceberg::spec::geospatial::GeographyType
+impl core::cmp::PartialEq for iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::eq(&self, other: &iceberg::spec::geospatial::GeographyType) -> bool
+impl core::default::Default for iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::default() -> Self
+impl core::fmt::Debug for iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::StructuralPartialEq for iceberg::spec::geospatial::GeographyType
+impl serde_core::ser::Serialize for iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::geospatial::GeographyType
+pub fn iceberg::spec::geospatial::GeographyType::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::spec::GeometryType
+impl iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::crs(&self) -> &str
+pub fn iceberg::spec::geospatial::GeometryType::new(crs: core::option::Option<alloc::string::String>) -> iceberg::Result<Self>
+impl core::clone::Clone for iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::clone(&self) -> iceberg::spec::geospatial::GeometryType
+impl core::cmp::Eq for iceberg::spec::geospatial::GeometryType
+impl core::cmp::PartialEq for iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::eq(&self, other: &iceberg::spec::geospatial::GeometryType) -> bool
+impl core::default::Default for iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::default() -> iceberg::spec::geospatial::GeometryType
+impl core::fmt::Debug for iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::StructuralPartialEq for iceberg::spec::geospatial::GeometryType
+impl serde_core::ser::Serialize for iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::geospatial::GeometryType
+pub fn iceberg::spec::geospatial::GeometryType::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::spec::ListType
 pub iceberg::spec::ListType::element_field: iceberg::spec::NestedFieldRef
 impl iceberg::spec::ListType

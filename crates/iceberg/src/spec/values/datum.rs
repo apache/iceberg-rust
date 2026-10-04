@@ -270,6 +270,12 @@ impl PartialOrd for Datum {
                 PrimitiveType::Binary,
             ) => val.partial_cmp(other_val),
             (
+                PrimitiveLiteral::Binary(_),
+                PrimitiveLiteral::Binary(_),
+                PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
+                PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
+            ) => None,
+            (
                 PrimitiveLiteral::Int128(val),
                 PrimitiveLiteral::Int128(other_val),
                 PrimitiveType::Decimal {
@@ -423,8 +429,10 @@ impl Datum {
             PrimitiveType::Uuid => {
                 PrimitiveLiteral::UInt128(u128::from_be_bytes(bytes.try_into()?))
             }
-            PrimitiveType::Fixed(_) => PrimitiveLiteral::Binary(Vec::from(bytes)),
-            PrimitiveType::Binary => PrimitiveLiteral::Binary(Vec::from(bytes)),
+            PrimitiveType::Fixed(_)
+            | PrimitiveType::Binary
+            | PrimitiveType::Geometry(_)
+            | PrimitiveType::Geography(_) => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Decimal { .. } => PrimitiveLiteral::Int128(
                 i128_from_be_bytes(bytes)
                     .ok_or_else(|| invalid_data!("Can't convert bytes to i128: {bytes:?}"))?,
