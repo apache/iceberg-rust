@@ -340,7 +340,12 @@ pub struct FileScanTaskDeleteFile {
     /// The delete file path
     pub file_path: String,
 
-    /// The total size of the delete file in bytes, from the manifest entry.
+    /// The total size of the delete file in bytes.
+    ///
+    /// Tasks planned from manifest entries carry the recorded file size.
+    /// Externally constructed tasks may use `0` when the size is unavailable;
+    /// the Parquet delete-file loader then resolves it with one metadata
+    /// request when the file is first loaded. Deletion vectors do not use it.
     pub file_size_in_bytes: u64,
 
     /// delete file type
