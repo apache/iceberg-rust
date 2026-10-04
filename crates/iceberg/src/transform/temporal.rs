@@ -1210,8 +1210,7 @@ mod test {
 
     #[test]
     fn test_projection_timestamp_types_day_negative() -> Result<()> {
-        // Before the day transform floored, 1969-12-30T23:59:59.5 was written to 1969-12-31,
-        // so pre-epoch projections also match the next day for every timestamp type
+        // 1969-12-30T23:59:59.5
         let micros = -86_400_500_000;
         for (field_type, value) in [
             (Timestamp, Datum::timestamp_micros(micros)),
@@ -2657,7 +2656,6 @@ mod test {
         let day = Box::new(super::Day) as BoxedTransformFunction;
         let expected = [-1, -2, -2, -2, -2, -366, -365];
 
-        // Test TimestampMicrosecond
         let micros = vec![
             -500_000,            // 1969-12-31T23:59:59.500000
             -86_400_000_001,     // 1969-12-30T23:59:59.999999
@@ -2676,7 +2674,6 @@ mod test {
             test_timestamp_and_tz_transform_using_i64(v, &day, Datum::date(d));
         }
 
-        // Test TimestampNanosecond
         let nanos = vec![
             -500_000_000,            // 1969-12-31T23:59:59.500000000
             -86_400_000_000_001,     // 1969-12-30T23:59:59.999999999

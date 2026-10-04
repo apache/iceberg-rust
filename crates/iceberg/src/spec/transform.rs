@@ -866,9 +866,6 @@ impl Transform {
 
     /// Adjust projection for temporal transforms, align with Java
     /// implementation: https://github.com/apache/iceberg/blob/main/api/src/main/java/org/apache/iceberg/transforms/ProjectionUtil.java#L275
-    ///
-    /// The `day` adjustment also covers files written before iceberg-rust's day transform
-    /// floored pre-epoch timestamps, which put some rows one day too high.
     fn adjust_time_projection(
         &self,
         op: &PredicateOperator,
