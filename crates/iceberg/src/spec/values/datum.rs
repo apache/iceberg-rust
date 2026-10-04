@@ -270,6 +270,12 @@ impl PartialOrd for Datum {
                 PrimitiveType::Binary,
             ) => val.partial_cmp(other_val),
             (
+                PrimitiveLiteral::Binary(_),
+                PrimitiveLiteral::Binary(_),
+                PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
+                PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
+            ) => None,
+            (
                 PrimitiveLiteral::Int128(val),
                 PrimitiveLiteral::Int128(other_val),
                 PrimitiveType::Decimal {
@@ -372,6 +378,12 @@ impl Datum {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     "Cannot create datum for unknown type from bytes",
+                ));
+            }
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Cannot create geospatial datum from bytes yet",
                 ));
             }
             PrimitiveType::Boolean => {
