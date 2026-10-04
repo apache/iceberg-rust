@@ -36,8 +36,8 @@ the code they describe or they are wrong.
   not how. Expand only for contract the caller must know.
 - Test names say what they check. Do not narrate asserts.
 - Do not rename, reformat, or reorder code unrelated to the change.
-- Prefer `pub(crate)`. Make items `pub` only when something outside the
-  crate needs them; `public-api.txt` changes show API growth.
+- Prefer `pub(crate)`. Make items `pub` only when they are part of the API
+  the change intends to expose; `public-api.txt` changes show API growth.
 
 ## Pull requests
 
