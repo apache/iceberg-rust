@@ -1476,6 +1476,8 @@ pub fn iceberg::spec::geospatial::EdgeInterpolationAlgorithm::clone(&self) -> ic
 impl core::cmp::Eq for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
 impl core::cmp::PartialEq for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
 pub fn iceberg::spec::geospatial::EdgeInterpolationAlgorithm::eq(&self, other: &iceberg::spec::geospatial::EdgeInterpolationAlgorithm) -> bool
+impl core::convert::From<parquet_geospatial::types::Edges> for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
+pub fn iceberg::spec::geospatial::EdgeInterpolationAlgorithm::from(edges: parquet_geospatial::types::Edges) -> Self
 impl core::default::Default for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
 pub fn iceberg::spec::geospatial::EdgeInterpolationAlgorithm::default() -> iceberg::spec::geospatial::EdgeInterpolationAlgorithm
 impl core::fmt::Debug for iceberg::spec::geospatial::EdgeInterpolationAlgorithm
