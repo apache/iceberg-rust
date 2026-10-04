@@ -876,7 +876,13 @@ impl Transform {
         transformed: &Datum,
     ) -> Option<AdjustedProjection> {
         let should_adjust = match self {
-            Transform::Day => !matches!(original.data_type(), PrimitiveType::Date),
+            Transform::Day => matches!(
+                original.data_type(),
+                PrimitiveType::Timestamp
+                    | PrimitiveType::Timestamptz
+                    | PrimitiveType::TimestampNs
+                    | PrimitiveType::TimestamptzNs
+            ),
             Transform::Year | Transform::Month => true,
             _ => false,
         };
