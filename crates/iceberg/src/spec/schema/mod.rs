@@ -621,7 +621,7 @@ mod tests {
 
     #[test]
     fn test_calc_min_compatible_format() {
-        use crate::spec::{FormatVersion, VariantType};
+        use crate::spec::{FormatVersion, GeometryType, VariantType};
 
         fn schema_with(fields: Vec<NestedFieldRef>) -> Schema {
             Schema::builder().with_fields(fields).build().unwrap()
@@ -647,6 +647,22 @@ mod tests {
         assert_eq!(unknown.calc_min_compatible_format(), FormatVersion::V3);
         assert!(
             unknown
+                .check_format_compatibility(FormatVersion::V2)
+                .is_err()
+        );
+
+        // Geospatial types are v3-only.
+        let geometry = schema_with(vec![
+            NestedField::optional(
+                1,
+                "geom",
+                Primitive(PrimitiveType::Geometry(GeometryType::default())),
+            )
+            .into(),
+        ]);
+        assert_eq!(geometry.calc_min_compatible_format(), FormatVersion::V3);
+        assert!(
+            geometry
                 .check_format_compatibility(FormatVersion::V2)
                 .is_err()
         );

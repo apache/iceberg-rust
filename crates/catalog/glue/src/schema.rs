@@ -173,6 +173,12 @@ impl SchemaVisitor for GlueSchemaBuilder {
                 "string".to_string()
             }
             PrimitiveType::Binary | PrimitiveType::Fixed(_) => "binary".to_string(),
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("Conversion from {p:?} is not supported"),
+                ));
+            }
             PrimitiveType::Decimal { precision, scale } => {
                 format!("decimal({precision},{scale})")
             }
@@ -189,7 +195,9 @@ impl SchemaVisitor for GlueSchemaBuilder {
 #[cfg(test)]
 mod tests {
     use iceberg::TableCreation;
-    use iceberg::spec::{FormatVersion, Schema, TableMetadataBuilder};
+    use iceberg::spec::{
+        FormatVersion, GeometryType, NestedField, PrimitiveType, Schema, TableMetadataBuilder, Type,
+    };
 
     use super::*;
 
@@ -559,5 +567,24 @@ mod tests {
 
         assert_eq!(result, expected);
         Ok(())
+    }
+
+    #[test]
+    fn test_schema_with_geospatial_type_is_unsupported() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "geom",
+                    Type::Primitive(PrimitiveType::Geometry(GeometryType::default())),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        let metadata = create_metadata_with_format_version(schema, FormatVersion::V3).unwrap();
+
+        let err = GlueSchemaBuilder::from_iceberg(&metadata).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
     }
 }

@@ -542,6 +542,65 @@ fn avro_bytes_string() {
 }
 
 #[test]
+fn avro_bytes_geometry() {
+    let bytes = vec![1u8, 2u8, 3u8, 4u8];
+    let ty = PrimitiveType::Geometry(Default::default());
+    check_avro_bytes_serde(
+        bytes.clone(),
+        Datum::new(ty.clone(), PrimitiveLiteral::Binary(bytes)),
+        &ty,
+    );
+}
+
+#[test]
+fn geospatial_wkt_json_is_not_yet_supported() {
+    for primitive_type in [
+        PrimitiveType::Geometry(Default::default()),
+        PrimitiveType::Geography(Default::default()),
+    ] {
+        let err = Literal::try_from_json(
+            serde_json::json!("POINT (1 2)"),
+            &Primitive(primitive_type.clone()),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        assert_eq!(
+            err.message(),
+            "WKT deserialization for geospatial types is not yet supported"
+        );
+
+        let err = Literal::Primitive(PrimitiveLiteral::Binary(vec![1, 2, 3]))
+            .try_into_json(&Primitive(primitive_type))
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        assert_eq!(
+            err.message(),
+            "WKT serialization for geospatial types is not yet supported"
+        );
+    }
+}
+
+#[test]
+fn geospatial_datums_are_not_orderable() {
+    let geometry_type = PrimitiveType::Geometry(Default::default());
+    let geography_type = PrimitiveType::Geography(Default::default());
+    let geometry = Datum::new(
+        geometry_type.clone(),
+        PrimitiveLiteral::Binary(vec![1, 2, 3]),
+    );
+    let other_geometry = Datum::new(geometry_type, PrimitiveLiteral::Binary(vec![4, 5, 6]));
+    let geography = Datum::new(
+        geography_type.clone(),
+        PrimitiveLiteral::Binary(vec![1, 2, 3]),
+    );
+    let other_geography = Datum::new(geography_type, PrimitiveLiteral::Binary(vec![4, 5, 6]));
+
+    assert_eq!(geometry.partial_cmp(&other_geometry), None);
+    assert_eq!(geography.partial_cmp(&other_geography), None);
+}
+
+#[test]
 fn avro_bytes_decimal() {
     // (input_bytes, decimal_num, expect_scale, expect_precision)
     let cases = vec![
