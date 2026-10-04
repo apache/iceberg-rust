@@ -103,8 +103,11 @@ cfg_if! {
 mod resolving;
 pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 
-/// Per-attempt timeout in milliseconds for OpenDAL IO operations (read, write, list, delete).
-/// Defaults to 10 seconds. Control operations such as `stat` keep OpenDAL's 60-second timeout.
+/// Timeout in milliseconds for each IO call on a reader, writer, lister or deleter, applied per
+/// retry attempt via OpenDAL's `TimeoutLayer::with_io_timeout`. Defaults to 10 seconds.
+///
+/// OpenDAL's separate `timeout`, which bounds whole control operations such as `stat`, is not
+/// affected and stays at its 60-second default.
 pub const OPENDAL_IO_TIMEOUT_MS: &str = "opendal.io-timeout-ms";
 
 /// Matches OpenDAL's `TimeoutLayer` default.
@@ -273,7 +276,7 @@ fn default_memory_operator() -> Operator {
 
 /// OpenDAL-based storage implementation.
 ///
-/// The serialized form is not stable across crate versions.
+/// The serialized representation is not a stable format and may change between crate versions.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum OpenDalStorage {
     /// Memory storage variant.
