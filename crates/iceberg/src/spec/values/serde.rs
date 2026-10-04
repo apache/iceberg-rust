@@ -417,7 +417,7 @@ pub(crate) mod _serde {
                 RawLiteralEnum::Double(v) => match ty {
                     Type::Primitive(PrimitiveType::Float) => {
                         let v_32 = v as f32;
-                        if v_32.is_finite() {
+                        if v.is_finite() {
                             let v_64 = f64::from(v_32);
                             if (v_64 - v).abs() > f32::EPSILON as f64 {
                                 // there is a precision loss
