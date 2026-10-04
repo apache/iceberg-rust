@@ -26,7 +26,7 @@ Also flag these, once per PR with the locations:
   history, or justify review decisions.
 - Unrelated edits: Renames, reformatting, or reordering of code the
   change does not otherwise need.
-- API growth: New `pub` items the change does not need to expose (see
-  `public-api.txt`). Suggest `pub(crate)`.
+- API growth: New public API the change does not need. Check new entries
+  in `public-api.txt`.
 - PR description: Descriptions that restate the diff or pad the
   template. Mention it in the review summary.
