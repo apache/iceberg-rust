@@ -157,6 +157,10 @@ fn iceberg_crs_from_wkb_metadata(metadata: &WkbMetadata) -> Result<String> {
     }
 }
 
+fn arrow_crs_from_iceberg(crs: &str) -> Option<&str> {
+    (!crs.eq_ignore_ascii_case(UNSET_GEOSPATIAL_CRS)).then_some(crs)
+}
+
 /// A post order arrow schema visitor.
 ///
 /// For order of methods called, please refer to the internal `visit_schema` function.
@@ -759,12 +763,12 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                 arrow_field.try_with_extension_type(UuidExtensionType)?;
             }
             Type::Primitive(PrimitiveType::Geometry(geometry)) => {
-                let metadata = WkbMetadata::new(Some(geometry.crs()), None);
+                let metadata = WkbMetadata::new(arrow_crs_from_iceberg(geometry.crs()), None);
                 arrow_field.try_with_extension_type(WkbType::new(Some(metadata)))?;
             }
             Type::Primitive(PrimitiveType::Geography(geography)) => {
                 let metadata = WkbMetadata::new(
-                    Some(geography.crs()),
+                    arrow_crs_from_iceberg(geography.crs()),
                     Some(to_arrow_wkb_edges(geography.algorithm())),
                 );
                 arrow_field.try_with_extension_type(WkbType::new(Some(metadata)))?;
@@ -2607,6 +2611,47 @@ mod tests {
                 GeometryType::new(Some(UNSET_GEOSPATIAL_CRS.to_string())).unwrap()
             ))
         );
+    }
+
+    #[test]
+    fn test_geospatial_arrow_unset_crs_export() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(
+                    1,
+                    "geom",
+                    Type::Primitive(PrimitiveType::Geometry(
+                        GeometryType::new(Some(UNSET_GEOSPATIAL_CRS.to_string())).unwrap(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(
+                    2,
+                    "geog",
+                    Type::Primitive(PrimitiveType::Geography(
+                        GeographyType::new(
+                            Some(UNSET_GEOSPATIAL_CRS.to_string()),
+                            IcebergEdgeInterpolationAlgorithm::Spherical,
+                        )
+                        .unwrap(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        let arrow_schema = schema_to_arrow_schema(&schema).unwrap();
+        for field in arrow_schema.fields() {
+            assert!(
+                field
+                    .try_extension_type::<WkbType>()
+                    .unwrap()
+                    .metadata()
+                    .crs
+                    .is_none()
+            );
+        }
+        assert_eq!(arrow_schema_to_schema(&arrow_schema).unwrap(), schema);
     }
 
     #[test]
