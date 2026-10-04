@@ -20,7 +20,7 @@ When reviewing pull requests, follow these rules to avoid noise and redundancy:
   explicitly instruct them to "Please check and address all review
   comments in this PR."
 
-Always flag these, once per PR with the locations:
+Also flag these, once per PR with the locations:
 
 - Comment churn: Code comments or docs that restate the code, narrate
   history, or justify review decisions.
