@@ -35,6 +35,7 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     Runtime, TableCommit, TableCreation, TableIdent,
 };
+use iceberg_property_macro::Properties;
 use iceberg_storage_opendal::OpenDalStorageFactory;
 
 use crate::utils::create_sdk_config;
@@ -44,49 +45,25 @@ pub const S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN: &str = "table_bucket_arn";
 /// S3Tables endpoint URL property
 pub const S3TABLES_CATALOG_PROP_ENDPOINT_URL: &str = "endpoint_url";
 
-/// S3Tables catalog configuration.
-#[derive(Debug)]
-struct S3TablesCatalogConfig {
-    /// Catalog name.
-    name: Option<String>,
-    /// Unlike other buckets, S3Tables bucket is not a physical bucket, but a virtual bucket
-    /// that is managed by s3tables. We can't directly access the bucket with path like
-    /// s3://{bucket_name}/{file_path}, all the operations are done with respect of the bucket
-    /// ARN.
-    table_bucket_arn: String,
-    /// Endpoint URL for the catalog.
-    endpoint_url: Option<String>,
-    /// Optional pre-configured AWS SDK client for S3Tables.
-    client: Option<aws_sdk_s3tables::Client>,
-    /// Properties for the catalog. The available properties are:
-    /// - `profile_name`: The name of the AWS profile to use.
-    /// - `region_name`: The AWS region to use.
-    /// - `aws_access_key_id`: The AWS access key ID to use.
-    /// - `aws_secret_access_key`: The AWS secret access key to use.
-    /// - `aws_session_token`: The AWS session token to use.
-    props: HashMap<String, String>,
-}
-
 /// Builder for [`S3TablesCatalog`].
 #[derive(Debug)]
 pub struct S3TablesCatalogBuilder {
-    config: S3TablesCatalogConfig,
+    table_bucket_arn: String,
+    endpoint_url: Option<String>,
+    client: Option<aws_sdk_s3tables::Client>,
     storage_factory: Option<Arc<dyn StorageFactory>>,
     kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
 }
 
 /// Default builder for [`S3TablesCatalog`].
+#[allow(clippy::derivable_impls)]
 impl Default for S3TablesCatalogBuilder {
     fn default() -> Self {
         Self {
-            config: S3TablesCatalogConfig {
-                name: None,
-                table_bucket_arn: "".to_string(),
-                endpoint_url: None,
-                client: None,
-                props: HashMap::new(),
-            },
+            table_bucket_arn: String::new(),
+            endpoint_url: None,
+            client: None,
             storage_factory: None,
             kms_client_factory: None,
             runtime: None,
@@ -105,13 +82,13 @@ impl S3TablesCatalogBuilder {
     /// This follows the general pattern where properties specified in the `load()` method
     /// have higher priority than builder method configurations.
     pub fn with_endpoint_url(mut self, endpoint_url: impl Into<String>) -> Self {
-        self.config.endpoint_url = Some(endpoint_url.into());
+        self.endpoint_url = Some(endpoint_url.into());
         self
     }
 
     /// Configure the catalog with a pre-built AWS SDK client.
     pub fn with_client(mut self, client: aws_sdk_s3tables::Client) -> Self {
-        self.config.client = Some(client);
+        self.client = Some(client);
         self
     }
 
@@ -124,7 +101,7 @@ impl S3TablesCatalogBuilder {
     /// This follows the general pattern where properties specified in the `load()` method
     /// have higher priority than builder method configurations.
     pub fn with_table_bucket_arn(mut self, table_bucket_arn: impl Into<String>) -> Self {
-        self.config.table_bucket_arn = table_bucket_arn.into();
+        self.table_bucket_arn = table_bucket_arn.into();
         self
     }
 }
@@ -148,81 +125,98 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
     }
 
     fn load(
-        mut self,
+        self,
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
         let catalog_name = name.into();
-        self.config.name = Some(catalog_name.clone());
-
-        if props.contains_key(S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN) {
-            self.config.table_bucket_arn = props
-                .get(S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN)
-                .cloned()
-                .unwrap_or_default();
-        }
-
-        if props.contains_key(S3TABLES_CATALOG_PROP_ENDPOINT_URL) {
-            self.config.endpoint_url = props.get(S3TABLES_CATALOG_PROP_ENDPOINT_URL).cloned();
-        }
-
-        // Collect other remaining properties
-        self.config.props = props
-            .into_iter()
-            .filter(|(k, _)| {
-                k != S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN
-                    && k != S3TABLES_CATALOG_PROP_ENDPOINT_URL
-            })
-            .collect();
 
         async move {
+            let mut catalog_properties = S3TablesCatalogProperties::from_properties(&props)?;
+            if !props.contains_key(S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN) {
+                catalog_properties.table_bucket_arn = self.table_bucket_arn;
+            }
+            if !props.contains_key(S3TABLES_CATALOG_PROP_ENDPOINT_URL) {
+                catalog_properties.endpoint_url = self.endpoint_url;
+            }
+
             if catalog_name.trim().is_empty() {
-                Err(Error::new(
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name cannot be empty",
-                ))
-            } else if self.config.table_bucket_arn.is_empty() {
-                Err(Error::new(
+                ));
+            }
+            if catalog_properties.table_bucket_arn.is_empty() {
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Table bucket ARN is required",
-                ))
-            } else {
-                let runtime = match self.runtime {
-                    Some(rt) => rt,
-                    None => Runtime::try_current()?,
-                };
-                let kms_client = match self.kms_client_factory {
-                    Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
-                    None => None,
-                };
-                S3TablesCatalog::new(self.config, self.storage_factory, runtime, kms_client).await
+                ));
             }
+
+            let runtime = match self.runtime {
+                Some(rt) => rt,
+                None => Runtime::try_current()?,
+            };
+            let kms_client = match self.kms_client_factory {
+                Some(factory) => Some(factory.create_kms_client(&props).await?),
+                None => None,
+            };
+            S3TablesCatalog::new(
+                catalog_name,
+                catalog_properties,
+                props,
+                self.client,
+                self.storage_factory,
+                runtime,
+                kms_client,
+            )
+            .await
         }
     }
 }
 
+#[derive(Debug, Properties)]
+pub(crate) struct S3TablesCatalogProperties {
+    #[property(key = S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN, default = "")]
+    table_bucket_arn: String,
+    #[property(key = S3TABLES_CATALOG_PROP_ENDPOINT_URL, default = None)]
+    endpoint_url: Option<String>,
+}
+
 /// S3Tables catalog implementation.
-#[derive(Debug)]
 pub struct S3TablesCatalog {
-    config: S3TablesCatalogConfig,
+    name: String,
+    properties: S3TablesCatalogProperties,
     s3tables_client: aws_sdk_s3tables::Client,
     file_io: FileIO,
     runtime: Runtime,
     kms_client: Option<Arc<dyn KeyManagementClient>>,
 }
 
+impl std::fmt::Debug for S3TablesCatalog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("S3TablesCatalog")
+            .field("name", &self.name)
+            .field("properties", &self.properties)
+            .finish_non_exhaustive()
+    }
+}
+
 impl S3TablesCatalog {
     /// Creates a new S3Tables catalog.
     async fn new(
-        config: S3TablesCatalogConfig,
+        name: String,
+        properties: S3TablesCatalogProperties,
+        props: HashMap<String, String>,
+        client: Option<aws_sdk_s3tables::Client>,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
         kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
-        let s3tables_client = if let Some(client) = config.client.clone() {
+        let s3tables_client = if let Some(client) = client {
             client
         } else {
-            let aws_config = create_sdk_config(&config.props, config.endpoint_url.clone()).await;
+            let aws_config = create_sdk_config(&props, properties.endpoint_url.clone()).await;
             aws_sdk_s3tables::Client::new(&aws_config)
         };
 
@@ -232,12 +226,11 @@ impl S3TablesCatalog {
                 customized_credential_load: None,
             })
         });
-        let file_io = FileIOBuilder::new(factory)
-            .with_props(&config.props)
-            .build();
+        let file_io = FileIOBuilder::new(factory).with_props(props).build();
 
         Ok(Self {
-            config,
+            name,
+            properties,
             s3tables_client,
             file_io,
             runtime,
@@ -252,7 +245,7 @@ impl S3TablesCatalog {
         let req = self
             .s3tables_client
             .get_table()
-            .table_bucket_arn(self.config.table_bucket_arn.clone())
+            .table_bucket_arn(self.properties.table_bucket_arn.clone())
             .namespace(table_ident.namespace().to_url_string())
             .name(table_ident.name());
 
@@ -319,7 +312,7 @@ impl Catalog for S3TablesCatalog {
             let mut req = self
                 .s3tables_client
                 .list_namespaces()
-                .table_bucket_arn(self.config.table_bucket_arn.clone());
+                .table_bucket_arn(self.properties.table_bucket_arn.clone());
             if let Some(token) = continuation_token {
                 req = req.continuation_token(token);
             }
@@ -366,7 +359,7 @@ impl Catalog for S3TablesCatalog {
         let req = self
             .s3tables_client
             .create_namespace()
-            .table_bucket_arn(self.config.table_bucket_arn.clone())
+            .table_bucket_arn(self.properties.table_bucket_arn.clone())
             .namespace(namespace.to_url_string());
         req.send().await.map_err(from_aws_sdk_error)?;
         Ok(Namespace::with_properties(
@@ -395,7 +388,7 @@ impl Catalog for S3TablesCatalog {
         let req = self
             .s3tables_client
             .get_namespace()
-            .table_bucket_arn(self.config.table_bucket_arn.clone())
+            .table_bucket_arn(self.properties.table_bucket_arn.clone())
             .namespace(namespace.to_url_string());
         let resp: GetNamespaceOutput = req.send().await.map_err(from_aws_sdk_error)?;
         let properties = HashMap::new();
@@ -421,7 +414,7 @@ impl Catalog for S3TablesCatalog {
         let req = self
             .s3tables_client
             .get_namespace()
-            .table_bucket_arn(self.config.table_bucket_arn.clone())
+            .table_bucket_arn(self.properties.table_bucket_arn.clone())
             .namespace(namespace.to_url_string());
         match req.send().await {
             Ok(_) => Ok(true),
@@ -469,7 +462,7 @@ impl Catalog for S3TablesCatalog {
         let req = self
             .s3tables_client
             .delete_namespace()
-            .table_bucket_arn(self.config.table_bucket_arn.clone())
+            .table_bucket_arn(self.properties.table_bucket_arn.clone())
             .namespace(namespace.to_url_string());
         req.send().await.map_err(from_aws_sdk_error)?;
         Ok(())
@@ -490,7 +483,7 @@ impl Catalog for S3TablesCatalog {
             let mut req = self
                 .s3tables_client
                 .list_tables()
-                .table_bucket_arn(self.config.table_bucket_arn.clone())
+                .table_bucket_arn(self.properties.table_bucket_arn.clone())
                 .namespace(namespace.to_url_string());
             if let Some(token) = continuation_token {
                 req = req.continuation_token(token);
@@ -535,7 +528,7 @@ impl Catalog for S3TablesCatalog {
         let create_resp: CreateTableOutput = self
             .s3tables_client
             .create_table()
-            .table_bucket_arn(self.config.table_bucket_arn.clone())
+            .table_bucket_arn(self.properties.table_bucket_arn.clone())
             .namespace(namespace.to_url_string())
             .format(OpenTableFormat::Iceberg)
             .name(table_ident.name())
@@ -556,7 +549,7 @@ impl Catalog for S3TablesCatalog {
                 let get_resp: GetTableOutput = self
                     .s3tables_client
                     .get_table()
-                    .table_bucket_arn(self.config.table_bucket_arn.clone())
+                    .table_bucket_arn(self.properties.table_bucket_arn.clone())
                     .namespace(namespace.to_url_string())
                     .name(table_ident.name())
                     .send()
@@ -578,7 +571,7 @@ impl Catalog for S3TablesCatalog {
         let metadata_location_str = metadata_location.to_string();
         self.s3tables_client
             .update_table_metadata_location()
-            .table_bucket_arn(self.config.table_bucket_arn.clone())
+            .table_bucket_arn(self.properties.table_bucket_arn.clone())
             .namespace(namespace.to_url_string())
             .name(table_ident.name())
             .metadata_location(metadata_location_str.clone())
@@ -629,7 +622,7 @@ impl Catalog for S3TablesCatalog {
         let req = self
             .s3tables_client
             .delete_table()
-            .table_bucket_arn(self.config.table_bucket_arn.clone())
+            .table_bucket_arn(self.properties.table_bucket_arn.clone())
             .namespace(table.namespace().to_url_string())
             .name(table.name());
         req.send().await.map_err(from_aws_sdk_error)?;
@@ -652,7 +645,7 @@ impl Catalog for S3TablesCatalog {
         let req = self
             .s3tables_client
             .get_table()
-            .table_bucket_arn(self.config.table_bucket_arn.clone())
+            .table_bucket_arn(self.properties.table_bucket_arn.clone())
             .namespace(table_ident.namespace().to_url_string())
             .name(table_ident.name());
         match req.send().await {
@@ -679,7 +672,7 @@ impl Catalog for S3TablesCatalog {
         let req = self
             .s3tables_client
             .rename_table()
-            .table_bucket_arn(self.config.table_bucket_arn.clone())
+            .table_bucket_arn(self.properties.table_bucket_arn.clone())
             .namespace(src.namespace().to_url_string())
             .name(src.name())
             .new_namespace_name(dest.namespace().to_url_string())
@@ -718,7 +711,7 @@ impl Catalog for S3TablesCatalog {
         let builder = self
             .s3tables_client
             .update_table_metadata_location()
-            .table_bucket_arn(&self.config.table_bucket_arn)
+            .table_bucket_arn(&self.properties.table_bucket_arn)
             .namespace(table_namespace.to_url_string())
             .name(table_ident.name())
             .version_token(version_token)
@@ -765,22 +758,86 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn test_catalog_properties() {
+        let properties = S3TablesCatalogProperties::from_properties(&HashMap::from([
+            (
+                S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN.to_string(),
+                "arn:aws:s3tables:us-east-1:123456789012:bucket/test".to_string(),
+            ),
+            (
+                S3TABLES_CATALOG_PROP_ENDPOINT_URL.to_string(),
+                "http://localhost".to_string(),
+            ),
+        ]))
+        .unwrap();
+
+        assert_eq!(
+            properties.table_bucket_arn,
+            "arn:aws:s3tables:us-east-1:123456789012:bucket/test"
+        );
+        assert_eq!(properties.endpoint_url.as_deref(), Some("http://localhost"));
+    }
+
+    #[test]
+    fn test_catalog_properties_defaults() {
+        let properties = S3TablesCatalogProperties::from_properties(&HashMap::new()).unwrap();
+
+        assert_eq!(properties.table_bucket_arn, "");
+        assert_eq!(properties.endpoint_url, None);
+    }
+
+    #[tokio::test]
+    async fn test_catalog_forwards_properties_to_file_io() {
+        let table_bucket_arn = "arn:aws:s3tables:us-east-1:123456789012:bucket/property-forwarding";
+        let catalog = S3TablesCatalogBuilder::default()
+            .with_storage_factory(Arc::new(iceberg::io::MemoryStorageFactory))
+            .load(
+                "s3tables",
+                HashMap::from([
+                    (
+                        S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN.to_string(),
+                        table_bucket_arn.to_string(),
+                    ),
+                    ("custom.property".to_string(), "value".to_string()),
+                ]),
+            )
+            .await
+            .unwrap();
+        let file_io_props = catalog.file_io.config().props();
+
+        assert_eq!(
+            file_io_props.get("custom.property"),
+            Some(&"value".to_string())
+        );
+        assert_eq!(
+            file_io_props.get(S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN),
+            Some(&table_bucket_arn.to_string())
+        );
+    }
+
     async fn load_s3tables_catalog_from_env() -> Result<Option<S3TablesCatalog>> {
         let table_bucket_arn = match std::env::var("TABLE_BUCKET_ARN").ok() {
             Some(table_bucket_arn) => table_bucket_arn,
             None => return Ok(None),
         };
 
-        let config = S3TablesCatalogConfig {
-            name: None,
+        let properties = S3TablesCatalogProperties {
             table_bucket_arn,
             endpoint_url: None,
-            client: None,
-            props: HashMap::new(),
         };
 
         Ok(Some(
-            S3TablesCatalog::new(config, None, Runtime::current(), None).await?,
+            S3TablesCatalog::new(
+                "s3tables".to_string(),
+                properties,
+                HashMap::new(),
+                None,
+                None,
+                Runtime::current(),
+                None,
+            )
+            .await?,
         ))
     }
 
@@ -1049,7 +1106,7 @@ mod tests {
 
         assert!(result.is_ok());
         let catalog = result.unwrap();
-        assert_eq!(catalog.config.table_bucket_arn, test_arn);
+        assert_eq!(catalog.properties.table_bucket_arn, test_arn);
     }
 
     #[tokio::test]
@@ -1093,11 +1150,11 @@ mod tests {
 
         // Property value should override builder method value
         assert_eq!(
-            catalog.config.endpoint_url,
+            catalog.properties.endpoint_url,
             Some(property_endpoint.to_string())
         );
         assert_ne!(
-            catalog.config.endpoint_url,
+            catalog.properties.endpoint_url,
             Some(builder_endpoint.to_string())
         );
     }
@@ -1117,7 +1174,7 @@ mod tests {
         let catalog = result.unwrap();
 
         assert_eq!(
-            catalog.config.endpoint_url,
+            catalog.properties.endpoint_url,
             Some(builder_endpoint.to_string())
         );
     }
@@ -1141,7 +1198,7 @@ mod tests {
         let catalog = result.unwrap();
 
         assert_eq!(
-            catalog.config.endpoint_url,
+            catalog.properties.endpoint_url,
             Some(property_endpoint.to_string())
         );
     }
@@ -1164,8 +1221,8 @@ mod tests {
         assert!(result.is_ok());
         let catalog = result.unwrap();
 
-        assert_eq!(catalog.config.table_bucket_arn, property_arn);
-        assert_ne!(catalog.config.table_bucket_arn, builder_arn);
+        assert_eq!(catalog.properties.table_bucket_arn, property_arn);
+        assert_ne!(catalog.properties.table_bucket_arn, builder_arn);
     }
 
     #[tokio::test]
@@ -1179,7 +1236,7 @@ mod tests {
         assert!(result.is_ok());
         let catalog = result.unwrap();
 
-        assert_eq!(catalog.config.table_bucket_arn, builder_arn);
+        assert_eq!(catalog.properties.table_bucket_arn, builder_arn);
     }
 
     #[tokio::test]
@@ -1199,7 +1256,7 @@ mod tests {
         assert!(result.is_ok());
         let catalog = result.unwrap();
 
-        assert_eq!(catalog.config.table_bucket_arn, property_arn);
+        assert_eq!(catalog.properties.table_bucket_arn, property_arn);
     }
 
     #[tokio::test]
