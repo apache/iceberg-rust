@@ -69,7 +69,7 @@ impl<T: Debug, const N: usize> Debug for LogicalExpression<T, N> {
 }
 
 impl<T, const N: usize> LogicalExpression<T, N> {
-    pub(crate) fn new(inputs: [Box<T>; N]) -> Self {
+    fn new(inputs: [Box<T>; N]) -> Self {
         Self { inputs }
     }
 

@@ -211,7 +211,7 @@ impl ArrowReader {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use std::fs::File;
     use std::sync::Arc;
 
@@ -223,19 +223,15 @@ mod tests {
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
-    use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
-    use parquet::file::metadata::{
-        FileMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataBuilder,
-    };
+    use parquet::file::metadata::{FileMetaData, ParquetMetaData, ParquetMetaDataBuilder};
     use parquet::file::properties::{EnabledStatistics, WriterProperties};
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
     use tempfile::TempDir;
 
     use crate::Runtime;
-    use crate::arrow::reader::predicate_visitor::residual_for_missing_fields;
     use crate::arrow::{ArrowReader, ArrowReaderBuilder};
     use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::io::FileIO;
@@ -1338,20 +1334,15 @@ mod tests {
     }
 
     async fn read_once(
+        reader: ArrowReader,
         file_path: &str,
         schema: Arc<Schema>,
         project_field_ids: Vec<i32>,
         predicate: Predicate,
-        bloom_enabled: bool,
+        partition: Option<(Arc<PartitionSpec>, Struct)>,
+        deletes: Vec<FileScanTaskDeleteFile>,
     ) -> (Vec<RecordBatch>, u64) {
-        let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
-            .with_bloom_filter_enabled(bloom_enabled)
-            // Keep the fixed footer prefetch small so the byte measurement reflects
-            // row group I/O rather than a constant metadata read.
-            .with_metadata_size_hint(8 * 1024)
-            .build();
-
+        let (partition_spec, partition) = partition.unzip();
         let task = FileScanTask::builder()
             .with_file_size_in_bytes(std::fs::metadata(file_path).unwrap().len())
             .with_start(0)
@@ -1361,6 +1352,9 @@ mod tests {
             .with_schema(schema.clone())
             .with_project_field_ids(project_field_ids)
             .with_predicate(Some(predicate.bind(schema, true).unwrap()))
+            .with_deletes(deletes)
+            .with_partition(partition)
+            .with_partition_spec(partition_spec)
             .with_case_sensitive(false)
             .build()
             .unwrap();
@@ -1389,15 +1383,25 @@ mod tests {
         project_field_ids: Vec<i32>,
         predicate: Predicate,
     ) -> (Option<RecordBatch>, u64, u64) {
-        let (off, bytes_off) = read_once(
-            file_path,
-            schema.clone(),
-            project_field_ids.clone(),
-            predicate.clone(),
-            false,
-        )
-        .await;
-        let (on, bytes_on) = read_once(file_path, schema, project_field_ids, predicate, true).await;
+        let read = |bloom_enabled| {
+            let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                .with_bloom_filter_enabled(bloom_enabled)
+                // Keep the fixed footer prefetch small so the byte measurement reflects
+                // row group I/O rather than a constant metadata read.
+                .with_metadata_size_hint(8 * 1024)
+                .build();
+            read_once(
+                reader,
+                file_path,
+                schema.clone(),
+                project_field_ids.clone(),
+                predicate.clone(),
+                None,
+                vec![],
+            )
+        };
+        let (off, bytes_off) = read(false).await;
+        let (on, bytes_on) = read(true).await;
 
         let off = collapse(&off);
         let on = collapse(&on);
@@ -1795,57 +1799,93 @@ mod tests {
     }
 
     /// Reads the file from [`write_file_without_b`], in which `b` reads as 7 on every row through
-    /// `schema` or `partition`, and asserts the rows each predicate keeps. Each predicate must keep
-    /// or drop all three rows as if `b` were stored as 7.
+    /// `schema` or `partition`, and asserts the rows each predicate keeps. Each predicate, and each
+    /// equality delete on `b`, must keep or drop all three rows as if `b` were stored as 7.
     async fn assert_absent_b_reads_as_7(
         schema: SchemaRef,
         partition: Option<(Arc<PartitionSpec>, Struct)>,
         cases: Vec<(Predicate, usize)>,
     ) {
-        let (file_path, _tmp_dir) = write_file_without_b();
-        let read = async |predicate: Predicate| {
-            let task = FileScanTask::builder()
-                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
-                .with_start(0)
-                .with_length(0)
-                .with_data_file_path(file_path.clone())
-                .with_data_file_format(DataFileFormat::Parquet)
-                .with_schema(schema.clone())
-                .with_project_field_ids(vec![1, 2])
-                .with_predicate(Some(predicate.bind(schema.clone(), true).unwrap()))
-                .with_partition_spec(partition.as_ref().map(|(spec, _)| spec.clone()))
-                .with_partition(partition.as_ref().map(|(_, data)| data.clone()))
-                .with_case_sensitive(false)
-                .build()
-                .unwrap();
-            let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-            ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-                .build()
-                .read(tasks)
-                .unwrap()
-                .stream()
-                .try_collect::<Vec<RecordBatch>>()
-                .await
-                .unwrap()
+        let (file_path, tmp_dir) = write_file_without_b();
+        let read = async |row_selection_enabled, predicate, deletes| {
+            let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                .with_row_selection_enabled(row_selection_enabled)
+                .build();
+            let (batches, _) = read_once(
+                reader,
+                &file_path,
+                schema.clone(),
+                vec![1, 2],
+                predicate,
+                partition.clone(),
+                deletes,
+            )
+            .await;
+            batches
         };
 
-        let batches = read(Predicate::AlwaysTrue).await;
+        let batches = read(false, Predicate::AlwaysTrue, vec![]).await;
         assert_eq!(
             batches[0].column(1).as_primitive::<Int64Type>().values(),
             &[7, 7, 7]
         );
 
-        let mut actual = Vec::new();
-        for (predicate, _) in &cases {
-            let batches = read(predicate.clone()).await;
-            let rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
-            actual.push((predicate.to_string(), rows));
-        }
-        let expected: Vec<_> = cases
-            .iter()
-            .map(|(predicate, rows)| (predicate.to_string(), *rows))
+        // The keep predicate for a deleted value `v` is `b IS NULL OR b != v`, and `b IS NOT NULL`
+        // for a deleted null.
+        let delete_field = Field::new("b", DataType::Int64, true).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "2".to_string(),
+        )]));
+        let delete_schema = Arc::new(ArrowSchema::new(vec![delete_field]));
+        let deletes: Vec<_> = [(Some(7), 0), (Some(5), 3), (None, 3)]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (deleted_b, rows))| {
+                let delete_path =
+                    format!("{}/eq-del-{i}.parquet", tmp_dir.path().to_str().unwrap());
+                let batch = RecordBatch::try_new(delete_schema.clone(), vec![Arc::new(
+                    Int64Array::from(vec![deleted_b]),
+                )])
+                .unwrap();
+                write_row_groups(&delete_path, delete_schema.clone(), vec![batch], false);
+                let delete = FileScanTaskDeleteFile {
+                    file_size_in_bytes: std::fs::metadata(&delete_path).unwrap().len(),
+                    file_path: delete_path,
+                    file_type: DataContentType::EqualityDeletes,
+                    file_format: DataFileFormat::Parquet,
+                    partition_spec_id: 0,
+                    equality_ids: Some(vec![2]),
+                    referenced_data_file: None,
+                    content_offset: None,
+                    content_size_in_bytes: None,
+                    record_count: None,
+                    key_metadata: None,
+                };
+                (deleted_b, delete, rows)
+            })
             .collect();
-        assert_eq!(actual, expected);
+
+        for row_selection_enabled in [false, true] {
+            for (predicate, expected) in &cases {
+                let batches = read(row_selection_enabled, predicate.clone(), vec![]).await;
+                let rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+                assert_eq!(
+                    rows, *expected,
+                    "{predicate}, row_selection_enabled = {row_selection_enabled}"
+                );
+            }
+            for (deleted_b, delete, expected) in &deletes {
+                let batches = read(row_selection_enabled, Predicate::AlwaysTrue, vec![
+                    delete.clone(),
+                ])
+                .await;
+                let rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+                assert_eq!(
+                    rows, *expected,
+                    "equality delete on b = {deleted_b:?}, row_selection_enabled = {row_selection_enabled}"
+                );
+            }
+        }
     }
 
     /// A file written before column `b` was added with `initial-default` 7.
@@ -1890,55 +1930,5 @@ mod tests {
             (b().is_null(), 0),
         ])
         .await;
-    }
-
-    #[tokio::test]
-    async fn test_page_index_on_absent_column_uses_initial_default() {
-        let schema = schema_with_b(
-            NestedField::optional(2, "b", Type::Primitive(PrimitiveType::Long))
-                .with_initial_default(Literal::long(7)),
-        );
-        let (file_path, _tmp_dir) = write_file_without_b();
-        let metadata = ArrowReaderMetadata::load(
-            &File::open(&file_path).unwrap(),
-            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
-        )
-        .unwrap()
-        .metadata()
-        .clone();
-        let field_id_map = HashMap::from([(1, 0)]);
-
-        let b = || Reference::new("b");
-        let predicates = [
-            b().equal_to(Datum::long(7)),
-            b().is_not_null(),
-            b().is_in([Datum::long(7), Datum::long(8)]),
-        ];
-
-        // The reader applies the residual before page index pruning.
-        let mut actual = Vec::new();
-        for predicate in &predicates {
-            let residual = residual_for_missing_fields(
-                predicate.clone().bind(schema.clone(), true).unwrap(),
-                &HashSet::from([2]),
-                &field_id_map,
-                &schema,
-                None,
-                None,
-            )
-            .unwrap();
-            let selection = ArrowReader::get_row_selection_for_filter_predicate(
-                &residual,
-                &metadata,
-                &None,
-                &field_id_map,
-                &schema,
-            )
-            .unwrap()
-            .expect("the file has a page index");
-            actual.push((predicate.to_string(), selection.row_count()));
-        }
-        let expected: Vec<_> = predicates.iter().map(|p| (p.to_string(), 3)).collect();
-        assert_eq!(actual, expected);
     }
 }

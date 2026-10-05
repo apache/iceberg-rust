@@ -516,6 +516,8 @@ impl FileScanTaskReader {
                 &predicate,
                 use_position_fallback,
             )?;
+            // Apply the residual before the row filter and every pruning layer below, so they all
+            // see the same predicate.
             let predicate = residual_for_missing_fields(
                 predicate,
                 &iceberg_field_ids,

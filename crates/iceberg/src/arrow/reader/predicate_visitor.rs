@@ -39,7 +39,7 @@ use crate::arrow::record_batch_transformer::constants_map;
 use crate::error::{Result, invalid_data};
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::visitors::expression_evaluator::ExpressionEvaluatorVisitor;
-use crate::expr::{BoundPredicate, BoundReference, LogicalExpression};
+use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{Datum, Literal, PartitionSpec, Schema, Struct};
 
 /// A visitor to collect field ids from bound predicates.
@@ -225,7 +225,7 @@ pub(super) fn residual_for_missing_fields(
         _ => HashMap::new(),
     };
 
-    let mut field_ids = HashSet::new();
+    let mut constant_field_ids = HashSet::new();
     let row: Struct = schema
         .as_struct()
         .fields()
@@ -239,29 +239,29 @@ pub(super) fn residual_for_missing_fields(
                 None => field.initial_default.clone(),
             };
             if value.is_some() {
-                field_ids.insert(field.id);
+                constant_field_ids.insert(field.id);
             }
             value
         })
         .collect();
 
-    if field_ids.is_empty() {
+    if constant_field_ids.is_empty() {
         return Ok(predicate);
     }
     visit(
         &mut MissingFieldResidualVisitor {
             row: &row,
-            field_ids: &field_ids,
+            constant_field_ids: &constant_field_ids,
         },
         &predicate,
     )
 }
 
-/// Replaces leaves on the fields in `field_ids` with their result on `row`, which holds each
+/// Replaces leaves on the fields in `constant_field_ids` with their result on `row`, which holds each
 /// top-level field's value at its position in the schema.
 struct MissingFieldResidualVisitor<'a> {
     row: &'a Struct,
-    field_ids: &'a HashSet<i32>,
+    constant_field_ids: &'a HashSet<i32>,
 }
 
 impl MissingFieldResidualVisitor<'_> {
@@ -270,7 +270,7 @@ impl MissingFieldResidualVisitor<'_> {
         reference: &BoundReference,
         predicate: &BoundPredicate,
     ) -> Result<BoundPredicate> {
-        if !self.field_ids.contains(&reference.field().id) {
+        if !self.constant_field_ids.contains(&reference.field().id) {
             return Ok(predicate.clone());
         }
         if visit(&mut ExpressionEvaluatorVisitor::new(self.row), predicate)? {
@@ -301,9 +301,7 @@ impl BoundPredicateVisitor for MissingFieldResidualVisitor<'_> {
     }
 
     fn not(&mut self, inner: BoundPredicate) -> Result<BoundPredicate> {
-        Ok(BoundPredicate::Not(LogicalExpression::new([Box::new(
-            inner,
-        )])))
+        Ok(inner.negate())
     }
 
     fn is_null(
@@ -907,7 +905,7 @@ mod tests {
         CollectFieldIdVisitor, PredicateConverter, constant_bool_array, residual_for_missing_fields,
     };
     use crate::expr::visitors::bound_predicate_visitor::visit;
-    use crate::expr::{Bind, BoundPredicate, LogicalExpression, Predicate, Reference};
+    use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::spec::{
         Datum, Literal, NestedField, PartitionSpec, PrimitiveType, Schema, SchemaRef, Struct,
         StructType, Transform, Type,
@@ -1115,29 +1113,19 @@ mod tests {
                 .unwrap(),
         );
 
-        let cases: Vec<_> = always_true
+        let cases = always_true
             .into_iter()
             .map(|predicate| (predicate, BoundPredicate::AlwaysTrue))
             .chain(
                 always_false
                     .into_iter()
                     .map(|predicate| (predicate, BoundPredicate::AlwaysFalse)),
-            )
-            .collect();
-        let actual: Vec<_> = cases
-            .iter()
-            .map(|(predicate, _)| {
-                (
-                    predicate.to_string(),
-                    residual_for_file_with_field_1(&schema, predicate.clone(), None),
-                )
-            })
-            .collect();
-        let expected: Vec<_> = cases
-            .into_iter()
-            .map(|(predicate, residual)| (predicate.to_string(), residual))
-            .collect();
-        assert_eq!(actual, expected);
+            );
+        for (predicate, expected) in cases {
+            let message = predicate.to_string();
+            let residual = residual_for_file_with_field_1(&schema, predicate, None);
+            assert_eq!(residual, expected, "{message}");
+        }
     }
 
     /// Mirrors Java's `TestMetricsRowGroupFilter.testColumnNotInFileWithInitialDefault`.
@@ -1287,9 +1275,7 @@ mod tests {
             (
                 "NOT (b = 7)",
                 !Reference::new("b").equal_to(Datum::long(7)),
-                BoundPredicate::Not(LogicalExpression::new([Box::new(
-                    BoundPredicate::AlwaysTrue,
-                )])),
+                BoundPredicate::AlwaysFalse,
             ),
             (
                 "a > 0 AND b = 8",
@@ -1306,23 +1292,29 @@ mod tests {
                     .or(Reference::new("b").equal_to(Datum::long(7))),
                 bind(Reference::new("d").equal_to(Datum::long(1))).or(BoundPredicate::AlwaysTrue),
             ),
+            (
+                "the keep predicate of an equality delete on b = 7 drops every row",
+                Reference::new("b")
+                    .is_null()
+                    .or(Reference::new("b").not_equal_to(Datum::long(7))),
+                BoundPredicate::AlwaysFalse.or(BoundPredicate::AlwaysFalse),
+            ),
+            (
+                "the keep predicate of an equality delete on b = 5 keeps every row",
+                Reference::new("b")
+                    .is_null()
+                    .or(Reference::new("b").not_equal_to(Datum::long(5))),
+                BoundPredicate::AlwaysFalse.or(BoundPredicate::AlwaysTrue),
+            ),
         ];
 
-        let actual: Vec<_> = cases
-            .iter()
-            .map(|(name, predicate, _)| {
-                let residual = residual_for_file_with_field_1(
-                    &schema,
-                    predicate.clone(),
-                    Some((&partition_spec, &partition)),
-                );
-                (*name, residual)
-            })
-            .collect();
-        let expected: Vec<_> = cases
-            .into_iter()
-            .map(|(name, _, residual)| (name, residual))
-            .collect();
-        assert_eq!(actual, expected);
+        for (name, predicate, expected) in cases {
+            let residual = residual_for_file_with_field_1(
+                &schema,
+                predicate,
+                Some((&partition_spec, &partition)),
+            );
+            assert_eq!(residual, expected, "{name}");
+        }
     }
 }
