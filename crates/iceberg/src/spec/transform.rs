@@ -1307,6 +1307,88 @@ mod tests {
         );
     }
 
+    fn human_identity(primitive: PrimitiveType, literal: Literal) -> String {
+        Transform::Identity.to_human_string(&Type::Primitive(primitive), Some(&literal))
+    }
+
+    /// Expected values are the output of iceberg-java's `Transform.toHumanString`.
+    #[test]
+    fn test_to_human_string_timestamp_matches_java() {
+        let cases = [
+            (1510871468123456, "2017-11-16T22:31:08.123456"),
+            (1510871460000000, "2017-11-16T22:31:00"),
+            (1510871468000000, "2017-11-16T22:31:08"),
+            (1510871460120000, "2017-11-16T22:31:00.12"),
+            (1510871460100000, "2017-11-16T22:31:00.1"),
+            (1510871460000001, "2017-11-16T22:31:00.000001"),
+            (0, "1970-01-01T00:00:00"),
+            (-1, "1969-12-31T23:59:59.999999"),
+            (-1000000, "1969-12-31T23:59:59"),
+        ];
+        for (micros, expected) in cases {
+            assert_eq!(
+                human_identity(PrimitiveType::Timestamp, Literal::timestamp(micros)),
+                expected
+            );
+            assert_eq!(
+                human_identity(PrimitiveType::Timestamptz, Literal::timestamptz(micros)),
+                format!("{expected}+00:00")
+            );
+        }
+    }
+
+    /// Expected values are the output of iceberg-java's `Transform.toHumanString`.
+    #[test]
+    fn test_to_human_string_timestamp_nanos_matches_java() {
+        let cases = [
+            (1510871468123456789, "2017-11-16T22:31:08.123456789"),
+            (1510871460000000000, "2017-11-16T22:31:00"),
+            (1510871460000000001, "2017-11-16T22:31:00.000000001"),
+            (1510871460120000000, "2017-11-16T22:31:00.12"),
+        ];
+        for (nanos, expected) in cases {
+            assert_eq!(
+                human_identity(
+                    PrimitiveType::TimestampNs,
+                    Literal::Primitive(PrimitiveLiteral::Long(nanos))
+                ),
+                expected
+            );
+            assert_eq!(
+                human_identity(
+                    PrimitiveType::TimestamptzNs,
+                    Literal::Primitive(PrimitiveLiteral::Long(nanos))
+                ),
+                format!("{expected}+00:00")
+            );
+        }
+    }
+
+    /// Expected values are the output of iceberg-java's `Transform.toHumanString`.
+    #[test]
+    fn test_to_human_string_binary_matches_java() {
+        let cases: [(&[u8], &str); 5] = [
+            (&[], ""),
+            (&[0xFB], "+w=="),
+            (&[0xFB, 0xFF], "+/8="),
+            (&[0x01, 0x02, 0xFF], "AQL/"),
+            (b"hello", "aGVsbG8="),
+        ];
+        for (bytes, expected) in cases {
+            assert_eq!(
+                human_identity(PrimitiveType::Binary, Literal::binary(bytes.to_vec())),
+                expected
+            );
+        }
+        assert_eq!(
+            human_identity(
+                PrimitiveType::Fixed(3),
+                Literal::fixed(vec![0x01, 0x02, 0xFF])
+            ),
+            "AQL/"
+        );
+    }
+
     #[test]
     fn test_to_human_string_null_cases() {
         assert_eq!(human(Transform::Void, PrimitiveType::Int, 47), "null");

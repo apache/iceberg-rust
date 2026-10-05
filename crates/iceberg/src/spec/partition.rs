@@ -1979,6 +1979,43 @@ mod tests {
         );
     }
 
+    /// The expected path is the output of iceberg-java's `PartitionSpec.partitionToPath`.
+    #[test]
+    fn test_partition_to_path_timestamp_and_binary_match_java() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "ts", Type::Primitive(PrimitiveType::Timestamp)).into(),
+                NestedField::required(2, "tstz", Type::Primitive(PrimitiveType::Timestamptz))
+                    .into(),
+                NestedField::required(3, "b", Type::Primitive(PrimitiveType::Binary)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let spec = PartitionSpec::builder(schema.clone())
+            .add_partition_field("ts", "ts", Transform::Identity)
+            .unwrap()
+            .add_partition_field("tstz", "tstz", Transform::Identity)
+            .unwrap()
+            .add_partition_field("b", "b", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let data = Struct::from_iter([
+            Some(Literal::timestamp(1510871468123456)),
+            Some(Literal::timestamptz(1510871468123456)),
+            Some(Literal::binary(vec![0x01, 0x02, 0xFF])),
+        ]);
+
+        assert_eq!(
+            spec.partition_to_path(&data, schema.into()),
+            "ts=2017-11-16T22%3A31%3A08.123456/\
+             tstz=2017-11-16T22%3A31%3A08.123456%2B00%3A00/\
+             b=AQL%2F"
+        );
+    }
+
     #[test]
     fn test_partition_to_path_escaped_field_name() {
         let schema = Schema::builder()
