@@ -19,28 +19,39 @@ use super::utils::try_insert_field;
 use super::*;
 
 /// Reassigns `schema`'s field ids, reusing ids from `base` for fields whose full name is unchanged
-/// and drawing fresh ids from `start_from` upwards for everything else.
+/// and drawing fresh ids from `last_column_id + 1` upwards for everything else.
 ///
-/// `start_from` must be past every id the table has ever assigned, not merely past `base`'s ids:
-/// pass `table_metadata.last_column_id() + 1`, which also reserves the ids of columns already
-/// dropped from `base`. A reused id does not consume a fresh one, so a too-low `start_from` fails in
-/// one of two ways. Failing to clear `base`'s own ids is rejected here. Landing on the id of a
-/// column already dropped from `base` cannot be detected from `base` alone: nothing here or in
-/// `build()` notices, and a new column silently inherits a retired id. Seeding from a schema's
-/// `highest_field_id() + 1` is the usual way to hit the latter.
+/// `last_column_id` must be every id the table has ever assigned, not merely `base`'s highest: pass
+/// `table_metadata.last_column_id()`, which also reserves the ids of columns already dropped from
+/// `base`. A reused id does not consume a fresh one, so a too-low `last_column_id` fails in one of
+/// two ways. Falling below `base`'s own ids is rejected here. Landing on the id of a column already
+/// dropped from `base` cannot be detected from `base` alone: nothing here or in `build()` notices,
+/// and a new column silently inherits a retired id. Passing a schema's `highest_field_id()` instead
+/// of the table's `last_column_id()` is the usual way to hit the latter.
 ///
 /// The returned `schema_id` is carried over unchanged and is not authoritative; it is arbitrated by
 /// [`TableMetadataBuilder::add_schema`](crate::spec::TableMetadataBuilder::add_schema).
-pub(crate) fn assign_fresh_ids(schema: Schema, base: &Schema, start_from: i32) -> Result<Schema> {
-    if start_from <= base.highest_field_id() {
+pub(crate) fn assign_fresh_ids(
+    schema: Schema,
+    base: &Schema,
+    last_column_id: i32,
+) -> Result<Schema> {
+    if last_column_id < base.highest_field_id() {
         return Err(Error::new(
             ErrorKind::DataInvalid,
             format!(
-                "start_from ({start_from}) must exceed base.highest_field_id() ({}); pass table_metadata.last_column_id() + 1",
+                "last_column_id ({last_column_id}) is below base.highest_field_id() ({}); pass table_metadata.last_column_id()",
                 base.highest_field_id()
             ),
         ));
     }
+
+    let start_from = last_column_id.checked_add(1).ok_or_else(|| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            "Field ID overflowed, cannot add more fields",
+        )
+    })?;
 
     let Schema {
         r#struct,
@@ -237,7 +248,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let assigned = assign_fresh_ids(schema, &empty_schema(), 11).unwrap();
+        let assigned = assign_fresh_ids(schema, &empty_schema(), 10).unwrap();
 
         assert_eq!(assigned.as_struct(), expected.as_struct());
     }
@@ -281,7 +292,7 @@ mod tests {
                 .build()
                 .unwrap();
 
-            let assigned = assign_fresh_ids(schema, &empty_schema(), 11).unwrap();
+            let assigned = assign_fresh_ids(schema, &empty_schema(), 10).unwrap();
 
             assert_eq!(
                 assigned.as_struct(),
@@ -372,7 +383,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let assigned = assign_fresh_ids(replacement, &base, 10).unwrap();
+        let assigned = assign_fresh_ids(replacement, &base, 9).unwrap();
 
         assert_eq!(assigned.field_by_name("nested").unwrap().id, 1);
         assert_eq!(assigned.field_by_name("nested.a").unwrap().id, 2);
@@ -392,8 +403,8 @@ mod tests {
         assert_eq!(assigned.highest_field_id(), 11);
     }
 
-    /// The table once had ids 1..=5; only 1 and 3 survive in `base`, so 4 and 5 are retired and a
-    /// correct seed is 6, not `base.highest_field_id() + 1`.
+    /// The table once had ids 1..=5; only 1 and 3 survive in `base`, so 4 and 5 are retired and the
+    /// correct `last_column_id` is 5, not `base.highest_field_id()`.
     fn schemas_with_dropped_column_ids() -> (Schema, Schema) {
         let base = Schema::builder()
             .with_fields(vec![
@@ -416,7 +427,7 @@ mod tests {
     fn test_assign_fresh_ids_skips_dropped_column_ids_when_seeded_correctly() {
         let (base, replacement) = schemas_with_dropped_column_ids();
 
-        let assigned = assign_fresh_ids(replacement, &base, 6).unwrap();
+        let assigned = assign_fresh_ids(replacement, &base, 5).unwrap();
 
         assert_eq!(assigned.field_by_name("a").unwrap().id, 1);
         assert_eq!(assigned.field_by_name("fresh").unwrap().id, 6);
@@ -426,24 +437,24 @@ mod tests {
     fn test_assign_fresh_ids_seeded_too_low_reuses_dropped_column_id() {
         let (base, replacement) = schemas_with_dropped_column_ids();
 
-        // A seed of 4 clears the guard (base's highest id is 3) and `build()` sees no duplicates,
-        // so the retired id 4 is reused silently. `base` alone cannot reveal that 4 is retired, so
-        // this stays the caller's contract.
-        let assigned = assign_fresh_ids(replacement, &base, base.highest_field_id() + 1).unwrap();
+        // Passing base's highest id as `last_column_id` clears the guard and `build()` sees no
+        // duplicates, so the retired id 4 is reused silently. `base` alone cannot reveal that 4 is
+        // retired, so this stays the caller's contract.
+        let assigned = assign_fresh_ids(replacement, &base, base.highest_field_id()).unwrap();
 
         assert_eq!(assigned.field_by_name("fresh").unwrap().id, 4);
     }
 
     #[test]
-    fn test_assign_fresh_ids_rejects_start_from_below_base_highest_field_id() {
+    fn test_assign_fresh_ids_rejects_last_column_id_below_base_highest_field_id() {
         let (base, replacement) = schemas_with_dropped_column_ids();
 
-        let err = assign_fresh_ids(replacement, &base, base.highest_field_id()).unwrap_err();
+        let err = assign_fresh_ids(replacement, &base, base.highest_field_id() - 1).unwrap_err();
 
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(
             err.message()
-                .contains("start_from (3) must exceed base.highest_field_id() (3)")
+                .contains("last_column_id (2) is below base.highest_field_id() (3)")
         );
     }
 
@@ -466,7 +477,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let err = assign_fresh_ids(replacement, &base, 3).unwrap_err();
+        let err = assign_fresh_ids(replacement, &base, 2).unwrap_err();
 
         assert!(
             err.message()
@@ -508,7 +519,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let assigned = assign_fresh_ids(schema, &empty_schema(), 11).unwrap();
+        let assigned = assign_fresh_ids(schema, &empty_schema(), 10).unwrap();
 
         assert_eq!(assigned.field_by_name("map").unwrap().id, 11);
         assert_eq!(assigned.field_by_name("tail").unwrap().id, 12);
