@@ -2935,12 +2935,14 @@ dependencies = [
  "cfg-if 1.0.4",
  "futures",
  "iceberg",
+ "iceberg-property-macro",
  "iceberg_test_utils",
  "opendal",
  "reqsign-aws-v4",
  "reqsign-core",
  "reqwest 0.12.28",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "typetag",
@@ -2952,6 +2954,7 @@ name = "iceberg_test_utils"
 version = "0.10.1"
 dependencies = [
  "iceberg",
+ "tokio",
  "tracing-subscriber",
 ]
 

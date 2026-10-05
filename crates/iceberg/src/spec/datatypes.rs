@@ -191,10 +191,7 @@ impl Type {
     /// Creates  decimal type.
     #[inline(always)]
     pub fn decimal(precision: u32, scale: u32) -> Result<Self> {
-        ensure_data_valid!(
-            precision > 0 && precision <= MAX_DECIMAL_PRECISION,
-            "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}",
-        );
+        validate_decimal_precision(precision)?;
         Ok(Type::Primitive(PrimitiveType::Decimal { precision, scale }))
     }
 
@@ -347,19 +344,40 @@ impl Serialize for PrimitiveType {
     }
 }
 
+fn validate_decimal_precision(precision: u32) -> Result<()> {
+    // Leave scale unconstrained for Java parity; the spec leaves scale > precision open.
+    ensure_data_valid!(precision > 0, "Decimal precision must be greater than zero",);
+    ensure_data_valid!(
+        precision <= MAX_DECIMAL_PRECISION,
+        "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}",
+    );
+    Ok(())
+}
+
 fn deserialize_decimal<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
 where D: Deserializer<'de> {
     let s = String::deserialize(deserializer)?;
-    let (precision, scale) = s
-        .trim_start_matches(r"decimal(")
-        .trim_end_matches(')')
-        .split_once(',')
-        .ok_or_else(|| D::Error::custom("Decimal requires precision and scale: {s}"))?;
+    let malformed = || D::Error::custom(format!("Invalid decimal type: {s}"));
 
-    Ok(PrimitiveType::Decimal {
-        precision: precision.trim().parse().map_err(D::Error::custom)?,
-        scale: scale.trim().parse().map_err(D::Error::custom)?,
-    })
+    let (precision, scale) = s
+        .strip_prefix("decimal(")
+        .and_then(|inner| inner.strip_suffix(')'))
+        .ok_or_else(malformed)?
+        .split_once(',')
+        .ok_or_else(|| D::Error::custom(format!("Decimal requires precision and scale: {s}")))?;
+
+    let (precision, scale) = (precision.trim(), scale.trim());
+    if [precision, scale]
+        .iter()
+        .any(|token| token.is_empty() || !token.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return Err(malformed());
+    }
+    let precision: u32 = precision.parse().map_err(D::Error::custom)?;
+    let scale: u32 = scale.parse().map_err(D::Error::custom)?;
+    validate_decimal_precision(precision).map_err(D::Error::custom)?;
+
+    Ok(PrimitiveType::Decimal { precision, scale })
 }
 
 fn serialize_decimal<S>(
@@ -375,12 +393,16 @@ where
 
 fn deserialize_fixed<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
 where D: Deserializer<'de> {
-    let fixed = String::deserialize(deserializer)?
-        .trim_start_matches(r"fixed[")
-        .trim_end_matches(']')
-        .to_owned();
+    let s = String::deserialize(deserializer)?;
 
-    fixed
+    let length = s
+        .strip_prefix("fixed[")
+        .and_then(|inner| inner.strip_suffix(']'))
+        .map(str::trim)
+        .filter(|length| !length.is_empty() && length.bytes().all(|byte| byte.is_ascii_digit()))
+        .ok_or_else(|| D::Error::custom(format!("Invalid fixed type: {s}")))?;
+
+    length
         .parse()
         .map(PrimitiveType::Fixed)
         .map_err(D::Error::custom)
@@ -1324,6 +1346,182 @@ mod tests {
 
         assert_eq!(5, Type::decimal_required_bytes(10).unwrap());
         assert_eq!(16, Type::decimal_required_bytes(38).unwrap());
+    }
+
+    #[test]
+    fn test_reject_malformed_decimal_and_fixed_type_strings() {
+        for invalid in [
+            r#""decimal(50, 2)""#,
+            r#""decimal(0, 0)""#,
+            r#""decimal(decimal(5, 2)))""#,
+            r#""decimal(decimal(5, 2)""#,
+            r#""decimal(5, 2""#,
+            r#""decimal(5, 2)))))""#,
+            r#""decimal(5, 2, 3)""#,
+            r#""decimal(-5, 2)""#,
+            r#""decimal(5, -2)""#,
+            r#""decimal(-5, -2)""#,
+            r#""decimal(-2, -5)""#,
+            r#""decimal((5, 2))""#,
+            r#""decimal[5, 2]""#,
+            r#""decimal()""#,
+            r#""fixed[fixed[16]]]""#,
+            r#""fixed[16""#,
+            r#""fixed[16]]]""#,
+            r#""fixed[[16]]""#,
+            r#""fixed[[16]""#,
+            r#""fixed(16)""#,
+            r#""fixed[]""#,
+        ] {
+            assert!(
+                serde_json::from_str::<Type>(invalid).is_err(),
+                "expected {invalid} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_reject_leading_plus_in_type_strings() {
+        for invalid in [
+            r#""decimal(+5, 2)""#,
+            r#""decimal(5, +2)""#,
+            r#""decimal(+5, +2)""#,
+            r#""fixed[+16]""#,
+        ] {
+            assert!(serde_json::from_str::<Type>(invalid).is_err(), "{invalid}");
+            assert!(
+                serde_json::from_str::<PrimitiveType>(invalid).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decimal_constructor_json_roundtrip() {
+        for (precision, scale) in [(1, 0), (5, 5), (5, 8), (38, 38)] {
+            let decimal = Type::decimal(precision, scale).unwrap();
+            let serialized = serde_json::to_string(&decimal).unwrap();
+            let reparsed: Type = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(reparsed, decimal);
+            let primitive: PrimitiveType = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(Type::Primitive(primitive), decimal);
+        }
+        for precision in [0, 39] {
+            assert!(Type::decimal(precision, 0).is_err());
+            let json = format!(r#""decimal({precision}, 0)""#);
+            assert!(serde_json::from_str::<Type>(&json).is_err());
+            assert!(serde_json::from_str::<PrimitiveType>(&json).is_err());
+        }
+    }
+
+    #[test]
+    fn test_empty_decimal_and_fixed_tokens() {
+        for invalid in [
+            r#""decimal(, 2)""#,
+            r#""decimal(5,)""#,
+            r#""decimal( , )""#,
+            r#""fixed[]""#,
+            r#""fixed[ ]""#,
+        ] {
+            assert!(serde_json::from_str::<Type>(invalid).is_err(), "{invalid}");
+            assert!(
+                serde_json::from_str::<PrimitiveType>(invalid).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decimal_and_fixed_overflow_errors() {
+        for invalid in [
+            r#""decimal(9999999999, 2)""#,
+            r#""decimal(5, 9999999999)""#,
+            r#""fixed[18446744073709551616]""#,
+        ] {
+            assert!(serde_json::from_str::<Type>(invalid).is_err(), "{invalid}");
+            let error = serde_json::from_str::<PrimitiveType>(invalid).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("number too large to fit in target type"),
+                "unexpected error for {invalid}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decimal_zero_precision_error() {
+        let error = serde_json::from_str::<PrimitiveType>(r#""decimal(0, 0)""#).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Decimal precision must be greater than zero"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_accept_valid_decimal_and_fixed_type_strings() {
+        for (json, canonical, expected) in [
+            (
+                r#""decimal(9, 2)""#,
+                r#""decimal(9, 2)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                }),
+            ),
+            (
+                r#""decimal(38, 10)""#,
+                r#""decimal(38, 10)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 38,
+                    scale: 10,
+                }),
+            ),
+            (
+                r#""decimal(5,2)""#,
+                r#""decimal(5, 2)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 5,
+                    scale: 2,
+                }),
+            ),
+            (
+                r#""decimal(5, 0)""#,
+                r#""decimal(5, 0)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 5,
+                    scale: 0,
+                }),
+            ),
+            (
+                r#""decimal(5, 5)""#,
+                r#""decimal(5, 5)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 5,
+                    scale: 5,
+                }),
+            ),
+            (
+                r#""fixed[16]""#,
+                r#""fixed[16]""#,
+                Type::Primitive(PrimitiveType::Fixed(16)),
+            ),
+        ] {
+            check_type_serde_roundtrip_value(json, canonical, expected);
+        }
+    }
+
+    fn check_type_serde_roundtrip_value(json: &str, canonical: &str, expected_type: Type) {
+        let parsed: Type = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed, expected_type);
+        let serialized = serde_json::to_string(&parsed).unwrap();
+        assert_eq!(serialized, canonical);
+        let primitive: PrimitiveType = serde_json::from_str(json).unwrap();
+        assert_eq!(serde_json::to_string(&primitive).unwrap(), canonical);
+        let reparsed: Type = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(reparsed, expected_type);
     }
 
     #[test]

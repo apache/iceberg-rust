@@ -316,6 +316,14 @@ pub struct TableProperties {
         getter
     )]
     write_object_storage_location: Option<String>,
+    /// Whether new data files use the object storage location layout, which
+    /// injects hash entropy into file paths to spread object-store prefixes.
+    #[property(
+        key = Self::PROPERTY_WRITE_OBJECT_STORAGE_ENABLED,
+        default = Self::PROPERTY_WRITE_OBJECT_STORAGE_ENABLED_DEFAULT,
+        getter
+    )]
+    write_object_storage_enabled: bool,
     /// Whether partition values are included in object storage paths.
     #[property(
         key = Self::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS,
@@ -530,6 +538,10 @@ impl TableProperties<'_> {
     pub const PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &'static str = "write.folder-storage.path";
     /// Property key for deprecated object storage path, kept as a fallback for compatibility.
     pub const PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &'static str = "write.object-storage.path";
+    /// Property key for enabling the object storage location layout for new data files.
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_ENABLED: &'static str = "write.object-storage.enabled";
+    /// Default value for [`TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_ENABLED`]
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_ENABLED_DEFAULT: bool = false;
     /// Property key for controlling whether partition values are included in object storage paths.
     pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &'static str =
         "write.object-storage.partitioned-paths";
