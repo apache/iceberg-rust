@@ -24,14 +24,24 @@ use super::*;
 /// `start_from` must be past every id the table has ever assigned, not merely past `base`'s ids:
 /// pass `table_metadata.last_column_id() + 1`, which also reserves the ids of columns already
 /// dropped from `base`. A reused id does not consume a fresh one, so a too-low `start_from` fails in
-/// one of two ways. Colliding with an id still present in `base` yields duplicate ids and a generic
-/// error from `build()`. Landing on the id of a column already dropped from `base` is worse: nothing
-/// here or in `build()` notices, and a new column silently inherits a retired id. Seeding from a
-/// schema's `highest_field_id() + 1` is the usual way to hit the latter.
+/// one of two ways. Failing to clear `base`'s own ids is rejected here. Landing on the id of a
+/// column already dropped from `base` cannot be detected from `base` alone: nothing here or in
+/// `build()` notices, and a new column silently inherits a retired id. Seeding from a schema's
+/// `highest_field_id() + 1` is the usual way to hit the latter.
 ///
 /// The returned `schema_id` is carried over unchanged and is not authoritative; it is arbitrated by
 /// [`TableMetadataBuilder::add_schema`](crate::spec::TableMetadataBuilder::add_schema).
 pub(crate) fn assign_fresh_ids(schema: Schema, base: &Schema, start_from: i32) -> Result<Schema> {
+    if start_from <= base.highest_field_id() {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "start_from ({start_from}) must exceed base.highest_field_id() ({}); pass table_metadata.last_column_id() + 1",
+                base.highest_field_id()
+            ),
+        ));
+    }
+
     let Schema {
         r#struct,
         schema_id,
@@ -62,13 +72,6 @@ struct AssignFreshIds {
 
 impl AssignFreshIds {
     fn new(target_names: HashMap<i32, String>, base: &Schema, start_from: i32) -> Self {
-        // Partial guard only: it trips the common `base.highest_field_id() + 1` mistake, but ids
-        // dropped above `base`'s highest still slip through, as that bound lives in `last_column_id`.
-        debug_assert!(
-            start_from > base.highest_field_id(),
-            "start_from must exceed every id the table has assigned; pass last_column_id() + 1"
-        );
-
         Self {
             next_field_id: start_from,
             target_names,
@@ -423,12 +426,25 @@ mod tests {
     fn test_assign_fresh_ids_seeded_too_low_reuses_dropped_column_id() {
         let (base, replacement) = schemas_with_dropped_column_ids();
 
-        // A seed of 4 clears the `debug_assert` in `new` (base's highest id is 3) and `build()`
-        // sees no duplicates, so the retired id 4 is reused silently: the caller's contract, and
-        // the limit of the assert.
+        // A seed of 4 clears the guard (base's highest id is 3) and `build()` sees no duplicates,
+        // so the retired id 4 is reused silently. `base` alone cannot reveal that 4 is retired, so
+        // this stays the caller's contract.
         let assigned = assign_fresh_ids(replacement, &base, base.highest_field_id() + 1).unwrap();
 
         assert_eq!(assigned.field_by_name("fresh").unwrap().id, 4);
+    }
+
+    #[test]
+    fn test_assign_fresh_ids_rejects_start_from_below_base_highest_field_id() {
+        let (base, replacement) = schemas_with_dropped_column_ids();
+
+        let err = assign_fresh_ids(replacement, &base, base.highest_field_id()).unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message()
+                .contains("start_from (3) must exceed base.highest_field_id() (3)")
+        );
     }
 
     #[test]
