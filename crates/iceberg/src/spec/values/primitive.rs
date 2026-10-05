@@ -25,7 +25,9 @@ use ordered_float::{FloatCore, OrderedFloat};
 ///
 /// `Float` and `Double` compare as Java's `Float.compare` and `Double.compare` do: `-0.0` is
 /// less than `0.0`, and every NaN is the same value, greater than all others. iceberg-java
-/// compares partition values this way, so `-0.0` and `0.0` are different partitions.
+/// compares partition values this way, so `-0.0` and `0.0` are different partitions. The
+/// [spec](https://iceberg.apache.org/spec/#scan-planning) states the same rule: floating point
+/// partition values are equal if their IEEE 754 bit layouts are equal, with NaNs normalized.
 // The derived `Hash` gives `-0.0` and `0.0` the same hash. That is coarser than `eq`, which is
 // allowed: equal values still hash alike.
 #[allow(clippy::derived_hash_with_manual_eq)]
@@ -73,8 +75,19 @@ impl PartialOrd for PrimitiveLiteral {
             (Self::Binary(a), Self::Binary(b)) => a.partial_cmp(b),
             (Self::Int128(a), Self::Int128(b)) => a.partial_cmp(b),
             (Self::UInt128(a), Self::UInt128(b)) => a.partial_cmp(b),
-            // Different variants order by declaration, as the derived impl did.
-            _ => self.variant_index().partial_cmp(&other.variant_index()),
+            (Self::AboveMax, Self::AboveMax) | (Self::BelowMin, Self::BelowMin) => {
+                Some(Ordering::Equal)
+            }
+            // Different variants order by declaration, as the derived impl did. A variant that
+            // lacks an arm above lands here against itself; fail closed instead of calling the
+            // two values equal.
+            _ => {
+                debug_assert_ne!(std::mem::discriminant(self), std::mem::discriminant(other));
+                match self.variant_index().cmp(&other.variant_index()) {
+                    Ordering::Equal => None,
+                    ordering => Some(ordering),
+                }
+            }
         }
     }
 }
@@ -92,7 +105,8 @@ fn float_cmp<T: FloatCore>(a: &OrderedFloat<T>, b: &OrderedFloat<T>) -> Ordering
 }
 
 impl PrimitiveLiteral {
-    /// Position of the variant in the declaration.
+    /// Must follow the declaration order of the variants: `partial_cmp` uses it to order
+    /// different variants the way the derived `PartialOrd` did.
     fn variant_index(&self) -> u8 {
         match self {
             Self::Boolean(_) => 0,

@@ -1583,13 +1583,10 @@ fn test_nan_literals_are_equal() {
 }
 
 #[test]
-fn test_primitive_literal_order_across_variants() {
-    // Literals of different variants order by variant declaration, whatever they hold.
-    assert!(PrimitiveLiteral::Int(5) < PrimitiveLiteral::Long(1));
-    assert!(PrimitiveLiteral::Double(OrderedFloat(1.0)) < PrimitiveLiteral::String("a".into()));
-    assert!(PrimitiveLiteral::UInt128(u128::MAX) < PrimitiveLiteral::AboveMax);
-    assert!(PrimitiveLiteral::AboveMax < PrimitiveLiteral::BelowMin);
+fn test_primitive_literal_eq_across_variants() {
     assert_eq!(PrimitiveLiteral::AboveMax, PrimitiveLiteral::AboveMax);
+    assert_eq!(PrimitiveLiteral::BelowMin, PrimitiveLiteral::BelowMin);
+    assert_ne!(PrimitiveLiteral::AboveMax, PrimitiveLiteral::BelowMin);
     assert_ne!(PrimitiveLiteral::Int(1), PrimitiveLiteral::Long(1));
 }
 

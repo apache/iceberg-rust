@@ -629,6 +629,44 @@ mod tests {
     }
 
     #[test]
+    fn test_expr_in_signed_zero() -> Result<()> {
+        let case_sensitive = true;
+        let (partition_spec, schema) = create_partition_spec(PrimitiveType::Float)?;
+
+        let data_file = DataFile {
+            partition: Struct::from_iter([Some(Literal::float(-0.0_f32))]),
+            ..create_data_file_float()
+        };
+
+        // -0.0 and 0.0 are different values, so `IN` keeps both and matches only its own zero.
+        for (literals, expected) in [
+            ([0.0_f32, 1.0_f32], false),
+            ([-0.0_f32, 1.0_f32], true),
+            ([0.0_f32, -0.0_f32], true),
+        ] {
+            let predicate = Predicate::Set(SetExpression::new(
+                PredicateOperator::In,
+                Reference::new("a"),
+                FnvHashSet::from_iter(literals.map(Datum::float)),
+            ))
+            .bind(schema.clone(), case_sensitive)?;
+
+            assert!(matches!(&predicate, BoundPredicate::Set(expr) if expr.literals().len() == 2));
+
+            let expression_evaluator = create_expression_evaluator(
+                partition_spec.clone(),
+                &schema,
+                &predicate,
+                case_sensitive,
+            )?;
+
+            assert_eq!(expression_evaluator.eval(&data_file)?, expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_expr_greater_than_or_eq() -> Result<()> {
         let case_sensitive = true;
         let (partition_spec, schema) = create_partition_spec(PrimitiveType::Float)?;
