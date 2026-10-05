@@ -69,6 +69,7 @@ pub struct Schema {
 
     alias_to_id: BiHashMap<String, i32>,
     id_to_field: HashMap<i32, NestedFieldRef>,
+    id_to_parent: HashMap<i32, i32>,
 
     name_to_id: HashMap<String, i32>,
     lowercase_name_to_id: HashMap<String, i32>,
@@ -137,10 +138,11 @@ impl SchemaBuilder {
 
         let r#struct = StructType::new(self.fields);
         let id_to_field = index_by_id(&r#struct)?;
+        let id_to_parent = index_parents(&r#struct)?;
 
         Self::validate_identifier_ids(
-            &r#struct,
             &id_to_field,
+            &id_to_parent,
             self.identifier_field_ids.iter().copied(),
         )?;
 
@@ -164,6 +166,7 @@ impl SchemaBuilder {
             identifier_field_ids: self.identifier_field_ids,
             alias_to_id: self.alias_to_id,
             id_to_field,
+            id_to_parent,
 
             name_to_id,
             lowercase_name_to_id,
@@ -251,11 +254,10 @@ impl SchemaBuilder {
     /// - Identifier fields may be nested in structs but cannot be nested within maps or lists.
     /// - A nested field cannot be used as an identifier field if it is nested in an optional struct, to avoid null values in identifiers.
     fn validate_identifier_ids(
-        r#struct: &StructType,
         id_to_field: &HashMap<i32, NestedFieldRef>,
+        id_to_parent: &HashMap<i32, i32>,
         identifier_field_ids: impl Iterator<Item = i32>,
     ) -> Result<()> {
-        let id_to_parent = index_parents(r#struct)?;
         for identifier_field_id in identifier_field_ids {
             let field = id_to_field.get(&identifier_field_id).ok_or_else(|| {
                 invalid_data!(
@@ -395,6 +397,27 @@ impl Schema {
     /// Get an accessor for retrieving data in a struct
     pub fn accessor_by_field_id(&self, field_id: i32) -> Option<Arc<StructAccessor>> {
         self.field_id_to_accessor.get(&field_id).cloned()
+    }
+
+    /// Return `true` if `field_id` and every ancestor struct up to the schema root is
+    /// required. Per the spec a null parent struct implies its leaves are null, so an
+    /// `IS NULL` / `IS NOT NULL` predicate on a required field can only be short-circuited
+    /// at bind time when the whole path is required. Returns `false` for an unknown id.
+    pub(crate) fn is_field_and_ancestors_required(&self, field_id: i32) -> bool {
+        let Some(field) = self.id_to_field.get(&field_id) else {
+            return false;
+        };
+        if !field.required {
+            return false;
+        }
+        let mut cur = field_id;
+        while let Some(parent) = self.id_to_parent.get(&cur) {
+            match self.id_to_field.get(parent) {
+                Some(parent_field) if parent_field.required => cur = *parent,
+                _ => return false,
+            }
+        }
+        true
     }
 
     /// Check if this schema is identical to another schema semantically - excluding schema id.
@@ -1309,6 +1332,54 @@ table {
     fn test_highest_field_id_no_fields() {
         let schema = Schema::builder().with_schema_id(1).build().unwrap();
         assert_eq!(0, schema.highest_field_id());
+    }
+
+    #[test]
+    fn test_is_field_and_ancestors_required() {
+        // person: optional struct<age: required int>; top: required int; top_opt: optional int
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::optional(
+                    1,
+                    "person",
+                    Struct(StructType::new(vec![
+                        NestedField::required(2, "age", Primitive(PrimitiveType::Int)).into(),
+                    ])),
+                )
+                .into(),
+                NestedField::required(3, "top", Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(4, "top_opt", Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        // Required leaf under an optional parent: a null parent implies a null leaf.
+        assert!(!schema.is_field_and_ancestors_required(2));
+        // The optional parent struct itself.
+        assert!(!schema.is_field_and_ancestors_required(1));
+        // Top-level required / optional.
+        assert!(schema.is_field_and_ancestors_required(3));
+        assert!(!schema.is_field_and_ancestors_required(4));
+        // Unknown id.
+        assert!(!schema.is_field_and_ancestors_required(999));
+
+        // Whole path required: required struct<age: required int>.
+        let all_required = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "person",
+                    Struct(StructType::new(vec![
+                        NestedField::required(2, "age", Primitive(PrimitiveType::Int)).into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        assert!(all_required.is_field_and_ancestors_required(1));
+        assert!(all_required.is_field_and_ancestors_required(2));
     }
 
     #[test]
