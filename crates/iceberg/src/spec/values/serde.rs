@@ -18,6 +18,8 @@
 //\! Serialization and deserialization support for Iceberg values
 
 pub(crate) mod _serde {
+    use std::collections::HashMap;
+
     use serde::de::Visitor;
     use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
     use serde::{Deserialize, Serialize};
@@ -27,7 +29,7 @@ pub(crate) mod _serde {
     use crate::Error;
     use crate::error::invalid_data;
     use crate::spec::values::{Literal, Map, PrimitiveLiteral, Struct};
-    use crate::spec::{MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, PrimitiveType, Type};
+    use crate::spec::{MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, PrimitiveType, StructType, Type};
 
     #[derive(SerializeDerive, DeserializeDerive, Debug)]
     #[serde(transparent)]
@@ -43,6 +45,49 @@ pub(crate) mod _serde {
         /// Convert raw literal to literal.
         pub fn try_into(self, ty: &Type) -> Result<Option<Literal>, Error> {
             self.0.try_into(ty)
+        }
+
+        /// Matches the fields of a record to `struct_type` by name, the way Avro
+        /// schema resolution matches record fields. The result has
+        /// `struct_type`'s fields in its order, with null for an optional field the
+        /// record lacks. Record fields that `struct_type` lacks are dropped. Values
+        /// other than records are returned unchanged.
+        pub fn project_by_name(self, struct_type: &StructType) -> Result<Self, Error> {
+            let (mut required, optional) = match self.0 {
+                RawLiteralEnum::Record(Record { required, optional }) => (required, optional),
+                other => return Ok(Self(other)),
+            };
+            required.extend(
+                optional
+                    .into_iter()
+                    .map(|(name, value)| (name, value.unwrap_or(RawLiteralEnum::Null))),
+            );
+            let fields = struct_type.fields();
+            let required = if required.len() == fields.len()
+                && required
+                    .iter()
+                    .zip(fields)
+                    .all(|((name, _), field)| *name == field.name)
+            {
+                required
+            } else {
+                let mut values: HashMap<String, RawLiteralEnum> = required.into_iter().collect();
+                fields
+                    .iter()
+                    .map(|field| match values.remove(&field.name) {
+                        Some(value) => Ok((field.name.clone(), value)),
+                        None if field.required => Err(invalid_data!(
+                            "Record has no value for required field {}",
+                            field.name
+                        )),
+                        None => Ok((field.name.clone(), RawLiteralEnum::Null)),
+                    })
+                    .collect::<Result<_, Error>>()?
+            };
+            Ok(Self(RawLiteralEnum::Record(Record {
+                required,
+                optional: Vec::new(),
+            })))
         }
     }
 

@@ -28,13 +28,15 @@ pub use reader::*;
 mod writer;
 use std::sync::Arc;
 
-use apache_avro::{Reader as AvroReader, from_value};
+use apache_avro::Reader as AvroReader;
+use apache_avro::error::Details;
 pub use writer::*;
 
 use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType, Schema, Struct, Type,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
+use crate::avro::{Resolved, define_named_types_once};
 use crate::error::{Result, invalid_data};
 
 /// A manifest contains metadata and a list of entries.
@@ -45,9 +47,30 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    /// Parse manifest metadata and entries from bytes of avro file.
-    pub(crate) fn try_from_avro_bytes(bs: &[u8]) -> Result<(ManifestMetadata, Vec<ManifestEntry>)> {
-        let reader = AvroReader::new(bs)?;
+    /// Parse manifest metadata and entries from bytes of avro file. `location`
+    /// names the manifest in warnings.
+    pub(crate) fn try_from_avro_bytes(
+        bs: &[u8],
+        location: Option<&str>,
+    ) -> Result<(ManifestMetadata, Vec<ManifestEntry>)> {
+        let rewritten;
+        let reader = match AvroReader::new(bs) {
+            Ok(reader) => reader,
+            Err(e) if matches!(e.details(), Details::AmbiguousSchemaDefinition(_)) => {
+                let Some((bs, repeated)) = define_named_types_once(bs)? else {
+                    return Err(e.into());
+                };
+                tracing::warn!(
+                    "Manifest {} defines Avro named types {repeated:?} more than once, which the \
+                     Avro specification doesn't allow. Reading it with each repeated definition \
+                     replaced by a reference to the first.",
+                    location.unwrap_or("<unknown location>")
+                );
+                rewritten = bs;
+                AvroReader::new(rewritten.as_slice())?
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         // Parse manifest metadata
         let meta = reader.user_metadata();
@@ -61,35 +84,27 @@ impl Manifest {
         let partition_struct_type = Type::Struct(partition_type.clone());
 
         let entries = match metadata.format_version {
-            FormatVersion::V1 => {
-                let schema = manifest_schema_v1(&partition_type)?;
-                let reader = AvroReader::with_schema(&schema, bs)?;
-                reader
-                    .into_iter()
-                    .map(|value| {
-                        from_value::<_serde::ManifestEntryV1>(&value?)?.try_into(
-                            metadata.partition_spec.spec_id(),
-                            &partition_struct_type,
-                            &metadata.schema,
-                        )
-                    })
-                    .collect::<Result<Vec<_>>>()?
-            }
+            FormatVersion::V1 => reader
+                .into_deser_iter::<Resolved<_serde::ManifestEntryV1>>()
+                .map(|entry| {
+                    entry?.0.try_into(
+                        metadata.partition_spec.spec_id(),
+                        &partition_struct_type,
+                        &metadata.schema,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?,
             // Manifest Schema & Manifest Entry did not change between V2 and V3
-            FormatVersion::V2 | FormatVersion::V3 => {
-                let schema = manifest_schema_v2(&partition_type)?;
-                let reader = AvroReader::with_schema(&schema, bs)?;
-                reader
-                    .into_iter()
-                    .map(|value| {
-                        from_value::<_serde::ManifestEntryV2>(&value?)?.try_into(
-                            metadata.partition_spec.spec_id(),
-                            &partition_struct_type,
-                            &metadata.schema,
-                        )
-                    })
-                    .collect::<Result<Vec<_>>>()?
-            }
+            FormatVersion::V2 | FormatVersion::V3 => reader
+                .into_deser_iter::<Resolved<_serde::ManifestEntryV2>>()
+                .map(|entry| {
+                    entry?.0.try_into(
+                        metadata.partition_spec.spec_id(),
+                        &partition_struct_type,
+                        &metadata.schema,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?,
         };
 
         Ok((metadata, entries))
@@ -97,7 +112,7 @@ impl Manifest {
 
     /// Parse manifest from bytes of avro file.
     pub fn parse_avro(bs: &[u8]) -> Result<Self> {
-        let (metadata, entries) = Self::try_from_avro_bytes(bs)?;
+        let (metadata, entries) = Self::try_from_avro_bytes(bs, None)?;
         Ok(Self::new(metadata, entries))
     }
 
@@ -163,6 +178,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::ErrorKind;
     use crate::io::FileIO;
     use crate::spec::{Literal, NestedField, PrimitiveType, Struct, Transform, Type};
 
@@ -356,7 +372,7 @@ mod tests {
                 .partition_type(&metadata.schema)
                 .unwrap();
             let avro_schema = manifest_schema_v2(&partition_type).unwrap();
-            let mut writer = Writer::with_codec(&avro_schema, Vec::new(), Codec::Snappy);
+            let mut writer = Writer::with_codec(&avro_schema, Vec::new(), Codec::Snappy).unwrap();
             writer
                 .add_user_metadata("schema".to_string(), to_vec(&metadata.schema).unwrap())
                 .unwrap();
@@ -397,7 +413,7 @@ mod tests {
             .unwrap()
             .resolve(&avro_schema)
             .unwrap();
-            writer.append(value).unwrap();
+            writer.append_value(value).unwrap();
             let bs = writer.into_inner().unwrap();
 
             let parsed_manifest = Manifest::parse_avro(&bs).unwrap();
@@ -1360,5 +1376,390 @@ mod tests {
 
         assert_eq!(deserialized_data_file1, original_data_file1);
         assert_eq!(deserialized_data_file2, original_data_file2);
+    }
+
+    /// Metadata for the writer schema tests: a V2 data manifest whose spec has
+    /// identity partitions on a long, a string, and a double column.
+    fn writer_schema_test_metadata() -> ManifestMetadata {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(3, "score", Type::Primitive(PrimitiveType::Double))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_partition_field("id", "id", Transform::Identity)
+            .unwrap()
+            .add_partition_field("name", "name", Transform::Identity)
+            .unwrap()
+            .add_partition_field("score", "score", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        ManifestMetadata {
+            schema_id: 0,
+            schema,
+            partition_spec,
+            content: ManifestContentType::Data,
+            format_version: FormatVersion::V2,
+        }
+    }
+
+    /// A V2 manifest entry writer schema with Java's record names and only the
+    /// required `data_file` fields.
+    fn v2_writer_schema(partition_fields: Value) -> Value {
+        serde_json::json!({
+            "type": "record",
+            "name": "manifest_entry",
+            "fields": [
+                {"name": "status", "type": "int", "field-id": 0},
+                {"name": "snapshot_id", "type": ["null", "long"], "default": null, "field-id": 1},
+                {"name": "sequence_number", "type": ["null", "long"], "default": null, "field-id": 3},
+                {"name": "file_sequence_number", "type": ["null", "long"], "default": null, "field-id": 4},
+                {"name": "data_file", "field-id": 2, "type": {
+                    "type": "record",
+                    "name": "r2",
+                    "fields": [
+                        {"name": "content", "type": "int", "field-id": 134},
+                        {"name": "file_path", "type": "string", "field-id": 100},
+                        {"name": "file_format", "type": "string", "field-id": 101},
+                        {"name": "partition", "field-id": 102, "type": {
+                            "type": "record",
+                            "name": "r102",
+                            "fields": partition_fields,
+                        }},
+                        {"name": "record_count", "type": "long", "field-id": 103},
+                        {"name": "file_size_in_bytes", "type": "long", "field-id": 104},
+                    ],
+                }},
+            ],
+        })
+    }
+
+    /// The field named by `path` in a record schema, descending through nested
+    /// record types.
+    fn writer_schema_field<'a>(record: &'a mut Value, path: &[&str]) -> &'a mut Value {
+        let (name, rest) = path.split_first().unwrap();
+        let field = record["fields"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|field| field["name"] == *name)
+            .unwrap();
+        if rest.is_empty() {
+            field
+        } else {
+            writer_schema_field(&mut field["type"], rest)
+        }
+    }
+
+    fn v2_entry(partition: Value) -> Value {
+        serde_json::json!({
+            "status": 1,
+            "snapshot_id": 7,
+            "sequence_number": null,
+            "file_sequence_number": null,
+            "data_file": {
+                "content": 0,
+                "file_path": "s3://bucket/table/data/a.parquet",
+                "file_format": "PARQUET",
+                "partition": partition,
+                "record_count": 10,
+                "file_size_in_bytes": 100,
+            },
+        })
+    }
+
+    fn expected_entry(partition: Struct) -> ManifestEntry {
+        ManifestEntry {
+            status: ManifestStatus::Added,
+            snapshot_id: Some(7),
+            sequence_number: None,
+            file_sequence_number: None,
+            data_file: DataFile {
+                content: DataContentType::Data,
+                file_path: "s3://bucket/table/data/a.parquet".to_string(),
+                file_format: DataFileFormat::Parquet,
+                partition,
+                record_count: 10,
+                file_size_in_bytes: 100,
+                column_sizes: HashMap::new(),
+                value_counts: HashMap::new(),
+                null_value_counts: HashMap::new(),
+                nan_value_counts: HashMap::new(),
+                lower_bounds: HashMap::new(),
+                upper_bounds: HashMap::new(),
+                key_metadata: None,
+                split_offsets: None,
+                equality_ids: None,
+                sort_order_id: None,
+                partition_spec_id: 0,
+                first_row_id: None,
+                referenced_data_file: None,
+                content_offset: None,
+                content_size_in_bytes: None,
+            },
+        }
+    }
+
+    /// Writes `entries` as a manifest with the given writer schema, encoding each
+    /// JSON value with the writer schema's types.
+    fn write_with_writer_schema(
+        metadata: &ManifestMetadata,
+        writer_schema: &Value,
+        entries: Vec<Value>,
+    ) -> Vec<u8> {
+        let avro_schema = apache_avro::Schema::parse(writer_schema).unwrap();
+        let mut writer = Writer::new(&avro_schema, Vec::new()).unwrap();
+        for (key, value) in [
+            ("schema", to_vec(&metadata.schema).unwrap()),
+            ("schema-id", metadata.schema_id.to_string().into_bytes()),
+            (
+                "partition-spec",
+                to_vec(&metadata.partition_spec.fields()).unwrap(),
+            ),
+            (
+                "partition-spec-id",
+                metadata.partition_spec.spec_id().to_string().into_bytes(),
+            ),
+            (
+                "format-version",
+                (metadata.format_version as u8).to_string().into_bytes(),
+            ),
+            ("content", metadata.content.to_string().into_bytes()),
+        ] {
+            writer.add_user_metadata(key.to_string(), value).unwrap();
+        }
+        for entry in entries {
+            let value = apache_avro::types::Value::try_from(entry)
+                .unwrap()
+                .resolve(&avro_schema)
+                .unwrap();
+            writer.append_value(value).unwrap();
+        }
+        writer.into_inner().unwrap()
+    }
+
+    #[test]
+    fn test_parse_manifest_matches_partition_fields_by_name() {
+        // The writer orders the partition fields differently from the spec, omits
+        // `name`, and adds a field the spec doesn't have.
+        let metadata = writer_schema_test_metadata();
+        let writer_schema = v2_writer_schema(serde_json::json!([
+            {"name": "score", "type": ["null", "double"], "default": null, "field-id": 1002},
+            {"name": "extra", "type": ["null", "int"], "default": null, "field-id": 1003},
+            {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
+        ]));
+        let bs = write_with_writer_schema(&metadata, &writer_schema, vec![v2_entry(
+            serde_json::json!({"score": 2.5, "extra": 9, "id": 5}),
+        )]);
+
+        let manifest = Manifest::parse_avro(&bs).unwrap();
+
+        let partition =
+            Struct::from_iter([Some(Literal::long(5)), None, Some(Literal::double(2.5))]);
+        assert_eq!(
+            manifest,
+            Manifest::new(metadata, vec![expected_entry(partition)])
+        );
+    }
+
+    #[test]
+    fn test_parse_manifest_promotes_writer_types() {
+        // Avro promotes int to long and float to double.
+        let metadata = writer_schema_test_metadata();
+        let mut writer_schema = v2_writer_schema(serde_json::json!([
+            {"name": "id", "type": ["null", "int"], "default": null, "field-id": 1000},
+            {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
+            {"name": "score", "type": ["null", "float"], "default": null, "field-id": 1002},
+        ]));
+        for field in ["record_count", "file_size_in_bytes"] {
+            writer_schema_field(&mut writer_schema, &["data_file", field])["type"] =
+                serde_json::json!("int");
+        }
+        let bs = write_with_writer_schema(&metadata, &writer_schema, vec![v2_entry(
+            serde_json::json!({"id": 5, "name": "a", "score": 2.5}),
+        )]);
+
+        let manifest = Manifest::parse_avro(&bs).unwrap();
+
+        let partition = Struct::from_iter([
+            Some(Literal::long(5)),
+            Some(Literal::string("a")),
+            Some(Literal::double(2.5)),
+        ]);
+        assert_eq!(
+            manifest,
+            Manifest::new(metadata, vec![expected_entry(partition)])
+        );
+    }
+
+    #[test]
+    fn test_parse_manifest_reads_required_writer_fields_as_optional() {
+        // Fields that are optional in the reader schema are written without a
+        // union.
+        let metadata = writer_schema_test_metadata();
+        let mut writer_schema = v2_writer_schema(serde_json::json!([
+            {"name": "id", "type": "long", "field-id": 1000},
+            {"name": "name", "type": "string", "field-id": 1001},
+            {"name": "score", "type": "double", "field-id": 1002},
+        ]));
+        *writer_schema_field(&mut writer_schema, &["snapshot_id"]) =
+            serde_json::json!({"name": "snapshot_id", "type": "long", "field-id": 1});
+        writer_schema_field(&mut writer_schema, &["data_file"])["type"]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"name": "sort_order_id", "type": "int", "field-id": 140}));
+        let mut entry = v2_entry(serde_json::json!({"id": 5, "name": "a", "score": 2.5}));
+        entry["data_file"]["sort_order_id"] = serde_json::json!(3);
+        let bs = write_with_writer_schema(&metadata, &writer_schema, vec![entry]);
+
+        let manifest = Manifest::parse_avro(&bs).unwrap();
+
+        let mut expected = expected_entry(Struct::from_iter([
+            Some(Literal::long(5)),
+            Some(Literal::string("a")),
+            Some(Literal::double(2.5)),
+        ]));
+        expected.data_file.sort_order_id = Some(3);
+        assert_eq!(manifest, Manifest::new(metadata, vec![expected]));
+    }
+
+    #[test]
+    fn test_parse_manifest_ignores_record_names_and_unknown_fields() {
+        // Record names differ from the ones Java writes, and the writer has fields
+        // the reader schema doesn't.
+        let metadata = writer_schema_test_metadata();
+        let mut writer_schema = v2_writer_schema(serde_json::json!([
+            {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
+            {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
+            {"name": "score", "type": ["null", "double"], "default": null, "field-id": 1002},
+        ]));
+        writer_schema["name"] = serde_json::json!("entry");
+        writer_schema["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"name": "unknown", "type": "string"}));
+        let data_file = &mut writer_schema_field(&mut writer_schema, &["data_file"])["type"];
+        data_file["name"] = serde_json::json!("file");
+        data_file["fields"][3]["type"]["name"] = serde_json::json!("part");
+        let data_file_fields = data_file["fields"].as_array_mut().unwrap();
+        data_file_fields.push(serde_json::json!({
+            "name": "column_sizes",
+            "field-id": 108,
+            "default": null,
+            "type": ["null", {
+                "type": "array",
+                "logicalType": "map",
+                "items": {
+                    "type": "record",
+                    "name": "sizes",
+                    "fields": [
+                        {"name": "key", "type": "int", "field-id": 117},
+                        {"name": "value", "type": "long", "field-id": 118},
+                    ],
+                },
+            }],
+        }));
+        data_file_fields.push(
+            serde_json::json!({"name": "block_size_in_bytes", "type": "long", "field-id": 105}),
+        );
+        let mut entry = v2_entry(serde_json::json!({"id": 5, "name": "a", "score": 2.5}));
+        entry["unknown"] = serde_json::json!("ignored");
+        entry["data_file"]["column_sizes"] = serde_json::json!([{"key": 1, "value": 40}]);
+        entry["data_file"]["block_size_in_bytes"] = serde_json::json!(64);
+        let bs = write_with_writer_schema(&metadata, &writer_schema, vec![entry]);
+
+        let manifest = Manifest::parse_avro(&bs).unwrap();
+
+        let mut expected = expected_entry(Struct::from_iter([
+            Some(Literal::long(5)),
+            Some(Literal::string("a")),
+            Some(Literal::double(2.5)),
+        ]));
+        expected.data_file.column_sizes = HashMap::from([(1, 40)]);
+        assert_eq!(manifest, Manifest::new(metadata, vec![expected]));
+    }
+
+    #[test]
+    fn test_parse_manifest_equality_ids_written_as_long() {
+        // PyIceberg wrote `equality_ids` as `array<long>` before
+        // apache/iceberg-python#3842.
+        let metadata = writer_schema_test_metadata();
+        let mut writer_schema = v2_writer_schema(serde_json::json!([
+            {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
+            {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
+            {"name": "score", "type": ["null", "double"], "default": null, "field-id": 1002},
+        ]));
+        writer_schema_field(&mut writer_schema, &["data_file"])["type"]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "name": "equality_ids",
+                "field-id": 135,
+                "default": null,
+                "type": ["null", {"type": "array", "items": "long", "element-id": 136}],
+            }));
+        let mut entry = v2_entry(serde_json::json!({"id": 5, "name": "a", "score": 2.5}));
+        entry["data_file"]["equality_ids"] = serde_json::json!([1, 2]);
+        let bs = write_with_writer_schema(&metadata, &writer_schema, vec![entry]);
+
+        let manifest = Manifest::parse_avro(&bs).unwrap();
+
+        let mut expected = expected_entry(Struct::from_iter([
+            Some(Literal::long(5)),
+            Some(Literal::string("a")),
+            Some(Literal::double(2.5)),
+        ]));
+        expected.data_file.equality_ids = Some(vec![1, 2]);
+        assert_eq!(manifest, Manifest::new(metadata, vec![expected]));
+    }
+
+    #[test]
+    fn test_parse_manifest_rejects_equality_id_above_int_range() {
+        let metadata = writer_schema_test_metadata();
+        let mut writer_schema = v2_writer_schema(serde_json::json!([
+            {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
+            {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
+            {"name": "score", "type": ["null", "double"], "default": null, "field-id": 1002},
+        ]));
+        writer_schema_field(&mut writer_schema, &["data_file"])["type"]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "name": "equality_ids",
+                "field-id": 135,
+                "default": null,
+                "type": ["null", {"type": "array", "items": "long", "element-id": 136}],
+            }));
+        let mut entry = v2_entry(serde_json::json!({"id": 5, "name": "a", "score": 2.5}));
+        entry["data_file"]["equality_ids"] = serde_json::json!([i64::from(i32::MAX) + 1]);
+        let bs = write_with_writer_schema(&metadata, &writer_schema, vec![entry]);
+
+        let err = Manifest::parse_avro(&bs).unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[test]
+    fn test_parse_manifest_with_repeated_named_type_definitions() {
+        let bs = fs::read(format!(
+            "{}/testdata/manifests/repeated-decimal-type-definitions.avro",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+
+        let manifest = Manifest::parse_avro(&bs).unwrap();
+
+        assert_eq!(
+            *manifest.entries()[0].data_file().partition(),
+            Struct::from_iter([Some(Literal::decimal(12345)), Some(Literal::decimal(-678))])
+        );
     }
 }

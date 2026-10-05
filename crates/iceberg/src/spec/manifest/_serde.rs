@@ -58,6 +58,7 @@ impl ManifestEntryV2 {
             file_sequence_number: self.file_sequence_number,
             data_file: self
                 .data_file
+                .project_partition_by_name(partition_type)?
                 .try_into(partition_spec_id, partition_type, schema)?,
         })
     }
@@ -92,6 +93,7 @@ impl ManifestEntryV1 {
             file_sequence_number: Some(0),
             data_file: self
                 .data_file
+                .project_partition_by_name(partition_type)?
                 .try_into(partition_spec_id, partition_type, schema)?,
         })
     }
@@ -159,6 +161,16 @@ impl DataFileSerde {
             content_offset: value.content_offset,
             content_size_in_bytes: value.content_size_in_bytes,
         })
+    }
+
+    /// Matches the partition value's fields to `partition_type` by name. Manifest
+    /// entries are deserialized with the writer's partition fields and order,
+    /// which can differ from the partition spec's.
+    fn project_partition_by_name(mut self, partition_type: &Type) -> Result<Self, Error> {
+        if let Type::Struct(struct_type) = partition_type {
+            self.partition = self.partition.project_by_name(struct_type)?;
+        }
+        Ok(self)
     }
 
     pub fn try_into(
