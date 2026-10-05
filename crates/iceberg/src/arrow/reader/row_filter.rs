@@ -23,13 +23,14 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow_arith::boolean::and_kleene;
 use parquet::arrow::ProjectionMask;
-use parquet::arrow::arrow_reader::{ArrowPredicateFn, RowFilter, RowSelection};
+use parquet::arrow::arrow_reader::{ArrowPredicate, ArrowPredicateFn, RowSelection};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::schema::types::SchemaDescriptor;
 
 use super::{ArrowReader, PredicateConverter};
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::expr::BoundPredicate;
 use crate::expr::visitors::bound_predicate_visitor::visit;
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
@@ -37,33 +38,54 @@ use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator
 use crate::spec::Schema;
 
 impl ArrowReader {
-    pub(super) fn get_row_filter(
-        predicates: &BoundPredicate,
+    /// Converts predicates into one Arrow predicate of a `RowFilter` that ANDs
+    /// them. Each is resolved against its own field-id map, and the union of
+    /// their columns is decoded once.
+    pub(super) fn get_arrow_predicate(
+        predicates: &[(&BoundPredicate, &HashSet<i32>, &HashMap<i32, usize>)],
         parquet_schema: &SchemaDescriptor,
-        iceberg_field_ids: &HashSet<i32>,
-        field_id_map: &HashMap<i32, usize>,
-    ) -> Result<RowFilter> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         // Collect Parquet column indices from field ids.
         // If the field id is not found in Parquet schema, it will be ignored due to schema evolution.
-        let mut column_indices = iceberg_field_ids
+        let mut column_indices = predicates
             .iter()
-            .filter_map(|field_id| field_id_map.get(field_id).cloned())
+            .flat_map(|(_, field_ids, field_id_map)| {
+                field_ids
+                    .iter()
+                    .filter_map(move |field_id| field_id_map.get(field_id).cloned())
+            })
             .collect::<Vec<_>>();
         column_indices.sort();
+        column_indices.dedup();
 
-        // The converter that converts `BoundPredicates` to `ArrowPredicates`
-        let mut converter = PredicateConverter {
-            parquet_schema,
-            column_map: field_id_map,
-            column_indices: &column_indices,
-        };
+        let mut predicate_funcs = Vec::with_capacity(predicates.len());
+        for (predicate, _, field_id_map) in predicates {
+            // The converter that converts `BoundPredicates` to `ArrowPredicates`
+            let mut converter = PredicateConverter {
+                parquet_schema,
+                column_map: field_id_map,
+                column_indices: &column_indices,
+            };
+            predicate_funcs.push(visit(&mut converter, predicate)?);
+        }
+        let predicate_func = predicate_funcs
+            .into_iter()
+            .reduce(|mut lhs, mut rhs| {
+                Box::new(move |batch| {
+                    let left = lhs(batch.clone())?;
+                    let right = rhs(batch)?;
+                    and_kleene(&left, &right)
+                })
+            })
+            .ok_or_else(|| invalid_data!("Row filter requires at least one predicate"))?;
 
-        // After collecting required leaf column indices used in the predicate,
-        // creates the projection mask for the Arrow predicates.
-        let projection_mask = ProjectionMask::leaves(parquet_schema, column_indices.clone());
-        let predicate_func = visit(&mut converter, predicates)?;
-        let arrow_predicate = ArrowPredicateFn::new(projection_mask, predicate_func);
-        Ok(RowFilter::new(vec![Box::new(arrow_predicate)]))
+        // After collecting required leaf column indices used in the predicates,
+        // creates the projection mask for the Arrow predicate.
+        let projection_mask = ProjectionMask::leaves(parquet_schema, column_indices);
+        Ok(Box::new(ArrowPredicateFn::new(
+            projection_mask,
+            predicate_func,
+        )))
     }
 
     pub(super) fn get_selected_row_group_indices(
