@@ -864,7 +864,8 @@ impl RecordBatchTransformer {
                         return Err(invalid_data!("Missing required field: {}", iceberg_field.name));
                     }
 
-                    // TODO: Materialize complex initial defaults, including child defaults.
+                    // TODO: Support the spec-defined non-null struct initial default `{}` by
+                    // creating a non-null struct and applying each child's initial default.
                     let default_value = match iceberg_field.initial_default.as_ref() {
                         None => None,
                         Some(Literal::Primitive(prim)) => Some(prim.clone()),
@@ -1406,12 +1407,24 @@ mod test {
                 RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
                     .unwrap();
 
-            let err = transformer.process_record_batch(file_batch).unwrap_err();
-            assert_eq!(err.kind(), crate::ErrorKind::FeatureUnsupported);
-            assert!(err.to_string().contains("Cannot read field added_struct"));
+            let err = transformer
+                .process_record_batch(file_batch)
+                .expect_err(&format!(
+                    "required={required}: complex default should be rejected"
+                ));
+            assert_eq!(
+                err.kind(),
+                crate::ErrorKind::FeatureUnsupported,
+                "required={required}"
+            );
+            assert!(
+                err.to_string().contains("Cannot read field added_struct"),
+                "required={required}: {err}"
+            );
             assert!(
                 err.to_string()
-                    .contains("applying a non-primitive initial-default")
+                    .contains("applying a non-primitive initial-default"),
+                "required={required}: {err}"
             );
         }
     }

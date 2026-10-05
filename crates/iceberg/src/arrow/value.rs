@@ -526,8 +526,7 @@ pub(crate) fn create_primitive_array_single_element(
     data_type: &DataType,
     prim_lit: Option<&PrimitiveLiteral>,
 ) -> Result<ArrayRef> {
-    // No value: a single NULL of any (possibly nested) type (#2618). The `1` is
-    // `new_null_array`'s row count.
+    // No value: a single NULL of any (possibly nested) type.
     if prim_lit.is_none() {
         return Ok(new_null_array(data_type, 1));
     }
@@ -608,7 +607,7 @@ pub(crate) fn create_primitive_array_repeated(
     prim_lit: Option<&PrimitiveLiteral>,
     num_rows: usize,
 ) -> Result<ArrayRef> {
-    // No value to repeat: an all-NULL column of any (possibly nested) type (#2618).
+    // No value to repeat: an all-NULL column of any (possibly nested) type.
     if prim_lit.is_none() {
         return Ok(new_null_array(data_type, num_rows));
     }
@@ -1630,6 +1629,67 @@ mod test {
                 assert_eq!(*scale, target_scale);
             }
             other => panic!("Expected Decimal128, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_create_null_arrays_preserve_type_and_length() {
+        let data_types = [
+            DataType::Decimal128(10, 2),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+            DataType::Struct(
+                vec![
+                    Field::new("a", DataType::Utf8, true),
+                    Field::new(
+                        "ys",
+                        DataType::List(Arc::new(Field::new("element", DataType::Int64, true))),
+                        true,
+                    ),
+                ]
+                .into(),
+            ),
+            DataType::Null,
+        ];
+
+        // NullArray has no validity bitmap; logical_null_count includes its implicit NULLs.
+        for data_type in data_types {
+            let single = create_primitive_array_single_element(&data_type, None)
+                .unwrap_or_else(|err| panic!("single, type={data_type:?}: {err}"));
+            assert_eq!(single.data_type(), &data_type, "single, type={data_type:?}");
+            assert_eq!(single.len(), 1, "single, type={data_type:?}");
+            if data_type != DataType::Null {
+                assert_eq!(single.null_count(), 1, "single, type={data_type:?}");
+            }
+            assert_eq!(single.logical_null_count(), 1, "single, type={data_type:?}");
+
+            for num_rows in [0, 1, 3] {
+                let repeated = create_primitive_array_repeated(&data_type, None, num_rows)
+                    .unwrap_or_else(|err| {
+                        panic!("repeated, type={data_type:?}, rows={num_rows}: {err}")
+                    });
+                assert_eq!(
+                    repeated.data_type(),
+                    &data_type,
+                    "repeated, type={data_type:?}, rows={num_rows}"
+                );
+                assert_eq!(
+                    repeated.len(),
+                    num_rows,
+                    "repeated, type={data_type:?}, rows={num_rows}"
+                );
+                if data_type != DataType::Null {
+                    assert_eq!(
+                        repeated.null_count(),
+                        num_rows,
+                        "repeated, type={data_type:?}, rows={num_rows}"
+                    );
+                }
+                assert_eq!(
+                    repeated.logical_null_count(),
+                    num_rows,
+                    "repeated, type={data_type:?}, rows={num_rows}"
+                );
+            }
         }
     }
 
