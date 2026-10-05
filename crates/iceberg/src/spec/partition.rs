@@ -2010,9 +2010,7 @@ mod tests {
 
         assert_eq!(
             spec.partition_to_path(&data, schema.into()),
-            "ts=2017-11-16T22%3A31%3A08.123456/\
-             tstz=2017-11-16T22%3A31%3A08.123456%2B00%3A00/\
-             b=AQL%2F"
+            "ts=2017-11-16T22%3A31%3A08.123456/tstz=2017-11-16T22%3A31%3A08.123456%2B00%3A00/b=AQL%2F"
         );
     }
 

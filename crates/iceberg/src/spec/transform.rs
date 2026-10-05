@@ -1348,16 +1348,13 @@ mod tests {
         ];
         for (nanos, expected) in cases {
             assert_eq!(
-                human_identity(
-                    PrimitiveType::TimestampNs,
-                    Literal::Primitive(PrimitiveLiteral::Long(nanos))
-                ),
+                human_identity(PrimitiveType::TimestampNs, Literal::timestamp_nano(nanos)),
                 expected
             );
             assert_eq!(
                 human_identity(
                     PrimitiveType::TimestamptzNs,
-                    Literal::Primitive(PrimitiveLiteral::Long(nanos))
+                    Literal::timestamptz_nano(nanos)
                 ),
                 format!("{expected}+00:00")
             );

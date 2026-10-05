@@ -1211,12 +1211,13 @@ impl Datum {
 
     /// Returns a human-readable string representation of this literal.
     ///
-    /// This is the value written into partition paths, so it follows iceberg-java's
-    /// `Transform.toHumanString`:
+    /// This is the value written into partition paths, so it mirrors the output of
+    /// iceberg-java's `Transform.toHumanString`:
     /// - string literals are returned without quotes;
     /// - timestamps use `yyyy-MM-ddTHH:mm:ss` with trailing zeros of the fraction trimmed,
-    ///   followed by `+00:00` when the type has a zone;
-    /// - binary and fixed values are standard Base64 with padding.
+    ///   followed by `+00:00` when the type has a zone (`TransformUtil.humanTimestamp*`);
+    /// - binary and fixed values are standard Base64 with padding
+    ///   (`TransformUtil.base64encode`).
     ///
     /// All other literals fall back to [`to_string()`](ToString::to_string).
     pub fn to_human_string(&self) -> String {
@@ -1242,9 +1243,11 @@ impl Datum {
     }
 }
 
-/// Formats a timestamp the way iceberg-java's `TransformUtil.humanTimestampWithoutZone`
-/// does: `yyyy-MM-ddTHH:mm:ss`, then the fraction of a second with its trailing zeros
-/// trimmed, so `.120000` is written as `.12` and a whole second has no fraction.
+/// Formats a timestamp as `yyyy-MM-ddTHH:mm:ss`, then the fraction of a second with its
+/// trailing zeros trimmed, so `.120000` is written as `.12` and a whole second has no
+/// fraction.
+///
+/// Mirrors the output of `TransformUtil.humanTimestampWithoutZone`.
 fn human_timestamp(datetime: NaiveDateTime) -> String {
     let mut human = datetime.format("%Y-%m-%dT%H:%M:%S").to_string();
     let nanos = datetime.and_utc().timestamp_subsec_nanos();
