@@ -173,6 +173,7 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
 
+    use apache_avro::types::Value as AvroValue;
     use apache_avro::{Codec, Writer, to_value};
     use serde_json::{Value, to_vec};
     use tempfile::TempDir;
@@ -1515,6 +1516,22 @@ mod tests {
         writer_schema: &Value,
         entries: Vec<Value>,
     ) -> Vec<u8> {
+        write_avro_values_with_writer_schema(
+            metadata,
+            writer_schema,
+            entries
+                .into_iter()
+                .map(|entry| AvroValue::try_from(entry).unwrap())
+                .collect(),
+        )
+    }
+
+    /// Like [`write_with_writer_schema`], for entries that JSON can't express.
+    fn write_avro_values_with_writer_schema(
+        metadata: &ManifestMetadata,
+        writer_schema: &Value,
+        entries: Vec<AvroValue>,
+    ) -> Vec<u8> {
         let avro_schema = apache_avro::Schema::parse(writer_schema).unwrap();
         let mut writer = Writer::new(&avro_schema, Vec::new()).unwrap();
         for (key, value) in [
@@ -1537,11 +1554,9 @@ mod tests {
             writer.add_user_metadata(key.to_string(), value).unwrap();
         }
         for entry in entries {
-            let value = apache_avro::types::Value::try_from(entry)
-                .unwrap()
-                .resolve(&avro_schema)
+            writer
+                .append_value(entry.resolve(&avro_schema).unwrap())
                 .unwrap();
-            writer.append_value(value).unwrap();
         }
         writer.into_inner().unwrap()
     }
@@ -1628,6 +1643,91 @@ mod tests {
             Some(Literal::double(2.5)),
         ]));
         expected.data_file.sort_order_id = Some(3);
+        assert_eq!(manifest, Manifest::new(metadata, vec![expected]));
+    }
+
+    #[test]
+    fn test_parse_manifest_reads_union_writer_fields_as_required() {
+        // A field that is required in the reader schema is written as a union with
+        // null.
+        let metadata = writer_schema_test_metadata();
+        let mut writer_schema = v2_writer_schema(serde_json::json!([
+            {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
+            {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
+            {"name": "score", "type": ["null", "double"], "default": null, "field-id": 1002},
+        ]));
+        writer_schema_field(&mut writer_schema, &["data_file", "record_count"])["type"] =
+            serde_json::json!(["null", "long"]);
+        let partition = serde_json::json!({"id": 5, "name": "a", "score": 2.5});
+        let bs =
+            write_with_writer_schema(&metadata, &writer_schema, vec![v2_entry(partition.clone())]);
+
+        let manifest = Manifest::parse_avro(&bs).unwrap();
+
+        let expected = expected_entry(Struct::from_iter([
+            Some(Literal::long(5)),
+            Some(Literal::string("a")),
+            Some(Literal::double(2.5)),
+        ]));
+        assert_eq!(manifest, Manifest::new(metadata.clone(), vec![expected]));
+
+        let mut entry = v2_entry(partition);
+        entry["data_file"]["record_count"] = Value::Null;
+        let bs = write_with_writer_schema(&metadata, &writer_schema, vec![entry]);
+
+        let err = Manifest::parse_avro(&bs).unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[test]
+    fn test_parse_manifest_with_fixed_uuid_partition() {
+        // The spec stores a uuid in Avro as a 16-byte fixed with logical type uuid.
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "u", Type::Primitive(PrimitiveType::Uuid)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_partition_field("u", "u", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        let metadata = ManifestMetadata {
+            schema_id: 0,
+            schema,
+            partition_spec,
+            content: ManifestContentType::Data,
+            format_version: FormatVersion::V2,
+        };
+        let writer_schema = v2_writer_schema(serde_json::json!([
+            {"name": "u", "default": null, "field-id": 1000, "type": ["null", {
+                "type": "fixed", "name": "uuid_fixed", "size": 16, "logicalType": "uuid",
+            }]},
+        ]));
+        let uuid = uuid::Uuid::from_u128(0xf79c3e09_677c_4bbd_a479_3f349cb785e7);
+        // `Value::resolve` doesn't convert a JSON string to a fixed uuid, so the
+        // partition value is set as an Avro value.
+        let mut entry = AvroValue::try_from(v2_entry(serde_json::json!({}))).unwrap();
+        let AvroValue::Map(fields) = &mut entry else {
+            unreachable!("a JSON object converts to an Avro map");
+        };
+        let Some(AvroValue::Map(data_file)) = fields.get_mut("data_file") else {
+            unreachable!("a JSON object converts to an Avro map");
+        };
+        data_file.insert(
+            "partition".to_string(),
+            AvroValue::Map(HashMap::from([("u".to_string(), AvroValue::Uuid(uuid))])),
+        );
+        let bs = write_avro_values_with_writer_schema(&metadata, &writer_schema, vec![entry]);
+
+        let manifest = Manifest::parse_avro(&bs).unwrap();
+
+        let expected = expected_entry(Struct::from_iter([Some(Literal::uuid(uuid))]));
         assert_eq!(manifest, Manifest::new(metadata, vec![expected]));
     }
 

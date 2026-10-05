@@ -26,6 +26,8 @@
 //!
 //! - Avro record names don't have to match serde type names.
 //! - A writer value that isn't a union reads into an `Option`.
+//! - A writer union reads into a type that isn't an `Option`. A null value
+//!   returns an error.
 //! - serde's numeric visitors convert between numeric types, so an `int` reads
 //!   into an `i64` and a `float` into an `f64`. An integer that doesn't fit the
 //!   target, such as a `long` above `i32::MAX` read into an `i32`, returns an
