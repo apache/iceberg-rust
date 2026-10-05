@@ -866,6 +866,7 @@ impl RecordBatchTransformer {
 
                     // TODO: Support the spec-defined non-null struct initial default `{}` by
                     // creating a non-null struct and applying each child's initial default.
+                    // Tracked in https://github.com/apache/iceberg-rust/issues/3261.
                     let default_value = match iceberg_field.initial_default.as_ref() {
                         None => None,
                         Some(Literal::Primitive(prim)) => Some(prim.clone()),
@@ -1153,7 +1154,7 @@ mod test {
     use arrow_cast::cast;
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 
-    use super::{PARQUET_FIELD_ID_META_KEY, field_with_id};
+    use super::{field_with_id, schema_to_arrow_schema};
     use crate::arrow::build_partition_constant;
     use crate::arrow::record_batch_transformer::{
         RecordBatchTransformer, RecordBatchTransformerBuilder,
@@ -1614,61 +1615,15 @@ mod test {
             .unwrap();
         assert_eq!(id_column.values(), &[1, 2, 3]);
 
-        // (3b) The added columns carry the evolved schema's Arrow types and are all-NULL.
-        assert!(matches!(
-            result.schema().field(1).data_type(),
-            DataType::List(_)
-        ));
-        assert!(matches!(
-            result.schema().field(2).data_type(),
-            DataType::Map(_, _)
-        ));
+        // (3b) The added columns carry the evolved schema's Arrow types, including nested
+        // field names, nullability, and field IDs, and are all-NULL.
+        let expected_schema = schema_to_arrow_schema(&schema_with_added_nested_columns()).unwrap();
+        assert_eq!(result.schema().as_ref(), &expected_schema);
         for (idx, name) in [(1, "xs"), (2, "props"), (3, "s")] {
             assert_eq!(
                 result.column(idx).null_count(),
                 3,
                 "added nested column `{name}` should be all-NULL"
-            );
-        }
-
-        // (3c) The all-NULL struct still carries its full nested shape (`a` plus the
-        // nested list `ys`), not a degenerate empty struct — this is what the
-        // type-preserving NULL fill guarantees over an enumerate-each-type fix.
-        let result_schema = result.schema();
-        let DataType::Struct(struct_fields) = result_schema.field(3).data_type() else {
-            panic!("field `s` should be a struct");
-        };
-        let child_names: Vec<&str> = struct_fields.iter().map(|f| f.name().as_str()).collect();
-        assert_eq!(child_names, vec!["a", "ys"]);
-
-        let DataType::List(xs_element) = result_schema.field(1).data_type() else {
-            panic!("field `xs` should be a list");
-        };
-        let DataType::Map(entries, _) = result_schema.field(2).data_type() else {
-            panic!("field `props` should be a map");
-        };
-        let DataType::Struct(map_fields) = entries.data_type() else {
-            panic!("map entries should be a struct");
-        };
-        let DataType::List(ys_element) = struct_fields[1].data_type() else {
-            panic!("field `ys` should be a list");
-        };
-        for (field, expected_id) in [
-            (xs_element, "3"),
-            (&map_fields[0], "5"),
-            (&map_fields[1], "6"),
-            (&struct_fields[0], "8"),
-            (&struct_fields[1], "9"),
-            (ys_element, "10"),
-        ] {
-            assert_eq!(
-                field
-                    .metadata()
-                    .get(PARQUET_FIELD_ID_META_KEY)
-                    .map(String::as_str),
-                Some(expected_id),
-                "nested field `{}` should preserve its field ID",
-                field.name()
             );
         }
     }
