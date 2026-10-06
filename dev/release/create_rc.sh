@@ -19,6 +19,12 @@
 
 set -Eeuo pipefail
 
+# bash 3.2 (macOS default) does not run the ERR trap for a failing subshell:
+# the script still exits on failure but does not report which step failed.
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+  echo "Warning: bash ${BASH_VERSION} will not print which step failed. Use bash 4 or newer to see it." >&2
+fi
+
 CURRENT_STEP=""
 
 on_error() {
@@ -147,16 +153,6 @@ require_command() {
 require_checksum_command() {
   if ! command -v shasum >/dev/null 2>&1 && ! command -v sha512sum >/dev/null 2>&1; then
     echo "This step requires either 'shasum' or 'sha512sum'." >&2
-    return 1
-  fi
-}
-
-require_cargo_deny() {
-  require_command cargo
-  if ! cargo deny --version >/dev/null 2>&1; then
-    echo "This step requires 'cargo-deny' for dependency license checks." >&2
-    echo "Install it with: cargo install --locked cargo-deny" >&2
-    echo "To skip this step locally, pass: --check_deps 0" >&2
     return 1
   fi
 }
@@ -311,12 +307,7 @@ check_rc_tag_available() {
 }
 
 check_dependency_licenses() {
-  require_cargo_deny
-  (
-    trap - ERR
-    cd "${REPO_ROOT}"
-    cargo deny check license
-  )
+  "${SCRIPT_DIR}/dependencies.sh" check
 }
 
 # Packages and builds every crate as `cargo publish` would, without uploading,

@@ -62,7 +62,7 @@ Defaults:
 `--check_deps 1` requires `cargo-deny`. Install it with:
 
 ```shell
-cargo install --locked cargo-deny
+make install-cargo-deny
 ```
 
 `--check_publish 1` runs `cargo publish --workspace --dry-run`, which packages and compiles every crate and needs network access to crates.io.

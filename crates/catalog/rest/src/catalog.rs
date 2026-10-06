@@ -1673,8 +1673,8 @@ mod tests {
         SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
         UnboundPartitionField, UnboundPartitionSpec,
     };
-    use iceberg::test_utils::test_runtime;
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
+    use iceberg_test_utils::test_runtime;
     use mockito::{Mock, Server, ServerGuard};
     use serde_json::json;
     use uuid::uuid;
@@ -3832,13 +3832,14 @@ mod tests {
             .properties(HashMap::from([("owner".to_string(), "testx".to_string())]))
             .partition_spec(
                 UnboundPartitionSpec::builder()
-                    .add_partition_fields(vec![
+                    .add_partition_field(
                         UnboundPartitionField::builder()
-                            .source_id(1)
+                            .source_ids(vec![1])
+                            .name("id")
                             .transform(Transform::Truncate(3))
-                            .name("id".to_string())
-                            .build(),
-                    ])
+                            .build()
+                            .unwrap(),
+                    )
                     .unwrap()
                     .build(),
             )
