@@ -39,10 +39,6 @@ const ENGINE_VERSION_PROP: &str = "engine-version";
 const ICEBERG_VERSION_PROP: &str = "iceberg-version";
 const ENGINE_NAME: &str = "iceberg-rust";
 
-/// Identity fields written on every snapshot this library commits.
-///
-/// `engine-name` and `engine-version` match PyIceberg. `iceberg-version` matches
-/// iceberg-java's `EnvironmentContext` and iceberg-go, without a git commit id.
 fn writer_identity_properties() -> HashMap<String, String> {
     let version = env!("CARGO_PKG_VERSION");
     HashMap::from([
@@ -437,10 +433,6 @@ impl<'a> SnapshotProducer<'a> {
             previous_snapshot.map(|s| s.summary()),
             snapshot_produce_operation.operation() == Operation::Overwrite,
         )?;
-        // Applied last, so these keys override a caller snapshot property with the
-        // same name. Java copies EnvironmentContext at the end of
-        // SnapshotProducer.summary; PyIceberg sets its engine fields at the end of
-        // update_snapshot_summaries.
         summary
             .additional_properties
             .extend(writer_identity_properties());
