@@ -114,17 +114,20 @@ mod tests {
         );
     }
 
-    /// The HA flow: table locations carry a logical authority while
-    /// `hdfs.name-node` carries the (comma-separated) endpoints; it wins.
+    /// The HA flow: table locations carry a logical authority, and
+    /// `hdfs.name-node.<nameservice>` declares its (comma-separated) endpoints.
     #[tokio::test]
     async fn test_file_io_hdfs_configured_name_node() {
         require_hdfs!();
         set_up();
         let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::HdfsNative))
-            .with_prop(HDFS_NAME_NODE, get_hdfs_endpoint())
+            .with_prop(
+                format!("{HDFS_NAME_NODE}.logical-nameservice"),
+                get_hdfs_endpoint(),
+            )
             .build();
 
-        // The path authority is a logical name; the configured NameNode wins.
+        // The path authority is a logical name resolved by its declaration.
         let path = format!(
             "hdfs://logical-nameservice/{}",
             normalize_test_name_with_parts!("test_file_io_hdfs_configured_name_node")

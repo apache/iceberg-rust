@@ -1260,13 +1260,16 @@ mod tests {
             "warehouse/db/t"
         );
 
-        // A logical nameservice resolves only through `hdfs.name-node`.
+        // A logical nameservice resolves only through its declaration.
         assert!(
             storage
                 .relativize_path("hdfs://nameservice1/a/b.parquet")
                 .is_err()
         );
-        let props = HashMap::from([(HDFS_NAME_NODE.to_string(), "hdfs://nn:8020".to_string())]);
+        let props = HashMap::from([(
+            format!("{HDFS_NAME_NODE}.nameservice1"),
+            "hdfs://nn:8020".to_string(),
+        )]);
         let configured = OpenDalStorage::HdfsNative(HdfsNativeStorage::new(
             hdfs_native_config_parse(props).unwrap(),
             OpenDalClientConfig::default(),
