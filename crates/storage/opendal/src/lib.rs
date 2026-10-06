@@ -554,13 +554,7 @@ impl OpenDalStorage {
             } => {
                 let operator =
                     gcs_config_build(config, credential_provider, path, credential_location)?;
-                let url = url::Url::parse(path).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid gcs url: {path}: {e}"),
-                    )
-                })?;
-                let prefix = format!("{}://{}/", url.scheme(), operator.info().name());
+                let prefix = format!("gs://{}/", operator.info().name());
                 if path.starts_with(&prefix) {
                     (operator, &path[prefix.len()..])
                 } else {
@@ -757,19 +751,13 @@ impl OpenDalStorage {
             #[cfg(feature = "opendal-gcs")]
             OpenDalStorage::Gcs { .. } => {
                 let url = url::Url::parse(path)?;
-                if !matches!(url.scheme(), "gs" | "gcs") {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid gcs url: {path}, expected gs:// or gcs://"),
-                    ));
-                }
                 let bucket = url.host_str().ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
                         format!("Invalid gcs url: {path}, missing bucket"),
                     )
                 })?;
-                let prefix = format!("{}://{}/", url.scheme(), bucket);
+                let prefix = format!("gs://{}/", bucket);
                 if path.starts_with(&prefix) {
                     Ok(&path[prefix.len()..])
                 } else {
@@ -1013,6 +1001,14 @@ impl FileWrite for OpenDalWriter {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "opendal-s3")]
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[cfg(feature = "opendal-gcs")]
+    use iceberg::io::{GCS_SERVICE_HOST, GCS_TOKEN};
+    #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+    use iceberg::io::{S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, StorageCredential};
+
     #[allow(unused_imports)]
     use super::*;
 
@@ -1027,7 +1023,7 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, path: &str) -> Result<iceberg::io::StorageCredential> {
+        async fn load_credential(&self, path: &str) -> Result<StorageCredential> {
             let prefix = if path.contains("/table-a/") {
                 "s3://bucket/table-a"
             } else {
@@ -1039,21 +1035,12 @@ mod tests {
 
     /// An S3 credential for locations under `prefix`.
     #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
-    fn s3_credential(
-        prefix: impl Into<String>,
-        access_key: &str,
-    ) -> iceberg::io::StorageCredential {
-        iceberg::io::StorageCredential::new(
+    fn s3_credential(prefix: impl Into<String>, access_key: &str) -> StorageCredential {
+        StorageCredential::new(
             prefix,
             HashMap::from([
-                (
-                    iceberg::io::S3_ACCESS_KEY_ID.to_string(),
-                    access_key.to_string(),
-                ),
-                (
-                    iceberg::io::S3_SECRET_ACCESS_KEY.to_string(),
-                    "secret-key".to_string(),
-                ),
+                (S3_ACCESS_KEY_ID.to_string(), access_key.to_string()),
+                (S3_SECRET_ACCESS_KEY.to_string(), "secret-key".to_string()),
             ]),
         )
     }
@@ -1373,8 +1360,8 @@ mod tests {
     #[cfg(feature = "opendal-s3")]
     #[derive(Debug, Default)]
     struct ChangingScopeProvider {
-        scoped: std::sync::atomic::AtomicBool,
-        scheme_wide_expired: std::sync::atomic::AtomicBool,
+        scoped: AtomicBool,
+        scheme_wide_expired: AtomicBool,
     }
 
     #[cfg(feature = "opendal-s3")]
@@ -1384,9 +1371,7 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, path: &str) -> Result<iceberg::io::StorageCredential> {
-            use std::sync::atomic::Ordering;
-
+        async fn load_credential(&self, path: &str) -> Result<StorageCredential> {
             if path.starts_with("s3://bucket/table-c") {
                 self.scoped.store(true, Ordering::SeqCst);
             }
@@ -1469,13 +1454,13 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<iceberg::io::StorageCredential> {
+        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
             let token = self
                 .0
                 .ok_or_else(|| Error::new(ErrorKind::Unexpected, "refresh failed"))?;
-            Ok(iceberg::io::StorageCredential::new(
+            Ok(StorageCredential::new(
                 "gs",
-                HashMap::from([(iceberg::io::GCS_TOKEN.to_string(), token.to_string())]),
+                HashMap::from([(GCS_TOKEN.to_string(), token.to_string())]),
             ))
         }
     }
@@ -1483,11 +1468,8 @@ mod tests {
     #[cfg(feature = "opendal-gcs")]
     fn gcs_storage(server: &mockito::Server, provider: GcsTokenProvider) -> OpenDalStorage {
         let config = gcs_config_parse(HashMap::from([
-            (iceberg::io::GCS_SERVICE_HOST.to_string(), server.url()),
-            (
-                iceberg::io::GCS_TOKEN.to_string(),
-                "static-token".to_string(),
-            ),
+            (GCS_SERVICE_HOST.to_string(), server.url()),
+            (GCS_TOKEN.to_string(), "static-token".to_string()),
         ]))
         .unwrap();
         OpenDalStorage::Gcs {
@@ -1587,7 +1569,7 @@ mod tests {
                 true
             }
 
-            async fn load_credential(&self, _path: &str) -> Result<iceberg::io::StorageCredential> {
+            async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
                 Ok(s3_credential("s3", "access-key"))
             }
         }
@@ -1722,15 +1704,12 @@ mod tests {
             client_config: OpenDalClientConfig::default(),
         };
 
-        for scheme in ["gs", "gcs"] {
-            let path = format!("{scheme}://my-bucket/path/to/file.parquet");
-            assert_eq!(
-                storage.relativize_path(&path).unwrap(),
-                "path/to/file.parquet"
-            );
-            let (_, relative) = storage.create_operator(&path).unwrap();
-            assert_eq!(relative, "path/to/file.parquet");
-        }
+        assert_eq!(
+            storage
+                .relativize_path("gs://my-bucket/path/to/file.parquet")
+                .unwrap(),
+            "path/to/file.parquet"
+        );
     }
 
     #[cfg(feature = "opendal-gcs")]
@@ -1745,11 +1724,6 @@ mod tests {
         assert!(
             storage
                 .relativize_path("s3://my-bucket/path/to/file.parquet")
-                .is_err()
-        );
-        assert!(
-            storage
-                .create_operator(&"s3://my-bucket/path/to/file.parquet")
                 .is_err()
         );
     }

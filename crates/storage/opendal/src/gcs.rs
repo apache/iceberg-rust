@@ -51,9 +51,7 @@ pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConf
         cfg.endpoint = Some(endpoint);
     }
 
-    if let Some(no_auth) = m.remove(GCS_NO_AUTH)
-        && is_truthy(&no_auth)
-    {
+    if m.remove(GCS_NO_AUTH).is_some() {
         cfg.skip_signature = true;
         cfg.disable_vm_metadata = true;
         cfg.disable_config_load = true;
@@ -86,12 +84,6 @@ pub(crate) fn gcs_config_build(
     credential_location: Option<&str>,
 ) -> Result<Operator> {
     let url = Url::parse(path)?;
-    if !matches!(url.scheme(), "gs" | "gcs") {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("Invalid gcs url: {path}, expected gs:// or gcs://"),
-        ));
-    }
     let bucket = url.host_str().ok_or_else(|| {
         Error::new(
             ErrorKind::DataInvalid,

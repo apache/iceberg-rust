@@ -239,7 +239,7 @@ impl StorageFactory for OpenDalResolvingStorageFactory {
 /// Sub-storages are lazily created on first use for each scheme and cached
 /// for subsequent operations. Scheme aliases like `s3`/`s3a`/`s3n` map to
 /// the same canonical scheme, so they share a storage instance.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OpenDalResolvingStorage {
     /// Configuration properties shared across all backends.
     props: HashMap<String, String>,
@@ -258,15 +258,6 @@ pub struct OpenDalResolvingStorage {
         serialize_with = "crate::serialize_credential_provider"
     )]
     credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
-}
-
-impl std::fmt::Debug for OpenDalResolvingStorage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `props` can contain storage secrets
-        f.debug_struct("OpenDalResolvingStorage")
-            .field("property_keys", &self.props.keys().collect::<Vec<_>>())
-            .finish_non_exhaustive()
-    }
 }
 
 impl OpenDalResolvingStorage {
@@ -410,6 +401,15 @@ mod tests {
     use std::time::Duration;
 
     #[allow(unused_imports)]
+    #[cfg(any(
+        not(any(feature = "opendal-s3", feature = "opendal-gcs")),
+        all(
+            feature = "opendal-memory",
+            any(feature = "opendal-s3", feature = "opendal-gcs")
+        )
+    ))]
+    use iceberg::io::StorageCredential;
+
     use super::*;
     use crate::OPENDAL_IO_TIMEOUT_MS;
 
@@ -436,7 +436,7 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<iceberg::io::StorageCredential> {
+        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
             unreachable!("unsupported backends must ignore the provider")
         }
     }

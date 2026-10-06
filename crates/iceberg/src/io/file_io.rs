@@ -16,7 +16,7 @@
 // under the License.
 
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Once, OnceLock};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
@@ -101,7 +101,7 @@ mod _serde {
 /// Warns that a `FileIO` crossing a process boundary loses its credential
 /// provider. Engines may serialize a `FileIO` per task, so each cause, tracked
 /// by its own `warned`, is reported once.
-fn warn_once_without_provider(warned: &'static std::sync::Once, reason: impl FnOnce() -> String) {
+fn warn_once_without_provider(warned: &'static Once, reason: impl FnOnce() -> String) {
     warned.call_once(|| {
         tracing::warn!(
             "{}; its credentials will not be refreshed after deserialization",
@@ -166,7 +166,7 @@ impl FileIO {
                 .factory()
                 .and_then(|factory| Ok(serde_json::to_value(factory)?))
                 .inspect_err(|error| {
-                    static WARNED: std::sync::Once = std::sync::Once::new();
+                    static WARNED: Once = Once::new();
                     warn_once_without_provider(&WARNED, || {
                         format!("serializing FileIO without its credential provider: {error}")
                     })
@@ -210,7 +210,7 @@ impl FileIO {
                 Ok(provider_factory) => provider_factory
                     .build(&config)
                     .inspect_err(|error| {
-                        static WARNED: std::sync::Once = std::sync::Once::new();
+                        static WARNED: Once = Once::new();
                         warn_once_without_provider(&WARNED, || {
                             format!(
                                 "deserializing FileIO without its credential provider, which \
@@ -220,7 +220,7 @@ impl FileIO {
                     })
                     .ok(),
                 Err(_) => {
-                    static WARNED: std::sync::Once = std::sync::Once::new();
+                    static WARNED: Once = Once::new();
                     warn_once_without_provider(&WARNED, || {
                         format!(
                             "deserializing FileIO without its credential provider, whose \
@@ -566,14 +566,17 @@ impl OutputFile {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::fs::{File, create_dir_all};
     use std::io::Write;
     use std::path::Path;
     use std::sync::Arc;
 
+    use async_trait::async_trait;
     use bytes::Bytes;
     use futures::AsyncReadExt;
     use futures::io::AllowStdIo;
+    use serde::{Deserialize, Serialize};
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
@@ -586,7 +589,7 @@ mod tests {
     #[derive(Debug)]
     struct TestCredentialProvider;
 
-    #[async_trait::async_trait]
+    #[async_trait]
     impl StorageCredentialProvider for TestCredentialProvider {
         fn supports_path(&self, _path: &str) -> bool {
             true
@@ -603,7 +606,7 @@ mod tests {
         endpoint: Option<String>,
     }
 
-    #[async_trait::async_trait]
+    #[async_trait]
     impl StorageCredentialProvider for PortableCredentialProvider {
         fn supports_path(&self, _path: &str) -> bool {
             true
@@ -612,7 +615,7 @@ mod tests {
         async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
             Ok(StorageCredential::new(
                 "gs",
-                std::collections::HashMap::from([(
+                HashMap::from([(
                     GCS_TOKEN.to_string(),
                     self.endpoint.clone().unwrap_or_default(),
                 )]),
@@ -624,7 +627,7 @@ mod tests {
         }
     }
 
-    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    #[derive(Debug, Serialize, Deserialize)]
     struct PortableCredentialProviderFactory;
 
     #[typetag::serde]
@@ -823,7 +826,7 @@ mod tests {
     #[derive(Debug)]
     struct UnserializableFactoryProvider;
 
-    #[async_trait::async_trait]
+    #[async_trait]
     impl StorageCredentialProvider for UnserializableFactoryProvider {
         fn supports_path(&self, _path: &str) -> bool {
             true
@@ -838,10 +841,10 @@ mod tests {
         }
     }
 
-    #[derive(Debug, serde::Deserialize)]
+    #[derive(Debug, Deserialize)]
     struct UnserializableFactory;
 
-    impl serde::Serialize for UnserializableFactory {
+    impl Serialize for UnserializableFactory {
         fn serialize<S: serde::Serializer>(
             &self,
             _serializer: S,
