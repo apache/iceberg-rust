@@ -1213,8 +1213,8 @@ mod tests {
     /// The configuration round-trips through serde; the operator cache does
     /// not and starts empty.
     #[cfg(feature = "opendal-hdfs-native")]
-    #[test]
-    fn test_hdfs_native_storage_serde_round_trip() {
+    #[tokio::test]
+    async fn test_hdfs_native_storage_serde_round_trip() {
         use iceberg::io::HDFS_NAME_NODE;
 
         let props = HashMap::from([
@@ -1228,6 +1228,15 @@ mod tests {
             hdfs_native_config_parse(props).unwrap(),
             client_config("45000").unwrap(),
         ));
+        // Populate the cache so that its absence after the round trip means
+        // something.
+        let OpenDalStorage::HdfsNative(hdfs) = &storage else {
+            panic!("expected the HdfsNative variant");
+        };
+        hdfs_native_create_operator("hdfs:///x", &hdfs.config, &hdfs.operators)
+            .await
+            .unwrap();
+        assert!(hdfs.operators.get("hdfs://nn:8020").unwrap().is_some());
 
         let value = serde_json::to_value(&storage).unwrap();
         assert!(value["HdfsNative"].get("operators").is_none());
@@ -1247,64 +1256,46 @@ mod tests {
         assert!(restored.operators.get("hdfs://nn:8020").unwrap().is_none());
     }
 
+    /// `relativize_path` follows the same resolution rule as `create_operator`.
     #[cfg(feature = "opendal-hdfs-native")]
     #[test]
     fn test_relativize_path_hdfs_native() {
         use iceberg::io::HDFS_NAME_NODE;
 
-        let storage = hdfs_native_test_storage();
+        let build = |key: String| {
+            let props = HashMap::from([(key, "hdfs://nn:8020".to_string())]);
+            OpenDalStorage::HdfsNative(HdfsNativeStorage::new(
+                hdfs_native_config_parse(props).unwrap(),
+                OpenDalClientConfig::default(),
+            ))
+        };
+        let unconfigured = hdfs_native_test_storage();
+        let declared = build(format!("{HDFS_NAME_NODE}.nameservice1"));
+        let plain = build(HDFS_NAME_NODE.to_string());
+
+        // A concrete authority needs nothing configured.
         assert_eq!(
-            storage
+            unconfigured
                 .relativize_path("hdfs://nn:8020/warehouse/db/t")
                 .unwrap(),
             "warehouse/db/t"
         );
-
-        // A logical nameservice resolves only through its declaration.
+        // A logical nameservice needs its declaration, an authority-less path
+        // the plain key.
+        for (storage, path, rel) in [
+            (&declared, "hdfs://nameservice1/a/b.parquet", "a/b.parquet"),
+            (&plain, "hdfs:///a/b", "a/b"),
+        ] {
+            let err = unconfigured.relativize_path(path).unwrap_err();
+            assert!(err.to_string().contains(HDFS_NAME_NODE), "{err}");
+            assert_eq!(storage.relativize_path(path).unwrap(), rel);
+        }
+        // Another scheme is rejected before any resolution.
+        let err = unconfigured.relativize_path("s3://bucket/x").unwrap_err();
         assert!(
-            storage
-                .relativize_path("hdfs://nameservice1/a/b.parquet")
-                .is_err()
+            err.to_string().contains("expected scheme `hdfs://`"),
+            "{err}"
         );
-        let props = HashMap::from([(
-            format!("{HDFS_NAME_NODE}.nameservice1"),
-            "hdfs://nn:8020".to_string(),
-        )]);
-        let configured = OpenDalStorage::HdfsNative(HdfsNativeStorage::new(
-            hdfs_native_config_parse(props).unwrap(),
-            OpenDalClientConfig::default(),
-        ));
-        assert_eq!(
-            configured
-                .relativize_path("hdfs://nameservice1/a/b.parquet")
-                .unwrap(),
-            "a/b.parquet"
-        );
-    }
-
-    #[cfg(feature = "opendal-hdfs-native")]
-    #[test]
-    fn test_relativize_path_hdfs_native_authority_less() {
-        use iceberg::io::HDFS_NAME_NODE;
-
-        // Same rule as `create_operator`: usable only with `hdfs.name-node` set.
-        let storage = hdfs_native_test_storage();
-        assert!(storage.relativize_path("hdfs:///a/b").is_err());
-
-        let props = HashMap::from([(HDFS_NAME_NODE.to_string(), "hdfs://nn:8020".to_string())]);
-        let storage = OpenDalStorage::HdfsNative(HdfsNativeStorage::new(
-            hdfs_native_config_parse(props).unwrap(),
-            OpenDalClientConfig::default(),
-        ));
-        assert_eq!(storage.relativize_path("hdfs:///a/b").unwrap(), "a/b");
-    }
-
-    #[cfg(feature = "opendal-hdfs-native")]
-    #[test]
-    fn test_relativize_path_hdfs_native_wrong_scheme_errors() {
-        let storage = hdfs_native_test_storage();
-
-        assert!(storage.relativize_path("s3://bucket/x").is_err());
     }
 
     #[cfg(feature = "opendal-azdls")]

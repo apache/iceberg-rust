@@ -35,7 +35,7 @@ mod tests {
 
     use bytes::Bytes;
     use futures::StreamExt;
-    use iceberg::io::{FileIO, FileIOBuilder, HDFS_NAME_NODE};
+    use iceberg::io::{FileIO, FileIOBuilder, HDFS_HOST, HDFS_NAME_NODE, HDFS_PORT};
     use iceberg_storage_opendal::{OpenDalResolvingStorageFactory, OpenDalStorageFactory};
     use iceberg_test_utils::{
         ENV_HDFS_ENDPOINT, get_hdfs_endpoint, normalize_test_name_with_parts, set_up,
@@ -88,9 +88,18 @@ mod tests {
     async fn test_file_io_hdfs_exists() {
         require_hdfs!();
         let file_io = get_file_io();
+        let dir = test_path("test_file_io_hdfs_exists");
+        let present = format!("{dir}/present");
+        let _ = file_io.delete(&present).await;
+        file_io
+            .new_output(&present)
+            .unwrap()
+            .write(Bytes::from_static(b"x"))
+            .await
+            .unwrap();
 
-        let absent = test_path("test_file_io_hdfs_exists_absent");
-        assert!(!file_io.exists(&absent).await.unwrap());
+        assert!(file_io.exists(&present).await.unwrap());
+        assert!(!file_io.exists(&format!("{dir}/absent")).await.unwrap());
     }
 
     #[tokio::test]
@@ -115,22 +124,24 @@ mod tests {
     }
 
     /// The HA flow: table locations carry a logical authority, and
-    /// `hdfs.name-node.<nameservice>` declares its (comma-separated) endpoints.
+    /// `hdfs.name-node.<nameservice>` declares its comma-separated endpoints
+    /// (the single-node fixture is listed twice to drive the list path).
     #[tokio::test]
-    async fn test_file_io_hdfs_configured_name_node() {
+    async fn test_file_io_hdfs_declared_nameservice() {
         require_hdfs!();
         set_up();
+        let endpoint = get_hdfs_endpoint();
         let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::HdfsNative))
             .with_prop(
                 format!("{HDFS_NAME_NODE}.logical-nameservice"),
-                get_hdfs_endpoint(),
+                format!("{endpoint},{endpoint}"),
             )
             .build();
 
         // The path authority is a logical name resolved by its declaration.
         let path = format!(
             "hdfs://logical-nameservice/{}",
-            normalize_test_name_with_parts!("test_file_io_hdfs_configured_name_node")
+            normalize_test_name_with_parts!("test_file_io_hdfs_declared_nameservice")
         );
         let _ = file_io.delete(&path).await;
 
@@ -146,6 +157,42 @@ mod tests {
             file_io.new_input(&path).unwrap().read().await.unwrap(),
             Bytes::from_static(b"via configured name node")
         );
+    }
+
+    /// Authority-less paths resolve through plain `hdfs.name-node`, or through
+    /// PyIceberg's `hdfs.host`/`hdfs.port`; both must reach the same cluster.
+    #[tokio::test]
+    async fn test_file_io_hdfs_authority_less_paths() {
+        require_hdfs!();
+        set_up();
+        let endpoint = get_hdfs_endpoint();
+        let url = url::Url::parse(&endpoint).unwrap();
+        let by_name_node = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::HdfsNative))
+            .with_prop(HDFS_NAME_NODE, &endpoint)
+            .build();
+        let by_host_port = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::HdfsNative))
+            .with_prop(HDFS_HOST, url.host_str().unwrap())
+            .with_prop(HDFS_PORT, url.port().unwrap().to_string())
+            .build();
+
+        let path = format!(
+            "hdfs:///{}",
+            normalize_test_name_with_parts!("test_file_io_hdfs_authority_less_paths")
+        );
+        let _ = by_name_node.delete(&path).await;
+        by_name_node
+            .new_output(&path)
+            .unwrap()
+            .write(Bytes::from_static(b"authority-less"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            by_host_port.new_input(&path).unwrap().read().await.unwrap(),
+            Bytes::from_static(b"authority-less")
+        );
+        by_host_port.delete(&path).await.unwrap();
+        assert!(!by_name_node.exists(&path).await.unwrap());
     }
 
     #[tokio::test]
@@ -198,8 +245,9 @@ mod tests {
     }
 
     /// Paths are batched per effective NameNode; two spellings of the fixture's
-    /// NameNode drive two batches through one stream. The fixture is one
-    /// cluster, so the keying itself is pinned by the unit tests.
+    /// NameNode drive two operators and two deleters through one stream. The
+    /// fixture is one cluster, so the keying itself is pinned by the unit
+    /// tests; this proves the multi-operator path completes and cleans up.
     #[tokio::test]
     async fn test_file_io_hdfs_delete_stream_two_name_nodes() {
         require_hdfs!();
@@ -230,7 +278,7 @@ mod tests {
         let stream = futures::stream::iter(paths.clone()).boxed();
         file_io.delete_stream(stream).await.unwrap();
 
-        // Both batches ran.
+        // Everything is gone, through whichever deleter.
         for path in [
             format!("{dir}/a"),
             format!("{dir}/b"),

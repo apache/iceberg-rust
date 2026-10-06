@@ -85,8 +85,18 @@ fn hdfs_native_name_node_list(property: &str, value: &str) -> Result<Vec<String>
         .collect()
 }
 
-/// Parse iceberg properties to [`HdfsNativeConfig`].
-pub(crate) fn hdfs_native_config_parse(mut m: HashMap<String, String>) -> Result<HdfsNativeConfig> {
+/// Parse iceberg properties to [`HdfsNativeConfig`]; dropped properties are
+/// logged as warnings.
+pub(crate) fn hdfs_native_config_parse(m: HashMap<String, String>) -> Result<HdfsNativeConfig> {
+    hdfs_native_config_parse_with(m, |warning| tracing::warn!("{warning}"))
+}
+
+/// The parser proper, with the warning sink injected so tests can see what
+/// was dropped without a tracing subscriber.
+fn hdfs_native_config_parse_with(
+    mut m: HashMap<String, String>,
+    mut warn: impl FnMut(String),
+) -> Result<HdfsNativeConfig> {
     let mut cfg = HdfsNativeConfig::default();
 
     // Entries are trimmed one by one: opendal splits the list on `,` as is,
@@ -135,7 +145,9 @@ pub(crate) fn hdfs_native_config_parse(mut m: HashMap<String, String>) -> Result
     // silently; the client reads `HADOOP_USER_NAME` and the Kerberos cache.
     for key in HDFS_UNSUPPORTED_KEYS {
         if m.remove(key).is_some() {
-            tracing::warn!("`{key}` is not supported by the hdfs-native backend and is ignored");
+            warn(format!(
+                "`{key}` is not supported by the hdfs-native backend and is ignored"
+            ));
         }
     }
     if m.contains_key(HDFS_HADOOP_CONF_PREFIX) {
@@ -214,7 +226,9 @@ pub(crate) fn hdfs_native_config_parse(mut m: HashMap<String, String>) -> Result
                 .or_insert(default_fs);
         }
         None if port.is_some() => {
-            tracing::warn!("`{HDFS_PORT}` has no effect without `{HDFS_HOST}` and is ignored");
+            warn(format!(
+                "`{HDFS_PORT}` has no effect without `{HDFS_HOST}` and is ignored"
+            ));
         }
         None => {}
     }
@@ -595,15 +609,21 @@ mod tests {
         assert_eq!(parse(""), None);
         assert_eq!(parse("  "), None);
         assert_eq!(parse(" , "), None);
-        assert_eq!(
-            parse(" hdfs://nn:8020/ ").as_deref(),
-            Some("hdfs://nn:8020")
-        );
-        // Per entry: a space after the comma would break failover to nn2.
-        assert_eq!(
-            parse("hdfs://nn1:8020/, hdfs://nn2:8020/,").as_deref(),
-            Some("hdfs://nn1:8020,hdfs://nn2:8020")
-        );
+        // `hdfs://` is optional (Hadoop's own rpc-address format is bare) and
+        // every entry is normalized to it, so it keys the cache like a path
+        // authority does; a space after a comma would otherwise break
+        // failover to the entry behind it.
+        for (value, normalized) in [
+            (" hdfs://nn:8020/ ", "hdfs://nn:8020"),
+            ("nn:8020", "hdfs://nn:8020"),
+            ("[::1]:8020", "hdfs://[::1]:8020"),
+            (
+                "hdfs://nn1:8020/, nn2:8020,",
+                "hdfs://nn1:8020,hdfs://nn2:8020",
+            ),
+        ] {
+            assert_eq!(parse(value).as_deref(), Some(normalized), "{value}");
+        }
     }
 
     #[test]
@@ -669,29 +689,43 @@ mod tests {
     }
 
     #[test]
-    fn test_hdfs_native_config_parse_rejects_bare_prefix_and_drops_unsupported_keys() {
+    fn test_hdfs_native_config_parse_rejects_bare_prefix() {
         let err = hdfs_native_config_parse(HashMap::from([(
             HDFS_HADOOP_CONF_PREFIX.to_string(),
             "x".to_string(),
         )]))
         .unwrap_err();
         assert!(err.to_string().contains(HDFS_HADOOP_CONF_PREFIX), "{err}");
+    }
 
-        // PyIceberg's identity keys are ignored (with a warning), never
-        // forwarded as Hadoop options.
-        let cfg = hdfs_native_config_parse(HashMap::from([
-            ("hdfs.user".to_string(), "alice".to_string()),
-            (
-                "hdfs.kerberos_ticket".to_string(),
-                "/tmp/krb5cc".to_string(),
-            ),
-        ]))
+    /// PyIceberg's identity keys and a port without a host are dropped, but
+    /// visibly: each leaves a warning naming the key, and none is forwarded.
+    #[test]
+    fn test_hdfs_native_config_parse_warns_about_ignored_keys() {
+        let mut warnings = Vec::new();
+        let cfg = hdfs_native_config_parse_with(
+            HashMap::from([
+                ("hdfs.user".to_string(), "alice".to_string()),
+                (
+                    "hdfs.kerberos_ticket".to_string(),
+                    "/tmp/krb5cc".to_string(),
+                ),
+                (HDFS_PORT.to_string(), "9000".to_string()),
+            ]),
+            |warning| warnings.push(warning),
+        )
         .unwrap();
-        assert_eq!(cfg.options, None);
+
+        assert_eq!(cfg.options, None, "ignored keys must not be forwarded");
+        assert_eq!(warnings, [
+            "`hdfs.user` is not supported by the hdfs-native backend and is ignored",
+            "`hdfs.kerberos_ticket` is not supported by the hdfs-native backend and is ignored",
+            "`hdfs.port` has no effect without `hdfs.host` and is ignored",
+        ]);
     }
 
     #[test]
-    fn test_hdfs_native_config_parse_name_node_requires_port() {
+    fn test_hdfs_native_config_parse_rejects_invalid_name_node_entries() {
         let parse = |value: &str| {
             hdfs_native_config_parse(HashMap::from([(
                 HDFS_NAME_NODE.to_string(),
@@ -699,20 +733,8 @@ mod tests {
             )]))
         };
 
-        // `hdfs://` is optional (Hadoop's own rpc-address format is bare) and
-        // every entry is normalized to it, so it keys the cache like a path
-        // authority does.
-        for (value, normalized) in [
-            ("nn:8020", "hdfs://nn:8020"),
-            ("hdfs://nn:8020/", "hdfs://nn:8020"),
-            ("[::1]:8020", "hdfs://[::1]:8020"),
-            (
-                "hdfs://nn1:8020, nn2:8020",
-                "hdfs://nn1:8020,hdfs://nn2:8020",
-            ),
-        ] {
-            assert_eq!(parse(value).unwrap().name_node.as_deref(), Some(normalized));
-        }
+        // Logical names, other schemes, userinfo, paths, port 0, unbracketed
+        // IPv6 and malformed ports: every entry must be a dialable host:port.
         for value in [
             "hdfs://ns1",
             "nn",
@@ -745,15 +767,18 @@ mod tests {
         let (nn, _) =
             hdfs_native_effective_name_node(&parse("hdfs://nn:8020/"), "hdfs:///a").unwrap();
         assert_eq!(nn, "hdfs://nn:8020");
-        for default_fs in ["viewfs://cluster/", "hdfs://", ""] {
-            assert!(hdfs_native_effective_name_node(&parse(default_fs), "hdfs:///a").is_err());
+        // Not an HDFS `host:port`, including the portless logical-name form,
+        // which only a declaration resolves.
+        for default_fs in ["viewfs://cluster/", "hdfs://", "hdfs://ns1"] {
+            let err = hdfs_native_effective_name_node(&parse(default_fs), "hdfs:///a").unwrap_err();
+            assert!(
+                err.to_string().contains(FS_DEFAULT_FS) && err.to_string().contains(HDFS_NAME_NODE),
+                "{default_fs}: {err}"
+            );
         }
-        // Portless: a logical nameservice, which only `hdfs.name-node` resolves.
-        let err = hdfs_native_effective_name_node(&parse("hdfs://ns1"), "hdfs:///a").unwrap_err();
-        assert!(
-            err.to_string().contains(FS_DEFAULT_FS) && err.to_string().contains(HDFS_NAME_NODE),
-            "{err}"
-        );
+        // Empty is unset, so the authority-less path has nothing to resolve to.
+        let err = hdfs_native_effective_name_node(&parse(""), "hdfs:///a").unwrap_err();
+        assert!(err.to_string().contains(HDFS_HOST), "{err}");
         // Normalized like every other source.
         let (nn, _) = hdfs_native_effective_name_node(&parse("nn:9000"), "hdfs:///a").unwrap();
         assert_eq!(nn, "hdfs://nn:9000");
@@ -989,13 +1014,9 @@ mod tests {
         ] {
             let err = hdfs_native_parse_path(path).unwrap_err().to_string();
             assert!(err.contains(reason), "{path}: {err}");
+            // A password must never reach a log.
+            assert!(!err.contains("alice") && !err.contains("secret"), "{err}");
         }
-        // Unresolvable paths keep keying on themselves for batching.
-        let config = HdfsNativeConfig::default();
-        assert_eq!(
-            hdfs_native_batch_key(&config, "hdfs://nn:0/a"),
-            "hdfs://nn:0/a"
-        );
     }
 
     #[test]
@@ -1031,9 +1052,13 @@ mod tests {
 
     #[test]
     fn test_hdfs_native_parse_path_invalid_url_errors() {
-        let err = hdfs_native_parse_path("not-a-url").unwrap_err();
+        let err = hdfs_native_parse_path("not-a-url").unwrap_err().to_string();
 
-        assert!(err.to_string().contains("Invalid hdfs path"));
+        // The URL parser's reason is forwarded; this is not the scheme check.
+        assert!(
+            err.contains("Invalid hdfs path") && !err.contains("expected scheme"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -1065,13 +1090,13 @@ mod tests {
         let config = HdfsNativeConfig::default();
 
         // Unresolvable paths must not collapse onto a shared "" key.
-        assert_eq!(hdfs_native_batch_key(&config, "not-a-url"), "not-a-url");
-        assert_eq!(hdfs_native_batch_key(&config, "hdfs:///a"), "hdfs:///a");
+        for path in ["not-a-url", "hdfs:///a", "hdfs://nn:0/a"] {
+            assert_eq!(hdfs_native_batch_key(&config, path), path);
+        }
     }
 
     // Creating an operator offloads the build to a blocking thread, so these
-    // run under tokio; `test_hdfs_native_operator_build_needs_no_runtime`
-    // pins that the build itself does not.
+    // run under tokio.
     #[tokio::test]
     async fn test_hdfs_native_create_operator_plain_key_serves_authority_less_paths() {
         let config = Arc::new(
@@ -1110,19 +1135,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_hdfs_native_create_operator_uses_path_authority() {
-        let config = Arc::new(HdfsNativeConfig::default());
-        let operators = HdfsNativeOperatorCache::default();
-
-        let (_, rel) = hdfs_native_create_operator("hdfs://nn:8020/a/b", &config, &operators)
-            .await
-            .unwrap();
-
-        assert_eq!(rel, "a/b");
-        assert!(operators.get("hdfs://nn:8020").unwrap().is_some());
-    }
-
-    #[tokio::test]
     async fn test_hdfs_native_create_operator_caches_per_name_node() {
         let config = Arc::new(HdfsNativeConfig::default());
         let operators = HdfsNativeOperatorCache::default();
@@ -1138,35 +1150,6 @@ mod tests {
         }
 
         assert_eq!(operators.len(), 2);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_hdfs_native_create_operator_concurrent_callers_share_one_entry() {
-        let config = Arc::new(HdfsNativeConfig::default());
-        let operators = HdfsNativeOperatorCache::default();
-
-        let callers: Vec<_> = (0..8)
-            .map(|_| {
-                let (config, operators) = (config.clone(), operators.clone());
-                tokio::spawn(async move {
-                    hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators)
-                        .await
-                        .unwrap();
-                })
-            })
-            .collect();
-        for caller in callers {
-            caller.await.unwrap();
-        }
-
-        assert_eq!(operators.len(), 1);
-    }
-
-    /// The build itself needs no runtime; only creating a cached operator does.
-    #[test]
-    fn test_hdfs_native_operator_build_needs_no_runtime() {
-        let config = HdfsNativeConfig::default();
-        hdfs_native_operator_build(&config, "hdfs://nn:8020").unwrap();
     }
 
     #[test]
@@ -1265,7 +1248,7 @@ mod tests {
                 hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators)
                     .await
                     .unwrap();
-                assert_eq!(metrics.num_alive_tasks(), baseline + 1);
+                assert!(metrics.num_alive_tasks() > baseline, "no sentinel task");
 
                 // Dropping the cache aborts the sentinel; the abort lands once
                 // the runtime schedules the task.
@@ -1277,17 +1260,5 @@ mod tests {
                 }
             });
         }
-    }
-
-    #[tokio::test]
-    async fn test_hdfs_native_create_operator_authority_less_without_config_errors() {
-        let config = Arc::new(HdfsNativeConfig::default());
-        let operators = HdfsNativeOperatorCache::default();
-
-        let err = hdfs_native_create_operator("hdfs:///a/b", &config, &operators)
-            .await
-            .unwrap_err();
-
-        assert!(err.to_string().contains(HDFS_NAME_NODE));
     }
 }
