@@ -101,7 +101,7 @@ impl From<OAuthError> for Error {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub(super) struct TokenResponse {
     pub(super) access_token: String,
     pub(super) token_type: String,
@@ -205,7 +205,7 @@ pub struct RenameTableRequest {
     pub destination: TableIdent,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 /// Result returned when a table is successfully loaded or created.
 ///
@@ -231,7 +231,18 @@ pub struct LoadTableResult {
     pub storage_credentials: Option<Vec<StorageCredential>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl std::fmt::Debug for LoadTableResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadTableResult")
+            .field("metadata_location", &self.metadata_location)
+            .field("metadata", &self.metadata)
+            .field("config_keys", &self.config.keys().collect::<Vec<_>>())
+            .field("storage_credentials", &self.storage_credentials)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// Storage credential for a specific location prefix.
 ///
 /// Indicates a storage location prefix where the credential is relevant. Clients should
@@ -242,6 +253,27 @@ pub struct StorageCredential {
     pub prefix: String,
     /// Configuration map containing credential information
     pub config: HashMap<String, String>,
+}
+
+impl std::fmt::Debug for StorageCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StorageCredential")
+            .field("prefix", &self.prefix)
+            .field("config_keys", &self.config.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+/// Response from the table credentials endpoint
+/// (`GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials`).
+///
+/// Returns freshly vended storage credentials so clients can refresh temporary
+/// credentials before they expire.
+pub struct LoadCredentialsResponse {
+    /// Storage credentials, one entry per location prefix.
+    pub storage_credentials: Vec<StorageCredential>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

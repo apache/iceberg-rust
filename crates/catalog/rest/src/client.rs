@@ -24,8 +24,10 @@ use reqwest::header::HeaderMap;
 use reqwest::{Client, IntoUrl, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 
-use crate::RestCatalogConfig;
 use crate::auth::{AuthSession, NoopSession};
+use crate::catalog::{
+    RestCatalogConfig, disable_header_redaction_from_props, explicit_headers_from_props,
+};
 use crate::request::HttpRequest;
 use crate::response::HttpResponse;
 
@@ -141,10 +143,32 @@ impl HttpClient {
         })
     }
 
-    /// Testing only: the session authenticating this client's requests.
-    #[cfg(test)]
-    pub(crate) fn auth_session(&self) -> &Arc<dyn AuthSession> {
-        &self.auth_session
+    /// Derives a client for table-scoped requests.
+    ///
+    /// The connection pool and catalog headers are inherited, headers in the
+    /// effective table properties override them, and `auth_session` replaces
+    /// the catalog session. As in Java, an explicit `header.Authorization`
+    /// takes precedence over the session's authentication.
+    pub(crate) fn for_table(
+        &self,
+        props: &HashMap<String, String>,
+        auth_session: Arc<dyn AuthSession>,
+    ) -> Result<Self> {
+        let mut extra_headers = self.extra_headers.clone();
+        extra_headers.extend(explicit_headers_from_props(props)?);
+
+        Ok(Self {
+            client: self.client.clone(),
+            extra_headers,
+            disable_header_redaction: disable_header_redaction_from_props(props)
+                .unwrap_or(self.disable_header_redaction),
+            auth_session,
+        })
+    }
+
+    /// Returns the session authenticating this client's requests.
+    pub(crate) fn auth_session(&self) -> Arc<dyn AuthSession> {
+        Arc::clone(&self.auth_session)
     }
 
     /// Testing only: the bearer token `session` would attach.
@@ -211,55 +235,48 @@ pub(crate) fn deserialize_catalog_response<R: DeserializeOwned>(
     })
 }
 
-/// Returns true if the header may carry a secret (matched by substring, so
-/// e.g. `x-client-secret` is covered along with `authorization`).
-fn is_sensitive_header(name: &str) -> bool {
-    let name_lower = name.to_lowercase();
-    [
-        "auth",
-        "token",
-        "secret",
-        "key",
-        "password",
-        "cookie",
-        "credential",
-    ]
-    .iter()
-    .any(|pattern| name_lower.contains(pattern))
-}
-
-/// Redacts sensitive headers and returns a debug-formatted string.
+/// Formats headers for errors and `Debug` output.
 ///
-/// If `disable_redaction` is true, returns all headers without redaction.
-/// Otherwise, replaces sensitive header values with `[REDACTED]`.
+/// Like Java, every header value is redacted, as any header may carry a
+/// secret. With `disable_redaction`, values are shown as they are.
 pub(crate) fn format_headers_redacted(headers: &HeaderMap, disable_redaction: bool) -> String {
-    if disable_redaction {
-        // Return all headers as-is without redaction
-        let all: HashMap<&str, &str> = headers
-            .iter()
-            .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.as_str(), v)))
-            .collect();
-        return format!("{all:?}");
-    }
-
-    // Redact sensitive headers by replacing their values with "[REDACTED]"
-    let redacted: HashMap<&str, &str> = headers
+    let headers: HashMap<&str, &str> = headers
         .iter()
         .filter_map(|(name, value)| {
-            if is_sensitive_header(name.as_str()) {
-                Some((name.as_str(), "[REDACTED]"))
+            let value = if disable_redaction {
+                value.to_str().ok()?
             } else {
-                value.to_str().ok().map(|v| (name.as_str(), v))
-            }
+                "[REDACTED]"
+            };
+            Some((name.as_str(), value))
         })
         .collect();
-    format!("{redacted:?}")
+    format!("{headers:?}")
 }
 
 /// Deserializes a unexpected catalog response into an error.
 pub(crate) fn deserialize_unexpected_catalog_error(
     response: HttpResponse,
     disable_header_redaction: bool,
+) -> Error {
+    unexpected_catalog_error(response, disable_header_redaction, true)
+}
+
+/// Builds an unexpected catalog error without retaining the response body.
+///
+/// Credential endpoints use this because even an unsuccessful response may
+/// contain credential material that must not be surfaced through an error.
+pub(crate) fn unexpected_catalog_error_without_body(
+    response: HttpResponse,
+    disable_header_redaction: bool,
+) -> Error {
+    unexpected_catalog_error(response, disable_header_redaction, false)
+}
+
+fn unexpected_catalog_error(
+    response: HttpResponse,
+    disable_header_redaction: bool,
+    include_body: bool,
 ) -> Error {
     let err = Error::new(
         ErrorKind::Unexpected,
@@ -275,12 +292,36 @@ pub(crate) fn deserialize_unexpected_catalog_error(
     if bytes.is_empty() {
         return err;
     }
-    err.with_context("json", String::from_utf8_lossy(bytes))
+    if include_body {
+        return err.with_context("json", String::from_utf8_lossy(bytes));
+    }
+    // Without the body, keep only the catalog's error description.
+    match serde_json::from_slice::<CatalogErrorResponse>(bytes) {
+        Ok(CatalogErrorResponse { error }) => err
+            .with_context("type", error.r#type)
+            .with_context("code", error.code.to_string())
+            .with_context("message", error.message),
+        Err(_) => err,
+    }
+}
+
+/// The parts of a REST catalog error response that describe the error.
+#[derive(serde::Deserialize)]
+struct CatalogErrorResponse {
+    error: CatalogError,
+}
+
+#[derive(serde::Deserialize)]
+struct CatalogError {
+    message: String,
+    r#type: String,
+    code: u16,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::REST_CATALOG_PROP_DISABLE_HEADER_REDACTION;
 
     #[derive(Debug)]
     struct StaticSession;
@@ -291,6 +332,19 @@ mod tests {
             request
                 .headers_mut()
                 .insert("authorization", "Bearer tok".parse().unwrap());
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct TableSession;
+
+    #[async_trait::async_trait]
+    impl AuthSession for TableSession {
+        async fn authenticate(&self, request: &mut HttpRequest) -> Result<()> {
+            request
+                .headers_mut()
+                .insert("authorization", "Bearer table-token".parse().unwrap());
             Ok(())
         }
     }
@@ -353,7 +407,7 @@ mod tests {
     #[test]
     fn test_unexpected_error_carries_status_headers_and_body() {
         // Everything a user needs to diagnose an unexpected status, with the
-        // sensitive headers held back.
+        // header values held back.
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer leaked".parse().unwrap());
         headers.insert("x-request-id", "abc123".parse().unwrap());
@@ -370,9 +424,26 @@ mod tests {
 
         assert!(err.contains("418"), "{err}");
         assert!(err.contains("x-request-id"), "{err}");
-        assert!(err.contains("abc123"), "{err}");
         assert!(err.contains("nope"), "{err}");
         assert!(!err.contains("leaked"), "{err}");
+        assert!(!err.contains("abc123"), "{err}");
+    }
+
+    #[test]
+    fn test_unexpected_error_can_omit_a_secret_body() {
+        let response = HttpResponse::new(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            HeaderMap::new(),
+            br#"{"secret": "do-not-expose"}"#.to_vec(),
+        );
+
+        let err = format!(
+            "{:?}",
+            unexpected_catalog_error_without_body(response, false)
+        );
+
+        assert!(err.contains("500"), "{err}");
+        assert!(!err.contains("do-not-expose"), "{err}");
     }
 
     #[tokio::test]
@@ -412,6 +483,90 @@ mod tests {
         unsigned.assert_async().await;
     }
 
+    #[tokio::test]
+    async fn test_table_client_uses_table_session_and_explicit_headers() {
+        let mut server = mockito::Server::new_async().await;
+        let table_session = server
+            .mock("GET", "/session")
+            .match_header("authorization", "Bearer table-token")
+            .match_header("x-catalog", "catalog")
+            .with_status(200)
+            .create_async()
+            .await;
+        let explicit_header = server
+            .mock("GET", "/header")
+            .match_header("authorization", "Bearer explicit-header")
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let config = RestCatalogConfig::builder()
+            .uri(server.url())
+            .props(HashMap::from([(
+                "header.x-catalog".to_string(),
+                "catalog".to_string(),
+            )]))
+            .build();
+        let catalog_client = HttpClient::new(&config).unwrap();
+        let get = |client: &HttpClient, path: &str| {
+            HttpRequest::build(client.request(Method::GET, format!("{}{path}", server.url())))
+                .unwrap()
+        };
+
+        // The table session authenticates, and catalog headers are inherited.
+        let session_client = catalog_client
+            .for_table(&HashMap::new(), Arc::new(TableSession))
+            .unwrap();
+        session_client
+            .query_catalog(get(&session_client, "/session"))
+            .await
+            .unwrap();
+        table_session.assert_async().await;
+
+        // An explicit Authorization header in the effective properties wins
+        // over the session, as in Java.
+        let header_client = catalog_client
+            .for_table(
+                &HashMap::from([(
+                    "header.Authorization".to_string(),
+                    "Bearer explicit-header".to_string(),
+                )]),
+                Arc::new(TableSession),
+            )
+            .unwrap();
+        header_client
+            .query_catalog(get(&header_client, "/header"))
+            .await
+            .unwrap();
+        explicit_header.assert_async().await;
+    }
+
+    #[test]
+    fn test_table_client_redaction_follows_the_table_properties() {
+        let catalog_client = HttpClient::new(
+            &RestCatalogConfig::builder()
+                .uri("http://localhost".to_string())
+                .build(),
+        )
+        .unwrap();
+        assert!(!catalog_client.disable_header_redaction());
+
+        let inherited = catalog_client
+            .for_table(&HashMap::new(), Arc::new(TableSession))
+            .unwrap();
+        assert!(!inherited.disable_header_redaction());
+        let disabled = catalog_client
+            .for_table(
+                &HashMap::from([(
+                    REST_CATALOG_PROP_DISABLE_HEADER_REDACTION.to_string(),
+                    "true".to_string(),
+                )]),
+                Arc::new(TableSession),
+            )
+            .unwrap();
+        assert!(disabled.disable_header_redaction());
+    }
+
     #[test]
     fn test_format_headers_redacted_empty() {
         let headers = HeaderMap::new();
@@ -420,17 +575,38 @@ mod tests {
     }
 
     #[test]
-    fn test_format_headers_redacted_non_sensitive() {
+    fn test_format_headers_redacted_redacts_every_value() {
         let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer secret-token".parse().unwrap());
+        headers.insert(
+            "set-cookie",
+            "CF_Authorization=sensitive-session-token; Path=/; Secure;"
+                .parse()
+                .unwrap(),
+        );
+        headers.insert("x-custom-signature", "unmatched-secret".parse().unwrap());
         headers.insert("content-type", "application/json".parse().unwrap());
-        headers.insert("x-request-id", "abc123".parse().unwrap());
 
         let result = format_headers_redacted(&headers, false);
 
-        assert!(result.contains("content-type"));
-        assert!(result.contains("application/json"));
-        assert!(result.contains("x-request-id"));
-        assert!(result.contains("abc123"));
+        // Every header name is shown, with its value redacted.
+        for name in [
+            "authorization",
+            "set-cookie",
+            "x-custom-signature",
+            "content-type",
+        ] {
+            assert!(result.contains(name), "{result}");
+        }
+        for value in [
+            "secret-token",
+            "sensitive-session-token",
+            "unmatched-secret",
+            "application/json",
+        ] {
+            assert!(!result.contains(value), "{result}");
+        }
+        assert!(result.contains("[REDACTED]"));
     }
 
     #[tokio::test]
@@ -456,81 +632,6 @@ mod tests {
         assert!(!out.contains("shh-secret"));
         assert!(!out.contains("cred-value"));
         assert!(out.contains("[REDACTED]"));
-    }
-
-    #[test]
-    fn test_format_headers_redacted_filters_sensitive() {
-        let mut headers = HeaderMap::new();
-        headers.insert("authorization", "Bearer secret-token".parse().unwrap());
-        headers.insert("content-type", "application/json".parse().unwrap());
-
-        let result = format_headers_redacted(&headers, false);
-
-        // Sensitive header should be present but with redacted value
-        assert!(result.contains("authorization"));
-        assert!(result.contains("[REDACTED]"));
-        // Sensitive value should NOT be present
-        assert!(!result.contains("secret-token"));
-        // Non-sensitive header should be present with actual value
-        assert!(result.contains("content-type"));
-        assert!(result.contains("application/json"));
-    }
-
-    #[test]
-    fn test_format_headers_redacted_filters_set_cookie() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "set-cookie",
-            "CF_Authorization=sensitive-session-token; Path=/; Secure;"
-                .parse()
-                .unwrap(),
-        );
-        headers.insert("server", "cloudflare".parse().unwrap());
-
-        let result = format_headers_redacted(&headers, false);
-
-        // Sensitive header should be present but with redacted value
-        assert!(result.contains("set-cookie"));
-        assert!(result.contains("[REDACTED]"));
-        // Sensitive value should NOT be present
-        assert!(!result.contains("sensitive-session-token"));
-        // Non-sensitive header should be present with actual value
-        assert!(result.contains("server"));
-        assert!(result.contains("cloudflare"));
-    }
-
-    #[test]
-    fn test_format_headers_redacted_filters_all_sensitive() {
-        let mut headers = HeaderMap::new();
-        headers.insert("authorization", "Bearer token".parse().unwrap());
-        headers.insert("proxy-authorization", "Basic creds".parse().unwrap());
-        headers.insert("set-cookie", "session=abc".parse().unwrap());
-        headers.insert("cookie", "session=abc".parse().unwrap());
-        headers.insert("x-api-key", "api-key-123".parse().unwrap());
-        headers.insert("x-auth-token", "auth-token-456".parse().unwrap());
-        headers.insert("x-request-id", "req-123".parse().unwrap());
-
-        let result = format_headers_redacted(&headers, false);
-
-        // All sensitive headers should be present but with redacted values
-        assert!(result.contains("authorization"));
-        assert!(result.contains("proxy-authorization"));
-        assert!(result.contains("set-cookie"));
-        assert!(result.contains("cookie"));
-        assert!(result.contains("x-api-key"));
-        assert!(result.contains("x-auth-token"));
-        assert!(result.contains("[REDACTED]"));
-
-        // Ensure no sensitive values leaked
-        assert!(!result.contains("Bearer token"));
-        assert!(!result.contains("Basic creds"));
-        assert!(!result.contains("session=abc"));
-        assert!(!result.contains("api-key-123"));
-        assert!(!result.contains("auth-token-456"));
-
-        // Non-sensitive header should be present with actual value
-        assert!(result.contains("x-request-id"));
-        assert!(result.contains("req-123"));
     }
 
     #[test]

@@ -22,7 +22,8 @@ use iceberg::io::{
     CLIENT_REGION, S3_ACCESS_KEY_ID, S3_ALLOW_ANONYMOUS, S3_ASSUME_ROLE_ARN,
     S3_ASSUME_ROLE_EXTERNAL_ID, S3_ASSUME_ROLE_SESSION_NAME, S3_DISABLE_CONFIG_LOAD,
     S3_DISABLE_EC2_METADATA, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
-    S3_SESSION_TOKEN, S3_SSE_KEY, S3_SSE_MD5, S3_SSE_TYPE,
+    S3_SESSION_TOKEN, S3_SESSION_TOKEN_EXPIRES_AT_MS, S3_SSE_KEY, S3_SSE_MD5, S3_SSE_TYPE,
+    StorageCredentialProvider,
 };
 use iceberg::{Error, ErrorKind, Result};
 use opendal::services::S3Config;
@@ -31,10 +32,15 @@ use opendal::{Configurator, Operator};
 pub use reqsign_aws_v4::Credential as AwsCredential;
 /// Trait for types that can asynchronously supply [`AwsCredential`] to a [`CustomAwsCredentialLoader`].
 pub use reqsign_core::ProvideCredential;
-use reqsign_core::{ProvideCredentialChain, ProvideCredentialDyn};
+use reqsign_core::{
+    Context, ProvideCredentialChain, ProvideCredentialDyn, Result as ReqsignResult,
+};
 use url::Url;
 
-use crate::utils::{from_opendal_error, is_truthy};
+use crate::utils::{
+    VendedCredentialSource, credential_expiry, from_opendal_error, is_truthy,
+    required_credential_property,
+};
 
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {
@@ -129,7 +135,9 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
 pub(crate) fn s3_config_build(
     cfg: &S3Config,
     customized_credential_load: &Option<CustomAwsCredentialLoader>,
+    credential_provider: &Option<Arc<dyn StorageCredentialProvider>>,
     path: &str,
+    credential_location: Option<&str>,
 ) -> Result<Operator> {
     let url = Url::parse(path)?;
     let bucket = url.host_str().ok_or_else(|| {
@@ -138,6 +146,19 @@ pub(crate) fn s3_config_build(
             format!("Invalid s3 url: {path}, missing bucket"),
         )
     })?;
+
+    // Preserve the existing custom-loader precedence: an explicitly configured loader
+    // is the sole source, otherwise install the catalog provider as a replacement chain so
+    // refresh failures cannot fall through to broader ambient AWS credentials.
+    let credential_provider = credential_provider
+        .as_ref()
+        .filter(|provider| provider.supports_path(path));
+    if customized_credential_load.is_none() && credential_provider.is_some() && cfg.skip_signature {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Invalid S3 auth settings: anonymous access cannot be combined with refreshable credentials",
+        ));
+    }
 
     let mut builder = cfg
         .clone()
@@ -148,9 +169,47 @@ pub(crate) fn s3_config_build(
     if let Some(loader) = customized_credential_load {
         let chain = ProvideCredentialChain::new().push(Arc::clone(&loader.0));
         builder = builder.credential_provider_chain(chain);
+    } else if let Some(provider) = credential_provider {
+        let chain = ProvideCredentialChain::new().push(VendedS3CredentialProvider(
+            VendedCredentialSource::new(
+                Arc::clone(provider),
+                credential_location.unwrap_or(path).to_string(),
+            ),
+        ));
+        builder = builder.credential_provider_chain(chain);
     }
 
     Operator::new(builder).map_err(from_opendal_error)
+}
+
+/// Adapts a generic [`StorageCredentialProvider`] into a reqsign
+/// [`ProvideCredential`], so the S3 signer can obtain and refresh vended
+/// credentials.
+#[derive(Debug)]
+struct VendedS3CredentialProvider(VendedCredentialSource);
+
+impl ProvideCredential for VendedS3CredentialProvider {
+    type Credential = AwsCredential;
+
+    async fn provide_credential(&self, _ctx: &Context) -> ReqsignResult<Option<AwsCredential>> {
+        let credential = self
+            .0
+            .load("S3", |config| {
+                Ok(AwsCredential {
+                    access_key_id: required_credential_property(config, S3_ACCESS_KEY_ID)?
+                        .to_string(),
+                    secret_access_key: required_credential_property(config, S3_SECRET_ACCESS_KEY)?
+                        .to_string(),
+                    session_token: config
+                        .get(S3_SESSION_TOKEN)
+                        .filter(|token| !token.is_empty())
+                        .cloned(),
+                    expires_in: credential_expiry(config, S3_SESSION_TOKEN_EXPIRES_AT_MS)?,
+                })
+            })
+            .await?;
+        Ok(Some(credential))
+    }
 }
 
 /// Custom AWS credential loader.
@@ -176,17 +235,102 @@ impl std::fmt::Debug for CustomAwsCredentialLoader {
 impl CustomAwsCredentialLoader {
     /// Create a new custom AWS credential loader from any [`ProvideCredential`] implementation.
     pub fn new(provider: impl ProvideCredential<Credential = AwsCredential> + 'static) -> Self {
-        Self(Arc::new(provider) as Arc<dyn ProvideCredentialDyn<Credential = AwsCredential>>)
+        Self(Arc::new(provider))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
-    use iceberg::io::S3_PATH_STYLE_ACCESS;
+    use async_trait::async_trait;
+    use iceberg::io::{GCS_TOKEN, S3_PATH_STYLE_ACCESS, StorageCredential};
+    use reqsign_core::time::Timestamp;
 
-    use super::s3_config_parse;
+    use super::*;
+
+    #[derive(Debug)]
+    struct FixedProvider(StorageCredential);
+
+    #[async_trait]
+    impl StorageCredentialProvider for FixedProvider {
+        fn supports_path(&self, _path: &str) -> bool {
+            true
+        }
+
+        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn adapter(credential: StorageCredential) -> VendedS3CredentialProvider {
+        VendedS3CredentialProvider(VendedCredentialSource::new(
+            Arc::new(FixedProvider(credential)),
+            "s3://bucket/table/file.parquet".to_string(),
+        ))
+    }
+
+    fn credential(prefix: &str, config: &[(&str, &str)]) -> StorageCredential {
+        StorageCredential::new(
+            prefix,
+            config
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        )
+    }
+
+    #[tokio::test]
+    async fn vended_adapter_returns_expiring_aws_credential() {
+        let credential = credential("s3://bucket/table", &[
+            (S3_ACCESS_KEY_ID, "AK"),
+            (S3_SECRET_ACCESS_KEY, "SK"),
+            (S3_SESSION_TOKEN, "TOK"),
+            (S3_SESSION_TOKEN_EXPIRES_AT_MS, "1500"),
+        ]);
+
+        let aws = adapter(credential)
+            .provide_credential(&Context::new())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(aws.access_key_id, "AK");
+        assert_eq!(aws.secret_access_key, "SK");
+        assert_eq!(aws.session_token.as_deref(), Some("TOK"));
+        assert_eq!(
+            aws.expires_in,
+            Some(Timestamp::from_millisecond(1500).unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn vended_adapter_rejects_incomplete_or_uncovering_credentials() {
+        for credential in [
+            // A credential for another backend.
+            credential("s3", &[(GCS_TOKEN, "token")]),
+            // No secret key.
+            credential("s3", &[(S3_ACCESS_KEY_ID, "AK")]),
+            // An unparsable expiry.
+            credential("s3", &[
+                (S3_ACCESS_KEY_ID, "AK"),
+                (S3_SECRET_ACCESS_KEY, "SK"),
+                (S3_SESSION_TOKEN_EXPIRES_AT_MS, "soon"),
+            ]),
+            // A prefix that does not cover the path.
+            credential("s3://bucket/other", &[
+                (S3_ACCESS_KEY_ID, "AK"),
+                (S3_SECRET_ACCESS_KEY, "SK"),
+            ]),
+        ] {
+            assert!(
+                adapter(credential)
+                    .provide_credential(&Context::new())
+                    .await
+                    .is_err()
+            );
+        }
+    }
 
     fn parse_with(prop: Option<&str>) -> bool {
         let mut props = HashMap::new();

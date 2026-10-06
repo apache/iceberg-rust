@@ -39,10 +39,11 @@ use reqwest::{Client, Method, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
-use crate::auth::{AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, AuthManager, NoopAuthManager, OAuth2Manager};
+use crate::auth::{AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, AuthManager, load_auth_manager};
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
+use crate::credential::{RestVendedCredentialProviderFactory, build_vended_credential_provider};
 use crate::endpoint::{Endpoint, V1_NAMESPACE_EXISTS, V1_TABLE_EXISTS};
 use crate::request::HttpRequest;
 use crate::response::HttpResponse;
@@ -59,6 +60,12 @@ pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 /// Disable header redaction in error logs and `Debug` output (defaults to
 /// false for security)
 pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
+/// Identifier of the server-side scan plan sent with credential requests as
+/// `planId`, as in Java's `RESTCatalogProperties.REST_SCAN_PLAN_ID`.
+pub(crate) const REST_CATALOG_PROP_SCAN_PLAN_ID: &str = "rest-scan-plan-id";
+/// Encoded view chain sent with credential requests as `referenced-by`, as in
+/// Java's `RESTCatalogProperties.REST_REFERENCED_BY`.
+pub(crate) const REST_CATALOG_PROP_REFERENCED_BY: &str = "rest-referenced-by";
 /// Authentication scheme: `none` or `oauth2`. When unset, `oauth2` is used
 /// if a `token`, `credential` or `oauth2-server-uri` is configured, `none`
 /// otherwise.
@@ -289,10 +296,52 @@ impl RestCatalogConfig {
     /// Returns true if the `disable-header-redaction` property is set to "true".
     /// Defaults to false for security (headers are redacted by default).
     pub(crate) fn disable_header_redaction(&self) -> bool {
+        disable_header_redaction_from_props(&self.props).unwrap_or(false)
+    }
+
+    /// The configured auth scheme: explicit `rest.auth.type` (matched
+    /// case-insensitively) when set; otherwise `oauth2` when a `token`,
+    /// `credential` or `oauth2-server-uri` is configured (preserving
+    /// pre-`rest.auth.type` setups), `none` when none is.
+    pub(crate) fn auth_type(&self) -> String {
         self.props
-            .get(REST_CATALOG_PROP_DISABLE_HEADER_REDACTION)
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
+            .get(REST_CATALOG_PROP_AUTH_TYPE)
+            // Matched case-insensitively, as the other flag properties are.
+            .map(|auth_type| auth_type.to_ascii_lowercase())
+            .unwrap_or_else(|| {
+                if self.token().is_some()
+                    || self.credential().is_some()
+                    || self.explicit_oauth2_server_uri().is_some()
+                {
+                    AUTH_TYPE_OAUTH2.to_string()
+                } else {
+                    AUTH_TYPE_NONE.to_string()
+                }
+            })
+    }
+
+    /// Whether `rest.auth.type` is set explicitly rather than inferred.
+    pub(crate) fn has_explicit_auth_type(&self) -> bool {
+        self.props.contains_key(REST_CATALOG_PROP_AUTH_TYPE)
+    }
+
+    /// The properties handed to the [`AuthManager`], with the catalog `uri`
+    /// and `warehouse` made explicit.
+    pub(crate) fn auth_props(&self) -> HashMap<String, String> {
+        // `oauth2-server-uri` stays absent unless explicitly configured, so an
+        // injected manager keeps its own endpoint. The resolved `uri` and
+        // `warehouse` ARE passed: the builder moved them off the props, and
+        // the built-in manager recomputes its token endpoint from the URI.
+        let mut props = self.props.clone();
+        props.insert(REST_CATALOG_PROP_URI.to_string(), self.uri.clone());
+        if let Some(warehouse) = &self.warehouse {
+            // A fallback only: after the handshake the merged props hold
+            // the resolved warehouse, server override included.
+            props
+                .entry(REST_CATALOG_PROP_WAREHOUSE.to_string())
+                .or_insert_with(|| warehouse.clone());
+        }
+        props
     }
 
     /// Merge the `RestCatalogConfig` with the a [`CatalogConfig`] (fetched from the REST server).
@@ -362,6 +411,13 @@ pub(crate) fn extra_headers_from_props(props: &HashMap<String, String>) -> Resul
     Ok(headers)
 }
 
+/// The `disable-header-redaction` property, when set.
+pub(crate) fn disable_header_redaction_from_props(props: &HashMap<String, String>) -> Option<bool> {
+    props
+        .get(REST_CATALOG_PROP_DISABLE_HEADER_REDACTION)
+        .map(|value| value.eq_ignore_ascii_case("true"))
+}
+
 /// The default OAuth2 token endpoint for a catalog `uri`.
 pub(crate) fn default_token_endpoint(uri: &str) -> String {
     [uri, PATH_V1, "oauth", "tokens"].join("/")
@@ -418,6 +474,8 @@ pub(crate) fn oauth_params_from_props(props: &HashMap<String, String>) -> HashMa
 
 #[derive(Debug)]
 struct RestClient {
+    /// Creates child authentication sessions for table-scoped requests.
+    auth_manager: Arc<dyn AuthManager>,
     /// Carries the session the auth manager derived from the merged
     /// configuration, so every request below is authenticated.
     http_client: HttpClient,
@@ -444,7 +502,7 @@ impl RestClient {
             let init_session = auth_manager
                 .init_session(
                     &http_client.without_auth_session(),
-                    &Self::auth_props(user_config),
+                    &user_config.auth_props(),
                 )
                 .await?;
             Self::load_config(
@@ -464,13 +522,11 @@ impl RestClient {
         // The manager is handed an unauthenticated client: its own
         // requests must not be signed by the session it is deriving.
         let session = auth_manager
-            .catalog_session(
-                &http_client.without_auth_session(),
-                &Self::auth_props(&config),
-            )
+            .catalog_session(&http_client.without_auth_session(), &config.auth_props())
             .await?;
 
         Ok(Self {
+            auth_manager,
             config,
             http_client: http_client.with_auth_session(session),
             endpoints,
@@ -486,25 +542,6 @@ impl RestClient {
     /// Sends `request`, authenticated by the client's session.
     async fn query_catalog(&self, request: HttpRequest) -> Result<HttpResponse> {
         self.http_client.query_catalog(request).await
-    }
-
-    /// The properties handed to the [`AuthManager`], with the catalog `uri`
-    /// and `warehouse` made explicit.
-    fn auth_props(config: &RestCatalogConfig) -> HashMap<String, String> {
-        // `oauth2-server-uri` stays absent unless explicitly configured, so an
-        // injected manager keeps its own endpoint. The resolved `uri` and
-        // `warehouse` ARE passed: the builder moved them off the props, and
-        // the built-in manager recomputes its token endpoint from the URI.
-        let mut props = config.props.clone();
-        props.insert(REST_CATALOG_PROP_URI.to_string(), config.uri.clone());
-        if let Some(warehouse) = &config.warehouse {
-            // A fallback only: after the handshake the merged props hold
-            // the resolved warehouse, server override included.
-            props
-                .entry(REST_CATALOG_PROP_WAREHOUSE.to_string())
-                .or_insert_with(|| warehouse.clone());
-        }
-        props
     }
 
     /// Loads the runtime config from the server using `user_config`.
@@ -758,56 +795,12 @@ impl RestSessionCatalog {
         }
     }
 
-    /// The configured auth scheme: explicit `rest.auth.type` (matched
-    /// case-insensitively) when set; otherwise `oauth2` when a `token`,
-    /// `credential` or `oauth2-server-uri` is configured (preserving
-    /// pre-`rest.auth.type` setups), `none` when none is.
-    fn auth_type(config: &RestCatalogConfig) -> String {
-        config
-            .props
-            .get(REST_CATALOG_PROP_AUTH_TYPE)
-            // Matched case-insensitively, as the other flag properties are.
-            .map(|auth_type| auth_type.to_ascii_lowercase())
-            .unwrap_or_else(|| {
-                if config.token().is_some()
-                    || config.credential().is_some()
-                    || config.explicit_oauth2_server_uri().is_some()
-                {
-                    AUTH_TYPE_OAUTH2.to_string()
-                } else {
-                    AUTH_TYPE_NONE.to_string()
-                }
-            })
-    }
-
     /// Resolves the auth manager: a `with_auth_manager` override wins,
     /// otherwise one is built from the `rest.auth.type` configuration.
     fn resolve_auth_manager(&self) -> Result<Arc<dyn AuthManager>> {
-        if let Some(auth_manager) = &self.auth_manager {
-            return Ok(auth_manager.clone());
-        }
-        let config = &self.user_config;
-        let auth_type = Self::auth_type(config);
-        // Java parity (`AuthManagers`): make the inference visible so users
-        // configure the type explicitly.
-        if auth_type == AUTH_TYPE_OAUTH2 && !config.props.contains_key(REST_CATALOG_PROP_AUTH_TYPE)
-        {
-            tracing::warn!(
-                "Inferring {REST_CATALOG_PROP_AUTH_TYPE}={AUTH_TYPE_OAUTH2} from the configured \
-                 OAuth properties; set it explicitly to avoid this warning"
-            );
-        }
-        match auth_type.as_str() {
-            AUTH_TYPE_NONE => Ok(Arc::new(NoopAuthManager)),
-            AUTH_TYPE_OAUTH2 => Ok(Arc::new(OAuth2Manager::from_config(config)?)),
-            other => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "unknown '{REST_CATALOG_PROP_AUTH_TYPE}': {other}; use \
-                     `RestSessionCatalogBuilder::with_auth_manager` or \
-                     `RestCatalogBuilder::with_auth_manager` to inject a custom auth manager"
-                ),
-            )),
+        match &self.auth_manager {
+            Some(auth_manager) => Ok(auth_manager.clone()),
+            None => load_auth_manager(&self.user_config),
         }
     }
 
@@ -843,22 +836,27 @@ impl RestSessionCatalog {
         }
     }
 
+    /// Builds the FileIO for `table` from the catalog properties and, when
+    /// loaded from a table response, its `config` overridden by the user
+    /// properties.
     async fn load_file_io(
         &self,
+        table: &TableIdent,
         metadata_location: Option<&str>,
-        extra_config: Option<HashMap<String, String>>,
+        table_config: Option<HashMap<String, String>>,
     ) -> Result<FileIO> {
-        let mut props = self.client().await?.config.props.clone();
-        if let Some(config) = extra_config {
-            props.extend(config);
+        let client = self.client().await?;
+        let mut props = client.config.props.clone();
+        if let Some(table_config) = &table_config {
+            props.extend(table_config.clone());
+            props.extend(self.user_config.props.clone());
         }
 
         // If the warehouse is a logical identifier instead of a URL we don't want
         // to raise an exception
-        let warehouse_path = match self.client().await?.config.warehouse.as_deref() {
+        let warehouse_path = match client.config.warehouse.as_deref() {
             Some(url) if Url::parse(url).is_ok() => Some(url),
-            Some(_) => None,
-            None => None,
+            _ => None,
         };
 
         if metadata_location.or(warehouse_path).is_none() {
@@ -879,9 +877,33 @@ impl RestSessionCatalog {
                 )
             })?;
 
-        let file_io = FileIOBuilder::new(factory).with_props(props).build();
+        // If the catalog vends refreshable credentials for this table's storage,
+        // attach a provider so the backend re-fetches them before they expire.
+        // Only catalog authentication resolved from the properties can be
+        // rebuilt after FileIO serialization.
+        let table_config = table_config.unwrap_or_default();
+        let credential_provider = build_vended_credential_provider(
+            &client.http_client,
+            client.auth_manager.as_ref(),
+            RestVendedCredentialProviderFactory::new(
+                &client.config.uri,
+                table.clone(),
+                self.user_config.auth_type(),
+                !self.user_config.has_explicit_auth_type(),
+                &table_config,
+            ),
+            &props,
+            &table_config,
+            self.auth_manager.is_none(),
+        )
+        .await?;
 
-        Ok(file_io)
+        let mut builder = FileIOBuilder::new(factory).with_props(props);
+        if let Some(provider) = credential_provider {
+            builder = builder.with_credential_provider(provider);
+        }
+
+        Ok(builder.build())
     }
 }
 
@@ -1181,14 +1203,8 @@ impl SessionCatalog for RestSessionCatalog {
             "Metadata location missing in `create_table` response!",
         ))?;
 
-        let config = response
-            .config
-            .into_iter()
-            .chain(self.user_config.props.clone())
-            .collect();
-
         let file_io = self
-            .load_file_io(Some(metadata_location), Some(config))
+            .load_file_io(&table_ident, Some(metadata_location), Some(response.config))
             .await?;
 
         let mut table_builder = Table::builder()
@@ -1245,14 +1261,12 @@ impl SessionCatalog for RestSessionCatalog {
             }
         };
 
-        let config = response
-            .config
-            .into_iter()
-            .chain(self.user_config.props.clone())
-            .collect();
-
         let file_io = self
-            .load_file_io(response.metadata_location.as_deref(), Some(config))
+            .load_file_io(
+                table_ident,
+                response.metadata_location.as_deref(),
+                Some(response.config),
+            )
             .await?;
 
         let mut table_builder = Table::builder()
@@ -1391,7 +1405,9 @@ impl SessionCatalog for RestSessionCatalog {
             "Metadata location missing in `register_table` response!",
         ))?;
 
-        let file_io = self.load_file_io(Some(metadata_location), None).await?;
+        let file_io = self
+            .load_file_io(table_ident, Some(metadata_location), Some(response.config))
+            .await?;
 
         let mut table_builder = Table::builder()
             .identifier(table_ident.clone())
@@ -1470,7 +1486,7 @@ impl SessionCatalog for RestSessionCatalog {
         };
 
         let file_io = self
-            .load_file_io(Some(&response.metadata_location), None)
+            .load_file_io(commit.identifier(), Some(&response.metadata_location), None)
             .await?;
 
         let mut table_builder = Table::builder()
@@ -1680,7 +1696,7 @@ mod tests {
     use uuid::uuid;
 
     use super::*;
-    use crate::auth::AuthSession;
+    use crate::auth::{AuthSession, NoopAuthManager, OAuth2Manager};
     use crate::request::HttpRequest;
 
     fn test_catalog(config: RestCatalogConfig) -> RestSessionCatalog {
@@ -4147,6 +4163,142 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_load_table_attaches_the_vended_credential_provider() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let mut load_response: serde_json::Value = serde_json::from_reader(BufReader::new(
+            File::open(format!(
+                "{}/testdata/load_table_response.json",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap(),
+        ))
+        .unwrap();
+        load_response["config"]["client.refresh-credentials-endpoint"] =
+            json!("/v1/namespaces/ns1/tables/test1/credentials");
+        load_response["config"]["token"] = json!("table-token");
+        let load_table_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body(load_response.to_string())
+            .create_async()
+            .await;
+        let expires_at = (std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let credentials_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1/credentials")
+            .match_header("authorization", "Bearer table-token")
+            .with_status(200)
+            .with_body(
+                json!({"storage-credentials": [{
+                    "prefix": "s3://warehouse",
+                    "config": {
+                        "s3.access-key-id": "VENDED_AK",
+                        "s3.secret-access-key": "SK",
+                        "s3.session-token": "TOK",
+                        "s3.session-token-expires-at-ms": expires_at.to_string(),
+                    },
+                }]})
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+        let table = catalog
+            .load_table(&TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .await
+            .unwrap();
+
+        assert!(
+            format!("{:?}", table.file_io()).contains("RestVendedCredentialProvider"),
+            "the table's FileIO holds the provider"
+        );
+        // The serialized provider rebuilds, and refreshes with the table token.
+        let serialized: serde_json::Value =
+            serde_json::from_slice(&table.file_io().serialize_all().unwrap()).unwrap();
+        let factory: Arc<dyn iceberg::io::StorageCredentialProviderFactory> =
+            serde_json::from_value(serialized["credential_provider"].clone()).unwrap();
+        let config = iceberg::io::StorageConfig::new().with_props(
+            serialized["config"]["props"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(key, value)| (key.clone(), value.as_str().unwrap().to_string())),
+        );
+        let credential = factory
+            .build(&config)
+            .unwrap()
+            .load_credential("s3://warehouse/database/table/data.parquet")
+            .await
+            .unwrap();
+        assert_eq!(
+            credential
+                .config()
+                .get("s3.access-key-id")
+                .map(String::as_str),
+            Some("VENDED_AK")
+        );
+
+        config_mock.assert_async().await;
+        load_table_mock.assert_async().await;
+        credentials_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_injected_auth_manager_file_io_serializes_without_provider() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let mut load_response: serde_json::Value = serde_json::from_reader(BufReader::new(
+            File::open(format!(
+                "{}/testdata/load_table_response.json",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap(),
+        ))
+        .unwrap();
+        load_response["config"]["client.refresh-credentials-endpoint"] =
+            json!("/v1/namespaces/ns1/tables/test1/credentials");
+        let load_table_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body(load_response.to_string())
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Box::new(NoopAuthManager)),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+        let table = catalog
+            .load_table(&TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .await
+            .unwrap();
+
+        // The FileIO serializes with its static credentials; the provider, which
+        // cannot be rebuilt with an injected AuthManager, is dropped.
+        let serialized: serde_json::Value =
+            serde_json::from_slice(&table.file_io().serialize_all().unwrap()).unwrap();
+        assert!(serialized.get("credential_provider").is_none());
+
+        config_mock.assert_async().await;
+        load_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn test_update_table_404() {
         let mut server = Server::new_async().await;
 
@@ -4270,6 +4422,45 @@ mod tests {
             table.metadata_location().unwrap()
         );
 
+        config_mock.assert_async().await;
+        register_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_register_table_attaches_the_vended_credential_provider() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let mut response: serde_json::Value = serde_json::from_reader(BufReader::new(
+            File::open(format!(
+                "{}/testdata/load_table_response.json",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap(),
+        ))
+        .unwrap();
+        response["config"]["client.refresh-credentials-endpoint"] =
+            json!("/v1/namespaces/ns1/tables/test1/credentials");
+        let register_table_mock = server
+            .mock("POST", "/v1/namespaces/ns1/register")
+            .with_status(200)
+            .with_body(response.to_string())
+            .create_async()
+            .await;
+
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let table = catalog
+            .register_table(
+                &SessionContext::empty(),
+                &TableIdent::from_strs(["ns1", "test1"]).unwrap(),
+                "s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json".to_string(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            format!("{:?}", table.file_io()).contains("RestVendedCredentialProvider"),
+            "the registered table's FileIO holds the provider"
+        );
         config_mock.assert_async().await;
         register_table_mock.assert_async().await;
     }

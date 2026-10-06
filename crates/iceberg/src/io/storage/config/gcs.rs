@@ -41,6 +41,12 @@ pub const GCS_NO_AUTH: &str = "gcs.no-auth";
 pub const GCS_CREDENTIALS_JSON: &str = "gcs.credentials-json";
 /// Google Cloud Storage token.
 pub const GCS_TOKEN: &str = "gcs.oauth2.token";
+/// Epoch-millisecond timestamp at which the vended GCS OAuth2 token expires.
+pub const GCS_TOKEN_EXPIRES_AT: &str = "gcs.oauth2.token-expires-at";
+/// Endpoint used to fetch and refresh vended GCS OAuth2 credentials.
+pub const GCS_REFRESH_CREDENTIALS_ENDPOINT: &str = "gcs.oauth2.refresh-credentials-endpoint";
+/// Whether vended GCS OAuth2 credentials should be refreshed. Defaults to `true`.
+pub const GCS_REFRESH_CREDENTIALS_ENABLED: &str = "gcs.oauth2.refresh-credentials-enabled";
 /// Option to skip signing requests (e.g. for public buckets/folders).
 pub const GCS_ALLOW_ANONYMOUS: &str = "gcs.allow-anonymous";
 /// Option to skip loading the credential from GCE metadata server.
@@ -105,7 +111,9 @@ impl TryFrom<&StorageConfig> for GcsConfig {
         }
 
         // GCS_NO_AUTH enables all anonymous/no-auth options
-        if props.get(GCS_NO_AUTH).is_some() {
+        if let Some(no_auth) = props.get(GCS_NO_AUTH)
+            && is_truthy(no_auth)
+        {
             cfg.allow_anonymous = true;
             cfg.disable_vm_metadata = true;
             cfg.disable_config_load = true;
@@ -174,6 +182,17 @@ mod tests {
         assert!(gcs_config.allow_anonymous);
         assert!(gcs_config.disable_vm_metadata);
         assert!(gcs_config.disable_config_load);
+    }
+
+    #[test]
+    fn test_gcs_config_no_auth_false() {
+        let storage_config = StorageConfig::new().with_prop(GCS_NO_AUTH, "false");
+
+        let gcs_config = GcsConfig::try_from(&storage_config).unwrap();
+
+        assert!(!gcs_config.allow_anonymous);
+        assert!(!gcs_config.disable_vm_metadata);
+        assert!(!gcs_config.disable_config_load);
     }
 
     #[test]
