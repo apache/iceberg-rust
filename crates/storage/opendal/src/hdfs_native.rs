@@ -39,12 +39,26 @@ const HDFS_DEFAULT_PORT: u16 = 8020;
 /// PyIceberg keys with no equivalent in opendal's config.
 const HDFS_UNSUPPORTED_KEYS: [&str; 2] = ["hdfs.user", "hdfs.kerberos_ticket"];
 
-/// `hdfs-native` dials a NameNode as a socket address and has no default
-/// port, so anything without one can only be a logical nameservice name.
-fn hdfs_native_has_port(name_node: &str) -> bool {
-    name_node
-        .rsplit_once(':')
-        .is_some_and(|(_, port)| port.parse::<u16>().is_ok())
+/// Normalizes one NameNode spelling to `hdfs://host:port`, the form path
+/// authorities take, so every source shares cache keys. `hdfs-native` dials
+/// a socket address and has no default port, so anything else is `None`:
+/// another scheme, a logical name, port 0, userinfo, a path.
+fn hdfs_native_name_node(entry: &str) -> Option<String> {
+    let rest = entry.trim().trim_end_matches('/');
+    let rest = rest.strip_prefix("hdfs://").unwrap_or(rest);
+    if rest.is_empty() || rest.contains("://") {
+        return None;
+    }
+    let url = Url::parse(&format!("hdfs://{rest}")).ok()?;
+    let (host, port) = (url.host_str()?, url.port()?);
+    let plain = host.is_empty()
+        || port == 0
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !matches!(url.path(), "" | "/")
+        || url.query().is_some()
+        || url.fragment().is_some();
+    (!plain).then(|| format!("hdfs://{host}:{port}"))
 }
 
 /// Parse iceberg properties to [`HdfsNativeConfig`].
@@ -57,19 +71,21 @@ pub(crate) fn hdfs_native_config_parse(mut m: HashMap<String, String>) -> Result
     // builder's empty-string guard and `Some("")` would shadow the
     // path-authority fallback below.
     if let Some(name_node) = m.remove(HDFS_NAME_NODE) {
-        let entries: Vec<&str> = name_node
+        let entries = name_node
             .split(',')
-            .map(|entry| entry.trim().trim_end_matches('/'))
+            .map(str::trim)
             .filter(|entry| !entry.is_empty())
-            .collect();
-        // Each entry is dialed as `host:port` (`hdfs://` optional); a portless
-        // one would fail only at the first I/O.
-        if let Some(entry) = entries.iter().find(|entry| !hdfs_native_has_port(entry)) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid `{HDFS_NAME_NODE}` entry: {entry}, expected host:port"),
-            ));
-        }
+            .map(|entry| {
+                hdfs_native_name_node(entry).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Invalid `{HDFS_NAME_NODE}` entry: {entry}, expected host:port (hdfs:// optional)"
+                        ),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         if !entries.is_empty() {
             cfg.name_node = Some(entries.join(","));
         }
@@ -198,25 +214,21 @@ pub(crate) fn hdfs_native_effective_name_node<'a>(
         )
     };
     let name_node = match authority {
-        Some(authority) if hdfs_native_has_port(&authority) => authority,
+        Some(authority) if hdfs_native_name_node(&authority).is_some() => authority,
         Some(logical) => config.name_node.clone().ok_or_else(|| {
             let logical = logical.trim_start_matches("hdfs://");
             invalid(format!(
                 "logical nameservice `{logical}` requires `{HDFS_NAME_NODE}`"
             ))
         })?,
-        None => match config
-            .name_node
-            .clone()
-            .or_else(|| hdfs_native_default_fs(config))
-        {
-            Some(name_node) if hdfs_native_has_port(&name_node) => name_node,
-            Some(logical) => {
-                return Err(invalid(format!(
-                    "`{FS_DEFAULT_FS}` {logical} has no port, a logical nameservice requires `{HDFS_NAME_NODE}`"
-                )));
-            }
-            None => {
+        None => match (&config.name_node, hdfs_native_default_fs(config)) {
+            (Some(name_node), _) => name_node.clone(),
+            (None, Some(default_fs)) => hdfs_native_name_node(default_fs).ok_or_else(|| {
+                invalid(format!(
+                    "`{FS_DEFAULT_FS}` {default_fs} is not an HDFS host:port, a logical nameservice requires `{HDFS_NAME_NODE}`"
+                ))
+            })?,
+            (None, None) => {
                 return Err(invalid(format!(
                     "authority-less paths require `{HDFS_NAME_NODE}` or `{HDFS_HOST}`"
                 )));
@@ -226,18 +238,14 @@ pub(crate) fn hdfs_native_effective_name_node<'a>(
     Ok((name_node, relative_path))
 }
 
-/// `fs.defaultFS` from the forwarded options, when it is an HDFS URI.
-fn hdfs_native_default_fs(config: &HdfsNativeConfig) -> Option<String> {
+/// `fs.defaultFS` from the forwarded options, as written.
+fn hdfs_native_default_fs(config: &HdfsNativeConfig) -> Option<&str> {
     config
         .options
         .as_ref()?
         .get(FS_DEFAULT_FS)
-        .map(|s| s.trim().trim_end_matches('/'))
-        .filter(|s| {
-            s.strip_prefix("hdfs://")
-                .is_some_and(|rest| !rest.is_empty())
-        })
-        .map(str::to_string)
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
 }
 
 /// State of [`OpenDalStorage::HdfsNative`](crate::OpenDalStorage::HdfsNative):
@@ -560,20 +568,32 @@ mod tests {
             )]))
         };
 
-        // `hdfs://` is optional: Hadoop's own rpc-address format is bare.
-        for value in [
-            "nn:8020",
-            "hdfs://nn:8020",
-            "[::1]:8020",
-            "hdfs://nn1:8020,nn2:8020",
+        // `hdfs://` is optional (Hadoop's own rpc-address format is bare) and
+        // every entry is normalized to it, so it keys the cache like a path
+        // authority does.
+        for (value, normalized) in [
+            ("nn:8020", "hdfs://nn:8020"),
+            ("hdfs://nn:8020/", "hdfs://nn:8020"),
+            ("[::1]:8020", "hdfs://[::1]:8020"),
+            (
+                "hdfs://nn1:8020, nn2:8020",
+                "hdfs://nn1:8020,hdfs://nn2:8020",
+            ),
         ] {
-            assert!(parse(value).is_ok(), "{value}");
+            assert_eq!(parse(value).unwrap().name_node.as_deref(), Some(normalized));
         }
         for value in [
             "hdfs://ns1",
             "nn",
             "nn:x",
+            "nn:0",
+            "nn:+80",
+            "::1",
             "hdfs://[::1]",
+            "viewfs://nn:8020",
+            "foo://nn:8020",
+            "user@nn:8020",
+            "nn:8020/path",
             "hdfs://nn1:8020,nn2",
         ] {
             let err = parse(value).unwrap_err().to_string();
@@ -599,7 +619,36 @@ mod tests {
         }
         // Portless: a logical nameservice, which only `hdfs.name-node` resolves.
         let err = hdfs_native_effective_name_node(&parse("hdfs://ns1"), "hdfs:///a").unwrap_err();
-        assert!(err.to_string().contains("has no port"), "{err}");
+        assert!(
+            err.to_string().contains(FS_DEFAULT_FS) && err.to_string().contains(HDFS_NAME_NODE),
+            "{err}"
+        );
+        // Normalized like every other source.
+        let (nn, _) = hdfs_native_effective_name_node(&parse("nn:9000"), "hdfs:///a").unwrap();
+        assert_eq!(nn, "hdfs://nn:9000");
+    }
+
+    /// A bare configured NameNode and the same NameNode as a path authority
+    /// share one cache entry.
+    #[tokio::test]
+    async fn test_hdfs_native_create_operator_dedupes_spellings() {
+        let config = Arc::new(
+            hdfs_native_config_parse(HashMap::from([(
+                HDFS_NAME_NODE.to_string(),
+                "nn:8020".to_string(),
+            )]))
+            .unwrap(),
+        );
+        let operators = HdfsNativeOperatorCache::default();
+
+        for path in ["hdfs:///a", "hdfs://nn:8020/b"] {
+            hdfs_native_create_operator(path, &config, &operators)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(operators.len(), 1);
+        assert!(operators.get("hdfs://nn:8020").unwrap().is_some());
     }
 
     #[test]
