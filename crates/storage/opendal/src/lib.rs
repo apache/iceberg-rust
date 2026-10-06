@@ -394,7 +394,7 @@ impl OpenDalStorage {
     /// * An [`opendal::Operator`] instance used to operate on file.
     /// * Relative path to the root uri of [`opendal::Operator`].
     #[allow(unreachable_code, unused_variables)]
-    pub(crate) fn create_operator<'a>(
+    pub(crate) async fn create_operator<'a>(
         &self,
         path: &'a impl AsRef<str>,
     ) -> Result<(Operator, &'a str)> {
@@ -459,7 +459,7 @@ impl OpenDalStorage {
             }
             #[cfg(feature = "opendal-hdfs-native")]
             OpenDalStorage::HdfsNative(storage) => {
-                hdfs_native_create_operator(path, &storage.config, &storage.operators)?
+                hdfs_native_create_operator(path, &storage.config, &storage.operators).await?
             }
             #[cfg(feature = "opendal-oss")]
             OpenDalStorage::Oss { config, .. } => {
@@ -673,12 +673,12 @@ impl OpenDalStorage {
 #[async_trait]
 impl Storage for OpenDalStorage {
     async fn exists(&self, path: &str) -> Result<bool> {
-        let (op, relative_path) = self.create_operator(&path)?;
+        let (op, relative_path) = self.create_operator(&path).await?;
         Ok(op.exists(relative_path).await.map_err(from_opendal_error)?)
     }
 
     async fn metadata(&self, path: &str) -> Result<FileMetadata> {
-        let (op, relative_path) = self.create_operator(&path)?;
+        let (op, relative_path) = self.create_operator(&path).await?;
         let meta = op.stat(relative_path).await.map_err(from_opendal_error)?;
         Ok(FileMetadata {
             size: meta.content_length(),
@@ -686,7 +686,7 @@ impl Storage for OpenDalStorage {
     }
 
     async fn read(&self, path: &str) -> Result<Bytes> {
-        let (op, relative_path) = self.create_operator(&path)?;
+        let (op, relative_path) = self.create_operator(&path).await?;
         Ok(op
             .read(relative_path)
             .await
@@ -695,14 +695,14 @@ impl Storage for OpenDalStorage {
     }
 
     async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
-        let (op, relative_path) = self.create_operator(&path)?;
+        let (op, relative_path) = self.create_operator(&path).await?;
         Ok(Box::new(OpenDalReader(
             op.reader(relative_path).await.map_err(from_opendal_error)?,
         )))
     }
 
     async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
-        let (op, relative_path) = self.create_operator(&path)?;
+        let (op, relative_path) = self.create_operator(&path).await?;
         op.write(relative_path, bs)
             .await
             .map_err(from_opendal_error)?;
@@ -710,19 +710,19 @@ impl Storage for OpenDalStorage {
     }
 
     async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
-        let (op, relative_path) = self.create_operator(&path)?;
+        let (op, relative_path) = self.create_operator(&path).await?;
         Ok(Box::new(OpenDalWriter::new(
             op.writer(relative_path).await.map_err(from_opendal_error)?,
         )))
     }
 
     async fn delete(&self, path: &str) -> Result<()> {
-        let (op, relative_path) = self.create_operator(&path)?;
+        let (op, relative_path) = self.create_operator(&path).await?;
         Ok(op.delete(relative_path).await.map_err(from_opendal_error)?)
     }
 
     async fn delete_prefix(&self, path: &str) -> Result<()> {
-        let (op, relative_path) = self.create_operator(&path)?;
+        let (op, relative_path) = self.create_operator(&path).await?;
         let path = if relative_path.ends_with('/') {
             relative_path.to_string()
         } else {
@@ -746,7 +746,7 @@ impl Storage for OpenDalStorage {
                     (self.relativize_path(&path)?.to_string(), entry.into_mut())
                 }
                 Entry::Vacant(entry) => {
-                    let (op, rel) = self.create_operator(&path)?;
+                    let (op, rel) = self.create_operator(&path).await?;
                     let rel = rel.to_string();
                     let deleter = op.deleter().await.map_err(from_opendal_error)?;
                     (rel, entry.insert(deleter))

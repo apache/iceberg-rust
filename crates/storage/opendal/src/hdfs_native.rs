@@ -331,9 +331,9 @@ fn poisoned<T>(_: T) -> Error {
 
 /// Creates an operator for the path, reusing the cached one for its
 /// effective NameNode.
-pub(crate) fn hdfs_native_create_operator<'a>(
+pub(crate) async fn hdfs_native_create_operator<'a>(
     path: &'a str,
-    config: &HdfsNativeConfig,
+    config: &Arc<HdfsNativeConfig>,
     operators: &HdfsNativeOperatorCache,
 ) -> Result<(Operator, &'a str)> {
     let (name_node, relative_path) = hdfs_native_effective_name_node(config, path)?;
@@ -342,11 +342,18 @@ pub(crate) fn hdfs_native_create_operator<'a>(
         return Ok((op, relative_path));
     }
 
-    // The build reads the Hadoop XML config synchronously (~0.1 ms, once
-    // per NameNode), so it runs outside the lock and is not worth a
-    // blocking-thread hop. A racing first caller may build too; the loser
-    // is dropped before opening any connection.
-    let op = hdfs_native_operator_build(config, &name_node)?;
+    // The build reads the Hadoop XML config synchronously, so it runs on a
+    // blocking thread and outside the lock. A racing first caller may build
+    // too; the loser is dropped before opening any connection.
+    let build_config = Arc::clone(config);
+    let build_name_node = name_node.clone();
+    let op = tokio::task::spawn_blocking(move || {
+        hdfs_native_operator_build(&build_config, &build_name_node)
+    })
+    .await
+    .map_err(|e| {
+        Error::new(ErrorKind::Unexpected, "HDFS operator build task failed").with_source(e)
+    })??;
     Ok((operators.insert(name_node, op)?, relative_path))
 }
 
@@ -663,20 +670,27 @@ mod tests {
         assert_eq!(hdfs_native_batch_key(&config, "hdfs:///a"), "hdfs:///a");
     }
 
-    // The operator tests are plain `#[test]`s on purpose: building an
-    // operator must not need a runtime, as the siblings' tests also assume.
-    #[test]
-    fn test_hdfs_native_create_operator_configured_name_node_serves_logical_paths() {
-        let config = hdfs_native_config_parse(HashMap::from([(
-            HDFS_NAME_NODE.to_string(),
-            "hdfs://nn1:8020/,hdfs://nn2:8020/".to_string(),
-        )]))
-        .unwrap();
+    // Creating an operator offloads the build to a blocking thread, so these
+    // run under tokio; `test_hdfs_native_operator_cache_keeps_first_insert`
+    // pins that the build itself needs no runtime.
+    #[tokio::test]
+    async fn test_hdfs_native_create_operator_configured_name_node_serves_logical_paths() {
+        let config = Arc::new(
+            hdfs_native_config_parse(HashMap::from([(
+                HDFS_NAME_NODE.to_string(),
+                "hdfs://nn1:8020/,hdfs://nn2:8020/".to_string(),
+            )]))
+            .unwrap(),
+        );
         let operators = HdfsNativeOperatorCache::default();
 
         // Logical and authority-less paths share the configured list's operator.
-        let (_, rel) = hdfs_native_create_operator("hdfs://ns-a/a/b", &config, &operators).unwrap();
-        hdfs_native_create_operator("hdfs:///c", &config, &operators).unwrap();
+        let (_, rel) = hdfs_native_create_operator("hdfs://ns-a/a/b", &config, &operators)
+            .await
+            .unwrap();
+        hdfs_native_create_operator("hdfs:///c", &config, &operators)
+            .await
+            .unwrap();
         assert_eq!(rel, "a/b");
         assert_eq!(operators.len(), 1);
         assert!(
@@ -687,33 +701,64 @@ mod tests {
         );
 
         // A concrete authority is another cluster, never the configured one.
-        hdfs_native_create_operator("hdfs://other:9000/d", &config, &operators).unwrap();
+        hdfs_native_create_operator("hdfs://other:9000/d", &config, &operators)
+            .await
+            .unwrap();
         assert_eq!(operators.len(), 2);
         assert!(operators.get("hdfs://other:9000").unwrap().is_some());
     }
 
-    #[test]
-    fn test_hdfs_native_create_operator_uses_path_authority() {
-        let config = HdfsNativeConfig::default();
+    #[tokio::test]
+    async fn test_hdfs_native_create_operator_uses_path_authority() {
+        let config = Arc::new(HdfsNativeConfig::default());
         let operators = HdfsNativeOperatorCache::default();
 
-        let (_, rel) =
-            hdfs_native_create_operator("hdfs://nn:8020/a/b", &config, &operators).unwrap();
+        let (_, rel) = hdfs_native_create_operator("hdfs://nn:8020/a/b", &config, &operators)
+            .await
+            .unwrap();
 
         assert_eq!(rel, "a/b");
         assert!(operators.get("hdfs://nn:8020").unwrap().is_some());
     }
 
-    #[test]
-    fn test_hdfs_native_create_operator_caches_per_name_node() {
-        let config = HdfsNativeConfig::default();
+    #[tokio::test]
+    async fn test_hdfs_native_create_operator_caches_per_name_node() {
+        let config = Arc::new(HdfsNativeConfig::default());
         let operators = HdfsNativeOperatorCache::default();
 
-        hdfs_native_create_operator("hdfs://nn1:8020/a", &config, &operators).unwrap();
-        hdfs_native_create_operator("hdfs://nn1:8020/b", &config, &operators).unwrap();
-        hdfs_native_create_operator("hdfs://nn2:8020/c", &config, &operators).unwrap();
+        for path in [
+            "hdfs://nn1:8020/a",
+            "hdfs://nn1:8020/b",
+            "hdfs://nn2:8020/c",
+        ] {
+            hdfs_native_create_operator(path, &config, &operators)
+                .await
+                .unwrap();
+        }
 
         assert_eq!(operators.len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_hdfs_native_create_operator_concurrent_callers_share_one_entry() {
+        let config = Arc::new(HdfsNativeConfig::default());
+        let operators = HdfsNativeOperatorCache::default();
+
+        let callers: Vec<_> = (0..8)
+            .map(|_| {
+                let (config, operators) = (config.clone(), operators.clone());
+                tokio::spawn(async move {
+                    hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators)
+                        .await
+                        .unwrap();
+                })
+            })
+            .collect();
+        for caller in callers {
+            caller.await.unwrap();
+        }
+
+        assert_eq!(operators.len(), 1);
     }
 
     #[test]
@@ -736,16 +781,6 @@ mod tests {
         assert_eq!(first.info().root(), "/first/");
         assert_eq!(second.info().root(), "/first/");
         assert_eq!(operators.len(), 1);
-
-        let config = HdfsNativeConfig::default();
-        std::thread::scope(|scope| {
-            for _ in 0..8 {
-                scope.spawn(|| {
-                    hdfs_native_create_operator("hdfs://other:8020/a", &config, &operators).unwrap()
-                });
-            }
-        });
-        assert_eq!(operators.len(), 2);
     }
 
     #[test]
@@ -760,18 +795,26 @@ mod tests {
         ];
         for build_runtime in flavors {
             let operators = HdfsNativeOperatorCache::default();
-            let config = HdfsNativeConfig::default();
+            let config = Arc::new(HdfsNativeConfig::default());
 
             let runtime = build_runtime();
             runtime.block_on(async {
-                hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators).unwrap();
+                hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators)
+                    .await
+                    .unwrap();
             });
             assert!(operators.get("hdfs://nn:8020").unwrap().is_some());
 
-            // The building runtime is gone: the entry is stale and gets rebuilt.
+            // The building runtime is gone: the entry is stale and the next
+            // runtime to use it rebuilds it.
             drop(runtime);
             assert!(operators.get("hdfs://nn:8020").unwrap().is_none());
-            hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators).unwrap();
+            let next = build_runtime();
+            next.block_on(async {
+                hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators)
+                    .await
+                    .unwrap();
+            });
             assert!(operators.get("hdfs://nn:8020").unwrap().is_some());
             assert_eq!(operators.len(), 1);
         }
@@ -793,8 +836,10 @@ mod tests {
                 let baseline = metrics.num_alive_tasks();
 
                 let operators = HdfsNativeOperatorCache::default();
-                let config = HdfsNativeConfig::default();
-                hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators).unwrap();
+                let config = Arc::new(HdfsNativeConfig::default());
+                hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators)
+                    .await
+                    .unwrap();
                 assert_eq!(metrics.num_alive_tasks(), baseline + 1);
 
                 // Dropping the cache aborts the sentinel; the abort lands once
@@ -809,12 +854,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_hdfs_native_create_operator_authority_less_without_config_errors() {
-        let config = HdfsNativeConfig::default();
+    #[tokio::test]
+    async fn test_hdfs_native_create_operator_authority_less_without_config_errors() {
+        let config = Arc::new(HdfsNativeConfig::default());
         let operators = HdfsNativeOperatorCache::default();
 
-        let err = hdfs_native_create_operator("hdfs:///a/b", &config, &operators).unwrap_err();
+        let err = hdfs_native_create_operator("hdfs:///a/b", &config, &operators)
+            .await
+            .unwrap_err();
 
         assert!(err.to_string().contains(HDFS_NAME_NODE));
     }
