@@ -34,10 +34,10 @@ use crate::table::Table;
 use crate::transaction::ActionCommit;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
+const ENGINE_NAME: &str = "iceberg-rust";
 const ENGINE_NAME_PROP: &str = "engine-name";
 const ENGINE_VERSION_PROP: &str = "engine-version";
 const ICEBERG_VERSION_PROP: &str = "iceberg-version";
-const ENGINE_NAME: &str = "iceberg-rust";
 
 fn apply_writer_identity(properties: &mut HashMap<String, String>) {
     let version = env!("CARGO_PKG_VERSION");

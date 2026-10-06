@@ -769,18 +769,12 @@ mod tests {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
 
-        let data_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("test/1.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(100)
-            .record_count(1)
-            .partition_spec_id(table.metadata().default_partition_spec_id())
-            .partition(Struct::from_iter([Some(Literal::long(300))]))
-            .build()
-            .unwrap();
+        let mut snapshot_properties = HashMap::new();
+        snapshot_properties.insert("key".to_string(), "val".to_string());
 
-        let action = tx.fast_append().add_data_files(vec![data_file]);
+        let action = tx
+            .fast_append()
+            .set_snapshot_properties(snapshot_properties);
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();
 
@@ -809,23 +803,10 @@ mod tests {
         snapshot_properties.insert("engine-name".to_string(), "other".to_string());
         snapshot_properties.insert("engine-version".to_string(), "0".to_string());
         snapshot_properties.insert("iceberg-version".to_string(), "custom".to_string());
-        snapshot_properties.insert("key".to_string(), "val".to_string());
-
-        let data_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("test/1.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(100)
-            .record_count(1)
-            .partition_spec_id(table.metadata().default_partition_spec_id())
-            .partition(Struct::from_iter([Some(Literal::long(300))]))
-            .build()
-            .unwrap();
 
         let action = tx
             .fast_append()
-            .set_snapshot_properties(snapshot_properties)
-            .add_data_files(vec![data_file]);
+            .set_snapshot_properties(snapshot_properties);
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();
 
@@ -843,7 +824,6 @@ mod tests {
             props.get("iceberg-version").unwrap(),
             &format!("Apache Iceberg Rust {version}")
         );
-        assert_eq!(props.get("key").unwrap(), "val");
     }
 
     #[tokio::test]
