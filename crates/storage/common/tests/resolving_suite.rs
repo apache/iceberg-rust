@@ -23,7 +23,8 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use common::{StorageKind, load_storage, unique_path};
-use iceberg::io::{FileIO, FileIOBuilder, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION};
+use iceberg::io::{FileIOBuilder, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION};
+use iceberg_storage_common::roundtrip_file_io;
 use iceberg_storage_opendal::{
     AwsCredential, CustomAwsCredentialLoader, OpenDalResolvingStorageFactory, ProvideCredential,
 };
@@ -31,11 +32,6 @@ use iceberg_test_utils::{get_object_store_endpoint, set_up};
 use reqsign_core::Context;
 use rstest::rstest;
 use tempfile::TempDir;
-
-fn roundtrip_file_io(file_io: &FileIO) -> FileIO {
-    let serialized = file_io.serialize_all().unwrap();
-    FileIO::deserialize_all(&serialized).unwrap()
-}
 
 #[rstest]
 #[case::opendal_resolving(StorageKind::OpenDalResolving)]
@@ -56,55 +52,31 @@ async fn test_mixed_scheme_write_and_read(#[case] kind: StorageKind) -> iceberg:
     // Write to all three schemes
     harness
         .file_io
-        .new_output(&s3_path)
-        .unwrap()
+        .new_output(&s3_path)?
         .write("from_s3".into())
-        .await
-        .unwrap();
+        .await?;
     harness
         .file_io
-        .new_output(&fs_path)
-        .unwrap()
+        .new_output(&fs_path)?
         .write("from_fs".into())
-        .await
-        .unwrap();
+        .await?;
     harness
         .file_io
-        .new_output(mem_path)
-        .unwrap()
+        .new_output(mem_path)?
         .write("from_memory".into())
-        .await
-        .unwrap();
+        .await?;
 
     // Read back from all three
     assert_eq!(
-        harness
-            .file_io
-            .new_input(&s3_path)
-            .unwrap()
-            .read()
-            .await
-            .unwrap(),
+        harness.file_io.new_input(&s3_path)?.read().await?,
         Bytes::from("from_s3")
     );
     assert_eq!(
-        harness
-            .file_io
-            .new_input(&fs_path)
-            .unwrap()
-            .read()
-            .await
-            .unwrap(),
+        harness.file_io.new_input(&fs_path)?.read().await?,
         Bytes::from("from_fs")
     );
     assert_eq!(
-        harness
-            .file_io
-            .new_input(mem_path)
-            .unwrap()
-            .read()
-            .await
-            .unwrap(),
+        harness.file_io.new_input(mem_path)?.read().await?,
         Bytes::from("from_memory")
     );
 
@@ -134,23 +106,21 @@ async fn test_mixed_scheme_exists_independently(#[case] kind: StorageKind) -> ic
     let _ = harness.file_io.delete(&s3_path).await;
 
     // None exist initially
-    assert!(!harness.file_io.exists(&s3_path).await.unwrap());
-    assert!(!harness.file_io.exists(&fs_path).await.unwrap());
-    assert!(!harness.file_io.exists(mem_path).await.unwrap());
+    assert!(!harness.file_io.exists(&s3_path).await?);
+    assert!(!harness.file_io.exists(&fs_path).await?);
+    assert!(!harness.file_io.exists(mem_path).await?);
 
     // Write only to fs
     harness
         .file_io
-        .new_output(&fs_path)
-        .unwrap()
+        .new_output(&fs_path)?
         .write("fs_only".into())
-        .await
-        .unwrap();
+        .await?;
 
     // Only fs exists
-    assert!(!harness.file_io.exists(&s3_path).await.unwrap());
-    assert!(harness.file_io.exists(&fs_path).await.unwrap());
-    assert!(!harness.file_io.exists(mem_path).await.unwrap());
+    assert!(!harness.file_io.exists(&s3_path).await?);
+    assert!(harness.file_io.exists(&fs_path).await?);
+    assert!(!harness.file_io.exists(mem_path).await?);
 
     let _ = harness.file_io.delete(&fs_path).await;
 
@@ -178,52 +148,34 @@ async fn test_mixed_scheme_delete_one_keeps_others(
     // Write to all three
     harness
         .file_io
-        .new_output(&s3_path)
-        .unwrap()
+        .new_output(&s3_path)?
         .write("s3".into())
-        .await
-        .unwrap();
+        .await?;
     harness
         .file_io
-        .new_output(&fs_path)
-        .unwrap()
+        .new_output(&fs_path)?
         .write("fs".into())
-        .await
-        .unwrap();
+        .await?;
     harness
         .file_io
-        .new_output(mem_path)
-        .unwrap()
+        .new_output(mem_path)?
         .write("mem".into())
-        .await
-        .unwrap();
+        .await?;
 
     // Delete only the fs file
-    harness.file_io.delete(&fs_path).await.unwrap();
+    harness.file_io.delete(&fs_path).await?;
 
     // fs gone, S3 and memory still there
-    assert!(harness.file_io.exists(&s3_path).await.unwrap());
-    assert!(!harness.file_io.exists(&fs_path).await.unwrap());
-    assert!(harness.file_io.exists(mem_path).await.unwrap());
+    assert!(harness.file_io.exists(&s3_path).await?);
+    assert!(!harness.file_io.exists(&fs_path).await?);
+    assert!(harness.file_io.exists(mem_path).await?);
 
     assert_eq!(
-        harness
-            .file_io
-            .new_input(&s3_path)
-            .unwrap()
-            .read()
-            .await
-            .unwrap(),
+        harness.file_io.new_input(&s3_path)?.read().await?,
         Bytes::from("s3")
     );
     assert_eq!(
-        harness
-            .file_io
-            .new_input(mem_path)
-            .unwrap()
-            .read()
-            .await
-            .unwrap(),
+        harness.file_io.new_input(mem_path)?.read().await?,
         Bytes::from("mem")
     );
 
@@ -251,55 +203,31 @@ async fn test_mixed_scheme_interleaved_operations(
     // Interleave: write fs, write memory, write s3
     harness
         .file_io
-        .new_output(&fs_path)
-        .unwrap()
+        .new_output(&fs_path)?
         .write("fs_data".into())
-        .await
-        .unwrap();
+        .await?;
     harness
         .file_io
-        .new_output(mem_path)
-        .unwrap()
+        .new_output(mem_path)?
         .write("mem_data".into())
-        .await
-        .unwrap();
+        .await?;
     harness
         .file_io
-        .new_output(&s3_path)
-        .unwrap()
+        .new_output(&s3_path)?
         .write("s3_data".into())
-        .await
-        .unwrap();
+        .await?;
 
     // Read in reverse order: s3, memory, fs
     assert_eq!(
-        harness
-            .file_io
-            .new_input(&s3_path)
-            .unwrap()
-            .read()
-            .await
-            .unwrap(),
+        harness.file_io.new_input(&s3_path)?.read().await?,
         Bytes::from("s3_data")
     );
     assert_eq!(
-        harness
-            .file_io
-            .new_input(mem_path)
-            .unwrap()
-            .read()
-            .await
-            .unwrap(),
+        harness.file_io.new_input(mem_path)?.read().await?,
         Bytes::from("mem_data")
     );
     assert_eq!(
-        harness
-            .file_io
-            .new_input(&fs_path)
-            .unwrap()
-            .read()
-            .await
-            .unwrap(),
+        harness.file_io.new_input(&fs_path)?.read().await?,
         Bytes::from("fs_data")
     );
 
@@ -386,7 +314,7 @@ async fn test_resolving_with_custom_credential_loader(
         ])
         .build();
 
-    assert!(file_io.exists("s3://bucket1/").await.unwrap());
+    assert!(file_io.exists("s3://bucket1/").await?);
 
     Ok(())
 }
@@ -403,16 +331,14 @@ async fn test_resolving_serialization_roundtrip(#[case] kind: StorageKind) -> ic
 
     let _ = file_io.delete(&s3_path).await;
     file_io
-        .new_output(&s3_path)
-        .unwrap()
+        .new_output(&s3_path)?
         .write(Bytes::from_static(b"resolving_roundtrip"))
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(
-        file_io.new_input(&s3_path).unwrap().read().await.unwrap(),
+        file_io.new_input(&s3_path)?.read().await?,
         Bytes::from_static(b"resolving_roundtrip")
     );
-    file_io.delete(&s3_path).await.unwrap();
-    assert!(!file_io.exists(&s3_path).await.unwrap());
+    file_io.delete(&s3_path).await?;
+    assert!(!file_io.exists(&s3_path).await?);
     Ok(())
 }

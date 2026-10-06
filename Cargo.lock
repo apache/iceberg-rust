@@ -2929,7 +2929,6 @@ dependencies = [
 name = "iceberg-storage-common"
 version = "0.10.1"
 dependencies = [
- "anyhow",
  "bytes",
  "futures",
  "iceberg",
