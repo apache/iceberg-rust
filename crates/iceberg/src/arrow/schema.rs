@@ -880,7 +880,13 @@ pub(crate) fn get_parquet_stat_min_as_datum(
             };
             Some(Datum::new(
                 primitive_type.clone(),
-                PrimitiveLiteral::Int128(i128::from_be_bytes(bytes.try_into()?)),
+                PrimitiveLiteral::Int128(
+                    // An empty bound carries no value; reject it rather than
+                    // decode it as zero, which could prune matching row groups.
+                    i128_from_be_bytes(bytes)
+                        .filter(|_| !bytes.is_empty())
+                        .ok_or_else(|| invalid_data!("Can't convert bytes to i128: {bytes:?}"))?,
+                ),
             ))
         }
         (
@@ -1024,7 +1030,13 @@ pub(crate) fn get_parquet_stat_max_as_datum(
             };
             Some(Datum::new(
                 primitive_type.clone(),
-                PrimitiveLiteral::Int128(i128::from_be_bytes(bytes.try_into()?)),
+                PrimitiveLiteral::Int128(
+                    // An empty bound carries no value; reject it rather than
+                    // decode it as zero, which could prune matching row groups.
+                    i128_from_be_bytes(bytes)
+                        .filter(|_| !bytes.is_empty())
+                        .ok_or_else(|| invalid_data!("Can't convert bytes to i128: {bytes:?}"))?,
+                ),
             ))
         }
         (
@@ -2599,5 +2611,84 @@ mod tests {
 
         pretty_assertions::assert_eq!(schema, expected);
         assert_eq!(schema.highest_field_id(), 17);
+    }
+
+    fn decimal_byte_array_stats(min: Vec<u8>, max: Vec<u8>) -> Statistics {
+        Statistics::byte_array(
+            Some(parquet::data_type::ByteArray::from(min)),
+            Some(parquet::data_type::ByteArray::from(max)),
+            None,
+            Some(0),
+            false,
+        )
+    }
+
+    fn decimal_bounds(stats: &Statistics) -> Result<(Option<Datum>, Option<Datum>)> {
+        let ty = PrimitiveType::Decimal {
+            precision: 38,
+            scale: 2,
+        };
+        Ok((
+            get_parquet_stat_min_as_datum(&ty, stats)?,
+            get_parquet_stat_max_as_datum(&ty, stats)?,
+        ))
+    }
+
+    fn decimal_datum(value: i128) -> Datum {
+        Datum::new(
+            PrimitiveType::Decimal {
+                precision: 38,
+                scale: 2,
+            },
+            PrimitiveLiteral::Int128(value),
+        )
+    }
+
+    #[test]
+    fn test_byte_array_decimal_stats_short_bounds() {
+        // Minimal-length big-endian two's-complement: -1234 and 1234.
+        let stats = decimal_byte_array_stats(vec![0xFB, 0x2E], vec![0x04, 0xD2]);
+        let (min, max) = decimal_bounds(&stats).unwrap();
+        assert_eq!(min, Some(decimal_datum(-1234)));
+        assert_eq!(max, Some(decimal_datum(1234)));
+
+        // Single-byte bounds: sign bit set must sign-extend, not zero-extend.
+        let stats = decimal_byte_array_stats(vec![0x80], vec![0x7F]);
+        let (min, max) = decimal_bounds(&stats).unwrap();
+        assert_eq!(min, Some(decimal_datum(-128)));
+        assert_eq!(max, Some(decimal_datum(127)));
+    }
+
+    #[test]
+    fn test_byte_array_decimal_stats_full_width_bounds() {
+        let stats = decimal_byte_array_stats(
+            i128::MIN.to_be_bytes().to_vec(),
+            i128::MAX.to_be_bytes().to_vec(),
+        );
+        let (min, max) = decimal_bounds(&stats).unwrap();
+        assert_eq!(min, Some(decimal_datum(i128::MIN)));
+        assert_eq!(max, Some(decimal_datum(i128::MAX)));
+    }
+
+    #[test]
+    fn test_byte_array_decimal_stats_empty_bound_errors() {
+        let stats = decimal_byte_array_stats(vec![], vec![0x01]);
+        let err = decimal_bounds(&stats).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+
+        let stats = decimal_byte_array_stats(vec![0x01], vec![]);
+        let err = decimal_bounds(&stats).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[test]
+    fn test_byte_array_decimal_stats_oversized_bound_errors() {
+        let stats = decimal_byte_array_stats(vec![0; 17], vec![0x01]);
+        let err = decimal_bounds(&stats).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+
+        let stats = decimal_byte_array_stats(vec![0x01], vec![0; 17]);
+        let err = decimal_bounds(&stats).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 }
