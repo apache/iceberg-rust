@@ -192,15 +192,26 @@ pub(crate) fn hdfs_native_config_parse(mut m: HashMap<String, String>) -> Result
     match host {
         Some(host) => {
             // An IPv6 literal needs brackets in a URI authority.
-            let host = if host.contains(':') && !host.starts_with('[') {
+            let bracketed = if host.contains(':') && !host.starts_with('[') {
                 format!("[{host}]")
             } else {
-                host
+                host.clone()
             };
             let port = port.unwrap_or(HDFS_DEFAULT_PORT);
+            // Validated like every other NameNode spelling, so a host that
+            // carries a scheme or port fails here and not at the first I/O.
+            let default_fs = hdfs_native_name_node(&format!("hdfs://{bracketed}:{port}"))
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Invalid `{HDFS_HOST}`/`{HDFS_PORT}`: {host}:{port}, expected a host name or IP and a port"
+                        ),
+                    )
+                })?;
             options
                 .entry(FS_DEFAULT_FS.to_string())
-                .or_insert_with(|| format!("hdfs://{host}:{port}"));
+                .or_insert(default_fs);
         }
         None if port.is_some() => {
             tracing::warn!("`{HDFS_PORT}` has no effect without `{HDFS_HOST}` and is ignored");
@@ -644,6 +655,16 @@ mod tests {
         ] {
             let err = parse(props).unwrap_err();
             assert!(err.to_string().contains(HDFS_PORT), "{props:?}: {err}");
+        }
+        // The composed value is validated like any other NameNode spelling.
+        for props in [
+            &[(HDFS_HOST, "nn:8020")][..],
+            &[(HDFS_HOST, "hdfs://nn")][..],
+            &[(HDFS_HOST, "nn"), (HDFS_PORT, "0")][..],
+            &[(HDFS_HOST, "nn/path")][..],
+        ] {
+            let err = parse(props).unwrap_err();
+            assert!(err.to_string().contains(HDFS_HOST), "{props:?}: {err}");
         }
     }
 
