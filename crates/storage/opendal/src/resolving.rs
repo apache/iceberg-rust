@@ -141,11 +141,10 @@ fn build_storage_for_scheme(
         #[cfg(feature = "opendal-hdfs-native")]
         "hdfs" => {
             let config = crate::hdfs_native::hdfs_native_config_parse(props.clone())?;
-            Ok(OpenDalStorage::HdfsNative {
-                config: Arc::new(config),
-                operators: crate::HdfsNativeOperatorCache::default(),
+            Ok(OpenDalStorage::HdfsNative(crate::HdfsNativeStorage::new(
+                config,
                 client_config,
-            })
+            )))
         }
         unsupported => Err(Error::new(
             ErrorKind::FeatureUnsupported,
@@ -457,7 +456,7 @@ mod tests {
         let resolved = storage.resolve("hdfs://nameservice1/a/b").unwrap();
 
         assert!(
-            matches!(&*resolved, OpenDalStorage::HdfsNative { .. }),
+            matches!(&*resolved, OpenDalStorage::HdfsNative(_)),
             "expected HdfsNative variant, got {resolved:?}"
         );
     }

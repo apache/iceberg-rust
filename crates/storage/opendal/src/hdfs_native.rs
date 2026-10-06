@@ -25,10 +25,12 @@ use iceberg::io::{HDFS_HADOOP_CONF_PREFIX, HDFS_HOST, HDFS_NAME_NODE, HDFS_PORT}
 use iceberg::{Error, ErrorKind, Result};
 use opendal::Operator;
 use opendal::services::HdfsNativeConfig;
+use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use url::Url;
 
+use crate::OpenDalClientConfig;
 use crate::utils::from_opendal_error;
 
 /// Hadoop's default filesystem, which serves authority-less paths.
@@ -207,6 +209,28 @@ fn hdfs_native_default_fs(config: &HdfsNativeConfig) -> Option<String> {
         .map(str::to_string)
 }
 
+/// State of [`OpenDalStorage::HdfsNative`](crate::OpenDalStorage::HdfsNative):
+/// the parsed configuration and the per-NameNode operator cache. Only the
+/// storage factories build it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HdfsNativeStorage {
+    pub(crate) config: Arc<HdfsNativeConfig>,
+    #[serde(skip, default)]
+    pub(crate) operators: HdfsNativeOperatorCache,
+    #[serde(default)]
+    pub(crate) client_config: OpenDalClientConfig,
+}
+
+impl HdfsNativeStorage {
+    pub(crate) fn new(config: HdfsNativeConfig, client_config: OpenDalClientConfig) -> Self {
+        Self {
+            config: Arc::new(config),
+            operators: HdfsNativeOperatorCache::default(),
+            client_config,
+        }
+    }
+}
+
 /// Operators cached per effective NameNode: each holds an `hdfs-native`
 /// client with live RPC connections, whose tasks run on the tokio runtime
 /// current when it was built (a private one when built outside any). An
@@ -214,7 +238,7 @@ fn hdfs_native_default_fs(config: &HdfsNativeConfig) -> Option<String> {
 /// it spawns onto a dead one. The cache lives as long as the storage that
 /// owns it (clones share it).
 #[derive(Clone, Debug, Default)]
-pub struct HdfsNativeOperatorCache(Arc<RwLock<HashMap<String, CachedOperator>>>);
+pub(crate) struct HdfsNativeOperatorCache(Arc<RwLock<HashMap<String, CachedOperator>>>);
 
 #[derive(Debug)]
 struct CachedOperator {
@@ -266,7 +290,7 @@ impl CachedOperator {
 }
 
 impl HdfsNativeOperatorCache {
-    fn get(&self, name_node: &str) -> Result<Option<Operator>> {
+    pub(crate) fn get(&self, name_node: &str) -> Result<Option<Operator>> {
         Ok(self
             .0
             .read()
