@@ -39,16 +39,18 @@ const ENGINE_VERSION_PROP: &str = "engine-version";
 const ICEBERG_VERSION_PROP: &str = "iceberg-version";
 const ENGINE_NAME: &str = "iceberg-rust";
 
-fn writer_identity_properties() -> HashMap<String, String> {
+fn apply_writer_identity(properties: &mut HashMap<String, String>) {
     let version = env!("CARGO_PKG_VERSION");
-    HashMap::from([
-        (ENGINE_NAME_PROP.to_string(), ENGINE_NAME.to_string()),
-        (ENGINE_VERSION_PROP.to_string(), version.to_string()),
-        (
-            ICEBERG_VERSION_PROP.to_string(),
-            format!("Apache Iceberg Rust {version}"),
-        ),
-    ])
+    properties
+        .entry(ENGINE_NAME_PROP.to_string())
+        .or_insert_with(|| ENGINE_NAME.to_string());
+    properties
+        .entry(ENGINE_VERSION_PROP.to_string())
+        .or_insert_with(|| version.to_string());
+    properties.insert(
+        ICEBERG_VERSION_PROP.to_string(),
+        format!("Apache Iceberg Rust {version}"),
+    );
 }
 
 /// A trait that defines how different table operations produce new snapshots.
@@ -433,9 +435,7 @@ impl<'a> SnapshotProducer<'a> {
             previous_snapshot.map(|s| s.summary()),
             snapshot_produce_operation.operation() == Operation::Overwrite,
         )?;
-        summary
-            .additional_properties
-            .extend(writer_identity_properties());
+        apply_writer_identity(&mut summary.additional_properties);
         Ok(summary)
     }
 

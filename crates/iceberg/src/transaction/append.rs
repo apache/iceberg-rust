@@ -801,7 +801,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_snapshot_properties_cannot_override_writer_identity() {
+    async fn test_caller_engine_identity_is_kept() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
 
@@ -837,8 +837,8 @@ mod tests {
         let props = &new_snapshot.summary().additional_properties;
         let version = env!("CARGO_PKG_VERSION");
 
-        assert_eq!(props.get("engine-name").unwrap(), "iceberg-rust");
-        assert_eq!(props.get("engine-version").unwrap(), version);
+        assert_eq!(props.get("engine-name").unwrap(), "other");
+        assert_eq!(props.get("engine-version").unwrap(), "0");
         assert_eq!(
             props.get("iceberg-version").unwrap(),
             &format!("Apache Iceberg Rust {version}")
