@@ -1689,8 +1689,8 @@ mod tests {
         SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
         UnboundPartitionField, UnboundPartitionSpec,
     };
-    use iceberg::test_utils::test_runtime;
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
+    use iceberg_test_utils::test_runtime;
     use mockito::{Mock, Server, ServerGuard};
     use serde_json::json;
     use uuid::uuid;

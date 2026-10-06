@@ -2829,6 +2829,7 @@ dependencies = [
  "cfg-if 1.0.4",
  "futures",
  "iceberg",
+ "iceberg-property-macro",
  "iceberg_test_utils",
  "mockito",
  "opendal",
@@ -2851,6 +2852,7 @@ name = "iceberg_test_utils"
 version = "0.10.1"
 dependencies = [
  "iceberg",
+ "tokio",
  "tracing-subscriber",
 ]
 

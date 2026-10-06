@@ -33,9 +33,9 @@ use iceberg::{Error, ErrorKind, Result};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::OpenDalStorage;
 #[cfg(feature = "opendal-s3")]
 use crate::s3::CustomAwsCredentialLoader;
+use crate::{OpenDalClientConfig, OpenDalStorage};
 
 /// Schemes supported by OpenDalResolvingStorage
 pub const SCHEME_MEMORY: &str = "memory";
@@ -93,6 +93,7 @@ fn build_storage_for_scheme(
     ))]
     credential_provider: &Option<Arc<dyn StorageCredentialProvider>>,
 ) -> Result<OpenDalStorage> {
+    let client_config = OpenDalClientConfig::from_properties(props)?;
     match scheme {
         #[cfg(feature = "opendal-s3")]
         "s3" => {
@@ -101,6 +102,7 @@ fn build_storage_for_scheme(
                 config: Arc::new(config),
                 customized_credential_load: customized_credential_load.clone(),
                 credential_provider: credential_provider.clone(),
+                client_config,
             })
         }
         #[cfg(feature = "opendal-gcs")]
@@ -109,6 +111,7 @@ fn build_storage_for_scheme(
             Ok(OpenDalStorage::Gcs {
                 config: Arc::new(config),
                 credential_provider: credential_provider.clone(),
+                client_config,
             })
         }
         #[cfg(feature = "opendal-oss")]
@@ -116,6 +119,7 @@ fn build_storage_for_scheme(
             let config = crate::oss::oss_config_parse(props.clone())?;
             Ok(OpenDalStorage::Oss {
                 config: Arc::new(config),
+                client_config,
             })
         }
         #[cfg(feature = "opendal-azdls")]
@@ -125,17 +129,22 @@ fn build_storage_for_scheme(
                 config: Arc::new(config),
                 sas_tokens: Arc::new(crate::azdls::AzdlsSasTokens::from_properties(props)),
                 credential_provider: credential_provider.clone(),
+                client_config,
             })
         }
         #[cfg(feature = "opendal-fs")]
-        "file" => Ok(OpenDalStorage::LocalFs),
+        "file" => Ok(OpenDalStorage::LocalFs { client_config }),
         #[cfg(feature = "opendal-memory")]
-        "memory" => Ok(OpenDalStorage::Memory(crate::memory::memory_config_build()?)),
+        "memory" => Ok(OpenDalStorage::Memory {
+            operator: crate::memory::memory_config_build()?,
+            client_config,
+        }),
         #[cfg(feature = "opendal-hf")]
         "hf" => {
             let config = crate::hf::hf_config_parse(props.clone())?;
             Ok(OpenDalStorage::Hf {
                 config: Arc::new(config),
+                client_config,
             })
         }
         unsupported => Err(Error::new(
@@ -415,8 +424,11 @@ impl Storage for OpenDalResolvingStorage {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     #[allow(unused_imports)]
     use super::*;
+    use crate::OPENDAL_IO_TIMEOUT_MS;
 
     #[cfg(any(
         feature = "opendal-azdls",
@@ -497,11 +509,6 @@ mod tests {
 
     /// Builds a resolving storage with empty props, suitable for `resolve()`
     /// calls that don't actually hit any backend.
-    #[cfg(any(
-        feature = "opendal-s3",
-        feature = "opendal-azdls",
-        all(feature = "opendal-memory", feature = "opendal-gcs")
-    ))]
     fn empty_resolving_storage() -> OpenDalResolvingStorage {
         OpenDalResolvingStorage {
             props: HashMap::new(),
@@ -514,6 +521,39 @@ mod tests {
                 feature = "opendal-azdls"
             ))]
             credential_provider: None,
+        }
+    }
+
+    #[test]
+    fn test_resolve_propagates_io_timeout() {
+        let mut storage = empty_resolving_storage();
+        storage
+            .props
+            .insert(OPENDAL_IO_TIMEOUT_MS.to_string(), "45000".to_string());
+
+        let paths: &[&str] = &[
+            #[cfg(feature = "opendal-memory")]
+            "memory:/key",
+            #[cfg(feature = "opendal-fs")]
+            "file:/key",
+            #[cfg(feature = "opendal-s3")]
+            "s3://bucket/key",
+            #[cfg(feature = "opendal-gcs")]
+            "gs://bucket/key",
+            #[cfg(feature = "opendal-oss")]
+            "oss://bucket/key",
+            #[cfg(feature = "opendal-azdls")]
+            "abfss://myfs@myaccount.dfs.core.windows.net/key",
+            #[cfg(feature = "opendal-hf")]
+            "hf://datasets/user/repo/key",
+        ];
+        for path in paths {
+            let resolved = storage.resolve(path).unwrap();
+            assert_eq!(
+                resolved.client_config().io_timeout(),
+                Duration::from_secs(45),
+                "{path}"
+            );
         }
     }
 
