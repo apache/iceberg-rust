@@ -42,7 +42,7 @@ opendal-all = [
 opendal-azdls = ["opendal/services-azdls"]
 opendal-fs = ["opendal/services-fs"]
 opendal-gcs = ["opendal/services-gcs"]
-opendal-hdfs-native = ["opendal/services-hdfs-native"]
+opendal-hdfs-native = ["opendal/services-hdfs-native", "dep:tokio"]
 opendal-hf = ["opendal/services-hf"]
 opendal-memory = ["opendal/services-memory"]
 opendal-oss = ["opendal/services-oss"]
@@ -60,6 +60,7 @@ opendal = { workspace = true }
 reqsign-aws-v4 = { version = "3.0.0", optional = true }
 reqsign-core = { version = "3.0.0", optional = true }
 serde = { workspace = true }
+tokio = { workspace = true, optional = true }
 typetag = { workspace = true }
 url = { workspace = true }
 

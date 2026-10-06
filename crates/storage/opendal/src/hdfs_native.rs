@@ -18,12 +18,15 @@
 //! HDFS storage backend via OpenDAL's `services-hdfs-native` (pure Rust, no JNI).
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::collections::hash_map::Entry;
+use std::sync::{Arc, RwLock, Weak};
 
 use iceberg::io::{HDFS_HADOOP_CONF_PREFIX, HDFS_HOST, HDFS_NAME_NODE, HDFS_PORT};
 use iceberg::{Error, ErrorKind, Result};
 use opendal::Operator;
 use opendal::services::HdfsNativeConfig;
+use tokio::runtime::Handle;
+use tokio::task::JoinHandle;
 use url::Url;
 
 use crate::utils::from_opendal_error;
@@ -181,28 +184,90 @@ fn hdfs_native_default_fs(config: &HdfsNativeConfig) -> Option<String> {
 
 /// Operators cached per effective NameNode: each holds an `hdfs-native`
 /// client with live RPC connections, whose tasks run on the tokio runtime
-/// current when it was built (a private one when built outside any). The
-/// cache lives as long as the storage that owns it (clones share it) and
-/// never evicts, so the storage must not be used from another runtime once
-/// the building one is dropped: `hdfs-native` panics on a dead runtime.
+/// current when it was built (a private one when built outside any). An
+/// entry is rebuilt once that runtime is gone, as `hdfs-native` panics when
+/// it spawns onto a dead one. The cache lives as long as the storage that
+/// owns it (clones share it).
 #[derive(Clone, Debug, Default)]
-pub struct HdfsNativeOperatorCache(Arc<RwLock<HashMap<String, Operator>>>);
+pub struct HdfsNativeOperatorCache(Arc<RwLock<HashMap<String, CachedOperator>>>);
+
+#[derive(Debug)]
+struct CachedOperator {
+    operator: Operator,
+    /// `None` when built outside any runtime.
+    sentinel: Option<RuntimeSentinel>,
+}
+
+/// A task parked on the building runtime that owns the token, so the token
+/// outlives it only while that runtime is alive. Aborted on drop so entries
+/// do not leave parked tasks behind.
+#[derive(Debug)]
+struct RuntimeSentinel {
+    alive: Weak<()>,
+    task: JoinHandle<()>,
+}
+
+impl RuntimeSentinel {
+    fn spawn(handle: &Handle) -> Self {
+        let token = Arc::new(());
+        let alive = Arc::downgrade(&token);
+        let task = handle.spawn(async move {
+            let _token = token;
+            std::future::pending::<()>().await
+        });
+        Self { alive, task }
+    }
+}
+
+impl Drop for RuntimeSentinel {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl CachedOperator {
+    fn new(operator: Operator) -> Self {
+        let sentinel = Handle::try_current()
+            .ok()
+            .map(|handle| RuntimeSentinel::spawn(&handle));
+        Self { operator, sentinel }
+    }
+
+    fn runtime_alive(&self) -> bool {
+        self.sentinel
+            .as_ref()
+            .is_none_or(|sentinel| sentinel.alive.strong_count() > 0)
+    }
+}
 
 impl HdfsNativeOperatorCache {
     fn get(&self, name_node: &str) -> Result<Option<Operator>> {
-        Ok(self.0.read().map_err(poisoned)?.get(name_node).cloned())
+        Ok(self
+            .0
+            .read()
+            .map_err(poisoned)?
+            .get(name_node)
+            .filter(|cached| cached.runtime_alive())
+            .map(|cached| cached.operator.clone()))
     }
 
     /// Inserts `op` unless a concurrent caller got there first, returning
-    /// whichever operator the cache now holds.
+    /// whichever operator the cache now holds; a stale entry is replaced.
     fn insert(&self, name_node: String, op: Operator) -> Result<Operator> {
-        Ok(self
-            .0
-            .write()
-            .map_err(poisoned)?
-            .entry(name_node)
-            .or_insert(op)
-            .clone())
+        let mut operators = self.0.write().map_err(poisoned)?;
+        match operators.entry(name_node) {
+            Entry::Occupied(entry) if entry.get().runtime_alive() => {
+                Ok(entry.get().operator.clone())
+            }
+            Entry::Occupied(mut entry) => {
+                entry.insert(CachedOperator::new(op.clone()));
+                Ok(op)
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(CachedOperator::new(op.clone()));
+                Ok(op)
+            }
+        }
     }
 
     #[cfg(test)]
@@ -621,6 +686,67 @@ mod tests {
             }
         });
         assert_eq!(operators.len(), 2);
+    }
+
+    #[test]
+    fn test_hdfs_native_operator_cache_rebuilds_after_runtime_shutdown() {
+        let flavors: [fn() -> tokio::runtime::Runtime; 2] = [
+            || {
+                tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .unwrap()
+            },
+            || tokio::runtime::Builder::new_multi_thread().build().unwrap(),
+        ];
+        for build_runtime in flavors {
+            let operators = HdfsNativeOperatorCache::default();
+            let config = HdfsNativeConfig::default();
+
+            let runtime = build_runtime();
+            runtime.block_on(async {
+                hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators).unwrap();
+            });
+            assert!(operators.get("hdfs://nn:8020").unwrap().is_some());
+
+            // The building runtime is gone: the entry is stale and gets rebuilt.
+            drop(runtime);
+            assert!(operators.get("hdfs://nn:8020").unwrap().is_none());
+            hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators).unwrap();
+            assert!(operators.get("hdfs://nn:8020").unwrap().is_some());
+            assert_eq!(operators.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_hdfs_native_operator_cache_drops_its_sentinel_task() {
+        let flavors: [fn() -> tokio::runtime::Runtime; 2] = [
+            || {
+                tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .unwrap()
+            },
+            || tokio::runtime::Builder::new_multi_thread().build().unwrap(),
+        ];
+        for build_runtime in flavors {
+            build_runtime().block_on(async {
+                let metrics = Handle::current().metrics();
+                let baseline = metrics.num_alive_tasks();
+
+                let operators = HdfsNativeOperatorCache::default();
+                let config = HdfsNativeConfig::default();
+                hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators).unwrap();
+                assert_eq!(metrics.num_alive_tasks(), baseline + 1);
+
+                // Dropping the cache aborts the sentinel; the abort lands once
+                // the runtime schedules the task.
+                drop(operators);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while metrics.num_alive_tasks() != baseline {
+                    assert!(std::time::Instant::now() < deadline, "sentinel task leaked");
+                    tokio::task::yield_now().await;
+                }
+            });
+        }
     }
 
     #[test]
