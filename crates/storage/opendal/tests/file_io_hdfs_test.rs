@@ -30,6 +30,7 @@
 
 #[cfg(feature = "opendal-hdfs-native")]
 mod tests {
+    use std::net::ToSocketAddrs;
     use std::sync::Arc;
 
     use bytes::Bytes;
@@ -65,6 +66,22 @@ mod tests {
             get_hdfs_endpoint(),
             normalize_test_name_with_parts!(suffix)
         )
+    }
+
+    /// The endpoint with its host replaced by that host's IPv4 address: a
+    /// second spelling of the same NameNode, so a second batch key. `None`
+    /// when the endpoint already uses an IP literal.
+    fn alternate_endpoint(endpoint: &str) -> Option<String> {
+        let url = url::Url::parse(endpoint).ok()?;
+        let host = url.host_str()?;
+        if host.parse::<std::net::IpAddr>().is_ok() {
+            return None;
+        }
+        let addr = (host, url.port()?)
+            .to_socket_addrs()
+            .ok()?
+            .find(std::net::SocketAddr::is_ipv4)?;
+        Some(format!("hdfs://{addr}"))
     }
 
     #[tokio::test]
@@ -183,9 +200,15 @@ mod tests {
     #[tokio::test]
     async fn test_file_io_hdfs_delete_stream_two_name_nodes() {
         require_hdfs!();
+        let endpoint = get_hdfs_endpoint();
+        let Some(alternate) = alternate_endpoint(&endpoint) else {
+            eprintln!("Skipping HDFS test: {endpoint} has no second spelling");
+            return;
+        };
         let file_io = get_file_io();
         let dir = test_path("test_file_io_hdfs_delete_stream_two_name_nodes");
-        let alt_dir = dir.replacen("localhost", "127.0.0.1", 1);
+        let alt_dir = dir.replacen(&endpoint, &alternate, 1);
+        assert_ne!(dir, alt_dir);
 
         let paths = vec![format!("{dir}/a"), format!("{alt_dir}/b")];
         for path in &paths {
