@@ -135,10 +135,14 @@ struct FileScanTaskReader {
 
 impl FileScanTaskReader {
     async fn process(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
-        let should_load_page_index = (self.row_selection_enabled && task.predicate().is_some())
-            || !task.deletes().is_empty();
         let mut parquet_read_options = self.parquet_read_options;
-        parquet_read_options.preload_page_index = should_load_page_index;
+        // The page index is only used through a row selection: page pruning builds one
+        // from the column and offset indexes, and Parquet uses the offset index to fetch
+        // only the selected pages. A task without a predicate or deletes builds none.
+        if task.predicate().is_none() && task.deletes().is_empty() {
+            parquet_read_options.preload_column_index = false;
+            parquet_read_options.preload_offset_index = false;
+        }
 
         let delete_filter_rx = self
             .delete_file_loader
@@ -3794,5 +3798,84 @@ mod tests {
         // A bare COUNT(*)-style empty projection must still report the row count.
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 3);
+    }
+
+    /// Total length of the column and offset indexes of every column chunk in the file.
+    fn page_index_len(file_path: &str) -> u64 {
+        use parquet::file::reader::{FileReader, SerializedFileReader};
+
+        let reader = SerializedFileReader::new(File::open(file_path).unwrap()).unwrap();
+        let len: i32 = reader
+            .metadata()
+            .row_groups()
+            .iter()
+            .flat_map(|row_group| row_group.columns())
+            .map(|column| {
+                column.column_index_length().unwrap_or(0)
+                    + column.offset_index_length().unwrap_or(0)
+            })
+            .sum();
+        len as u64
+    }
+
+    #[tokio::test]
+    async fn test_scan_without_predicate_or_deletes_does_not_read_page_index() {
+        use crate::expr::{Bind, Reference};
+        use crate::spec::Datum;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = write_plain_parquet(
+            tmp_dir.path().to_str().unwrap(),
+            "page_index.parquet",
+            vec![],
+            vec![],
+        );
+        let page_index_len = page_index_len(&file_path);
+        assert!(page_index_len > 0, "fixture must have a page index");
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let task = |predicate| {
+            FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path.clone())
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(Arc::clone(&schema))
+                .with_project_field_ids(vec![1])
+                .with_predicate(predicate)
+                .with_case_sensitive(false)
+                .build()
+                .unwrap()
+        };
+        // A minimal prefetch hint keeps the page index out of the footer read, so
+        // fetching it shows up in `bytes_read`.
+        let bytes_read = |task: FileScanTask| async move {
+            let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                .with_metadata_size_hint(8)
+                .build();
+            let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+            let scan = reader.read(tasks).unwrap();
+            let metrics = scan.metrics().clone();
+            let _: Vec<RecordBatch> = scan.stream().try_collect().await.unwrap();
+            metrics.bytes_read()
+        };
+
+        let predicate = Reference::new("id")
+            .greater_than_or_equal_to(Datum::int(0))
+            .bind(Arc::clone(&schema), false)
+            .unwrap();
+        let with_predicate = bytes_read(task(Some(predicate))).await;
+        let without_predicate = bytes_read(task(None)).await;
+
+        assert_eq!(with_predicate - without_predicate, page_index_len);
     }
 }
