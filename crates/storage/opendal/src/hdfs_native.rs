@@ -36,6 +36,8 @@ use crate::utils::from_opendal_error;
 /// Hadoop's default filesystem, which serves authority-less paths.
 const FS_DEFAULT_FS: &str = "fs.defaultFS";
 const HDFS_DEFAULT_PORT: u16 = 8020;
+/// PyIceberg keys with no equivalent in opendal's config.
+const HDFS_UNSUPPORTED_KEYS: [&str; 2] = ["hdfs.user", "hdfs.kerberos_ticket"];
 
 /// `hdfs-native` dials a NameNode as a socket address and has no default
 /// port, so anything without one can only be a logical nameservice name.
@@ -73,8 +75,39 @@ pub(crate) fn hdfs_native_config_parse(mut m: HashMap<String, String>) -> Result
         }
     }
 
-    let host = m.remove(HDFS_HOST).map(|s| s.trim().to_string());
-    let port = m.remove(HDFS_PORT).map(|s| s.trim().to_string());
+    // A config carried over from PyIceberg would otherwise change identity
+    // silently; the client reads `HADOOP_USER_NAME` and the Kerberos cache.
+    for key in HDFS_UNSUPPORTED_KEYS {
+        if m.remove(key).is_some() {
+            tracing::warn!("`{key}` is not supported by the hdfs-native backend and is ignored");
+        }
+    }
+    if m.contains_key(HDFS_HADOOP_CONF_PREFIX) {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Invalid property `{HDFS_HADOOP_CONF_PREFIX}`: a Hadoop key must follow the prefix"
+            ),
+        ));
+    }
+
+    let host = m
+        .remove(HDFS_HOST)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let port = m
+        .remove(HDFS_PORT)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|port| {
+            port.parse::<u16>().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid `{HDFS_PORT}`: {port}: {e}"),
+                )
+            })
+        })
+        .transpose()?;
 
     let mut options: HashMap<String, String> = m
         .into_iter()
@@ -86,25 +119,23 @@ pub(crate) fn hdfs_native_config_parse(mut m: HashMap<String, String>) -> Result
     // PyIceberg's `hdfs.host`/`hdfs.port` name the filesystem for
     // authority-less paths, which is what Hadoop's `fs.defaultFS` means; an
     // explicit `hadoop.fs.defaultFS` wins.
-    if let Some(host) = host.filter(|s| !s.is_empty()) {
-        let port = match port.filter(|s| !s.is_empty()) {
-            Some(port) => port.parse::<u16>().map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Invalid `{HDFS_PORT}`: {port}: {e}"),
-                )
-            })?,
-            None => HDFS_DEFAULT_PORT,
-        };
-        // An IPv6 literal needs brackets in a URI authority.
-        let host = if host.contains(':') && !host.starts_with('[') {
-            format!("[{host}]")
-        } else {
-            host
-        };
-        options
-            .entry(FS_DEFAULT_FS.to_string())
-            .or_insert_with(|| format!("hdfs://{host}:{port}"));
+    match host {
+        Some(host) => {
+            // An IPv6 literal needs brackets in a URI authority.
+            let host = if host.contains(':') && !host.starts_with('[') {
+                format!("[{host}]")
+            } else {
+                host
+            };
+            let port = port.unwrap_or(HDFS_DEFAULT_PORT);
+            options
+                .entry(FS_DEFAULT_FS.to_string())
+                .or_insert_with(|| format!("hdfs://{host}:{port}"));
+        }
+        None if port.is_some() => {
+            tracing::warn!("`{HDFS_PORT}` has no effect without `{HDFS_HOST}` and is ignored");
+        }
+        None => {}
     }
     if !options.is_empty() {
         cfg.options = Some(options);
@@ -482,8 +513,37 @@ mod tests {
             None
         );
         assert_eq!(parse(&[(HDFS_PORT, "9000")]).unwrap(), None);
-        let err = parse(&[(HDFS_HOST, "nn"), (HDFS_PORT, "x")]).unwrap_err();
-        assert!(err.to_string().contains(HDFS_PORT));
+        // A bad port is rejected whether or not a host accompanies it.
+        for props in [
+            &[(HDFS_HOST, "nn"), (HDFS_PORT, "x")][..],
+            &[(HDFS_PORT, "x")][..],
+            &[(HDFS_PORT, "70000")][..],
+        ] {
+            let err = parse(props).unwrap_err();
+            assert!(err.to_string().contains(HDFS_PORT), "{props:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn test_hdfs_native_config_parse_rejects_bare_prefix_and_drops_unsupported_keys() {
+        let err = hdfs_native_config_parse(HashMap::from([(
+            HDFS_HADOOP_CONF_PREFIX.to_string(),
+            "x".to_string(),
+        )]))
+        .unwrap_err();
+        assert!(err.to_string().contains(HDFS_HADOOP_CONF_PREFIX), "{err}");
+
+        // PyIceberg's identity keys are ignored (with a warning), never
+        // forwarded as Hadoop options.
+        let cfg = hdfs_native_config_parse(HashMap::from([
+            ("hdfs.user".to_string(), "alice".to_string()),
+            (
+                "hdfs.kerberos_ticket".to_string(),
+                "/tmp/krb5cc".to_string(),
+            ),
+        ]))
+        .unwrap();
+        assert_eq!(cfg.options, None);
     }
 
     #[test]

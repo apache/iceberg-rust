@@ -28,7 +28,8 @@ pub const HDFS_NAME_NODE: &str = "hdfs.name-node";
 /// have no equivalent: the client reads `HADOOP_USER_NAME` and the default
 /// Kerberos credential cache.
 pub const HDFS_HOST: &str = "hdfs.host";
-/// NameNode port for [`HDFS_HOST`]; defaults to `8020`.
+/// NameNode port for [`HDFS_HOST`]; defaults to `8020` and has no effect
+/// without the host.
 pub const HDFS_PORT: &str = "hdfs.port";
 /// Prefix for properties forwarded to the HDFS client configuration with the
 /// prefix stripped: `hadoop.dfs.client.failover.random.order` is forwarded as
