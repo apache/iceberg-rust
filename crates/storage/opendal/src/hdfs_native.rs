@@ -35,6 +35,14 @@ use crate::utils::from_opendal_error;
 const FS_DEFAULT_FS: &str = "fs.defaultFS";
 const HDFS_DEFAULT_PORT: u16 = 8020;
 
+/// `hdfs-native` dials a NameNode as a socket address and has no default
+/// port, so anything without one can only be a logical nameservice name.
+fn hdfs_native_has_port(name_node: &str) -> bool {
+    name_node
+        .rsplit_once(':')
+        .is_some_and(|(_, port)| port.parse::<u16>().is_ok())
+}
+
 /// Parse iceberg properties to [`HdfsNativeConfig`].
 pub(crate) fn hdfs_native_config_parse(mut m: HashMap<String, String>) -> Result<HdfsNativeConfig> {
     let mut cfg = HdfsNativeConfig::default();
@@ -50,13 +58,9 @@ pub(crate) fn hdfs_native_config_parse(mut m: HashMap<String, String>) -> Result
             .map(|entry| entry.trim().trim_end_matches('/'))
             .filter(|entry| !entry.is_empty())
             .collect();
-        // hdfs-native dials each entry as `host:port` (`hdfs://` optional);
-        // without a port it fails only at the first I/O.
-        if let Some(entry) = entries.iter().find(|entry| {
-            entry
-                .rsplit_once(':')
-                .is_none_or(|(_, port)| port.parse::<u16>().is_err())
-        }) {
+        // Each entry is dialed as `host:port` (`hdfs://` optional); a portless
+        // one would fail only at the first I/O.
+        if let Some(entry) = entries.iter().find(|entry| !hdfs_native_has_port(entry)) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("Invalid `{HDFS_NAME_NODE}` entry: {entry}, expected host:port"),
@@ -143,28 +147,49 @@ pub(crate) fn hdfs_native_parse_path(path: &str) -> Result<(Option<String>, &str
     Ok((name_node, rel))
 }
 
-/// Resolves the effective NameNode for a path — the configured
-/// `hdfs.name-node` when set, else the path authority, else `fs.defaultFS` —
-/// plus the relative path. The operator cache, `delete_stream` batching and
-/// `relativize_path` all go through this, so they cannot drift apart.
+/// Resolves the effective NameNode for a path, plus the relative path. As in
+/// Hadoop, an authority with a port is used as is; a logical nameservice
+/// authority (no port) resolves through `hdfs.name-node`, and an
+/// authority-less path through `hdfs.name-node`, else `fs.defaultFS`. The
+/// operator cache, `delete_stream` batching and `relativize_path` all go
+/// through this, so they cannot drift apart.
 pub(crate) fn hdfs_native_effective_name_node<'a>(
     config: &HdfsNativeConfig,
     path: &'a str,
 ) -> Result<(String, &'a str)> {
-    let (authority_name_node, relative_path) = hdfs_native_parse_path(path)?;
-    let name_node = config
-        .name_node
-        .clone()
-        .or(authority_name_node)
-        .or_else(|| hdfs_native_default_fs(config))
-        .ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid hdfs path: {path}, authority-less paths require `{HDFS_NAME_NODE}` or `{HDFS_HOST}`"
-                ),
-            )
-        })?;
+    let (authority, relative_path) = hdfs_native_parse_path(path)?;
+    let invalid = |reason: String| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid hdfs path: {path}, {reason}"),
+        )
+    };
+    let name_node = match authority {
+        Some(authority) if hdfs_native_has_port(&authority) => authority,
+        Some(logical) => config.name_node.clone().ok_or_else(|| {
+            let logical = logical.trim_start_matches("hdfs://");
+            invalid(format!(
+                "logical nameservice `{logical}` requires `{HDFS_NAME_NODE}`"
+            ))
+        })?,
+        None => match config
+            .name_node
+            .clone()
+            .or_else(|| hdfs_native_default_fs(config))
+        {
+            Some(name_node) if hdfs_native_has_port(&name_node) => name_node,
+            Some(logical) => {
+                return Err(invalid(format!(
+                    "`{FS_DEFAULT_FS}` {logical} has no port, a logical nameservice requires `{HDFS_NAME_NODE}`"
+                )));
+            }
+            None => {
+                return Err(invalid(format!(
+                    "authority-less paths require `{HDFS_NAME_NODE}` or `{HDFS_HOST}`"
+                )));
+            }
+        },
+    };
     Ok((name_node, relative_path))
 }
 
@@ -476,6 +501,9 @@ mod tests {
         for default_fs in ["viewfs://cluster/", "hdfs://", ""] {
             assert!(hdfs_native_effective_name_node(&parse(default_fs), "hdfs:///a").is_err());
         }
+        // Portless: a logical nameservice, which only `hdfs.name-node` resolves.
+        let err = hdfs_native_effective_name_node(&parse("hdfs://ns1"), "hdfs:///a").unwrap_err();
+        assert!(err.to_string().contains("has no port"), "{err}");
     }
 
     #[test]
@@ -493,23 +521,28 @@ mod tests {
                 .unwrap();
         let unconfigured = HdfsNativeConfig::default();
 
-        // Configured wins over the authority and `hdfs.host`, including for
-        // authority-less paths.
+        // An authority with a port is used as is, whatever is configured.
+        for config in [&configured, &default_fs, &unconfigured] {
+            let (nn, rel) =
+                hdfs_native_effective_name_node(config, "hdfs://other:9000/a/b").unwrap();
+            assert_eq!((nn.as_str(), rel), ("hdfs://other:9000", "a/b"));
+        }
+        // A logical nameservice and an authority-less path use the configured
+        // list, ahead of `hdfs.host`.
         for path in ["hdfs://ns-a/x", "hdfs:///y"] {
             let (nn, _) = hdfs_native_effective_name_node(&configured, path).unwrap();
             assert_eq!(nn, "hdfs://nn1:8020,hdfs://nn2:8020");
         }
-        // Otherwise the authority, including its port, even with `hdfs.host`.
-        for config in [&unconfigured, &default_fs] {
-            let (nn, rel) = hdfs_native_effective_name_node(config, "hdfs://nn:9000/a/b").unwrap();
-            assert_eq!((nn.as_str(), rel), ("hdfs://nn:9000", "a/b"));
-        }
-        // Then `fs.defaultFS`, here from `hdfs.host`, for authority-less paths.
+        // Only an authority-less path falls back to `fs.defaultFS`.
         let (nn, rel) = hdfs_native_effective_name_node(&default_fs, "hdfs:///y").unwrap();
         assert_eq!((nn.as_str(), rel), ("hdfs://nn:8020", "y"));
-        // None of them: a pointed error.
-        let err = hdfs_native_effective_name_node(&unconfigured, "hdfs:///a").unwrap_err();
-        assert!(err.to_string().contains(HDFS_NAME_NODE));
+        let err = hdfs_native_effective_name_node(&default_fs, "hdfs://ns-a/x").unwrap_err();
+        assert!(err.to_string().contains("logical nameservice `ns-a`"));
+        // Nothing applicable: pointed errors.
+        for path in ["hdfs:///a", "hdfs://ns-a/x"] {
+            let err = hdfs_native_effective_name_node(&unconfigured, path).unwrap_err();
+            assert!(err.to_string().contains(HDFS_NAME_NODE), "{err}");
+        }
     }
 
     #[test]
@@ -609,7 +642,7 @@ mod tests {
     // The operator tests are plain `#[test]`s on purpose: building an
     // operator must not need a runtime, as the siblings' tests also assume.
     #[test]
-    fn test_hdfs_native_create_operator_configured_name_node_wins() {
+    fn test_hdfs_native_create_operator_configured_name_node_serves_logical_paths() {
         let config = hdfs_native_config_parse(HashMap::from([(
             HDFS_NAME_NODE.to_string(),
             "hdfs://nn1:8020/,hdfs://nn2:8020/".to_string(),
@@ -617,11 +650,9 @@ mod tests {
         .unwrap();
         let operators = HdfsNativeOperatorCache::default();
 
-        let (_, rel) =
-            hdfs_native_create_operator("hdfs://from-path:9000/a/b", &config, &operators).unwrap();
-        hdfs_native_create_operator("hdfs://nn1:8020/c", &config, &operators).unwrap();
-
-        // The configured list is the single key, whatever authority the paths carry.
+        // Logical and authority-less paths share the configured list's operator.
+        let (_, rel) = hdfs_native_create_operator("hdfs://ns-a/a/b", &config, &operators).unwrap();
+        hdfs_native_create_operator("hdfs:///c", &config, &operators).unwrap();
         assert_eq!(rel, "a/b");
         assert_eq!(operators.len(), 1);
         assert!(
@@ -630,6 +661,11 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+
+        // A concrete authority is another cluster, never the configured one.
+        hdfs_native_create_operator("hdfs://other:9000/d", &config, &operators).unwrap();
+        assert_eq!(operators.len(), 2);
+        assert!(operators.get("hdfs://other:9000").unwrap().is_some());
     }
 
     #[test]

@@ -17,9 +17,10 @@
 
 //! HDFS storage configuration.
 
-/// HDFS NameNode RPC endpoint(s), e.g. `hdfs://namenode:8020`; a
-/// comma-separated list enables HA failover. Takes precedence over the path
-/// authority; when unset, the NameNode is derived from the path authority.
+/// HDFS NameNode RPC endpoint(s) as `host:port`, e.g. `hdfs://namenode:8020`;
+/// a comma-separated list enables HA failover. Resolves logical nameservice
+/// authorities (no port) and authority-less paths; as in Hadoop, an authority
+/// with a port is always used as is.
 pub const HDFS_NAME_NODE: &str = "hdfs.name-node";
 /// NameNode host for authority-less paths, as in PyIceberg; paths that carry
 /// an authority ignore it, as they do there. Combined with [`HDFS_PORT`] into

@@ -1224,19 +1224,33 @@ mod tests {
     #[cfg(feature = "opendal-hdfs-native")]
     #[test]
     fn test_relativize_path_hdfs_native() {
-        let storage = hdfs_native_test_storage();
+        use iceberg::io::HDFS_NAME_NODE;
 
-        assert_eq!(
-            storage
-                .relativize_path("hdfs://nameservice1/a/b.parquet")
-                .unwrap(),
-            "a/b.parquet"
-        );
+        let storage = hdfs_native_test_storage();
         assert_eq!(
             storage
                 .relativize_path("hdfs://nn:8020/warehouse/db/t")
                 .unwrap(),
             "warehouse/db/t"
+        );
+
+        // A logical nameservice resolves only through `hdfs.name-node`.
+        assert!(
+            storage
+                .relativize_path("hdfs://nameservice1/a/b.parquet")
+                .is_err()
+        );
+        let props = HashMap::from([(HDFS_NAME_NODE.to_string(), "hdfs://nn:8020".to_string())]);
+        let configured = OpenDalStorage::HdfsNative {
+            config: Arc::new(hdfs_native_config_parse(props).unwrap()),
+            operators: HdfsNativeOperatorCache::default(),
+            client_config: OpenDalClientConfig::default(),
+        };
+        assert_eq!(
+            configured
+                .relativize_path("hdfs://nameservice1/a/b.parquet")
+                .unwrap(),
+            "a/b.parquet"
         );
     }
 
