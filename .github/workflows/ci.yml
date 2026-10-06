@@ -244,9 +244,6 @@ jobs:
 
       - name: Start Docker containers
         if: matrix.test-suite.name == 'default'
-        env:
-          # The HDFS fixture needs host networking; opt in here (Linux only).
-          COMPOSE_PROFILES: hdfs
         run: make docker-up
 
       - name: Run tests
@@ -257,9 +254,6 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_BUCKET: ${{ secrets.HF_BUCKET }}
           HF_DATASET: ${{ secrets.HF_DATASET }}
-          # HDFS integration tests self-skip when unset; see
-          # crates/storage/opendal/tests/file_io_hdfs_test.rs
-          ICEBERG_TEST_HDFS_ENDPOINT: hdfs://localhost:8020
         run: |
           if [ "${{ matrix.test-suite.name }}" = "default" ]; then
             cargo nextest run ${{ matrix.test-suite.args }}
@@ -270,6 +264,46 @@ jobs:
       - name: Stop Docker containers
         if: always() && matrix.test-suite.name == 'default'
         run: make docker-down
+
+  tests-hdfs:
+    needs: lint
+    runs-on: ubuntu-latest
+    name: Tests (hdfs)
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: $/.github/actions/setup-builder
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: hdfs
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: cargo-nextest
+
+      # Only the two HDFS services: the fixture needs host networking and a
+      # 2 GB image, so it stays out of the default suite's docker-up.
+      - name: Start HDFS fixture
+        run: docker compose -f dev/docker-compose.yaml --profile hdfs up -d --wait hdfs-namenode hdfs-datanode
+
+      - name: Run HDFS integration tests
+        env:
+          ICEBERG_TEST_HDFS_ENDPOINT: hdfs://localhost:8020
+        run: cargo nextest run -p iceberg-storage-opendal --features opendal-hdfs-native --test file_io_hdfs_test
+
+      - name: Stop HDFS fixture
+        if: always()
+        run: docker compose -f dev/docker-compose.yaml --profile hdfs down -v --remove-orphans --timeout 0
 
   msrv:
     name: Verify MSRV
@@ -293,7 +327,7 @@ jobs:
 
   ci-required:
     if: ${{ always() }}
-    needs: [lint, clippy, build, check_standalone, build_with_no_default_features, tests, msrv]
+    needs: [lint, clippy, build, check_standalone, build_with_no_default_features, tests, tests-hdfs, msrv]
     runs-on: ubuntu-slim
     steps:
       - name: Verify CI jobs succeeded
