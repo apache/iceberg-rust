@@ -29,30 +29,67 @@ pub(crate) fn from_opendal_error(e: opendal::Error) -> iceberg::Error {
     .with_source(e)
 }
 
-/// Convert a [`SystemTime`](std::time::SystemTime) credential expiry into the
-/// `reqsign` [`Timestamp`](reqsign_core::time::Timestamp) used on backend
-/// credential types (e.g. `AwsCredential::expires_in`, `google::Token::expires_at`).
+/// The non-empty value of `key` in a vended credential's config.
 #[cfg(any(
     feature = "opendal-s3",
     feature = "opendal-gcs",
     feature = "opendal-azdls"
 ))]
-pub(crate) fn system_time_to_timestamp(
-    time: std::time::SystemTime,
-) -> reqsign_core::Result<reqsign_core::time::Timestamp> {
-    let millis = time
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| {
-            reqsign_core::Error::unexpected(format!(
-                "credential expiry precedes the UNIX epoch: {e}"
-            ))
-        })?
-        .as_millis();
-    let millis = i64::try_from(millis).map_err(|_| {
-        reqsign_core::Error::unexpected("credential expiry overflows i64 milliseconds")
-    })?;
-    reqsign_core::time::Timestamp::from_millisecond(millis)
-        .map_err(|e| reqsign_core::Error::unexpected(format!("invalid credential expiry: {e}")))
+pub(crate) fn required_credential_property<'a>(
+    config: &'a std::collections::HashMap<String, String>,
+    key: &str,
+) -> reqsign_core::Result<&'a str> {
+    config
+        .get(key)
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            reqsign_core::Error::unexpected(format!("vended credential is missing {key}"))
+        })
+}
+
+/// The latest epoch millisecond `reqsign` timestamps can represent,
+/// `9999-12-30T22:00:00Z`.
+#[cfg(any(
+    feature = "opendal-s3",
+    feature = "opendal-gcs",
+    feature = "opendal-azdls"
+))]
+const MAX_TIMESTAMP_MILLIS: i64 = 253_402_207_200_000;
+
+/// The epoch-millisecond expiry under `key` in a vended credential's config,
+/// if present, as the `reqsign` timestamp backend credentials use. Later
+/// expiries, such as `Long.MAX_VALUE` for a credential that never expires,
+/// are clamped to the latest representable timestamp.
+#[cfg(any(
+    feature = "opendal-s3",
+    feature = "opendal-gcs",
+    feature = "opendal-azdls"
+))]
+pub(crate) fn credential_expiry(
+    config: &std::collections::HashMap<String, String>,
+    key: &str,
+) -> reqsign_core::Result<Option<reqsign_core::time::Timestamp>> {
+    config
+        .get(key)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .ok()
+                .and_then(|millis| {
+                    reqsign_core::time::Timestamp::from_millisecond(
+                        millis.min(MAX_TIMESTAMP_MILLIS),
+                    )
+                    .ok()
+                })
+                .ok_or_else(|| {
+                    reqsign_core::Error::unexpected(format!(
+                        "vended credential has an invalid {key}"
+                    ))
+                })
+        })
+        .transpose()
 }
 
 /// Validate that a provider's credential covers the location for which the
@@ -69,11 +106,21 @@ pub(crate) fn validate_credential_prefix(
     if credential.covers(location) {
         Ok(())
     } else {
-        Err(reqsign_core::Error::unexpected(format!(
-            "vended credential prefix {:?} does not cover storage location {location:?}",
-            credential.prefix()
+        Err(reqsign_core::Error::unexpected(uncovered_location_message(
+            location, credential,
         )))
     }
+}
+
+/// The error message for a vended credential that does not cover `location`.
+pub(crate) fn uncovered_location_message(
+    location: &str,
+    credential: &iceberg::io::StorageCredential,
+) -> String {
+    format!(
+        "vended credential prefix {:?} does not cover storage location {location:?}",
+        credential.prefix()
+    )
 }
 
 /// The root of the storage location containing `path`, e.g. `s3://bucket/`.
@@ -109,32 +156,43 @@ impl VendedCredentialSource {
         Self { provider, location }
     }
 
-    /// Load a credential covering the location, returning its backend-specific
-    /// material and expiry.
-    pub(crate) async fn load(
+    /// Load a credential covering the location and convert its config with
+    /// `extract` into the backend's credential.
+    ///
+    /// Errors are logged here: reqsign's credential chain replaces them with an
+    /// error that only says no credential could be loaded, and reports the
+    /// cause only through the `log` crate.
+    pub(crate) async fn load<T>(
         &self,
         backend: &str,
-    ) -> reqsign_core::Result<(
-        iceberg::io::StorageCredentialKind,
-        Option<reqsign_core::time::Timestamp>,
-    )> {
+        extract: impl FnOnce(&std::collections::HashMap<String, String>) -> reqsign_core::Result<T>,
+    ) -> reqsign_core::Result<T> {
+        self.try_load(backend, extract).await.inspect_err(|error| {
+            tracing::warn!(
+                "cannot use vended {backend} credentials for {}: {error}",
+                self.location
+            )
+        })
+    }
+
+    async fn try_load<T>(
+        &self,
+        backend: &str,
+        extract: impl FnOnce(&std::collections::HashMap<String, String>) -> reqsign_core::Result<T>,
+    ) -> reqsign_core::Result<T> {
         let credential = self
             .provider
             .load_credential(&self.location)
             .await
             .map_err(|e| {
                 reqsign_core::Error::unexpected(format!(
-                    "failed to load vended {backend} credential for {}",
+                    "failed to load vended {backend} credential for {}: {e}",
                     self.location
                 ))
                 .with_source(e)
             })?;
         validate_credential_prefix(&self.location, &credential)?;
-        let expires_at = credential
-            .expires_at()
-            .map(system_time_to_timestamp)
-            .transpose()?;
-        Ok((credential.into_kind(), expires_at))
+        extract(credential.config())
     }
 }
 
@@ -160,11 +218,12 @@ impl std::fmt::Debug for VendedCredentialSource {
     )
 ))]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use iceberg::io::{
-        GcsCredential, StorageCredential, StorageCredentialKind, StorageCredentialProvider,
+        GCS_TOKEN, GCS_TOKEN_EXPIRES_AT, StorageCredential, StorageCredentialProvider,
     };
 
     use super::*;
@@ -172,30 +231,36 @@ mod tests {
     /// Returns a credential scoped to `prefix` and records requested locations.
     #[derive(Debug)]
     struct RecordingProvider {
-        prefix: Option<&'static str>,
+        prefix: &'static str,
         requested: Mutex<Vec<String>>,
     }
 
     #[async_trait]
     impl StorageCredentialProvider for RecordingProvider {
+        fn supports_path(&self, _path: &str) -> bool {
+            true
+        }
+
         async fn load_credential(&self, path: &str) -> iceberg::Result<StorageCredential> {
             self.requested.lock().unwrap().push(path.to_string());
-            let credential =
-                StorageCredential::new(StorageCredentialKind::Gcs(GcsCredential::new("token")));
-            Ok(match self.prefix {
-                Some(prefix) => credential.with_prefix(prefix),
-                None => credential,
-            })
+            Ok(StorageCredential::new(
+                self.prefix,
+                HashMap::from([(GCS_TOKEN.to_string(), "token".to_string())]),
+            ))
         }
     }
 
-    async fn load(prefix: Option<&'static str>, location: &str) -> reqsign_core::Result<()> {
+    async fn load(prefix: &'static str, location: &str) -> reqsign_core::Result<()> {
         let provider = Arc::new(RecordingProvider {
             prefix,
             requested: Mutex::new(Vec::new()),
         });
         let source = VendedCredentialSource::new(provider.clone(), location.to_string());
-        let result = source.load("GCS").await.map(|_| ());
+        let result = source
+            .load("GCS", |config| {
+                required_credential_property(config, GCS_TOKEN).map(|_| ())
+            })
+            .await;
         assert_eq!(*provider.requested.lock().unwrap(), vec![location]);
         result
     }
@@ -203,16 +268,48 @@ mod tests {
     #[tokio::test]
     async fn vended_source_requires_a_covering_credential() {
         let location = "gs://bucket/table/data/file.parquet";
-        assert!(load(None, location).await.is_ok());
-        assert!(load(Some("gs://bucket/table"), location).await.is_ok());
-        assert!(load(Some("gcs://bucket"), location).await.is_ok());
+        assert!(load("gs", location).await.is_ok());
+        assert!(load("gs://bucket/table", location).await.is_ok());
+        assert!(load("gs://bucket/tab", location).await.is_ok());
         assert!(
-            load(Some("gs://bucket/table/data/other"), location)
+            load("gs://bucket/table/data/other", location)
                 .await
                 .is_err()
         );
-        assert!(load(Some("gs://bucket/tab"), location).await.is_err());
-        assert!(load(Some(""), location).await.is_err());
+        assert!(load("gcs://bucket", location).await.is_err());
+        assert!(load("", location).await.is_err());
+    }
+
+    #[test]
+    fn credential_properties_are_parsed() {
+        let config = HashMap::from([
+            (GCS_TOKEN.to_string(), "token".to_string()),
+            (GCS_TOKEN_EXPIRES_AT.to_string(), "1500".to_string()),
+        ]);
+        assert_eq!(
+            required_credential_property(&config, GCS_TOKEN).unwrap(),
+            "token"
+        );
+        assert!(required_credential_property(&config, "missing").is_err());
+        assert_eq!(
+            credential_expiry(&config, GCS_TOKEN_EXPIRES_AT).unwrap(),
+            Some(reqsign_core::time::Timestamp::from_millisecond(1500).unwrap())
+        );
+        assert_eq!(credential_expiry(&config, "missing").unwrap(), None);
+        // An expiry beyond year 9999, such as Java's `Long.MAX_VALUE`, is
+        // clamped rather than rejected.
+        let never = HashMap::from([(GCS_TOKEN_EXPIRES_AT.to_string(), i64::MAX.to_string())]);
+        assert_eq!(
+            credential_expiry(&never, GCS_TOKEN_EXPIRES_AT).unwrap(),
+            Some(reqsign_core::time::Timestamp::from_millisecond(MAX_TIMESTAMP_MILLIS).unwrap())
+        );
+        assert!(reqsign_core::time::Timestamp::from_millisecond(MAX_TIMESTAMP_MILLIS + 1).is_err());
+        // The value is never quoted in the error.
+        let invalid = HashMap::from([(GCS_TOKEN_EXPIRES_AT.to_string(), "secret".to_string())]);
+        let error = credential_expiry(&invalid, GCS_TOKEN_EXPIRES_AT)
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("secret"), "{error}");
     }
 
     #[test]
@@ -226,5 +323,36 @@ mod tests {
             "abfss://fs@account.dfs.core.windows.net/"
         );
         assert!(storage_root("not a url").is_err());
+    }
+
+    #[derive(Debug)]
+    struct FailingProvider;
+
+    #[async_trait]
+    impl StorageCredentialProvider for FailingProvider {
+        fn supports_path(&self, _path: &str) -> bool {
+            true
+        }
+
+        async fn load_credential(&self, _path: &str) -> iceberg::Result<StorageCredential> {
+            Err(iceberg::Error::new(
+                iceberg::ErrorKind::Unexpected,
+                "catalog returned 503",
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn vended_source_errors_carry_the_cause() {
+        let source = VendedCredentialSource::new(
+            Arc::new(FailingProvider),
+            "gs://bucket/file.parquet".to_string(),
+        );
+        let error = source
+            .load("GCS", |_| Ok(()))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("catalog returned 503"), "{error}");
     }
 }

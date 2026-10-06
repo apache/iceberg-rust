@@ -26,11 +26,12 @@
 //!
 //! Unlike the Java client, which has one provider per cloud SDK, this is a
 //! single backend-agnostic provider with an independent endpoint and cache for
-//! each configured cloud. The path being accessed selects the cloud cache, and
-//! the returned [`StorageCredential`] enum lets the storage adapter enforce the
-//! expected backend-specific type. This preserves Java's per-cloud credential
-//! selection and prefetch policies while supporting mixed-cloud tables through
-//! a resolving FileIO. Unlike Java's scheduled refresh, which permanently stops
+//! each configured cloud. The path being accessed selects the cloud cache. Like
+//! Java's `StorageCredential`, the returned [`StorageCredential`] holds the
+//! backend's storage properties, which the storage adapter turns into its own
+//! credential. This preserves Java's per-cloud credential selection and
+//! prefetch policies while supporting mixed-cloud tables through a resolving
+//! FileIO. Unlike Java's scheduled refresh, which permanently stops
 //! after a failed fetch, transient failures are retried here with jittered
 //! exponential backoff while an unexpired credential remains available.
 //!
@@ -42,9 +43,9 @@
 //! # Adding a cloud
 //!
 //! The refresh policy for each cloud lives in one [`CloudRefresh`] constant. To
-//! add a backend, first add its credential type to Iceberg's storage API and
-//! teach the storage adapter to consume it. Then write its `parse_*` function,
-//! add a `CloudRefresh` constant, and list it in [`CloudRefresh::SUPPORTED`].
+//! add a backend, teach its storage adapter to read its credential properties
+//! from a [`StorageCredential`]. Then write its `parse_*` function, add a
+//! `CloudRefresh` constant, and list it in [`CloudRefresh::SUPPORTED`].
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -54,33 +55,43 @@ use async_trait::async_trait;
 use iceberg::io::{
     ADLS_REFRESH_CREDENTIALS_ENABLED, ADLS_REFRESH_CREDENTIALS_ENDPOINT,
     ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX, ADLS_SAS_TOKEN_PREFIX, AWS_REFRESH_CREDENTIALS_ENABLED,
-    AWS_REFRESH_CREDENTIALS_ENDPOINT, AzdlsCredential, GCS_REFRESH_CREDENTIALS_ENABLED,
-    GCS_REFRESH_CREDENTIALS_ENDPOINT, GCS_TOKEN, GCS_TOKEN_EXPIRES_AT, GcsCredential,
-    S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN, S3_SESSION_TOKEN_EXPIRES_AT_MS,
-    S3Credential, StorageConfig, StorageCredential, StorageCredentialKind,
-    StorageCredentialProvider, StorageCredentialProviderFactory, storage_prefix_covers,
+    AWS_REFRESH_CREDENTIALS_ENDPOINT, GCS_REFRESH_CREDENTIALS_ENABLED,
+    GCS_REFRESH_CREDENTIALS_ENDPOINT, GCS_TOKEN, GCS_TOKEN_EXPIRES_AT, S3_ACCESS_KEY_ID,
+    S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN, S3_SESSION_TOKEN_EXPIRES_AT_MS, StorageConfig,
+    StorageCredential, StorageCredentialProvider, StorageCredentialProviderFactory,
 };
 use iceberg::{Error, ErrorKind, Result, TableIdent};
 use rand::Rng;
-use reqwest::{Method, StatusCode, Url};
+use reqwest::{Method, Url};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, OnceCell};
 
-use crate::auth::{AuthManager, load_auth_manager};
-use crate::catalog::{REST_CATALOG_PROP_SCAN_PLAN_ID, RestCatalogConfig};
+use crate::auth::{AUTH_TYPE_NONE, AuthManager, load_auth_manager, static_token_session};
+use crate::catalog::{
+    REST_CATALOG_PROP_AUTH_TYPE, REST_CATALOG_PROP_REFERENCED_BY, REST_CATALOG_PROP_SCAN_PLAN_ID,
+    RestCatalogConfig,
+};
 use crate::client::{HttpClient, unexpected_catalog_error_without_body};
 use crate::request::HttpRequest;
 use crate::types::LoadCredentialsResponse;
 
 type CredentialParser =
-    fn(config: &HashMap<String, String>, prefix: Option<String>) -> Result<StorageCredential>;
+    fn(config: &HashMap<String, String>, prefix: String) -> Result<VendedCredential>;
 type KeyedSeedCredentialParser =
-    fn(config: &HashMap<String, String>) -> HashMap<String, StorageCredential>;
+    fn(config: &HashMap<String, String>) -> HashMap<String, VendedCredential>;
 type KeyedSeedPathResolver = fn(path: &str) -> Result<KeyedSeedPath>;
 
+/// A credential vended by the catalog, with the expiry its config declares.
+#[derive(Clone)]
+struct VendedCredential {
+    credential: StorageCredential,
+    expires_at: SystemTime,
+}
+
 enum SeedStrategy {
-    /// One credential stored in the backend's flat properties.
-    Flat,
+    /// One credential stored in the backend's flat properties, for every
+    /// location with one of the scheme prefixes, like Java's root clients.
+    Flat { prefixes: &'static [&'static str] },
     /// Credentials selected by a backend-specific key derived from each path.
     Keyed(KeyedSeedStrategy),
 }
@@ -91,7 +102,8 @@ struct KeyedSeedStrategy {
 }
 
 struct KeyedSeedPath {
-    key: String,
+    /// Seed keys for the path, most specific first.
+    keys: Vec<String>,
     scope: String,
 }
 
@@ -107,6 +119,9 @@ struct CloudRefresh {
     endpoint_key: &'static str,
     /// Table property controlling refresh; only missing or case-insensitive `"true"` enables it.
     enabled_key: &'static str,
+    /// Table property that must be present for refresh to apply, as in Java,
+    /// where it decides whether the backend uses vended credentials at all.
+    required_key: Option<&'static str>,
     /// Whether to jitter successful prefetch times like AWS `CachedSupplier`.
     jitter_prefetch: bool,
     /// Parse a complete credential from catalog-supplied properties.
@@ -121,24 +136,32 @@ impl CloudRefresh {
         schemes: &["s3", "s3a", "s3n"],
         endpoint_key: AWS_REFRESH_CREDENTIALS_ENDPOINT,
         enabled_key: AWS_REFRESH_CREDENTIALS_ENABLED,
+        required_key: None,
         jitter_prefetch: true,
         parse_credential: parse_s3_credential,
-        seed_strategy: SeedStrategy::Flat,
+        // `s3` also covers `s3a` and `s3n` locations.
+        seed_strategy: SeedStrategy::Flat { prefixes: &["s3"] },
     };
     /// Google Cloud Storage
     const GCP: Self = Self {
         schemes: &["gs", "gcs"],
         endpoint_key: GCS_REFRESH_CREDENTIALS_ENDPOINT,
         enabled_key: GCS_REFRESH_CREDENTIALS_ENABLED,
+        // Java's GCS client only refreshes a vended OAuth2 token; without
+        // one it uses Google's default credentials.
+        required_key: Some(GCS_TOKEN),
         jitter_prefetch: false,
         parse_credential: parse_gcs_credential,
-        seed_strategy: SeedStrategy::Flat,
+        seed_strategy: SeedStrategy::Flat {
+            prefixes: &["gs", "gcs"],
+        },
     };
     /// Azure Data Lake Storage
     const AZURE: Self = Self {
         schemes: &["abfs", "abfss", "wasb", "wasbs"],
         endpoint_key: ADLS_REFRESH_CREDENTIALS_ENDPOINT,
         enabled_key: ADLS_REFRESH_CREDENTIALS_ENABLED,
+        required_key: None,
         jitter_prefetch: false,
         parse_credential: parse_azdls_credential,
         seed_strategy: SeedStrategy::Keyed(KeyedSeedStrategy {
@@ -176,46 +199,44 @@ const MAX_FAILURE_BACKOFF: Duration = Duration::from_secs(30);
 #[derive(Clone)]
 struct CachedEntry {
     credential: StorageCredential,
-    /// When this entry becomes eligible for prefetch. `None` means it does not
-    /// expire and therefore never needs proactive refresh.
-    refresh_at: Option<SystemTime>,
+    expires_at: SystemTime,
+    /// When this entry becomes eligible for prefetch.
+    refresh_at: SystemTime,
 }
 
 impl CachedEntry {
-    fn new(credential: StorageCredential, jitter_prefetch: bool) -> Self {
-        let refresh_at = credential
-            .expires_at()
-            .map(|expires_at| prefetch_time(SystemTime::now(), expires_at, jitter_prefetch));
+    fn new(vended: VendedCredential, jitter_prefetch: bool) -> Self {
+        let VendedCredential {
+            credential,
+            expires_at,
+        } = vended;
         Self {
             credential,
-            refresh_at,
+            expires_at,
+            refresh_at: prefetch_time(SystemTime::now(), expires_at, jitter_prefetch),
         }
     }
 
     /// Seed entries that are already inside the nominal five-minute window are
     /// immediately due. Otherwise AWS applies the same jitter as it does to a
     /// freshly fetched value.
-    fn seed(credential: StorageCredential, jitter_prefetch: bool) -> Self {
-        let due = credential.expires_at().is_some_and(|expires_at| {
-            SystemTime::now()
-                .checked_add(REFRESH_BUFFER)
-                .is_none_or(|refresh_boundary| refresh_boundary >= expires_at)
-        });
-        let mut entry = Self::new(credential, jitter_prefetch);
+    fn seed(vended: VendedCredential, jitter_prefetch: bool) -> Self {
+        let due = SystemTime::now()
+            .checked_add(REFRESH_BUFFER)
+            .is_none_or(|refresh_boundary| refresh_boundary >= vended.expires_at);
+        let mut entry = Self::new(vended, jitter_prefetch);
         if due {
-            entry.refresh_at = Some(UNIX_EPOCH);
+            entry.refresh_at = UNIX_EPOCH;
         }
         entry
     }
 
     fn is_fresh(&self, now: SystemTime) -> bool {
-        self.refresh_at.is_none_or(|refresh_at| now < refresh_at)
+        now < self.refresh_at
     }
 
     fn is_unexpired(&self, now: SystemTime) -> bool {
-        self.credential
-            .expires_at()
-            .is_none_or(|expires_at| now < expires_at)
+        now < self.expires_at
     }
 }
 
@@ -237,48 +258,97 @@ struct CredentialError {
 /// re-fetch either. Backoff is therefore shared by the whole cloud.
 struct CacheState {
     entries: Vec<CachedEntry>,
+    /// Prefixes whose credential in the last successful response was invalid.
+    /// Paths under them must not use a broader credential: the catalog scoped
+    /// them more tightly.
+    failed_prefixes: HashSet<String>,
     consecutive_failures: u32,
     retry_not_before: Option<Instant>,
+    /// Why the last refresh failed, reported while refresh is backed off.
+    last_failure: Option<String>,
 }
 
 impl CacheState {
     fn new(entries: Vec<CachedEntry>) -> Self {
         Self {
             entries,
+            failed_prefixes: HashSet::new(),
             consecutive_failures: 0,
             retry_not_before: None,
+            last_failure: None,
         }
+    }
+
+    /// The index of the unexpired credential with the longest prefix covering
+    /// `path`.
+    fn unexpired_match(&self, path: &str, now: SystemTime) -> Option<usize> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.is_unexpired(now) && entry.credential.covers(path))
+            .max_by_key(|(_, entry)| entry.credential.prefix().len())
+            .map(|(index, _)| index)
+    }
+
+    /// Whether a failed prefix covering `path` is narrower than `credential`'s.
+    fn masks(&self, path: &str, credential: Option<&StorageCredential>) -> bool {
+        let prefix_len = credential.map(|credential| credential.prefix().len());
+        self.failed_prefixes.iter().any(|failed| {
+            prefix_covers(failed, path) && prefix_len.is_none_or(|len| failed.len() > len)
+        })
+    }
+
+    /// Cache `entry`, replacing any entry with the same prefix, and return its
+    /// index.
+    fn insert(&mut self, entry: CachedEntry) -> usize {
+        let prefix = entry.credential.prefix().to_owned();
+        self.entries
+            .retain(|cached| cached.credential.prefix() != prefix);
+        self.entries.push(entry);
+        self.entries.len() - 1
     }
 
     fn record_success(&mut self) {
         self.consecutive_failures = 0;
         self.retry_not_before = None;
+        self.last_failure = None;
     }
 
-    fn record_failure(&mut self) {
+    fn record_failure(&mut self, error: &Error) {
         self.consecutive_failures = self.consecutive_failures.saturating_add(1);
         self.retry_not_before =
             Instant::now().checked_add(failure_backoff(self.consecutive_failures));
+        self.last_failure = Some(error.to_string());
     }
 
-    /// Replace cached credentials with the fetched ones, prefix by prefix.
+    /// Replace cached credentials with the fetched ones, prefix by prefix,
+    /// and record the prefixes whose credential was invalid in this response.
     ///
     /// An unexpired cached credential survives when the response carries no
     /// valid replacement for its prefix, so an absent or malformed entry never
     /// evicts a usable credential. Returns the prefixes the response replaced.
-    fn merge(&mut self, fetched: Vec<CachedEntry>, now: SystemTime) -> HashSet<String> {
+    fn merge(&mut self, fetched: Vec<CachedEntry>, errors: &[CredentialError]) -> HashSet<String> {
         let fetched_prefixes = fetched
             .iter()
-            .filter_map(|entry| entry.credential.prefix().map(str::to_owned))
+            .map(|entry| entry.credential.prefix().to_owned())
+            .collect::<HashSet<_>>();
+        // A response names every prefix of the table, so a prefix it omits is
+        // no longer scoped separately: a fetched credential that covers it
+        // replaces its cached one. A prefix whose credential is invalid keeps
+        // its cached one.
+        let failed_prefixes = errors
+            .iter()
+            .map(|error| error.prefix.clone())
             .collect::<HashSet<_>>();
         self.entries.retain(|entry| {
-            entry.is_unexpired(now)
-                && entry
-                    .credential
-                    .prefix()
-                    .is_none_or(|prefix| !fetched_prefixes.contains(prefix))
+            let prefix = entry.credential.prefix();
+            failed_prefixes.contains(prefix)
+                || !fetched
+                    .iter()
+                    .any(|fetched| fetched.credential.covers(prefix))
         });
         self.entries.extend(fetched);
+        self.failed_prefixes = failed_prefixes;
         fetched_prefixes
     }
 }
@@ -321,7 +391,10 @@ impl ConfiguredCloud {
     ) -> Option<Self> {
         let enabled = props
             .get(cloud.enabled_key)
-            .is_none_or(|value| value.eq_ignore_ascii_case("true"));
+            .is_none_or(|value| value.eq_ignore_ascii_case("true"))
+            && cloud
+                .required_key
+                .is_none_or(|key| props.get(key).is_some_and(|value| !value.is_empty()));
         let endpoint = props
             .get(cloud.endpoint_key)
             .filter(|endpoint| enabled && !endpoint.is_empty())
@@ -330,10 +403,12 @@ impl ConfiguredCloud {
         let mut entries = Vec::new();
         let mut keyed_seeds = HashMap::new();
         match &cloud.seed_strategy {
-            SeedStrategy::Flat => {
-                if let Ok(credential) = (cloud.parse_credential)(props, None) {
-                    entries.push(CachedEntry::seed(credential, cloud.jitter_prefetch));
-                }
+            SeedStrategy::Flat { prefixes } => {
+                entries.extend(prefixes.iter().filter_map(|prefix| {
+                    (cloud.parse_credential)(props, prefix.to_string())
+                        .ok()
+                        .map(|vended| CachedEntry::seed(vended, cloud.jitter_prefetch))
+                }));
             }
             SeedStrategy::Keyed(strategy) => {
                 keyed_seeds = (strategy.parse_credentials)(props)
@@ -352,11 +427,19 @@ impl ConfiguredCloud {
             return Ok(None);
         };
         let resolved = (strategy.resolve_path)(path)?;
-        let Some(seed) = self.keyed_seeds.get(&resolved.key) else {
+        let Some(seed) = resolved
+            .keys
+            .iter()
+            .find_map(|key| self.keyed_seeds.get(key))
+        else {
             return Ok(None);
         };
-        Ok(Some(CachedEntry {
-            credential: seed.credential.clone().with_prefix(resolved.scope),
+        let credential = StorageCredential::new(resolved.scope, seed.credential.config().clone());
+        // The scope is normalized, e.g. with a lowercase scheme, so it may not
+        // cover the path as written; the path then fetches its credential.
+        Ok(credential.covers(path).then_some(CachedEntry {
+            credential,
+            expires_at: seed.expires_at,
             refresh_at: seed.refresh_at,
         }))
     }
@@ -369,30 +452,62 @@ pub(crate) struct RestVendedCredentialProviderFactory {
     /// Catalog URI, used to resolve relative refresh endpoints.
     catalog_uri: String,
     table: TableIdent,
-    /// The unmerged config returned by the table endpoint, from which the
-    /// auth manager derives a table session. Keeping it separate prevents
-    /// local FileIO overrides from masking table auth.
-    table_config: HashMap<String, String>,
+    /// The `rest.auth.type` the catalog resolved, so a rebuilt provider uses
+    /// the same auth manager even when the merged FileIO properties would
+    /// infer another one.
+    auth_type: String,
+    /// Whether `auth_type` was inferred rather than configured. Like Java,
+    /// a table `token` then authenticates a catalog without auth.
+    auth_type_inferred: bool,
+    /// The auth-related part of the unmerged config returned by the table
+    /// endpoint, from which the auth manager derives a table session. Keeping
+    /// it separate prevents local FileIO overrides from masking table auth.
+    table_auth: HashMap<String, String>,
 }
+
+/// Table config keys that may override authentication in a table session.
+const TABLE_AUTH_KEYS: &[&str] = &["token"];
 
 impl RestVendedCredentialProviderFactory {
     pub(crate) fn new(
         catalog_uri: impl Into<String>,
         table: TableIdent,
-        table_config: HashMap<String, String>,
+        auth_type: impl Into<String>,
+        auth_type_inferred: bool,
+        table_config: &HashMap<String, String>,
     ) -> Self {
         Self {
             catalog_uri: catalog_uri.into(),
             table,
-            table_config,
+            auth_type: auth_type.into(),
+            auth_type_inferred,
+            table_auth: table_config
+                .iter()
+                .filter(|(key, _)| TABLE_AUTH_KEYS.contains(&key.as_str()))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
         }
+    }
+
+    /// The table token that authenticates credential requests of a catalog
+    /// without auth. Java's credential providers infer OAuth2 from a `token`
+    /// unless `rest.auth.type` is configured.
+    fn bearer_table_token(&self) -> Option<&str> {
+        (self.auth_type == AUTH_TYPE_NONE && self.auth_type_inferred)
+            .then(|| self.table_auth.get("token").map(String::as_str))
+            .flatten()
     }
 
     /// Connect to the catalog from the FileIO properties, as the catalog would.
     async fn connect(&self, props: &HashMap<String, String>) -> Result<HttpClient> {
+        let mut config_props = props.clone();
+        config_props.insert(
+            REST_CATALOG_PROP_AUTH_TYPE.to_string(),
+            self.auth_type.clone(),
+        );
         let config = RestCatalogConfig::builder()
             .uri(self.catalog_uri.clone())
-            .props(props.clone())
+            .props(config_props)
             .build();
         let auth_manager = load_auth_manager(&config)?;
         let client = HttpClient::new(&config)?;
@@ -404,7 +519,8 @@ impl RestVendedCredentialProviderFactory {
             auth_manager.as_ref(),
             &self.table,
             props,
-            &self.table_config,
+            &self.table_auth,
+            self.bearer_table_token(),
         )
         .await
     }
@@ -437,21 +553,30 @@ impl StorageCredentialProviderFactory for RestVendedCredentialProviderFactory {
 }
 
 /// Derive the table-scoped client used for credential requests.
+///
+/// A `bearer_table_token` authenticates instead of a session from the auth
+/// manager.
 async fn table_client(
     catalog_client: &HttpClient,
     auth_manager: &dyn AuthManager,
     table: &TableIdent,
     props: &HashMap<String, String>,
     table_config: &HashMap<String, String>,
+    bearer_table_token: Option<&str>,
 ) -> Result<HttpClient> {
-    let session = auth_manager
-        .table_session(
-            &catalog_client.without_auth_session(),
-            table,
-            table_config,
-            catalog_client.auth_session(),
-        )
-        .await?;
+    let session = match bearer_table_token {
+        Some(token) => static_token_session(token),
+        None => {
+            auth_manager
+                .table_session(
+                    &catalog_client.without_auth_session(),
+                    table,
+                    table_config,
+                    catalog_client.auth_session(),
+                )
+                .await?
+        }
+    };
     catalog_client.for_table(props, session)
 }
 
@@ -470,8 +595,8 @@ pub(crate) struct RestVendedCredentialProvider {
     factory: Option<RestVendedCredentialProviderFactory>,
     /// Effective FileIO properties, which supply catalog connection settings.
     props: HashMap<String, String>,
-    /// Optional scan-plan identifier.
-    plan_id: Option<String>,
+    /// Query parameters sent with every credentials request.
+    query_params: Vec<(&'static str, String)>,
     /// Independently configured endpoint and cache for each backing cloud.
     clouds: Vec<ConfiguredCloud>,
 }
@@ -491,7 +616,7 @@ impl RestVendedCredentialProvider {
             client: OnceCell::new(),
             factory: None,
             props: props.clone(),
-            plan_id: props.get(REST_CATALOG_PROP_SCAN_PLAN_ID).cloned(),
+            query_params: credentials_query_params(props),
             clouds,
         })
     }
@@ -520,29 +645,32 @@ impl RestVendedCredentialProvider {
     async fn fetch(&self, configured: &ConfiguredCloud) -> Result<ParsedCredentials> {
         let cloud = configured.cloud;
         let client = self.client().await?;
-        let mut request = client.request(Method::GET, &configured.endpoint);
-        if let Some(plan_id) = &self.plan_id {
-            request = request.query(&[("planId", plan_id)]);
-        }
-        let request = HttpRequest::build(request)?;
+        let url = credentials_url(&configured.endpoint, &self.query_params)?;
+        let request = HttpRequest::build(client.request(Method::GET, url))?;
         let response = client.query_catalog(request).await?;
 
-        if response.status() != StatusCode::OK {
+        if !response.status().is_success() {
             return Err(unexpected_catalog_error_without_body(
                 response,
                 client.disable_header_redaction(),
             ));
         }
 
-        // Credential responses contain secrets. Do not include the response
-        // body in a deserialization error.
+        // Credential responses contain secrets, and serde's errors quote the
+        // values they reject, so only the error's category and position are
+        // reported.
         let parsed: LoadCredentialsResponse =
             serde_json::from_slice(response.body()).map_err(|error| {
                 Error::new(
                     ErrorKind::Unexpected,
-                    "failed to parse vended credential response",
+                    format!(
+                        "failed to parse vended credential response: {:?} error at line {}, \
+                         column {}",
+                        error.classify(),
+                        error.line(),
+                        error.column()
+                    ),
                 )
-                .with_source(error)
             })?;
         let now = SystemTime::now();
         let mut entries = Vec::new();
@@ -553,8 +681,8 @@ impl RestVendedCredentialProvider {
             .filter(|credential| cloud.matches_location(&credential.prefix))
         {
             let prefix = credential.prefix;
-            let parsed = (cloud.parse_credential)(&credential.config, Some(prefix.clone()))
-                .map(|credential| CachedEntry::new(credential, cloud.jitter_prefetch))
+            let parsed = (cloud.parse_credential)(&credential.config, prefix.clone())
+                .map(|vended| CachedEntry::new(vended, cloud.jitter_prefetch))
                 .and_then(|entry| {
                     if entry.is_unexpired(now) {
                         Ok(entry)
@@ -582,48 +710,89 @@ impl RestVendedCredentialProvider {
         let fetched = self.fetch(configured).await;
         let mut cache = configured.cache.lock().await;
         let now = SystemTime::now();
+        cache.entries.retain(|entry| entry.is_unexpired(now));
 
         let (fetched_prefixes, failure) = match fetched {
             Ok(ParsedCredentials { entries, errors }) => {
+                let fetched_prefixes = cache.merge(entries, &errors);
+                // The most specific error for `path`.
                 let failure = errors
                     .into_iter()
-                    .filter(|error| storage_prefix_covers(&error.prefix, path))
+                    .filter(|error| prefix_covers(&error.prefix, path))
                     .max_by_key(|error| error.prefix.len())
                     .map(|error| error.error);
-                (cache.merge(entries, now), failure)
+                (Some(fetched_prefixes), failure)
             }
-            Err(error) => (HashSet::new(), Some(error)),
+            Err(error) => (None, Some(error)),
         };
 
-        let selected = longest_prefix_match(&cache.entries, path)
-            .filter(|entry| entry.is_unexpired(now))
-            .cloned();
-        let refreshed = selected.as_ref().is_some_and(|entry| {
-            entry
-                .credential
-                .prefix()
-                .is_some_and(|prefix| fetched_prefixes.contains(prefix))
+        let selected = cache.unexpired_match(path, now);
+        // A keyed seed is only cached once served as the fallback.
+        let seed = selected
+            .is_none()
+            .then(|| {
+                fallback
+                    .clone()
+                    .filter(|fallback| fallback.is_unexpired(now))
+            })
+            .flatten();
+        let candidate = selected
+            .map(|index| &cache.entries[index].credential)
+            .or(seed.as_ref().map(|seed| &seed.credential));
+        if cache.masks(path, candidate) {
+            let error = failure.unwrap_or_else(|| masked_credential_error(path));
+            cache.record_failure(&error);
+            return Err(error);
+        }
+
+        let refreshed = selected.filter(|&index| {
+            fetched_prefixes
+                .as_ref()
+                .is_some_and(|fetched| fetched.contains(cache.entries[index].credential.prefix()))
         });
-        if refreshed {
+        if let Some(index) = refreshed {
+            let entry = &mut cache.entries[index];
+            // A catalog may return the same credential until shortly before
+            // it expires. Treat one that is no newer like no answer, so the
+            // checks stay few as expiry approaches.
+            if fallback
+                .as_ref()
+                .is_some_and(|previous| entry.expires_at <= previous.expires_at)
+            {
+                entry.refresh_at = recheck_time(now, entry.expires_at);
+            }
             cache.record_success();
-        } else {
+            return Ok(cache.entries[index].credential.clone());
+        }
+
+        let selected = selected.or_else(|| seed.map(|seed| cache.insert(seed)));
+        let Some(index) = selected else {
+            let error = failure.unwrap_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!("no unexpired vended credential matches storage location: {path}"),
+                )
+            });
+            cache.record_failure(&error);
+            return Err(error);
+        };
+        // A failed fetch always reports its error as the failure.
+        match failure {
+            None => {
+                // The catalog answered without a newer credential for this
+                // path, for example when it replaced a scheme-wide credential
+                // with scoped ones. Keep the current credential and check
+                // again later instead of on every access.
+                let entry = &mut cache.entries[index];
+                entry.refresh_at = recheck_time(now, entry.expires_at);
+                cache.record_success();
+            }
             // Graceful degradation: while a credential for this path remains
             // usable, serve it and retry after jittered backoff. Expired
             // credentials are never served.
-            cache.record_failure();
+            Some(error) => cache.record_failure(&error),
         }
-
-        selected
-            .or_else(|| fallback.filter(|fallback| fallback.is_unexpired(now)))
-            .map(|entry| entry.credential)
-            .ok_or_else(|| {
-                failure.unwrap_or_else(|| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        format!("no unexpired vended credential matches storage location: {path}"),
-                    )
-                })
-            })
+        Ok(cache.entries[index].credential.clone())
     }
 }
 
@@ -638,25 +807,37 @@ impl std::fmt::Debug for RestVendedCredentialProvider {
 enum CacheDecision {
     Use(StorageCredential),
     Refresh(Option<CachedEntry>),
-    Backoff,
+    /// Refresh is backed off after the failure described, if known.
+    Backoff(Option<String>),
 }
 
-fn refresh_backoff_error(path: &str) -> Error {
+fn masked_credential_error(path: &str) -> Error {
     Error::new(
+        ErrorKind::DataInvalid,
+        format!("the catalog vended an invalid credential for storage location: {path}"),
+    )
+}
+
+fn refresh_backoff_error(path: &str, last_failure: Option<String>) -> Error {
+    let error = Error::new(
         ErrorKind::Unexpected,
         format!("vended credential refresh is temporarily backed off for storage location: {path}"),
-    )
+    );
+    match last_failure {
+        Some(last_failure) => error.with_context("last_failure", last_failure),
+        None => error,
+    }
 }
 
 async fn cache_decision(configured: &ConfiguredCloud, path: &str) -> Result<CacheDecision> {
     let keyed_seed = configured.keyed_seed_for_path(path)?;
     let cache = configured.cache.lock().await;
     let now = SystemTime::now();
-    let current = match longest_prefix_match(&cache.entries, path).cloned() {
-        Some(cached) if cached.is_unexpired(now) => Some(cached),
-        Some(expired) => keyed_seed.or(Some(expired)),
-        None => keyed_seed,
-    };
+    let current = cache
+        .unexpired_match(path, now)
+        .map(|index| cache.entries[index].clone())
+        .or(keyed_seed)
+        .filter(|entry| !cache.masks(path, Some(&entry.credential)));
 
     if let Some(entry) = current.as_ref().filter(|entry| entry.is_fresh(now)) {
         return Ok(CacheDecision::Use(entry.credential.clone()));
@@ -669,7 +850,7 @@ async fn cache_decision(configured: &ConfiguredCloud, path: &str) -> Result<Cach
         return Ok(current
             .filter(|entry| entry.is_unexpired(now))
             .map(|entry| CacheDecision::Use(entry.credential))
-            .unwrap_or(CacheDecision::Backoff));
+            .unwrap_or_else(|| CacheDecision::Backoff(cache.last_failure.clone())));
     }
 
     Ok(CacheDecision::Refresh(current))
@@ -692,7 +873,9 @@ impl StorageCredentialProvider for RestVendedCredentialProvider {
         let current = match cache_decision(configured, path).await? {
             CacheDecision::Use(credential) => return Ok(credential),
             CacheDecision::Refresh(current) => current,
-            CacheDecision::Backoff => return Err(refresh_backoff_error(path)),
+            CacheDecision::Backoff(last_failure) => {
+                return Err(refresh_backoff_error(path, last_failure));
+            }
         };
 
         // One caller refreshes, while concurrent callers immediately keep using the
@@ -715,7 +898,9 @@ impl StorageCredentialProvider for RestVendedCredentialProvider {
         let current = match cache_decision(configured, path).await? {
             CacheDecision::Use(credential) => return Ok(credential),
             CacheDecision::Refresh(current) => current,
-            CacheDecision::Backoff => return Err(refresh_backoff_error(path)),
+            CacheDecision::Backoff(last_failure) => {
+                return Err(refresh_backoff_error(path, last_failure));
+            }
         };
 
         self.refresh_credential(configured, path, current).await
@@ -727,19 +912,10 @@ impl StorageCredentialProvider for RestVendedCredentialProvider {
             None => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "the vended credential provider cannot be serialized because the REST catalog \
-                 uses an injected AuthManager, which cannot be rebuilt in another process; use \
-                 FileIO::without_credential_provider to serialize without credential refresh",
+                 uses an injected AuthManager, which cannot be rebuilt in another process",
             )),
         }
     }
-}
-
-/// Select the credential whose prefix is the longest match for `path`.
-fn longest_prefix_match<'a>(entries: &'a [CachedEntry], path: &str) -> Option<&'a CachedEntry> {
-    entries
-        .iter()
-        .filter(|entry| entry.credential.covers(path))
-        .max_by_key(|entry| entry.credential.prefix().map_or(0, str::len))
 }
 
 /// Compute the prefetch time of a credential obtained at `now`.
@@ -769,6 +945,19 @@ fn prefetch_time(now: SystemTime, expires_at: SystemTime, jitter: bool) -> Syste
     .unwrap_or(base)
 }
 
+/// When to ask the catalog again for a newer credential after it answered
+/// that none exists: at the regular prefetch time, which is halfway to expiry
+/// within ten minutes of it, or not at all once less than twice
+/// [`MIN_REFRESH_BUFFER`] remains, so the checks stay few as expiry approaches.
+fn recheck_time(now: SystemTime, expires_at: SystemTime) -> SystemTime {
+    let remaining = expires_at.duration_since(now).unwrap_or_default();
+    if remaining <= MIN_REFRESH_BUFFER * 2 {
+        expires_at
+    } else {
+        prefetch_time(now, expires_at, false)
+    }
+}
+
 /// Equal-jitter exponential backoff. The random lower half avoids both hot
 /// retry loops and synchronized retries across clients.
 fn failure_backoff(consecutive_failures: u32) -> Duration {
@@ -796,18 +985,22 @@ pub(crate) async fn build_vended_credential_provider(
     auth_manager: &dyn AuthManager,
     factory: RestVendedCredentialProviderFactory,
     props: &HashMap<String, String>,
+    table_config: &HashMap<String, String>,
     portable: bool,
 ) -> Result<Option<Arc<dyn StorageCredentialProvider>>> {
     let Some(provider) = RestVendedCredentialProvider::configure(&factory, props) else {
         return Ok(None);
     };
 
+    // An injected auth manager decides on table sessions itself, given the
+    // whole table config.
     let client = table_client(
         catalog_client,
         auth_manager,
         &factory.table,
         props,
-        &factory.table_config,
+        table_config,
+        portable.then(|| factory.bearer_table_token()).flatten(),
     )
     .await?;
     Ok(Some(Arc::new(RestVendedCredentialProvider {
@@ -815,6 +1008,53 @@ pub(crate) async fn build_vended_credential_provider(
         factory: portable.then_some(factory),
         ..provider
     })))
+}
+
+/// The `referenced-by` query parameter. Its value is already percent-encoded.
+const REFERENCED_BY_QUERY_PARAMETER: &str = "referenced-by";
+
+/// Query parameters for credentials requests, like Java's
+/// `RESTUtil.credentialsQueryParams`.
+fn credentials_query_params(props: &HashMap<String, String>) -> Vec<(&'static str, String)> {
+    [
+        (REST_CATALOG_PROP_SCAN_PLAN_ID, "planId"),
+        (
+            REST_CATALOG_PROP_REFERENCED_BY,
+            REFERENCED_BY_QUERY_PARAMETER,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(property, parameter)| props.get(property).map(|value| (parameter, value.clone())))
+    .collect()
+}
+
+/// The credentials request URL. Like Java's `HTTPRequest.requestUri`, the
+/// already encoded `referenced-by` value is appended verbatim instead of being
+/// encoded again.
+fn credentials_url(endpoint: &str, query_params: &[(&str, String)]) -> Result<Url> {
+    let mut url = Url::parse(endpoint).map_err(|error| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("invalid credentials endpoint: {endpoint}"),
+        )
+        .with_source(error)
+    })?;
+    for (parameter, value) in query_params {
+        if *parameter != REFERENCED_BY_QUERY_PARAMETER {
+            url.query_pairs_mut().append_pair(parameter, value);
+        }
+    }
+    if let Some((_, referenced_by)) = query_params
+        .iter()
+        .find(|(parameter, _)| *parameter == REFERENCED_BY_QUERY_PARAMETER)
+    {
+        let query = match url.query() {
+            Some(query) => format!("{query}&{REFERENCED_BY_QUERY_PARAMETER}={referenced_by}"),
+            None => format!("{REFERENCED_BY_QUERY_PARAMETER}={referenced_by}"),
+        };
+        url.set_query(Some(&query));
+    }
+    Ok(url)
 }
 
 /// Resolve a possibly-relative refresh endpoint against the catalog base URI.
@@ -831,6 +1071,12 @@ fn resolve_endpoint(base_uri: &str, endpoint: &str) -> String {
     format!("{base}{separator}{endpoint}")
 }
 
+/// Whether the credential `prefix` covers `location`, as in
+/// [`StorageCredential::covers`].
+fn prefix_covers(prefix: &str, location: &str) -> bool {
+    !prefix.is_empty() && location.starts_with(prefix)
+}
+
 /// The URL scheme of `location`, lowercased (e.g. `"s3"` for `s3://bucket/k`).
 fn scheme_of(location: &str) -> Option<String> {
     Url::parse(location)
@@ -841,163 +1087,174 @@ fn scheme_of(location: &str) -> Option<String> {
 /// Parse a complete S3 credential supplied by the catalog.
 fn parse_s3_credential(
     config: &HashMap<String, String>,
-    prefix: Option<String>,
-) -> Result<StorageCredential> {
-    let access_key_id = required_nonempty(config, S3_ACCESS_KEY_ID)?;
-    let secret_access_key = required_nonempty(config, S3_SECRET_ACCESS_KEY)?;
-    let session_token = required_nonempty(config, S3_SESSION_TOKEN)?;
-    let expires_at = required_epoch_millis(config, S3_SESSION_TOKEN_EXPIRES_AT_MS)?;
-    Ok(with_prefix(
-        StorageCredential::new(StorageCredentialKind::S3(S3Credential::new(
-            access_key_id,
-            secret_access_key,
-            Some(session_token),
-        )))
-        .with_expiration(expires_at),
-        prefix,
-    ))
+    prefix: String,
+) -> Result<VendedCredential> {
+    let credential_config = copy_required(config, &[
+        S3_ACCESS_KEY_ID,
+        S3_SECRET_ACCESS_KEY,
+        S3_SESSION_TOKEN,
+        S3_SESSION_TOKEN_EXPIRES_AT_MS,
+    ])?;
+    Ok(VendedCredential {
+        expires_at: required_epoch_millis(config, S3_SESSION_TOKEN_EXPIRES_AT_MS)?,
+        credential: StorageCredential::new(prefix, credential_config),
+    })
 }
 
 /// Parse a complete GCS credential supplied by the catalog.
 fn parse_gcs_credential(
     config: &HashMap<String, String>,
-    prefix: Option<String>,
-) -> Result<StorageCredential> {
-    let token = required_nonempty(config, GCS_TOKEN)?;
-    let expires_at = required_epoch_millis(config, GCS_TOKEN_EXPIRES_AT)?;
-    Ok(with_prefix(
-        StorageCredential::new(StorageCredentialKind::Gcs(GcsCredential::new(token)))
-            .with_expiration(expires_at),
-        prefix,
-    ))
+    prefix: String,
+) -> Result<VendedCredential> {
+    let credential_config = copy_required(config, &[GCS_TOKEN, GCS_TOKEN_EXPIRES_AT])?;
+    Ok(VendedCredential {
+        expires_at: required_epoch_millis(config, GCS_TOKEN_EXPIRES_AT)?,
+        credential: StorageCredential::new(prefix, credential_config),
+    })
 }
 
-fn with_prefix(credential: StorageCredential, prefix: Option<String>) -> StorageCredential {
-    match prefix {
-        Some(prefix) => credential.with_prefix(prefix),
-        None => credential,
-    }
+/// The non-empty values of `keys` in `config`, which must all be present.
+fn copy_required(
+    config: &HashMap<String, String>,
+    keys: &[&str],
+) -> Result<HashMap<String, String>> {
+    keys.iter()
+        .map(|key| Ok((key.to_string(), required_nonempty(config, key)?)))
+        .collect()
 }
 
 /// Parse a complete account-specific ADLS SAS credential supplied by the catalog.
 fn parse_azdls_credential(
     config: &HashMap<String, String>,
-    prefix: Option<String>,
-) -> Result<StorageCredential> {
-    let prefix = prefix.ok_or_else(|| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            "invalid vended ADLS credential: storage prefix is missing",
-        )
-    })?;
-    let account = azdls_account_name(&prefix)?;
-    let (suffix, sas_token) = azdls_sas_tokens(config)
-        .filter(|(_, token_account, _)| *token_account == account)
-        .map(|(suffix, _, token)| (suffix, token))
-        // Prefer the host-keyed token when both forms name the account, as
-        // the storage backend does.
-        .max()
+    prefix: String,
+) -> Result<VendedCredential> {
+    let location = AzdlsLocation::parse(&prefix)?;
+    let (suffix, sas_token) = location
+        .token_keys()
+        .into_iter()
+        .find_map(|key| azdls_sas_tokens(config).find(|(suffix, _)| *suffix == key))
         .ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
-                format!("invalid vended credential: no {ADLS_SAS_TOKEN_PREFIX}* token for account {account}"),
+                format!(
+                    "invalid vended credential: no {ADLS_SAS_TOKEN_PREFIX}* token for {}",
+                    location.host
+                ),
             )
         })?;
-    let expires_at = required_epoch_millis(
-        config,
-        &format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}{suffix}"),
-    )?;
-    Ok(
-        StorageCredential::new(StorageCredentialKind::Azdls(AzdlsCredential::new(
-            sas_token,
-        )))
-        .with_prefix(prefix)
-        .with_expiration(expires_at),
-    )
+    azdls_vended_credential(config, prefix, suffix, sas_token)
 }
 
-/// Parse every complete account-qualified ADLS credential from the initial
-/// table properties. Unlike a URI prefix, an Azure account occurs after the
-/// filesystem in a location, so these seeds are selected by account name.
+/// The vended credential for the SAS token under `suffix`, which must have an
+/// expiry under the same suffix.
+fn azdls_vended_credential(
+    config: &HashMap<String, String>,
+    prefix: String,
+    suffix: &str,
+    sas_token: &str,
+) -> Result<VendedCredential> {
+    let expiry_key = format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}{suffix}");
+    let expires_at = required_epoch_millis(config, &expiry_key)?;
+    let expires_at_ms = required_nonempty(config, &expiry_key)?;
+    let credential_config = HashMap::from([
+        (
+            format!("{ADLS_SAS_TOKEN_PREFIX}{suffix}"),
+            sas_token.to_string(),
+        ),
+        (expiry_key, expires_at_ms),
+    ]);
+    Ok(VendedCredential {
+        credential: StorageCredential::new(prefix, credential_config),
+        expires_at,
+    })
+}
+
+/// Parse every complete account-specific ADLS credential from the initial
+/// table properties, keyed by their key suffix. Unlike a URI prefix, the host
+/// of an Azure location occurs after the filesystem, so these seeds are
+/// selected by host, or by account for keys that name only one. Their prefix
+/// is set once a location selects them.
 fn parse_azdls_account_seeds(
     config: &HashMap<String, String>,
-) -> HashMap<String, StorageCredential> {
-    let mut seeds = azdls_sas_tokens(config)
-        .filter_map(|(suffix, account, token)| {
-            let expires_at = required_epoch_millis(
-                config,
-                &format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}{suffix}"),
-            )
-            .ok()?;
-            Some((suffix, account, token, expires_at))
-        })
-        .collect::<Vec<_>>();
-    // Deterministic choice when several keys name the same account: the last,
-    // host-keyed one wins, as in the storage backend.
-    seeds.sort_by(|left, right| left.0.cmp(right.0));
-    seeds
-        .into_iter()
-        .map(|(_, account, token, expires_at)| {
-            (
-                account.to_string(),
-                StorageCredential::new(StorageCredentialKind::Azdls(AzdlsCredential::new(token)))
-                    .with_expiration(expires_at),
-            )
+) -> HashMap<String, VendedCredential> {
+    azdls_sas_tokens(config)
+        .filter_map(|(suffix, token)| {
+            let vended = azdls_vended_credential(config, String::new(), suffix, token).ok()?;
+            Some((suffix.to_string(), vended))
         })
         .collect()
 }
 
-/// Account-specific SAS tokens as `(key suffix, account, token)`. Like Java,
-/// keys may name the host (`account.dfs.core.windows.net`) or only the account.
-fn azdls_sas_tokens(config: &HashMap<String, String>) -> impl Iterator<Item = (&str, &str, &str)> {
+/// Account-specific SAS tokens as `(key suffix, token)`. A suffix names a host
+/// such as `account.dfs.core.windows.net`, as in Java, or only the account.
+fn azdls_sas_tokens(config: &HashMap<String, String>) -> impl Iterator<Item = (&str, &str)> {
     config.iter().filter_map(|(key, token)| {
         let suffix = key.strip_prefix(ADLS_SAS_TOKEN_PREFIX)?;
-        let account = suffix.split('.').next().unwrap_or(suffix);
-        (!account.is_empty() && !token.is_empty()).then_some((suffix, account, token.as_str()))
+        (!suffix.is_empty() && !token.is_empty()).then_some((suffix, token.as_str()))
     })
 }
 
 fn resolve_azdls_seed_path(location: &str) -> Result<KeyedSeedPath> {
-    let (mut url, account) = parse_azdls_location(location)?;
-    url.set_path("/");
+    let location = AzdlsLocation::parse(location)?;
+    let keys = location.token_keys();
+    let mut url = location.url;
+    // Without a trailing slash, the scope also covers the container root.
+    url.set_path("");
     url.set_query(None);
     url.set_fragment(None);
     Ok(KeyedSeedPath {
-        key: account,
+        keys,
         scope: url.to_string(),
     })
 }
 
-fn azdls_account_name(location: &str) -> Result<String> {
-    parse_azdls_location(location).map(|(_, account)| account)
+/// An ADLS location, with the host and account that select its SAS token.
+struct AzdlsLocation {
+    url: Url,
+    /// Host, e.g. `account.dfs.core.windows.net`.
+    host: String,
+    /// Storage account.
+    account: String,
 }
 
-fn parse_azdls_location(location: &str) -> Result<(Url, String)> {
-    let url = Url::parse(location).map_err(|error| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!("invalid ADLS storage location: {location}"),
-        )
-        .with_source(error)
-    })?;
-    if !CloudRefresh::AZURE.schemes.contains(&url.scheme()) {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("invalid ADLS storage location scheme: {}", url.scheme()),
-        ));
-    }
-    let account = url
-        .host_str()
-        .and_then(|host| host.split('.').next())
-        .filter(|account| !account.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| {
+impl AzdlsLocation {
+    fn parse(location: &str) -> Result<Self> {
+        let url = Url::parse(location).map_err(|error| {
             Error::new(
                 ErrorKind::DataInvalid,
-                format!("ADLS storage location has no account name: {location}"),
+                format!("invalid ADLS storage location: {location}"),
             )
+            .with_source(error)
         })?;
-    Ok((url, account))
+        if !CloudRefresh::AZURE.schemes.contains(&url.scheme()) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("invalid ADLS storage location scheme: {}", url.scheme()),
+            ));
+        }
+        let host = url.host_str().unwrap_or_default().to_string();
+        let account = host
+            .split('.')
+            .next()
+            .filter(|account| !account.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("ADLS storage location has no account name: {location}"),
+                )
+            })?;
+        Ok(Self { url, host, account })
+    }
+
+    /// SAS token key suffixes for this location, most specific first: the
+    /// exact host, as in Java, then the account alone, as sent for older Java
+    /// versions and PyIceberg. A key that names only the account matches every
+    /// host of an account with that name, including one in another cloud; a
+    /// host-keyed token matches only its host.
+    fn token_keys(&self) -> Vec<String> {
+        vec![self.host.clone(), self.account.clone()]
+    }
 }
 
 fn required_nonempty(config: &HashMap<String, String>, key: &str) -> Result<String> {
@@ -1038,7 +1295,7 @@ mod tests {
     use mockito::{Matcher, Server};
 
     use super::*;
-    use crate::auth::{NoopAuthManager, OAuth2Manager};
+    use crate::auth::{AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, NoopAuthManager, OAuth2Manager};
 
     fn epoch_millis(time: SystemTime) -> String {
         time.duration_since(UNIX_EPOCH)
@@ -1047,36 +1304,46 @@ mod tests {
             .to_string()
     }
 
-    fn s3_cred(
-        prefix: Option<&str>,
-        access_key_id: &str,
-        expires_at: Option<SystemTime>,
-    ) -> StorageCredential {
-        let mut credential = StorageCredential::new(StorageCredentialKind::S3(S3Credential::new(
-            access_key_id,
-            "secret",
-            None,
-        )));
-        if let Some(prefix) = prefix {
-            credential = credential.with_prefix(prefix);
+    fn s3_vended(prefix: &str, access_key_id: &str, expires_at: SystemTime) -> VendedCredential {
+        VendedCredential {
+            credential: StorageCredential::new(
+                prefix,
+                HashMap::from([
+                    (S3_ACCESS_KEY_ID.to_string(), access_key_id.to_string()),
+                    (S3_SECRET_ACCESS_KEY.to_string(), "secret".to_string()),
+                ]),
+            ),
+            expires_at,
         }
-        if let Some(expires_at) = expires_at {
-            credential = credential.with_expiration(expires_at);
-        }
-        credential
     }
 
     fn s3_access_key_id(credential: &StorageCredential) -> &str {
-        match credential.kind() {
-            StorageCredentialKind::S3(s3) => s3.access_key_id(),
-            other => panic!("expected S3 credential, got {other:?}"),
-        }
+        credential
+            .config()
+            .get(S3_ACCESS_KEY_ID)
+            .expect("an S3 credential")
+    }
+
+    fn gcs_token(credential: &StorageCredential) -> &str {
+        credential
+            .config()
+            .get(GCS_TOKEN)
+            .expect("a GCS credential")
+    }
+
+    fn sas_token(credential: &StorageCredential) -> &str {
+        credential
+            .config()
+            .iter()
+            .find(|(key, _)| key.starts_with(ADLS_SAS_TOKEN_PREFIX))
+            .map(|(_, token)| token.as_str())
+            .expect("an ADLS credential")
     }
 
     /// A previously cached entry: like a seed, its age is unknown, so it is due
     /// once inside the nominal refresh window.
-    fn cached_s3(prefix: &str, access_key_id: &str, expires_at: Option<SystemTime>) -> CachedEntry {
-        CachedEntry::seed(s3_cred(Some(prefix), access_key_id, expires_at), false)
+    fn cached_s3(prefix: &str, access_key_id: &str, expires_at: SystemTime) -> CachedEntry {
+        CachedEntry::seed(s3_vended(prefix, access_key_id, expires_at), false)
     }
 
     fn test_client(base_uri: &str) -> HttpClient {
@@ -1093,7 +1360,9 @@ mod tests {
         RestVendedCredentialProviderFactory::new(
             base_uri,
             test_table(),
-            table_config.cloned().unwrap_or_default(),
+            AUTH_TYPE_OAUTH2,
+            true,
+            &table_config.cloned().unwrap_or_default(),
         )
     }
 
@@ -1106,7 +1375,7 @@ mod tests {
             client: OnceCell::new_with(Some(test_client(base_uri))),
             factory: None,
             props: HashMap::new(),
-            plan_id: None,
+            query_params: Vec::new(),
             clouds: vec![ConfiguredCloud::new(
                 &CloudRefresh::AWS,
                 format!("{base_uri}/v1/credentials"),
@@ -1155,6 +1424,7 @@ mod tests {
             &NoopAuthManager,
             test_factory(base_uri, table_auth_props),
             props,
+            table_auth_props.unwrap_or(&HashMap::new()),
             true,
         )
         .await
@@ -1236,53 +1506,46 @@ mod tests {
 
     #[test]
     fn parses_s3_credential() {
+        let prefix = || "s3://bucket".to_string();
         let mut config = HashMap::new();
-        assert!(parse_s3_credential(&config, None).is_err());
+        assert!(parse_s3_credential(&config, prefix()).is_err());
         config.insert(S3_ACCESS_KEY_ID.to_string(), "AK".to_string());
-        assert!(parse_s3_credential(&config, None).is_err());
+        assert!(parse_s3_credential(&config, prefix()).is_err());
         config.insert(S3_SECRET_ACCESS_KEY.to_string(), "SK".to_string());
-        assert!(parse_s3_credential(&config, None).is_err());
+        assert!(parse_s3_credential(&config, prefix()).is_err());
         config.insert(S3_SESSION_TOKEN.to_string(), "TOK".to_string());
         config.insert(
             S3_SESSION_TOKEN_EXPIRES_AT_MS.to_string(),
             "not-a-timestamp".to_string(),
         );
-        assert!(parse_s3_credential(&config, None).is_err());
+        assert!(parse_s3_credential(&config, prefix()).is_err());
 
         config.insert(
             S3_SESSION_TOKEN_EXPIRES_AT_MS.to_string(),
             "1500".to_string(),
         );
-        let credential = parse_s3_credential(&config, Some("s3://bucket".to_string())).unwrap();
-        assert_eq!(credential.prefix(), Some("s3://bucket"));
-        assert_eq!(
-            credential.expires_at(),
-            Some(UNIX_EPOCH + Duration::from_millis(1500))
-        );
-        match credential.kind() {
-            StorageCredentialKind::S3(s3) => assert_eq!(s3.session_token(), Some("TOK")),
-            other => panic!("expected S3, got {other:?}"),
-        }
+        config.insert("unrelated".to_string(), "value".to_string());
+        let vended = parse_s3_credential(&config, prefix()).unwrap();
+        assert_eq!(vended.credential.prefix(), "s3://bucket");
+        assert_eq!(vended.expires_at, UNIX_EPOCH + Duration::from_millis(1500));
+        // Only the credential's own properties are kept.
+        config.remove("unrelated");
+        assert_eq!(vended.credential.config(), &config);
     }
 
     #[test]
     fn parse_gcs_requires_token_and_expiry() {
+        let prefix = || "gs://bucket".to_string();
         let mut config = HashMap::new();
-        assert!(parse_gcs_credential(&config, None).is_err());
+        assert!(parse_gcs_credential(&config, prefix()).is_err());
         config.insert(GCS_TOKEN.to_string(), "ya29.token".to_string());
-        assert!(parse_gcs_credential(&config, None).is_err());
+        assert!(parse_gcs_credential(&config, prefix()).is_err());
 
         config.insert(GCS_TOKEN_EXPIRES_AT.to_string(), "2000".to_string());
-        let credential = parse_gcs_credential(&config, Some("gs://bucket".to_string())).unwrap();
-        assert_eq!(credential.prefix(), Some("gs://bucket"));
-        match credential.kind() {
-            StorageCredentialKind::Gcs(gcs) => assert_eq!(gcs.token(), "ya29.token"),
-            other => panic!("expected GCS, got {other:?}"),
-        }
-        assert_eq!(
-            credential.expires_at(),
-            Some(UNIX_EPOCH + Duration::from_millis(2000))
-        );
+        let vended = parse_gcs_credential(&config, prefix()).unwrap();
+        assert_eq!(vended.credential.prefix(), "gs://bucket");
+        assert_eq!(gcs_token(&vended.credential), "ya29.token");
+        assert_eq!(vended.expires_at, UNIX_EPOCH + Duration::from_millis(2000));
     }
 
     #[test]
@@ -1292,41 +1555,79 @@ mod tests {
         let expiry_key = format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}account1");
         let mut config = HashMap::new();
 
-        assert!(parse_azdls_credential(&config, Some(prefix.to_string())).is_err());
+        assert!(parse_azdls_credential(&config, prefix.to_string()).is_err());
         config.insert(token_key, "sv=2026&sig=secret".to_string());
-        assert!(parse_azdls_credential(&config, Some(prefix.to_string())).is_err());
+        assert!(parse_azdls_credential(&config, prefix.to_string()).is_err());
         config.insert(expiry_key, "2500".to_string());
 
-        let credential = parse_azdls_credential(&config, Some(prefix.to_string())).unwrap();
-        assert_eq!(credential.prefix(), Some(prefix));
+        let vended = parse_azdls_credential(&config, prefix.to_string()).unwrap();
+        assert_eq!(vended.credential.prefix(), prefix);
+        assert_eq!(vended.expires_at, UNIX_EPOCH + Duration::from_millis(2500));
+        assert_eq!(sas_token(&vended.credential), "sv=2026&sig=secret");
+        assert_eq!(vended.credential.config(), &config);
+    }
+
+    #[test]
+    fn azdls_tokens_match_the_exact_host_or_the_account() {
+        let expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
+        let config = HashMap::from([
+            (
+                format!("{ADLS_SAS_TOKEN_PREFIX}acct.dfs.core.windows.net"),
+                "host".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}acct.dfs.core.windows.net"),
+                expires.clone(),
+            ),
+        ]);
+        let token = |prefix: &str, config: &HashMap<String, String>| {
+            parse_azdls_credential(config, prefix.to_string())
+                .map(|vended| sas_token(&vended.credential).to_string())
+        };
+
         assert_eq!(
-            credential.expires_at(),
-            Some(UNIX_EPOCH + Duration::from_millis(2500))
+            token("abfss://c@acct.dfs.core.windows.net/t", &config).unwrap(),
+            "host"
         );
-        match credential.kind() {
-            StorageCredentialKind::Azdls(azdls) => {
-                assert_eq!(azdls.sas_token(), "sv=2026&sig=secret")
-            }
-            other => panic!("expected ADLS, got {other:?}"),
-        }
+        // The same account name in another cloud is a different account.
+        assert!(token("abfss://c@acct.dfs.core.usgovcloudapi.net/t", &config).is_err());
+
+        // A key naming only the account matches any host of it, after the
+        // exact host.
+        let mut config = config;
+        config.extend([
+            (
+                format!("{ADLS_SAS_TOKEN_PREFIX}acct"),
+                "account".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}acct"),
+                expires,
+            ),
+        ]);
+        assert_eq!(
+            token("abfss://c@acct.dfs.core.windows.net/t", &config).unwrap(),
+            "host"
+        );
+        assert_eq!(
+            token("abfss://c@acct.dfs.core.usgovcloudapi.net/t", &config).unwrap(),
+            "account"
+        );
     }
 
     #[test]
     fn cached_entry_freshness() {
-        let no_expiry = cached_s3("", "a", None);
         let far = cached_s3(
-            "",
+            "s3",
             "a",
-            Some(SystemTime::now() + REFRESH_BUFFER + Duration::from_secs(60)),
+            SystemTime::now() + REFRESH_BUFFER + Duration::from_secs(60),
         );
         // Within the buffer but not yet expired: stale for a fast-path read, but
         // still usable for graceful degradation.
-        let soon = cached_s3("", "a", Some(SystemTime::now() + Duration::from_secs(60)));
-        let past = cached_s3("", "a", Some(SystemTime::now() - Duration::from_secs(60)));
+        let soon = cached_s3("s3", "a", SystemTime::now() + Duration::from_secs(60));
+        let past = cached_s3("s3", "a", SystemTime::now() - Duration::from_secs(60));
 
         let now = SystemTime::now();
-        assert!(no_expiry.is_fresh(now));
-        assert!(no_expiry.is_unexpired(now));
         assert!(far.is_fresh(now));
         assert!(!soon.is_fresh(now));
         assert!(soon.is_unexpired(now));
@@ -1370,10 +1671,10 @@ mod tests {
 
     #[test]
     fn seed_inside_nominal_window_is_immediately_due() {
-        let credential = s3_cred(
-            None,
+        let credential = s3_vended(
+            "s3",
             "a",
-            Some(SystemTime::now() + REFRESH_BUFFER - Duration::from_secs(1)),
+            SystemTime::now() + REFRESH_BUFFER - Duration::from_secs(1),
         );
         let entry = CachedEntry::seed(credential, true);
         let now = SystemTime::now();
@@ -1399,26 +1700,34 @@ mod tests {
     }
 
     #[test]
-    fn longest_prefix_match_ignores_freshness() {
-        let far = Some(SystemTime::now() + REFRESH_BUFFER + Duration::from_secs(3600));
-        let entries = vec![
+    fn unexpired_match_selects_longest_unexpired_prefix() {
+        let now = SystemTime::now();
+        let far = now + REFRESH_BUFFER + Duration::from_secs(3600);
+        let cache = CacheState::new(vec![
             cached_s3("s3://bucket", "wide", far),
             cached_s3("s3://bucket/warehouse/db", "narrow", far),
-        ];
-        let got = longest_prefix_match(&entries, "s3://bucket/warehouse/db/t/f").unwrap();
+        ]);
+        let got = &cache.entries[cache
+            .unexpired_match("s3://bucket/warehouse/db/t/f", now)
+            .unwrap()];
         assert_eq!(s3_access_key_id(&got.credential), "narrow");
-        assert_eq!(got.credential.prefix(), Some("s3://bucket/warehouse/db"));
-        assert!(longest_prefix_match(&entries, "s3://other/x").is_none());
+        assert!(cache.unexpired_match("s3://other/x", now).is_none());
 
-        let fresh = Some(SystemTime::now() + REFRESH_BUFFER + Duration::from_secs(60));
-        let stale = Some(SystemTime::now() - Duration::from_secs(60));
-        let entries = vec![
-            cached_s3("s3://bucket", "wide", fresh),
-            cached_s3("s3://bucket/table", "narrow-stale", stale),
-        ];
-        let selected = longest_prefix_match(&entries, "s3://bucket/table/f").unwrap();
-        assert_eq!(s3_access_key_id(&selected.credential), "narrow-stale");
-        assert!(!selected.is_fresh(SystemTime::now()));
+        // Freshness does not matter, but an expired narrower entry is skipped.
+        let cache = CacheState::new(vec![
+            cached_s3("s3://bucket", "wide", far),
+            cached_s3("s3://bucket/due", "due", now + Duration::from_secs(60)),
+            cached_s3(
+                "s3://bucket/table",
+                "expired",
+                now - Duration::from_secs(60),
+            ),
+        ]);
+        let due = &cache.entries[cache.unexpired_match("s3://bucket/due/f", now).unwrap()];
+        assert_eq!(s3_access_key_id(&due.credential), "due");
+        assert!(!due.is_fresh(now));
+        let wide = &cache.entries[cache.unexpired_match("s3://bucket/table/f", now).unwrap()];
+        assert_eq!(s3_access_key_id(&wide.credential), "wide");
     }
 
     #[tokio::test]
@@ -1486,7 +1795,598 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_includes_scan_plan_id() {
+    async fn unchanged_refreshed_credential_is_not_refetched_near_expiry() {
+        let mut server = Server::new_async().await;
+        // Millisecond precision, as the catalog sends it.
+        let expires_at = UNIX_EPOCH
+            + Duration::from_millis(
+                (SystemTime::now() + Duration::from_secs(90))
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64,
+            );
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(s3_response("s3://bucket", "AK", expires_at))
+            .create_async()
+            .await;
+        // The catalog returns the credential the cache already holds.
+        let provider = provider_with_cached_s3(&server.url(), vec![cached_s3(
+            "s3://bucket",
+            "AK",
+            expires_at,
+        )]);
+
+        provider.load_credential("s3://bucket/f").await.unwrap();
+        let cache = provider.clouds[0].cache.lock().await;
+        // With under two minutes left, there is no further check.
+        assert_eq!(cache.entries[0].refresh_at, expires_at);
+        drop(cache);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn malformed_narrower_credential_is_not_masked_by_broader_one() {
+        let mut server = Server::new_async().await;
+        let expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
+        let body = format!(
+            r#"{{"storage-credentials":[
+                {{"prefix":"s3://bucket","config":{{"s3.access-key-id":"BROAD_AK","s3.secret-access-key":"SK","s3.session-token":"TOK","s3.session-token-expires-at-ms":"{expires}"}}}},
+                {{"prefix":"s3://bucket/table","config":{{"s3.access-key-id":"BAD"}}}}
+            ]}}"#
+        );
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+        let provider = test_provider(&server.url(), &aws_refresh_props("/v1/credentials")).await;
+
+        let error = provider
+            .load_credential("s3://bucket/table/f")
+            .await
+            .unwrap_err();
+        assert!(error.message().contains("is missing or empty"), "{error}");
+        // The cached broader credential does not mask the failure later either.
+        assert!(
+            provider
+                .load_credential("s3://bucket/table/other")
+                .await
+                .is_err()
+        );
+        // Paths only the broader credential covers still use it.
+        assert_eq!(
+            s3_access_key_id(
+                &provider
+                    .load_credential("s3://bucket/other/f")
+                    .await
+                    .unwrap()
+            ),
+            "BROAD_AK"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn failed_refreshes_do_not_duplicate_the_account_seed() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(2)
+            .with_status(503)
+            .create_async()
+            .await;
+        let host = "acct.dfs.core.windows.net";
+        let azdls = |prefix: String, token: &str, expires_at: SystemTime| VendedCredential {
+            credential: StorageCredential::new(
+                prefix,
+                HashMap::from([(format!("{ADLS_SAS_TOKEN_PREFIX}{host}"), token.to_string())]),
+            ),
+            expires_at,
+        };
+        let seed = CachedEntry::seed(
+            azdls(
+                String::new(),
+                "seed",
+                SystemTime::now() + Duration::from_secs(60),
+            ),
+            false,
+        );
+        let expired = CachedEntry::new(
+            azdls(
+                format!("abfss://c@{host}/data"),
+                "old",
+                SystemTime::now() - Duration::from_secs(1),
+            ),
+            false,
+        );
+        let configured = ConfiguredCloud::new(
+            &CloudRefresh::AZURE,
+            format!("{}/v1/credentials", server.url()),
+            vec![expired],
+            HashMap::from([(host.to_string(), seed)]),
+        );
+        let provider = RestVendedCredentialProvider {
+            client: OnceCell::new_with(Some(test_client(&server.url()))),
+            factory: None,
+            props: HashMap::new(),
+            query_params: Vec::new(),
+            clouds: vec![configured],
+        };
+        let path = format!("abfss://c@{host}/data/f.parquet");
+
+        for _ in 0..2 {
+            let fallback = configured_seed(&provider, &path);
+            let credential = provider
+                .refresh_credential(&provider.clouds[0], &path, fallback)
+                .await
+                .unwrap();
+            assert_eq!(sas_token(&credential), "seed");
+        }
+        // The expired entry is gone and the seed is cached once.
+        assert_eq!(provider.clouds[0].cache.lock().await.entries.len(), 1);
+        mock.assert_async().await;
+    }
+
+    fn configured_seed(provider: &RestVendedCredentialProvider, path: &str) -> Option<CachedEntry> {
+        provider.clouds[0].keyed_seed_for_path(path).unwrap()
+    }
+
+    #[tokio::test]
+    async fn expired_narrower_credential_falls_back_to_scheme_wide_seed() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(503)
+            .create_async()
+            .await;
+        let seed = CachedEntry::seed(
+            s3_vended("s3", "SEED_AK", SystemTime::now() + Duration::from_secs(60)),
+            false,
+        );
+        let expired = CachedEntry::new(
+            s3_vended(
+                "s3://bucket/table",
+                "OLD_AK",
+                SystemTime::now() - Duration::from_secs(1),
+            ),
+            false,
+        );
+        let provider = provider_with_cached_s3(&server.url(), vec![seed, expired]);
+
+        // As for ADLS account seeds, the expired narrower entry is ignored.
+        for _ in 0..2 {
+            assert_eq!(
+                s3_access_key_id(
+                    &provider
+                        .load_credential("s3://bucket/table/f")
+                        .await
+                        .unwrap()
+                ),
+                "SEED_AK"
+            );
+        }
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn failed_prefix_clears_once_the_catalog_stops_naming_it() {
+        let mut server = Server::new_async().await;
+        let expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
+        let broad = format!(
+            r#"{{"prefix":"s3://bucket","config":{{"s3.access-key-id":"BROAD_AK","s3.secret-access-key":"SK","s3.session-token":"TOK","s3.session-token-expires-at-ms":"{expires}"}}}}"#
+        );
+        let responses = [
+            format!(
+                r#"{{"storage-credentials":[{broad},{{"prefix":"s3://bucket/table","config":{{"s3.access-key-id":"BAD"}}}}]}}"#
+            ),
+            // The catalog fixes the table by vending only the broader credential.
+            format!(r#"{{"storage-credentials":[{broad}]}}"#),
+        ];
+        let fetches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&fetches);
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(2)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(move |_| {
+                let fetch = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                responses[fetch.min(1)].clone().into_bytes()
+            })
+            .create_async()
+            .await;
+        let provider = provider_with_cached_s3(&server.url(), Vec::new());
+
+        assert!(
+            provider
+                .load_credential("s3://bucket/table/f")
+                .await
+                .is_err()
+        );
+        // Skip the backoff, then a later fetch no longer names the prefix.
+        provider.clouds[0].cache.lock().await.retry_not_before = None;
+        provider.clouds[0].cache.lock().await.entries[0].refresh_at = UNIX_EPOCH;
+        assert_eq!(
+            s3_access_key_id(
+                &provider
+                    .load_credential("s3://bucket/table/f")
+                    .await
+                    .unwrap()
+            ),
+            "BROAD_AK"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn azdls_seed_is_served_consistently_when_a_broader_credential_fails() {
+        let mut server = Server::new_async().await;
+        let host = "acct.dfs.core.windows.net";
+        // The catalog's credential for the whole container has no expiry.
+        let body = format!(
+            r#"{{"storage-credentials":[{{"prefix":"abfss://c@{host}","config":{{"adls.sas-token.{host}":"sv=2026&sig=bad"}}}}]}}"#
+        );
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+        let props = HashMap::from([
+            (
+                CloudRefresh::AZURE.endpoint_key.to_string(),
+                "/v1/credentials".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_PREFIX}{host}"),
+                "sv=2026&sig=seed".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}{host}"),
+                epoch_millis(SystemTime::now() + Duration::from_secs(120)),
+            ),
+        ]);
+        let provider = test_provider(&server.url(), &props).await;
+
+        // The failed prefix is not narrower than the seed, so the seed is
+        // served on the refresh and during the backoff that follows.
+        for _ in 0..2 {
+            let credential = provider
+                .load_credential(&format!("abfss://c@{host}/data.parquet"))
+                .await
+                .unwrap();
+            assert_eq!(sas_token(&credential), "sv=2026&sig=seed");
+        }
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn backoff_error_reports_the_last_failure() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(s3_response(
+                "s3://bucket/table-a",
+                "AK",
+                SystemTime::now() + Duration::from_secs(3600),
+            ))
+            .create_async()
+            .await;
+        let provider = test_provider(&server.url(), &aws_refresh_props("/v1/credentials")).await;
+
+        assert!(
+            provider
+                .load_credential("s3://bucket/table-b/f")
+                .await
+                .is_err()
+        );
+        let error = provider
+            .load_credential("s3://bucket/table-b/f")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("backed off"), "{error}");
+        assert!(
+            error.contains("no unexpired vended credential matches"),
+            "{error}"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn azdls_container_root_is_not_refetched_on_every_access() {
+        let mut server = Server::new_async().await;
+        let host = "acct.dfs.core.windows.net";
+        let expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
+        let body = format!(
+            r#"{{"storage-credentials":[{{"prefix":"abfss://c@{host}/table","config":{{"adls.sas-token.{host}":"sv=2026&sig=table","adls.sas-token-expires-at-ms.{host}":"{expires}"}}}}]}}"#
+        );
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+        // The account seed is inside its refresh window.
+        let props = HashMap::from([
+            (
+                CloudRefresh::AZURE.endpoint_key.to_string(),
+                "/v1/credentials".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_PREFIX}{host}"),
+                "sv=2026&sig=seed".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}{host}"),
+                epoch_millis(SystemTime::now() + Duration::from_secs(240)),
+            ),
+        ]);
+        let provider = test_provider(&server.url(), &props).await;
+
+        for _ in 0..5 {
+            let credential = provider
+                .load_credential(&format!("abfss://c@{host}"))
+                .await
+                .unwrap();
+            assert_eq!(sas_token(&credential), "sv=2026&sig=seed");
+        }
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn malformed_response_errors_do_not_quote_secrets() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"storage-credentials":[{"prefix":"s3://b","config":"s3.secret-access-key=TOPSECRET"}]}"#,
+            )
+            .create_async()
+            .await;
+        let provider = test_provider(&server.url(), &aws_refresh_props("/v1/credentials")).await;
+
+        for _ in 0..2 {
+            let error = provider
+                .load_credential("s3://b/f")
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(!error.contains("TOPSECRET"), "{error}");
+        }
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn catalog_error_messages_are_reported() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(403)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"error":{"message":"not allowed to access the table","type":"ForbiddenException","code":403}}"#,
+            )
+            .create_async()
+            .await;
+        let provider = test_provider(&server.url(), &aws_refresh_props("/v1/credentials")).await;
+
+        let error = provider
+            .load_credential("s3://b/f")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not allowed to access the table"), "{error}");
+        assert!(error.contains("ForbiddenException"), "{error}");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn widened_scope_replaces_the_narrower_credential() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(s3_response(
+                "s3://b",
+                "WIDE_AK",
+                SystemTime::now() + Duration::from_secs(3600),
+            ))
+            .create_async()
+            .await;
+        // The narrower credential is inside its refresh window.
+        let provider = provider_with_cached_s3(&server.url(), vec![cached_s3(
+            "s3://b/t",
+            "NARROW_AK",
+            SystemTime::now() + Duration::from_secs(240),
+        )]);
+
+        for _ in 0..2 {
+            assert_eq!(
+                s3_access_key_id(&provider.load_credential("s3://b/t/f").await.unwrap()),
+                "WIDE_AK"
+            );
+        }
+        assert_eq!(provider.clouds[0].cache.lock().await.entries.len(), 1);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn azdls_seed_is_not_served_for_a_path_it_does_not_cover() {
+        let mut server = Server::new_async().await;
+        let host = "acct.dfs.core.windows.net";
+        let expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
+        let body = format!(
+            r#"{{"storage-credentials":[{{"prefix":"ABFSS://c@{host}","config":{{"adls.sas-token.{host}":"sv=2026&sig=fetched","adls.sas-token-expires-at-ms.{host}":"{expires}"}}}}]}}"#
+        );
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+        let props = HashMap::from([
+            (
+                CloudRefresh::AZURE.endpoint_key.to_string(),
+                "/v1/credentials".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_PREFIX}{host}"),
+                "sv=2026&sig=seed".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}{host}"),
+                expires.clone(),
+            ),
+        ]);
+        let provider = test_provider(&server.url(), &props).await;
+
+        // The seed's scope has a lowercase scheme, so it does not cover this
+        // path, which fetches a credential that does.
+        let path = format!("ABFSS://c@{host}/data.parquet");
+        let credential = provider.load_credential(&path).await.unwrap();
+        assert!(credential.covers(&path));
+        assert_eq!(sas_token(&credential), "sv=2026&sig=fetched");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_loads_without_a_usable_credential_fetch_once() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(s3_response(
+                "s3://bucket",
+                "AK",
+                SystemTime::now() + Duration::from_secs(3600),
+            ))
+            .create_async()
+            .await;
+        let provider = test_provider(&server.url(), &aws_refresh_props("/v1/credentials")).await;
+
+        // Waiters for the in-flight refresh use its result instead of fetching.
+        let loads = (0..8).map(|_| {
+            let provider = Arc::clone(&provider);
+            tokio::spawn(async move { provider.load_credential("s3://bucket/x/f").await })
+        });
+        for load in futures::future::join_all(loads).await {
+            assert_eq!(s3_access_key_id(&load.unwrap().unwrap()), "AK");
+        }
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn failed_credential_requests_do_not_report_the_body() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(1)
+            .with_status(500)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"error":{"message":"internal error","type":"ServerError","code":500},"storage-credentials":[{"prefix":"s3://b","config":{"s3.secret-access-key":"TOPSECRET"}}]}"#,
+            )
+            .create_async()
+            .await;
+        let provider = test_provider(&server.url(), &aws_refresh_props("/v1/credentials")).await;
+
+        let error = provider
+            .load_credential("s3://b/f")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("internal error"), "{error}");
+        assert!(!error.contains("TOPSECRET"), "{error}");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn rebuilt_provider_does_not_infer_another_auth_type() {
+        let mut server = Server::new_async().await;
+        // The merged FileIO properties hold a `credential`, which would infer
+        // oauth2 and exchange it; the catalog resolved no auth.
+        let token_mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .expect(0)
+            .create_async()
+            .await;
+        let credentials_mock = server
+            .mock("GET", "/v1/credentials")
+            .match_header("authorization", Matcher::Missing)
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(s3_response(
+                "s3://bucket",
+                "AK",
+                SystemTime::now() + Duration::from_secs(3600),
+            ))
+            .create_async()
+            .await;
+        let mut props = aws_refresh_props("/v1/credentials");
+        props.insert("credential".to_string(), "client:secret".to_string());
+        let rebuilt = RestVendedCredentialProviderFactory::new(
+            server.url(),
+            test_table(),
+            AUTH_TYPE_NONE,
+            false,
+            &HashMap::new(),
+        )
+        .build(&StorageConfig::new().with_props(props))
+        .unwrap();
+
+        rebuilt.load_credential("s3://bucket/x/f").await.unwrap();
+        token_mock.assert_async().await;
+        credentials_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn gcs_refresh_requires_a_vended_token() {
+        let mut props = HashMap::from([(
+            CloudRefresh::GCP.endpoint_key.to_string(),
+            "/v1/credentials".to_string(),
+        )]);
+        // Without a vended token, like Java, GCS keeps its default credentials.
+        assert!(
+            build_test_provider(test_client("http://cat"), "http://cat", &props, None)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        props.insert(GCS_TOKEN.to_string(), "TOKEN".to_string());
+        let provider = test_provider("http://cat", &props).await;
+        assert!(provider.supports_path("gs://bucket/x"));
+    }
+
+    #[tokio::test]
+    async fn refresh_includes_java_query_parameters() {
         let mut server = Server::new_async().await;
         let body = s3_response(
             "s3://bucket",
@@ -1495,9 +2395,9 @@ mod tests {
         );
         let mock = server
             .mock("GET", "/v1/credentials")
-            .match_query(Matcher::UrlEncoded(
-                "planId".to_string(),
-                "scan-plan-1".to_string(),
+            // `referenced-by` is sent verbatim, without encoding `%` again.
+            .match_query(Matcher::Exact(
+                "planId=scan-plan-1&referenced-by=ns%1Fview,ns%1Fother".to_string(),
             ))
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -1507,25 +2407,31 @@ mod tests {
 
         // No static creds -> no seed -> first load fetches from the endpoint.
         let mut props = aws_refresh_props("/v1/credentials");
-        props.insert(
-            REST_CATALOG_PROP_SCAN_PLAN_ID.to_string(),
-            "scan-plan-1".to_string(),
-        );
+        props.extend([
+            (
+                REST_CATALOG_PROP_SCAN_PLAN_ID.to_string(),
+                "scan-plan-1".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_REFERENCED_BY.to_string(),
+                "ns%1Fview,ns%1Fother".to_string(),
+            ),
+        ]);
 
         let provider = test_provider(&server.url(), &props).await;
         let credential = provider
             .load_credential("s3://bucket/warehouse/f")
             .await
             .unwrap();
-        assert_eq!(credential.prefix(), Some("s3://bucket"));
-
-        match credential.kind() {
-            StorageCredentialKind::S3(s3) => {
-                assert_eq!(s3.access_key_id(), "AK");
-                assert_eq!(s3.session_token(), Some("TOK"));
-            }
-            other => panic!("expected S3, got {other:?}"),
-        }
+        assert_eq!(credential.prefix(), "s3://bucket");
+        assert_eq!(s3_access_key_id(&credential), "AK");
+        assert_eq!(
+            credential
+                .config()
+                .get(S3_SESSION_TOKEN)
+                .map(String::as_str),
+            Some("TOK")
+        );
         mock.assert_async().await;
     }
 
@@ -1640,7 +2546,7 @@ mod tests {
         let provider = test_provider(&server.url(), &props).await;
         let credential = provider.load_credential("s3://bucket/x/f").await.unwrap();
 
-        assert_eq!(credential.prefix(), None);
+        assert_eq!(credential.prefix(), "s3");
         assert_eq!(s3_access_key_id(&credential), "SEED_AK");
         mock.assert_async().await;
     }
@@ -1683,14 +2589,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             credential.prefix(),
-            Some("abfss://container@account1.dfs.core.windows.net/")
+            "abfss://container@account1.dfs.core.windows.net"
         );
-        match credential.kind() {
-            StorageCredentialKind::Azdls(azdls) => {
-                assert_eq!(azdls.sas_token(), "sv=2026&sig=seed")
-            }
-            other => panic!("expected ADLS credential, got {other:?}"),
-        }
+        assert_eq!(sas_token(&credential), "sv=2026&sig=seed");
 
         let credential = provider
             .load_credential("abfss://other-container@account2.dfs.core.windows.net/data/b.parquet")
@@ -1698,14 +2599,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             credential.prefix(),
-            Some("abfss://other-container@account2.dfs.core.windows.net/")
+            "abfss://other-container@account2.dfs.core.windows.net"
         );
-        match credential.kind() {
-            StorageCredentialKind::Azdls(azdls) => {
-                assert_eq!(azdls.sas_token(), "sv=2026&sig=other-seed")
-            }
-            other => panic!("expected ADLS credential, got {other:?}"),
-        }
+        assert_eq!(sas_token(&credential), "sv=2026&sig=other-seed");
         mock.assert_async().await;
     }
 
@@ -1809,7 +2705,7 @@ mod tests {
         let provider = provider_with_cached_s3(&server.url(), vec![cached_s3(
             "s3://bucket/requested",
             "SEED_AK",
-            Some(SystemTime::now() + Duration::from_secs(60)),
+            SystemTime::now() + Duration::from_secs(60),
         )]);
 
         let fallback = provider
@@ -1860,22 +2756,22 @@ mod tests {
             cached_s3(
                 "s3://bucket/table-a",
                 "OLD_AK",
-                Some(SystemTime::now() + Duration::from_secs(60)),
+                SystemTime::now() + Duration::from_secs(60),
             ),
             cached_s3(
                 "s3://bucket/table-b",
                 "OLDER_BK",
-                Some(SystemTime::now() + Duration::from_secs(3600)),
+                SystemTime::now() + Duration::from_secs(3600),
             ),
             cached_s3(
                 "s3://bucket/table-b",
                 "LATEST_BK",
-                Some(SystemTime::now() + Duration::from_secs(3600)),
+                SystemTime::now() + Duration::from_secs(3600),
             ),
             cached_s3(
                 "s3://bucket/table-c",
                 "VALID_CK",
-                Some(SystemTime::now() + Duration::from_secs(3600)),
+                SystemTime::now() + Duration::from_secs(3600),
             ),
         ]);
 
@@ -1897,6 +2793,131 @@ mod tests {
             .unwrap();
         assert_eq!(s3_access_key_id(&fallback), "VALID_CK");
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn scoped_refresh_after_scheme_wide_seed_does_not_back_off() {
+        let mut server = Server::new_async().await;
+        let body = s3_response(
+            "s3://bucket/table",
+            "SCOPED_AK",
+            SystemTime::now() + Duration::from_secs(3600),
+        );
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(2)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        // The scheme-wide seed is inside its refresh window.
+        let seed = CachedEntry::seed(
+            s3_vended("s3", "SEED_AK", SystemTime::now() + Duration::from_secs(60)),
+            false,
+        );
+        let provider = provider_with_cached_s3(&server.url(), vec![seed]);
+
+        assert_eq!(
+            s3_access_key_id(
+                &provider
+                    .load_credential("s3://bucket/table/data/f.parquet")
+                    .await
+                    .unwrap()
+            ),
+            "SCOPED_AK"
+        );
+        // A location only the seed covers refreshes once, finds no newer
+        // credential, and keeps using the seed. This is not a failure, so the
+        // cloud is not backed off.
+        for location in ["s3://bucket/", "s3://bucket/", "s3://bucket/other/f"] {
+            assert_eq!(
+                s3_access_key_id(&provider.load_credential(location).await.unwrap()),
+                "SEED_AK"
+            );
+        }
+        let cache = provider.clouds[0].cache.lock().await;
+        assert_eq!(cache.consecutive_failures, 0);
+        assert!(cache.retry_not_before.is_none());
+        drop(cache);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn scoped_refresh_after_azdls_account_seed_does_not_back_off() {
+        let mut server = Server::new_async().await;
+        let host = "account1.dfs.core.windows.net";
+        let expires = epoch_millis(SystemTime::now() + Duration::from_secs(3600));
+        let body = format!(
+            r#"{{"storage-credentials":[{{"prefix":"abfss://container@{host}/table","config":{{"adls.sas-token.{host}":"sv=2026&sig=scoped","adls.sas-token-expires-at-ms.{host}":"{expires}"}}}}]}}"#
+        );
+        // One fetch for the container root, which finds nothing newer, and one
+        // for an account without credentials. A backed-off cloud would skip
+        // the second.
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .expect(2)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+        // The account seed is inside its refresh window.
+        let props = HashMap::from([
+            (
+                CloudRefresh::AZURE.endpoint_key.to_string(),
+                "/v1/credentials".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_PREFIX}{host}"),
+                "sv=2026&sig=seed".to_string(),
+            ),
+            (
+                format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}{host}"),
+                epoch_millis(SystemTime::now() + Duration::from_secs(240)),
+            ),
+        ]);
+        let provider = test_provider(&server.url(), &props).await;
+        let sas_token = |credential: StorageCredential| sas_token(&credential).to_string();
+
+        let root = format!("abfss://container@{host}/");
+        for _ in 0..2 {
+            assert_eq!(
+                sas_token(provider.load_credential(&root).await.unwrap()),
+                "sv=2026&sig=seed"
+            );
+        }
+        assert_eq!(
+            sas_token(
+                provider
+                    .load_credential(&format!("{root}table/data.parquet"))
+                    .await
+                    .unwrap()
+            ),
+            "sv=2026&sig=scoped"
+        );
+        assert!(
+            provider
+                .load_credential("abfss://container@account2.dfs.core.windows.net/a")
+                .await
+                .is_err()
+        );
+        mock.assert_async().await;
+    }
+
+    #[test]
+    fn recheck_time_stops_near_expiry() {
+        let now = SystemTime::now();
+        assert_eq!(
+            recheck_time(now, now + Duration::from_secs(240)),
+            now + Duration::from_secs(120)
+        );
+        let soon = now + MIN_REFRESH_BUFFER * 2;
+        assert_eq!(recheck_time(now, soon), soon);
+        // Longer lifetimes keep the regular prefetch time.
+        let later = now + Duration::from_secs(3600);
+        assert_eq!(recheck_time(now, later), later - REFRESH_BUFFER);
     }
 
     #[tokio::test]
@@ -2001,6 +3022,7 @@ mod tests {
             &auth_manager,
             test_factory(&server.url(), Some(&table_auth)),
             &props,
+            &table_auth,
             true,
         )
         .await
@@ -2052,6 +3074,7 @@ mod tests {
             &auth_manager,
             test_factory(&server.url(), Some(&table_auth)),
             &props,
+            &table_auth,
             true,
         )
         .await
@@ -2098,6 +3121,12 @@ mod tests {
                 CloudRefresh::GCP.endpoint_key.to_string(),
                 "/v1/gcp-credentials".to_string(),
             ),
+            // GCS refreshes only a vended token; this one already expired.
+            (GCS_TOKEN.to_string(), "EXPIRED".to_string()),
+            (
+                GCS_TOKEN_EXPIRES_AT.to_string(),
+                epoch_millis(SystemTime::now() - Duration::from_secs(60)),
+            ),
         ]);
         let provider = test_provider(&server.url(), &props).await;
 
@@ -2107,15 +3136,10 @@ mod tests {
             s3_access_key_id(&provider.load_credential("s3://bucket/x").await.unwrap()),
             "AK"
         );
-        match provider
-            .load_credential("gs://bucket/x")
-            .await
-            .unwrap()
-            .kind()
-        {
-            StorageCredentialKind::Gcs(gcs) => assert_eq!(gcs.token(), "GCS"),
-            other => panic!("expected GCS credential, got {other:?}"),
-        }
+        assert_eq!(
+            gcs_token(&provider.load_credential("gs://bucket/x").await.unwrap()),
+            "GCS"
+        );
         aws_mock.assert_async().await;
         gcp_mock.assert_async().await;
     }
@@ -2152,10 +3176,7 @@ mod tests {
             ),
         ]);
         let provider = test_provider(&server.url(), &props).await;
-        let sas_token = |credential: StorageCredential| match credential.into_kind() {
-            StorageCredentialKind::Azdls(azdls) => azdls.into_sas_token(),
-            other => panic!("expected ADLS credential, got {other:?}"),
-        };
+        let sas_token = |credential: StorageCredential| sas_token(&credential).to_string();
 
         // The host-keyed seed serves the account without fetching.
         let seeded = provider
@@ -2203,12 +3224,7 @@ mod tests {
             .load_credential(&format!("{prefix}/data.parquet"))
             .await
             .unwrap();
-        match credential.kind() {
-            StorageCredentialKind::Azdls(azdls) => {
-                assert_eq!(azdls.sas_token(), "sv=2026&sig=secret")
-            }
-            other => panic!("expected ADLS credential, got {other:?}"),
-        }
+        assert_eq!(sas_token(&credential), "sv=2026&sig=secret");
         mock.assert_async().await;
     }
 
@@ -2267,14 +3283,9 @@ mod tests {
             let credential = provider.load_credential(path).await.unwrap();
             assert_eq!(
                 credential.prefix(),
-                Some("abfss://container@account2.dfs.core.windows.net/")
+                "abfss://container@account2.dfs.core.windows.net"
             );
-            match credential.kind() {
-                StorageCredentialKind::Azdls(azdls) => {
-                    assert_eq!(azdls.sas_token(), "sv=2026&sig=seed")
-                }
-                other => panic!("expected ADLS credential, got {other:?}"),
-            }
+            assert_eq!(sas_token(&credential), "sv=2026&sig=seed");
         }
         mock.assert_async().await;
     }
@@ -2332,7 +3343,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scheme_aliases_share_prefix_scoped_credentials() {
+    async fn prefixes_match_locations_like_java() {
         let mut server = Server::new_async().await;
         let body = s3_response(
             "s3://bucket/table",
@@ -2349,16 +3360,17 @@ mod tests {
             .await;
 
         let provider = test_provider(&server.url(), &aws_refresh_props("/v1/credentials")).await;
-        for path in ["s3a://bucket/table/f", "s3://bucket/table/f"] {
+        // As in Java, prefixes are compared as plain strings.
+        for path in ["s3://bucket/table/f", "s3://bucket/table2/f"] {
             assert_eq!(
                 s3_access_key_id(&provider.load_credential(path).await.unwrap()),
                 "AK"
             );
         }
-        // A prefix only covers whole path segments, so this path refreshes.
+        // `s3a` is another scheme, so this path is not covered and refreshes.
         assert!(
             provider
-                .load_credential("s3://bucket/table2/f")
+                .load_credential("s3a://bucket/table/f")
                 .await
                 .is_err()
         );
@@ -2377,7 +3389,7 @@ mod tests {
             .mock("GET", "/v1/credentials")
             .match_header("authorization", "Bearer table-token")
             .match_header("x-custom", "value")
-            .expect(1)
+            .expect(2)
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(body)
@@ -2392,14 +3404,16 @@ mod tests {
         let table_auth = HashMap::from([("token".to_string(), "table-token".to_string())]);
         let provider = build_vended_credential_provider(
             &test_client(&server.url()),
-            &NoopAuthManager,
+            &OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url())),
             test_factory(&server.url(), Some(&table_auth)),
             &props,
+            &table_auth,
             true,
         )
         .await
         .unwrap()
         .unwrap();
+        provider.load_credential("s3://bucket/x/f").await.unwrap();
 
         let factory: Arc<dyn StorageCredentialProviderFactory> =
             serde_json::from_str(&serde_json::to_string(&provider.factory().unwrap()).unwrap())
@@ -2407,6 +3421,7 @@ mod tests {
         let config = StorageConfig::new().with_props(props);
         let rebuilt = factory.build(&config).unwrap();
 
+        // The rebuilt provider authenticates like the original one.
         assert_eq!(
             s3_access_key_id(&rebuilt.load_credential("s3://bucket/x/f").await.unwrap()),
             "AK"
@@ -2417,12 +3432,223 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn table_token_authenticates_without_catalog_auth() {
+        let mut server = Server::new_async().await;
+        let body = s3_response(
+            "s3://bucket",
+            "AK",
+            SystemTime::now() + Duration::from_secs(3600),
+        );
+        // As in Java, a table token authenticates credential requests of a
+        // catalog without auth, in process and after the provider is rebuilt.
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .match_header("authorization", "Bearer table-token")
+            .expect(2)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let props = aws_refresh_props("/v1/credentials");
+        let factory = RestVendedCredentialProviderFactory::new(
+            server.url(),
+            test_table(),
+            AUTH_TYPE_NONE,
+            true,
+            &HashMap::from([("token".to_string(), "table-token".to_string())]),
+        );
+        let provider = build_vended_credential_provider(
+            &test_client(&server.url()),
+            &NoopAuthManager,
+            factory.clone(),
+            &props,
+            &HashMap::from([("token".to_string(), "table-token".to_string())]),
+            true,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        provider.load_credential("s3://bucket/x/f").await.unwrap();
+
+        let rebuilt = factory
+            .build(&StorageConfig::new().with_props(props))
+            .unwrap();
+        rebuilt.load_credential("s3://bucket/x/f").await.unwrap();
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn explicit_no_auth_ignores_the_table_token() {
+        let mut server = Server::new_async().await;
+        // As in Java, an explicit `rest.auth.type=none` is not overridden by a
+        // table token, in process and after the provider is rebuilt.
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .match_header("authorization", Matcher::Missing)
+            .expect(2)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(s3_response(
+                "s3://bucket",
+                "AK",
+                SystemTime::now() + Duration::from_secs(3600),
+            ))
+            .create_async()
+            .await;
+        let table_config = HashMap::from([("token".to_string(), "table-token".to_string())]);
+        let props = aws_refresh_props("/v1/credentials");
+        let factory = RestVendedCredentialProviderFactory::new(
+            server.url(),
+            test_table(),
+            AUTH_TYPE_NONE,
+            false,
+            &table_config,
+        );
+        let provider = build_vended_credential_provider(
+            &test_client(&server.url()),
+            &NoopAuthManager,
+            factory.clone(),
+            &props,
+            &table_config,
+            true,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        provider.load_credential("s3://bucket/x/f").await.unwrap();
+        let rebuilt = factory
+            .build(&StorageConfig::new().with_props(props))
+            .unwrap();
+        rebuilt.load_credential("s3://bucket/x/f").await.unwrap();
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn injected_auth_manager_receives_the_whole_table_config() {
+        #[derive(Debug, Default)]
+        struct RecordingAuthManager(std::sync::Mutex<Vec<String>>);
+
+        #[async_trait]
+        impl AuthManager for RecordingAuthManager {
+            async fn init_session(
+                &self,
+                _client: &HttpClient,
+                _props: &HashMap<String, String>,
+            ) -> Result<Box<dyn crate::auth::AuthSession>> {
+                unreachable!("only table sessions are created")
+            }
+
+            async fn catalog_session(
+                &self,
+                _client: &HttpClient,
+                _props: &HashMap<String, String>,
+            ) -> Result<Arc<dyn crate::auth::AuthSession>> {
+                unreachable!("only table sessions are created")
+            }
+
+            async fn table_session(
+                &self,
+                _client: &HttpClient,
+                _table: &TableIdent,
+                props: &HashMap<String, String>,
+                parent: Arc<dyn crate::auth::AuthSession>,
+            ) -> Result<Arc<dyn crate::auth::AuthSession>> {
+                let mut keys = props.keys().cloned().collect::<Vec<_>>();
+                keys.sort();
+                *self.0.lock().unwrap() = keys;
+                Ok(parent)
+            }
+        }
+
+        let manager = RecordingAuthManager::default();
+        let table_config = HashMap::from([
+            ("token".to_string(), "table-token".to_string()),
+            ("custom.auth".to_string(), "value".to_string()),
+        ]);
+        build_vended_credential_provider(
+            &test_client("http://cat"),
+            &manager,
+            test_factory("http://cat", Some(&table_config)),
+            &aws_refresh_props("/v1/creds"),
+            &table_config,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(*manager.0.lock().unwrap(), vec![
+            "custom.auth".to_string(),
+            "token".to_string()
+        ]);
+    }
+
+    #[tokio::test]
+    async fn injected_auth_manager_decides_on_the_table_token() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/v1/credentials")
+            .match_header("authorization", Matcher::Missing)
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(s3_response(
+                "s3://bucket",
+                "AK",
+                SystemTime::now() + Duration::from_secs(3600),
+            ))
+            .create_async()
+            .await;
+        let provider = build_vended_credential_provider(
+            &test_client(&server.url()),
+            &NoopAuthManager,
+            RestVendedCredentialProviderFactory::new(
+                server.url(),
+                test_table(),
+                AUTH_TYPE_NONE,
+                true,
+                &HashMap::from([("token".to_string(), "table-token".to_string())]),
+            ),
+            &aws_refresh_props("/v1/credentials"),
+            &HashMap::from([("token".to_string(), "table-token".to_string())]),
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        provider.load_credential("s3://bucket/x/f").await.unwrap();
+        mock.assert_async().await;
+    }
+
+    #[test]
+    fn factory_keeps_only_table_auth_config() {
+        let factory = RestVendedCredentialProviderFactory::new(
+            "http://cat",
+            test_table(),
+            AUTH_TYPE_OAUTH2,
+            true,
+            &HashMap::from([
+                ("token".to_string(), "table-token".to_string()),
+                (S3_SECRET_ACCESS_KEY.to_string(), "SECRET".to_string()),
+            ]),
+        );
+        assert_eq!(
+            factory.table_auth,
+            HashMap::from([("token".to_string(), "table-token".to_string())])
+        );
+    }
+
+    #[tokio::test]
     async fn provider_with_injected_auth_manager_is_not_serializable() {
         let provider = build_vended_credential_provider(
             &test_client("http://cat"),
             &NoopAuthManager,
             test_factory("http://cat", None),
             &aws_refresh_props("/v1/creds"),
+            &HashMap::new(),
             false,
         )
         .await
@@ -2431,10 +3657,7 @@ mod tests {
 
         let error = provider.factory().unwrap_err();
         assert_eq!(error.kind(), ErrorKind::FeatureUnsupported);
-        assert!(
-            error.message().contains("without_credential_provider"),
-            "{error}"
-        );
+        assert!(error.message().contains("injected AuthManager"), "{error}");
     }
 
     #[test]

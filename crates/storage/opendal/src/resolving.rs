@@ -207,11 +207,11 @@ impl OpenDalResolvingStorageFactory {
 #[typetag::serde]
 impl StorageFactory for OpenDalResolvingStorageFactory {
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
-        self.build_with_credentials(config, None)
+        self.build_with_credential_provider(config, None)
     }
 
     #[allow(unused_variables)]
-    fn build_with_credentials(
+    fn build_with_credential_provider(
         &self,
         config: &StorageConfig,
         credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
@@ -256,14 +256,17 @@ pub struct OpenDalResolvingStorage {
         feature = "opendal-gcs",
         feature = "opendal-azdls"
     ))]
-    #[serde(skip)]
+    #[serde(
+        skip_deserializing,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::serialize_credential_provider"
+    )]
     credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
 }
 
 impl std::fmt::Debug for OpenDalResolvingStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `props` can contain storage secrets, and a custom credential provider
-        // may carry secret state in its own Debug implementation
+        // `props` can contain storage secrets
         f.debug_struct("OpenDalResolvingStorage")
             .field("property_keys", &self.props.keys().collect::<Vec<_>>())
             .finish_non_exhaustive()
@@ -369,7 +372,19 @@ impl Storage for OpenDalResolvingStorage {
         Ok(())
     }
 
-    #[allow(unreachable_code)]
+    #[cfg_attr(
+        not(any(
+            feature = "opendal-memory",
+            feature = "opendal-fs",
+            feature = "opendal-s3",
+            feature = "opendal-gcs",
+            feature = "opendal-oss",
+            feature = "opendal-azdls",
+            feature = "opendal-hf"
+        )),
+        // Without a backend, there is no storage to resolve.
+        allow(unreachable_code)
+    )]
     fn new_input(&self, path: &str) -> Result<InputFile> {
         Ok(InputFile::new(
             Arc::new(self.resolve(path)?.as_ref().clone()),
@@ -377,7 +392,19 @@ impl Storage for OpenDalResolvingStorage {
         ))
     }
 
-    #[allow(unreachable_code)]
+    #[cfg_attr(
+        not(any(
+            feature = "opendal-memory",
+            feature = "opendal-fs",
+            feature = "opendal-s3",
+            feature = "opendal-gcs",
+            feature = "opendal-oss",
+            feature = "opendal-azdls",
+            feature = "opendal-hf"
+        )),
+        // Without a backend, there is no storage to resolve.
+        allow(unreachable_code)
+    )]
     fn new_output(&self, path: &str) -> Result<OutputFile> {
         Ok(OutputFile::new(
             Arc::new(self.resolve(path)?.as_ref().clone()),
@@ -412,6 +439,10 @@ mod tests {
     ))]
     #[async_trait]
     impl StorageCredentialProvider for AllPathsCredentialProvider {
+        fn supports_path(&self, _path: &str) -> bool {
+            true
+        }
+
         async fn load_credential(&self, _path: &str) -> Result<iceberg::io::StorageCredential> {
             unreachable!("unsupported backends must ignore the provider")
         }
@@ -426,7 +457,7 @@ mod tests {
     fn test_factory_ignores_credentials_without_compatible_backend() {
         assert!(
             OpenDalResolvingStorageFactory::new()
-                .build_with_credentials(
+                .build_with_credential_provider(
                     &StorageConfig::new(),
                     Some(Arc::new(AllPathsCredentialProvider)),
                 )

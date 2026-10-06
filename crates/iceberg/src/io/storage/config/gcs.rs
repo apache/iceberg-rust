@@ -111,7 +111,9 @@ impl TryFrom<&StorageConfig> for GcsConfig {
         }
 
         // GCS_NO_AUTH enables all anonymous/no-auth options
-        if props.get(GCS_NO_AUTH).is_some() {
+        if let Some(no_auth) = props.get(GCS_NO_AUTH)
+            && is_truthy(no_auth)
+        {
             cfg.allow_anonymous = true;
             cfg.disable_vm_metadata = true;
             cfg.disable_config_load = true;
@@ -180,6 +182,17 @@ mod tests {
         assert!(gcs_config.allow_anonymous);
         assert!(gcs_config.disable_vm_metadata);
         assert!(gcs_config.disable_config_load);
+    }
+
+    #[test]
+    fn test_gcs_config_no_auth_false() {
+        let storage_config = StorageConfig::new().with_prop(GCS_NO_AUTH, "false");
+
+        let gcs_config = GcsConfig::try_from(&storage_config).unwrap();
+
+        assert!(!gcs_config.allow_anonymous);
+        assert!(!gcs_config.disable_vm_metadata);
+        assert!(!gcs_config.disable_config_load);
     }
 
     #[test]

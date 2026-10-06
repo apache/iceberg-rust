@@ -60,8 +60,12 @@ pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 /// Disable header redaction in error logs and `Debug` output (defaults to
 /// false for security)
 pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
-/// Identifier for a server-side scan plan associated with credential requests.
-pub(crate) const REST_CATALOG_PROP_SCAN_PLAN_ID: &str = "rest.scan.plan-id";
+/// Identifier of the server-side scan plan sent with credential requests as
+/// `planId`, as in Java's `RESTCatalogProperties.REST_SCAN_PLAN_ID`.
+pub(crate) const REST_CATALOG_PROP_SCAN_PLAN_ID: &str = "rest-scan-plan-id";
+/// Encoded view chain sent with credential requests as `referenced-by`, as in
+/// Java's `RESTCatalogProperties.REST_REFERENCED_BY`.
+pub(crate) const REST_CATALOG_PROP_REFERENCED_BY: &str = "rest-referenced-by";
 /// Authentication scheme: `none` or `oauth2`. When unset, `oauth2` is used
 /// if a `token`, `credential` or `oauth2-server-uri` is configured, `none`
 /// otherwise.
@@ -877,15 +881,19 @@ impl RestSessionCatalog {
         // attach a provider so the backend re-fetches them before they expire.
         // Only catalog authentication resolved from the properties can be
         // rebuilt after FileIO serialization.
+        let table_config = table_config.unwrap_or_default();
         let credential_provider = build_vended_credential_provider(
             &client.http_client,
             client.auth_manager.as_ref(),
             RestVendedCredentialProviderFactory::new(
                 &client.config.uri,
                 table.clone(),
-                table_config.unwrap_or_default(),
+                self.user_config.auth_type(),
+                !self.user_config.has_explicit_auth_type(),
+                &table_config,
             ),
             &props,
+            &table_config,
             self.auth_manager.is_none(),
         )
         .await?;
@@ -4155,7 +4163,99 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_injected_auth_manager_file_io_serializes_without_provider_only() {
+    async fn test_load_table_attaches_the_vended_credential_provider() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let mut load_response: serde_json::Value = serde_json::from_reader(BufReader::new(
+            File::open(format!(
+                "{}/testdata/load_table_response.json",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap(),
+        ))
+        .unwrap();
+        load_response["config"]["client.refresh-credentials-endpoint"] =
+            json!("/v1/namespaces/ns1/tables/test1/credentials");
+        load_response["config"]["token"] = json!("table-token");
+        let load_table_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body(load_response.to_string())
+            .create_async()
+            .await;
+        let expires_at = (std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let credentials_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1/credentials")
+            .match_header("authorization", "Bearer table-token")
+            .with_status(200)
+            .with_body(
+                json!({"storage-credentials": [{
+                    "prefix": "s3://warehouse",
+                    "config": {
+                        "s3.access-key-id": "VENDED_AK",
+                        "s3.secret-access-key": "SK",
+                        "s3.session-token": "TOK",
+                        "s3.session-token-expires-at-ms": expires_at.to_string(),
+                    },
+                }]})
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+        let table = catalog
+            .load_table(&TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .await
+            .unwrap();
+
+        assert!(
+            format!("{:?}", table.file_io()).contains("RestVendedCredentialProvider"),
+            "the table's FileIO holds the provider"
+        );
+        // The serialized provider rebuilds, and refreshes with the table token.
+        let serialized: serde_json::Value =
+            serde_json::from_slice(&table.file_io().serialize_all().unwrap()).unwrap();
+        let factory: Arc<dyn iceberg::io::StorageCredentialProviderFactory> =
+            serde_json::from_value(serialized["credential_provider"].clone()).unwrap();
+        let config = iceberg::io::StorageConfig::new().with_props(
+            serialized["config"]["props"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(key, value)| (key.clone(), value.as_str().unwrap().to_string())),
+        );
+        let credential = factory
+            .build(&config)
+            .unwrap()
+            .load_credential("s3://warehouse/database/table/data.parquet")
+            .await
+            .unwrap();
+        assert_eq!(
+            credential
+                .config()
+                .get("s3.access-key-id")
+                .map(String::as_str),
+            Some("VENDED_AK")
+        );
+
+        config_mock.assert_async().await;
+        load_table_mock.assert_async().await;
+        credentials_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_injected_auth_manager_file_io_serializes_without_provider() {
         let mut server = Server::new_async().await;
         let config_mock = create_config_mock(&mut server).await;
         let mut load_response: serde_json::Value = serde_json::from_reader(BufReader::new(
@@ -4188,15 +4288,11 @@ mod tests {
             .await
             .unwrap();
 
-        let error = table.file_io().serialize_all().unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::FeatureUnsupported);
-        assert!(
-            table
-                .file_io()
-                .without_credential_provider()
-                .serialize_all()
-                .is_ok()
-        );
+        // The FileIO serializes with its static credentials; the provider, which
+        // cannot be rebuilt with an injected AuthManager, is dropped.
+        let serialized: serde_json::Value =
+            serde_json::from_slice(&table.file_io().serialize_all().unwrap()).unwrap();
+        assert!(serialized.get("credential_provider").is_none());
 
         config_mock.assert_async().await;
         load_table_mock.assert_async().await;
@@ -4326,6 +4422,45 @@ mod tests {
             table.metadata_location().unwrap()
         );
 
+        config_mock.assert_async().await;
+        register_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_register_table_attaches_the_vended_credential_provider() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let mut response: serde_json::Value = serde_json::from_reader(BufReader::new(
+            File::open(format!(
+                "{}/testdata/load_table_response.json",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap(),
+        ))
+        .unwrap();
+        response["config"]["client.refresh-credentials-endpoint"] =
+            json!("/v1/namespaces/ns1/tables/test1/credentials");
+        let register_table_mock = server
+            .mock("POST", "/v1/namespaces/ns1/register")
+            .with_status(200)
+            .with_body(response.to_string())
+            .create_async()
+            .await;
+
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let table = catalog
+            .register_table(
+                &SessionContext::empty(),
+                &TableIdent::from_strs(["ns1", "test1"]).unwrap(),
+                "s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json".to_string(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            format!("{:?}", table.file_io()).contains("RestVendedCredentialProvider"),
+            "the registered table's FileIO holds the provider"
+        );
         config_mock.assert_async().await;
         register_table_mock.assert_async().await;
     }

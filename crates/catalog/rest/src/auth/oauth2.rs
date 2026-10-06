@@ -157,15 +157,20 @@ impl AuthManager for OAuth2Manager {
         props: &HashMap<String, String>,
         parent: Arc<dyn AuthSession>,
     ) -> Result<Arc<dyn AuthSession>> {
-        let Some(token) = props.get("token") else {
-            return Ok(parent);
-        };
-
-        Ok(Arc::new(OAuth2Session {
-            token: Arc::new(Mutex::new(Some(SensitiveString::from(token.clone())))),
-            token_source: TokenSource::StaticToken,
-        }))
+        Ok(match props.get("token") {
+            Some(token) => static_token_session(token),
+            None => parent,
+        })
     }
+}
+
+/// A session that authenticates with `token` as a bearer token, which is never
+/// refreshed.
+pub(crate) fn static_token_session(token: &str) -> Arc<dyn AuthSession> {
+    Arc::new(OAuth2Session {
+        token: Arc::new(Mutex::new(Some(SensitiveString::from(token.to_string())))),
+        token_source: TokenSource::StaticToken,
+    })
 }
 
 impl OAuth2Manager {
@@ -309,15 +314,21 @@ impl ClientCredentialsConfig {
         let body = response.body();
 
         let auth_res: TokenResponse = if status == StatusCode::OK {
+            // A token response holds the token, and serde's errors quote the
+            // values they reject, so neither the body nor the error is kept.
             Ok(serde_json::from_slice(body).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
-                    "Failed to parse response from rest catalog server!",
+                    format!(
+                        "Failed to parse response from rest catalog server: {:?} error at \
+                         line {}, column {}",
+                        e.classify(),
+                        e.line(),
+                        e.column()
+                    ),
                 )
                 .with_context("operation", "auth")
                 .with_context("url", self.token_endpoint.clone())
-                .with_context("json", String::from_utf8_lossy(body))
-                .with_source(e)
             })?)
         } else {
             let e: ErrorResponse = serde_json::from_slice(body).map_err(|e| {
@@ -453,5 +464,33 @@ mod tests {
             table_request.headers().get("authorization").unwrap(),
             "Bearer table-token"
         );
+    }
+
+    #[tokio::test]
+    async fn test_unparsable_token_response_is_not_quoted() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .with_status(200)
+            .with_body(r#"{"access_token":"SECRET-TOKEN","token_type":7}"#)
+            .create_async()
+            .await;
+        let manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()))
+            .with_credential(Some("client".to_string()), "secret".to_string());
+        let session = manager
+            .catalog_session(&test_client(), &HashMap::new())
+            .await
+            .unwrap();
+
+        let mut request = HttpRequest::new(
+            Client::new()
+                .get("https://rest.example.com/catalog")
+                .build()
+                .unwrap(),
+        );
+        let error = session.authenticate(&mut request).await.unwrap_err();
+        let error = format!("{error:?}");
+        assert!(!error.contains("SECRET-TOKEN"), "{error}");
+        mock.assert_async().await;
     }
 }

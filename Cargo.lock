@@ -2830,6 +2830,7 @@ dependencies = [
  "futures",
  "iceberg",
  "iceberg_test_utils",
+ "mockito",
  "opendal",
  "reqsign-aws-v4",
  "reqsign-azure-storage",
@@ -2837,8 +2838,10 @@ dependencies = [
  "reqsign-google",
  "reqwest 0.12.28",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
  "typetag",
  "url",
 ]

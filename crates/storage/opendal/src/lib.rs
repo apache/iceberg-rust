@@ -160,14 +160,34 @@ where
     ))
 }
 
+/// Fails serialization of a storage holding a credential provider, which would
+/// otherwise silently fall back to the configured or ambient credentials.
+/// [`FileIO`](iceberg::io::FileIO) serializes its provider separately.
+#[cfg(any(
+    feature = "opendal-s3",
+    feature = "opendal-gcs",
+    feature = "opendal-azdls"
+))]
+pub(crate) fn serialize_credential_provider<S>(
+    _provider: &Option<Arc<dyn StorageCredentialProvider>>,
+    _serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    Err(serde::ser::Error::custom(
+        "storage with a credential provider cannot be serialized; serialize its FileIO instead",
+    ))
+}
+
 #[typetag::serde(name = "OpenDalStorageFactory")]
 impl StorageFactory for OpenDalStorageFactory {
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
-        self.build_with_credentials(config, None)
+        self.build_with_credential_provider(config, None)
     }
 
     #[allow(unused_variables)]
-    fn build_with_credentials(
+    fn build_with_credential_provider(
         &self,
         config: &StorageConfig,
         credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
@@ -254,7 +274,11 @@ pub enum OpenDalStorage {
         #[serde(skip)]
         customized_credential_load: Option<CustomAwsCredentialLoader>,
         /// Provider of refreshable vended credentials, supplied by the catalog.
-        #[serde(skip)]
+        #[serde(
+            skip_deserializing,
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_credential_provider"
+        )]
         credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
     },
     /// GCS storage variant.
@@ -264,7 +288,11 @@ pub enum OpenDalStorage {
         /// GCS configuration.
         config: Arc<GcsConfig>,
         /// Provider of refreshable vended credentials, supplied by the catalog.
-        #[serde(skip)]
+        #[serde(
+            skip_deserializing,
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_credential_provider"
+        )]
         credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
     },
     /// OSS storage variant.
@@ -286,10 +314,14 @@ pub enum OpenDalStorage {
         /// Azure DLS configuration.
         config: Arc<AzdlsConfig>,
         /// Account-specific SAS tokens supplied by Java-compatible properties.
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "AzdlsSasTokens::is_empty")]
         sas_tokens: Arc<AzdlsSasTokens>,
         /// Provider of refreshable vended credentials, supplied by the catalog.
-        #[serde(skip)]
+        #[serde(
+            skip_deserializing,
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_credential_provider"
+        )]
         credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
     },
     /// HuggingFace Hub storage variant.
@@ -309,10 +341,56 @@ pub enum OpenDalStorage {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct DeleteBatchKey {
     storage: String,
-    /// Location used to look up the dynamic credential shared by the batch:
-    /// the credential prefix, or the storage root for an unscoped credential.
-    /// `None` when the path is served by static credentials.
-    credential_location: Option<String>,
+    credential: BatchCredential,
+}
+
+impl DeleteBatchKey {
+    /// Open batches to flush before adding a path with this key.
+    ///
+    /// A scoped credential inside the scope of an open batch means the catalog
+    /// is replacing that batch's broader credential, such as a scheme-wide or
+    /// account-wide seed. Such batches are flushed while their credential is
+    /// still valid: once it expires, nothing may cover their whole scope.
+    fn superseded_batches<'a>(
+        &self,
+        open: impl Iterator<Item = &'a DeleteBatchKey>,
+    ) -> Vec<DeleteBatchKey> {
+        let BatchCredential::Scoped { prefix } = &self.credential else {
+            return Vec::new();
+        };
+        open.filter(|key| {
+            key.storage == self.storage
+                && key
+                    .credential
+                    .location()
+                    .is_some_and(|location| location != prefix && prefix.starts_with(location))
+        })
+        .cloned()
+        .collect()
+    }
+}
+
+/// The credential shared by the paths of a bulk-delete batch.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum BatchCredential {
+    /// Served by the backend's configured credentials.
+    Static,
+    /// A dynamic credential for a whole scheme, such as `s3`, looked up for
+    /// the storage root.
+    SchemeWide { root: String },
+    /// A dynamic credential scoped to `prefix`, looked up for the prefix.
+    Scoped { prefix: String },
+}
+
+impl BatchCredential {
+    /// Location the batch operator looks dynamic credentials up for.
+    fn location(&self) -> Option<&str> {
+        match self {
+            BatchCredential::Static => None,
+            BatchCredential::SchemeWide { root } => Some(root),
+            BatchCredential::Scoped { prefix } => Some(prefix),
+        }
+    }
 }
 
 impl OpenDalStorage {
@@ -328,7 +406,6 @@ impl OpenDalStorage {
     ///
     /// * An [`opendal::Operator`] instance used to operate on file.
     /// * Relative path to the root uri of [`opendal::Operator`].
-    #[allow(unreachable_code, unused_variables)]
     pub(crate) fn create_operator<'a>(
         &self,
         path: &'a impl AsRef<str>,
@@ -341,7 +418,7 @@ impl OpenDalStorage {
     ///
     /// A bulk-delete batch passes its scope location, so every credential the
     /// operator loads covers all paths in the batch.
-    #[allow(unreachable_code, unused_variables)]
+    #[allow(unreachable_code, unreachable_patterns, unused_variables)]
     fn create_operator_with_credential_location<'a>(
         &self,
         path: &'a impl AsRef<str>,
@@ -528,29 +605,34 @@ impl OpenDalStorage {
     /// scope. Loading the credential is normally a cache hit and avoids rebuilding
     /// an operator for every path while preventing a batch from crossing prefixes.
     async fn delete_batch_key_for_path(&self, path: &str) -> Result<DeleteBatchKey> {
-        let credential_location = match self.credential_provider_for_path(path) {
+        let credential = match self.credential_provider_for_path(path) {
             Some(provider) => {
                 let credential = provider.load_credential(path).await?;
                 if !credential.covers(path) {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!(
-                            "vended credential prefix {:?} does not cover storage location {path:?}",
-                            credential.prefix()
-                        ),
+                        utils::uncovered_location_message(path, &credential),
                     ));
                 }
-                Some(match credential.prefix() {
-                    Some(prefix) => prefix.to_string(),
-                    None => utils::storage_root(path)?,
-                })
+                let prefix = credential.prefix();
+                if prefix.contains("://") {
+                    BatchCredential::Scoped {
+                        prefix: prefix.to_string(),
+                    }
+                } else {
+                    // A scheme-wide prefix such as `s3` is no location to look
+                    // up, so the batch looks its credential up for the root.
+                    BatchCredential::SchemeWide {
+                        root: utils::storage_root(path)?,
+                    }
+                }
             }
-            None => None,
+            None => BatchCredential::Static,
         };
 
         Ok(DeleteBatchKey {
             storage: self.batch_key_for_path(path)?,
-            credential_location,
+            credential,
         })
     }
 
@@ -559,7 +641,7 @@ impl OpenDalStorage {
     /// This is a lightweight alternative to [`create_operator`](Self::create_operator) for cases
     /// where only the relative path is needed (e.g. bulk deletes where the operator is already
     /// available).
-    #[allow(unreachable_code, unused_variables)]
+    #[allow(unreachable_code, unreachable_patterns, unused_variables)]
     pub(crate) fn relativize_path<'a>(&self, path: &'a str) -> Result<&'a str> {
         match self {
             #[cfg(feature = "opendal-memory")]
@@ -731,6 +813,12 @@ impl Storage for OpenDalStorage {
         while let Some(path) = paths.next().await {
             let batch_key = self.delete_batch_key_for_path(&path).await?;
 
+            for key in batch_key.superseded_batches(deleters.keys()) {
+                if let Some(mut deleter) = deleters.remove(&key) {
+                    deleter.close().await.map_err(from_opendal_error)?;
+                }
+            }
+
             let (relative_path, deleter) = match deleters.entry(batch_key) {
                 Entry::Occupied(entry) => {
                     (self.relativize_path(&path)?.to_string(), entry.into_mut())
@@ -738,7 +826,7 @@ impl Storage for OpenDalStorage {
                 Entry::Vacant(entry) => {
                     let (op, rel) = self.create_operator_with_credential_location(
                         &path,
-                        entry.key().credential_location.as_deref(),
+                        entry.key().credential.location(),
                     )?;
                     let rel = rel.to_string();
                     let deleter = op.deleter().await.map_err(from_opendal_error)?;
@@ -856,19 +944,43 @@ mod tests {
     ))]
     #[async_trait]
     impl StorageCredentialProvider for AlwaysSupportedCredentialProvider {
+        fn supports_path(&self, _path: &str) -> bool {
+            true
+        }
+
         async fn load_credential(&self, path: &str) -> Result<iceberg::io::StorageCredential> {
             let prefix = if path.contains("/table-a/") {
                 "s3://bucket/table-a"
             } else {
                 "s3://bucket/table-b"
             };
-            Ok(
-                iceberg::io::StorageCredential::new(iceberg::io::StorageCredentialKind::S3(
-                    iceberg::io::S3Credential::new("access-key", "secret-key", None),
-                ))
-                .with_prefix(prefix),
-            )
+            Ok(s3_credential(prefix, "access-key"))
         }
+    }
+
+    /// An S3 credential for locations under `prefix`.
+    #[cfg(any(
+        feature = "opendal-s3",
+        feature = "opendal-gcs",
+        all(feature = "opendal-memory", feature = "opendal-azdls")
+    ))]
+    fn s3_credential(
+        prefix: impl Into<String>,
+        access_key: &str,
+    ) -> iceberg::io::StorageCredential {
+        iceberg::io::StorageCredential::new(
+            prefix,
+            HashMap::from([
+                (
+                    iceberg::io::S3_ACCESS_KEY_ID.to_string(),
+                    access_key.to_string(),
+                ),
+                (
+                    iceberg::io::S3_SECRET_ACCESS_KEY.to_string(),
+                    "secret-key".to_string(),
+                ),
+            ]),
+        )
     }
 
     #[cfg(feature = "opendal-s3")]
@@ -920,7 +1032,7 @@ mod tests {
     #[test]
     fn test_factory_ignores_credentials_for_unsupported_backend() {
         let storage = OpenDalStorageFactory::Memory
-            .build_with_credentials(
+            .build_with_credential_provider(
                 &StorageConfig::new(),
                 Some(Arc::new(AlwaysSupportedCredentialProvider)),
             )
@@ -1016,6 +1128,198 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "opendal-azdls")]
+    #[test]
+    fn test_azdls_storage_omits_empty_sas_tokens() {
+        let storage = |sas_tokens: AzdlsSasTokens| OpenDalStorage::Azdls {
+            config: Arc::new(AzdlsConfig::default()),
+            sas_tokens: Arc::new(sas_tokens),
+            credential_provider: None,
+        };
+
+        let json = serde_json::to_value(storage(AzdlsSasTokens::default())).unwrap();
+        assert!(json["Azdls"].get("sas_tokens").is_none(), "{json}");
+        let deserialized: OpenDalStorage = serde_json::from_value(json).unwrap();
+        assert!(matches!(deserialized, OpenDalStorage::Azdls { .. }));
+    }
+
+    /// Vends a credential for the whole `s3` scheme until it has served
+    /// `table-c`, then credentials scoped to each table. The scheme-wide
+    /// credential expires once the `table-c` batch is signed.
+    #[cfg(feature = "opendal-s3")]
+    #[derive(Debug, Default)]
+    struct ChangingScopeProvider {
+        scoped: std::sync::atomic::AtomicBool,
+        scheme_wide_expired: std::sync::atomic::AtomicBool,
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[async_trait]
+    impl StorageCredentialProvider for ChangingScopeProvider {
+        fn supports_path(&self, _path: &str) -> bool {
+            true
+        }
+
+        async fn load_credential(&self, path: &str) -> Result<iceberg::io::StorageCredential> {
+            use std::sync::atomic::Ordering;
+
+            if path.starts_with("s3://bucket/table-c") {
+                self.scoped.store(true, Ordering::SeqCst);
+            }
+            // Signing the scoped batch means the scheme-wide credential is gone.
+            if path == "s3://bucket/table-c" {
+                self.scheme_wide_expired.store(true, Ordering::SeqCst);
+            }
+            match path.strip_prefix("s3://bucket/") {
+                Some(rest) if self.scoped.load(Ordering::SeqCst) && !rest.is_empty() => {
+                    let table = rest.split('/').next().unwrap_or_default();
+                    Ok(s3_credential(format!("s3://bucket/{table}"), "SCOPED_AK"))
+                }
+                _ if self.scheme_wide_expired.load(Ordering::SeqCst) => Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "the scheme-wide credential expired",
+                )),
+                _ => Ok(s3_credential("s3", "SCHEME_AK")),
+            }
+        }
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[tokio::test]
+    async fn test_delete_stream_signs_each_batch_with_its_vended_credential() {
+        let mut server = mockito::Server::new_async().await;
+        let mut delete = |path: &str, access_key: &str| {
+            server
+                .mock("DELETE", path)
+                .match_header(
+                    "authorization",
+                    mockito::Matcher::Regex(format!("Credential={access_key}/")),
+                )
+                .expect(1)
+                .with_status(204)
+        };
+        // The scheme-wide batch is flushed, with its own credential, before
+        // the scoped credential that replaces it is used.
+        let scheme_wide = delete("/bucket/table-b/f.parquet", "SCHEME_AK")
+            .create_async()
+            .await;
+        let scoped = delete("/bucket/table-c/f.parquet", "SCOPED_AK")
+            .create_async()
+            .await;
+
+        let mut config = S3Config::default();
+        config.endpoint = Some(server.url());
+        config.region = Some("us-east-1".to_string());
+        config.disable_config_load = true;
+        config.disable_ec2_metadata = true;
+        let storage = OpenDalStorage::S3 {
+            config: Arc::new(config),
+            customized_credential_load: None,
+            credential_provider: Some(Arc::new(ChangingScopeProvider::default())),
+        };
+        storage
+            .delete_stream(
+                futures::stream::iter([
+                    "s3://bucket/table-b/f.parquet".to_string(),
+                    "s3://bucket/table-c/f.parquet".to_string(),
+                ])
+                .boxed(),
+            )
+            .await
+            .unwrap();
+
+        scheme_wide.assert_async().await;
+        scoped.assert_async().await;
+    }
+
+    /// Vends `token` as a GCS credential, or fails when it is `None`.
+    #[cfg(feature = "opendal-gcs")]
+    #[derive(Debug)]
+    struct GcsTokenProvider(Option<&'static str>);
+
+    #[cfg(feature = "opendal-gcs")]
+    #[async_trait]
+    impl StorageCredentialProvider for GcsTokenProvider {
+        fn supports_path(&self, _path: &str) -> bool {
+            true
+        }
+
+        async fn load_credential(&self, _path: &str) -> Result<iceberg::io::StorageCredential> {
+            let token = self
+                .0
+                .ok_or_else(|| Error::new(ErrorKind::Unexpected, "refresh failed"))?;
+            Ok(iceberg::io::StorageCredential::new(
+                "gs",
+                HashMap::from([(iceberg::io::GCS_TOKEN.to_string(), token.to_string())]),
+            ))
+        }
+    }
+
+    #[cfg(feature = "opendal-gcs")]
+    fn gcs_storage(server: &mockito::Server, provider: GcsTokenProvider) -> OpenDalStorage {
+        let config = gcs_config_parse(HashMap::from([
+            (iceberg::io::GCS_SERVICE_HOST.to_string(), server.url()),
+            (
+                iceberg::io::GCS_TOKEN.to_string(),
+                "static-token".to_string(),
+            ),
+        ]))
+        .unwrap();
+        OpenDalStorage::Gcs {
+            config: Arc::new(config),
+            credential_provider: Some(Arc::new(provider)),
+        }
+    }
+
+    #[cfg(feature = "opendal-gcs")]
+    #[tokio::test]
+    async fn test_gcs_signs_with_the_vended_token() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", mockito::Matcher::Any)
+            .match_header("authorization", "Bearer vended-token")
+            .expect_at_least(1)
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let storage = gcs_storage(&server, GcsTokenProvider(Some("vended-token")));
+        assert!(!storage.exists("gs://bucket/file.parquet").await.unwrap());
+        mock.assert_async().await;
+    }
+
+    #[cfg(feature = "opendal-gcs")]
+    #[tokio::test]
+    async fn test_gcs_does_not_fall_back_when_the_provider_fails() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", mockito::Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let storage = gcs_storage(&server, GcsTokenProvider(None));
+        assert!(storage.exists("gs://bucket/file.parquet").await.is_err());
+        mock.assert_async().await;
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[test]
+    fn test_storage_with_credential_provider_is_not_serializable() {
+        let storage =
+            |credential_provider: Option<Arc<dyn StorageCredentialProvider>>| OpenDalStorage::S3 {
+                config: Arc::new(S3Config::default()),
+                customized_credential_load: None,
+                credential_provider,
+            };
+
+        assert!(serde_json::to_string(&storage(None)).is_ok());
+        let error =
+            serde_json::to_string(&storage(Some(Arc::new(AlwaysSupportedCredentialProvider))))
+                .unwrap_err();
+        assert!(error.to_string().contains("credential provider"), "{error}");
+    }
+
     #[cfg(feature = "opendal-s3")]
     #[tokio::test]
     async fn test_dynamic_credentials_batch_by_prefix() {
@@ -1029,10 +1333,7 @@ mod tests {
         let other_scope = "s3://bucket/table-b/file.parquet";
 
         let first_key = storage.delete_batch_key_for_path(first).await.unwrap();
-        assert_eq!(
-            first_key.credential_location.as_deref(),
-            Some("s3://bucket/table-a")
-        );
+        assert_eq!(first_key.credential.location(), Some("s3://bucket/table-a"));
         assert_eq!(
             first_key,
             storage.delete_batch_key_for_path(same_scope).await.unwrap()
@@ -1048,40 +1349,85 @@ mod tests {
 
     #[cfg(feature = "opendal-s3")]
     #[tokio::test]
-    async fn test_unscoped_dynamic_credentials_batch_by_storage_root() {
+    async fn test_scheme_wide_dynamic_credentials_batch_by_storage_root() {
         #[derive(Debug)]
-        struct UnscopedProvider;
+        struct SchemeWideProvider;
 
         #[async_trait]
-        impl StorageCredentialProvider for UnscopedProvider {
+        impl StorageCredentialProvider for SchemeWideProvider {
+            fn supports_path(&self, _path: &str) -> bool {
+                true
+            }
+
             async fn load_credential(&self, _path: &str) -> Result<iceberg::io::StorageCredential> {
-                Ok(iceberg::io::StorageCredential::new(
-                    iceberg::io::StorageCredentialKind::S3(iceberg::io::S3Credential::new(
-                        "access-key",
-                        "secret-key",
-                        None,
-                    )),
-                ))
+                Ok(s3_credential("s3", "access-key"))
             }
         }
 
         let storage = OpenDalStorage::S3 {
             config: Arc::new(S3Config::default()),
             customized_credential_load: None,
-            credential_provider: Some(Arc::new(UnscopedProvider)),
+            credential_provider: Some(Arc::new(SchemeWideProvider)),
         };
 
         let key = storage
             .delete_batch_key_for_path("s3://bucket/table-a/file.parquet")
             .await
             .unwrap();
-        assert_eq!(key.credential_location.as_deref(), Some("s3://bucket/"));
+        assert_eq!(key.credential, BatchCredential::SchemeWide {
+            root: "s3://bucket/".to_string()
+        });
         assert_eq!(
             key,
             storage
                 .delete_batch_key_for_path("s3://bucket/table-b/file.parquet")
                 .await
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_scoped_batch_flushes_broader_batches_of_same_storage() {
+        let key = |storage: &str, credential: BatchCredential| DeleteBatchKey {
+            storage: storage.to_string(),
+            credential,
+        };
+        let unscoped = key("bucket", BatchCredential::SchemeWide {
+            root: "s3://bucket/".to_string(),
+        });
+        let other_storage = key("other", BatchCredential::SchemeWide {
+            root: "s3://other/".to_string(),
+        });
+        let scoped = key("bucket", BatchCredential::Scoped {
+            prefix: "s3://bucket/table-a".to_string(),
+        });
+        let open = [unscoped.clone(), other_storage, scoped.clone()];
+
+        let new_scope = key("bucket", BatchCredential::Scoped {
+            prefix: "s3://bucket/table-b".to_string(),
+        });
+        assert_eq!(new_scope.superseded_batches(open.iter()), vec![
+            unscoped.clone()
+        ]);
+
+        // A narrower scope also supersedes a broader scoped batch, such as one
+        // using an account-wide ADLS seed scoped to its container.
+        let nested = key("bucket", BatchCredential::Scoped {
+            prefix: "s3://bucket/table-a/data".to_string(),
+        });
+        let superseded = nested.superseded_batches(open.iter());
+        assert_eq!(superseded.len(), 2);
+        assert!(superseded.contains(&unscoped) && superseded.contains(&scoped));
+        // A batch never supersedes itself.
+        assert_eq!(scoped.superseded_batches(open.iter()), vec![
+            unscoped.clone()
+        ]);
+        // Scheme-wide and static paths leave open batches alone.
+        assert!(unscoped.superseded_batches(open.iter()).is_empty());
+        assert!(
+            key("bucket", BatchCredential::Static)
+                .superseded_batches(open.iter())
+                .is_empty()
         );
     }
 
@@ -1100,7 +1446,7 @@ mod tests {
             .delete_batch_key_for_path("s3://bucket/table-a/file.parquet")
             .await
             .unwrap();
-        assert_eq!(key.credential_location, None);
+        assert_eq!(key.credential, BatchCredential::Static);
     }
 
     #[cfg(feature = "opendal-s3")]

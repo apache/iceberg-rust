@@ -27,6 +27,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use iceberg::{Error, ErrorKind, Result, TableIdent};
 pub use oauth2::OAuth2Manager;
+pub(crate) use oauth2::static_token_session;
 
 use crate::catalog::{REST_CATALOG_PROP_AUTH_TYPE, RestCatalogConfig};
 use crate::client::HttpClient;
@@ -102,6 +103,9 @@ pub trait AuthManager: Debug + Send + Sync {
     ) -> Result<Arc<dyn AuthSession>>;
 
     /// Returns a session for requests associated with `table`.
+    ///
+    /// Currently only requests for the table's vended storage credentials use
+    /// it; other table operations use the catalog session.
     ///
     /// `props` are the unmerged properties returned by the table endpoint.
     /// The default preserves the catalog session; managers should return a
