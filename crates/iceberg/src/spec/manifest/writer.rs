@@ -580,6 +580,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::avro::define_named_types_repeatedly;
     use crate::io::FileIO;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, Manifest, NestedField,
@@ -823,9 +824,12 @@ mod tests {
         );
     }
 
-    /// Writes a manifest partitioned by identity on two columns of `field_type`
-    /// and reads it back.
-    async fn roundtrip_two_partition_fields_of_type(field_type: Type, values: [Literal; 2]) {
+    /// Writes a manifest partitioned by identity on two columns of `field_type`,
+    /// reads it back, and returns the manifest file.
+    async fn roundtrip_two_partition_fields_of_type(
+        field_type: Type,
+        values: [Literal; 2],
+    ) -> Vec<u8> {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
@@ -867,10 +871,34 @@ mod tests {
             )
             .unwrap();
         writer.write_manifest_file().await.unwrap();
+        let bs = fs::read(&path).unwrap();
 
-        let manifest = Manifest::parse_avro(&fs::read(&path).unwrap()).unwrap();
+        // Also read the manifest as iceberg-rust wrote it before defining each
+        // named type once.
+        for bs in [bs.clone(), define_named_types_repeatedly(&bs)] {
+            let manifest = Manifest::parse_avro(&bs).unwrap();
 
-        assert_eq!(*manifest.entries()[0].data_file().partition(), partition);
+            assert_eq!(*manifest.entries()[0].data_file().partition(), partition);
+        }
+        bs
+    }
+
+    #[tokio::test]
+    async fn test_write_manifest_header_marks_int_keyed_maps() {
+        // Java and PyIceberg read an array of key-value records as a map only if
+        // it has `logicalType: map`. apache-avro 0.22 drops the attribute when it
+        // parses a schema (https://github.com/apache/avro-rs/issues/654), so this
+        // checks the schema JSON in the written header.
+        let bs = roundtrip_two_partition_fields_of_type(Type::Primitive(PrimitiveType::Int), [
+            Literal::int(1),
+            Literal::int(2),
+        ])
+        .await;
+
+        let file = String::from_utf8_lossy(&bs);
+        // `column_sizes`, `value_counts`, `null_value_counts`,
+        // `nan_value_counts`, `lower_bounds`, and `upper_bounds`.
+        assert_eq!(file.matches(r#""logicalType":"map""#).count(), 6);
     }
 
     #[tokio::test]

@@ -1724,7 +1724,7 @@ fn test_datum_to_decimal_rejects_scale_change() {
 }
 
 #[test]
-fn raw_literal_project_by_name_reorders_and_fills_fields() {
+fn test_raw_literal_project_by_name_reorders_and_fills_fields() {
     let written = StructType::new(vec![
         NestedField::required(1, "a", Primitive(PrimitiveType::Int)).into(),
         NestedField::optional(2, "b", Primitive(PrimitiveType::Int)).into(),
@@ -1762,7 +1762,7 @@ fn raw_literal_project_by_name_reorders_and_fills_fields() {
 }
 
 #[test]
-fn raw_literal_project_by_name_rejects_missing_required_field() {
+fn test_raw_literal_project_by_name_rejects_missing_required_field() {
     let written = StructType::new(vec![
         NestedField::optional(1, "a", Primitive(PrimitiveType::Int)).into(),
     ]);

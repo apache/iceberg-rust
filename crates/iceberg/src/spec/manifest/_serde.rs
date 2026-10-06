@@ -15,6 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Serde forms of manifest entries.
+//!
+//! `Manifest::parse_avro` deserializes these structs from the writer schema
+//! without a reader schema, so they decide which manifests read. A field that
+//! a writer may omit, per the spec's read rules for every format version the
+//! struct reads, must be an `Option` or have `#[serde(default)]`.
+//! `test_parse_manifest_without_each_field` checks each field.
+
 use std::collections::HashMap;
 
 use serde_derive::{Deserialize, Serialize};
@@ -327,9 +335,10 @@ mod tests {
     use std::io::Cursor;
     use std::sync::Arc;
 
+    use crate::avro::define_named_types_repeatedly;
     use crate::spec::manifest::_serde::{I64Entry, parse_i64_entry};
     use crate::spec::{
-        DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, NestedField,
+        DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, Literal, NestedField,
         PrimitiveType, Schema, Struct, StructType, Type, read_data_files_from_avro,
         write_data_files_to_avro,
     };
@@ -422,6 +431,52 @@ mod tests {
         .unwrap();
 
         assert_eq!(data_files, actual_data_file);
+    }
+
+    /// apache-avro 0.22 checks the writer schema for repeated names only when
+    /// the reader has no reader schema, so this path reads 0.21 output without
+    /// the header rewrite that `Manifest::parse_avro` needs.
+    #[test]
+    fn test_read_data_files_with_repeated_named_type_definitions() {
+        let decimal = Type::Primitive(PrimitiveType::Decimal {
+            precision: 10,
+            scale: 2,
+        });
+        let schema = Schema::builder()
+            .with_fields(schema().as_struct().fields().to_vec())
+            .with_fields(vec![
+                NestedField::optional(4, "a", decimal.clone()).into(),
+                NestedField::optional(5, "b", decimal.clone()).into(),
+            ])
+            .build()
+            .unwrap();
+        let partition_type = StructType::new(vec![
+            NestedField::optional(1000, "a", decimal.clone()).into(),
+            NestedField::optional(1001, "b", decimal).into(),
+        ]);
+        let mut data_files = data_files();
+        data_files[0].partition =
+            Struct::from_iter([Some(Literal::decimal(12345)), Some(Literal::decimal(-678))]);
+        let mut buffer = Vec::new();
+        write_data_files_to_avro(
+            &mut buffer,
+            data_files.clone(),
+            &partition_type,
+            FormatVersion::V2,
+        )
+        .unwrap();
+        let legacy = define_named_types_repeatedly(&buffer);
+
+        let actual = read_data_files_from_avro(
+            &mut Cursor::new(legacy),
+            &schema,
+            0,
+            &partition_type,
+            FormatVersion::V2,
+        )
+        .unwrap();
+
+        assert_eq!(actual, data_files);
     }
 
     #[tokio::test]

@@ -989,6 +989,75 @@ mod tests {
     }
 
     #[test]
+    fn test_schema_to_avro_schema_defines_named_types_before_references() {
+        let decimal = Type::Primitive(PrimitiveType::Decimal {
+            precision: 10,
+            scale: 2,
+        });
+        let iceberg_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "a", decimal.clone()).into(),
+                NestedField::required(
+                    2,
+                    "list",
+                    Type::List(ListType::new(
+                        NestedField::list_element(3, decimal.clone(), false).into(),
+                    )),
+                )
+                .into(),
+                NestedField::required(
+                    4,
+                    "map",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(5, PrimitiveType::Int.into())
+                            .into(),
+                        value_field: NestedField::map_value_element(6, decimal, false).into(),
+                    }),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let json = schema_to_avro_schema("r", &iceberg_schema)
+            .unwrap()
+            .canonical_form();
+
+        // Parsing fails on a reference that precedes its definition.
+        AvroSchema::parse_str(&json).unwrap();
+        assert_eq!(json.matches(r#""name":"decimal_10_2""#).count(), 1);
+    }
+
+    #[test]
+    fn test_schema_with_array_map_without_parsing() {
+        // Unlike `test_schema_with_array_map`, this converts an Avro schema built
+        // in code, which keeps `logicalType: map` in apache-avro 0.22.
+        let map = |key_id, value_id, value_required| {
+            Type::Map(MapType {
+                key_field: NestedField::map_key_element(key_id, PrimitiveType::Boolean.into())
+                    .into(),
+                value_field: NestedField::map_value_element(
+                    value_id,
+                    PrimitiveType::Boolean.into(),
+                    value_required,
+                )
+                .into(),
+            })
+        };
+        let iceberg_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(100, "optional_values", map(102, 103, false)).into(),
+                NestedField::optional(104, "required_values", map(105, 106, true)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let avro_schema = schema_to_avro_schema("avro_schema", &iceberg_schema).unwrap();
+
+        assert_eq!(avro_schema_to_schema(&avro_schema).unwrap(), iceberg_schema);
+    }
+
+    #[test]
     #[ignore = "apache-avro 0.22 drops `logicalType: map` when parsing schema JSON \
                 (https://github.com/apache/avro-rs/issues/654), so avro_schema_to_schema \
                 reads a parsed map array as a list. Fixed by \

@@ -27,6 +27,7 @@ mod reader;
 pub use reader::*;
 mod writer;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use apache_avro::Reader as AvroReader;
 use apache_avro::error::Details;
@@ -38,6 +39,10 @@ use super::{
 };
 use crate::avro::{Resolved, define_named_types_once};
 use crate::error::{Result, invalid_data};
+
+/// Whether a manifest with repeated Avro named type definitions was logged at
+/// warn level. A table written by an affected release can have many of them.
+static WARNED_REPEATED_DEFINITIONS: AtomicBool = AtomicBool::new(false);
 
 /// A manifest contains metadata and a list of entries.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -56,16 +61,26 @@ impl Manifest {
         let rewritten;
         let reader = match AvroReader::new(bs) {
             Ok(reader) => reader,
+            // iceberg-rust repeated `decimal` definitions before
+            // `schema_to_avro_schema` defined each named type once, so this
+            // fallback stays while tables can contain manifests it wrote.
             Err(e) if matches!(e.details(), Details::AmbiguousSchemaDefinition(_)) => {
-                let Some((bs, repeated)) = define_named_types_once(bs)? else {
+                let Ok(Some((bs, repeated))) = define_named_types_once(bs) else {
                     return Err(e.into());
                 };
-                tracing::warn!(
-                    "Manifest {} defines Avro named types {repeated:?} more than once, which the \
-                     Avro specification doesn't allow. Reading it with each repeated definition \
-                     replaced by a reference to the first.",
-                    location.unwrap_or("<unknown location>")
-                );
+                let location = location.unwrap_or("<unknown location>");
+                if WARNED_REPEATED_DEFINITIONS.swap(true, Ordering::Relaxed) {
+                    tracing::debug!(
+                        "Manifest {location} defines Avro named types {repeated:?} more than once."
+                    );
+                } else {
+                    tracing::warn!(
+                        "Manifest {location} defines Avro named types {repeated:?} more than once, \
+                         which the Avro specification doesn't allow. Reading it with each repeated \
+                         definition replaced by a reference to the first. Later manifests like \
+                         this are logged at debug level."
+                    );
+                }
                 rewritten = bs;
                 AvroReader::new(rewritten.as_slice())?
             }
@@ -1561,6 +1576,157 @@ mod tests {
         writer.into_inner().unwrap()
     }
 
+    /// Removes the field named by `path` from a record schema and from a record
+    /// value of that schema.
+    fn remove_writer_field(schema: &mut Value, entry: &mut AvroValue, path: &[&str]) {
+        let (name, rest) = path.split_first().unwrap();
+        let AvroValue::Record(values) = entry else {
+            unreachable!("the entry is a record");
+        };
+        let fields = schema["fields"].as_array_mut().unwrap();
+        if rest.is_empty() {
+            fields.retain(|field| field["name"] != *name);
+            values.retain(|(value_name, _)| value_name != name);
+        } else {
+            let field = fields.iter_mut().find(|field| field["name"] == *name);
+            let value = values.iter_mut().find(|(value_name, _)| value_name == name);
+            remove_writer_field(&mut field.unwrap()["type"], &mut value.unwrap().1, rest);
+        }
+    }
+
+    #[test]
+    fn test_parse_manifest_without_each_field() {
+        // Fields that the spec doesn't require in every version must read as
+        // their default when the writer omits them.
+        let metadata = writer_schema_test_metadata();
+        let partition_type = metadata
+            .partition_spec
+            .partition_type(&metadata.schema)
+            .unwrap();
+        let full_schema =
+            serde_json::to_value(manifest_schema_v2(&partition_type).unwrap()).unwrap();
+        let mut full_entry = expected_entry(Struct::from_iter([
+            Some(Literal::long(5)),
+            Some(Literal::string("a")),
+            Some(Literal::double(2.5)),
+        ]));
+        full_entry.sequence_number = Some(3);
+        full_entry.file_sequence_number = Some(4);
+        let data_file = &mut full_entry.data_file;
+        data_file.content = DataContentType::PositionDeletes;
+        data_file.column_sizes = HashMap::from([(1, 40)]);
+        data_file.value_counts = HashMap::from([(1, 10)]);
+        data_file.null_value_counts = HashMap::from([(1, 1)]);
+        data_file.nan_value_counts = HashMap::from([(3, 2)]);
+        data_file.lower_bounds = HashMap::from([(1, Datum::long(1))]);
+        data_file.upper_bounds = HashMap::from([(1, Datum::long(9))]);
+        data_file.key_metadata = Some(vec![1, 2]);
+        data_file.split_offsets = Some(vec![4]);
+        data_file.equality_ids = Some(vec![1]);
+        data_file.sort_order_id = Some(0);
+        data_file.first_row_id = Some(100);
+        data_file.referenced_data_file = Some("s3://bucket/table/data/b.parquet".to_string());
+        data_file.content_offset = Some(4);
+        data_file.content_size_in_bytes = Some(8);
+        let full_value = to_value(
+            _serde::ManifestEntryV2::try_from(
+                full_entry.clone(),
+                &Type::Struct(partition_type.clone()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        type ResetField = fn(&mut ManifestEntry);
+        let optional: [(&[&str], ResetField); 18] = [
+            (&["snapshot_id"], |e| e.snapshot_id = None),
+            (&["sequence_number"], |e| e.sequence_number = None),
+            (&["file_sequence_number"], |e| e.file_sequence_number = None),
+            (&["data_file", "content"], |e| {
+                e.data_file.content = DataContentType::Data
+            }),
+            (&["data_file", "column_sizes"], |e| {
+                e.data_file.column_sizes.clear()
+            }),
+            (&["data_file", "value_counts"], |e| {
+                e.data_file.value_counts.clear()
+            }),
+            (&["data_file", "null_value_counts"], |e| {
+                e.data_file.null_value_counts.clear()
+            }),
+            (&["data_file", "nan_value_counts"], |e| {
+                e.data_file.nan_value_counts.clear()
+            }),
+            (&["data_file", "lower_bounds"], |e| {
+                e.data_file.lower_bounds.clear()
+            }),
+            (&["data_file", "upper_bounds"], |e| {
+                e.data_file.upper_bounds.clear()
+            }),
+            (&["data_file", "key_metadata"], |e| {
+                e.data_file.key_metadata = None
+            }),
+            (&["data_file", "split_offsets"], |e| {
+                e.data_file.split_offsets = None
+            }),
+            (&["data_file", "equality_ids"], |e| {
+                e.data_file.equality_ids = None
+            }),
+            (&["data_file", "sort_order_id"], |e| {
+                e.data_file.sort_order_id = None
+            }),
+            (&["data_file", "first_row_id"], |e| {
+                e.data_file.first_row_id = None
+            }),
+            (&["data_file", "referenced_data_file"], |e| {
+                e.data_file.referenced_data_file = None
+            }),
+            (&["data_file", "content_offset"], |e| {
+                e.data_file.content_offset = None
+            }),
+            (&["data_file", "content_size_in_bytes"], |e| {
+                e.data_file.content_size_in_bytes = None
+            }),
+        ];
+        for (path, reset) in optional {
+            let (mut schema, mut value) = (full_schema.clone(), full_value.clone());
+            remove_writer_field(&mut schema, &mut value, path);
+            let bs = write_avro_values_with_writer_schema(&metadata, &schema, vec![value]);
+
+            let manifest = Manifest::parse_avro(&bs).unwrap();
+
+            let mut expected = full_entry.clone();
+            reset(&mut expected);
+            assert_eq!(
+                manifest,
+                Manifest::new(metadata.clone(), vec![expected]),
+                "{path:?}"
+            );
+        }
+
+        let required: [&[&str]; 7] = [
+            &["status"],
+            &["data_file"],
+            &["data_file", "file_path"],
+            &["data_file", "file_format"],
+            &["data_file", "partition"],
+            &["data_file", "record_count"],
+            &["data_file", "file_size_in_bytes"],
+        ];
+        for path in required {
+            let (mut schema, mut value) = (full_schema.clone(), full_value.clone());
+            remove_writer_field(&mut schema, &mut value, path);
+            let bs = write_avro_values_with_writer_schema(&metadata, &schema, vec![value]);
+
+            let err = Manifest::parse_avro(&bs).unwrap_err();
+
+            assert!(
+                err.to_string().contains(path.last().unwrap()),
+                "{path:?}: {err}"
+            );
+        }
+    }
+
     #[test]
     fn test_parse_manifest_matches_partition_fields_by_name() {
         // The writer orders the partition fields differently from the spec, omits
@@ -1845,6 +2011,94 @@ mod tests {
         let err = Manifest::parse_avro(&bs).unwrap_err();
 
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[test]
+    fn test_parse_manifest_written_by_pyiceberg() {
+        let bs = fs::read(format!(
+            "{}/testdata/manifests/pyiceberg-v2-data.avro",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+
+        let manifest = Manifest::parse_avro(&bs).unwrap();
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "category", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                    NestedField::optional(3, "score", Type::Primitive(PrimitiveType::Double))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_partition_field("category", "category", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        let metadata = ManifestMetadata {
+            schema_id: 0,
+            schema,
+            partition_spec,
+            content: ManifestContentType::Data,
+            format_version: FormatVersion::V2,
+        };
+        let entries = (0..2)
+            .map(|i: i64| {
+                let category = format!("c{i}");
+                ManifestEntry {
+                    status: ManifestStatus::Added,
+                    snapshot_id: Some(7),
+                    sequence_number: Some(1),
+                    file_sequence_number: Some(1),
+                    data_file: DataFile {
+                        content: DataContentType::Data,
+                        file_path: format!(
+                            "s3://bucket/table/data/category={category}/0000{i}.parquet"
+                        ),
+                        file_format: DataFileFormat::Parquet,
+                        partition: Struct::from_iter([Some(Literal::string(&category))]),
+                        record_count: 100 + i as u64,
+                        file_size_in_bytes: 1000 + i as u64,
+                        column_sizes: HashMap::from([
+                            (1, 10 + i as u64),
+                            (2, 20 + i as u64),
+                            (3, 30 + i as u64),
+                        ]),
+                        value_counts: HashMap::from([
+                            (1, 100 + i as u64),
+                            (2, 100 + i as u64),
+                            (3, 100 + i as u64),
+                        ]),
+                        null_value_counts: HashMap::from([(1, 0), (2, i as u64), (3, 1)]),
+                        nan_value_counts: HashMap::from([(3, i as u64)]),
+                        lower_bounds: HashMap::from([
+                            (1, Datum::long(i)),
+                            (2, Datum::string(&category)),
+                        ]),
+                        upper_bounds: HashMap::from([
+                            (1, Datum::long(i + 50)),
+                            (2, Datum::string(&category)),
+                        ]),
+                        key_metadata: None,
+                        split_offsets: Some(vec![4]),
+                        equality_ids: None,
+                        sort_order_id: Some(0),
+                        partition_spec_id: 0,
+                        first_row_id: None,
+                        referenced_data_file: None,
+                        content_offset: None,
+                        content_size_in_bytes: None,
+                    },
+                }
+            })
+            .collect();
+        assert_eq!(manifest, Manifest::new(metadata, entries));
     }
 
     #[test]

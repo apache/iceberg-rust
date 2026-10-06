@@ -45,6 +45,16 @@ const SCHEMA_KEY: &str = "avro.schema";
 /// file and the full names of the repeated types, or `None` if a repeated
 /// definition differs from the first one, which leaves the file ambiguous.
 pub(crate) fn define_named_types_once(bs: &[u8]) -> Result<Option<(Vec<u8>, Vec<String>)>> {
+    rewrite_schema(bs, reference_repeated_definitions)
+}
+
+/// Rewrites the schema in the header of an Avro object container file with
+/// `rewrite`, leaving the data blocks as they are. Returns `None` if `rewrite`
+/// does.
+fn rewrite_schema<T>(
+    bs: &[u8],
+    rewrite: impl FnOnce(&mut JsonValue) -> Option<T>,
+) -> Result<Option<(Vec<u8>, T)>> {
     let body = bs
         .strip_prefix(MAGIC)
         .ok_or_else(|| invalid_data!("Not an Avro object container file"))?;
@@ -60,13 +70,16 @@ pub(crate) fn define_named_types_once(bs: &[u8]) -> Result<Option<(Vec<u8>, Vec<
     else {
         return Err(invalid_data!("Avro file metadata is not a map"));
     };
-    let rest = &body[cursor.position() as usize..];
+    let rest = usize::try_from(cursor.position())
+        .ok()
+        .and_then(|position| body.get(position..))
+        .ok_or_else(|| invalid_data!("Avro file metadata extends past the end of the file"))?;
 
     let Some(AvroValue::Bytes(schema)) = metadata.get(SCHEMA_KEY) else {
         return Err(invalid_data!("Avro file metadata has no {SCHEMA_KEY}"));
     };
     let mut schema: JsonValue = serde_json::from_slice(schema)?;
-    let Some(repeated) = reference_repeated_definitions(&mut schema) else {
+    let Some(rewritten) = rewrite(&mut schema) else {
         return Ok(None);
     };
     metadata.insert(
@@ -77,7 +90,48 @@ pub(crate) fn define_named_types_once(bs: &[u8]) -> Result<Option<(Vec<u8>, Vec<
         .build()?
         .write_value_to_vec(AvroValue::Map(metadata))?;
 
-    Ok(Some(([MAGIC, &metadata, rest].concat(), repeated)))
+    Ok(Some(([MAGIC, &metadata, rest].concat(), rewritten)))
+}
+
+/// Rewrites the header of an Avro object container file so that each reference
+/// to a named type repeats its definition, as iceberg-rust wrote manifests with
+/// `apache-avro` 0.21.
+#[cfg(test)]
+pub(crate) fn define_named_types_repeatedly(bs: &[u8]) -> Vec<u8> {
+    fn inline_references(schema: &mut JsonValue, defined: &mut HashMap<String, JsonValue>) {
+        match schema {
+            JsonValue::String(name) => {
+                if let Some(definition) = defined.get(name.as_str()) {
+                    *schema = definition.clone();
+                }
+            }
+            JsonValue::Array(schemas) => schemas
+                .iter_mut()
+                .for_each(|schema| inline_references(schema, defined)),
+            JsonValue::Object(object) => {
+                if let (Some(JsonValue::String(name)), Some("record" | "enum" | "fixed")) = (
+                    object.get("name"),
+                    object.get("type").and_then(JsonValue::as_str),
+                ) {
+                    defined.insert(name.clone(), JsonValue::Object(object.clone()));
+                }
+                for key in ["type", "items", "values", "fields"] {
+                    if let Some(child) = object.get_mut(key) {
+                        inline_references(child, defined);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    rewrite_schema(bs, |schema| {
+        inline_references(schema, &mut HashMap::new());
+        Some(())
+    })
+    .unwrap()
+    .unwrap()
+    .0
 }
 
 /// Replaces each repeated definition of a named type in `schema` with its full

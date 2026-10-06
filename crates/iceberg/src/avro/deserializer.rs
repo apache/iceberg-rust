@@ -278,3 +278,180 @@ impl<'de, S: DeserializeSeed<'de>> DeserializeSeed<'de> for ResolvingSeed<S> {
         self.0.deserialize(ResolvingDeserializer(deserializer))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::fmt::Debug;
+
+    use apache_avro::types::Value as AvroValue;
+    use apache_avro::{Reader, Schema as AvroSchema, Writer};
+    use serde::de::DeserializeOwned;
+    use serde_bytes::ByteBuf;
+    use serde_derive::Deserialize;
+
+    use super::*;
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct Pair {
+        a: i64,
+        b: Option<String>,
+    }
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    enum Suit {
+        Hearts,
+        Spades,
+    }
+
+    /// Writes `value` with `writer_schema` and reads it back as a `T`.
+    fn read<T: DeserializeOwned>(
+        writer_schema: &str,
+        value: AvroValue,
+    ) -> apache_avro::AvroResult<T> {
+        let schema = AvroSchema::parse_str(writer_schema).unwrap();
+        let mut writer = Writer::new(&schema, Vec::new()).unwrap();
+        writer.append_value(value).unwrap();
+        let bs = writer.into_inner().unwrap();
+        let mut values = Reader::new(bs.as_slice())
+            .unwrap()
+            .into_deser_iter::<Resolved<T>>();
+        values.next().unwrap().map(|value| value.0)
+    }
+
+    fn check<T: DeserializeOwned + Debug + PartialEq>(
+        writer_schema: &str,
+        value: AvroValue,
+        expected: T,
+    ) {
+        assert_eq!(
+            read::<T>(writer_schema, value).unwrap(),
+            expected,
+            "{writer_schema}"
+        );
+    }
+
+    const PAIR: &str = r#"{"type": "record", "name": "writer_name", "fields": [
+        {"name": "b", "type": "string"},
+        {"name": "extra", "type": "int"},
+        {"name": "a", "type": "int"}
+    ]}"#;
+
+    fn pair_value() -> AvroValue {
+        AvroValue::Record(vec![
+            ("b".to_string(), AvroValue::String("x".to_string())),
+            ("extra".to_string(), AvroValue::Int(9)),
+            ("a".to_string(), AvroValue::Int(1)),
+        ])
+    }
+
+    fn pair() -> Pair {
+        Pair {
+            a: 1,
+            b: Some("x".to_string()),
+        }
+    }
+
+    const SUIT: &str = r#"{"type": "enum", "name": "suit", "symbols": ["Hearts", "Spades"]}"#;
+
+    #[test]
+    fn test_resolved_reads_writer_values() {
+        check(r#""boolean""#, AvroValue::Boolean(true), true);
+        check(r#""int""#, AvroValue::Int(-3), -3i64);
+        check(r#""long""#, AvroValue::Long(7), 7i32);
+        check(r#""float""#, AvroValue::Float(1.5), 1.5f64);
+        check(r#""double""#, AvroValue::Double(2.5), 2.5f64);
+        check(
+            r#""string""#,
+            AvroValue::String("s".to_string()),
+            "s".to_string(),
+        );
+        check(
+            r#""bytes""#,
+            AvroValue::Bytes(vec![1, 2]),
+            ByteBuf::from(vec![1, 2]),
+        );
+        check(
+            r#"{"type": "fixed", "name": "f", "size": 2}"#,
+            AvroValue::Fixed(2, vec![3, 4]),
+            ByteBuf::from(vec![3, 4]),
+        );
+        check(
+            r#"{"type": "array", "items": "int"}"#,
+            AvroValue::Array(vec![AvroValue::Int(1), AvroValue::Int(2)]),
+            vec![1i64, 2],
+        );
+        check(
+            r#"{"type": "map", "values": "long"}"#,
+            AvroValue::Map(HashMap::from([("k".to_string(), AvroValue::Long(5))])),
+            HashMap::from([("k".to_string(), 5i32)]),
+        );
+        check(PAIR, pair_value(), pair());
+        check(SUIT, AvroValue::Enum(1, "Spades".to_string()), Suit::Spades);
+        check(
+            r#"["null", "long"]"#,
+            AvroValue::Union(1, Box::new(AvroValue::Long(5))),
+            5i64,
+        );
+    }
+
+    #[test]
+    fn test_resolved_reads_any_writer_value_as_option() {
+        check(r#""null""#, AvroValue::Null, None::<i64>);
+        check(
+            r#"["null", "long"]"#,
+            AvroValue::Union(0, Box::new(AvroValue::Null)),
+            None::<i64>,
+        );
+        check(
+            r#"["null", "int"]"#,
+            AvroValue::Union(1, Box::new(AvroValue::Int(5))),
+            Some(5i64),
+        );
+        check(r#""boolean""#, AvroValue::Boolean(true), Some(true));
+        check(r#""int""#, AvroValue::Int(-3), Some(-3i64));
+        check(r#""long""#, AvroValue::Long(7), Some(7i32));
+        check(r#""float""#, AvroValue::Float(1.5), Some(1.5f64));
+        check(r#""double""#, AvroValue::Double(2.5), Some(2.5f64));
+        check(
+            r#""string""#,
+            AvroValue::String("s".to_string()),
+            Some("s".to_string()),
+        );
+        check(
+            r#""bytes""#,
+            AvroValue::Bytes(vec![1, 2]),
+            Some(ByteBuf::from(vec![1, 2])),
+        );
+        check(
+            r#"{"type": "array", "items": "int"}"#,
+            AvroValue::Array(vec![AvroValue::Int(1)]),
+            Some(vec![1i64]),
+        );
+        check(
+            r#"{"type": "map", "values": "long"}"#,
+            AvroValue::Map(HashMap::from([("k".to_string(), AvroValue::Long(5))])),
+            Some(HashMap::from([("k".to_string(), 5i32)])),
+        );
+        check(PAIR, pair_value(), Some(pair()));
+        check(
+            SUIT,
+            AvroValue::Enum(0, "Hearts".to_string()),
+            Some(Suit::Hearts),
+        );
+    }
+
+    #[test]
+    fn test_resolved_rejects_values_that_do_not_fit() {
+        assert!(read::<i32>(r#""long""#, AvroValue::Long(i64::from(i32::MAX) + 1)).is_err());
+        assert!(read::<u8>(r#""int""#, AvroValue::Int(-1)).is_err());
+        assert!(
+            read::<i64>(
+                r#"["null", "long"]"#,
+                AvroValue::Union(0, Box::new(AvroValue::Null))
+            )
+            .is_err()
+        );
+        assert!(read::<String>(r#""long""#, AvroValue::Long(1)).is_err());
+    }
+}
