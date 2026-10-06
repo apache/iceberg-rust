@@ -331,19 +331,12 @@ impl CachingDeleteFileLoader {
         }
     }
 
-    /// Validates a deletion-vector task and returns what the read needs as typed values:
+    /// Extracts a deletion-vector task's metadata as the values needed by the read:
     /// `(start, len, referenced data file path, expected cardinality)`.
     ///
-    /// Builder-created tasks are validated up front, but deserialized scan plans can bypass the
-    /// builder. Keep the required-field checks here so malformed plans return `DataInvalid`
-    /// instead of panicking.
-    ///
-    /// Equality and ordinary position deletes have no equivalent validation in this loader: a
-    /// malformed equality/position delete file fails loudly when the Parquet reader can't open
-    /// it. A deletion vector's coordinates instead drive a raw byte-range read with no format
-    /// to fail against, so a bad coordinate would otherwise decode silently into the wrong (or
-    /// no) deletes, per the same corrupted-blob concern Iceberg-Java validates in
-    /// `BitmapPositionDeleteIndex.deserializeBitmap`.
+    /// Both builder construction and deserialization validate the task's required fields.
+    /// The fallible extraction here converts the optional fields into values for the
+    /// byte-range read, preserving `DataInvalid` errors instead of unwrapping them.
     fn validate_deletion_vector_task(
         task: &FileScanTaskDeleteFile,
     ) -> Result<(u64, u64, String, u64)> {
