@@ -530,9 +530,6 @@ impl OpenDalStorage {
                 multipart_part_size,
                 ..
             } => WriteOptions {
-                // Clamp rather than panic on a configured value: a validated
-                // part size reaches 5 GiB, which exceeds `usize` on a 32-bit
-                // target, where the effective ceiling is just under 4 GiB.
                 chunk: Some(usize::try_from(*multipart_part_size).unwrap_or(usize::MAX)),
                 ..WriteOptions::default()
             },
