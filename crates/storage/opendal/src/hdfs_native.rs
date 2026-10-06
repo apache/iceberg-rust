@@ -231,6 +231,22 @@ pub(crate) fn hdfs_native_parse_path(path: &str) -> Result<(Option<String>, &str
             format!("Invalid hdfs path: {path}, expected scheme `hdfs://`"),
         ));
     };
+    // Userinfo has nowhere to go and port 0 cannot be dialed; silently
+    // dropping the one or reading the other as a logical name would mislead.
+    if !url.username().is_empty() || url.password().is_some() {
+        // Not echoing the path: it may carry a password.
+        let host = url.host_str().unwrap_or_default();
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid hdfs path for host `{host}`: userinfo is not supported"),
+        ));
+    }
+    if url.port() == Some(0) {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid hdfs path: {path}, port 0 cannot be dialed"),
+        ));
+    }
 
     let name_node = url.host_str().filter(|h| !h.is_empty()).map(|host| {
         url.port()
@@ -941,6 +957,24 @@ mod tests {
         let (nn, rel) = hdfs_native_parse_path("hdfs://[::1]:8020/a/b").unwrap();
         assert_eq!(nn.as_deref(), Some("hdfs://[::1]:8020"));
         assert_eq!(rel, "a/b");
+    }
+
+    #[test]
+    fn test_hdfs_native_parse_path_rejects_userinfo_and_port_zero() {
+        for (path, reason) in [
+            ("hdfs://alice@nn:8020/a", "userinfo"),
+            ("hdfs://alice:secret@nn:8020/a", "userinfo"),
+            ("hdfs://nn:0/a", "port 0"),
+        ] {
+            let err = hdfs_native_parse_path(path).unwrap_err().to_string();
+            assert!(err.contains(reason), "{path}: {err}");
+        }
+        // Unresolvable paths keep keying on themselves for batching.
+        let config = HdfsNativeConfig::default();
+        assert_eq!(
+            hdfs_native_batch_key(&config, "hdfs://nn:0/a"),
+            "hdfs://nn:0/a"
+        );
     }
 
     #[test]
