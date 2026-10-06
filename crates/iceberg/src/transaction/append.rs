@@ -765,6 +765,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_snapshot_summary_records_writer_identity() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let action = tx.fast_append().add_data_files(vec![data_file]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            snapshot
+        } else {
+            unreachable!()
+        };
+        let props = &new_snapshot.summary().additional_properties;
+        let version = env!("CARGO_PKG_VERSION");
+
+        assert_eq!(props.get("engine-name").unwrap(), "iceberg-rust");
+        assert_eq!(props.get("engine-version").unwrap(), version);
+        assert_eq!(
+            props.get("iceberg-version").unwrap(),
+            &format!("Apache Iceberg Rust {version}")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_properties_cannot_override_writer_identity() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+
+        let mut snapshot_properties = HashMap::new();
+        snapshot_properties.insert("engine-name".to_string(), "other".to_string());
+        snapshot_properties.insert("engine-version".to_string(), "0".to_string());
+        snapshot_properties.insert("iceberg-version".to_string(), "custom".to_string());
+        snapshot_properties.insert("key".to_string(), "val".to_string());
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let action = tx
+            .fast_append()
+            .set_snapshot_properties(snapshot_properties)
+            .add_data_files(vec![data_file]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            snapshot
+        } else {
+            unreachable!()
+        };
+        let props = &new_snapshot.summary().additional_properties;
+        let version = env!("CARGO_PKG_VERSION");
+
+        assert_eq!(props.get("engine-name").unwrap(), "iceberg-rust");
+        assert_eq!(props.get("engine-version").unwrap(), version);
+        assert_eq!(
+            props.get("iceberg-version").unwrap(),
+            &format!("Apache Iceberg Rust {version}")
+        );
+        assert_eq!(props.get("key").unwrap(), "val");
+    }
+
+    #[tokio::test]
     async fn test_append_snapshot_properties() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
