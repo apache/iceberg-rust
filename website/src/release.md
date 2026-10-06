@@ -64,7 +64,7 @@ The RC creation script requires a local GPG secret key when artifact signing or 
 
 Install the release tooling used by the local scripts:
 
-- `cargo-deny`
+- `cargo-deny` (`make install-cargo-deny`)
 - `docker`
 - `gpg`
 - `svn`

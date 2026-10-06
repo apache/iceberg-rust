@@ -33,9 +33,9 @@ use iceberg::{Error, ErrorKind, Result};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::OpenDalStorage;
 #[cfg(feature = "opendal-s3")]
 use crate::s3::CustomAwsCredentialLoader;
+use crate::{OpenDalClientConfig, OpenDalStorage};
 
 /// Schemes supported by OpenDalResolvingStorage
 pub const SCHEME_MEMORY: &str = "memory";
@@ -88,6 +88,7 @@ fn build_storage_for_scheme(
     props: &HashMap<String, String>,
     #[cfg(feature = "opendal-s3")] customized_credential_load: &Option<CustomAwsCredentialLoader>,
 ) -> Result<OpenDalStorage> {
+    let client_config = OpenDalClientConfig::from_properties(props)?;
     match scheme {
         #[cfg(feature = "opendal-s3")]
         "s3" => {
@@ -95,6 +96,7 @@ fn build_storage_for_scheme(
             Ok(OpenDalStorage::S3 {
                 config: Arc::new(config),
                 customized_credential_load: customized_credential_load.clone(),
+                client_config,
             })
         }
         #[cfg(feature = "opendal-gcs")]
@@ -102,6 +104,7 @@ fn build_storage_for_scheme(
             let config = crate::gcs::gcs_config_parse(props.clone())?;
             Ok(OpenDalStorage::Gcs {
                 config: Arc::new(config),
+                client_config,
             })
         }
         #[cfg(feature = "opendal-oss")]
@@ -109,6 +112,7 @@ fn build_storage_for_scheme(
             let config = crate::oss::oss_config_parse(props.clone())?;
             Ok(OpenDalStorage::Oss {
                 config: Arc::new(config),
+                client_config,
             })
         }
         #[cfg(feature = "opendal-azdls")]
@@ -116,17 +120,22 @@ fn build_storage_for_scheme(
             let config = crate::azdls::azdls_config_parse(props.clone())?;
             Ok(OpenDalStorage::Azdls {
                 config: Arc::new(config),
+                client_config,
             })
         }
         #[cfg(feature = "opendal-fs")]
-        "file" => Ok(OpenDalStorage::LocalFs),
+        "file" => Ok(OpenDalStorage::LocalFs { client_config }),
         #[cfg(feature = "opendal-memory")]
-        "memory" => Ok(OpenDalStorage::Memory(crate::memory::memory_config_build()?)),
+        "memory" => Ok(OpenDalStorage::Memory {
+            operator: crate::memory::memory_config_build()?,
+            client_config,
+        }),
         #[cfg(feature = "opendal-hf")]
         "hf" => {
             let config = crate::hf::hf_config_parse(props.clone())?;
             Ok(OpenDalStorage::Hf {
                 config: Arc::new(config),
+                client_config,
             })
         }
         #[cfg(feature = "opendal-hdfs-native")]
@@ -135,6 +144,7 @@ fn build_storage_for_scheme(
             Ok(OpenDalStorage::HdfsNative {
                 config: Arc::new(config),
                 operators: crate::HdfsNativeOperatorCache::default(),
+                client_config,
             })
         }
         unsupported => Err(Error::new(
@@ -344,7 +354,10 @@ impl Storage for OpenDalResolvingStorage {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+    use crate::OPENDAL_IO_TIMEOUT_MS;
 
     #[cfg(feature = "opendal-s3")]
     #[derive(Debug)]
@@ -384,6 +397,39 @@ mod tests {
             storages: RwLock::new(HashMap::new()),
             #[cfg(feature = "opendal-s3")]
             customized_credential_load: None,
+        }
+    }
+
+    #[test]
+    fn test_resolve_propagates_io_timeout() {
+        let mut storage = empty_resolving_storage();
+        storage
+            .props
+            .insert(OPENDAL_IO_TIMEOUT_MS.to_string(), "45000".to_string());
+
+        let paths: &[&str] = &[
+            #[cfg(feature = "opendal-memory")]
+            "memory:/key",
+            #[cfg(feature = "opendal-fs")]
+            "file:/key",
+            #[cfg(feature = "opendal-s3")]
+            "s3://bucket/key",
+            #[cfg(feature = "opendal-gcs")]
+            "gs://bucket/key",
+            #[cfg(feature = "opendal-oss")]
+            "oss://bucket/key",
+            #[cfg(feature = "opendal-azdls")]
+            "abfss://myfs@myaccount.dfs.core.windows.net/key",
+            #[cfg(feature = "opendal-hf")]
+            "hf://datasets/user/repo/key",
+        ];
+        for path in paths {
+            let resolved = storage.resolve(path).unwrap();
+            assert_eq!(
+                resolved.client_config().io_timeout(),
+                Duration::from_secs(45),
+                "{path}"
+            );
         }
     }
 
