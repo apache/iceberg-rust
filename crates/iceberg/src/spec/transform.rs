@@ -1325,4 +1325,49 @@ mod tests {
             );
         }
     }
+
+    /// Expected values are the output of Java's `Double.toString` / `Float.toString` (JDK 21).
+    #[test]
+    fn test_to_human_string_float_matches_java() {
+        let double = |value: f64| {
+            Transform::Identity.to_human_string(
+                &Type::Primitive(PrimitiveType::Double),
+                Some(&Literal::double(value)),
+            )
+        };
+        assert_eq!(double(1.0), "1.0");
+        assert_eq!(double(100.0), "100.0");
+        assert_eq!(double(0.0), "0.0");
+        assert_eq!(double(-0.0), "-0.0");
+        assert_eq!(double(1.5), "1.5");
+        assert_eq!(double(0.001), "0.001");
+        assert_eq!(double(9999999.0), "9999999.0");
+        assert_eq!(double(1.0e7), "1.0E7");
+        assert_eq!(double(1.0e-5), "1.0E-5");
+        assert_eq!(double(1.23456789e20), "1.23456789E20");
+        assert_eq!(double(1.0e23), "1.0E23");
+        assert_eq!(double(f64::INFINITY), "Infinity");
+        assert_eq!(double(f64::NEG_INFINITY), "-Infinity");
+        assert_eq!(double(f64::NAN), "NaN");
+        assert_eq!(double(f64::MAX), "1.7976931348623157E308");
+        // Java uses at least two significant digits.
+        assert_eq!(double(f64::from_bits(1)), "4.9E-324");
+        // Halfway between two 17-digit decimals: Java picks the even one.
+        assert_eq!(double(2f64.powi(-25)), "2.9802322387695312E-8");
+
+        let float = |value: f32| {
+            Transform::Identity.to_human_string(
+                &Type::Primitive(PrimitiveType::Float),
+                Some(&Literal::float(value)),
+            )
+        };
+        assert_eq!(float(1.0), "1.0");
+        assert_eq!(float(-0.0), "-0.0");
+        assert_eq!(float(0.1), "0.1");
+        assert_eq!(float(1.0e7), "1.0E7");
+        assert_eq!(float(f32::NEG_INFINITY), "-Infinity");
+        assert_eq!(float(f32::from_bits(1)), "1.4E-45");
+        // 2097152.25, halfway between 2097152.2 and 2097152.3.
+        assert_eq!(float(f32::from_bits(0x4a00_0001)), "2097152.2");
+    }
 }
