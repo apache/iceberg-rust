@@ -46,7 +46,7 @@ mod tests {
 
     fn stat(runtime: &tokio::runtime::Runtime, file_io: &FileIO) {
         runtime.block_on(async {
-            let input = file_io.new_input("hdfs://x/f").unwrap();
+            let input = file_io.new_input("hdfs:///f").unwrap();
             // The fake NameNode never answers, so this fails; only the dial matters.
             let _ = tokio::time::timeout(Duration::from_secs(10), input.metadata()).await;
         });
