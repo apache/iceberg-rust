@@ -264,8 +264,8 @@ impl HdfsNativeStorage {
 
 /// Operators cached per effective NameNode: each holds an `hdfs-native`
 /// client with live RPC connections, whose tasks run on the tokio runtime
-/// current when it was built (a private one when built outside any). An
-/// entry is rebuilt once that runtime is gone, as `hdfs-native` panics when
+/// current when it was built. An entry is rebuilt once that runtime is
+/// gone, as `hdfs-native` panics when
 /// it spawns onto a dead one. The cache lives as long as the storage that
 /// owns it (clones share it).
 #[derive(Clone, Debug, Default)]
@@ -274,8 +274,7 @@ pub(crate) struct HdfsNativeOperatorCache(Arc<RwLock<HashMap<String, CachedOpera
 #[derive(Debug)]
 struct CachedOperator {
     operator: Operator,
-    /// `None` when built outside any runtime.
-    sentinel: Option<RuntimeSentinel>,
+    sentinel: RuntimeSentinel,
 }
 
 /// A task parked on the building runtime that owns the token, so the token
@@ -306,17 +305,15 @@ impl Drop for RuntimeSentinel {
 }
 
 impl CachedOperator {
-    fn new(operator: Operator) -> Self {
-        let sentinel = Handle::try_current()
-            .ok()
-            .map(|handle| RuntimeSentinel::spawn(&handle));
-        Self { operator, sentinel }
+    fn new(operator: Operator, handle: &Handle) -> Self {
+        Self {
+            operator,
+            sentinel: RuntimeSentinel::spawn(handle),
+        }
     }
 
     fn runtime_alive(&self) -> bool {
-        self.sentinel
-            .as_ref()
-            .is_none_or(|sentinel| sentinel.alive.strong_count() > 0)
+        self.sentinel.alive.strong_count() > 0
     }
 }
 
@@ -333,18 +330,18 @@ impl HdfsNativeOperatorCache {
 
     /// Inserts `op` unless a concurrent caller got there first, returning
     /// whichever operator the cache now holds; a stale entry is replaced.
-    fn insert(&self, name_node: String, op: Operator) -> Result<Operator> {
+    fn insert(&self, name_node: String, op: Operator, handle: &Handle) -> Result<Operator> {
         let mut operators = self.0.write().map_err(poisoned)?;
         match operators.entry(name_node) {
             Entry::Occupied(entry) if entry.get().runtime_alive() => {
                 Ok(entry.get().operator.clone())
             }
             Entry::Occupied(mut entry) => {
-                entry.insert(CachedOperator::new(op.clone()));
+                entry.insert(CachedOperator::new(op.clone(), handle));
                 Ok(op)
             }
             Entry::Vacant(entry) => {
-                entry.insert(CachedOperator::new(op.clone()));
+                entry.insert(CachedOperator::new(op.clone(), handle));
                 Ok(op)
             }
         }
@@ -373,19 +370,27 @@ pub(crate) async fn hdfs_native_create_operator<'a>(
         return Ok((op, relative_path));
     }
 
+    // Every operator in this crate needs a tokio runtime for its I/O (the
+    // timeout layer), so say so instead of panicking in `spawn_blocking`.
+    let handle = Handle::try_current().map_err(|_| {
+        Error::new(
+            ErrorKind::FeatureUnsupported,
+            "HDFS storage requires a tokio runtime",
+        )
+    })?;
+
     // The build reads the Hadoop XML config synchronously, so it runs on a
     // blocking thread and outside the lock. A racing first caller may build
     // too; the loser is dropped before opening any connection.
     let build_config = Arc::clone(config);
     let build_name_node = name_node.clone();
-    let op = tokio::task::spawn_blocking(move || {
-        hdfs_native_operator_build(&build_config, &build_name_node)
-    })
-    .await
-    .map_err(|e| {
-        Error::new(ErrorKind::Unexpected, "HDFS operator build task failed").with_source(e)
-    })??;
-    Ok((operators.insert(name_node, op)?, relative_path))
+    let op = handle
+        .spawn_blocking(move || hdfs_native_operator_build(&build_config, &build_name_node))
+        .await
+        .map_err(|e| {
+            Error::new(ErrorKind::Unexpected, "HDFS operator build task failed").with_source(e)
+        })??;
+    Ok((operators.insert(name_node, op, &handle)?, relative_path))
 }
 
 /// Returns the `delete_stream` grouping key for a path: the effective
@@ -731,8 +736,8 @@ mod tests {
     }
 
     // Creating an operator offloads the build to a blocking thread, so these
-    // run under tokio; `test_hdfs_native_operator_cache_keeps_first_insert`
-    // pins that the build itself needs no runtime.
+    // run under tokio; `test_hdfs_native_operator_build_needs_no_runtime`
+    // pins that the build itself does not.
     #[tokio::test]
     async fn test_hdfs_native_create_operator_configured_name_node_serves_logical_paths() {
         let config = Arc::new(
@@ -821,9 +826,33 @@ mod tests {
         assert_eq!(operators.len(), 1);
     }
 
+    /// The build itself needs no runtime; only creating a cached operator does.
     #[test]
-    fn test_hdfs_native_operator_cache_keeps_first_insert() {
+    fn test_hdfs_native_operator_build_needs_no_runtime() {
+        let config = HdfsNativeConfig::default();
+        hdfs_native_operator_build(&config, "hdfs://nn:8020").unwrap();
+    }
+
+    #[test]
+    fn test_hdfs_native_create_operator_without_runtime_errors() {
+        let config = Arc::new(HdfsNativeConfig::default());
         let operators = HdfsNativeOperatorCache::default();
+
+        let err = futures::executor::block_on(hdfs_native_create_operator(
+            "hdfs://nn:8020/a",
+            &config,
+            &operators,
+        ))
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert_eq!(operators.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_hdfs_native_operator_cache_keeps_first_insert() {
+        let operators = HdfsNativeOperatorCache::default();
+        let handle = Handle::current();
         let build = |root: &str| {
             let mut config = hdfs_native_config_parse(HashMap::new()).unwrap();
             config.root = Some(root.to_string());
@@ -833,10 +862,10 @@ mod tests {
         // Two callers racing for one NameNode: the first insert wins and both
         // get the cached operator.
         let first = operators
-            .insert("hdfs://nn:8020".to_string(), build("/first"))
+            .insert("hdfs://nn:8020".to_string(), build("/first"), &handle)
             .unwrap();
         let second = operators
-            .insert("hdfs://nn:8020".to_string(), build("/second"))
+            .insert("hdfs://nn:8020".to_string(), build("/second"), &handle)
             .unwrap();
         assert_eq!(first.info().root(), "/first/");
         assert_eq!(second.info().root(), "/first/");
