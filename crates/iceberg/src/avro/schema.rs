@@ -271,6 +271,8 @@ impl SchemaVisitor for SchemaToAvroSchema {
             PrimitiveType::TimestampNs => AvroSchema::TimestampNanos,
             PrimitiveType::TimestamptzNs => AvroSchema::TimestampNanos,
             PrimitiveType::String => AvroSchema::String,
+            // TODO(#2913): write the spec's `fixed[16]` uuid. The manifest reader
+            // already accepts both forms.
             PrimitiveType::Uuid => AvroSchema::Uuid(UuidSchema::String),
             PrimitiveType::Fixed(len) => self.define_once(avro_fixed_schema((*len) as usize)?),
             PrimitiveType::Binary => AvroSchema::Bytes,

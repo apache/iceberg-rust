@@ -38,7 +38,7 @@ use super::{
     UNASSIGNED_SEQUENCE_NUMBER,
 };
 use crate::avro::{Resolved, define_named_types_once};
-use crate::error::{Result, invalid_data};
+use crate::error::{Error, Result, invalid_data};
 
 /// Whether a manifest with repeated Avro named type definitions was logged at
 /// warn level. A table written by an affected release can have many of them.
@@ -82,7 +82,12 @@ impl Manifest {
                     );
                 }
                 rewritten = bs;
-                AvroReader::new(rewritten.as_slice())?
+                AvroReader::new(rewritten.as_slice()).map_err(|retry_error| {
+                    Error::from(e).with_context(
+                        "error after defining each named type once",
+                        retry_error.to_string(),
+                    )
+                })?
             }
             Err(e) => return Err(e.into()),
         };
@@ -1594,6 +1599,49 @@ mod tests {
         }
     }
 
+    type ResetField = fn(&mut ManifestEntry);
+
+    /// Removes each field in `optional` and `required` in turn from a manifest
+    /// that `full_schema` and `full_value` write as `full_entry`. Checks that the
+    /// manifest reads with an optional field reset and fails naming a required one.
+    fn assert_reads_without_each_field(
+        metadata: &ManifestMetadata,
+        full_schema: &Value,
+        full_value: &AvroValue,
+        full_entry: &ManifestEntry,
+        optional: &[(&[&str], ResetField)],
+        required: &[&[&str]],
+    ) {
+        for (path, reset) in optional {
+            let (mut schema, mut value) = (full_schema.clone(), full_value.clone());
+            remove_writer_field(&mut schema, &mut value, path);
+            let bs = write_avro_values_with_writer_schema(metadata, &schema, vec![value]);
+
+            let manifest = Manifest::parse_avro(&bs).unwrap();
+
+            let mut expected = full_entry.clone();
+            reset(&mut expected);
+            assert_eq!(
+                manifest,
+                Manifest::new(metadata.clone(), vec![expected]),
+                "{path:?}"
+            );
+        }
+
+        for path in required {
+            let (mut schema, mut value) = (full_schema.clone(), full_value.clone());
+            remove_writer_field(&mut schema, &mut value, path);
+            let bs = write_avro_values_with_writer_schema(metadata, &schema, vec![value]);
+
+            let err = Manifest::parse_avro(&bs).unwrap_err();
+
+            assert!(
+                err.to_string().contains(path.last().unwrap()),
+                "{path:?}: {err}"
+            );
+        }
+    }
+
     #[test]
     fn test_parse_manifest_without_each_field() {
         // Fields that the spec doesn't require in every version must read as
@@ -1637,7 +1685,6 @@ mod tests {
         )
         .unwrap();
 
-        type ResetField = fn(&mut ManifestEntry);
         let optional: [(&[&str], ResetField); 18] = [
             (&["snapshot_id"], |e| e.snapshot_id = None),
             (&["sequence_number"], |e| e.sequence_number = None),
@@ -1688,22 +1735,6 @@ mod tests {
                 e.data_file.content_size_in_bytes = None
             }),
         ];
-        for (path, reset) in optional {
-            let (mut schema, mut value) = (full_schema.clone(), full_value.clone());
-            remove_writer_field(&mut schema, &mut value, path);
-            let bs = write_avro_values_with_writer_schema(&metadata, &schema, vec![value]);
-
-            let manifest = Manifest::parse_avro(&bs).unwrap();
-
-            let mut expected = full_entry.clone();
-            reset(&mut expected);
-            assert_eq!(
-                manifest,
-                Manifest::new(metadata.clone(), vec![expected]),
-                "{path:?}"
-            );
-        }
-
         let required: [&[&str]; 7] = [
             &["status"],
             &["data_file"],
@@ -1713,18 +1744,102 @@ mod tests {
             &["data_file", "record_count"],
             &["data_file", "file_size_in_bytes"],
         ];
-        for path in required {
-            let (mut schema, mut value) = (full_schema.clone(), full_value.clone());
-            remove_writer_field(&mut schema, &mut value, path);
-            let bs = write_avro_values_with_writer_schema(&metadata, &schema, vec![value]);
+        assert_reads_without_each_field(
+            &metadata,
+            &full_schema,
+            &full_value,
+            &full_entry,
+            &optional,
+            &required,
+        );
+    }
 
-            let err = Manifest::parse_avro(&bs).unwrap_err();
+    #[test]
+    fn test_parse_v1_manifest_without_each_field() {
+        let mut metadata = writer_schema_test_metadata();
+        metadata.format_version = FormatVersion::V1;
+        let partition_type = metadata
+            .partition_spec
+            .partition_type(&metadata.schema)
+            .unwrap();
+        let full_schema =
+            serde_json::to_value(manifest_schema_v1(&partition_type).unwrap()).unwrap();
+        let mut full_entry = expected_entry(Struct::from_iter([
+            Some(Literal::long(5)),
+            Some(Literal::string("a")),
+            Some(Literal::double(2.5)),
+        ]));
+        // V1 has no sequence numbers, and every V1 entry reads with 0.
+        full_entry.sequence_number = Some(0);
+        full_entry.file_sequence_number = Some(0);
+        let data_file = &mut full_entry.data_file;
+        data_file.column_sizes = HashMap::from([(1, 40)]);
+        data_file.value_counts = HashMap::from([(1, 10)]);
+        data_file.null_value_counts = HashMap::from([(1, 1)]);
+        data_file.nan_value_counts = HashMap::from([(3, 2)]);
+        data_file.lower_bounds = HashMap::from([(1, Datum::long(1))]);
+        data_file.upper_bounds = HashMap::from([(1, Datum::long(9))]);
+        data_file.key_metadata = Some(vec![1, 2]);
+        data_file.split_offsets = Some(vec![4]);
+        data_file.sort_order_id = Some(0);
+        let full_value = to_value(
+            _serde::ManifestEntryV1::try_from(
+                full_entry.clone(),
+                &Type::Struct(partition_type.clone()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
 
-            assert!(
-                err.to_string().contains(path.last().unwrap()),
-                "{path:?}: {err}"
-            );
-        }
+        let optional: [(&[&str], ResetField); 10] = [
+            // Required in V1, but deprecated and not read.
+            (&["data_file", "block_size_in_bytes"], |_| {}),
+            (&["data_file", "column_sizes"], |e| {
+                e.data_file.column_sizes.clear()
+            }),
+            (&["data_file", "value_counts"], |e| {
+                e.data_file.value_counts.clear()
+            }),
+            (&["data_file", "null_value_counts"], |e| {
+                e.data_file.null_value_counts.clear()
+            }),
+            (&["data_file", "nan_value_counts"], |e| {
+                e.data_file.nan_value_counts.clear()
+            }),
+            (&["data_file", "lower_bounds"], |e| {
+                e.data_file.lower_bounds.clear()
+            }),
+            (&["data_file", "upper_bounds"], |e| {
+                e.data_file.upper_bounds.clear()
+            }),
+            (&["data_file", "key_metadata"], |e| {
+                e.data_file.key_metadata = None
+            }),
+            (&["data_file", "split_offsets"], |e| {
+                e.data_file.split_offsets = None
+            }),
+            (&["data_file", "sort_order_id"], |e| {
+                e.data_file.sort_order_id = None
+            }),
+        ];
+        let required: [&[&str]; 8] = [
+            &["status"],
+            &["snapshot_id"],
+            &["data_file"],
+            &["data_file", "file_path"],
+            &["data_file", "file_format"],
+            &["data_file", "partition"],
+            &["data_file", "record_count"],
+            &["data_file", "file_size_in_bytes"],
+        ];
+        assert_reads_without_each_field(
+            &metadata,
+            &full_schema,
+            &full_value,
+            &full_entry,
+            &optional,
+            &required,
+        );
     }
 
     #[test]
@@ -2115,5 +2230,29 @@ mod tests {
             *manifest.entries()[0].data_file().partition(),
             Struct::from_iter([Some(Literal::decimal(12345)), Some(Literal::decimal(-678))])
         );
+    }
+
+    #[test]
+    fn test_parse_manifest_with_repeated_named_type_definitions_reports_original_error() {
+        let bs = fs::read(format!(
+            "{}/testdata/manifests/repeated-decimal-type-definitions.avro",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        // Cut the header's sync marker in half, so the rewritten header parses
+        // its schema but fails to read the marker. The file ends with the marker.
+        let marker = &bs[bs.len() - 16..];
+        let header_marker = bs.windows(16).position(|w| w == marker).unwrap();
+        let truncated = &bs[..header_marker + 8];
+
+        let err = Manifest::parse_avro(truncated).unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        let message = err.to_string();
+        assert!(
+            message.contains("Two named schema defined for same fullname"),
+            "{message}"
+        );
+        assert!(message.contains("Failed to read marker bytes"), "{message}");
     }
 }

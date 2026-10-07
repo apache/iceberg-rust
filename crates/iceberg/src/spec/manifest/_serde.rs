@@ -21,7 +21,8 @@
 //! without a reader schema, so they decide which manifests read. A field that
 //! a writer may omit, per the spec's read rules for every format version the
 //! struct reads, must be an `Option` or have `#[serde(default)]`.
-//! `test_parse_manifest_without_each_field` checks each field.
+//! `test_parse_manifest_without_each_field` and
+//! `test_parse_v1_manifest_without_each_field` check each field.
 
 use std::collections::HashMap;
 
