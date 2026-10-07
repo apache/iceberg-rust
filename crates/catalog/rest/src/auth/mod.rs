@@ -90,9 +90,10 @@ pub trait AuthManager: Debug + Send + Sync {
     /// context may therefore return the previously cached session.
     async fn contextual_session(
         &self,
-        _context: &SessionContext,
+        context: &SessionContext,
         catalog_session: Arc<dyn AuthSession>,
     ) -> Result<Arc<dyn AuthSession>> {
+        let _ = context;
         Ok(catalog_session)
     }
 }
