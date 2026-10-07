@@ -108,13 +108,11 @@ http@1.5.0		X								X
 http-body@1.0.1										X			
 http-body-util@0.1.3										X			
 httparse@1.10.1		X								X			
-httpdate@1.0.3		X								X			
 hyper@1.10.1										X			
 hyper-util@0.1.20										X			
 iana-time-zone@0.1.65		X								X			
 iana-time-zone-haiku@0.1.2		X								X			
 iceberg@0.10.1		X											
-iceberg-catalog-rest@0.10.1		X											
 iceberg-kms@0.10.1		X											
 iceberg-property-macro@0.10.1		X											
 iceberg_test_utils@0.10.1		X											
@@ -149,7 +147,6 @@ litemap@0.8.2											X
 lock_api@0.4.14		X								X			
 log@0.4.33		X								X			
 lz4_flex@0.14.0										X			
-matchers@0.2.0										X			
 memchr@2.8.2										X		X	
 miniz_oxide@0.8.9		X								X			X
 mio@1.2.1										X			
@@ -242,7 +239,6 @@ tracing@0.1.44										X
 tracing-attributes@0.1.31										X			
 tracing-core@0.1.36										X			
 tracing-log@0.2.0										X			
-tracing-serde@0.2.0										X			
 tracing-subscriber@0.3.23										X			
 try-lock@0.2.5										X			
 twox-hash@2.1.2										X			
@@ -267,7 +263,6 @@ wasm-bindgen-futures@0.4.76		X								X
 wasm-bindgen-macro@0.2.126		X								X			
 wasm-bindgen-macro-support@0.2.126		X								X			
 wasm-bindgen-shared@0.2.126		X								X			
-wasm-streams@0.4.2		X								X			
 web-sys@0.3.103		X								X			
 windows-core@0.62.2		X								X			
 windows-implement@0.60.2		X								X			

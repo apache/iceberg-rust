@@ -48,12 +48,6 @@ The Apache Iceberg Rust project is composed of the following components:
 [iceberg release docs]: https://docs.rs/iceberg
 [iceberg dev docs]: https://rust.iceberg.apache.org/api/iceberg/
 
-[iceberg-kms]: crates/kms/README.md
-[iceberg-kms image]: https://img.shields.io/crates/v/iceberg-kms.svg
-[iceberg-kms link]: https://crates.io/crates/iceberg-kms
-[iceberg-kms release docs]: https://docs.rs/iceberg-kms
-[iceberg-kms dev docs]: https://rust.iceberg.apache.org/api/iceberg_kms/
-
 [iceberg-catalog-glue]: crates/catalog/glue/README.md
 [iceberg-catalog-glue image]: https://img.shields.io/crates/v/iceberg-catalog-glue.svg
 [iceberg-catalog-glue link]: https://crates.io/crates/iceberg-catalog-glue
@@ -101,6 +95,12 @@ The Apache Iceberg Rust project is composed of the following components:
 [iceberg-cache-moka link]: https://crates.io/crates/iceberg-cache-moka
 [iceberg-cache-moka release docs]: https://docs.rs/iceberg-cache-moka
 [iceberg-cache-moka dev docs]: https://rust.iceberg.apache.org/api/iceberg_cache_moka/
+
+[iceberg-kms]: crates/kms/README.md
+[iceberg-kms image]: https://img.shields.io/crates/v/iceberg-kms.svg
+[iceberg-kms link]: https://crates.io/crates/iceberg-kms
+[iceberg-kms release docs]: https://docs.rs/iceberg-kms
+[iceberg-kms dev docs]: https://rust.iceberg.apache.org/api/iceberg_kms/
 
 ## Iceberg Rust Implementation Status
 

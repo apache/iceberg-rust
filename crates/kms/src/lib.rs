@@ -22,6 +22,5 @@
 
 #![deny(missing_docs)]
 
-/// AWS Key Management Service integration.
 #[cfg(feature = "aws")]
 pub mod aws;
