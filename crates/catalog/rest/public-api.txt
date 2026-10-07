@@ -14,6 +14,23 @@ impl<'a> core::fmt::Debug for iceberg_catalog_rest::HttpRequestBody<'a>
 pub fn iceberg_catalog_rest::HttpRequestBody<'a>::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::Copy for iceberg_catalog_rest::HttpRequestBody<'a>
 impl<'a> core::marker::StructuralPartialEq for iceberg_catalog_rest::HttpRequestBody<'a>
+pub enum iceberg_catalog_rest::SnapshotLoadingMode
+pub iceberg_catalog_rest::SnapshotLoadingMode::All
+pub iceberg_catalog_rest::SnapshotLoadingMode::Refs
+impl iceberg_catalog_rest::SnapshotLoadingMode
+pub fn iceberg_catalog_rest::SnapshotLoadingMode::as_str(&self) -> &'static str
+impl core::clone::Clone for iceberg_catalog_rest::SnapshotLoadingMode
+pub fn iceberg_catalog_rest::SnapshotLoadingMode::clone(&self) -> iceberg_catalog_rest::SnapshotLoadingMode
+impl core::cmp::Eq for iceberg_catalog_rest::SnapshotLoadingMode
+impl core::cmp::PartialEq for iceberg_catalog_rest::SnapshotLoadingMode
+pub fn iceberg_catalog_rest::SnapshotLoadingMode::eq(&self, other: &iceberg_catalog_rest::SnapshotLoadingMode) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::SnapshotLoadingMode
+pub fn iceberg_catalog_rest::SnapshotLoadingMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for iceberg_catalog_rest::SnapshotLoadingMode
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::SnapshotLoadingMode
+impl core::str::traits::FromStr for iceberg_catalog_rest::SnapshotLoadingMode
+pub type iceberg_catalog_rest::SnapshotLoadingMode::Err = iceberg::error::Error
+pub fn iceberg_catalog_rest::SnapshotLoadingMode::from_str(mode: &str) -> iceberg::error::Result<Self>
 pub struct iceberg_catalog_rest::CommitTableRequest
 pub iceberg_catalog_rest::CommitTableRequest::identifier: core::option::Option<iceberg::catalog::TableIdent>
 pub iceberg_catalog_rest::CommitTableRequest::requirements: alloc::vec::Vec<iceberg::catalog::TableRequirement>
@@ -381,6 +398,7 @@ pub const iceberg_catalog_rest::AUTH_TYPE_NONE: &str
 pub const iceberg_catalog_rest::AUTH_TYPE_OAUTH2: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_AUTH_TYPE: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SNAPSHOT_LOADING_MODE: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_URI: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_WAREHOUSE: &str
 pub trait iceberg_catalog_rest::AuthManager: core::fmt::Debug + core::marker::Send + core::marker::Sync
