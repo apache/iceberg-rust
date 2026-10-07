@@ -84,9 +84,8 @@ pub trait AuthManager: Debug + Send + Sync {
     /// implementations should return `catalog_session` unchanged.
     ///
     /// The catalog does not cache the returned session. Implementations should
-    /// cache context-specific sessions internally using
-    /// [`SessionContext::session_id`] and are responsible for eviction and
-    /// releasing any associated resources. Reusing a session ID with different
+    /// cache context-specific sessions internally using [`SessionContext::session_id`]
+    /// and are responsible for eviction. Reusing a session ID with different
     /// context may therefore return the previously cached session.
     async fn contextual_session(
         &self,
