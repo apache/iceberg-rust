@@ -48,8 +48,8 @@ pub const AUTH_TYPE_OAUTH2: &str = "oauth2";
 /// derives from it may rely on the state established by that call.
 ///
 /// [`Self::init_session`] and [`Self::catalog_session`] are handed the
-/// catalog's [`HttpClient`], which an implementation may reuse for its own
-/// requests (e.g. a token exchange) so that they share the catalog's
+/// catalog's [`HttpClient`], which an implementation may clone and store for
+/// its own requests (e.g. a token exchange) so that they share the catalog's
 /// connection pool and configuration.
 #[async_trait]
 pub trait AuthManager: Debug + Send + Sync {
@@ -87,6 +87,13 @@ pub trait AuthManager: Debug + Send + Sync {
     /// cache context-specific sessions internally using [`SessionContext::session_id`]
     /// and are responsible for eviction. Reusing a session ID with different
     /// context may therefore return the previously cached session.
+    ///
+    /// The catalog calls this method for every request without serializing
+    /// calls that share a session ID. Caching implementations must guard
+    /// against concurrently creating multiple sessions for the same context.
+    ///
+    /// No [`HttpClient`] is passed. Implementations that need one, e.g. for a
+    /// token exchange, should store the client handed to [`Self::catalog_session`].
     async fn contextual_session(
         &self,
         context: &SessionContext,
