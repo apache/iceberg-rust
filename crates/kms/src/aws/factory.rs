@@ -241,7 +241,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_static_credentials_and_region_override_default_chains() {
+    async fn test_static_credentials_and_region_are_applied() {
         let properties = sdk_properties(&[
             (AWS_ACCESS_KEY_ID, "access"),
             (AWS_SECRET_ACCESS_KEY, "secret"),
@@ -275,13 +275,32 @@ mod tests {
 
     #[tokio::test]
     async fn test_reject_assume_role() {
-        let properties = sdk_properties(&[(S3_ASSUME_ROLE_ARN, ROLE_ARN)]);
+        // Rejected before the AWS environment is read.
+        let properties = HashMap::from([(S3_ASSUME_ROLE_ARN.to_string(), ROLE_ARN.to_string())]);
 
-        let error = create_sdk_config(&properties, test_loader())
+        let Err(error) = AwsKmsClientFactory::new()
+            .create_kms_client(&properties)
             .await
-            .unwrap_err();
+        else {
+            panic!("assume-role properties must be rejected");
+        };
 
         assert_eq!(error.kind(), ErrorKind::FeatureUnsupported);
+    }
+
+    #[tokio::test]
+    async fn test_reject_incomplete_static_credentials() {
+        // Rejected before the AWS environment is read.
+        let properties = HashMap::from([(AWS_ACCESS_KEY_ID.to_string(), "access".to_string())]);
+
+        let Err(error) = AwsKmsClientFactory::new()
+            .create_kms_client(&properties)
+            .await
+        else {
+            panic!("incomplete static credentials must be rejected");
+        };
+
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
     }
 
     #[tokio::test]

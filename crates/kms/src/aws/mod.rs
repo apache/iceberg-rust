@@ -52,10 +52,10 @@
 //!   with an asymmetric algorithm, locally generated key-encryption keys are
 //!   sized by the table property `encryption.data-key-length`, like data keys.
 //!
-//! Unless an [`SdkConfig`](aws_config::SdkConfig) is supplied through
-//! [`AwsKmsClientFactory::with_sdk_config`], in which case they are not read,
-//! the AWS SDK's default credential and region provider chains are used, and
-//! these properties override them:
+//! The AWS SDK's default credential and region provider chains are used, and
+//! the properties below override them. They are not read when an
+//! [`SdkConfig`](aws_config::SdkConfig) is supplied through
+//! [`AwsKmsClientFactory::with_sdk_config`].
 //!
 //! - `client.region` selects the region, as in Iceberg Java. The `region_name`
 //!   property used by the Glue and S3 Tables catalogs is also accepted, with
