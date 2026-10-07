@@ -3949,7 +3949,7 @@ dependencies = [
  "md-5 0.11.0",
  "mea",
  "percent-encoding",
- "quick-xml 0.41.0",
+ "quick-xml",
  "reqsign-core",
  "serde",
  "serde_json",
@@ -4029,7 +4029,7 @@ dependencies = [
  "mea",
  "opendal-core",
  "opendal-service-azure-common",
- "quick-xml 0.41.0",
+ "quick-xml",
  "reqsign-azure-storage",
  "reqsign-core",
  "reqsign-file-read-tokio",
@@ -4073,7 +4073,7 @@ dependencies = [
  "log",
  "opendal-core",
  "percent-encoding",
- "quick-xml 0.41.0",
+ "quick-xml",
  "reqsign-core",
  "reqsign-file-read-tokio",
  "reqsign-google",
@@ -4108,7 +4108,7 @@ dependencies = [
  "http 1.5.0",
  "log",
  "opendal-core",
- "quick-xml 0.41.0",
+ "quick-xml",
  "reqsign-aliyun-oss",
  "reqsign-core",
  "reqsign-file-read-tokio",
@@ -4128,7 +4128,7 @@ dependencies = [
  "log",
  "md-5 0.11.0",
  "opendal-core",
- "quick-xml 0.41.0",
+ "quick-xml",
  "reqsign-aws-v4",
  "reqsign-core",
  "reqsign-file-read-tokio",
@@ -4637,16 +4637,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quick-xml"
-version = "0.42.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
-dependencies = [
- "memchr",
- "serde",
-]
-
-[[package]]
 name = "quinn"
 version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4944,9 +4934,9 @@ dependencies = [
 
 [[package]]
 name = "reqsign-aws-core"
-version = "3.2.0"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d38c902d8ec745bd9eadd1abbcbe227f4c1fc2926b2ec8929f89234af3114500"
+checksum = "4d63b56638bb3cc7bd376a7cdce1ba3089777a08f47e4097888f2d784cc3f46c"
 dependencies = [
  "bytes",
  "form_urlencoded",
@@ -4954,7 +4944,7 @@ dependencies = [
  "http 1.5.0",
  "log",
  "percent-encoding",
- "quick-xml 0.42.0",
+ "quick-xml",
  "reqsign-core",
  "rust-ini",
  "serde",
@@ -4965,14 +4955,14 @@ dependencies = [
 
 [[package]]
 name = "reqsign-aws-v4"
-version = "3.3.1"
+version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "906bfd028f96bfe73fdb892ce26f3b3f99b4f30feb9bd024be58bd6657f68b2b"
+checksum = "4a0c499f4ed12d04c3d4c78fe4cb01aee22c9dae22848c14db2c6313d9df9f43"
 dependencies = [
  "bytes",
  "http 1.5.0",
  "log",
- "quick-xml 0.42.0",
+ "quick-xml",
  "reqsign-aws-core",
  "reqsign-core",
  "serde",

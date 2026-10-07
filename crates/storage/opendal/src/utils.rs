@@ -229,7 +229,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vended_source_requires_a_covering_credential() {
+    async fn test_vended_source_requires_a_covering_credential() {
         let location = "gs://bucket/table/data/file.parquet";
         assert!(load("gs", location).await.is_ok());
         assert!(load("gs://bucket/table", location).await.is_ok());
@@ -244,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn credential_properties_are_parsed() {
+    fn test_credential_properties_are_parsed() {
         let config = HashMap::from([
             (GCS_TOKEN.to_string(), "token".to_string()),
             (GCS_TOKEN_EXPIRES_AT.to_string(), "1500".to_string()),
@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn storage_root_keeps_scheme_and_authority() {
+    fn test_storage_root_keeps_scheme_and_authority() {
         assert_eq!(
             storage_root("s3a://bucket/table/file.parquet").unwrap(),
             "s3a://bucket/"
@@ -306,7 +306,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vended_source_errors_carry_the_cause() {
+    async fn test_vended_source_errors_carry_the_cause() {
         let source = VendedCredentialSource::new(
             Arc::new(FailingProvider),
             "gs://bucket/file.parquet".to_string(),

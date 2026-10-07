@@ -12,9 +12,9 @@ pub iceberg_storage_opendal::OpenDalStorage::Gcs::credential_provider: core::opt
 #[non_exhaustive] pub iceberg_storage_opendal::OpenDalStorage::Hf
 pub iceberg_storage_opendal::OpenDalStorage::Hf::client_config: iceberg_storage_opendal::OpenDalClientConfig
 pub iceberg_storage_opendal::OpenDalStorage::Hf::config: alloc::sync::Arc<opendal_service_hf::config::HfConfig>
-pub iceberg_storage_opendal::OpenDalStorage::LocalFs
+#[non_exhaustive] pub iceberg_storage_opendal::OpenDalStorage::LocalFs
 pub iceberg_storage_opendal::OpenDalStorage::LocalFs::client_config: iceberg_storage_opendal::OpenDalClientConfig
-pub iceberg_storage_opendal::OpenDalStorage::Memory
+#[non_exhaustive] pub iceberg_storage_opendal::OpenDalStorage::Memory
 pub iceberg_storage_opendal::OpenDalStorage::Memory::client_config: iceberg_storage_opendal::OpenDalClientConfig
 pub iceberg_storage_opendal::OpenDalStorage::Memory::operator: opendal_core::types::operator::operator::Operator
 #[non_exhaustive] pub iceberg_storage_opendal::OpenDalStorage::Oss

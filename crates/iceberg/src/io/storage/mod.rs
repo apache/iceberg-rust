@@ -23,7 +23,7 @@ mod memory;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -145,13 +145,25 @@ pub trait StorageFactory: Debug + Send + Sync {
     /// that the backend can call to obtain and refresh short-lived credentials.
     ///
     /// Backends that cannot use the provider ignore it and use the credentials
-    /// in `config`, as they would without one. The default does exactly that.
-    #[allow(unused_variables)]
+    /// in `config`, as they would without one. The default does so and logs a
+    /// warning once, since the storage's credentials are then not refreshed.
+    /// Factories that wrap another factory should forward the provider to it,
+    /// and factories whose storage needs no credentials can ignore it silently.
     fn build_with_credential_provider(
         &self,
         config: &StorageConfig,
         credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
     ) -> Result<Arc<dyn Storage>> {
+        if credential_provider.is_some() {
+            static WARNED: Once = Once::new();
+            WARNED.call_once(|| {
+                tracing::warn!(
+                    "{} ignores storage credential providers; its storage uses the credentials \
+                     in its configuration, which are not refreshed",
+                    std::any::type_name::<Self>()
+                )
+            });
+        }
         self.build(config)
     }
 }
@@ -174,6 +186,13 @@ pub trait StorageFactory: Debug + Send + Sync {
 /// Implementations must cache internally and only re-fetch when the current
 /// credential is at or near expiry; otherwise every object-store request could
 /// trigger a call back to the catalog.
+///
+/// Backends may treat a credential as stale before it expires, and load
+/// another on every request until they get a fresher one. The OpenDAL S3 and
+/// GCS backends do so within two minutes of expiry, and reject a newly loaded
+/// credential that expires within ten seconds. Implementations should
+/// therefore refresh early enough that the credential they return has more
+/// than two minutes left.
 #[async_trait]
 pub trait StorageCredentialProvider: Debug + Send + Sync {
     /// Return whether this provider supplies credentials for `path`.
@@ -225,8 +244,7 @@ pub trait StorageCredentialProviderFactory: Debug + Send + Sync {
 }
 
 /// A vended storage credential: the storage properties that apply to
-/// locations under a prefix, like Java's `StorageCredential` and the REST
-/// catalog's `storage-credentials`.
+/// locations under a prefix, like Java's `StorageCredential`.
 ///
 /// `config` holds backend storage properties, such as `s3.access-key-id`,
 /// `s3.secret-access-key`, `s3.session-token` and
@@ -294,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn credential_prefix_matches_like_java() {
+    fn test_credential_prefix_matches_like_java() {
         let credential = scoped("s3://bucket/table");
         assert!(credential.covers("s3://bucket/table"));
         assert!(credential.covers("s3://bucket/table/data/file.parquet"));
@@ -310,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn credential_debug_omits_config_values() {
+    fn test_credential_debug_omits_config_values() {
         let debug = format!("{:?}", scoped("s3://bucket"));
         assert!(debug.contains("s3://bucket"), "{debug}");
         assert!(!debug.contains("secret"), "{debug}");

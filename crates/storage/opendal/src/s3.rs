@@ -235,7 +235,7 @@ impl std::fmt::Debug for CustomAwsCredentialLoader {
 impl CustomAwsCredentialLoader {
     /// Create a new custom AWS credential loader from any [`ProvideCredential`] implementation.
     pub fn new(provider: impl ProvideCredential<Credential = AwsCredential> + 'static) -> Self {
-        Self(Arc::new(provider))
+        Self(Arc::new(provider) as Arc<dyn ProvideCredentialDyn<Credential = AwsCredential>>)
     }
 }
 
@@ -282,7 +282,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vended_adapter_returns_expiring_aws_credential() {
+    async fn test_vended_adapter_returns_expiring_aws_credential() {
         let credential = credential("s3://bucket/table", &[
             (S3_ACCESS_KEY_ID, "AK"),
             (S3_SECRET_ACCESS_KEY, "SK"),
@@ -305,7 +305,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vended_adapter_rejects_incomplete_or_uncovering_credentials() {
+    async fn test_vended_adapter_rejects_incomplete_or_uncovering_credentials() {
         for credential in [
             // A credential for another backend.
             credential("s3", &[(GCS_TOKEN, "token")]),

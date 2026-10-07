@@ -188,7 +188,7 @@ impl FileIO {
     /// documented by each storage factory implementation.
     ///
     /// A credential provider is rebuilt when the binary links its factory implementation, such as
-    /// the REST catalog's. Otherwise, or when rebuilding fails, the `FileIO` is deserialized without
+    /// a catalog's. Otherwise, or when rebuilding fails, the `FileIO` is deserialized without
     /// it and logs a warning, as [`FileIO::serialize_all`] does.
     pub fn deserialize_all(bytes: &[u8]) -> Result<Self> {
         let _serde::DeserializedFileIO {
@@ -571,6 +571,7 @@ mod tests {
     use std::io::Write;
     use std::path::Path;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use async_trait::async_trait;
     use bytes::Bytes;
@@ -582,8 +583,9 @@ mod tests {
     use super::{FileIO, FileIOBuilder};
     use crate::Result;
     use crate::io::{
-        GCS_TOKEN, LocalFsStorageFactory, MemoryStorageFactory, StorageConfig, StorageCredential,
-        StorageCredentialProvider, StorageCredentialProviderFactory,
+        GCS_TOKEN, LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig,
+        StorageCredential, StorageCredentialProvider, StorageCredentialProviderFactory,
+        StorageFactory,
     };
 
     #[derive(Debug)]
@@ -783,6 +785,43 @@ mod tests {
 
         assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
         assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
+    }
+
+    /// Memory storage that records whether it was given a credential provider.
+    #[derive(Debug, Default, Serialize, Deserialize)]
+    struct ProviderRecordingFactory {
+        #[serde(skip)]
+        received_provider: Arc<AtomicBool>,
+    }
+
+    #[typetag::serde]
+    impl StorageFactory for ProviderRecordingFactory {
+        fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+            self.build_with_credential_provider(config, None)
+        }
+
+        fn build_with_credential_provider(
+            &self,
+            config: &StorageConfig,
+            credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
+        ) -> Result<Arc<dyn Storage>> {
+            self.received_provider
+                .store(credential_provider.is_some(), Ordering::SeqCst);
+            MemoryStorageFactory.build(config)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_file_io_passes_credential_provider_to_factory() {
+        let received_provider = Arc::new(AtomicBool::new(false));
+        let file_io = FileIOBuilder::new(Arc::new(ProviderRecordingFactory {
+            received_provider: Arc::clone(&received_provider),
+        }))
+        .with_credential_provider(Arc::new(TestCredentialProvider))
+        .build();
+
+        file_io.exists("memory://file").await.unwrap();
+        assert!(received_provider.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
