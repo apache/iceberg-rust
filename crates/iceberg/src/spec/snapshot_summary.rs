@@ -48,6 +48,7 @@ const TOTAL_RECORDS: &str = "total-records";
 const TOTAL_FILE_SIZE: &str = "total-files-size";
 const CHANGED_PARTITION_COUNT_PROP: &str = "changed-partition-count";
 const CHANGED_PARTITION_PREFIX: &str = "partitions.";
+pub(crate) const ICEBERG_VERSION_PROP: &str = "iceberg-version";
 
 /// `SnapshotSummaryCollector` collects and aggregates snapshot update metrics.
 /// It gathers metrics about added or removed data files and manifests, and tracks

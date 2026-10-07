@@ -25,16 +25,15 @@ use uuid::Uuid;
 
 use crate::error::{Result, invalid_data};
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
-    TableProperties, update_snapshot_summaries,
+    DataFile, DataFileFormat, FormatVersion, ICEBERG_VERSION_PROP, MAIN_BRANCH,
+    ManifestContentType, ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriter,
+    ManifestWriterBuilder, Operation, Snapshot, SnapshotReference, SnapshotRetention,
+    SnapshotSummaryCollector, Struct, StructType, Summary, TableProperties,
+    update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
-
-const ICEBERG_VERSION_PROP: &str = "iceberg-version";
 
 fn apply_writer_identity(properties: &mut HashMap<String, String>) {
     let version = env!("CARGO_PKG_VERSION");
