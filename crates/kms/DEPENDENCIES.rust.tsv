@@ -71,13 +71,11 @@ derive_builder_core@0.20.2		X								X
 derive_builder_macro@0.20.2		X								X			
 digest@0.10.7		X								X			
 displaydoc@0.2.6		X								X			
-dissimilar@1.0.11		X											
 either@1.16.0		X								X			
 equivalent@1.0.2		X								X			
 erased-serde@0.4.10		X								X			
 event-listener@5.4.1		X								X			
 event-listener-strategy@0.5.4		X								X			
-expect-test@1.5.1		X								X			
 fastnum@0.7.5		X								X			
 fastrand@2.4.1		X								X			
 find-msvc-tools@0.1.9		X								X			
