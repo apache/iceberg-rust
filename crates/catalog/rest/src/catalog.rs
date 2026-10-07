@@ -63,6 +63,55 @@ pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-red
 /// if a `token`, `credential` or `oauth2-server-uri` is configured, `none`
 /// otherwise.
 pub const REST_CATALOG_PROP_AUTH_TYPE: &str = "rest.auth.type";
+/// Snapshots to request when loading a table: `all` or `refs`, see
+/// [`SnapshotLoadingMode`]. When unset, the `snapshots` query parameter is
+/// omitted and the server applies its default (`all`).
+pub const REST_CATALOG_PROP_SNAPSHOT_LOADING_MODE: &str = "snapshot-loading-mode";
+
+/// The `snapshots` query parameter of `GET /v1/{prefix}/namespaces/{namespace}/tables/{table}`,
+/// configured with [`REST_CATALOG_PROP_SNAPSHOT_LOADING_MODE`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotLoadingMode {
+    /// Request every snapshot. This is what a server returns when the
+    /// parameter is omitted.
+    All,
+    /// Request only the snapshots referenced by a branch or tag, so servers
+    /// can skip the rest of the snapshot history.
+    ///
+    /// The loaded metadata then has no snapshots other than those, and this
+    /// catalog does not transparently re-load the full history: operations
+    /// that need an unreferenced snapshot (time travel to one, or reading the
+    /// full `history`/`snapshots` metadata tables) will not find it.
+    Refs,
+}
+
+impl SnapshotLoadingMode {
+    /// The value to send as the `snapshots` query parameter.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SnapshotLoadingMode::All => "all",
+            SnapshotLoadingMode::Refs => "refs",
+        }
+    }
+}
+
+impl FromStr for SnapshotLoadingMode {
+    type Err = Error;
+
+    fn from_str(mode: &str) -> Result<Self> {
+        match mode.to_ascii_lowercase().as_str() {
+            "all" => Ok(SnapshotLoadingMode::All),
+            "refs" => Ok(SnapshotLoadingMode::Refs),
+            other => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "unknown '{REST_CATALOG_PROP_SNAPSHOT_LOADING_MODE}': {other}; \
+                     expected `all` or `refs`"
+                ),
+            )),
+        }
+    }
+}
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -282,6 +331,16 @@ impl RestCatalogConfig {
     /// Get the optional OAuth headers from the config.
     pub(crate) fn extra_oauth_params(&self) -> HashMap<String, String> {
         oauth_params_from_props(&self.props)
+    }
+
+    /// The configured [`SnapshotLoadingMode`], or `None` when
+    /// `snapshot-loading-mode` is unset and the `snapshots` query parameter
+    /// should be omitted.
+    pub(crate) fn snapshot_loading_mode(&self) -> Result<Option<SnapshotLoadingMode>> {
+        self.props
+            .get(REST_CATALOG_PROP_SNAPSHOT_LOADING_MODE)
+            .map(|mode| mode.parse())
+            .transpose()
     }
 
     /// Check if header redaction is disabled in error logs.
@@ -1219,11 +1278,15 @@ impl SessionCatalog for RestSessionCatalog {
     ) -> Result<Table> {
         let client = self.client().await?;
 
-        let request = HttpRequest::build(
-            client
-                .http_client
-                .request(Method::GET, client.config.table_endpoint(table_ident)),
-        )?;
+        let mut request_builder = client
+            .http_client
+            .request(Method::GET, client.config.table_endpoint(table_ident));
+
+        if let Some(mode) = client.config.snapshot_loading_mode()? {
+            request_builder = request_builder.query(&[("snapshots", mode.as_str())]);
+        }
+
+        let request = HttpRequest::build(request_builder)?;
 
         let http_response = client.query_catalog(request).await?;
 
@@ -1642,6 +1705,9 @@ impl RestSessionCatalogBuilder {
                     "Catalog uri is required",
                 ))
             } else {
+                // Reject a malformed mode here rather than at the first `load_table`.
+                self.config.snapshot_loading_mode()?;
+
                 let runtime = self.runtime.unwrap_or_else(Runtime::current);
                 let kms_client = match self.kms_client_factory {
                     Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
@@ -3755,6 +3821,125 @@ mod tests {
 
         config_mock.assert_async().await;
         rename_table_mock.assert_async().await;
+    }
+
+    async fn load_table_mock(server: &mut ServerGuard, query: mockito::Matcher) -> Mock {
+        server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .match_query(query)
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "load_table_response.json"
+            ))
+            .create_async()
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_load_table_omits_snapshots_by_default() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let table_mock = load_table_mock(&mut server, mockito::Matcher::Missing).await;
+
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        catalog
+            .load_table(
+                &SessionContext::empty(),
+                &TableIdent::from_strs(["ns1", "test1"]).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        config_mock.assert_async().await;
+        table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_load_table_sends_snapshot_loading_mode() {
+        for (prop, expected) in [("refs", "refs"), ("ALL", "all")] {
+            let mut server = Server::new_async().await;
+            let config_mock = create_config_mock(&mut server).await;
+            let table_mock = load_table_mock(
+                &mut server,
+                mockito::Matcher::UrlEncoded("snapshots".to_string(), expected.to_string()),
+            )
+            .await;
+
+            let catalog = session_catalog(
+                RestCatalogConfig::builder()
+                    .uri(server.url())
+                    .props(HashMap::from([(
+                        REST_CATALOG_PROP_SNAPSHOT_LOADING_MODE.to_string(),
+                        prop.to_string(),
+                    )]))
+                    .build(),
+            );
+            catalog
+                .load_table(
+                    &SessionContext::empty(),
+                    &TableIdent::from_strs(["ns1", "test1"]).unwrap(),
+                )
+                .await
+                .unwrap();
+
+            config_mock.assert_async().await;
+            table_mock.assert_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_loading_mode_from_server_defaults() {
+        let mut server = Server::new_async().await;
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(r#"{"defaults": {"snapshot-loading-mode": "refs"}, "overrides": {}}"#)
+            .create_async()
+            .await;
+        let table_mock = load_table_mock(
+            &mut server,
+            mockito::Matcher::UrlEncoded("snapshots".to_string(), "refs".to_string()),
+        )
+        .await;
+
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        catalog
+            .load_table(
+                &SessionContext::empty(),
+                &TableIdent::from_strs(["ns1", "test1"]).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        config_mock.assert_async().await;
+        table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_unknown_snapshot_loading_mode_is_rejected() {
+        let err = RestSessionCatalogBuilder::default()
+            .load(
+                "rest",
+                HashMap::from([
+                    (
+                        REST_CATALOG_PROP_URI.to_string(),
+                        "http://localhost".to_string(),
+                    ),
+                    (
+                        REST_CATALOG_PROP_SNAPSHOT_LOADING_MODE.to_string(),
+                        "branches".to_string(),
+                    ),
+                ]),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.message()
+                .contains(REST_CATALOG_PROP_SNAPSHOT_LOADING_MODE)
+        );
     }
 
     #[tokio::test]
