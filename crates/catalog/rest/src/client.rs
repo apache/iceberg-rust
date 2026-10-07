@@ -57,19 +57,18 @@ impl Debug for HttpClient {
 }
 
 impl HttpClient {
-    /// Sends a form-encoded POST and returns the response status and body,
+    /// Sends an unauthenticated form-encoded POST and returns the response,
     /// which is what an [`AuthManager`] needs to exchange a credential for a
-    /// token. Only `headers` are sent; the catalog's own extra headers are
-    /// not merged in.
+    /// token.
     ///
-    /// Like every request, it carries this client's session; call
-    /// [`Self::without_auth_session`] first to send it unauthenticated.
+    /// Only `headers` are sent: neither the catalog's extra headers nor
+    /// any session's authentication is applied, so a token request carries
+    /// exactly the credentials its caller puts into `headers` or `form`.
     ///
     /// [`AuthManager`]: crate::auth::AuthManager
     pub async fn post_form(
         &self,
         url: &str,
-        auth_session: &dyn AuthSession,
         headers: &HeaderMap,
         form: &HashMap<&str, &str>,
     ) -> Result<HttpResponse> {
@@ -85,7 +84,7 @@ impl HttpClient {
             reqwest::header::CONTENT_TYPE,
             reqwest::header::HeaderValue::from_static("application/x-www-form-urlencoded"),
         );
-        auth_session.authenticate(&mut request).await?;
+
         let response = self.client.execute(request.into_inner()).await?;
         HttpResponse::read(response).await
     }
@@ -255,20 +254,6 @@ pub(crate) fn deserialize_unexpected_catalog_error(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::NoopSession;
-
-    #[derive(Debug)]
-    struct StaticSession;
-
-    #[async_trait::async_trait]
-    impl AuthSession for StaticSession {
-        async fn authenticate(&self, request: &mut HttpRequest) -> Result<()> {
-            request
-                .headers_mut()
-                .insert("authorization", "Bearer tok".parse().unwrap());
-            Ok(())
-        }
-    }
 
     #[tokio::test]
     async fn test_a_truncated_body_error_names_the_url() {
@@ -291,7 +276,7 @@ mod tests {
         let url = format!("http://{addr}/token");
         let err = HttpClient::new(&RestCatalogConfig::builder().uri(url.clone()).build())
             .unwrap()
-            .post_form(&url, &NoopSession, &HeaderMap::new(), &HashMap::new())
+            .post_form(&url, &HeaderMap::new(), &HashMap::new())
             .await
             .unwrap_err();
 
@@ -313,7 +298,6 @@ mod tests {
             .unwrap()
             .post_form(
                 &format!("{}/token", server.url()),
-                &NoopSession,
                 &HeaderMap::new(),
                 &HashMap::new(),
             )
@@ -352,38 +336,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_post_form_carries_the_session_until_it_is_removed() {
-        // Every request a client sends carries its session; a caller that
-        // needs an unauthenticated one removes the session first.
+    async fn test_post_form_is_never_authenticated() {
+        // A token request carries no authentication, not even a
+        // user-configured `header.authorization` meant for the catalog.
         let mut server = mockito::Server::new_async().await;
-        let signed = server
-            .mock("POST", "/token")
-            .match_header("authorization", "Bearer tok")
-            .with_status(200)
-            .create_async()
-            .await;
-        let unsigned = server
+        let mock = server
             .mock("POST", "/token")
             .match_header("authorization", mockito::Matcher::Missing)
             .with_status(200)
             .create_async()
             .await;
 
-        let client =
-            HttpClient::new(&RestCatalogConfig::builder().uri(server.url()).build()).unwrap();
-        let url = format!("{}/token", server.url());
+        HttpClient::new(
+            &RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(HashMap::from([(
+                    "header.authorization".to_string(),
+                    "Basic xyz".to_string(),
+                )]))
+                .build(),
+        )
+        .unwrap()
+        .post_form(
+            &format!("{}/token", server.url()),
+            &HeaderMap::new(),
+            &HashMap::new(),
+        )
+        .await
+        .unwrap();
 
-        client
-            .post_form(&url, &StaticSession, &HeaderMap::new(), &HashMap::new())
-            .await
-            .unwrap();
-        signed.assert_async().await;
-
-        client
-            .post_form(&url, &NoopSession, &HeaderMap::new(), &HashMap::new())
-            .await
-            .unwrap();
-        unsigned.assert_async().await;
+        mock.assert_async().await;
     }
 
     #[test]
