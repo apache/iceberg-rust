@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 
 use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
@@ -25,7 +24,7 @@ use reqwest::{Client, IntoUrl, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 
 use crate::RestCatalogConfig;
-use crate::auth::{AuthSession, NoopSession};
+use crate::auth::AuthSession;
 use crate::request::HttpRequest;
 use crate::response::HttpResponse;
 
@@ -41,12 +40,6 @@ pub struct HttpClient {
     extra_headers: HeaderMap,
     /// Whether to disable header redaction in error logs (defaults to false for security).
     disable_header_redaction: bool,
-    /// Authenticates everything this client sends. A client handed to an
-    /// [`AuthManager`] carries no authentication, since that is what the
-    /// manager is about to create.
-    ///
-    /// [`AuthManager`]: crate::auth::AuthManager
-    auth_session: Arc<dyn AuthSession>,
 }
 
 impl Debug for HttpClient {
@@ -64,23 +57,6 @@ impl Debug for HttpClient {
 }
 
 impl HttpClient {
-    /// The same client authenticating with `auth_session` instead: a derived
-    /// auth session reuses the connection pool and headers of the client it
-    /// came from, carrying its own authentication.
-    pub fn with_auth_session(&self, auth_session: Arc<dyn AuthSession>) -> Self {
-        Self {
-            auth_session,
-            ..self.clone()
-        }
-    }
-
-    /// The same client with no authentication, for the requests that must not
-    /// carry it — a session refreshing its own token over the client it
-    /// authenticates would otherwise recurse.
-    pub fn without_auth_session(&self) -> Self {
-        self.with_auth_session(Arc::new(NoopSession))
-    }
-
     /// Sends a form-encoded POST and returns the response status and body,
     /// which is what an [`AuthManager`] needs to exchange a credential for a
     /// token. Only `headers` are sent; the catalog's own extra headers are
@@ -93,6 +69,7 @@ impl HttpClient {
     pub async fn post_form(
         &self,
         url: &str,
+        auth_session: &dyn AuthSession,
         headers: &HeaderMap,
         form: &HashMap<&str, &str>,
     ) -> Result<HttpResponse> {
@@ -108,7 +85,7 @@ impl HttpClient {
             reqwest::header::CONTENT_TYPE,
             reqwest::header::HeaderValue::from_static("application/x-www-form-urlencoded"),
         );
-        self.auth_session.authenticate(&mut request).await?;
+        auth_session.authenticate(&mut request).await?;
         let response = self.client.execute(request.into_inner()).await?;
         HttpResponse::read(response).await
     }
@@ -119,7 +96,6 @@ impl HttpClient {
             client: cfg.client(),
             extra_headers: cfg.extra_headers()?,
             disable_header_redaction: cfg.disable_header_redaction(),
-            auth_session: Arc::new(NoopSession),
         })
     }
 
@@ -137,7 +113,6 @@ impl HttpClient {
             client: cfg.client(),
             extra_headers,
             disable_header_redaction: cfg.disable_header_redaction(),
-            auth_session: self.auth_session,
         })
     }
 
@@ -146,13 +121,13 @@ impl HttpClient {
     /// Authenticates a throwaway request (never sent) and reads the header
     /// back, so it works for any [`AuthSession`].
     #[cfg(test)]
-    pub(crate) async fn token(&self) -> Option<String> {
+    pub(crate) async fn token(&self, auth_session: &dyn AuthSession) -> Option<String> {
         let mut request = HttpRequest::build(
             self.client
                 .request(Method::GET, "http://localhost/token-probe"),
         )
         .ok()?;
-        self.auth_session.authenticate(&mut request).await.ok()?;
+        auth_session.authenticate(&mut request).await.ok()?;
         let request = request.into_inner();
         request
             .headers()
@@ -172,10 +147,15 @@ impl HttpClient {
 
     /// Sends `request` to the Iceberg REST catalog, authenticated by this
     /// client's session.
-    pub(crate) async fn query_catalog(&self, mut request: HttpRequest) -> Result<HttpResponse> {
+    pub(crate) async fn query_catalog(
+        &self,
+        auth_session: &dyn AuthSession,
+        mut request: HttpRequest,
+    ) -> Result<HttpResponse> {
         // Authenticate first, then apply extra headers, so a configured
         // `header.authorization` keeps overriding a token (unchanged behavior).
-        self.auth_session.authenticate(&mut request).await?;
+        auth_session.authenticate(&mut request).await?;
+
         let mut request = request.into_inner();
         request.headers_mut().extend(self.extra_headers.clone());
         HttpResponse::read(self.client.execute(request).await?).await
@@ -275,6 +255,7 @@ pub(crate) fn deserialize_unexpected_catalog_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NoopSession;
 
     #[derive(Debug)]
     struct StaticSession;
@@ -310,7 +291,7 @@ mod tests {
         let url = format!("http://{addr}/token");
         let err = HttpClient::new(&RestCatalogConfig::builder().uri(url.clone()).build())
             .unwrap()
-            .post_form(&url, &HeaderMap::new(), &HashMap::new())
+            .post_form(&url, &NoopSession, &HeaderMap::new(), &HashMap::new())
             .await
             .unwrap_err();
 
@@ -332,6 +313,7 @@ mod tests {
             .unwrap()
             .post_form(
                 &format!("{}/token", server.url()),
+                &NoopSession,
                 &HeaderMap::new(),
                 &HashMap::new(),
             )
@@ -387,20 +369,18 @@ mod tests {
             .create_async()
             .await;
 
-        let client = HttpClient::new(&RestCatalogConfig::builder().uri(server.url()).build())
-            .unwrap()
-            .with_auth_session(Arc::new(StaticSession));
+        let client =
+            HttpClient::new(&RestCatalogConfig::builder().uri(server.url()).build()).unwrap();
         let url = format!("{}/token", server.url());
 
         client
-            .post_form(&url, &HeaderMap::new(), &HashMap::new())
+            .post_form(&url, &StaticSession, &HeaderMap::new(), &HashMap::new())
             .await
             .unwrap();
         signed.assert_async().await;
 
         client
-            .without_auth_session()
-            .post_form(&url, &HeaderMap::new(), &HashMap::new())
+            .post_form(&url, &NoopSession, &HeaderMap::new(), &HashMap::new())
             .await
             .unwrap();
         unsigned.assert_async().await;

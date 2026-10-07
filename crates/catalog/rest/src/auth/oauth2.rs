@@ -27,6 +27,7 @@ use reqwest::header::HeaderMap;
 use tokio::sync::Mutex;
 
 use super::{AuthManager, AuthSession, HttpRequest};
+use crate::NoopSession;
 use crate::catalog::{
     REST_CATALOG_PROP_URI, RestCatalogConfig, credential_from_props, default_token_endpoint,
     explicit_headers_from_props,
@@ -281,7 +282,13 @@ impl ClientCredentialsConfig {
 
         let response = self
             .client
-            .post_form(&self.token_endpoint, &self.extra_headers, &params)
+            .post_form(
+                &self.token_endpoint,
+                // TODO: Verify this is matching the old behavior.
+                &NoopSession,
+                &self.extra_headers,
+                &params,
+            )
             .await?;
         let status = response.status();
         let body = response.body();

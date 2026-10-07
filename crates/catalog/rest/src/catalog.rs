@@ -460,16 +460,9 @@ impl RestCatalogClient {
         // it before deriving the catalog session.
         let catalog_config = {
             let init_session = auth_manager
-                .init_session(
-                    &http_client.without_auth_session(),
-                    &Self::auth_props(user_config),
-                )
+                .init_session(&http_client, &Self::auth_props(user_config))
                 .await?;
-            Self::load_config(
-                &http_client.with_auth_session(Arc::from(init_session)),
-                user_config,
-            )
-            .await?
+            Self::load_config(&http_client, init_session.as_ref(), user_config).await?
         };
         // Use the advertised endpoints as-is, falling back to
         // `DEFAULT_ENDPOINTS` when absent or empty.
@@ -482,10 +475,7 @@ impl RestCatalogClient {
         // The manager is handed an unauthenticated client: its own
         // requests must not be signed by the session it is deriving.
         let catalog_session = auth_manager
-            .catalog_session(
-                &http_client.without_auth_session(),
-                &Self::auth_props(&config),
-            )
+            .catalog_session(&http_client, &Self::auth_props(&config))
             .await?;
 
         Ok(Self {
@@ -500,10 +490,7 @@ impl RestCatalogClient {
     /// Testing only: the bearer token the catalog session would attach.
     #[cfg(test)]
     async fn token(&self) -> Option<String> {
-        self.http_client
-            .with_auth_session(Arc::clone(&self.catalog_session))
-            .token()
-            .await
+        self.http_client.token(self.catalog_session.as_ref()).await
     }
 
     /// Sends `request` with the authentication derived for `context`.
@@ -517,8 +504,7 @@ impl RestCatalogClient {
             .contextual_session(context, Arc::clone(&self.catalog_session))
             .await?;
         self.http_client
-            .with_auth_session(session)
-            .query_catalog(request)
+            .query_catalog(session.as_ref(), request)
             .await
     }
 
@@ -546,6 +532,7 @@ impl RestCatalogClient {
     /// It's required for a REST catalog to update its config after creation.
     async fn load_config(
         http_client: &HttpClient,
+        auth_session: &dyn AuthSession,
         user_config: &RestCatalogConfig,
     ) -> Result<CatalogConfig> {
         let mut request_builder = http_client.request(Method::GET, user_config.config_endpoint());
@@ -556,7 +543,7 @@ impl RestCatalogClient {
 
         let request = HttpRequest::build(request_builder)?;
 
-        let http_response = http_client.query_catalog(request).await?;
+        let http_response = http_client.query_catalog(auth_session, request).await?;
 
         match http_response.status() {
             StatusCode::OK => deserialize_catalog_response(http_response),
