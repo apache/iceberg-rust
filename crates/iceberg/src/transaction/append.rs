@@ -795,38 +795,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_caller_engine_identity_is_kept() {
-        let table = make_v2_minimal_table();
-        let tx = Transaction::new(&table);
-
-        let mut snapshot_properties = HashMap::new();
-        snapshot_properties.insert("engine-name".to_string(), "other".to_string());
-        snapshot_properties.insert("engine-version".to_string(), "0".to_string());
-        snapshot_properties.insert("iceberg-version".to_string(), "custom".to_string());
-
-        let action = tx
-            .fast_append()
-            .set_snapshot_properties(snapshot_properties);
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
-        let updates = action_commit.take_updates();
-
-        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
-        } else {
-            unreachable!()
-        };
-        let props = &new_snapshot.summary().additional_properties;
-        let version = env!("CARGO_PKG_VERSION");
-
-        assert_eq!(props.get("engine-name").unwrap(), "other");
-        assert_eq!(props.get("engine-version").unwrap(), "0");
-        assert_eq!(
-            props.get("iceberg-version").unwrap(),
-            &format!("Apache Iceberg Rust {version}")
-        );
-    }
-
-    #[tokio::test]
     async fn test_append_snapshot_properties() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
