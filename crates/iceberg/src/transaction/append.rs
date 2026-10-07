@@ -769,8 +769,10 @@ mod tests {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
 
-        let mut snapshot_properties = HashMap::new();
-        snapshot_properties.insert("key".to_string(), "val".to_string());
+        let snapshot_properties = HashMap::from([
+            ("key".to_string(), "val".to_string()),
+            ("iceberg-version".to_string(), "caller".to_string()),
+        ]);
 
         let action = tx
             .fast_append()
@@ -790,6 +792,7 @@ mod tests {
             props.get("iceberg-version").unwrap(),
             &format!("Apache Iceberg Rust {version}")
         );
+        assert_eq!(props.get("key").unwrap(), "val");
     }
 
     #[tokio::test]
