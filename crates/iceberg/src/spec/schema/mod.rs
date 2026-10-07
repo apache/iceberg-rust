@@ -25,6 +25,7 @@ mod utils;
 mod visitor;
 pub use self::visitor::*;
 pub(super) mod _serde;
+mod assign_fresh_ids;
 mod id_reassigner;
 mod index;
 mod prune_columns;
@@ -33,6 +34,7 @@ use itertools::{Itertools, zip_eq};
 use serde::{Deserialize, Serialize};
 
 use self::_serde::SchemaEnum;
+pub(crate) use self::assign_fresh_ids::assign_fresh_ids;
 use self::id_reassigner::ReassignFieldIds;
 use self::index::{IndexByName, index_by_id, index_parents};
 pub use self::prune_columns::prune_columns;
