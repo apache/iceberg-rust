@@ -214,7 +214,10 @@ impl StorageFactory for OpenDalResolvingStorageFactory {
         self.build_with_credential_provider(config, None)
     }
 
-    #[allow(unused_variables)]
+    #[cfg_attr(
+        not(any(feature = "opendal-s3", feature = "opendal-gcs")),
+        allow(unused_variables)
+    )]
     fn build_with_credential_provider(
         &self,
         config: &StorageConfig,

@@ -244,11 +244,10 @@ impl StorageFactory for MemoryStorageFactory {
     }
 
     /// In-memory storage needs no credentials.
-    #[allow(unused_variables)]
     fn build_with_credential_provider(
         &self,
         config: &StorageConfig,
-        credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
+        _credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
     ) -> Result<Arc<dyn Storage>> {
         self.build(config)
     }

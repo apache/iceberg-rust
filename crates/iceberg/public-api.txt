@@ -906,7 +906,7 @@ impl core::fmt::Debug for iceberg::io::LocalFsStorageFactory
 pub fn iceberg::io::LocalFsStorageFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::io::StorageFactory for iceberg::io::LocalFsStorageFactory
 pub fn iceberg::io::LocalFsStorageFactory::build(&self, _config: &iceberg::io::StorageConfig) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
-pub fn iceberg::io::LocalFsStorageFactory::build_with_credential_provider(&self, config: &iceberg::io::StorageConfig, credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProvider>>) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
+pub fn iceberg::io::LocalFsStorageFactory::build_with_credential_provider(&self, config: &iceberg::io::StorageConfig, _credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProvider>>) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
 impl serde_core::ser::Serialize for iceberg::io::LocalFsStorageFactory
 pub fn iceberg::io::LocalFsStorageFactory::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::io::LocalFsStorageFactory
@@ -945,7 +945,7 @@ impl core::fmt::Debug for iceberg::io::MemoryStorageFactory
 pub fn iceberg::io::MemoryStorageFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::io::StorageFactory for iceberg::io::MemoryStorageFactory
 pub fn iceberg::io::MemoryStorageFactory::build(&self, _config: &iceberg::io::StorageConfig) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
-pub fn iceberg::io::MemoryStorageFactory::build_with_credential_provider(&self, config: &iceberg::io::StorageConfig, credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProvider>>) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
+pub fn iceberg::io::MemoryStorageFactory::build_with_credential_provider(&self, config: &iceberg::io::StorageConfig, _credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProvider>>) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
 impl serde_core::ser::Serialize for iceberg::io::MemoryStorageFactory
 pub fn iceberg::io::MemoryStorageFactory::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::io::MemoryStorageFactory
@@ -1180,10 +1180,10 @@ pub fn iceberg::io::StorageFactory::build(&self, config: &iceberg::io::StorageCo
 pub fn iceberg::io::StorageFactory::build_with_credential_provider(&self, config: &iceberg::io::StorageConfig, credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProvider>>) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
 impl iceberg::io::StorageFactory for iceberg::io::LocalFsStorageFactory
 pub fn iceberg::io::LocalFsStorageFactory::build(&self, _config: &iceberg::io::StorageConfig) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
-pub fn iceberg::io::LocalFsStorageFactory::build_with_credential_provider(&self, config: &iceberg::io::StorageConfig, credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProvider>>) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
+pub fn iceberg::io::LocalFsStorageFactory::build_with_credential_provider(&self, config: &iceberg::io::StorageConfig, _credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProvider>>) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
 impl iceberg::io::StorageFactory for iceberg::io::MemoryStorageFactory
 pub fn iceberg::io::MemoryStorageFactory::build(&self, _config: &iceberg::io::StorageConfig) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
-pub fn iceberg::io::MemoryStorageFactory::build_with_credential_provider(&self, config: &iceberg::io::StorageConfig, credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProvider>>) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
+pub fn iceberg::io::MemoryStorageFactory::build_with_credential_provider(&self, config: &iceberg::io::StorageConfig, _credential_provider: core::option::Option<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProvider>>) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
 pub mod iceberg::memory
 pub struct iceberg::memory::MemoryCatalog
 impl core::fmt::Debug for iceberg::memory::MemoryCatalog
