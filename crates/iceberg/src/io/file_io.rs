@@ -394,7 +394,8 @@ impl FileIOBuilder {
     /// Attach a provider of refreshable, backend-specific credentials.
     ///
     /// Storage factories that cannot use the provider ignore it and use the
-    /// credentials in the configuration.
+    /// credentials in the configuration; the default implementation logs a
+    /// warning when it does.
     pub fn with_credential_provider(
         mut self,
         provider: Arc<dyn StorageCredentialProvider>,
@@ -824,9 +825,21 @@ mod tests {
         assert!(received_provider.load(Ordering::SeqCst));
     }
 
+    /// Memory storage from a factory that implements only `build`, so it uses
+    /// the default `build_with_credential_provider`.
+    #[derive(Debug, Serialize, Deserialize)]
+    struct BuildOnlyFactory;
+
+    #[typetag::serde]
+    impl StorageFactory for BuildOnlyFactory {
+        fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+            MemoryStorageFactory.build(config)
+        }
+    }
+
     #[tokio::test]
     async fn test_file_io_ignores_credentials_for_unsupported_factory() {
-        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+        let file_io = FileIOBuilder::new(Arc::new(BuildOnlyFactory))
             .with_credential_provider(Arc::new(TestCredentialProvider))
             .build();
 

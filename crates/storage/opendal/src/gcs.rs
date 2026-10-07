@@ -109,7 +109,7 @@ pub(crate) fn gcs_config_build(
 
     let mut builder = cfg.into_builder();
 
-    // A catalog-supplied provider re-fetches the vended OAuth2 token as it nears expiry
+    // The provider re-fetches the vended OAuth2 token as it nears expiry.
     if let Some(provider) = credential_provider {
         builder =
             builder.credential_provider(VendedGcsCredentialProvider(VendedCredentialSource::new(

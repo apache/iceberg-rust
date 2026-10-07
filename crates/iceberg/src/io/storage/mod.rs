@@ -146,9 +146,10 @@ pub trait StorageFactory: Debug + Send + Sync {
     ///
     /// Backends that cannot use the provider ignore it and use the credentials
     /// in `config`, as they would without one. The default does so and logs a
-    /// warning once, since the storage's credentials are then not refreshed.
-    /// Factories that wrap another factory should forward the provider to it,
-    /// and factories whose storage needs no credentials can ignore it silently.
+    /// warning once per process, since the storage's credentials are then not
+    /// refreshed. Factories that wrap another factory should forward the
+    /// provider to it, and factories whose storage needs no credentials can
+    /// ignore it silently.
     fn build_with_credential_provider(
         &self,
         config: &StorageConfig,
@@ -215,6 +216,9 @@ pub trait StorageCredentialProvider: Debug + Send + Sync {
     /// Backends read the credential's expiry from its config, such as
     /// `s3.session-token-expires-at-ms`, and load a new one before it expires.
     /// A credential without an expiry is used for as long as the backend lives.
+    ///
+    /// An error, or a credential that does not cover `path`, fails the request:
+    /// backends do not fall back to other credentials.
     async fn load_credential(&self, path: &str) -> Result<StorageCredential>;
 
     /// Return a factory that rebuilds an equivalent provider in another process.
@@ -262,7 +266,7 @@ pub struct StorageCredential {
 impl StorageCredential {
     /// Create a credential for locations under `prefix`.
     ///
-    /// An empty prefix covers no location, as Java rejects it.
+    /// An empty prefix covers no location; Java rejects one outright.
     pub fn new(prefix: impl Into<String>, config: HashMap<String, String>) -> Self {
         Self {
             prefix: prefix.into(),

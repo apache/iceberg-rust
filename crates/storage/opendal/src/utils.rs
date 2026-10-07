@@ -266,6 +266,7 @@ mod tests {
             credential_expiry(&never, GCS_TOKEN_EXPIRES_AT).unwrap(),
             Some(Timestamp::from_millisecond(MAX_TIMESTAMP_MILLIS).unwrap())
         );
+        // Pins the constant to the latest timestamp reqsign accepts.
         assert!(Timestamp::from_millisecond(MAX_TIMESTAMP_MILLIS + 1).is_err());
         // The value is never quoted in the error.
         let invalid = HashMap::from([(GCS_TOKEN_EXPIRES_AT.to_string(), "secret".to_string())]);

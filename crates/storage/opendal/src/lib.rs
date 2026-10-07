@@ -339,7 +339,7 @@ pub enum OpenDalStorage {
         /// Custom AWS credential loader.
         #[serde(skip)]
         customized_credential_load: Option<CustomAwsCredentialLoader>,
-        /// Provider of refreshable vended credentials, supplied by the catalog.
+        /// Provider of refreshable vended credentials, from the `FileIO`.
         #[serde(
             skip_deserializing,
             skip_serializing_if = "Option::is_none",
@@ -356,7 +356,7 @@ pub enum OpenDalStorage {
     Gcs {
         /// GCS configuration.
         config: Arc<GcsConfig>,
-        /// Provider of refreshable vended credentials, supplied by the catalog.
+        /// Provider of refreshable vended credentials, from the `FileIO`.
         #[serde(
             skip_deserializing,
             skip_serializing_if = "Option::is_none",
@@ -446,15 +446,15 @@ impl DeleteBatchKey {
 enum BatchCredential {
     /// Served by the backend's configured credentials.
     Static,
-    /// A dynamic credential for a whole scheme, such as `s3`, looked up for
+    /// A vended credential for a whole scheme, such as `s3`, looked up for
     /// the storage root.
     SchemeWide { root: String },
-    /// A dynamic credential scoped to `prefix`, looked up for the prefix.
+    /// A vended credential scoped to `prefix`, looked up for the prefix.
     Scoped { prefix: String },
 }
 
 impl BatchCredential {
-    /// Location the batch operator looks dynamic credentials up for.
+    /// Location the batch operator looks vended credentials up for.
     fn location(&self) -> Option<&str> {
         match self {
             BatchCredential::Static => None,
@@ -484,7 +484,7 @@ impl OpenDalStorage {
         self.create_operator_with_credential_location(path, None)
     }
 
-    /// Creates an operator whose dynamic credentials are looked up for
+    /// Creates an operator whose vended credentials are looked up for
     /// `credential_location` instead of `path`.
     ///
     /// A bulk-delete batch passes its scope location, so every credential the
@@ -660,7 +660,7 @@ impl OpenDalStorage {
         }
     }
 
-    /// Return the dynamic credential provider that serves `path`, if any.
+    /// Return the credential provider that serves `path`, if any.
     fn credential_provider_for_path(
         &self,
         path: &str,
@@ -1547,26 +1547,20 @@ mod tests {
         fresh.assert_async().await;
     }
 
-    /// Vends `token` as a GCS credential, or fails when it is `None`.
+    /// Fails every credential load.
     #[cfg(feature = "opendal-gcs")]
     #[derive(Debug)]
-    struct GcsTokenProvider(Option<&'static str>);
+    struct FailingCredentialProvider;
 
     #[cfg(feature = "opendal-gcs")]
     #[async_trait]
-    impl StorageCredentialProvider for GcsTokenProvider {
+    impl StorageCredentialProvider for FailingCredentialProvider {
         fn supports_path(&self, _path: &str) -> bool {
             true
         }
 
         async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
-            let token = self
-                .0
-                .ok_or_else(|| Error::new(ErrorKind::Unexpected, "refresh failed"))?;
-            Ok(StorageCredential::new(
-                "gs",
-                HashMap::from([(GCS_TOKEN.to_string(), token.to_string())]),
-            ))
+            Err(Error::new(ErrorKind::Unexpected, "refresh failed"))
         }
     }
 
@@ -1585,23 +1579,6 @@ mod tests {
             credential_provider: Some(Arc::new(provider)),
             client_config: OpenDalClientConfig::default(),
         }
-    }
-
-    #[cfg(feature = "opendal-gcs")]
-    #[tokio::test]
-    async fn test_gcs_signs_with_the_vended_token() {
-        let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("GET", mockito::Matcher::Any)
-            .match_header("authorization", "Bearer vended-token")
-            .expect_at_least(1)
-            .with_status(404)
-            .create_async()
-            .await;
-
-        let storage = gcs_storage(&server, GcsTokenProvider(Some("vended-token")));
-        assert!(!storage.exists("gs://bucket/file.parquet").await.unwrap());
-        mock.assert_async().await;
     }
 
     /// Vends `expiring-token`, which is about to expire, and then `fresh-token`.
@@ -1671,7 +1648,7 @@ mod tests {
             .create_async()
             .await;
 
-        let storage = gcs_storage(&server, GcsTokenProvider(None));
+        let storage = gcs_storage(&server, FailingCredentialProvider);
         assert!(storage.exists("gs://bucket/file.parquet").await.is_err());
         mock.assert_async().await;
     }
@@ -1696,7 +1673,7 @@ mod tests {
 
     #[cfg(feature = "opendal-s3")]
     #[tokio::test]
-    async fn test_dynamic_credentials_batch_by_prefix() {
+    async fn test_vended_credentials_batch_by_prefix() {
         let storage = OpenDalStorage::S3 {
             config: Arc::new(S3Config::default()),
             customized_credential_load: None,
@@ -1724,7 +1701,7 @@ mod tests {
 
     #[cfg(feature = "opendal-s3")]
     #[tokio::test]
-    async fn test_scheme_wide_dynamic_credentials_batch_by_storage_root() {
+    async fn test_scheme_wide_vended_credentials_batch_by_storage_root() {
         #[derive(Debug)]
         struct SchemeWideProvider;
 
@@ -1808,7 +1785,7 @@ mod tests {
 
     #[cfg(feature = "opendal-s3")]
     #[tokio::test]
-    async fn test_custom_s3_credential_loader_ignores_dynamic_provider_for_batching() {
+    async fn test_custom_s3_credential_loader_ignores_credential_provider_for_batching() {
         let storage = OpenDalStorage::S3 {
             config: Arc::new(S3Config::default()),
             customized_credential_load: Some(CustomAwsCredentialLoader::new(
@@ -1827,7 +1804,7 @@ mod tests {
 
     #[cfg(feature = "opendal-s3")]
     #[test]
-    fn test_s3_rejects_anonymous_dynamic_credentials() {
+    fn test_s3_rejects_anonymous_vended_credentials() {
         let mut config = S3Config::default();
         config.skip_signature = true;
         let storage = OpenDalStorage::S3 {
@@ -1845,7 +1822,7 @@ mod tests {
 
     #[cfg(feature = "opendal-gcs")]
     #[test]
-    fn test_gcs_rejects_anonymous_dynamic_credentials() {
+    fn test_gcs_rejects_anonymous_vended_credentials() {
         let mut config = GcsConfig::default();
         config.skip_signature = true;
         let storage = OpenDalStorage::Gcs {

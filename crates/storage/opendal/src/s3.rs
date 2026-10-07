@@ -148,7 +148,7 @@ pub(crate) fn s3_config_build(
     })?;
 
     // Preserve the existing custom-loader precedence: an explicitly configured loader
-    // is the sole source, otherwise install the catalog provider as a replacement chain so
+    // is the sole source, otherwise install the credential provider as a replacement chain so
     // refresh failures cannot fall through to broader ambient AWS credentials.
     let credential_provider = credential_provider
         .as_ref()
