@@ -109,9 +109,8 @@ impl ArrowReader {
                 .collect();
 
             // Every key column may be absent from this file, leaving `column_indices`
-            // empty. `ProjectionMask::leaves(schema, [])` predicate with a zero-column
-            // batch carrying and correct row count, so the probe still returns one boolean
-            // per row and the selection.
+            // empty. `ProjectionMask::leaves(schema, [])` still yields a zero-column batch
+            // with the correct row count, so the probe returns one boolean per row.
             let mut column_indices: Vec<usize> = leaf_indices.iter().flatten().copied().collect();
             column_indices.sort_unstable();
             column_indices.dedup();
