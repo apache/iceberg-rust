@@ -25,24 +25,14 @@ use uuid::Uuid;
 
 use crate::error::{Result, invalid_data};
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, ICEBERG_VERSION_PROP, MAIN_BRANCH,
-    ManifestContentType, ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriter,
-    ManifestWriterBuilder, Operation, Snapshot, SnapshotReference, SnapshotRetention,
-    SnapshotSummaryCollector, Struct, StructType, Summary, TableProperties,
-    update_snapshot_summaries,
+    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
+    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
+    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
+    TableProperties, set_iceberg_version, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
-
-fn apply_writer_identity(properties: &mut HashMap<String, String>) {
-    let version = env!("CARGO_PKG_VERSION");
-    properties.insert(
-        ICEBERG_VERSION_PROP.to_string(),
-        format!("Apache Iceberg Rust {version}"),
-    );
-}
-
 /// A trait that defines how different table operations produce new snapshots.
 ///
 /// `SnapshotProduceOperation` is used by [`SnapshotProducer`] to customize snapshot creation
@@ -425,7 +415,7 @@ impl<'a> SnapshotProducer<'a> {
             previous_snapshot.map(|s| s.summary()),
             snapshot_produce_operation.operation() == Operation::Overwrite,
         )?;
-        apply_writer_identity(&mut summary.additional_properties);
+        set_iceberg_version(&mut summary.additional_properties);
         Ok(summary)
     }
 
