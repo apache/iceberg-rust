@@ -24,6 +24,7 @@ use aes_gcm::aead::OsRng;
 use aes_gcm::aead::rand_core::RngCore;
 
 use super::{AesKeySize, SecureKey};
+use crate::error::invalid_data;
 use crate::{Error, ErrorKind, Result};
 
 /// Standard key metadata for Iceberg table encryption.
@@ -74,7 +75,7 @@ impl StandardKeyMetadata {
         self
     }
 
-    /// Adds a file length.
+    /// Sets the encrypted file length in bytes, required for AGS1 truncation protection.
     pub fn with_file_length(mut self, length: u64) -> Self {
         self.file_length = Some(length);
         self
@@ -90,7 +91,7 @@ impl StandardKeyMetadata {
         self.aad_prefix.as_deref()
     }
 
-    /// Returns the optional file length.
+    /// Returns the optional encrypted file length in bytes; AGS1 readers require it to be set.
     pub fn file_length(&self) -> Option<u64> {
         self.file_length
     }
@@ -196,10 +197,7 @@ mod _serde {
 
         pub(super) fn decode(bytes: &[u8]) -> Result<Self> {
             if bytes.is_empty() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Empty key metadata buffer",
-                ));
+                return Err(invalid_data!("Empty key metadata buffer"));
             }
 
             let version = bytes[0];
@@ -211,17 +209,11 @@ mod _serde {
             }
 
             let mut reader = Cursor::new(&bytes[1..]);
-            let value = from_avro_datum(&AVRO_SCHEMA_V1, &mut reader, None).map_err(|e| {
-                Error::new(ErrorKind::DataInvalid, "Failed to decode key metadata").with_source(e)
-            })?;
+            let value = from_avro_datum(&AVRO_SCHEMA_V1, &mut reader, None)
+                .map_err(|e| invalid_data!("Failed to decode key metadata").with_source(e))?;
 
-            from_value(&value).map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Failed to decode key metadata fields",
-                )
-                .with_source(e)
-            })
+            from_value(&value)
+                .map_err(|e| invalid_data!("Failed to decode key metadata fields").with_source(e))
         }
     }
 
@@ -243,11 +235,7 @@ mod _serde {
 
         fn try_from(v1: StandardKeyMetadataV1) -> Result<Self> {
             let encryption_key = SecureKey::new(&v1.encryption_key).map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Invalid encryption key in key metadata",
-                )
-                .with_source(e)
+                invalid_data!("Invalid encryption key in key metadata").with_source(e)
             })?;
             Ok(Self {
                 encryption_key,

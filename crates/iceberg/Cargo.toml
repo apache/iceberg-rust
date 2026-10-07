@@ -54,7 +54,6 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 crc32fast = { workspace = true }
 derive_builder = { workspace = true }
-expect-test = { workspace = true }
 fastnum = { workspace = true }
 flate2 = { workspace = true }
 fnv = { workspace = true }
