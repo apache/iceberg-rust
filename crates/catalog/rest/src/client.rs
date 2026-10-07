@@ -21,12 +21,13 @@ use std::sync::Arc;
 
 use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
-use reqwest::{Client, IntoUrl, Method, RequestBuilder, Response, StatusCode};
+use reqwest::{Client, IntoUrl, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 
 use crate::RestCatalogConfig;
 use crate::auth::{AuthSession, NoopSession};
 use crate::request::HttpRequest;
+use crate::response::HttpResponse;
 
 /// The catalog's HTTP client, handed to an [`AuthManager`] so its own
 /// requests share the catalog's connection pool and configuration.
@@ -94,7 +95,7 @@ impl HttpClient {
         url: &str,
         headers: &HeaderMap,
         form: &HashMap<&str, &str>,
-    ) -> Result<(StatusCode, Vec<u8>)> {
+    ) -> Result<HttpResponse> {
         let mut request = HttpRequest::build(
             self.client
                 .request(Method::POST, url)
@@ -109,12 +110,7 @@ impl HttpClient {
         );
         self.auth_session.authenticate(&mut request).await?;
         let response = self.client.execute(request.into_inner()).await?;
-        let status = response.status();
-        let body = response
-            .bytes()
-            .await
-            .map_err(|err| err.with_url(url.parse().unwrap_or_else(|_| "/".parse().unwrap())))?;
-        Ok((status, body.to_vec()))
+        HttpResponse::read(response).await
     }
 
     /// Create a new http client.
@@ -180,15 +176,15 @@ impl HttpClient {
             .headers(self.extra_headers.clone())
     }
 
-    // Queries the Iceberg REST catalog after authentication with the given `Request` and
-    // returns a `Response`.
-    pub(crate) async fn query_catalog(&self, mut request: HttpRequest) -> Result<Response> {
+    /// Sends `request` to the Iceberg REST catalog, authenticated by this
+    /// client's session.
+    pub(crate) async fn query_catalog(&self, mut request: HttpRequest) -> Result<HttpResponse> {
         // Authenticate first, then apply extra headers, so a configured
         // `header.authorization` keeps overriding a token (unchanged behavior).
         self.auth_session.authenticate(&mut request).await?;
         let mut request = request.into_inner();
         request.headers_mut().extend(self.extra_headers.clone());
-        Ok(self.client.execute(request).await?)
+        HttpResponse::read(self.client.execute(request).await?).await
     }
 
     /// Returns whether header redaction is disabled for this client.
@@ -197,20 +193,20 @@ impl HttpClient {
     }
 }
 
-/// Deserializes a catalog response into the given [`DeserializedOwned`] type.
+/// Deserializes a catalog response into the given [`DeserializeOwned`] type.
 ///
 /// Returns an error if unable to parse the response bytes.
-pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
-    response: Response,
+pub(crate) fn deserialize_catalog_response<R: DeserializeOwned>(
+    response: HttpResponse,
 ) -> Result<R> {
-    let bytes = response.bytes().await?;
+    let bytes = response.body();
 
-    serde_json::from_slice::<R>(&bytes).map_err(|e| {
+    serde_json::from_slice::<R>(bytes).map_err(|e| {
         Error::new(
             ErrorKind::Unexpected,
             "Failed to parse response from rest catalog server",
         )
-        .with_context("json", String::from_utf8_lossy(&bytes))
+        .with_context("json", String::from_utf8_lossy(bytes))
         .with_source(e)
     })
 }
@@ -235,8 +231,8 @@ fn is_sensitive_header(name: &str) -> bool {
 /// Redacts sensitive headers and returns a debug-formatted string.
 ///
 /// If `disable_redaction` is true, returns all headers without redaction.
-/// Otherwise, replaces sensitive header values with "[REDACTED]".
-fn format_headers_redacted(headers: &HeaderMap, disable_redaction: bool) -> String {
+/// Otherwise, replaces sensitive header values with `[REDACTED]`.
+pub(crate) fn format_headers_redacted(headers: &HeaderMap, disable_redaction: bool) -> String {
     if disable_redaction {
         // Return all headers as-is without redaction
         let all: HashMap<&str, &str> = headers
@@ -261,8 +257,8 @@ fn format_headers_redacted(headers: &HeaderMap, disable_redaction: bool) -> Stri
 }
 
 /// Deserializes a unexpected catalog response into an error.
-pub(crate) async fn deserialize_unexpected_catalog_error(
-    response: Response,
+pub(crate) fn deserialize_unexpected_catalog_error(
+    response: HttpResponse,
     disable_header_redaction: bool,
 ) -> Error {
     let err = Error::new(
@@ -275,15 +271,11 @@ pub(crate) async fn deserialize_unexpected_catalog_error(
         format_headers_redacted(response.headers(), disable_header_redaction),
     );
 
-    let bytes = match response.bytes().await {
-        Ok(bytes) => bytes,
-        Err(err) => return err.into(),
-    };
-
+    let bytes = response.body();
     if bytes.is_empty() {
         return err;
     }
-    err.with_context("json", String::from_utf8_lossy(&bytes))
+    err.with_context("json", String::from_utf8_lossy(bytes))
 }
 
 #[cfg(test)]
@@ -301,6 +293,86 @@ mod tests {
                 .insert("authorization", "Bearer tok".parse().unwrap());
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn test_a_truncated_body_error_names_the_url() {
+        // `bytes()` builds its error without a URL, so `read` attaches the one
+        // the response came from; otherwise a failure can't be attributed to a
+        // catalog. Needs a raw socket: the body has to be cut short.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = std::io::Read::read(&mut stream, &mut buf);
+            // Promise more than is sent, then hang up.
+            let _ = std::io::Write::write_all(
+                &mut stream,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort",
+            );
+        });
+
+        let url = format!("http://{addr}/token");
+        let err = HttpClient::new(&RestCatalogConfig::builder().uri(url.clone()).build())
+            .unwrap()
+            .post_form(&url, &HeaderMap::new(), &HashMap::new())
+            .await
+            .unwrap_err();
+
+        assert!(format!("{err:?}").contains(&url), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn test_reading_a_response_keeps_status_headers_and_body() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/token")
+            .with_status(418)
+            .with_header("x-request-id", "abc123")
+            .with_body("brewing")
+            .create_async()
+            .await;
+
+        let response = HttpClient::new(&RestCatalogConfig::builder().uri(server.url()).build())
+            .unwrap()
+            .post_form(
+                &format!("{}/token", server.url()),
+                &HeaderMap::new(),
+                &HashMap::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 418);
+        assert_eq!(response.headers().get("x-request-id").unwrap(), "abc123");
+        assert_eq!(response.body(), b"brewing");
+        mock.assert_async().await;
+    }
+
+    #[test]
+    fn test_unexpected_error_carries_status_headers_and_body() {
+        // Everything a user needs to diagnose an unexpected status, with the
+        // sensitive headers held back.
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer leaked".parse().unwrap());
+        headers.insert("x-request-id", "abc123".parse().unwrap());
+        let response = HttpResponse::new(
+            http::StatusCode::IM_A_TEAPOT,
+            headers,
+            br#"{"error": "nope"}"#.to_vec(),
+        );
+
+        let err = format!(
+            "{:?}",
+            deserialize_unexpected_catalog_error(response, false)
+        );
+
+        assert!(err.contains("418"), "{err}");
+        assert!(err.contains("x-request-id"), "{err}");
+        assert!(err.contains("abc123"), "{err}");
+        assert!(err.contains("nope"), "{err}");
+        assert!(!err.contains("leaked"), "{err}");
     }
 
     #[tokio::test]

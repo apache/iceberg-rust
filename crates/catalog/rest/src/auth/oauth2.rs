@@ -279,29 +279,31 @@ impl ClientCredentialsConfig {
                 .map(|(k, v)| (k.as_str(), v.as_str())),
         );
 
-        let (status, body) = self
+        let response = self
             .client
             .post_form(&self.token_endpoint, &self.extra_headers, &params)
             .await?;
+        let status = response.status();
+        let body = response.body();
 
         let auth_res: TokenResponse = if status == StatusCode::OK {
-            Ok(serde_json::from_slice(&body).map_err(|e| {
+            Ok(serde_json::from_slice(body).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
                 .with_context("operation", "auth")
                 .with_context("url", self.token_endpoint.clone())
-                .with_context("json", String::from_utf8_lossy(&body))
+                .with_context("json", String::from_utf8_lossy(body))
                 .with_source(e)
             })?)
         } else {
-            let e: ErrorResponse = serde_json::from_slice(&body).map_err(|e| {
+            let e: ErrorResponse = serde_json::from_slice(body).map_err(|e| {
                 Error::new(ErrorKind::Unexpected, "Received unexpected response")
                     .with_context("code", status.to_string())
                     .with_context("operation", "auth")
                     .with_context("url", self.token_endpoint.clone())
-                    .with_context("json", String::from_utf8_lossy(&body))
+                    .with_context("json", String::from_utf8_lossy(body))
                     .with_source(e)
             })?;
             Err(Error::from(e))

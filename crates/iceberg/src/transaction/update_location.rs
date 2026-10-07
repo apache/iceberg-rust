@@ -19,22 +19,23 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::error::invalid_data;
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
-use crate::{Error, ErrorKind, Result, TableUpdate};
+use crate::{Result, TableUpdate};
 
 /// A transaction action that sets or updates the location of a table.
 ///
 /// This action is used to explicitly set a new metadata location during a transaction,
 /// typically as part of advanced commit or recovery flows. The location is optional until
-/// explicitly set via [`set_location`].
+/// explicitly set via [`UpdateLocationAction::set_location`].
 pub struct UpdateLocationAction {
     location: Option<String>,
 }
 
 impl UpdateLocationAction {
     /// Creates a new [`UpdateLocationAction`] with no location set.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         UpdateLocationAction { location: None }
     }
 
@@ -53,12 +54,6 @@ impl UpdateLocationAction {
     }
 }
 
-impl Default for UpdateLocationAction {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[async_trait]
 impl TransactionAction for UpdateLocationAction {
     async fn commit(self: Arc<Self>, _table: &Table) -> Result<ActionCommit> {
@@ -66,9 +61,8 @@ impl TransactionAction for UpdateLocationAction {
         if let Some(location) = self.location.clone() {
             updates = vec![TableUpdate::SetLocation { location }];
         } else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Location is not set for UpdateLocationAction!",
+            return Err(invalid_data!(
+                "Location is not set for UpdateLocationAction!"
             ));
         }
 

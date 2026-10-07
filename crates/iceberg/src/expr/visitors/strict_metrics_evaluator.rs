@@ -17,25 +17,26 @@
 
 use fnv::FnvHashSet;
 
+use crate::Result;
+use crate::error::invalid_data;
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{DataFile, Datum};
-use crate::{Error, ErrorKind, Result};
 
 #[allow(dead_code)]
 const ROWS_MUST_MATCH: Result<bool> = Ok(true);
 #[allow(dead_code)]
 const ROWS_MIGHT_NOT_MATCH: Result<bool> = Ok(false);
 
-#[allow(dead_code)]
 /// Evaluates an `Expression` on a `DataFile` to test whether all rows in the file match.
-///  
+///
 /// This evaluation is strict: it returns true if all rows in a file must match the expression.
 /// For example, if a file's ts column has min X and max Y, this evaluator will return true for ts
 /// &lt; Y+1 but not for ts &lt; Y-1.
 ///
 /// Files are passed to `eval(DataFile)`, which returns true if all rows in the file
 /// must contain matching rows and false if the file may contain rows that do not match.
+#[allow(dead_code)]
 pub(crate) struct StrictMetricsEvaluator<'a> {
     data_file: &'a DataFile,
 }
@@ -159,10 +160,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
     }
 
     fn not(&mut self, _inner: bool) -> Result<bool> {
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            "NOT should be rewritten",
-        ))
+        Err(invalid_data!("NOT should be rewritten"))
     }
 
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {

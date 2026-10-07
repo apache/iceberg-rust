@@ -23,6 +23,8 @@ mod entry;
 pub use entry::*;
 mod metadata;
 pub use metadata::*;
+mod reader;
+pub use reader::*;
 mod writer;
 use std::sync::Arc;
 
@@ -30,11 +32,10 @@ use apache_avro::{Reader as AvroReader, from_value};
 pub use writer::*;
 
 use super::{
-    Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType, Schema, Struct,
+    Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType, Schema, Struct, Type,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
-use crate::error::Result;
-use crate::{Error, ErrorKind};
+use crate::error::{Result, invalid_data};
 
 /// A manifest contains metadata and a list of entries.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -54,6 +55,10 @@ impl Manifest {
 
         // Parse manifest entries
         let partition_type = metadata.partition_spec.partition_type(&metadata.schema)?;
+        // Wrap the partition type once and share it across all entries: the
+        // per-entry conversion needs a `&Type`, and building it here keeps the
+        // lazily-populated field-name lookup from being rebuilt for every entry.
+        let partition_struct_type = Type::Struct(partition_type.clone());
 
         let entries = match metadata.format_version {
             FormatVersion::V1 => {
@@ -64,7 +69,7 @@ impl Manifest {
                     .map(|value| {
                         from_value::<_serde::ManifestEntryV1>(&value?)?.try_into(
                             metadata.partition_spec.spec_id(),
-                            &partition_type,
+                            &partition_struct_type,
                             &metadata.schema,
                         )
                     })
@@ -79,7 +84,7 @@ impl Manifest {
                     .map(|value| {
                         from_value::<_serde::ManifestEntryV2>(&value?)?.try_into(
                             metadata.partition_spec.spec_id(),
-                            &partition_type,
+                            &partition_struct_type,
                             &metadata.schema,
                         )
                     })
@@ -127,14 +132,10 @@ pub fn serialize_data_file_to_json(
     partition_type: &super::StructType,
     format_version: FormatVersion,
 ) -> Result<String> {
-    let serde = _serde::DataFileSerde::try_from(data_file, partition_type, format_version)?;
-    serde_json::to_string(&serde).map_err(|e| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            "Failed to serialize DataFile to JSON!".to_string(),
-        )
-        .with_source(e)
-    })
+    let partition_struct_type = Type::Struct(partition_type.clone());
+    let serde = _serde::DataFileSerde::try_from(data_file, &partition_struct_type, format_version)?;
+    serde_json::to_string(&serde)
+        .map_err(|e| invalid_data!("Failed to serialize DataFile to JSON!").with_source(e))
 }
 
 /// Deserialize a DataFile from a JSON string.
@@ -144,15 +145,11 @@ pub fn deserialize_data_file_from_json(
     partition_type: &super::StructType,
     schema: &Schema,
 ) -> Result<DataFile> {
-    let serde = serde_json::from_str::<_serde::DataFileSerde>(json).map_err(|e| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            "Failed to deserialize JSON to DataFile!".to_string(),
-        )
-        .with_source(e)
-    })?;
+    let serde = serde_json::from_str::<_serde::DataFileSerde>(json)
+        .map_err(|e| invalid_data!("Failed to deserialize JSON to DataFile!").with_source(e))?;
 
-    serde.try_into(partition_spec_id, partition_type, schema)
+    let partition_struct_type = Type::Struct(partition_type.clone());
+    serde.try_into(partition_spec_id, &partition_struct_type, schema)
 }
 
 #[cfg(test)]
@@ -391,7 +388,11 @@ mod tests {
                 .add_user_metadata("content".to_string(), metadata.content.to_string())
                 .unwrap();
             let value = to_value(
-                _serde::ManifestEntryV2::try_from(entry.clone(), &partition_type).unwrap(),
+                _serde::ManifestEntryV2::try_from(
+                    entry.clone(),
+                    &Type::Struct(partition_type.clone()),
+                )
+                .unwrap(),
             )
             .unwrap()
             .resolve(&avro_schema)
@@ -1022,7 +1023,7 @@ mod tests {
                     partition: Struct::from_iter(
                         vec![
                             Some(Literal::int(2021)),
-                            Some(Literal::float(1.0)),
+                            Some(Literal::float(1.0_f32)),
                             Some(Literal::double(2.0)),
                         ]
                     ),
@@ -1057,7 +1058,7 @@ mod tests {
                         partition: Struct::from_iter(
                             vec![
                                 Some(Literal::int(1111)),
-                                Some(Literal::float(15.5)),
+                                Some(Literal::float(15.5_f32)),
                                 Some(Literal::double(25.5)),
                             ]
                         ),
@@ -1185,11 +1186,11 @@ mod tests {
 
         assert_eq!(
             partitions[1].clone().lower_bound.unwrap(),
-            Datum::float(1.0).to_bytes().unwrap()
+            Datum::float(1.0_f32).to_bytes().unwrap()
         );
         assert_eq!(
             partitions[1].clone().upper_bound.unwrap(),
-            Datum::float(15.5).to_bytes().unwrap()
+            Datum::float(15.5_f32).to_bytes().unwrap()
         );
         assert!(partitions[1].clone().contains_null);
         assert_eq!(partitions[1].clone().contains_nan, Some(true));

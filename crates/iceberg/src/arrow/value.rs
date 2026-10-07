@@ -23,11 +23,12 @@ use arrow_array::{
     LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
     Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray, new_null_array,
 };
-use arrow_buffer::NullBuffer;
+use arrow_buffer::BooleanBuffer;
 use arrow_schema::{DataType, FieldRef, TimeUnit};
 use uuid::Uuid;
 
 use super::get_field_id_from_metadata;
+use crate::error::invalid_data;
 use crate::spec::{
     ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveLiteral, PrimitiveType,
     SchemaWithPartnerVisitor, Struct, StructType, Type, VariantType, visit_struct_with_partner,
@@ -57,12 +58,9 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
     ) -> Result<Vec<Option<Literal>>> {
         // Make there is no null value if the field is required
         if field.required && value.iter().any(Option::is_none) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The field is required but has null value",
-            )
-            .with_context("field_id", field.id.to_string())
-            .with_context("field_name", &field.name));
+            return Err(invalid_data!("The field is required but has null value")
+                .with_context("field_id", field.id.to_string())
+                .with_context("field_name", &field.name));
         }
         Ok(value)
     }
@@ -75,12 +73,11 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
     ) -> Result<Vec<Option<Literal>>> {
         let row_len = results.first().map(|column| column.len()).unwrap_or(0);
         if let Some(col) = results.iter().find(|col| col.len() != row_len) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The struct columns have different row length",
-            )
-            .with_context("first col length", row_len.to_string())
-            .with_context("actual col length", col.len().to_string()));
+            return Err(
+                invalid_data!("The struct columns have different row length")
+                    .with_context("first col length", row_len.to_string())
+                    .with_context("actual col length", col.len().to_string()),
+            );
         }
 
         let mut struct_literals = Vec::with_capacity(row_len);
@@ -111,19 +108,14 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
         elements: Vec<Option<Literal>>,
     ) -> Result<Vec<Option<Literal>>> {
         if list.element_field.required && elements.iter().any(Option::is_none) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The list should not have null value",
-            ));
+            return Err(invalid_data!("The list should not have null value"));
         }
         match array.data_type() {
             DataType::List(_) => {
                 let offset = array
                     .as_any()
                     .downcast_ref::<ListArray>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a list array")
-                    })?
+                    .ok_or_else(|| invalid_data!("The partner is not a list array"))?
                     .offsets();
                 // combine the result according to the offset
                 let mut result = Vec::with_capacity(offset.len() - 1);
@@ -138,12 +130,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 let offset = array
                     .as_any()
                     .downcast_ref::<LargeListArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The partner is not a large list array",
-                        )
-                    })?
+                    .ok_or_else(|| invalid_data!("The partner is not a large list array"))?
                     .offsets();
                 // combine the result according to the offset
                 let mut result = Vec::with_capacity(offset.len() - 1);
@@ -163,10 +150,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 }
                 Ok(result)
             }
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The partner is not a list type",
-            )),
+            _ => Err(invalid_data!("The partner is not a list type")),
         }
     }
 
@@ -179,16 +163,15 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
     ) -> Result<Vec<Option<Literal>>> {
         // Make sure key_value and value have the same row length
         if key_values.len() != values.len() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The key value and value of map should have the same row length",
+            return Err(invalid_data!(
+                "The key value and value of map should have the same row length"
             ));
         }
 
         let offsets = partner
             .as_any()
             .downcast_ref::<MapArray>()
-            .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "The partner is not a map array"))?
+            .ok_or_else(|| invalid_data!("The partner is not a map array"))?
             .offsets();
         // combine the result according to the offset
         let mut result = Vec::with_capacity(offsets.len() - 1);
@@ -206,69 +189,52 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
 
     fn primitive(&mut self, p: &PrimitiveType, partner: &ArrayRef) -> Result<Vec<Option<Literal>>> {
         match p {
+            PrimitiveType::Unknown => Ok(vec![None; partner.len()]),
             PrimitiveType::Boolean => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<BooleanArray>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a boolean array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a boolean array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::bool)).collect())
             }
             PrimitiveType::Int => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<Int32Array>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a int32 array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a int32 array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::int)).collect())
             }
             PrimitiveType::Long => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<Int64Array>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a int64 array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a int64 array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::long)).collect())
             }
             PrimitiveType::Float => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<Float32Array>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a float32 array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a float32 array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::float)).collect())
             }
             PrimitiveType::Double => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<Float64Array>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a float64 array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a float64 array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::double)).collect())
             }
             PrimitiveType::Decimal { precision, scale } => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<Decimal128Array>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The partner is not a decimal128 array",
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a decimal128 array"))?;
                 if let DataType::Decimal128(arrow_precision, arrow_scale) = array.data_type()
                     && (*arrow_precision as u32 != *precision || *arrow_scale as u32 != *scale)
                 {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "The precision or scale ({arrow_precision},{arrow_scale}) of arrow decimal128 array is not compatible with iceberg decimal type ({precision},{scale})"
-                        ),
+                    return Err(invalid_data!(
+                        "The precision or scale ({arrow_precision},{arrow_scale}) of arrow decimal128 array is not compatible with iceberg decimal type ({precision},{scale})"
                     ));
                 }
                 Ok(array.iter().map(|v| v.map(Literal::decimal)).collect())
@@ -277,54 +243,35 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 let array = partner
                     .as_any()
                     .downcast_ref::<Date32Array>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a date32 array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a date32 array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::date)).collect())
             }
             PrimitiveType::Time => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<Time64MicrosecondArray>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a time64 array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a time64 array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::time)).collect())
             }
             PrimitiveType::Timestamp => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<TimestampMicrosecondArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The partner is not a timestamp array",
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a timestamp array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::timestamp)).collect())
             }
             PrimitiveType::Timestamptz => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<TimestampMicrosecondArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The partner is not a timestamptz array",
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a timestamptz array"))?;
                 Ok(array.iter().map(|v| v.map(Literal::timestamptz)).collect())
             }
             PrimitiveType::TimestampNs => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<TimestampNanosecondArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The partner is not a timestamp_ns array",
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a timestamp_ns array"))?;
                 Ok(array
                     .iter()
                     .map(|v| v.map(Literal::timestamp_nano))
@@ -334,12 +281,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 let array = partner
                     .as_any()
                     .downcast_ref::<TimestampNanosecondArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The partner is not a timestamptz_ns array",
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a timestamptz_ns array"))?;
                 Ok(array
                     .iter()
                     .map(|v| v.map(Literal::timestamptz_nano))
@@ -351,54 +293,37 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 } else if let Some(array) = partner.as_any().downcast_ref::<StringArray>() {
                     Ok(array.iter().map(|v| v.map(Literal::string)).collect())
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "The partner is not a string array",
-                    ))
+                    Err(invalid_data!("The partner is not a string array"))
                 }
             }
             PrimitiveType::Uuid => {
                 if let Some(array) = partner.as_any().downcast_ref::<FixedSizeBinaryArray>() {
                     if array.value_length() != 16 {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "The partner is not a uuid array",
-                        ));
+                        return Err(invalid_data!("The partner is not a uuid array"));
                     }
                     Ok(array
                         .iter()
                         .map(|v| {
                             v.map(|v| {
                                 Ok(Literal::uuid(Uuid::from_bytes(v.try_into().map_err(
-                                    |_| {
-                                        Error::new(
-                                            ErrorKind::DataInvalid,
-                                            "Failed to convert binary to uuid",
-                                        )
-                                    },
+                                    |_| invalid_data!("Failed to convert binary to uuid"),
                                 )?)))
                             })
                             .transpose()
                         })
                         .collect::<Result<Vec<_>>>()?)
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "The partner is not a uuid array",
-                    ))
+                    Err(invalid_data!("The partner is not a uuid array"))
                 }
             }
             PrimitiveType::Fixed(len) => {
                 let array = partner
                     .as_any()
                     .downcast_ref::<FixedSizeBinaryArray>()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "The partner is not a fixed array")
-                    })?;
+                    .ok_or_else(|| invalid_data!("The partner is not a fixed array"))?;
                 if array.value_length() != *len as i32 {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "The length of fixed size binary array is not compatible with iceberg fixed type",
+                    return Err(invalid_data!(
+                        "The length of fixed size binary array is not compatible with iceberg fixed type"
                     ));
                 }
                 Ok(array
@@ -418,10 +343,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                         .map(|v| v.map(|v| Literal::binary(v.to_vec())))
                         .collect())
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "The partner is not a binary array",
-                    ))
+                    Err(invalid_data!("The partner is not a binary array"))
                 }
             }
         }
@@ -493,10 +415,7 @@ impl Default for ArrowArrayAccessor {
 impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
     fn struct_partner<'a>(&self, schema_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
         if !matches!(schema_partner.data_type(), DataType::Struct(_)) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The schema partner is not a struct type",
-            ));
+            return Err(invalid_data!("The schema partner is not a struct type"));
         }
 
         Ok(schema_partner)
@@ -511,11 +430,8 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
             .as_any()
             .downcast_ref::<StructArray>()
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "The struct partner is not a struct array, partner: {struct_partner:?}"
-                    ),
+                invalid_data!(
+                    "The struct partner is not a struct array, partner: {struct_partner:?}"
                 )
             })?;
 
@@ -523,12 +439,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
             .fields()
             .iter()
             .position(|arrow_field| self.match_mode.match_field(arrow_field, field))
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Field id {} not found in struct array", field.id),
-                )
-            })?;
+            .ok_or_else(|| invalid_data!("Field id {} not found in struct array", field.id))?;
 
         Ok(struct_array.column(field_pos))
     }
@@ -539,24 +450,14 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                 let list_array = list_partner
                     .as_any()
                     .downcast_ref::<ListArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The list partner is not a list array",
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_data!("The list partner is not a list array"))?;
                 Ok(list_array.values())
             }
             DataType::LargeList(_) => {
                 let list_array = list_partner
                     .as_any()
                     .downcast_ref::<LargeListArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The list partner is not a large list array",
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_data!("The list partner is not a large list array"))?;
                 Ok(list_array.values())
             }
             DataType::FixedSizeList(_, _) => {
@@ -564,17 +465,11 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                     .as_any()
                     .downcast_ref::<FixedSizeListArray>()
                     .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "The list partner is not a fixed size list array",
-                        )
+                        invalid_data!("The list partner is not a fixed size list array")
                     })?;
                 Ok(list_array.values())
             }
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The list partner is not a list type",
-            )),
+            _ => Err(invalid_data!("The list partner is not a list type")),
         }
     }
 
@@ -582,9 +477,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
         let map_array = map_partner
             .as_any()
             .downcast_ref::<MapArray>()
-            .ok_or_else(|| {
-                Error::new(ErrorKind::DataInvalid, "The map partner is not a map array")
-            })?;
+            .ok_or_else(|| invalid_data!("The map partner is not a map array"))?;
         Ok(map_array.keys())
     }
 
@@ -592,9 +485,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
         let map_array = map_partner
             .as_any()
             .downcast_ref::<MapArray>()
-            .ok_or_else(|| {
-                Error::new(ErrorKind::DataInvalid, "The map partner is not a map array")
-            })?;
+            .ok_or_else(|| invalid_data!("The map partner is not a map array"))?;
         Ok(map_array.values())
     }
 }
@@ -633,35 +524,27 @@ pub fn arrow_primitive_to_literal(
 /// a single value that represents all rows.
 pub(crate) fn create_primitive_array_single_element(
     data_type: &DataType,
-    prim_lit: &Option<PrimitiveLiteral>,
+    prim_lit: Option<&PrimitiveLiteral>,
 ) -> Result<ArrayRef> {
+    // No value: a single NULL of any (possibly nested) type.
+    if prim_lit.is_none() {
+        return Ok(new_null_array(data_type, 1));
+    }
     match (data_type, prim_lit) {
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(v))) => {
             Ok(Arc::new(BooleanArray::from(vec![*v])))
         }
-        (DataType::Boolean, None) => Ok(Arc::new(BooleanArray::from(vec![Option::<bool>::None]))),
         (DataType::Int32, Some(PrimitiveLiteral::Int(v))) => {
             Ok(Arc::new(Int32Array::from(vec![*v])))
         }
-        (DataType::Int32, None) => Ok(Arc::new(Int32Array::from(vec![Option::<i32>::None]))),
         (DataType::Date32, Some(PrimitiveLiteral::Int(v))) => {
             Ok(Arc::new(Date32Array::from(vec![*v])))
         }
-        (DataType::Date32, None) => Ok(Arc::new(Date32Array::from(vec![Option::<i32>::None]))),
         (DataType::Int64, Some(PrimitiveLiteral::Long(v))) => {
             Ok(Arc::new(Int64Array::from(vec![*v])))
         }
-        (DataType::Int64, None) => Ok(Arc::new(Int64Array::from(vec![Option::<i64>::None]))),
         (DataType::Timestamp(TimeUnit::Microsecond, timezone), Some(PrimitiveLiteral::Long(v))) => {
             let array = TimestampMicrosecondArray::from(vec![*v]);
-            if let Some(timezone) = timezone {
-                Ok(Arc::new(array.with_timezone(timezone.clone())))
-            } else {
-                Ok(Arc::new(array))
-            }
-        }
-        (DataType::Timestamp(TimeUnit::Microsecond, timezone), None) => {
-            let array = TimestampMicrosecondArray::from(vec![Option::<i64>::None]);
             if let Some(timezone) = timezone {
                 Ok(Arc::new(array.with_timezone(timezone.clone())))
             } else {
@@ -676,42 +559,25 @@ pub(crate) fn create_primitive_array_single_element(
                 Ok(Arc::new(array))
             }
         }
-        (DataType::Timestamp(TimeUnit::Nanosecond, timezone), None) => {
-            let array = TimestampNanosecondArray::from(vec![Option::<i64>::None]);
-            if let Some(timezone) = timezone {
-                Ok(Arc::new(array.with_timezone(timezone.clone())))
-            } else {
-                Ok(Arc::new(array))
-            }
-        }
         (DataType::Float32, Some(PrimitiveLiteral::Float(v))) => {
             Ok(Arc::new(Float32Array::from(vec![v.0])))
         }
-        (DataType::Float32, None) => Ok(Arc::new(Float32Array::from(vec![Option::<f32>::None]))),
         (DataType::Float64, Some(PrimitiveLiteral::Double(v))) => {
             Ok(Arc::new(Float64Array::from(vec![v.0])))
         }
-        (DataType::Float64, None) => Ok(Arc::new(Float64Array::from(vec![Option::<f64>::None]))),
         (DataType::Utf8, Some(PrimitiveLiteral::String(v))) => {
             Ok(Arc::new(StringArray::from(vec![v.as_str()])))
         }
-        (DataType::Utf8, None) => Ok(Arc::new(StringArray::from(vec![Option::<&str>::None]))),
         (DataType::Binary, Some(PrimitiveLiteral::Binary(v))) => {
             Ok(Arc::new(BinaryArray::from_vec(vec![v.as_slice()])))
         }
-        (DataType::Binary, None) => Ok(Arc::new(BinaryArray::from_opt_vec(vec![
-            Option::<&[u8]>::None,
-        ]))),
         (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::Int128(v))) => {
             let array = Decimal128Array::from(vec![{ *v }])
                 .with_precision_and_scale(*precision, *scale)
                 .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
+                    invalid_data!(
                             "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                        ),
-                    )
+                        )
                 })?;
             Ok(Arc::new(array))
         }
@@ -719,89 +585,11 @@ pub(crate) fn create_primitive_array_single_element(
             let array = Decimal128Array::from(vec![*v as i128])
                 .with_precision_and_scale(*precision, *scale)
                 .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
+                    invalid_data!(
                             "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                        ),
-                    )
+                        )
                 })?;
             Ok(Arc::new(array))
-        }
-        (DataType::Decimal128(precision, scale), None) => {
-            let array = Decimal128Array::from(vec![Option::<i128>::None])
-                .with_precision_and_scale(*precision, *scale)
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                        ),
-                    )
-                })?;
-            Ok(Arc::new(array))
-        }
-        (DataType::Struct(fields), None) => {
-            // Create a single-element StructArray with nulls
-            let null_arrays: Vec<ArrayRef> = fields
-                .iter()
-                .map(|f| {
-                    // Recursively create null arrays for struct fields
-                    // For primitive fields in structs, use simple null arrays (not REE within struct)
-                    match f.data_type() {
-                        DataType::Boolean => {
-                            Ok(Arc::new(BooleanArray::from(vec![Option::<bool>::None]))
-                                as ArrayRef)
-                        }
-                        DataType::Int32 | DataType::Date32 => {
-                            Ok(Arc::new(Int32Array::from(vec![Option::<i32>::None])) as ArrayRef)
-                        }
-                        DataType::Int64 => {
-                            Ok(Arc::new(Int64Array::from(vec![Option::<i64>::None])) as ArrayRef)
-                        }
-                        DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
-                            let array = TimestampMicrosecondArray::from(vec![Option::<i64>::None]);
-                            if let Some(timezone) = timezone {
-                                Ok(Arc::new(array.with_timezone(timezone.clone())) as ArrayRef)
-                            } else {
-                                Ok(Arc::new(array) as ArrayRef)
-                            }
-                        }
-                        DataType::Timestamp(TimeUnit::Nanosecond, timezone) => {
-                            let array = TimestampNanosecondArray::from(vec![Option::<i64>::None]);
-                            if let Some(timezone) = timezone {
-                                Ok(Arc::new(array.with_timezone(timezone.clone())) as ArrayRef)
-                            } else {
-                                Ok(Arc::new(array) as ArrayRef)
-                            }
-                        }
-                        DataType::Float32 => {
-                            Ok(Arc::new(Float32Array::from(vec![Option::<f32>::None])) as ArrayRef)
-                        }
-                        DataType::Float64 => {
-                            Ok(Arc::new(Float64Array::from(vec![Option::<f64>::None])) as ArrayRef)
-                        }
-                        DataType::Utf8 => {
-                            Ok(Arc::new(StringArray::from(vec![Option::<&str>::None])) as ArrayRef)
-                        }
-                        DataType::Binary => {
-                            Ok(
-                                Arc::new(BinaryArray::from_opt_vec(vec![Option::<&[u8]>::None]))
-                                    as ArrayRef,
-                            )
-                        }
-                        _ => Err(Error::new(
-                            ErrorKind::Unexpected,
-                            format!("Unsupported struct field type: {:?}", f.data_type()),
-                        )),
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(Arc::new(StructArray::new(
-                fields.clone(),
-                null_arrays,
-                Some(NullBuffer::new_null(1)),
-            )))
         }
         _ => Err(Error::new(
             ErrorKind::Unexpected,
@@ -816,13 +604,22 @@ pub(crate) fn create_primitive_array_single_element(
 /// repeated for each row.
 pub(crate) fn create_primitive_array_repeated(
     data_type: &DataType,
-    prim_lit: &Option<PrimitiveLiteral>,
+    prim_lit: Option<&PrimitiveLiteral>,
     num_rows: usize,
 ) -> Result<ArrayRef> {
+    // No value to repeat: an all-NULL column of any (possibly nested) type.
+    if prim_lit.is_none() {
+        return Ok(new_null_array(data_type, num_rows));
+    }
     Ok(match (data_type, prim_lit) {
         // --- Primitive Some arms ---
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(value))) => {
-            Arc::new(BooleanArray::from(vec![*value; num_rows]))
+            let buffer = if *value {
+                BooleanBuffer::new_set(num_rows)
+            } else {
+                BooleanBuffer::new_unset(num_rows)
+            };
+            Arc::new(BooleanArray::new(buffer, None))
         }
         (DataType::Int32, Some(PrimitiveLiteral::Int(value))) => {
             Arc::new(Int32Array::from(vec![*value; num_rows]))
@@ -864,23 +661,32 @@ pub(crate) fn create_primitive_array_repeated(
         (DataType::Float64, Some(PrimitiveLiteral::Double(value))) => {
             Arc::new(Float64Array::from(vec![value.0; num_rows]))
         }
-        (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => {
-            Arc::new(StringArray::from(vec![value.clone(); num_rows]))
-        }
-        (DataType::Binary, Some(PrimitiveLiteral::Binary(value))) => {
-            Arc::new(BinaryArray::from_vec(vec![value; num_rows]))
-        }
-        (DataType::LargeBinary, Some(PrimitiveLiteral::Binary(value))) => {
-            Arc::new(LargeBinaryArray::from_vec(vec![value; num_rows]))
-        }
+        (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => Arc::new(
+            StringArray::from_iter_values(std::iter::repeat_n(value.as_str(), num_rows)),
+        ),
+        (DataType::Binary, Some(PrimitiveLiteral::Binary(value))) => Arc::new(
+            BinaryArray::from_iter_values(std::iter::repeat_n(value.as_slice(), num_rows)),
+        ),
+        (DataType::LargeBinary, Some(PrimitiveLiteral::Binary(value))) => Arc::new(
+            LargeBinaryArray::from_iter_values(std::iter::repeat_n(value.as_slice(), num_rows)),
+        ),
         (DataType::FixedSizeBinary(len), Some(PrimitiveLiteral::Binary(value))) => {
-            let repeated: Vec<&[u8]> = vec![value.as_slice(); num_rows];
-            Arc::new(FixedSizeBinaryArray::try_from_iter(repeated.into_iter()).map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Failed to create FixedSizeBinary({len}) array: {e}"),
-                )
-            })?)
+            // try_from_iter infers the width from the data, never from `len`, so a
+            // wrong-width literal would otherwise produce a FixedSizeBinary of the
+            // wrong width instead of erroring.
+            if value.len() != *len as usize {
+                return Err(invalid_data!(
+                    "FixedSizeBinary literal length {} does not match declared width {len}",
+                    value.len()
+                ));
+            }
+
+            Arc::new(
+                FixedSizeBinaryArray::try_from_iter(std::iter::repeat_n(value.as_slice(), num_rows))
+                    .map_err(|e| {
+                        invalid_data!("Failed to create FixedSizeBinary({len}) array: {e}")
+                    })?,
+            )
         }
         (DataType::Time64(TimeUnit::Microsecond), Some(PrimitiveLiteral::Long(value))) => {
             Arc::new(Time64MicrosecondArray::from(vec![*value; num_rows]))
@@ -890,12 +696,9 @@ pub(crate) fn create_primitive_array_repeated(
                 Decimal128Array::from(vec![*value; num_rows])
                     .with_precision_and_scale(*precision, *scale)
                     .map_err(|e| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
+                        invalid_data!(
                                 "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                            ),
-                        )
+                            )
                     })?,
             )
         }
@@ -904,49 +707,12 @@ pub(crate) fn create_primitive_array_repeated(
                 Decimal128Array::from(vec![*value as i128; num_rows])
                     .with_precision_and_scale(*precision, *scale)
                     .map_err(|e| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
+                        invalid_data!(
                                 "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                            ),
-                        )
+                            )
                     })?,
             )
         }
-
-        // --- Special-case None arms ---
-        (DataType::Decimal128(precision, scale), None) => {
-            let vals: Vec<Option<i128>> = vec![None; num_rows];
-            Arc::new(
-                Decimal128Array::from(vals)
-                    .with_precision_and_scale(*precision, *scale)
-                    .map_err(|e| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                            ),
-                        )
-                    })?,
-            )
-        }
-        (DataType::Struct(fields), None) => {
-            // Create a StructArray filled with nulls, recursively creating null children
-            let null_arrays: Vec<ArrayRef> = fields
-                .iter()
-                .map(|field| create_primitive_array_repeated(field.data_type(), &None, num_rows))
-                .collect::<Result<Vec<_>>>()?;
-
-            Arc::new(StructArray::new(
-                fields.clone(),
-                null_arrays,
-                Some(NullBuffer::new_null(num_rows)),
-            ))
-        }
-        (DataType::Null, _) => Arc::new(arrow_array::NullArray::new(num_rows)),
-
-        // --- Catch-all null arm: use arrow-rs new_null_array for any remaining DataType ---
-        (dt, None) => new_null_array(dt, num_rows),
 
         (dt, _) => {
             return Err(Error::new(
@@ -1186,7 +952,7 @@ mod test {
                 Some(Literal::bool(true)),
                 Some(Literal::int(3)),
                 Some(Literal::long(5)),
-                Some(Literal::float(1.1)),
+                Some(Literal::float(1.1_f32)),
                 Some(Literal::double(3.3)),
                 Some(Literal::decimal(1000)),
                 Some(Literal::date(18628)),
@@ -1200,7 +966,7 @@ mod test {
                 Some(Literal::bool(false)),
                 Some(Literal::int(4)),
                 Some(Literal::long(6)),
-                Some(Literal::float(2.2)),
+                Some(Literal::float(2.2_f32)),
                 Some(Literal::double(4.4)),
                 Some(Literal::decimal(2000)),
                 Some(Literal::date(18629)),
@@ -1854,7 +1620,7 @@ mod test {
         let target_type = DataType::Decimal128(target_precision, target_scale);
         let value = PrimitiveLiteral::Int128(10000000000);
 
-        let array = create_primitive_array_single_element(&target_type, &Some(value))
+        let array = create_primitive_array_single_element(&target_type, Some(&value))
             .expect("Failed to create decimal array");
 
         match array.data_type() {
@@ -1867,6 +1633,87 @@ mod test {
     }
 
     #[test]
+    fn test_create_null_arrays_preserve_type_and_length() {
+        let data_types = [
+            DataType::Decimal128(10, 2),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+            DataType::Struct(
+                vec![
+                    Field::new("a", DataType::Utf8, true),
+                    Field::new(
+                        "ys",
+                        DataType::List(Arc::new(Field::new("element", DataType::Int64, true))),
+                        true,
+                    ),
+                ]
+                .into(),
+            ),
+            DataType::Null,
+        ];
+
+        // NullArray has no validity bitmap; logical_null_count includes its implicit NULLs.
+        for data_type in data_types {
+            let single = create_primitive_array_single_element(&data_type, None)
+                .unwrap_or_else(|err| panic!("single, type={data_type:?}: {err}"));
+            assert_eq!(single.data_type(), &data_type, "single, type={data_type:?}");
+            assert_eq!(single.len(), 1, "single, type={data_type:?}");
+            if data_type != DataType::Null {
+                assert_eq!(single.null_count(), 1, "single, type={data_type:?}");
+            }
+            assert_eq!(single.logical_null_count(), 1, "single, type={data_type:?}");
+
+            for num_rows in [0, 1, 3] {
+                let repeated = create_primitive_array_repeated(&data_type, None, num_rows)
+                    .unwrap_or_else(|err| {
+                        panic!("repeated, type={data_type:?}, rows={num_rows}: {err}")
+                    });
+                assert_eq!(
+                    repeated.data_type(),
+                    &data_type,
+                    "repeated, type={data_type:?}, rows={num_rows}"
+                );
+                assert_eq!(
+                    repeated.len(),
+                    num_rows,
+                    "repeated, type={data_type:?}, rows={num_rows}"
+                );
+                if data_type != DataType::Null {
+                    assert_eq!(
+                        repeated.null_count(),
+                        num_rows,
+                        "repeated, type={data_type:?}, rows={num_rows}"
+                    );
+                }
+                assert_eq!(
+                    repeated.logical_null_count(),
+                    num_rows,
+                    "repeated, type={data_type:?}, rows={num_rows}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_create_null_array_rejects_non_null_literal() {
+        let literal = Some(PrimitiveLiteral::Int(1));
+
+        assert!(create_primitive_array_single_element(&DataType::Null, literal.as_ref()).is_err());
+        assert!(create_primitive_array_repeated(&DataType::Null, literal.as_ref(), 2).is_err());
+        assert_eq!(
+            create_primitive_array_single_element(&DataType::Null, None)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            create_primitive_array_repeated(&DataType::Null, None, 2)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
     fn test_create_decimal_array_repeated_respects_precision() {
         // Ensure repeated arrays also respect target precision, not Arrow's default.
         let target_precision = 18u8;
@@ -1875,7 +1722,7 @@ mod test {
         let value = PrimitiveLiteral::Int128(10000000000);
         let num_rows = 5;
 
-        let array = create_primitive_array_repeated(&target_type, &Some(value), num_rows)
+        let array = create_primitive_array_repeated(&target_type, Some(&value), num_rows)
             .expect("Failed to create repeated decimal array");
 
         match array.data_type() {
@@ -1895,7 +1742,7 @@ mod test {
         let value = PrimitiveLiteral::Long(1_740_600_000_000_000);
         let num_rows = 3;
 
-        let array = create_primitive_array_repeated(&target_type, &Some(value), num_rows)
+        let array = create_primitive_array_repeated(&target_type, Some(&value), num_rows)
             .expect("Failed to create repeated timestamp microsecond array");
 
         assert_eq!(array.data_type(), &target_type);
@@ -1908,10 +1755,126 @@ mod test {
         let value = PrimitiveLiteral::Long(1_740_600_000_000_000);
         let num_rows = 2;
 
-        let array = create_primitive_array_repeated(&target_type, &Some(value), num_rows)
+        let array = create_primitive_array_repeated(&target_type, Some(&value), num_rows)
             .expect("Failed to create repeated timestamp microsecond array with timezone");
 
         assert_eq!(array.data_type(), &target_type);
         assert_eq!(array.len(), num_rows);
+    }
+
+    #[test]
+    fn test_create_string_and_binary_arrays_repeated() {
+        let text = "partition-value-2026";
+        let bytes: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let num_rows = 4;
+
+        let utf8 = create_primitive_array_repeated(
+            &DataType::Utf8,
+            Some(&PrimitiveLiteral::String(text.to_string())),
+            num_rows,
+        )
+        .unwrap();
+        let utf8 = utf8.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(utf8.len(), num_rows);
+        assert!((0..num_rows).all(|i| utf8.value(i) == text));
+
+        let binary = create_primitive_array_repeated(
+            &DataType::Binary,
+            Some(&PrimitiveLiteral::Binary(bytes.clone())),
+            num_rows,
+        )
+        .unwrap();
+        let binary = binary.as_any().downcast_ref::<BinaryArray>().unwrap();
+        assert_eq!(binary.len(), num_rows);
+        assert!((0..num_rows).all(|i| binary.value(i) == bytes.as_slice()));
+
+        let large = create_primitive_array_repeated(
+            &DataType::LargeBinary,
+            Some(&PrimitiveLiteral::Binary(bytes.clone())),
+            num_rows,
+        )
+        .unwrap();
+        let large = large.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
+        assert_eq!(large.len(), num_rows);
+        assert!((0..num_rows).all(|i| large.value(i) == bytes.as_slice()));
+
+        let fixed = create_primitive_array_repeated(
+            &DataType::FixedSizeBinary(bytes.len() as i32),
+            Some(&PrimitiveLiteral::Binary(bytes.clone())),
+            num_rows,
+        )
+        .unwrap();
+        let fixed = fixed
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(fixed.len(), num_rows);
+        assert!((0..num_rows).all(|i| fixed.value(i) == bytes.as_slice()));
+    }
+
+    #[test]
+    fn test_create_boolean_array_repeated() {
+        let num_rows = 4;
+
+        for value in [true, false] {
+            let array = create_primitive_array_repeated(
+                &DataType::Boolean,
+                Some(&PrimitiveLiteral::Boolean(value)),
+                num_rows,
+            )
+            .unwrap();
+            let array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+            assert_eq!(array.len(), num_rows);
+            assert_eq!(array.null_count(), 0);
+            assert!((0..num_rows).all(|i| array.value(i) == value));
+        }
+
+        // num_rows == 0 must produce an empty (not one-element) array.
+        let empty = create_primitive_array_repeated(
+            &DataType::Boolean,
+            Some(&PrimitiveLiteral::Boolean(true)),
+            0,
+        )
+        .unwrap();
+        assert_eq!(empty.len(), 0);
+        assert_eq!(empty.null_count(), 0);
+    }
+
+    #[test]
+    fn test_create_string_array_repeated_empty() {
+        // num_rows == 0 must produce an empty (not one-element) array.
+        let array = create_primitive_array_repeated(
+            &DataType::Utf8,
+            Some(&PrimitiveLiteral::String("x".to_string())),
+            0,
+        )
+        .unwrap();
+        assert_eq!(array.len(), 0);
+    }
+
+    #[test]
+    fn test_create_fixed_size_binary_repeated_wrong_width_errors() {
+        // A literal whose length differs from the declared width must error rather
+        // than silently producing a FixedSizeBinary array of the literal's width.
+        let err = create_primitive_array_repeated(
+            &DataType::FixedSizeBinary(4),
+            Some(&PrimitiveLiteral::Binary(vec![0x01, 0x02, 0x03])),
+            2,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("does not match declared width"));
+    }
+
+    #[test]
+    fn test_create_fixed_size_binary_repeated_empty_errors() {
+        // arrow's try_from_iter cannot infer the fixed width from an empty iterator,
+        // so num_rows == 0 over a fixed[n] column surfaces as an error rather than an
+        // empty fixed[n] array.
+        let result = create_primitive_array_repeated(
+            &DataType::FixedSizeBinary(4),
+            Some(&PrimitiveLiteral::Binary(vec![0xDE, 0xAD, 0xBE, 0xEF])),
+            0,
+        );
+        assert!(result.is_err());
     }
 }

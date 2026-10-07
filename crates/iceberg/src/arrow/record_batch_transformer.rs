@@ -36,6 +36,7 @@ use crate::arrow::{
     datum_to_arrow_type_with_ree, primitive_type_to_arrow_type_with_ree, schema_to_arrow_schema,
     type_to_arrow_type,
 };
+use crate::error::invalid_data;
 use crate::metadata_columns::{
     RESERVED_COL_NAME_PARTITION, RESERVED_FIELD_ID_PARTITION, get_metadata_field,
 };
@@ -150,35 +151,36 @@ pub(crate) enum ColumnSource {
         source_index: usize,
     },
 
-    // Signifies that a new column has been inserted before the column
-    // with index `index`. (we choose "before" rather than "after" so
-    // that we can use usize; if we insert after, then we need to
-    // be able to store -1 here to signify that a new
-    // column is to be added at the front of the column list).
-    // If multiple columns need to be inserted at a given
-    // location, they should all be given the same index, as the index
-    // here refers to the original RecordBatch, not the interim state after
-    // a preceding operation.
+    // Materializes a column by looking up its per-file constant in the
+    // transformer's `constant_fields` map by `field_id`, producing a column of
+    // `target_type`. Handles the three non-coalesce `ColumnConstant` variants:
+    // scalar values (`_file`, `_spec_id`, identity partitions), the `_partition`
+    // struct, and all-null metadata columns. The coalesce variant routes to
+    // `Coalesce` instead. Resolved at apply time rather than baking the value here.
+    ConstantLookup {
+        field_id: i32,
+        target_type: DataType,
+    },
+
+    // Inserts a schema-evolution default value (the field's `initial_default`,
+    // or null for an absent optional field). Distinct from `ConstantLookup`:
+    // this value comes from the table schema, not the per-file constant map.
     Add {
         target_type: DataType,
         value: Option<PrimitiveLiteral>,
     },
 
-    // A struct column where each child is a constant primitive value.
-    // Used for the _partition metadata column.
-    AddStructConstant {
-        fields: Fields,
-        child_values: Vec<Option<PrimitiveLiteral>>,
-    },
-
     // A metadata column read from the file and coalesced with a per-file
-    // fallback: the source column's value where non-null, else `fallback`.
-    // Used for `_last_updated_sequence_number` when the file physically carries
-    // the per-row column. The result is cast to `target_type` so it matches the
-    // (run-end-encoded) type the constant and null paths produce for the column.
-    CoalesceLastUpdatedSeq {
+    // fallback looked up in `constant_fields` by `field_id`: the source column's
+    // value where non-null, else the fallback constant. The entry at `field_id`
+    // must be a `ColumnConstant::CoalesceLastUpdatedSeq` (the apply arm rejects
+    // any other variant). Used for `_last_updated_sequence_number` when the file
+    // physically carries the per-row column. The result is cast to `target_type`
+    // so it matches the (run-end-encoded) type the constant and null paths
+    // produce for the column.
+    Coalesce {
+        field_id: i32,
         source_index: usize,
-        fallback: PrimitiveLiteral,
         target_type: DataType,
     },
     // The iceberg spec refers to other permissible schema evolution actions
@@ -229,8 +231,9 @@ enum SchemaComparison {
 ///
 /// All per-file constants (scalar metadata like `_file`, identity partition values,
 /// and the `_partition` struct) are stored in a single `constant_fields` map keyed by
-/// field_id. This unified representation (via [`ColumnConstant`]) means the
-/// transformer handles all constant columns through one code path.
+/// field_id (via [`ColumnConstant`]). Each is resolved at apply time from that single
+/// map (through a `ConstantLookup` or `Coalesce` action) rather than baked into the
+/// action.
 #[derive(Debug)]
 pub(crate) struct RecordBatchTransformerBuilder {
     snapshot_schema: Arc<IcebergSchema>,
@@ -277,13 +280,10 @@ impl StructConstant {
     /// the same length.
     pub(crate) fn new(fields: Fields, child_values: Vec<Option<PrimitiveLiteral>>) -> Result<Self> {
         if fields.len() != child_values.len() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "StructConstant: fields length ({}) != child_values length ({})",
-                    fields.len(),
-                    child_values.len()
-                ),
+            return Err(invalid_data!(
+                "StructConstant: fields length ({}) != child_values length ({})",
+                fields.len(),
+                child_values.len()
             ));
         }
         Ok(Self {
@@ -704,9 +704,12 @@ impl RecordBatchTransformer {
                     Some(ColumnConstant::Struct(pc))
                         if *field_id == RESERVED_FIELD_ID_PARTITION =>
                     {
-                        return Ok(ColumnSource::AddStructConstant {
-                            fields: pc.fields().clone(),
-                            child_values: pc.child_values().to_vec(),
+                        // The struct apply arm rebuilds the column from the map entry's own
+                        // fields/child_values, so `target_type` is a placeholder here and is
+                        // not read for the struct case (only the scalar/null cases consult it).
+                        return Ok(ColumnSource::ConstantLookup {
+                            field_id: *field_id,
+                            target_type: DataType::Struct(pc.fields().clone()),
                         });
                     }
                     Some(ColumnConstant::Struct(_)) => {
@@ -747,8 +750,8 @@ impl RecordBatchTransformer {
                                     .clone()
                             };
 
-                            return Ok(ColumnSource::Add {
-                                value: Some(datum.literal().clone()),
+                            return Ok(ColumnSource::ConstantLookup {
+                                field_id: *field_id,
                                 target_type: arrow_type,
                             });
                         }
@@ -756,8 +759,8 @@ impl RecordBatchTransformer {
                         // to read from the file instead of using the constant.
                     }
                     Some(ColumnConstant::Null(arrow_type)) => {
-                        return Ok(ColumnSource::Add {
-                            value: None,
+                        return Ok(ColumnSource::ConstantLookup {
+                            field_id: *field_id,
                             target_type: arrow_type.clone(),
                         });
                     }
@@ -775,9 +778,9 @@ impl RecordBatchTransformer {
                                     ),
                                 )
                             })?;
-                        return Ok(ColumnSource::CoalesceLastUpdatedSeq {
+                        return Ok(ColumnSource::Coalesce {
+                            field_id: *field_id,
                             source_index: *source_index,
-                            fallback: datum.literal().clone(),
                             target_type: datum_to_arrow_type_with_ree(datum),
                         });
                     }
@@ -858,19 +861,27 @@ impl RecordBatchTransformer {
                     // Iceberg-Java's Parquet readers (BaseParquetReaders / SparkParquetReaders),
                     // which raise "Missing required field: <name>".
                     if iceberg_field.initial_default.is_none() && iceberg_field.required {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Missing required field: {}", iceberg_field.name),
-                        ));
+                        return Err(invalid_data!("Missing required field: {}", iceberg_field.name));
                     }
 
-                    let default_value = iceberg_field.initial_default.as_ref().and_then(|lit| {
-                        if let Literal::Primitive(prim) = lit {
-                            Some(prim.clone())
-                        } else {
-                            None
+                    // TODO: Support the spec-defined non-null struct initial default `{}` by
+                    // creating a non-null struct and applying each child's initial default.
+                    // Tracked in https://github.com/apache/iceberg-rust/issues/3261.
+                    let default_value = match iceberg_field.initial_default.as_ref() {
+                        None => None,
+                        Some(Literal::Primitive(prim)) => Some(prim.clone()),
+                        Some(_) => {
+                            return Err(Error::new(
+                                ErrorKind::FeatureUnsupported,
+                                format!(
+                                    "Cannot read field {} that is absent from the data file: \
+                                     applying a non-primitive initial-default for {} is not yet \
+                                     supported",
+                                    iceberg_field.name, iceberg_field.field_type
+                                ),
+                            ));
                         }
-                    });
+                    };
 
                     ColumnSource::Add {
                         value: default_value,
@@ -890,12 +901,9 @@ impl RecordBatchTransformer {
         for (source_field_idx, source_field) in source_schema.fields.iter().enumerate() {
             // Check if field has a field ID in metadata
             if let Some(field_id_str) = source_field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
-                let this_field_id = field_id_str.parse().map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("field id not parseable as an i32: {e}"),
-                    )
-                })?;
+                let this_field_id = field_id_str
+                    .parse()
+                    .map_err(|e| invalid_data!("field id not parseable as an i32: {e}"))?;
 
                 field_id_to_source_schema
                     .insert(this_field_id, (source_field.clone(), source_field_idx));
@@ -928,23 +936,57 @@ impl RecordBatchTransformer {
                     } => cast(&*columns[*source_index], target_type)?,
 
                     ColumnSource::Add { target_type, value } => {
-                        Self::create_column(target_type, value, num_rows)?
+                        Self::create_column(target_type, value.as_ref(), num_rows)?
                     }
 
-                    ColumnSource::AddStructConstant {
-                        fields,
-                        child_values,
-                    } => Self::create_struct_column(fields, child_values, num_rows)?,
+                    // Resolve the per-file constant for this field id from the map and
+                    // materialize it as the target type.
+                    ColumnSource::ConstantLookup {
+                        field_id,
+                        target_type,
+                    } => match self.constant_fields.get(field_id) {
+                        Some(ColumnConstant::Scalar(datum)) => {
+                            Self::create_column(target_type, Some(datum.literal()), num_rows)?
+                        }
+                        Some(ColumnConstant::Null(_)) => {
+                            Self::create_column(target_type, None, num_rows)?
+                        }
+                        Some(ColumnConstant::Struct(sc)) => {
+                            Self::create_struct_column(sc.fields(), sc.child_values(), num_rows)?
+                        }
+                        other => {
+                            return Err(Error::new(
+                                ErrorKind::Unexpected,
+                                format!(
+                                    "ConstantLookup for field id {field_id} expected a scalar, \
+                                     null, or struct constant, found {other:?}"
+                                ),
+                            ));
+                        }
+                    },
 
-                    ColumnSource::CoalesceLastUpdatedSeq {
+                    ColumnSource::Coalesce {
+                        field_id,
                         source_index,
-                        fallback,
                         target_type,
-                    } => Self::create_coalesce_column(
-                        &columns[*source_index],
-                        fallback,
-                        target_type,
-                    )?,
+                    } => {
+                        let Some(ColumnConstant::CoalesceLastUpdatedSeq(datum)) =
+                            self.constant_fields.get(field_id)
+                        else {
+                            return Err(Error::new(
+                                ErrorKind::Unexpected,
+                                format!(
+                                    "Coalesce for field id {field_id} expected a coalesce \
+                                     fallback constant in the constant map"
+                                ),
+                            ));
+                        };
+                        Self::create_coalesce_column(
+                            &columns[*source_index],
+                            datum.literal(),
+                            target_type,
+                        )?
+                    }
                 })
             })
             .collect()
@@ -959,9 +1001,9 @@ impl RecordBatchTransformer {
         target_type: &DataType,
     ) -> Result<ArrayRef> {
         if source.data_type() != &DataType::Int64 {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("coalesce source must be Int64, got {}", source.data_type()),
+            return Err(invalid_data!(
+                "coalesce source must be Int64, got {}",
+                source.data_type()
             ));
         }
         let PrimitiveLiteral::Long(seq) = fallback else {
@@ -981,7 +1023,7 @@ impl RecordBatchTransformer {
 
     fn create_column(
         target_type: &DataType,
-        prim_lit: &Option<PrimitiveLiteral>,
+        prim_lit: Option<&PrimitiveLiteral>,
         num_rows: usize,
     ) -> Result<ArrayRef> {
         // Check if this is a RunEndEncoded type (for constant fields)
@@ -1033,7 +1075,7 @@ impl RecordBatchTransformer {
             .iter()
             .zip(child_values.iter())
             .map(|(field, value)| {
-                create_primitive_array_repeated(field.data_type(), value, num_rows)
+                create_primitive_array_repeated(field.data_type(), value.as_ref(), num_rows)
             })
             .collect::<Result<_>>()?;
 
@@ -1112,12 +1154,14 @@ mod test {
     use arrow_cast::cast;
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 
-    use super::field_with_id;
+    use super::{field_with_id, schema_to_arrow_schema};
     use crate::arrow::build_partition_constant;
     use crate::arrow::record_batch_transformer::{
         RecordBatchTransformer, RecordBatchTransformerBuilder,
     };
-    use crate::spec::{Literal, NestedField, PrimitiveType, Schema, Struct, Type};
+    use crate::spec::{
+        ListType, Literal, MapType, NestedField, PrimitiveType, Schema, Struct, Type,
+    };
 
     /// Helper to extract string values from either StringArray or RunEndEncoded<StringArray>
     /// Returns empty string for null values
@@ -1330,6 +1374,63 @@ mod test {
     }
 
     #[test]
+    fn schema_evolution_absent_struct_with_initial_default_errors() {
+        for required in [false, true] {
+            let added_field = NestedField::new(
+                2,
+                "added_struct",
+                Type::Struct(crate::spec::StructType::new(vec![
+                    NestedField::optional(3, "child", Type::Primitive(PrimitiveType::Int))
+                        .with_initial_default(Literal::int(42))
+                        .into(),
+                ])),
+                required,
+            )
+            .with_initial_default(Literal::Struct(Struct::from_iter(vec![None])));
+            let snapshot_schema = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                        added_field.into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let mut transformer =
+                RecordBatchTransformerBuilder::new(snapshot_schema, &[1, 2]).build();
+            let file_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+                "id",
+                DataType::Int32,
+                false,
+                1,
+            )]));
+            let file_batch =
+                RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
+                    .unwrap();
+
+            let err = transformer
+                .process_record_batch(file_batch)
+                .expect_err(&format!(
+                    "required={required}: complex default should be rejected"
+                ));
+            assert_eq!(
+                err.kind(),
+                crate::ErrorKind::FeatureUnsupported,
+                "required={required}"
+            );
+            assert!(
+                err.to_string().contains("Cannot read field added_struct"),
+                "required={required}: {err}"
+            );
+            assert!(
+                err.to_string()
+                    .contains("applying a non-primitive initial-default"),
+                "required={required}: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn schema_evolution_adds_struct_column_with_nulls() {
         // Test that when a struct column is added after data files are written,
         // the transformer can materialize the missing struct column with null values.
@@ -1404,6 +1505,127 @@ mod test {
         assert!(struct_column.is_null(0));
         assert!(struct_column.is_null(1));
         assert!(struct_column.is_null(2));
+    }
+
+    /// Evolved table schema for the #2618 regression test: `id` plus three
+    /// later-added optional nested columns — a list, a map, and a struct that
+    /// itself contains a nested list (`ys`). The nested-in-struct list is the
+    /// case a per-type NULL-fill would miss.
+    fn schema_with_added_nested_columns() -> Schema {
+        Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(
+                    2,
+                    "xs",
+                    Type::List(ListType {
+                        element_field: NestedField::list_element(
+                            3,
+                            Type::Primitive(PrimitiveType::Int),
+                            false,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+                NestedField::optional(
+                    4,
+                    "props",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            5,
+                            Type::Primitive(PrimitiveType::String),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            6,
+                            Type::Primitive(PrimitiveType::Int),
+                            false,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+                NestedField::optional(
+                    7,
+                    "s",
+                    Type::Struct(crate::spec::StructType::new(vec![
+                        NestedField::optional(8, "a", Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::optional(
+                            9,
+                            "ys",
+                            Type::List(ListType {
+                                element_field: NestedField::list_element(
+                                    10,
+                                    Type::Primitive(PrimitiveType::Long),
+                                    false,
+                                )
+                                .into(),
+                            }),
+                        )
+                        .into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn schema_evolution_adds_list_map_and_nested_struct_columns_with_nulls() {
+        // Regression test for https://github.com/apache/iceberg-rust/issues/2618.
+        //
+        // The story the test tells, in order:
+        //   1. An old data file was written with only the `id` column.
+        //   2. The table schema has since evolved, adding optional list / map /
+        //      struct columns (see `schema_with_added_nested_columns`).
+        //   3. Reading the old file against the evolved schema must fill those
+        //      absent columns with typed all-NULL arrays — previously this errored
+        //      with "unexpected target column type" for the nested types.
+
+        // (1) The old data file: just `id`.
+        let file_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "id",
+            DataType::Int32,
+            false,
+            1,
+        )]));
+        let file_batch =
+            RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
+                .unwrap();
+
+        // (2) Read it against the evolved schema, projecting id + the three added columns.
+        let snapshot_schema = Arc::new(schema_with_added_nested_columns());
+        let projected_iceberg_field_ids = [1, 2, 4, 7];
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
+                .build();
+        let result = transformer.process_record_batch(file_batch).unwrap();
+
+        // (3a) `id` survives unchanged.
+        assert_eq!(result.num_columns(), 4);
+        assert_eq!(result.num_rows(), 3);
+        let id_column = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_column.values(), &[1, 2, 3]);
+
+        // (3b) The added columns carry the evolved schema's Arrow types, including nested
+        // field names, nullability, and field IDs, and are all-NULL.
+        let expected_schema = schema_to_arrow_schema(&schema_with_added_nested_columns()).unwrap();
+        assert_eq!(result.schema().as_ref(), &expected_schema);
+        for (idx, name) in [(1, "xs"), (2, "props"), (3, "s")] {
+            assert_eq!(
+                result.column(idx).null_count(),
+                3,
+                "added nested column `{name}` should be all-NULL"
+            );
+        }
     }
 
     pub fn source_record_batch() -> RecordBatch {

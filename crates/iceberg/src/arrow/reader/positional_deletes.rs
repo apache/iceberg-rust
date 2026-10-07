@@ -172,6 +172,7 @@ mod tests {
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{DataContentType, DataFileFormat, NestedField, PrimitiveType, Schema, Type};
+    use crate::test_utils::encode_dv_blob;
 
     fn build_test_row_group_meta(
         schema_descr: SchemaDescPtr,
@@ -449,11 +450,13 @@ mod tests {
                     .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
                     .with_file_path(delete_file_path)
                     .with_file_type(DataContentType::PositionDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
                     .build(),
             ])
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result = reader
@@ -667,11 +670,13 @@ mod tests {
                     .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
                     .with_file_path(delete_file_path)
                     .with_file_type(DataContentType::PositionDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
                     .build(),
             ])
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result = reader
@@ -879,11 +884,13 @@ mod tests {
                     .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
                     .with_file_path(delete_file_path)
                     .with_file_type(DataContentType::PositionDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
                     .build(),
             ])
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result = reader
@@ -922,5 +929,190 @@ mod tests {
             all_ids, expected_ids,
             "Should have ids 101-200 (all of row group 1)"
         );
+    }
+
+    /// End-to-end read of a data file with a V3 deletion vector applied. Exercises the whole
+    /// deletion-vector read path together: the DV coordinates on the scan task, the loader
+    /// reading the blob by range from its Puffin file, decoding it with DeleteVector::deserialize,
+    /// validating cardinality against record_count, and ArrowReader filtering the deleted rows.
+    #[tokio::test]
+    async fn test_deletion_vector_applied_end_to_end() {
+        use arrow_array::Int32Array;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+
+        // Data file: ids 1..=5 at positions 0..=4.
+        let data_file_path = format!("{table_location}/data.parquet");
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
+            Int32Array::from_iter_values(1..=5),
+        )])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(&data_file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Deletion vector deleting positions 1 and 3 (ids 2 and 4), serialized as a
+        // deletion-vector-v1 blob and embedded in a Puffin-like file at a non-zero offset.
+        let blob = encode_dv_blob([1u64, 3]);
+        let content_offset = 12i64;
+        let content_size = blob.len() as i64;
+        let mut dv_file_bytes = vec![0u8; content_offset as usize];
+        dv_file_bytes.extend_from_slice(&blob);
+        let dv_path = format!("{table_location}/deletes.puffin");
+        std::fs::write(&dv_path, &dv_file_bytes).unwrap();
+
+        let file_io = FileIO::new_with_fs();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&data_file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_record_count(Some(5))
+            .with_data_file_path(data_file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(table_schema.clone())
+            .with_project_field_ids(vec![1])
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_path(dv_path.clone())
+                    .with_file_size_in_bytes(std::fs::metadata(&dv_path).unwrap().len())
+                    .with_file_type(DataContentType::PositionDeletes)
+                    .with_file_format(DataFileFormat::Puffin)
+                    .with_partition_spec_id(0)
+                    .with_referenced_data_file(Some(data_file_path.clone()))
+                    .with_content_offset(Some(content_offset))
+                    .with_content_size_in_bytes(Some(content_size))
+                    .with_record_count(Some(2))
+                    .build(),
+            ])
+            .with_case_sensitive(false)
+            .build();
+
+        let tasks = Box::pin(futures::stream::iter(vec![task])) as FileScanTaskStream;
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        let ids: Vec<i32> = result
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<arrow_array::types::Int32Type>()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect();
+
+        // Positions 1 and 3 (ids 2 and 4) are deleted; ids 1, 3, 5 remain.
+        assert_eq!(ids, vec![1, 3, 5]);
+    }
+
+    /// A deletion vector whose decoded cardinality disagrees with the manifest entry's
+    /// `record_count` must fail the read rather than silently applying the wrong deletes, the
+    /// same invariant Iceberg-Java enforces in `BitmapPositionDeleteIndex.deserializeBitmap`.
+    #[tokio::test]
+    async fn test_deletion_vector_cardinality_mismatch_fails_read() {
+        use arrow_array::Int32Array;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+
+        let data_file_path = format!("{table_location}/data.parquet");
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
+            Int32Array::from_iter_values(1..=5),
+        )])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(&data_file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // The blob decodes to 2 positions, but the manifest entry claims 5.
+        let blob = encode_dv_blob([1u64, 3]);
+        let dv_path = format!("{table_location}/deletes.puffin");
+        std::fs::write(&dv_path, &blob).unwrap();
+
+        let file_io = FileIO::new_with_fs();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&data_file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_record_count(Some(5))
+            .with_data_file_path(data_file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(table_schema.clone())
+            .with_project_field_ids(vec![1])
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_path(dv_path.clone())
+                    .with_file_size_in_bytes(std::fs::metadata(&dv_path).unwrap().len())
+                    .with_file_type(DataContentType::PositionDeletes)
+                    .with_file_format(DataFileFormat::Puffin)
+                    .with_partition_spec_id(0)
+                    .with_referenced_data_file(Some(data_file_path.clone()))
+                    .with_content_offset(Some(0))
+                    .with_content_size_in_bytes(Some(blob.len() as i64))
+                    .with_record_count(Some(5))
+                    .build(),
+            ])
+            .with_case_sensitive(false)
+            .build();
+
+        let tasks = Box::pin(futures::stream::iter(vec![task])) as FileScanTaskStream;
+        let result: Result<Vec<RecordBatch>, _> =
+            reader.read(tasks).unwrap().stream().try_collect().await;
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), crate::ErrorKind::DataInvalid);
+        assert!(err.message().contains("expected 5 from record_count"));
     }
 }
