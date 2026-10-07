@@ -786,8 +786,8 @@ mod tests {
         let props = &new_snapshot.summary().additional_properties;
         let version = env!("CARGO_PKG_VERSION");
 
-        assert_eq!(props.get("engine-name").unwrap(), "iceberg-rust");
-        assert_eq!(props.get("engine-version").unwrap(), version);
+        assert!(props.get("engine-name").is_none());
+        assert!(props.get("engine-version").is_none());
         assert_eq!(
             props.get("iceberg-version").unwrap(),
             &format!("Apache Iceberg Rust {version}")
