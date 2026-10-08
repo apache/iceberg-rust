@@ -165,8 +165,9 @@ impl SigV4Signer {
 
         // `aws_sigv4` traces the request, `Original-Authorization` included.
         // Mute it only when a subscriber could record that (the max level is
-        // `OFF` until one is registered): `with_default` marks tracing as in
-        // use for good, which turns off its `log` fallback process-wide.
+        // `OFF` until one is registered): `with_default` also sets
+        // tracing-core's `EXISTS` flag, which nothing clears, and with the
+        // `log` feature tracing then stops forwarding events to `log` for good.
         let signed = if LevelFilter::current() == LevelFilter::TRACE {
             tracing::subscriber::with_default(NoSubscriber::default(), || sign(signable, &params))
         } else {
