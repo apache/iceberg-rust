@@ -57,6 +57,7 @@ mod append;
 mod expire_snapshots;
 mod snapshot;
 mod sort_order;
+mod unreferenced_files;
 mod update_location;
 mod update_properties;
 mod update_schema;
@@ -67,6 +68,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWithContext};
+pub use unreferenced_files::{UnreferencedFiles, unreferenced_files};
 pub use update_schema::AddColumn;
 
 use crate::error::Result;
