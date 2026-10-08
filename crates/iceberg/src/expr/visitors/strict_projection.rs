@@ -45,7 +45,8 @@ impl StrictProjection {
         if let std::collections::hash_map::Entry::Vacant(e) = self.cached_parts.entry(field_id) {
             let mut parts: Vec<PartitionField> = vec![];
             for partition_spec_field in self.partition_spec.fields() {
-                if partition_spec_field.source_id == field_id {
+                // A multi-argument field has an unknown transform, which cannot project
+                if partition_spec_field.source_ids() == [field_id] {
                     parts.push(partition_spec_field.clone())
                 }
             }
@@ -81,7 +82,7 @@ impl StrictProjection {
                 // the day, but does match the original predicate.
                 Ok(
                     if let Some(pred_for_part) =
-                        part.transform.strict_project(&part.name, predicate)?
+                        part.transform().strict_project(part.name(), predicate)?
                     {
                         if res == Predicate::AlwaysFalse {
                             pred_for_part

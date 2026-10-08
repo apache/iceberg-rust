@@ -850,7 +850,12 @@ impl TableMetadataBuilder {
             .partition_specs
             .values()
             .flat_map(|spec| spec.fields())
-            .map(|field| ((vec![field.source_id], field.transform), field.field_id))
+            .map(|field| {
+                (
+                    (field.source_ids().to_vec(), field.transform()),
+                    field.field_id(),
+                )
+            })
             .collect();
 
         // Create new fields with reused field IDs where possible
@@ -2799,7 +2804,7 @@ mod tests {
             .default_partition_spec()
             .fields()
             .iter()
-            .map(|f| f.name.clone())
+            .map(|f| f.name().to_string())
             .collect();
         assert!(partition_field_names.contains(&"bucket_data".to_string()));
 
@@ -3691,7 +3696,7 @@ mod tests {
 
         // Verify field ID reuse: spec 2 should reuse IDs from specs 0 and 1, assign new ID for new field
         let spec2 = result.metadata.partition_spec_by_id(2).unwrap();
-        let field_ids: Vec<i32> = spec2.fields().iter().map(|f| f.field_id).collect();
+        let field_ids: Vec<i32> = spec2.fields().iter().map(|f| f.field_id()).collect();
         assert_eq!(field_ids, vec![1000, 1001, 1002]); // Reused 1000, 1001; new 1002
     }
 }

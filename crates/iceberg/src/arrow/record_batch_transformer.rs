@@ -82,10 +82,12 @@ fn constants_map(
 
     for (pos, field) in partition_spec.fields().iter().enumerate() {
         // Only identity transforms should use constant values from partition metadata
-        if matches!(field.transform, Transform::Identity) {
+        if matches!(field.transform(), Transform::Identity) {
+            // An identity transform reads exactly one source column.
+            let source_id = field.source_id()?;
             // The source column may have been dropped from the schema after the spec was
             // created. It cannot be projected in that case, so no constant is needed.
-            let Some(iceberg_field) = schema.field_by_id(field.source_id) else {
+            let Some(iceberg_field) = schema.field_by_id(source_id) else {
                 continue;
             };
 
@@ -97,7 +99,7 @@ fn constants_map(
                         ErrorKind::Unexpected,
                         format!(
                             "Partition field {} has non-primitive type {:?}",
-                            field.source_id, iceberg_field.field_type
+                            source_id, iceberg_field.field_type
                         ),
                     ));
                 }
@@ -115,14 +117,14 @@ fn constants_map(
                 Some(Literal::Primitive(value)) => {
                     // Create a Datum from the primitive type and value
                     let datum = Datum::new(prim_type.clone(), value.clone());
-                    constants.insert(field.source_id, datum);
+                    constants.insert(source_id, datum);
                 }
                 Some(literal) => {
                     return Err(Error::new(
                         ErrorKind::Unexpected,
                         format!(
                             "Partition field {} has non-primitive value: {:?}",
-                            field.source_id, literal
+                            source_id, literal
                         ),
                     ));
                 }
@@ -1127,7 +1129,7 @@ pub(crate) fn build_partition_constant(
         // Find matching field in this file's partition spec by field_id
         let value = spec_fields
             .iter()
-            .position(|f| f.field_id == unified_field.id)
+            .position(|f| f.field_id() == unified_field.id)
             .and_then(|pos| {
                 // Get the value from partition_data at this position
                 match &partition_data[pos] {
