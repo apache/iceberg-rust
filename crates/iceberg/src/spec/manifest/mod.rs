@@ -366,6 +366,7 @@ mod tests {
                     metadata.schema.schema_id().to_string(),
                 )
                 .unwrap();
+            // Spec form: `partition-spec` holds only the partition fields array.
             writer
                 .add_user_metadata(
                     "partition-spec".to_string(),
