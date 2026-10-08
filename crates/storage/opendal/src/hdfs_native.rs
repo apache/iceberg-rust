@@ -77,7 +77,8 @@ fn hdfs_native_name_node_list(property: &str, value: &str) -> Result<Vec<String>
                 Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Invalid `{property}` entry: {entry}, expected host:port (hdfs:// optional)"
+                        "Invalid `{property}` entry: {}, expected host:port (hdfs:// optional)",
+                        hdfs_native_redact(entry)
                     ),
                 )
             })
@@ -217,7 +218,8 @@ fn hdfs_native_config_parse_with(
                     Error::new(
                         ErrorKind::DataInvalid,
                         format!(
-                            "Invalid `{HDFS_HOST}`/`{HDFS_PORT}`: {host}:{port}, expected a host name or IP and a port"
+                            "Invalid `{HDFS_HOST}`/`{HDFS_PORT}`: {}, expected a host name or IP and a port",
+                            hdfs_native_redact(&format!("{host}:{port}"))
                         ),
                     )
                 })?;
@@ -239,38 +241,49 @@ fn hdfs_native_config_parse_with(
     Ok(cfg)
 }
 
+/// `s` with everything between its scheme and its last `@` masked, so an
+/// error message never echoes userinfo, even a password holding a raw `/`,
+/// `?`, `#` or `://` that a URL parser would split elsewhere. An `@` further
+/// along the path is masked the same way, which only costs context.
+fn hdfs_native_redact(s: &str) -> String {
+    let start = s
+        .find("://")
+        .filter(|&i| {
+            s[..i]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+        })
+        .map_or(0, |i| i + 3);
+    match s[start..].rfind('@') {
+        Some(at) => format!("{}***{}", &s[..start], &s[start + at..]),
+        None => s.to_string(),
+    }
+}
+
+/// A `DataInvalid` error for an HDFS path, its userinfo masked.
+fn hdfs_native_invalid_path(path: &str, reason: impl std::fmt::Display) -> Error {
+    Error::new(
+        ErrorKind::DataInvalid,
+        format!("Invalid hdfs path: {}, {reason}", hdfs_native_redact(path)),
+    )
+}
+
 /// Parse an HDFS path into `Some("hdfs://<authority>")` (`None` when
 /// authority-less) and the relative path (no leading `/`, opendal style).
 pub(crate) fn hdfs_native_parse_path(path: &str) -> Result<(Option<String>, &str)> {
-    let url = Url::parse(path).map_err(|e| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!("Invalid hdfs path: {path}: {e}"),
-        )
-    })?;
+    let url = Url::parse(path).map_err(|e| hdfs_native_invalid_path(path, e))?;
     // Non-special schemes parse even without `//` (e.g. `hdfs:x` is a valid
     // non-hierarchical URL), so require the literal prefix before slicing.
     let (Some(after_scheme), "hdfs") = (path.strip_prefix("hdfs://"), url.scheme()) else {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("Invalid hdfs path: {path}, expected scheme `hdfs://`"),
-        ));
+        return Err(hdfs_native_invalid_path(path, "expected scheme `hdfs://`"));
     };
     // Userinfo has nowhere to go and port 0 cannot be dialed; silently
     // dropping the one or reading the other as a logical name would mislead.
     if !url.username().is_empty() || url.password().is_some() {
-        // Not echoing the path: it may carry a password.
-        let host = url.host_str().unwrap_or_default();
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("Invalid hdfs path for host `{host}`: userinfo is not supported"),
-        ));
+        return Err(hdfs_native_invalid_path(path, "userinfo is not supported"));
     }
     if url.port() == Some(0) {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("Invalid hdfs path: {path}, port 0 cannot be dialed"),
-        ));
+        return Err(hdfs_native_invalid_path(path, "port 0 cannot be dialed"));
     }
 
     let name_node = url.host_str().filter(|h| !h.is_empty()).map(|host| {
@@ -302,12 +315,7 @@ pub(crate) fn hdfs_native_effective_name_node<'a>(
     path: &'a str,
 ) -> Result<(String, &'a str)> {
     let (authority, relative_path) = hdfs_native_parse_path(path)?;
-    let invalid = |reason: String| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!("Invalid hdfs path: {path}, {reason}"),
-        )
-    };
+    let invalid = |reason: String| hdfs_native_invalid_path(path, reason);
     let name_node = match authority {
         Some(authority) if hdfs_native_name_node(&authority).is_some() => authority,
         Some(logical) => {
@@ -322,7 +330,8 @@ pub(crate) fn hdfs_native_effective_name_node<'a>(
             (Some(name_node), _) => name_node.clone(),
             (None, Some(default_fs)) => hdfs_native_name_node(default_fs).ok_or_else(|| {
                 invalid(format!(
-                    "`{FS_DEFAULT_FS}` {default_fs} is not an HDFS host:port, a logical nameservice requires `{HDFS_NAME_NODE}`"
+                    "`{FS_DEFAULT_FS}` {} is not an HDFS host:port, a logical nameservice requires `{HDFS_NAME_NODE}`",
+                    hdfs_native_redact(default_fs)
                 ))
             })?,
             (None, None) => {
@@ -1016,6 +1025,67 @@ mod tests {
             assert!(err.contains(reason), "{path}: {err}");
             // A password must never reach a log.
             assert!(!err.contains("alice") && !err.contains("secret"), "{err}");
+        }
+    }
+
+    #[test]
+    fn test_hdfs_native_errors_mask_userinfo() {
+        let path_err = |path: &str| {
+            hdfs_native_effective_name_node(&HdfsNativeConfig::default(), path)
+                .unwrap_err()
+                .to_string()
+        };
+        let config_err = |key: &str, value: &str| {
+            let props = HashMap::from([(key.to_string(), value.to_string())]);
+            hdfs_native_config_parse(props)
+                .and_then(|config| hdfs_native_effective_name_node(&config, "hdfs:///x"))
+                .unwrap_err()
+                .to_string()
+        };
+        // Every error that echoes a path or a NameNode value, including the
+        // ones that fail before the userinfo check can run.
+        for (err, masked) in [
+            (
+                path_err("hdfs://alice:s3cret@nn:bad/x"),
+                "hdfs://***@nn:bad/x",
+            ),
+            (path_err("s3://alice:s3cret@b/x"), "s3://***@b/x"),
+            (
+                path_err("hdfs://alice:s3cret@nn:8020/x"),
+                "hdfs://***@nn:8020/x",
+            ),
+            (
+                config_err(HDFS_NAME_NODE, "hdfs://alice:s3cret@nn:8020"),
+                "hdfs://***@nn:8020",
+            ),
+            (
+                config_err("hdfs.name-node.ns", "hdfs://alice:s3cret@nn:8020"),
+                "hdfs://***@nn:8020",
+            ),
+            (config_err(HDFS_HOST, "alice:s3cret@nn"), "***@nn:8020"),
+            (
+                config_err("hadoop.fs.defaultFS", "hdfs://alice:s3cret@nn:8020"),
+                "hdfs://***@nn:8020",
+            ),
+            // A raw `/`, `#` or `://` in the password, or a second `@`, must
+            // not move where the masking stops.
+            (
+                path_err("hdfs://alice:s3/cret@nn:8020/x"),
+                "hdfs://***@nn:8020/x",
+            ),
+            (path_err("s3://alice:12#cret@b/x"), "s3://***@b/x"),
+            (
+                path_err("hdfs://alice@corp:s3cret@nn:bad/x"),
+                "hdfs://***@nn:bad/x",
+            ),
+            (
+                config_err(HDFS_NAME_NODE, "hdfs://alice:s3/cret@nn:8020"),
+                "hdfs://***@nn:8020",
+            ),
+            (config_err(HDFS_HOST, "alice:s3://cret@nn"), "***@nn:8020"),
+        ] {
+            assert!(err.contains(masked), "{err}");
+            assert!(!err.contains("alice") && !err.contains("cret"), "{err}");
         }
     }
 
