@@ -137,7 +137,7 @@ impl SigV4Signer {
         })?;
         request.headers_mut().insert(CONTENT_SHA256, content_value);
 
-        rewrite_url_for_signing(request);
+        rewrite_url_for_signing(request)?;
 
         let identity = credentials.clone().into();
         let params = v4::SigningParams::builder()
@@ -214,16 +214,23 @@ fn signable_headers(request: &crate::HttpRequest) -> Result<Vec<(&str, &str)>> {
 /// Drops userinfo, which the wire `Host` never carries, and rewrites `+` in the
 /// query as `%20`: a space to AWS and Java either way, but unambiguous to any
 /// verifier.
-fn rewrite_url_for_signing(request: &mut crate::HttpRequest) {
+fn rewrite_url_for_signing(request: &mut crate::HttpRequest) -> Result<()> {
     if !request.url().username().is_empty() || request.url().password().is_some() {
         let url = request.url_mut();
-        let _ = url.set_username("");
-        let _ = url.set_password(None);
+        url.set_username("")
+            .and_then(|()| url.set_password(None))
+            .map_err(|()| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "cannot strip userinfo from the request URL",
+                )
+            })?;
     }
     if let Some(query) = request.url().query().filter(|q| q.contains('+')) {
         let unambiguous = query.replace('+', "%20");
         request.url_mut().set_query(Some(&unambiguous));
     }
+    Ok(())
 }
 
 /// `Aws4Signer`'s settings: normalized double-encoded path, and Java's ignore
