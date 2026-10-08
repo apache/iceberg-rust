@@ -23,6 +23,7 @@ members = [
   "crates/iceberg",
   "crates/integration_tests",
   "crates/integrations/*",
+  "crates/kms",
   "crates/property-macro",
   "crates/storage/*",
   "crates/test_utils",
@@ -59,8 +60,12 @@ arrow-select = "59.2"
 arrow-string = "59.2"
 as-any = "0.3.2"
 async-trait = "0.1.89"
-aws-config = "1.8.7"
+aws-config = "1.9"
 aws-sdk-glue = { version = "1.85", default-features = false, features = [
+  "default-https-client",
+  "rt-tokio",
+] }
+aws-sdk-kms = { version = "1.123", default-features = false, features = [
   "default-https-client",
   "rt-tokio",
 ] }
@@ -68,6 +73,8 @@ aws-sdk-s3tables = { version = "1.28", default-features = false, features = [
   "default-https-client",
   "rt-tokio",
 ] }
+aws-smithy-http-client = "1.5"
+aws-smithy-mocks = "0.3"
 backon = "1.5.1"
 base64 = "0.22.1"
 bimap = "0.6"
