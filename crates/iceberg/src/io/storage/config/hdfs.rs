@@ -19,14 +19,14 @@
 
 /// HDFS NameNode RPC endpoint(s) as `host:port`, e.g. `hdfs://namenode:8020`;
 /// a comma-separated list enables HA failover. Serves authority-less paths
-/// (`hdfs:///path`) only. As in Hadoop, an authority with a port is always
-/// used as is, and a logical nameservice authority (`hdfs://ns1/path`, no
-/// port) must be declared: `hdfs.name-node.<nameservice>` takes the same
-/// list and is sugar for Hadoop's `dfs.ha.namenodes.<nameservice>` and
+/// (`hdfs:///path`) only; a path authority with a port is used as is. A
+/// portless authority (`hdfs://ns1/path`) must be a nameservice declared in
+/// properties: `hdfs.name-node.<nameservice>` takes the same list and is
+/// sugar for Hadoop's `dfs.ha.namenodes.<nameservice>` and
 /// `dfs.namenode.rpc-address.<nameservice>.<id>`, which are honored as well
-/// when passed through [`HDFS_HADOOP_CONF_PREFIX`]. An undeclared nameservice
-/// is an error rather than a guess, and nameservices defined only in
-/// `$HADOOP_CONF_DIR` are not visible here, so declare them in properties.
+/// when passed through [`HDFS_HADOOP_CONF_PREFIX`]. Unlike Hadoop, an
+/// undeclared one is an error: it is neither resolved from
+/// `$HADOOP_CONF_DIR` nor dialed on the default port 8020.
 pub const HDFS_NAME_NODE: &str = "hdfs.name-node";
 /// NameNode host for authority-less paths, as in PyIceberg; paths that carry
 /// an authority ignore it, as they do there. Combined with [`HDFS_PORT`] into

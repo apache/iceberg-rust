@@ -304,12 +304,11 @@ pub(crate) fn hdfs_native_parse_path(path: &str) -> Result<(Option<String>, &str
     Ok((name_node, rel))
 }
 
-/// Resolves the effective NameNode for a path, plus the relative path. As in
-/// Hadoop, an authority with a port is used as is; a logical nameservice
-/// authority (no port) resolves through its declaration, and an
-/// authority-less path through `hdfs.name-node`, else `fs.defaultFS`. The
-/// operator cache, `delete_stream` batching and `relativize_path` all go
-/// through this, so they cannot drift apart.
+/// Resolves the effective NameNode for a path, plus the relative path. An
+/// authority with a port is used as is, a portless one must be a declared
+/// nameservice, and an authority-less path uses `hdfs.name-node`, else
+/// `fs.defaultFS`. The operator cache, `delete_stream` batching and
+/// `relativize_path` all go through this, so they cannot drift apart.
 pub(crate) fn hdfs_native_effective_name_node<'a>(
     config: &HdfsNativeConfig,
     path: &'a str,
@@ -318,11 +317,11 @@ pub(crate) fn hdfs_native_effective_name_node<'a>(
     let invalid = |reason: String| hdfs_native_invalid_path(path, reason);
     let name_node = match authority {
         Some(authority) if hdfs_native_name_node(&authority).is_some() => authority,
-        Some(logical) => {
-            let nameservice = logical.trim_start_matches("hdfs://");
+        Some(portless) => {
+            let nameservice = portless.trim_start_matches("hdfs://");
             hdfs_native_nameservice(config, nameservice)?.ok_or_else(|| {
                 invalid(format!(
-                    "logical nameservice `{nameservice}` is not declared; set `{HDFS_NAME_NODE}.{nameservice}`"
+                    "`{nameservice}` has no port and is not a declared nameservice; add the port or set `{HDFS_NAME_NODE}.{nameservice}`"
                 ))
             })?
         }
@@ -978,7 +977,7 @@ mod tests {
         let (nn, rel) = hdfs_native_effective_name_node(&default_fs, "hdfs:///y").unwrap();
         assert_eq!((nn.as_str(), rel), ("hdfs://nn:8020", "y"));
         let err = hdfs_native_effective_name_node(&default_fs, "hdfs://ns-a/x").unwrap_err();
-        assert!(err.to_string().contains("logical nameservice `ns-a`"));
+        assert!(err.to_string().contains("`hdfs.name-node.ns-a`"), "{err}");
         // Nothing applicable: pointed errors.
         for path in ["hdfs:///a", "hdfs://ns-a/x"] {
             let err = hdfs_native_effective_name_node(&unconfigured, path).unwrap_err();
