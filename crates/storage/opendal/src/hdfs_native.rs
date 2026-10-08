@@ -1280,25 +1280,35 @@ mod tests {
             let config = Arc::new(HdfsNativeConfig::default());
 
             let runtime = build_runtime();
-            runtime.block_on(async {
-                hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators)
-                    .await
-                    .unwrap();
-            });
+            let (stale, _) = runtime
+                .block_on(hdfs_native_create_operator(
+                    "hdfs://nn:8020/a",
+                    &config,
+                    &operators,
+                ))
+                .unwrap();
             assert!(operators.get("hdfs://nn:8020").is_some());
 
             // The building runtime is gone: the entry is stale and the next
-            // runtime to use it rebuilds it.
+            // runtime to use it builds a new operator in its place.
             drop(runtime);
             assert!(operators.get("hdfs://nn:8020").is_none());
             let next = build_runtime();
-            next.block_on(async {
-                hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators)
-                    .await
-                    .unwrap();
-            });
+            let (rebuilt, _) = next
+                .block_on(hdfs_native_create_operator(
+                    "hdfs://nn:8020/a",
+                    &config,
+                    &operators,
+                ))
+                .unwrap();
             assert!(operators.get("hdfs://nn:8020").is_some());
             assert_eq!(operators.len(), 1);
+            let (_, stale) = stale.into_parts();
+            let (_, rebuilt) = rebuilt.into_parts();
+            assert!(
+                !Arc::ptr_eq(&stale, &rebuilt),
+                "the stale operator was reused"
+            );
         }
     }
 

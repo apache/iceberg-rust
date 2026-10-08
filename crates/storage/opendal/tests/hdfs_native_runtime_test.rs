@@ -21,7 +21,8 @@
 
 #[cfg(feature = "opendal-hdfs-native")]
 mod tests {
-    use std::net::TcpListener;
+    use std::io::Read;
+    use std::net::{TcpListener, TcpStream};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
@@ -29,7 +30,8 @@ mod tests {
     use iceberg::io::{FileIO, FileIOBuilder, HDFS_NAME_NODE};
     use iceberg_storage_opendal::OpenDalStorageFactory;
 
-    /// Accepts and immediately closes connections, counting them.
+    /// Accepts and immediately closes connections, counting them. A failed
+    /// accept (a dial reset while queued) is skipped so the listener lives on.
     fn fake_name_node() -> (u16, Arc<AtomicUsize>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -37,7 +39,7 @@ mod tests {
         let counter = dials.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
-                let Ok(_stream) = stream else { break };
+                let Ok(_stream) = stream else { continue };
                 counter.fetch_add(1, Ordering::SeqCst);
             }
         });
@@ -62,9 +64,20 @@ mod tests {
 
         let first = tokio::runtime::Runtime::new().unwrap();
         stat(&first, &file_io);
-        let after_first = dials.load(Ordering::SeqCst);
-        assert!(after_first >= 1, "the NameNode was never dialed");
+        assert!(
+            dials.load(Ordering::SeqCst) >= 1,
+            "the NameNode was never dialed"
+        );
         drop(first);
+
+        // The listener accepts in order, so once it has closed this marker
+        // connection, every dial from the first runtime has been counted.
+        let mut marker = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        marker
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        assert_eq!(marker.read(&mut [0]).unwrap(), 0);
+        let after_first = dials.load(Ordering::SeqCst);
 
         // Reusing the FileIO from another runtime used to panic inside
         // hdfs-native, whose client was bound to the dropped runtime.
