@@ -91,9 +91,22 @@ impl ArrowReader {
                     .try_flatten(),
             )
         } else {
+            let runtime = self.runtime.clone();
             Box::pin(
                 tasks
-                    .map_ok(move |task| task_reader.clone().process(task))
+                    .map_ok(move |task| {
+                        // Open the file on the IO runtime. The flatten below stops polling
+                        // the opens once it holds `concurrency_limit_data_files` streams, and
+                        // a half-read response keeps part of the HTTP/2 connection window,
+                        // which stalls every other read on that connection.
+                        let opening = runtime.io().spawn(task_reader.clone().process(task));
+                        async move {
+                            opening.await.map_err(|err| {
+                                Error::new(ErrorKind::Unexpected, "opening a data file failed")
+                                    .with_source(err)
+                            })?
+                        }
+                    })
                     .map_err(|err| {
                         Error::new(ErrorKind::Unexpected, "file scan task generate failed")
                             .with_source(err)
