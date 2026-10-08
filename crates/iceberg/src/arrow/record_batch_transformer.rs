@@ -1157,13 +1157,24 @@ impl RecordBatchTransformer {
                         return Err(invalid_data!("Missing required field: {}", iceberg_field.name));
                     }
 
-                    let default_value = iceberg_field.initial_default.as_ref().and_then(|lit| {
-                        if let Literal::Primitive(prim) = lit {
-                            Some(prim.clone())
-                        } else {
-                            None
+                    // TODO: Support the spec-defined non-null struct initial default `{}` by
+                    // creating a non-null struct and applying each child's initial default.
+                    // Tracked in https://github.com/apache/iceberg-rust/issues/3261.
+                    let default_value = match iceberg_field.initial_default.as_ref() {
+                        None => None,
+                        Some(Literal::Primitive(prim)) => Some(prim.clone()),
+                        Some(_) => {
+                            return Err(Error::new(
+                                ErrorKind::FeatureUnsupported,
+                                format!(
+                                    "Cannot read field {} that is absent from the data file: \
+                                     applying a non-primitive initial-default for {} is not yet \
+                                     supported",
+                                    iceberg_field.name, iceberg_field.field_type
+                                ),
+                            ));
                         }
-                    });
+                    };
 
                     ColumnSource::Add {
                         value: default_value,
@@ -1433,7 +1444,7 @@ mod test {
     use arrow_cast::cast;
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema};
 
-    use super::field_with_id;
+    use super::{field_with_id, schema_to_arrow_schema};
     use crate::ErrorKind;
     use crate::arrow::record_batch_transformer::{
         PromotePlan, RecordBatchTransformer, RecordBatchTransformerBuilder,
@@ -2407,6 +2418,63 @@ mod test {
     }
 
     #[test]
+    fn schema_evolution_absent_struct_with_initial_default_errors() {
+        for required in [false, true] {
+            let added_field = NestedField::new(
+                2,
+                "added_struct",
+                Type::Struct(StructType::new(vec![
+                    NestedField::optional(3, "child", Type::Primitive(PrimitiveType::Int))
+                        .with_initial_default(Literal::int(42))
+                        .into(),
+                ])),
+                required,
+            )
+            .with_initial_default(Literal::Struct(Struct::from_iter(vec![None])));
+            let snapshot_schema = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                        added_field.into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let mut transformer =
+                RecordBatchTransformerBuilder::new(snapshot_schema, &[1, 2]).build();
+            let file_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+                "id",
+                DataType::Int32,
+                false,
+                1,
+            )]));
+            let file_batch =
+                RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
+                    .unwrap();
+
+            let err = transformer
+                .process_record_batch(file_batch)
+                .expect_err(&format!(
+                    "required={required}: complex default should be rejected"
+                ));
+            assert_eq!(
+                err.kind(),
+                ErrorKind::FeatureUnsupported,
+                "required={required}"
+            );
+            assert!(
+                err.to_string().contains("Cannot read field added_struct"),
+                "required={required}: {err}"
+            );
+            assert!(
+                err.to_string()
+                    .contains("applying a non-primitive initial-default"),
+                "required={required}: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn schema_evolution_adds_struct_column_with_nulls() {
         // Test that when a struct column is added after data files are written,
         // the transformer can materialize the missing struct column with null values.
@@ -2481,6 +2549,127 @@ mod test {
         assert!(struct_column.is_null(0));
         assert!(struct_column.is_null(1));
         assert!(struct_column.is_null(2));
+    }
+
+    /// Evolved table schema for the #2618 regression test: `id` plus three
+    /// later-added optional nested columns — a list, a map, and a struct that
+    /// itself contains a nested list (`ys`). The nested-in-struct list is the
+    /// case a per-type NULL-fill would miss.
+    fn schema_with_added_nested_columns() -> Schema {
+        Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(
+                    2,
+                    "xs",
+                    Type::List(ListType {
+                        element_field: NestedField::list_element(
+                            3,
+                            Type::Primitive(PrimitiveType::Int),
+                            false,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+                NestedField::optional(
+                    4,
+                    "props",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            5,
+                            Type::Primitive(PrimitiveType::String),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            6,
+                            Type::Primitive(PrimitiveType::Int),
+                            false,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+                NestedField::optional(
+                    7,
+                    "s",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(8, "a", Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::optional(
+                            9,
+                            "ys",
+                            Type::List(ListType {
+                                element_field: NestedField::list_element(
+                                    10,
+                                    Type::Primitive(PrimitiveType::Long),
+                                    false,
+                                )
+                                .into(),
+                            }),
+                        )
+                        .into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn schema_evolution_adds_list_map_and_nested_struct_columns_with_nulls() {
+        // Regression test for https://github.com/apache/iceberg-rust/issues/2618.
+        //
+        // The story the test tells, in order:
+        //   1. An old data file was written with only the `id` column.
+        //   2. The table schema has since evolved, adding optional list / map /
+        //      struct columns (see `schema_with_added_nested_columns`).
+        //   3. Reading the old file against the evolved schema must fill those
+        //      absent columns with typed all-NULL arrays — previously this errored
+        //      with "unexpected target column type" for the nested types.
+
+        // (1) The old data file: just `id`.
+        let file_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "id",
+            DataType::Int32,
+            false,
+            1,
+        )]));
+        let file_batch =
+            RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
+                .unwrap();
+
+        // (2) Read it against the evolved schema, projecting id + the three added columns.
+        let snapshot_schema = Arc::new(schema_with_added_nested_columns());
+        let projected_iceberg_field_ids = [1, 2, 4, 7];
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
+                .build();
+        let result = transformer.process_record_batch(file_batch).unwrap();
+
+        // (3a) `id` survives unchanged.
+        assert_eq!(result.num_columns(), 4);
+        assert_eq!(result.num_rows(), 3);
+        let id_column = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_column.values(), &[1, 2, 3]);
+
+        // (3b) The added columns carry the evolved schema's Arrow types, including nested
+        // field names, nullability, and field IDs, and are all-NULL.
+        let expected_schema = schema_to_arrow_schema(&schema_with_added_nested_columns()).unwrap();
+        assert_eq!(result.schema().as_ref(), &expected_schema);
+        for (idx, name) in [(1, "xs"), (2, "props"), (3, "s")] {
+            assert_eq!(
+                result.column(idx).null_count(),
+                3,
+                "added nested column `{name}` should be all-NULL"
+            );
+        }
     }
 
     pub fn source_record_batch() -> RecordBatch {

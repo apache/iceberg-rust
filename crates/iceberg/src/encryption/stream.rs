@@ -50,7 +50,7 @@ use bytes::{Bytes, BytesMut};
 
 use super::AesGcmCipher;
 use crate::error::invalid_data;
-use crate::io::{FileRead, FileWrite};
+use crate::io::{FileMetadata, FileRead, FileWrite};
 use crate::{Error, ErrorKind, Result};
 
 /// Default plaintext block size (1 MiB), matching Java's `Ciphers.PLAIN_BLOCK_SIZE`.
@@ -72,8 +72,7 @@ pub const GCM_STREAM_MAGIC: [u8; 4] = *b"AGS1";
 pub const GCM_STREAM_HEADER_LENGTH: u32 = 8;
 
 /// Minimum valid AGS1 stream length (header + one empty block).
-#[cfg(test)]
-pub const MIN_STREAM_LENGTH: u32 = GCM_STREAM_HEADER_LENGTH + NONCE_LENGTH + GCM_TAG_LENGTH;
+pub(crate) const MIN_STREAM_LENGTH: u32 = GCM_STREAM_HEADER_LENGTH + NONCE_LENGTH + GCM_TAG_LENGTH;
 
 /// Constructs the per-block AAD for AGS1 stream encryption.
 ///
@@ -147,19 +146,13 @@ impl AesGcmFileRead {
         aad_prefix: Box<[u8]>,
         encrypted_file_length: u64,
     ) -> Result<Self> {
+        if encrypted_file_length < u64::from(MIN_STREAM_LENGTH) {
+            return Err(invalid_data!(
+                "Invalid encrypted file length: {encrypted_file_length} is less than {MIN_STREAM_LENGTH}"
+            ));
+        }
         let plain_stream_size = Self::calculate_plaintext_length(encrypted_file_length)?;
         let stream_length = encrypted_file_length - GCM_STREAM_HEADER_LENGTH as u64;
-
-        if stream_length == 0 {
-            return Ok(Self {
-                inner,
-                cipher,
-                aad_prefix,
-                plain_stream_size: 0,
-                num_blocks: 0,
-                last_cipher_block_size: 0,
-            });
-        }
 
         let num_full_blocks = stream_length / CIPHER_BLOCK_SIZE as u64;
         let cipher_bytes_in_last_block = (stream_length % CIPHER_BLOCK_SIZE as u64) as u32;
@@ -280,7 +273,9 @@ impl FileRead for AesGcmFileRead {
     /// file. GCM authentication is verified per-block, so any tampering is detected
     /// at the granularity of individual blocks.
     async fn read(&self, range: Range<u64>) -> Result<Bytes> {
-        if range.start == range.end {
+        // An empty stream still has one block whose GCM tag must be verified, so an empty read
+        // cannot short-circuit there: that is what detects a file truncated to just its header.
+        if range.start == range.end && self.plain_stream_size != 0 {
             return Ok(Bytes::new());
         }
 
@@ -301,12 +296,8 @@ impl FileRead for AesGcmFileRead {
             ));
         }
 
-        if self.num_blocks == 0 {
-            return Ok(Bytes::new());
-        }
-
         let first_block = range.start / PLAIN_BLOCK_SIZE as u64;
-        let last_block = (range.end - 1) / PLAIN_BLOCK_SIZE as u64;
+        let last_block = range.end.saturating_sub(1) / PLAIN_BLOCK_SIZE as u64;
 
         // Read all needed encrypted blocks in a single I/O call
         let encrypted_start = Self::encrypted_block_offset(first_block);
@@ -314,6 +305,13 @@ impl FileRead for AesGcmFileRead {
             Self::encrypted_block_offset(last_block) + self.cipher_block_size(last_block) as u64;
 
         let all_encrypted = self.inner.read(encrypted_start..encrypted_end).await?;
+        if all_encrypted.len() as u64 != encrypted_end - encrypted_start {
+            return Err(invalid_data!(
+                "Invalid encrypted read length: expected {} bytes, got {}",
+                encrypted_end - encrypted_start,
+                all_encrypted.len()
+            ));
+        }
 
         // Decrypt each block and extract the requested plaintext range
         let result_len = (range.end - range.start) as usize;
@@ -489,7 +487,7 @@ impl FileWrite for AesGcmFileWrite {
         Ok(())
     }
 
-    async fn close(&mut self) -> Result<()> {
+    async fn close(&mut self) -> Result<FileMetadata> {
         if self.closed {
             return Err(Error::new(
                 ErrorKind::Unexpected,
@@ -622,6 +620,69 @@ mod tests {
         // Reading empty range should return empty bytes
         let result = reader.read(0..0).await.unwrap();
         assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_short_ciphertext_read_is_rejected() {
+        struct ShortRead;
+
+        #[async_trait::async_trait]
+        impl FileRead for ShortRead {
+            async fn read(&self, range: Range<u64>) -> Result<Bytes> {
+                let len = (range.end - range.start).saturating_sub(1) as usize;
+                Ok(Bytes::from(vec![0; len]))
+            }
+        }
+
+        let reader = AesGcmFileRead::new(
+            Box::new(ShortRead),
+            Arc::new(make_cipher(b"0123456789abcdef")),
+            Box::default(),
+            u64::from(MIN_STREAM_LENGTH) + 10,
+        )
+        .unwrap();
+        let err = reader.read(0..10).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.to_string().contains("Invalid encrypted read length"));
+    }
+
+    #[tokio::test]
+    async fn test_oversized_declared_length_is_rejected() {
+        // Object stores clamp reads at EOF rather than failing, unlike the in-memory FileIO.
+        struct ClampingRead(Bytes);
+
+        #[async_trait::async_trait]
+        impl FileRead for ClampingRead {
+            async fn read(&self, range: Range<u64>) -> Result<Bytes> {
+                let start = (range.start as usize).min(self.0.len());
+                let end = (range.end as usize).min(self.0.len());
+                Ok(self.0.slice(start..end))
+            }
+        }
+
+        let key = b"0123456789abcdef";
+        let aad_prefix = b"test-aad-prefix!";
+        let plaintext = b"some bytes to measure";
+        let encrypted = write_through_ags1(plaintext, key, aad_prefix).await;
+
+        // A declared length larger than the real file must be rejected rather than yielding
+        // truncated plaintext, whether it overstates by one byte or by a whole extra block.
+        for excess in [1, u64::from(CIPHER_BLOCK_SIZE)] {
+            let reader = AesGcmFileRead::new(
+                Box::new(ClampingRead(Bytes::from(encrypted.clone()))),
+                Arc::new(make_cipher(key)),
+                aad_prefix.to_vec().into_boxed_slice(),
+                encrypted.len() as u64 + excess,
+            )
+            .unwrap();
+
+            let err = reader
+                .read(0..plaintext.len() as u64)
+                .await
+                .expect_err("an inflated declared length must not read back as plaintext");
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.to_string().contains("Invalid encrypted read length"));
+        }
     }
 
     #[tokio::test]
@@ -940,15 +1001,21 @@ mod tests {
         assert_eq!(&aad[..], &42u32.to_le_bytes());
     }
 
-    #[tokio::test]
-    async fn test_encrypted_file_too_short() {
-        let result = AesGcmFileRead::new(
-            memory_reader(vec![0; 4]),
-            Arc::new(make_cipher(b"0123456789abcdef")),
-            [].into(),
-            4,
-        );
-        assert!(result.is_err());
+    #[test]
+    fn test_encrypted_file_too_short() {
+        for length in 0..MIN_STREAM_LENGTH {
+            let result = AesGcmFileRead::new(
+                memory_reader(vec![0; length as usize]),
+                Arc::new(make_cipher(b"0123456789abcdef")),
+                [].into(),
+                u64::from(length),
+            );
+            let err = result
+                .err()
+                .expect("a stream must contain an authenticated block");
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.to_string().contains("Invalid encrypted file length"));
+        }
     }
 
     // --- AesGcmFileWrite tests ---
@@ -974,8 +1041,14 @@ mod tests {
             Ok(())
         }
 
-        async fn close(&mut self) -> Result<()> {
-            Ok(())
+        // A poisoned AesGcmFileWrite must reject close() before delegating, so reaching this is a
+        // bug. Returning an error rather than panicking surfaces it as a failed assertion on the
+        // expected "poisoned" message.
+        async fn close(&mut self) -> Result<FileMetadata> {
+            Err(Error::new(
+                ErrorKind::Unexpected,
+                "FailingFileWrite::close called unexpectedly",
+            ))
         }
     }
 
@@ -986,8 +1059,10 @@ mod tests {
             Ok(())
         }
 
-        async fn close(&mut self) -> Result<()> {
-            Ok(())
+        async fn close(&mut self) -> Result<FileMetadata> {
+            Ok(FileMetadata {
+                size: self.buffer.lock().unwrap().len() as u64,
+            })
         }
     }
 
@@ -1001,9 +1076,15 @@ mod tests {
         let mut writer = AesGcmFileWrite::new(inner, cipher, aad_prefix.to_vec());
 
         writer.write(Bytes::from(plaintext.to_vec())).await.unwrap();
-        writer.close().await.unwrap();
+        let metadata = writer.close().await.unwrap();
 
-        buffer.lock().unwrap().clone()
+        let encrypted = buffer.lock().unwrap().clone();
+        assert_eq!(
+            metadata.size,
+            encrypted.len() as u64,
+            "close() must report the full ciphertext length"
+        );
+        encrypted
     }
 
     #[tokio::test]
@@ -1223,10 +1304,9 @@ mod tests {
         );
 
         // Close should also be rejected
-        let result = writer.close().await;
-        assert!(result.is_err());
+        let err = writer.close().await.err().expect("close should fail");
         assert!(
-            result.unwrap_err().to_string().contains("poisoned"),
+            err.to_string().contains("poisoned"),
             "expected poisoned error on close"
         );
     }

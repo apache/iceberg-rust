@@ -89,7 +89,15 @@ check-public-api: install-cargo-public-api
 check-license-notice:
 	bash ./dev/check_license_notice.sh
 
-check: check-fmt check-clippy check-toml cargo-machete check-license-notice
+# Keep version in sync with the CI lint install step in .github/workflows/ci.yml
+# and EXPECTED_CARGO_DENY_VERSION in dev/release/dependencies.sh.
+install-cargo-deny:
+	cargo install --locked cargo-deny@0.19.9
+
+check-dependency-licenses: install-cargo-deny
+	bash ./dev/release/dependencies.sh check
+
+check: check-fmt check-clippy check-toml cargo-machete check-license-notice check-dependency-licenses
 
 doc-test:
 	cargo test --no-fail-fast --doc --all-features --workspace
@@ -112,7 +120,7 @@ site: install-mdbook
 
 # Docker targets for integration tests
 docker-up:
-	docker compose -f dev/docker-compose.yaml up -d --build --wait
+	docker compose -f dev/docker-compose.yaml up -d --build --wait --remove-orphans
 
 docker-down:
 	docker compose -f dev/docker-compose.yaml down -v --remove-orphans --timeout 0
