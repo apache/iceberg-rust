@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, PoisonError, RwLock, Weak};
 
 use iceberg::io::{HDFS_HADOOP_CONF_PREFIX, HDFS_HOST, HDFS_NAME_NODE, HDFS_PORT};
 use iceberg::{Error, ErrorKind, Result};
@@ -469,32 +469,31 @@ impl CachedOperator {
     }
 }
 
+// A poisoned lock is recovered rather than reported: writes only ever
+// replace whole entries, so a panic elsewhere cannot leave the map broken.
 impl HdfsNativeOperatorCache {
-    pub(crate) fn get(&self, name_node: &str) -> Result<Option<Operator>> {
-        Ok(self
-            .0
+    pub(crate) fn get(&self, name_node: &str) -> Option<Operator> {
+        self.0
             .read()
-            .map_err(poisoned)?
+            .unwrap_or_else(PoisonError::into_inner)
             .get(name_node)
             .filter(|cached| cached.runtime_alive())
-            .map(|cached| cached.operator.clone()))
+            .map(|cached| cached.operator.clone())
     }
 
     /// Inserts `op` unless a concurrent caller got there first, returning
     /// whichever operator the cache now holds; a stale entry is replaced.
-    fn insert(&self, name_node: String, op: Operator, handle: &Handle) -> Result<Operator> {
-        let mut operators = self.0.write().map_err(poisoned)?;
+    fn insert(&self, name_node: String, op: Operator, handle: &Handle) -> Operator {
+        let mut operators = self.0.write().unwrap_or_else(PoisonError::into_inner);
         match operators.entry(name_node) {
-            Entry::Occupied(entry) if entry.get().runtime_alive() => {
-                Ok(entry.get().operator.clone())
-            }
+            Entry::Occupied(entry) if entry.get().runtime_alive() => entry.get().operator.clone(),
             Entry::Occupied(mut entry) => {
                 entry.insert(CachedOperator::new(op.clone(), handle));
-                Ok(op)
+                op
             }
             Entry::Vacant(entry) => {
                 entry.insert(CachedOperator::new(op.clone(), handle));
-                Ok(op)
+                op
             }
         }
     }
@@ -503,10 +502,6 @@ impl HdfsNativeOperatorCache {
     fn len(&self) -> usize {
         self.0.read().unwrap().len()
     }
-}
-
-fn poisoned<T>(_: T) -> Error {
-    Error::new(ErrorKind::Unexpected, "HDFS operator cache lock poisoned")
 }
 
 /// Creates an operator for the path, reusing the cached one for its
@@ -518,7 +513,7 @@ pub(crate) async fn hdfs_native_create_operator<'a>(
 ) -> Result<(Operator, &'a str)> {
     let (name_node, relative_path) = hdfs_native_effective_name_node(config, path)?;
 
-    if let Some(op) = operators.get(&name_node)? {
+    if let Some(op) = operators.get(&name_node) {
         return Ok((op, relative_path));
     }
 
@@ -542,7 +537,7 @@ pub(crate) async fn hdfs_native_create_operator<'a>(
         .map_err(|e| {
             Error::new(ErrorKind::Unexpected, "HDFS operator build task failed").with_source(e)
         })??;
-    Ok((operators.insert(name_node, op, &handle)?, relative_path))
+    Ok((operators.insert(name_node, op, &handle), relative_path))
 }
 
 /// Returns the `delete_stream` grouping key for a path: the effective
@@ -813,7 +808,7 @@ mod tests {
         }
 
         assert_eq!(operators.len(), 1);
-        assert!(operators.get("hdfs://nn:8020").unwrap().is_some());
+        assert!(operators.get("hdfs://nn:8020").is_some());
     }
 
     #[test]
@@ -1184,12 +1179,7 @@ mod tests {
             .unwrap();
         assert_eq!(rel, "a/b");
         assert_eq!(operators.len(), 1);
-        assert!(
-            operators
-                .get("hdfs://nn1:8020,hdfs://nn2:8020")
-                .unwrap()
-                .is_some()
-        );
+        assert!(operators.get("hdfs://nn1:8020,hdfs://nn2:8020").is_some());
 
         // A logical nameservice must be declared; a concrete authority is
         // another cluster, never the configured one.
@@ -1201,7 +1191,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(operators.len(), 2);
-        assert!(operators.get("hdfs://other:9000").unwrap().is_some());
+        assert!(operators.get("hdfs://other:9000").is_some());
     }
 
     #[tokio::test]
@@ -1250,15 +1240,29 @@ mod tests {
 
         // Two callers racing for one NameNode: the first insert wins and both
         // get the cached operator.
-        let first = operators
-            .insert("hdfs://nn:8020".to_string(), build("/first"), &handle)
-            .unwrap();
-        let second = operators
-            .insert("hdfs://nn:8020".to_string(), build("/second"), &handle)
-            .unwrap();
+        let first = operators.insert("hdfs://nn:8020".to_string(), build("/first"), &handle);
+        let second = operators.insert("hdfs://nn:8020".to_string(), build("/second"), &handle);
         assert_eq!(first.info().root(), "/first/");
         assert_eq!(second.info().root(), "/first/");
         assert_eq!(operators.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_hdfs_native_operator_cache_survives_a_poisoned_lock() {
+        let operators = HdfsNativeOperatorCache::default();
+        // A panic elsewhere while the lock is held must not break HDFS I/O
+        // for good: every write replaces a whole entry, so the map is intact.
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = operators.0.write().unwrap();
+            panic!("poisoning the operator cache lock");
+        });
+        assert!(operators.0.is_poisoned());
+
+        let config = Arc::new(HdfsNativeConfig::default());
+        hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators)
+            .await
+            .unwrap();
+        assert!(operators.get("hdfs://nn:8020").is_some());
     }
 
     #[test]
@@ -1281,19 +1285,19 @@ mod tests {
                     .await
                     .unwrap();
             });
-            assert!(operators.get("hdfs://nn:8020").unwrap().is_some());
+            assert!(operators.get("hdfs://nn:8020").is_some());
 
             // The building runtime is gone: the entry is stale and the next
             // runtime to use it rebuilds it.
             drop(runtime);
-            assert!(operators.get("hdfs://nn:8020").unwrap().is_none());
+            assert!(operators.get("hdfs://nn:8020").is_none());
             let next = build_runtime();
             next.block_on(async {
                 hdfs_native_create_operator("hdfs://nn:8020/a", &config, &operators)
                     .await
                     .unwrap();
             });
-            assert!(operators.get("hdfs://nn:8020").unwrap().is_some());
+            assert!(operators.get("hdfs://nn:8020").is_some());
             assert_eq!(operators.len(), 1);
         }
     }

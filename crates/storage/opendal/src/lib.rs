@@ -1235,7 +1235,7 @@ mod tests {
         hdfs_native_create_operator("hdfs:///x", &hdfs.config, &hdfs.operators)
             .await
             .unwrap();
-        assert!(hdfs.operators.get("hdfs://nn:8020").unwrap().is_some());
+        assert!(hdfs.operators.get("hdfs://nn:8020").is_some());
 
         let value = serde_json::to_value(&storage).unwrap();
         assert!(value["HdfsNative"].get("operators").is_none());
@@ -1252,7 +1252,7 @@ mod tests {
             Some(&"true".to_string())
         );
         assert_eq!(restored.client_config.io_timeout(), Duration::from_secs(45));
-        assert!(restored.operators.get("hdfs://nn:8020").unwrap().is_none());
+        assert!(restored.operators.get("hdfs://nn:8020").is_none());
     }
 
     /// `relativize_path` follows the same resolution rule as `create_operator`.
