@@ -65,9 +65,23 @@ impl Manifest {
             // `schema_to_avro_schema` defined each named type once, so this
             // fallback stays while tables can contain manifests it wrote.
             Err(e) if matches!(e.details(), Details::AmbiguousSchemaDefinition(_)) => {
-                let Ok(Some((bs, repeated))) = define_named_types_once(bs) else {
-                    return Err(e.into());
+                let (bs, repeated) = match define_named_types_once(bs) {
+                    Ok(Some(rewrite)) => rewrite,
+                    Ok(None) => return Err(e.into()),
+                    Err(rewrite_error) => {
+                        return Err(Error::from(e).with_context(
+                            "error defining each named type once",
+                            rewrite_error.to_string(),
+                        ));
+                    }
                 };
+                rewritten = bs;
+                let reader = AvroReader::new(rewritten.as_slice()).map_err(|retry_error| {
+                    Error::from(e).with_context(
+                        "error after defining each named type once",
+                        retry_error.to_string(),
+                    )
+                })?;
                 let location = location.unwrap_or("<unknown location>");
                 if WARNED_REPEATED_DEFINITIONS.swap(true, Ordering::Relaxed) {
                     tracing::debug!(
@@ -81,13 +95,7 @@ impl Manifest {
                          this are logged at debug level."
                     );
                 }
-                rewritten = bs;
-                AvroReader::new(rewritten.as_slice()).map_err(|retry_error| {
-                    Error::from(e).with_context(
-                        "error after defining each named type once",
-                        retry_error.to_string(),
-                    )
-                })?
+                reader
             }
             Err(e) => return Err(e.into()),
         };
@@ -197,6 +205,8 @@ mod tests {
     use apache_avro::{Codec, Writer, to_value};
     use serde_json::{Value, to_vec};
     use tempfile::TempDir;
+    use tracing::Level;
+    use tracing::subscriber::with_default;
 
     use super::*;
     use crate::ErrorKind;
@@ -2244,8 +2254,14 @@ mod tests {
         let marker = &bs[bs.len() - 16..];
         let header_marker = bs.windows(16).position(|w| w == marker).unwrap();
         let truncated = &bs[..header_marker + 8];
+        let log_dir = TempDir::new().unwrap();
+        let log_path = log_dir.path().join("log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(Level::DEBUG)
+            .with_writer(Arc::new(fs::File::create(&log_path).unwrap()))
+            .finish();
 
-        let err = Manifest::parse_avro(truncated).unwrap_err();
+        let err = with_default(subscriber, || Manifest::parse_avro(truncated)).unwrap_err();
 
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         let message = err.to_string();
@@ -2254,5 +2270,8 @@ mod tests {
             "{message}"
         );
         assert!(message.contains("Failed to read marker bytes"), "{message}");
+        // The fallback logs only manifests that it reads.
+        let log = fs::read_to_string(&log_path).unwrap();
+        assert!(!log.contains("more than once"), "{log}");
     }
 }

@@ -76,6 +76,8 @@ impl ManifestEntryV2 {
 #[derive(Serialize, Deserialize)]
 pub(super) struct ManifestEntryV1 {
     status: i32,
+    // Required in v1 by the spec. Java declares it optional and writes null when
+    // snapshot ID inheritance is enabled, which #3371 tracks.
     pub snapshot_id: i64,
     data_file: DataFileSerde,
 }
