@@ -33,19 +33,30 @@ the code they describe or they are wrong.
   ("previously", "instead of", "unlike X"). Put that in the commit message
   or PR description.
 - Public items get a one-line doc summary of what they do for the caller,
-  not how. Expand only for contract the caller must know.
+  not how. Expand only for contract the caller must know, such as the
+  errors it returns (`# Errors`) or when it panics (`# Panics`).
 - Test names say what they check. Do not narrate asserts.
+- Cover the edge cases and error paths the change adds, not only the
+  happy path.
+- Build the expected value and assert equality with it, rather than
+  checking fields one at a time.
 - Do not add tests that duplicate existing coverage.
-- Do not rename, reformat, or reorder code unrelated to the change.
-- Reuse existing helpers and types before adding new ones.
+- Do not rename, reformat, refactor, or reorder code unrelated to the
+  change. A bug fix does not carry an API redesign.
+- Reuse existing helpers, types, and test fixtures (such as
+  `TableTestFixture`) before adding new ones. Use arrow-rs kernels
+  instead of reimplementing them.
 - Use the narrowest visibility that works. Make items `pub` only when they
-  are part of the API the change intends to expose; `public-api.txt`
-  changes show API growth.
+  are part of the API the change intends to expose. Run
+  `make generate-public-api` to update each crate's `public-api.txt`, and
+  check its diff for API growth.
 
 ## Pull requests
 
 - Follow the PR template. Keep each section short: the problem, the
-  approach, and anything a reviewer would not guess from the diff.
+  approach, and anything a reviewer would not guess from the diff. In
+  AI Disclosure, name the areas of uncertainty or assumptions a reviewer
+  should focus on.
 - Do not restate the diff: no file-by-file walkthroughs, per-function
   summaries, or "changes made" checklists.
 
