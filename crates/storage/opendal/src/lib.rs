@@ -260,10 +260,12 @@ impl StorageFactory for OpenDalStorageFactory {
                     Ok(Arc::new(OpenDalStorage::S3 {
                         config: s3_config_parse(config.props().clone())?.into(),
                         customized_credential_load: None,
+                        client_config,
                     }))
                 } else {
                     Ok(Arc::new(OpenDalStorage::Oss {
                         config: oss_config_parse(config.props().clone())?.into(),
+                        client_config,
                     }))
                 }
             }
