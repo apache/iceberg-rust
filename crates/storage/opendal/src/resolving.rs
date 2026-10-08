@@ -117,12 +117,15 @@ fn build_storage_for_scheme(
                 let config = crate::s3::s3_config_parse(props.clone())?;
                 Ok(OpenDalStorage::S3 {
                     config: Arc::new(config),
+                    multipart_part_size: crate::s3::s3_multipart_part_size_parse(props)?,
                     customized_credential_load: customized_credential_load.clone(),
+                    client_config: crate::s3::s3_client_config(props, client_config)?,
                 })
             } else {
                 let config = crate::oss::oss_config_parse(props.clone())?;
                 Ok(OpenDalStorage::Oss {
                     config: Arc::new(config),
+                    client_config,
                 })
             }
         }

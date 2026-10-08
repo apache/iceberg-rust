@@ -332,11 +332,14 @@ impl StorageFactory for OpenDalStorageFactory {
                 if routes_oss_via_s3(config.props()) {
                     Ok(Arc::new(OpenDalStorage::S3 {
                         config: s3_config_parse(config.props().clone())?.into(),
+                        multipart_part_size: s3_multipart_part_size_parse(config.props())?,
                         customized_credential_load: None,
+                        client_config: s3_client_config(config.props(), client_config)?,
                     }))
                 } else {
                     Ok(Arc::new(OpenDalStorage::Oss {
                         config: oss_config_parse(config.props().clone())?.into(),
+                        client_config,
                     }))
                 }
             }
