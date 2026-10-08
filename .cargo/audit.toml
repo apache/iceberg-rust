@@ -37,4 +37,18 @@ ignore = [
   # once the transitive dependency set permits quick-xml >=0.41.0.
   "RUSTSEC-2026-0194",
   "RUSTSEC-2026-0195",
+  # `h2` 0.3.27 accepts an unbounded number of empty DATA frames (low-severity
+  # DoS).
+  #
+  # It is present only through `aws-sdk-kms/test-util` ->
+  # `aws-smithy-runtime/legacy-test-util`, which is required by the official
+  # `aws-smithy-mocks` test framework, and is absent from normal/build
+  # dependencies.
+  #
+  # Per SECURITY-THREAT-MODEL.md, malformed-input DoS is hardening rather than
+  # an Iceberg Rust trust-boundary vulnerability.
+  #
+  # Remove after the fix in
+  # https://github.com/smithy-lang/smithy-rs/pull/4827 reaches an AWS SDK release.
+  "RUSTSEC-2026-0258",
 ]
