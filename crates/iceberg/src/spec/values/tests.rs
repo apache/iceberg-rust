@@ -159,6 +159,57 @@ fn json_long() {
 }
 
 #[test]
+fn test_raw_literal_json_integer_boundaries() {
+    for value in [
+        i64::MIN,
+        -1,
+        0,
+        i32::MAX as i64,
+        i32::MAX as i64 + 1,
+        i64::MAX,
+    ] {
+        check_raw_literal_json_serde(Literal::long(value), &Primitive(PrimitiveType::Long));
+
+        let datum = Datum::long(value);
+        let json = serde_json::to_string(&datum).unwrap();
+        assert_eq!(serde_json::from_str::<Datum>(&json).unwrap(), datum);
+    }
+}
+
+#[test]
+fn test_raw_literal_json_rejects_unsigned_overflow() {
+    for value in [i64::MAX as u64 + 1, u64::MAX] {
+        let json = value.to_string();
+        assert!(serde_json::from_str::<RawLiteral>(&json).is_err(), "{json}");
+        assert!(serde_json::from_value::<RawLiteral>(serde_json::json!(value)).is_err());
+    }
+}
+
+#[test]
+fn test_datum_json_rejects_unsigned_overflow() {
+    for ty in [
+        PrimitiveType::Int,
+        PrimitiveType::Date,
+        PrimitiveType::Long,
+        PrimitiveType::Time,
+        PrimitiveType::Timestamp,
+        PrimitiveType::Timestamptz,
+        PrimitiveType::TimestampNs,
+        PrimitiveType::TimestamptzNs,
+    ] {
+        for value in [i64::MAX as u64 + 1, u64::MAX] {
+            for json in [
+                serde_json::json!({"type": ty, "literal": value}),
+                serde_json::json!([ty, value]),
+            ] {
+                let json = json.to_string();
+                assert!(serde_json::from_str::<Datum>(&json).is_err(), "{json}");
+            }
+        }
+    }
+}
+
+#[test]
 fn json_float() {
     let record = r#"1.0"#;
 
