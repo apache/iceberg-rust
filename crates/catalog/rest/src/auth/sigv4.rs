@@ -20,6 +20,7 @@
 use chrono::{DateTime, Utc};
 use iceberg::{Error, ErrorKind, Result};
 use sha2::{Digest, Sha256};
+use typed_builder::TypedBuilder;
 
 /// Hex SHA-256 of the empty string.
 const EMPTY_BODY_HEX_SHA256: &str =
@@ -63,27 +64,21 @@ fn content_sha256_header(body: Option<&[u8]>, mode: PayloadHashMode) -> String {
 
 /// Signs REST catalog requests the way Iceberg Java's `RESTSigV4AuthSession`
 /// does. Carries no credentials, so one signer serves every session.
-#[derive(Clone)]
+///
+/// Built with [`SigV4Signer::builder`].
+#[derive(Clone, TypedBuilder)]
 pub struct SigV4Signer {
+    /// The signing region, e.g. `us-east-1`.
+    #[builder(setter(into))]
     region: String,
+    /// The signing name, e.g. `execute-api`.
+    #[builder(setter(into))]
     service: String,
+    /// How the payload hash is encoded.
     mode: PayloadHashMode,
 }
 
 impl SigV4Signer {
-    /// Creates a new SigV4 signer.
-    pub fn new(
-        region: impl Into<String>,
-        service: impl Into<String>,
-        mode: PayloadHashMode,
-    ) -> Self {
-        Self {
-            region: region.into(),
-            service: service.into(),
-            mode,
-        }
-    }
-
     /// Signs `request` in place. An existing `Authorization` moves to
     /// `Original-Authorization`, and a caller's `x-amz-date`,
     /// `x-amz-content-sha256` or `x-amz-security-token` that the signer
@@ -390,7 +385,11 @@ mod tests {
         );
         assert!(request.url().query().unwrap().contains("my+ns"));
 
-        let signer = SigV4Signer::new("us-east-1", "execute-api", PayloadHashMode::StandardAws);
+        let signer = SigV4Signer::builder()
+            .region("us-east-1")
+            .service("execute-api")
+            .mode(PayloadHashMode::StandardAws)
+            .build();
         let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
         signer
             .sign_at(&mut request, &test_credentials(), now)
@@ -473,7 +472,11 @@ mod tests {
     }
 
     fn test_signer(mode: PayloadHashMode) -> SigV4Signer {
-        SigV4Signer::new("us-east-1", "execute-api", mode)
+        SigV4Signer::builder()
+            .region("us-east-1")
+            .service("execute-api")
+            .mode(mode)
+            .build()
     }
 
     fn test_credentials() -> aws_credential_types::Credentials {
@@ -684,7 +687,11 @@ mod tests {
             None,
             "test",
         );
-        let signer = SigV4Signer::new("us-east-1", "execute-api", PayloadHashMode::StandardAws);
+        let signer = SigV4Signer::builder()
+            .region("us-east-1")
+            .service("execute-api")
+            .mode(PayloadHashMode::StandardAws)
+            .build();
         let mut req = HttpRequest::new(
             reqwest::Client::new()
                 .get("https://rest.example.com/v1/config")
@@ -871,7 +878,11 @@ mod tests {
             None,
             "test",
         );
-        let signer = SigV4Signer::new("us-east-1", "execute-api", PayloadHashMode::StandardAws);
+        let signer = SigV4Signer::builder()
+            .region("us-east-1")
+            .service("execute-api")
+            .mode(PayloadHashMode::StandardAws)
+            .build();
         let mut req = HttpRequest::new(
             reqwest::Client::new()
                 .get("https://rest.example.com/v1/config")
@@ -943,7 +954,11 @@ mod tests {
             None,
             "test",
         );
-        let signer = SigV4Signer::new("us-east-1", "custom-service", PayloadHashMode::IcebergRest);
+        let signer = SigV4Signer::builder()
+            .region("us-east-1")
+            .service("custom-service")
+            .mode(PayloadHashMode::IcebergRest)
+            .build();
         let mut req = HttpRequest::new(
             reqwest::Client::new()
                 .get("https://catalog.example.com/v1/config?warehouse=my-catalog")
@@ -985,7 +1000,11 @@ mod tests {
             None,
             "test",
         );
-        let signer = SigV4Signer::new("us-east-1", "glue", PayloadHashMode::IcebergRest);
+        let signer = SigV4Signer::builder()
+            .region("us-east-1")
+            .service("glue")
+            .mode(PayloadHashMode::IcebergRest)
+            .build();
         let client = reqwest::Client::new();
         let mut req = HttpRequest::new(
             client
@@ -1034,7 +1053,11 @@ mod tests {
             None,
             "test",
         );
-        let signer = SigV4Signer::new("us-east-1", "glue", PayloadHashMode::IcebergRest);
+        let signer = SigV4Signer::builder()
+            .region("us-east-1")
+            .service("glue")
+            .mode(PayloadHashMode::IcebergRest)
+            .build();
         let client = reqwest::Client::new();
         let mut req = HttpRequest::new(
             client
@@ -1079,7 +1102,11 @@ mod tests {
             None,
             "test",
         );
-        let signer = SigV4Signer::new("us-east-1", "execute-api", PayloadHashMode::IcebergRest);
+        let signer = SigV4Signer::builder()
+            .region("us-east-1")
+            .service("execute-api")
+            .mode(PayloadHashMode::IcebergRest)
+            .build();
         let body = br#"{"namespace":["ns"]}"#;
         let mut req = HttpRequest::new(
             reqwest::Client::new()
@@ -1175,7 +1202,11 @@ mod tests {
             None,
             "test",
         );
-        let signer = SigV4Signer::new("us-east-1", "glue", PayloadHashMode::IcebergRest);
+        let signer = SigV4Signer::builder()
+            .region("us-east-1")
+            .service("glue")
+            .mode(PayloadHashMode::IcebergRest)
+            .build();
         let client = reqwest::Client::new();
         let mut req = HttpRequest::new(
             client
@@ -1205,7 +1236,11 @@ mod tests {
             None,
             "test",
         );
-        let signer = SigV4Signer::new("us-east-1", "glue", PayloadHashMode::IcebergRest);
+        let signer = SigV4Signer::builder()
+            .region("us-east-1")
+            .service("glue")
+            .mode(PayloadHashMode::IcebergRest)
+            .build();
         let client = reqwest::Client::new();
         let mut req = HttpRequest::new(
             client
@@ -1235,7 +1270,11 @@ mod tests {
             None,
             "test",
         );
-        let signer = SigV4Signer::new("us-east-1", "service", PayloadHashMode::StandardAws);
+        let signer = SigV4Signer::builder()
+            .region("us-east-1")
+            .service("service")
+            .mode(PayloadHashMode::StandardAws)
+            .build();
         let mut req = HttpRequest::new(
             reqwest::Client::new()
                 .post("https://example.amazonaws.com/")
