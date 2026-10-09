@@ -36,10 +36,16 @@ pub const S3_ACCESS_KEY_ID: &str = "s3.access-key-id";
 pub const S3_SECRET_ACCESS_KEY: &str = "s3.secret-access-key";
 /// S3 session token (required when using temporary credentials).
 pub const S3_SESSION_TOKEN: &str = "s3.session-token";
+/// Epoch-millisecond timestamp at which the vended S3 session token expires.
+pub const S3_SESSION_TOKEN_EXPIRES_AT_MS: &str = "s3.session-token-expires-at-ms";
 /// S3 region.
 pub const S3_REGION: &str = "s3.region";
 /// Region to use for the S3 client (takes precedence over [`S3_REGION`]).
 pub const CLIENT_REGION: &str = "client.region";
+/// Table property naming the endpoint a catalog serves to refresh vended AWS credentials.
+pub const AWS_REFRESH_CREDENTIALS_ENDPOINT: &str = "client.refresh-credentials-endpoint";
+/// Table property enabling refresh of vended AWS credentials. Defaults to `true`.
+pub const AWS_REFRESH_CREDENTIALS_ENABLED: &str = "client.refresh-credentials-enabled";
 /// S3 Path Style Access.
 pub const S3_PATH_STYLE_ACCESS: &str = "s3.path-style-access";
 /// S3 Server Side Encryption Type.
