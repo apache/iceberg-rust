@@ -27,6 +27,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[cfg(feature = "sigv4")]
+pub use aws_credential_types::Credentials;
 use iceberg::{Result, SessionContext};
 pub use oauth2::OAuth2Manager;
 #[cfg(feature = "sigv4")]

@@ -1,4 +1,5 @@
 pub mod iceberg_catalog_rest
+pub use iceberg_catalog_rest::Credentials
 pub enum iceberg_catalog_rest::HttpRequestBody<'a>
 pub iceberg_catalog_rest::HttpRequestBody::Buffered(&'a [u8])
 pub iceberg_catalog_rest::HttpRequestBody::Empty

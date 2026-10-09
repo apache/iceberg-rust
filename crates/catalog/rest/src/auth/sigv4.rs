@@ -22,9 +22,7 @@ use iceberg::{Error, ErrorKind, Result};
 use sha2::{Digest, Sha256};
 use typed_builder::TypedBuilder;
 
-/// Hex SHA-256 of the empty string.
-const EMPTY_BODY_HEX_SHA256: &str =
-    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+use super::Credentials;
 
 /// How the payload hash is encoded in the `x-amz-content-sha256` header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,10 +37,6 @@ pub enum PayloadHashMode {
     StandardAws,
 }
 
-fn hex_sha256(data: &[u8]) -> String {
-    encode_hex(&Sha256::digest(data))
-}
-
 fn encode_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -51,15 +45,15 @@ fn base64_encode(bytes: &[u8]) -> String {
     base64::engine::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
 }
 
-/// The `x-amz-content-sha256` value; `None` is no body at all.
-fn content_sha256_header(body: Option<&[u8]>, mode: PayloadHashMode) -> String {
-    match mode {
-        PayloadHashMode::StandardAws => hex_sha256(body.unwrap_or_default()),
-        PayloadHashMode::IcebergRest => match body {
-            None => EMPTY_BODY_HEX_SHA256.to_string(),
-            Some(body) => base64_encode(&Sha256::digest(body)),
-        },
-    }
+/// The content header and canonical payload hash, computed from one digest.
+fn payload_hashes(body: Option<&[u8]>, mode: PayloadHashMode) -> (String, String) {
+    let digest = Sha256::digest(body.unwrap_or_default());
+    let hex = encode_hex(&digest);
+    let header = match mode {
+        PayloadHashMode::IcebergRest if body.is_some() => base64_encode(&digest),
+        _ => hex.clone(),
+    };
+    (header, hex)
 }
 
 /// Signs REST catalog requests the way Iceberg Java's `RESTSigV4AuthSession`
@@ -89,8 +83,9 @@ impl SigV4Signer {
     /// Uses `credentials` as given and never refreshes them: resolve temporary
     /// ones from their provider before each call.
     ///
-    /// Fails on a streaming body or a non-UTF-8 header, which cannot be
-    /// canonicalized faithfully.
+    /// A streaming body or non-UTF-8 header is rejected before modifying the
+    /// request. Other signing errors may leave it partially modified; rebuild
+    /// the request before retrying.
     ///
     /// Send the result through a client that does not follow redirects: a
     /// redirect replays the signature, and across hosts reqwest drops
@@ -100,18 +95,14 @@ impl SigV4Signer {
     /// A `tracing` subscriber is muted for the call, but the `log` bridge (no
     /// subscriber, or `log-always`) still forwards those events, so keep
     /// `aws_sigv4` below trace level there.
-    pub fn sign(
-        &self,
-        request: &mut crate::HttpRequest,
-        credentials: &aws_credential_types::Credentials,
-    ) -> Result<()> {
+    pub fn sign(&self, request: &mut crate::HttpRequest, credentials: &Credentials) -> Result<()> {
         self.sign_at(request, credentials, Utc::now())
     }
 
     fn sign_at(
         &self,
         request: &mut crate::HttpRequest,
-        credentials: &aws_credential_types::Credentials,
+        credentials: &Credentials,
         now: DateTime<Utc>,
     ) -> Result<()> {
         use aws_sigv4::http_request::{SignableBody, SignableRequest, sign};
@@ -119,8 +110,9 @@ impl SigV4Signer {
         use tracing::level_filters::LevelFilter;
         use tracing::subscriber::NoSubscriber;
 
-        let body = signable_body(request)?;
-        let content_header = content_sha256_header(body.as_deref(), self.mode);
+        // Validate before relocating or replacing any caller headers.
+        signable_headers(request).try_for_each(|header| header.map(|_| ()))?;
+        let (content_header, payload_hash) = payload_hashes(signable_body(request)?, self.mode);
 
         convert_headers(request);
 
@@ -152,12 +144,12 @@ impl SigV4Signer {
             })?
             .into();
 
-        let headers = signable_headers(request)?;
+        let headers = signable_headers(request).collect::<Result<Vec<_>>>()?;
         let signable = SignableRequest::new(
             request.method().as_str(),
             request.url_str(),
             headers.into_iter(),
-            SignableBody::Bytes(body.as_deref().unwrap_or_default()),
+            SignableBody::Precomputed(payload_hash),
         )
         .map_err(|e| {
             Error::new(ErrorKind::DataInvalid, "request is not signable").with_source(e)
@@ -182,10 +174,10 @@ impl SigV4Signer {
 }
 
 /// The body to sign; as in Java, an absent body and an empty one differ.
-fn signable_body(request: &crate::HttpRequest) -> Result<Option<Vec<u8>>> {
+fn signable_body(request: &crate::HttpRequest) -> Result<Option<&[u8]>> {
     match request.body() {
         crate::HttpRequestBody::Empty => Ok(None),
-        crate::HttpRequestBody::Buffered(bytes) => Ok(Some(bytes.to_vec())),
+        crate::HttpRequestBody::Buffered(bytes) => Ok(Some(bytes)),
         crate::HttpRequestBody::Streaming => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             "cannot sign a streaming request body",
@@ -195,21 +187,17 @@ fn signable_body(request: &crate::HttpRequest) -> Result<Option<Vec<u8>>> {
 
 /// The headers to sign. A non-UTF-8 one is an error: skipping it would send
 /// it unsigned.
-fn signable_headers(request: &crate::HttpRequest) -> Result<Vec<(&str, &str)>> {
-    request
-        .headers()
-        .iter()
-        .map(|(n, v)| {
-            let v = v.to_str().map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("cannot sign non-UTF-8 header value for `{n}`"),
-                )
-                .with_source(e)
-            })?;
-            Ok((n.as_str(), v))
-        })
-        .collect()
+fn signable_headers(request: &crate::HttpRequest) -> impl Iterator<Item = Result<(&str, &str)>> {
+    request.headers().iter().map(|(n, v)| {
+        let v = v.to_str().map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("cannot sign non-UTF-8 header value for `{n}`"),
+            )
+            .with_source(e)
+        })?;
+        Ok((n.as_str(), v))
+    })
 }
 
 /// Drops userinfo, which the wire `Host` never carries, and rewrites `+` in the
@@ -244,7 +232,7 @@ fn signing_settings() -> aws_sigv4::http_request::SigningSettings {
     let mut settings = SigningSettings::default();
     settings.percent_encoding_mode = PercentEncodingMode::Double;
     settings.uri_path_normalization_mode = UriPathNormalizationMode::Enabled;
-    // We set the header ourselves: base64 for IcebergRest.
+    // We set and relocate the content hash ourselves, outside the instructions.
     settings.payload_checksum_kind = PayloadChecksumKind::NoHeader;
     let mut excluded = settings.excluded_headers.take().unwrap_or_default();
     excluded.extend([
@@ -336,7 +324,6 @@ const RELOCATED_SECURITY_TOKEN: reqwest::header::HeaderName =
 fn relocated_name(name: &str) -> Option<reqwest::header::HeaderName> {
     match name {
         n if n == AMZ_DATE => Some(RELOCATED_AMZ_DATE),
-        n if n == CONTENT_SHA256 => Some(RELOCATED_CONTENT_SHA256),
         n if n == SECURITY_TOKEN => Some(RELOCATED_SECURITY_TOKEN),
         _ => None,
     }
@@ -413,22 +400,19 @@ mod tests {
     }
 
     #[test]
-    fn content_sha256_header_iceberg_mode() {
-        let v = content_sha256_header(Some(b"hello"), PayloadHashMode::IcebergRest);
+    fn payload_hashes_iceberg_mode() {
+        let v = payload_hashes(Some(b"hello"), PayloadHashMode::IcebergRest).0;
         assert_eq!(v, "LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=");
-        let e = content_sha256_header(None, PayloadHashMode::IcebergRest);
+        let e = payload_hashes(None, PayloadHashMode::IcebergRest).0;
         assert_eq!(e, EMPTY_HEX);
     }
 
     /// As in Java, an empty body is hashed, unlike an absent one.
     #[test]
-    fn content_sha256_header_separates_an_empty_body_from_an_absent_one() {
-        let empty = content_sha256_header(Some(b""), PayloadHashMode::IcebergRest);
+    fn payload_hashes_separates_an_empty_body_from_an_absent_one() {
+        let empty = payload_hashes(Some(b""), PayloadHashMode::IcebergRest).0;
         assert_eq!(empty, "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=");
-        assert_ne!(
-            empty,
-            content_sha256_header(None, PayloadHashMode::IcebergRest)
-        );
+        assert_ne!(empty, payload_hashes(None, PayloadHashMode::IcebergRest).0);
     }
 
     /// The same, through `sign_at`.
@@ -459,8 +443,8 @@ mod tests {
     }
 
     #[test]
-    fn content_sha256_header_standard_mode() {
-        let v = content_sha256_header(Some(b"hello"), PayloadHashMode::StandardAws);
+    fn payload_hashes_standard_mode() {
+        let v = payload_hashes(Some(b"hello"), PayloadHashMode::StandardAws).0;
         assert_eq!(
             v,
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
@@ -487,8 +471,8 @@ mod tests {
             .build()
     }
 
-    fn test_credentials() -> aws_credential_types::Credentials {
-        aws_credential_types::Credentials::new("ak", "sk", None::<String>, None, "test")
+    fn test_credentials() -> Credentials {
+        Credentials::new("ak", "sk", None::<String>, None, "test")
     }
 
     /// Records every event field.
@@ -558,30 +542,40 @@ mod tests {
     }
 
     #[test]
-    fn a_non_utf8_header_value_is_rejected_rather_than_left_unsigned() {
+    fn a_non_utf8_header_is_rejected_without_changing_the_request() {
         use chrono::TimeZone;
 
         let signer = test_signer(PayloadHashMode::IcebergRest);
-        let mut req = HttpRequest::new(
-            reqwest::Client::new()
-                .get("https://rest.example.com/v1/config")
-                .header(
-                    "x-amz-meta-tenant",
-                    reqwest::header::HeaderValue::from_bytes(b"acme\xfa").unwrap(),
-                )
-                .build()
-                .unwrap(),
-        );
+        for name in ["x-amz-meta-tenant", "authorization", "x-amz-content-sha256"] {
+            let mut req = HttpRequest::new(reqwest::Request::new(
+                reqwest::Method::GET,
+                "https://user:pw@rest.example.com/v1/config?warehouse=my+catalog"
+                    .parse()
+                    .unwrap(),
+            ));
+            req.headers_mut()
+                .insert("authorization", "Bearer delegate-token".parse().unwrap());
+            req.headers_mut()
+                .insert("x-amz-content-sha256", "caller-hash".parse().unwrap());
+            req.headers_mut().insert(
+                name,
+                reqwest::header::HeaderValue::from_bytes(b"acme\xfa").unwrap(),
+            );
+            let headers = req.headers().clone();
+            let url = req.url().clone();
 
-        let err = signer
-            .sign_at(
-                &mut req,
-                &test_credentials(),
-                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
-            )
-            .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("x-amz-meta-tenant"), "{err}");
+            let err = signer
+                .sign_at(
+                    &mut req,
+                    &test_credentials(),
+                    Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
+                )
+                .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.message().contains(name), "{err}");
+            assert_eq!(req.headers(), &headers, "{name}");
+            assert_eq!(req.url(), &url, "{name}");
+        }
     }
 
     /// Relocation appends to a caller's `Original-x-amz-*` after signing, so it
@@ -656,9 +650,16 @@ mod tests {
 
         assert_eq!(req.url().username(), "");
         assert_eq!(req.url().password(), None);
-        assert_signature_is(
-            &req,
-            "0f4a3487bcff9dd16bf0a42d06c24dc49b2366e8a928dc9666f8424cf5b306b3",
+        let mut plain = HttpRequest::new(reqwest::Request::new(
+            reqwest::Method::GET,
+            "https://rest.example.com/v1/config".parse().unwrap(),
+        ));
+        signer
+            .sign_at(&mut plain, &test_credentials(), now)
+            .unwrap();
+        assert_eq!(
+            req.headers().get("authorization"),
+            plain.headers().get("authorization"),
         );
     }
 
@@ -677,9 +678,16 @@ mod tests {
 
         signer.sign_at(&mut req, &test_credentials(), now).unwrap();
 
-        assert_signature_is(
-            &req,
-            "0f4a3487bcff9dd16bf0a42d06c24dc49b2366e8a928dc9666f8424cf5b306b3",
+        let mut plain = HttpRequest::new(reqwest::Request::new(
+            reqwest::Method::GET,
+            "https://rest.example.com/v1/config".parse().unwrap(),
+        ));
+        signer
+            .sign_at(&mut plain, &test_credentials(), now)
+            .unwrap();
+        assert_eq!(
+            req.headers().get("authorization"),
+            plain.headers().get("authorization"),
         );
     }
 
@@ -688,7 +696,7 @@ mod tests {
         use chrono::TimeZone;
 
         // As in Java, conflicting caller values move to `Original-<name>`.
-        let creds = aws_credential_types::Credentials::new(
+        let creds = Credentials::new(
             "ak".to_string(),
             "sk".to_string(),
             Some("signer-token".to_string()),
@@ -879,7 +887,7 @@ mod tests {
         use chrono::TimeZone;
 
         // Both carry a credential, so `Debug` must not print them.
-        let creds = aws_credential_types::Credentials::new(
+        let creds = Credentials::new(
             "ak".to_string(),
             "sk".to_string(),
             Some("session-token".to_string()),
@@ -955,7 +963,7 @@ mod tests {
 
         // As a non-AWS catalog might vend: its own signing name, and STS
         // credentials.
-        let creds = aws_credential_types::Credentials::new(
+        let creds = Credentials::new(
             "STS.EXAMPLEACCESSKEYID",
             "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
             Some("example-session-token".to_string()),
@@ -1001,7 +1009,7 @@ mod tests {
     fn signs_request_iceberg_mode() {
         use chrono::TimeZone;
 
-        let creds = aws_credential_types::Credentials::new(
+        let creds = Credentials::new(
             "AKIDEXAMPLE",
             "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
             Some("SESSIONTOKEN".to_string()),
@@ -1054,7 +1062,7 @@ mod tests {
     fn signs_empty_body_and_all_headers() {
         use chrono::TimeZone;
 
-        let creds = aws_credential_types::Credentials::new(
+        let creds = Credentials::new(
             "AKIDEXAMPLE",
             "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
             None::<String>,
@@ -1103,7 +1111,7 @@ mod tests {
         // Needs a body: without one the header is the hex constant too.
         use chrono::TimeZone;
 
-        let creds = aws_credential_types::Credentials::new(
+        let creds = Credentials::new(
             "AKIDEXAMPLE",
             "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
             None::<String>,
@@ -1130,11 +1138,13 @@ mod tests {
         // The header carries base64 while the pinned signature covers hex.
         assert_eq!(
             req.headers().get("x-amz-content-sha256").unwrap(),
-            content_sha256_header(Some(body), PayloadHashMode::IcebergRest).as_str()
+            payload_hashes(Some(body), PayloadHashMode::IcebergRest)
+                .0
+                .as_str()
         );
         assert_ne!(
             req.headers().get("x-amz-content-sha256").unwrap(),
-            hex_sha256(body).as_str()
+            encode_hex(&Sha256::digest(body)).as_str()
         );
         assert_signature_is(
             &req,
@@ -1148,7 +1158,7 @@ mod tests {
     fn signatures_match_iceberg_java() {
         use chrono::TimeZone;
 
-        let creds = aws_credential_types::Credentials::new(
+        let creds = Credentials::new(
             "AKIDEXAMPLE",
             "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
             Some("example-session-token".to_string()),
@@ -1203,7 +1213,7 @@ mod tests {
     fn signs_host_with_non_default_port() {
         use chrono::TimeZone;
 
-        let creds = aws_credential_types::Credentials::new(
+        let creds = Credentials::new(
             "AKIDEXAMPLE",
             "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
             None::<String>,
@@ -1237,7 +1247,7 @@ mod tests {
     fn canonical_uri_is_aws_double_encoded() {
         use chrono::TimeZone;
 
-        let creds = aws_credential_types::Credentials::new(
+        let creds = Credentials::new(
             "AKIDEXAMPLE",
             "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
             None::<String>,
@@ -1271,7 +1281,7 @@ mod tests {
     fn standard_mode_matches_the_aws_test_suite() {
         use chrono::TimeZone;
 
-        let creds = aws_credential_types::Credentials::new(
+        let creds = Credentials::new(
             "AKIDEXAMPLE",
             "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
             None::<String>,
