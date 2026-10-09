@@ -1632,7 +1632,7 @@ impl SessionCatalog for RestSessionCatalog {
 
     async fn update_table(
         &self,
-        _context: &SessionContext,
+        context: &SessionContext,
         mut commit: TableCommit,
     ) -> Result<Table> {
         let client = self.client().await?;
