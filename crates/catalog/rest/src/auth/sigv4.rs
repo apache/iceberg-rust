@@ -60,7 +60,7 @@ fn payload_hashes(body: Option<&[u8]>, mode: PayloadHashMode) -> (String, String
 /// does. Carries no credentials, so one signer serves every session.
 ///
 /// Built with [`SigV4Signer::builder`].
-#[derive(Clone, TypedBuilder)]
+#[derive(Clone, Debug, TypedBuilder)]
 pub struct SigV4Signer {
     /// The signing region, e.g. `us-east-1`.
     #[builder(setter(into))]
@@ -83,9 +83,8 @@ impl SigV4Signer {
     /// Uses `credentials` as given and never refreshes them: resolve temporary
     /// ones from their provider before each call.
     ///
-    /// A streaming body or non-UTF-8 header is rejected before modifying the
-    /// request. Other signing errors may leave it partially modified; rebuild
-    /// the request before retrying.
+    /// On error, including for a streaming body or a non-UTF-8 header, the
+    /// request is left unchanged.
     ///
     /// Send the result through a client that does not follow redirects: a
     /// redirect replays the signature, and across hosts reqwest drops
@@ -105,12 +104,28 @@ impl SigV4Signer {
         credentials: &Credentials,
         now: DateTime<Utc>,
     ) -> Result<()> {
+        let headers = request.headers().clone();
+        let url = request.url().clone();
+        let signed = self.sign_in_place(request, credentials, now);
+        if signed.is_err() {
+            *request.headers_mut() = headers;
+            *request.url_mut() = url;
+        }
+        signed
+    }
+
+    fn sign_in_place(
+        &self,
+        request: &mut crate::HttpRequest,
+        credentials: &Credentials,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
         use aws_sigv4::http_request::{SignableBody, SignableRequest, sign};
         use aws_sigv4::sign::v4;
+        use tracing::dispatcher::Dispatch;
         use tracing::level_filters::LevelFilter;
-        use tracing::subscriber::NoSubscriber;
 
-        // Validate before relocating or replacing any caller headers.
+        // Before the content hash is displaced, which takes it out of signing.
         signable_headers(request).try_for_each(|header| header.map(|_| ()))?;
         let (content_header, payload_hash) = payload_hashes(signable_body(request)?, self.mode);
 
@@ -161,7 +176,7 @@ impl SigV4Signer {
         // tracing-core's `EXISTS` flag, which nothing clears, and with the
         // `log` feature tracing then stops forwarding events to `log` for good.
         let signed = if LevelFilter::current() == LevelFilter::TRACE {
-            tracing::subscriber::with_default(NoSubscriber::default(), || sign(signable, &params))
+            tracing::dispatcher::with_default(&Dispatch::none(), || sign(signable, &params))
         } else {
             sign(signable, &params)
         };
@@ -189,7 +204,7 @@ fn signable_body(request: &crate::HttpRequest) -> Result<Option<&[u8]>> {
 /// it unsigned.
 fn signable_headers(request: &crate::HttpRequest) -> impl Iterator<Item = Result<(&str, &str)>> {
     request.headers().iter().map(|(n, v)| {
-        let v = v.to_str().map_err(|e| {
+        let v = std::str::from_utf8(v.as_bytes()).map_err(|e| {
             Error::new(
                 ErrorKind::DataInvalid,
                 format!("cannot sign non-UTF-8 header value for `{n}`"),
@@ -349,18 +364,10 @@ fn relocate_conflicting(
     }
 }
 
-impl std::fmt::Debug for SigV4Signer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SigV4Signer")
-            .field("region", &self.region)
-            .field("service", &self.service)
-            .field("mode", &self.mode)
-            .finish_non_exhaustive()
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use chrono::TimeZone;
+
     use super::*;
     use crate::HttpRequest;
 
@@ -368,8 +375,6 @@ mod tests {
 
     #[test]
     fn signing_rewrites_an_ambiguous_plus_out_of_the_query() {
-        use chrono::TimeZone;
-
         // reqwest writes a space as `+`; signing makes it `%20`.
         let mut request = HttpRequest::new(
             reqwest::Client::new()
@@ -380,12 +385,8 @@ mod tests {
         );
         assert!(request.url().query().unwrap().contains("my+ns"));
 
-        let signer = SigV4Signer::builder()
-            .region("us-east-1")
-            .service("execute-api")
-            .mode(PayloadHashMode::StandardAws)
-            .build();
-        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+        let signer = test_signer(PayloadHashMode::StandardAws);
+        let now = test_time();
         signer
             .sign_at(&mut request, &test_credentials(), now)
             .unwrap();
@@ -409,19 +410,9 @@ mod tests {
 
     /// As in Java, an empty body is hashed, unlike an absent one.
     #[test]
-    fn payload_hashes_separates_an_empty_body_from_an_absent_one() {
-        let empty = payload_hashes(Some(b""), PayloadHashMode::IcebergRest).0;
-        assert_eq!(empty, "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=");
-        assert_ne!(empty, payload_hashes(None, PayloadHashMode::IcebergRest).0);
-    }
-
-    /// The same, through `sign_at`.
-    #[test]
     fn signing_separates_an_empty_body_from_an_absent_one() {
-        use chrono::TimeZone;
-
         let signer = test_signer(PayloadHashMode::IcebergRest);
-        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+        let now = test_time();
         let hash_of = |builder: reqwest::RequestBuilder| {
             let mut req = HttpRequest::new(builder.build().unwrap());
             signer.sign_at(&mut req, &test_credentials(), now).unwrap();
@@ -475,6 +466,52 @@ mod tests {
         Credentials::new("ak", "sk", None::<String>, None, "test")
     }
 
+    fn example_credentials(session_token: Option<&str>) -> Credentials {
+        Credentials::new(
+            "AKIDEXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            session_token.map(str::to_string),
+            None,
+            "test",
+        )
+    }
+
+    fn test_time() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap()
+    }
+
+    fn signed_headers(req: &HttpRequest) -> Vec<String> {
+        let auth = req
+            .headers()
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let signed = auth.split("SignedHeaders=").nth(1).unwrap();
+        let signed = signed.split(',').next().unwrap();
+        signed.split(';').map(str::to_string).collect()
+    }
+
+    /// Every header value as `(name, value)`, sorted.
+    fn header_list(req: &HttpRequest) -> Vec<(String, String)> {
+        let mut headers: Vec<_> = req
+            .headers()
+            .iter()
+            .map(|(n, v)| (n.to_string(), v.to_str().unwrap().to_string()))
+            .collect();
+        headers.sort();
+        headers
+    }
+
+    fn sorted_pairs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        let mut pairs: Vec<_> = pairs
+            .iter()
+            .map(|(n, v)| (n.to_string(), v.to_string()))
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
     /// Records every event field.
     #[derive(Clone, Default)]
     struct CapturedLog(std::sync::Arc<std::sync::Mutex<String>>);
@@ -504,8 +541,6 @@ mod tests {
     /// `aws_sigv4` does not redact `Original-Authorization` itself.
     #[test]
     fn signing_does_not_trace_a_relocated_bearer_token() {
-        use chrono::TimeZone;
-
         const TOKEN: &str = "Bearer topsecretdelegatetoken";
         let signer = test_signer(PayloadHashMode::IcebergRest);
         let mut req = HttpRequest::new(
@@ -524,27 +559,19 @@ mod tests {
                 tracing::level_filters::LevelFilter::TRACE
             );
             signer
-                .sign_at(
-                    &mut req,
-                    &test_credentials(),
-                    Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
-                )
+                .sign_at(&mut req, &test_credentials(), test_time())
                 .unwrap();
-            // Proves the capture works.
             tracing::trace!(canary = "subscriber-is-live");
         });
 
         let captured = log.0.lock().unwrap().clone();
         assert!(captured.contains("subscriber-is-live"), "captured nothing");
         assert!(!captured.contains(TOKEN), "{captured}");
-        // The token still travels, it is just not logged.
         assert_eq!(req.headers().get(RELOCATED_AUTHORIZATION).unwrap(), TOKEN);
     }
 
     #[test]
     fn a_non_utf8_header_is_rejected_without_changing_the_request() {
-        use chrono::TimeZone;
-
         let signer = test_signer(PayloadHashMode::IcebergRest);
         for name in ["x-amz-meta-tenant", "authorization", "x-amz-content-sha256"] {
             let mut req = HttpRequest::new(reqwest::Request::new(
@@ -565,11 +592,7 @@ mod tests {
             let url = req.url().clone();
 
             let err = signer
-                .sign_at(
-                    &mut req,
-                    &test_credentials(),
-                    Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
-                )
+                .sign_at(&mut req, &test_credentials(), test_time())
                 .unwrap_err();
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
             assert!(err.message().contains(name), "{err}");
@@ -578,12 +601,63 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_non_ascii_utf8_header_is_signed() {
+        let signer = test_signer(PayloadHashMode::StandardAws);
+        let mut req = HttpRequest::new(reqwest::Request::new(
+            reqwest::Method::GET,
+            "https://rest.example.com/v1/config".parse().unwrap(),
+        ));
+        req.headers_mut().insert(
+            "x-tenant",
+            reqwest::header::HeaderValue::from_bytes("Zürich".as_bytes()).unwrap(),
+        );
+
+        signer
+            .sign_at(&mut req, &test_credentials(), test_time())
+            .unwrap();
+
+        assert_eq!(signed_headers(&req), [
+            "host",
+            "x-amz-content-sha256",
+            "x-amz-date",
+            "x-tenant"
+        ]);
+    }
+
+    #[test]
+    fn a_signing_failure_after_relocation_restores_the_request() {
+        let signer = test_signer(PayloadHashMode::IcebergRest);
+        // Longer than `http::Uri` accepts, so signing fails after the headers
+        // and query were rewritten.
+        let url = format!(
+            "https://rest.example.com/v1/config?warehouse=my+catalog&pad={}",
+            "a".repeat(70_000)
+        );
+        let mut req = HttpRequest::new(
+            reqwest::Client::new()
+                .get(url)
+                .header("authorization", "Bearer delegate-token")
+                .header("x-amz-content-sha256", "caller-hash")
+                .build()
+                .unwrap(),
+        );
+        let headers = req.headers().clone();
+        let url = req.url().clone();
+
+        let err = signer
+            .sign_at(&mut req, &test_credentials(), test_time())
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid, "{err}");
+        assert_eq!(req.headers(), &headers);
+        assert_eq!(req.url(), &url);
+    }
+
     /// Relocation appends to a caller's `Original-x-amz-*` after signing, so it
     /// must stay unsigned.
     #[test]
     fn a_caller_supplied_relocation_header_is_not_signed() {
-        use chrono::TimeZone;
-
         let signer = test_signer(PayloadHashMode::StandardAws);
         let mut req = HttpRequest::new(
             reqwest::Client::new()
@@ -595,33 +669,14 @@ mod tests {
         );
 
         signer
-            .sign_at(
-                &mut req,
-                &test_credentials(),
-                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
-            )
+            .sign_at(&mut req, &test_credentials(), test_time())
             .unwrap();
 
-        let auth = req
-            .headers()
-            .get("authorization")
-            .unwrap()
-            .to_str()
-            .unwrap();
-        let signed = auth
-            .split("SignedHeaders=")
-            .nth(1)
-            .unwrap()
-            .split(',')
-            .next()
-            .unwrap();
-        assert!(
-            !signed
-                .split(';')
-                .any(|h| h == "original-x-amz-content-sha256"),
-            "{signed}"
-        );
-        // Both values still travel, they are just outside the signature.
+        assert_eq!(signed_headers(&req), [
+            "host",
+            "x-amz-content-sha256",
+            "x-amz-date"
+        ]);
         let relocated: Vec<_> = req
             .headers()
             .get_all("original-x-amz-content-sha256")
@@ -633,8 +688,6 @@ mod tests {
 
     #[test]
     fn userinfo_is_stripped_before_signing() {
-        use chrono::TimeZone;
-
         // A hand-built request can carry userinfo; the wire `Host` never does.
         let signer = test_signer(PayloadHashMode::StandardAws);
         let mut req = HttpRequest::new(reqwest::Request::new(
@@ -644,7 +697,7 @@ mod tests {
                 .unwrap(),
         ));
         assert_eq!(req.url().username(), "user");
-        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+        let now = test_time();
 
         signer.sign_at(&mut req, &test_credentials(), now).unwrap();
 
@@ -665,8 +718,6 @@ mod tests {
 
     #[test]
     fn a_doubled_slash_in_the_path_is_normalized() {
-        use chrono::TimeZone;
-
         // A trailing slash on the catalog URI gives `//v1/...`, which
         // `Aws4Signer` collapses.
         let signer = test_signer(PayloadHashMode::StandardAws);
@@ -674,7 +725,7 @@ mod tests {
             reqwest::Method::GET,
             "https://rest.example.com//v1//config".parse().unwrap(),
         ));
-        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+        let now = test_time();
 
         signer.sign_at(&mut req, &test_credentials(), now).unwrap();
 
@@ -693,8 +744,6 @@ mod tests {
 
     #[test]
     fn caller_headers_the_signer_overwrites_are_relocated() {
-        use chrono::TimeZone;
-
         // As in Java, conflicting caller values move to `Original-<name>`.
         let creds = Credentials::new(
             "ak".to_string(),
@@ -703,11 +752,7 @@ mod tests {
             None,
             "test",
         );
-        let signer = SigV4Signer::builder()
-            .region("us-east-1")
-            .service("execute-api")
-            .mode(PayloadHashMode::StandardAws)
-            .build();
+        let signer = test_signer(PayloadHashMode::StandardAws);
         let mut req = HttpRequest::new(
             reqwest::Client::new()
                 .get("https://rest.example.com/v1/config")
@@ -719,48 +764,35 @@ mod tests {
                 .unwrap(),
         );
 
-        signer
-            .sign_at(
-                &mut req,
-                &creds,
-                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
-            )
-            .unwrap();
+        signer.sign_at(&mut req, &creds, test_time()).unwrap();
 
-        let h = req.headers();
         assert_eq!(
-            h.get("original-authorization").unwrap(),
-            "Bearer caller-token"
+            header_list(&req),
+            sorted_pairs(&[
+                (
+                    "authorization",
+                    "AWS4-HMAC-SHA256 Credential=ak/20150830/us-east-1/execute-api/aws4_request, \
+                     SignedHeaders=host;original-authorization;x-amz-content-sha256;x-amz-date;\
+                     x-amz-security-token, \
+                     Signature=87560cb735277b284a547d63f57cfe3a721f9bce0b08a9402a58d754d2ed707c"
+                ),
+                ("original-authorization", "Bearer caller-token"),
+                ("original-x-amz-content-sha256", "caller-hash"),
+                ("original-x-amz-date", "19700101T000000Z"),
+                ("original-x-amz-security-token", "caller-session"),
+                ("x-amz-content-sha256", EMPTY_HEX),
+                ("x-amz-date", "20150830T123600Z"),
+                ("x-amz-security-token", "signer-token"),
+            ])
         );
-        assert_eq!(h.get("original-x-amz-date").unwrap(), "19700101T000000Z");
-        assert_eq!(
-            h.get("original-x-amz-content-sha256").unwrap(),
-            "caller-hash"
-        );
-        let token = h.get("original-x-amz-security-token").unwrap();
-        assert_eq!(token, "caller-session");
         // Relocated originals may be credentials themselves.
-        assert!(token.is_sensitive());
-        assert!(
-            h.get("original-x-amz-content-sha256")
-                .unwrap()
-                .is_sensitive()
-        );
-        // And the signer's own values took their place.
-        assert!(
-            h.get("authorization")
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .starts_with("AWS4-HMAC-SHA256 ")
-        );
-        assert_eq!(h.get("x-amz-security-token").unwrap(), "signer-token");
+        for relocated in [RELOCATED_SECURITY_TOKEN, RELOCATED_CONTENT_SHA256] {
+            assert!(req.headers().get(relocated).unwrap().is_sensitive());
+        }
     }
 
     #[test]
     fn an_existing_authorization_is_never_signed() {
-        use chrono::TimeZone;
-
         // The signer replaces `authorization`, and a proxy may rewrite
         // `user-agent`, so neither is signed.
         let signer = test_signer(PayloadHashMode::StandardAws);
@@ -774,41 +806,20 @@ mod tests {
         );
 
         signer
-            .sign_at(
-                &mut req,
-                &test_credentials(),
-                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
-            )
+            .sign_at(&mut req, &test_credentials(), test_time())
             .unwrap();
 
-        let auth = req
-            .headers()
-            .get("authorization")
-            .unwrap()
-            .to_str()
-            .unwrap();
-        let signed = auth
-            .split("SignedHeaders=")
-            .nth(1)
-            .unwrap()
-            .split(',')
-            .next()
-            .unwrap();
-        for excluded in ["authorization", "user-agent"] {
-            assert!(!signed.split(';').any(|h| h == excluded), "{signed}");
-        }
-        // The relocated copy is signed: it is renamed before signing.
-        assert!(
-            signed.split(';').any(|h| h == "original-authorization"),
-            "{signed}"
-        );
+        assert_eq!(signed_headers(&req), [
+            "host",
+            "original-authorization",
+            "x-amz-content-sha256",
+            "x-amz-date"
+        ]);
     }
 
     /// As in Java, every `Authorization` value is relocated, and stays redacted.
     #[test]
     fn every_repeated_authorization_is_relocated_and_kept_sensitive() {
-        use chrono::TimeZone;
-
         let signer = test_signer(PayloadHashMode::StandardAws);
         let mut req = HttpRequest::new(
             reqwest::Client::new()
@@ -820,11 +831,7 @@ mod tests {
         );
 
         signer
-            .sign_at(
-                &mut req,
-                &test_credentials(),
-                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
-            )
+            .sign_at(&mut req, &test_credentials(), test_time())
             .unwrap();
 
         let relocated: Vec<_> = req
@@ -840,8 +847,6 @@ mod tests {
 
     #[test]
     fn hop_by_hop_headers_are_not_signed() {
-        use chrono::TimeZone;
-
         // A proxy may drop or rewrite these, so they are not signed.
         let signer = test_signer(PayloadHashMode::StandardAws);
         let mut req = HttpRequest::new(
@@ -854,28 +859,16 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+        let now = test_time();
 
         signer.sign_at(&mut req, &test_credentials(), now).unwrap();
 
-        let auth = req
-            .headers()
-            .get("authorization")
-            .unwrap()
-            .to_str()
-            .unwrap();
-        let signed = auth
-            .split("SignedHeaders=")
-            .nth(1)
-            .unwrap()
-            .split(',')
-            .next()
-            .unwrap();
-        for skipped in ["expect", "connection", "x-forwarded-for"] {
-            assert!(!signed.split(';').any(|h| h == skipped), "{signed}");
-        }
-        // An ordinary caller header is still signed.
-        assert!(signed.split(';').any(|h| h == "x-tenant"), "{signed}");
+        assert_eq!(signed_headers(&req), [
+            "host",
+            "x-amz-content-sha256",
+            "x-amz-date",
+            "x-tenant"
+        ]);
         assert_signature_is(
             &req,
             "f938221412ed6b55cf3db380ce6ded476419ad3d7db4c76d932031c98465ce79",
@@ -884,8 +877,6 @@ mod tests {
 
     #[test]
     fn signed_credentials_are_marked_sensitive() {
-        use chrono::TimeZone;
-
         // Both carry a credential, so `Debug` must not print them.
         let creds = Credentials::new(
             "ak".to_string(),
@@ -894,11 +885,7 @@ mod tests {
             None,
             "test",
         );
-        let signer = SigV4Signer::builder()
-            .region("us-east-1")
-            .service("execute-api")
-            .mode(PayloadHashMode::StandardAws)
-            .build();
+        let signer = test_signer(PayloadHashMode::StandardAws);
         let mut req = HttpRequest::new(
             reqwest::Client::new()
                 .get("https://rest.example.com/v1/config")
@@ -906,13 +893,7 @@ mod tests {
                 .unwrap(),
         );
 
-        signer
-            .sign_at(
-                &mut req,
-                &creds,
-                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
-            )
-            .unwrap();
+        signer.sign_at(&mut req, &creds, test_time()).unwrap();
 
         assert!(req.headers().get("authorization").unwrap().is_sensitive());
         assert!(
@@ -926,41 +907,7 @@ mod tests {
     }
 
     #[test]
-    fn a_caller_content_hash_is_relocated_not_dropped() {
-        use chrono::TimeZone;
-
-        // The caller's value moves aside rather than vanishing.
-        let signer = test_signer(PayloadHashMode::StandardAws);
-        let mut req = HttpRequest::new(
-            reqwest::Client::new()
-                .get("https://rest.example.com/v1/config")
-                .header("x-amz-content-sha256", "caller-supplied")
-                .build()
-                .unwrap(),
-        );
-
-        signer
-            .sign_at(
-                &mut req,
-                &test_credentials(),
-                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
-            )
-            .unwrap();
-
-        assert_eq!(
-            req.headers().get("original-x-amz-content-sha256").unwrap(),
-            "caller-supplied"
-        );
-        assert_eq!(
-            req.headers().get("x-amz-content-sha256").unwrap(),
-            EMPTY_HEX
-        );
-    }
-
-    #[test]
     fn signs_with_a_non_default_service_and_session_token() {
-        use chrono::TimeZone;
-
         // As a non-AWS catalog might vend: its own signing name, and STS
         // credentials.
         let creds = Credentials::new(
@@ -1007,15 +954,7 @@ mod tests {
 
     #[test]
     fn signs_request_iceberg_mode() {
-        use chrono::TimeZone;
-
-        let creds = Credentials::new(
-            "AKIDEXAMPLE",
-            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-            Some("SESSIONTOKEN".to_string()),
-            None,
-            "test",
-        );
+        let creds = example_credentials(Some("SESSIONTOKEN"));
         let signer = SigV4Signer::builder()
             .region("us-east-1")
             .service("glue")
@@ -1030,29 +969,24 @@ mod tests {
                 .unwrap(),
         );
 
-        signer
-            .sign_at(
-                &mut req,
-                &creds,
-                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
-            )
-            .unwrap();
+        signer.sign_at(&mut req, &creds, test_time()).unwrap();
 
-        let h = req.headers();
-        assert!(
-            h.get("authorization")
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .starts_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/")
-        );
-        assert_eq!(h.get("x-amz-date").unwrap(), "20150830T123600Z");
-        assert_eq!(h.get("x-amz-security-token").unwrap(), "SESSIONTOKEN");
-        let csha = h.get("x-amz-content-sha256").unwrap().to_str().unwrap();
-        assert_eq!(csha, "RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=");
-        assert_signature_is(
-            &req,
-            "effad6acde583dd14ba7aff52b2b83776a54421c010fe82067f166819057cb32",
+        assert_eq!(
+            header_list(&req),
+            sorted_pairs(&[
+                (
+                    "authorization",
+                    "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/glue/aws4_request, \
+                     SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, \
+                     Signature=effad6acde583dd14ba7aff52b2b83776a54421c010fe82067f166819057cb32"
+                ),
+                (
+                    "x-amz-content-sha256",
+                    "RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o="
+                ),
+                ("x-amz-date", "20150830T123600Z"),
+                ("x-amz-security-token", "SESSIONTOKEN"),
+            ])
         );
     }
 
@@ -1060,15 +994,7 @@ mod tests {
     /// (Java's `authenticateWithoutBody`).
     #[test]
     fn signs_empty_body_and_all_headers() {
-        use chrono::TimeZone;
-
-        let creds = Credentials::new(
-            "AKIDEXAMPLE",
-            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-            None::<String>,
-            None,
-            "test",
-        );
+        let creds = example_credentials(None);
         let signer = SigV4Signer::builder()
             .region("us-east-1")
             .service("glue")
@@ -1084,45 +1010,30 @@ mod tests {
                 .unwrap(),
         );
 
-        signer
-            .sign_at(
-                &mut req,
-                &creds,
-                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
-            )
-            .unwrap();
+        signer.sign_at(&mut req, &creds, test_time()).unwrap();
 
-        let h = req.headers();
-        assert_eq!(h.get("x-amz-content-sha256").unwrap(), EMPTY_HEX);
-        assert!(!h.contains_key("x-amz-security-token"));
-        let auth = h.get("authorization").unwrap().to_str().unwrap();
-        assert!(auth.starts_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/"));
-        assert!(auth.contains(
-            "SignedHeaders=content-encoding;content-type;host;x-amz-content-sha256;x-amz-date"
-        ));
-        assert_signature_is(
-            &req,
-            "eaef7eb88d9cd810031684748671d8a3c9394ea5168622a212ed041b670b9777",
+        assert_eq!(
+            header_list(&req),
+            sorted_pairs(&[
+                (
+                    "authorization",
+                    "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/glue/aws4_request, \
+                     SignedHeaders=content-encoding;content-type;host;x-amz-content-sha256;x-amz-date, \
+                     Signature=eaef7eb88d9cd810031684748671d8a3c9394ea5168622a212ed041b670b9777"
+                ),
+                ("content-encoding", "gzip"),
+                ("content-type", "application/json"),
+                ("x-amz-content-sha256", EMPTY_HEX),
+                ("x-amz-date", "20150830T123600Z"),
+            ])
         );
     }
 
     #[test]
     fn iceberg_mode_signs_the_hex_payload_hash_not_the_base64_header() {
         // Needs a body: without one the header is the hex constant too.
-        use chrono::TimeZone;
-
-        let creds = Credentials::new(
-            "AKIDEXAMPLE",
-            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-            None::<String>,
-            None,
-            "test",
-        );
-        let signer = SigV4Signer::builder()
-            .region("us-east-1")
-            .service("execute-api")
-            .mode(PayloadHashMode::IcebergRest)
-            .build();
+        let creds = example_credentials(None);
+        let signer = test_signer(PayloadHashMode::IcebergRest);
         let body = br#"{"namespace":["ns"]}"#;
         let mut req = HttpRequest::new(
             reqwest::Client::new()
@@ -1131,11 +1042,10 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+        let now = test_time();
 
         signer.sign_at(&mut req, &creds, now).unwrap();
 
-        // The header carries base64 while the pinned signature covers hex.
         assert_eq!(
             req.headers().get("x-amz-content-sha256").unwrap(),
             payload_hashes(Some(body), PayloadHashMode::IcebergRest)
@@ -1156,15 +1066,7 @@ mod tests {
     /// these requests, given these credentials as `rest.*` properties.
     #[test]
     fn signatures_match_iceberg_java() {
-        use chrono::TimeZone;
-
-        let creds = Credentials::new(
-            "AKIDEXAMPLE",
-            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-            Some("example-session-token".to_string()),
-            None,
-            "test",
-        );
+        let creds = example_credentials(Some("example-session-token"));
         let signer = test_signer(PayloadHashMode::IcebergRest);
         let now = Utc.with_ymd_and_hms(2026, 10, 2, 11, 40, 30).unwrap();
         let client = reqwest::Client::new();
@@ -1211,15 +1113,7 @@ mod tests {
     /// The signed `host` keeps a non-default port, as on the wire.
     #[test]
     fn signs_host_with_non_default_port() {
-        use chrono::TimeZone;
-
-        let creds = Credentials::new(
-            "AKIDEXAMPLE",
-            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-            None::<String>,
-            None,
-            "test",
-        );
+        let creds = example_credentials(None);
         let signer = SigV4Signer::builder()
             .region("us-east-1")
             .service("glue")
@@ -1232,7 +1126,7 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+        let now = test_time();
 
         signer.sign_at(&mut req, &creds, now).unwrap();
         assert_signature_is(
@@ -1245,15 +1139,7 @@ mod tests {
     /// and `%2C` becomes `%252C`.
     #[test]
     fn canonical_uri_is_aws_double_encoded() {
-        use chrono::TimeZone;
-
-        let creds = Credentials::new(
-            "AKIDEXAMPLE",
-            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-            None::<String>,
-            None,
-            "test",
-        );
+        let creds = example_credentials(None);
         let signer = SigV4Signer::builder()
             .region("us-east-1")
             .service("glue")
@@ -1266,7 +1152,7 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let now = Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap();
+        let now = test_time();
 
         signer.sign_at(&mut req, &creds, now).unwrap();
         assert_signature_is(
@@ -1279,15 +1165,7 @@ mod tests {
     /// hex `x-amz-content-sha256` like this mode.
     #[test]
     fn standard_mode_matches_the_aws_test_suite() {
-        use chrono::TimeZone;
-
-        let creds = Credentials::new(
-            "AKIDEXAMPLE",
-            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-            None::<String>,
-            None,
-            "test",
-        );
+        let creds = example_credentials(None);
         let signer = SigV4Signer::builder()
             .region("us-east-1")
             .service("service")
@@ -1303,13 +1181,7 @@ mod tests {
                 .unwrap(),
         );
 
-        signer
-            .sign_at(
-                &mut req,
-                &creds,
-                Utc.with_ymd_and_hms(2015, 8, 30, 12, 36, 0).unwrap(),
-            )
-            .unwrap();
+        signer.sign_at(&mut req, &creds, test_time()).unwrap();
 
         assert_eq!(
             req.headers().get("x-amz-content-sha256").unwrap(),

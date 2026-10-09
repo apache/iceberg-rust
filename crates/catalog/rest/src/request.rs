@@ -110,10 +110,6 @@ pub enum HttpRequestBody<'a> {
 impl<'a> HttpRequestBody<'a> {
     /// The signable bytes: empty for [`Self::Empty`], the buffer for
     /// [`Self::Buffered`], and `None` for [`Self::Streaming`].
-    ///
-    /// An absent body and an empty one both give `&[]`. Where the two must
-    /// differ, as in Iceberg Java's SigV4 payload hashing, match on the
-    /// variants instead.
     pub fn as_bytes(&self) -> Option<&'a [u8]> {
         match self {
             HttpRequestBody::Empty => Some(&[]),
