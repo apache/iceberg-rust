@@ -73,9 +73,7 @@ use crate::error::Result;
 use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
-pub use crate::transaction::append::{
-    FastAppendAction, IDEMPOTENCY_KEY_SUMMARY_PROPERTY, snapshot_with_idempotency_key,
-};
+pub use crate::transaction::append::{FastAppendAction, IDEMPOTENCY_KEY_SUMMARY_PROPERTY};
 pub use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
 pub use crate::transaction::sort_order::ReplaceSortOrderAction;
 pub use crate::transaction::update_location::UpdateLocationAction;

@@ -3353,7 +3353,6 @@ pub trait iceberg::transaction::ApplyTransactionAction
 pub fn iceberg::transaction::ApplyTransactionAction::apply(self, tx: iceberg::transaction::Transaction) -> iceberg::Result<iceberg::transaction::Transaction>
 impl<T: TransactionAction + 'static> iceberg::transaction::ApplyTransactionAction for T
 pub fn T::apply(self, tx: iceberg::transaction::Transaction) -> core::result::Result<iceberg::transaction::Transaction, iceberg::Error>
-pub fn iceberg::transaction::snapshot_with_idempotency_key(table: &iceberg::table::Table, key: &str) -> core::option::Option<iceberg::spec::SnapshotRef>
 pub mod iceberg::transform
 pub trait iceberg::transform::TransformFunction: core::marker::Send + core::marker::Sync + core::fmt::Debug
 pub fn iceberg::transform::TransformFunction::transform(&self, input: arrow_array::array::ArrayRef) -> iceberg::Result<arrow_array::array::ArrayRef>
