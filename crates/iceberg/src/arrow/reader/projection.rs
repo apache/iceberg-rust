@@ -422,7 +422,7 @@ pub(super) fn apply_name_mapping_to_arrow_schema(
         "Schema already has field IDs - name mapping should not be applied"
     );
 
-    let mut field_ids_by_name = HashMap::new();
+    let mut field_ids_by_name = HashMap::with_capacity(name_mapping.fields().len());
     for mapped_field in name_mapping.fields() {
         for name in mapped_field.names() {
             // Preserve the existing first-match behavior for duplicate aliases.
@@ -543,7 +543,8 @@ mod tests {
             MappedField::new(Some(4), vec!["name".to_string()], vec![]),
         ]);
 
-        let mapped = super::apply_name_mapping_to_arrow_schema(arrow_schema, &name_mapping).unwrap();
+        let mapped =
+            super::apply_name_mapping_to_arrow_schema(arrow_schema, &name_mapping).unwrap();
 
         assert_eq!(
             mapped.fields()[0]

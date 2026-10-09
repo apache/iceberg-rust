@@ -682,7 +682,6 @@ mod tests {
         }
 
         assert_eq!(ids, (200..300).collect::<Vec<_>>());
-
     }
 
     /// A single data file split into multiple sub-row-group byte ranges (as Spark/Iceberg
