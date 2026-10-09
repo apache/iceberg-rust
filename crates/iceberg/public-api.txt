@@ -1693,16 +1693,15 @@ impl core::clone::Clone for iceberg::spec::PrimitiveLiteral
 pub fn iceberg::spec::PrimitiveLiteral::clone(&self) -> iceberg::spec::PrimitiveLiteral
 impl core::cmp::Eq for iceberg::spec::PrimitiveLiteral
 impl core::cmp::PartialEq for iceberg::spec::PrimitiveLiteral
-pub fn iceberg::spec::PrimitiveLiteral::eq(&self, other: &iceberg::spec::PrimitiveLiteral) -> bool
+pub fn iceberg::spec::PrimitiveLiteral::eq(&self, other: &Self) -> bool
 impl core::cmp::PartialOrd for iceberg::spec::PrimitiveLiteral
-pub fn iceberg::spec::PrimitiveLiteral::partial_cmp(&self, other: &iceberg::spec::PrimitiveLiteral) -> core::option::Option<core::cmp::Ordering>
+pub fn iceberg::spec::PrimitiveLiteral::partial_cmp(&self, other: &Self) -> core::option::Option<core::cmp::Ordering>
 impl core::convert::From<iceberg::spec::Datum> for iceberg::spec::PrimitiveLiteral
 pub fn iceberg::spec::PrimitiveLiteral::from(value: iceberg::spec::Datum) -> Self
 impl core::fmt::Debug for iceberg::spec::PrimitiveLiteral
 pub fn iceberg::spec::PrimitiveLiteral::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for iceberg::spec::PrimitiveLiteral
 pub fn iceberg::spec::PrimitiveLiteral::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
-impl core::marker::StructuralPartialEq for iceberg::spec::PrimitiveLiteral
 pub enum iceberg::spec::PrimitiveType
 pub iceberg::spec::PrimitiveType::Binary
 pub iceberg::spec::PrimitiveType::Boolean

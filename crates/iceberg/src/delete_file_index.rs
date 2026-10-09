@@ -593,6 +593,38 @@ mod tests {
     }
 
     #[test]
+    fn test_partition_scoped_deletes_distinguish_signed_zero() {
+        let neg_zero = Struct::from_iter([Some(Literal::double(-0.0))]);
+        let pos_zero = Struct::from_iter([Some(Literal::double(0.0))]);
+        let spec_id = 1;
+
+        let delete_contexts: Vec<DeleteFileContext> = [
+            build_partitioned_eq_delete(&neg_zero, spec_id),
+            build_partitioned_pos_delete(&neg_zero, spec_id),
+        ]
+        .iter()
+        .map(|delete| DeleteFileContext {
+            manifest_entry: build_added_manifest_entry(4, delete).into(),
+            partition_spec_id: spec_id,
+        })
+        .collect();
+
+        let delete_file_index = PopulatedDeleteFileIndex::new(delete_contexts).unwrap();
+
+        let deletes_for_neg_zero = delete_file_index
+            .get_deletes_for_data_file(&build_partitioned_data_file(&neg_zero, spec_id), Some(0))
+            .unwrap();
+        assert_eq!(deletes_for_neg_zero.len(), 2);
+
+        // -0.0 and 0.0 are different partitions, as in iceberg-java, so deletes written
+        // for one do not apply to data files in the other.
+        let deletes_for_pos_zero = delete_file_index
+            .get_deletes_for_data_file(&build_partitioned_data_file(&pos_zero, spec_id), Some(0))
+            .unwrap();
+        assert!(deletes_for_pos_zero.is_empty());
+    }
+
+    #[test]
     fn test_pos_delete_with_referenced_data_file_applies_only_to_that_file() {
         let data_file_a = build_unpartitioned_data_file();
         let data_file_b = build_unpartitioned_data_file();

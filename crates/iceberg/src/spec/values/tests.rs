@@ -17,6 +17,8 @@
 
 //! Tests for Iceberg value types
 
+use std::collections::HashSet;
+
 use apache_avro::to_value;
 use apache_avro::types::Value;
 use ordered_float::OrderedFloat;
@@ -1532,6 +1534,63 @@ fn test_negative_zero_less_than_positive_zero() {
             "IEEE 754 totalOrder requires -0.0 < +0.0 on F64"
         );
     }
+}
+
+#[test]
+fn test_signed_zero_literals_are_distinct() {
+    for (neg_zero, pos_zero) in [
+        (
+            PrimitiveLiteral::Float(OrderedFloat(-0.0)),
+            PrimitiveLiteral::Float(OrderedFloat(0.0)),
+        ),
+        (
+            PrimitiveLiteral::Double(OrderedFloat(-0.0)),
+            PrimitiveLiteral::Double(OrderedFloat(0.0)),
+        ),
+    ] {
+        assert_ne!(neg_zero, pos_zero);
+        assert_eq!(
+            neg_zero.partial_cmp(&pos_zero),
+            Some(std::cmp::Ordering::Less)
+        );
+        assert_eq!(HashSet::from([neg_zero, pos_zero]).len(), 2);
+    }
+
+    assert_ne!(Datum::float(-0.0_f32), Datum::float(0.0_f32));
+    assert_ne!(Datum::double(-0.0), Datum::double(0.0));
+
+    // A partition tuple is a `Struct`, which the partitioned writers use as a map key.
+    let partitions = HashSet::from([
+        Struct::from_iter([Some(Literal::double(-0.0))]),
+        Struct::from_iter([Some(Literal::double(0.0))]),
+    ]);
+    assert_eq!(partitions.len(), 2);
+}
+
+#[test]
+fn test_nan_literals_are_equal() {
+    for (nan, other_nan) in [
+        (
+            PrimitiveLiteral::Float(OrderedFloat(f32::NAN)),
+            PrimitiveLiteral::Float(OrderedFloat(-f32::NAN)),
+        ),
+        (
+            PrimitiveLiteral::Double(OrderedFloat(f64::NAN)),
+            PrimitiveLiteral::Double(OrderedFloat(-f64::NAN)),
+        ),
+    ] {
+        assert_eq!(nan, other_nan);
+        assert_eq!(nan.partial_cmp(&other_nan), Some(std::cmp::Ordering::Equal));
+        assert_eq!(HashSet::from([nan, other_nan]).len(), 1);
+    }
+}
+
+#[test]
+fn test_primitive_literal_eq_across_variants() {
+    assert_eq!(PrimitiveLiteral::AboveMax, PrimitiveLiteral::AboveMax);
+    assert_eq!(PrimitiveLiteral::BelowMin, PrimitiveLiteral::BelowMin);
+    assert_ne!(PrimitiveLiteral::AboveMax, PrimitiveLiteral::BelowMin);
+    assert_ne!(PrimitiveLiteral::Int(1), PrimitiveLiteral::Long(1));
 }
 
 /// Test Date deserialization from JSON as number (days since epoch).
