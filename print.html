@@ -1225,7 +1225,7 @@ You may use generative AI to assist making this update, but please review the pr
 The changelog should reflect a summary of each commit in the new release.</p>
 <h4 id="verify-dependency-licenses"><a class="header" href="#verify-dependency-licenses">Verify dependency licenses</a></h4>
 <p>Run the following command to verify the licenses meet the project's policy.</p>
-<pre><code class="language-shell">dev/release/dependencies.sh check
+<pre><code class="language-shell">python3 dev/release/licenses.py dependencies check
 </code></pre>
 <h4 id="open-pull-request"><a class="header" href="#open-pull-request">Open pull request</a></h4>
 <p>Open a pull request with all the changes.
