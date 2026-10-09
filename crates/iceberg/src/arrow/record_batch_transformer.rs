@@ -283,16 +283,15 @@ impl PromotePlan {
                             sorted: *sorted,
                         })
                     }
-                    _ => Err(Error::new(
-                        ErrorKind::Unexpected,
-                        format!(
-                            "expected struct-typed map entries, got {source_entries:?} and {target_entries:?}"
-                        ),
+                    _ => Err(invalid_data!(
+                        "expected struct-typed map entries, got {source_entries:?} and {target_entries:?}"
                     )),
                 }
             }
             (_, DataType::Struct(_) | DataType::List(_) | DataType::LargeList(_))
-            | (_, DataType::Map(_, _)) => {
+            | (_, DataType::Map(_, _))
+            | (DataType::Struct(_) | DataType::List(_) | DataType::LargeList(_), _)
+            | (DataType::Map(_, _), _) => {
                 Err(invalid_data!("cannot promote {source:?} to {target:?}"))
             }
             _ => Ok(PromotePlan::Cast(target.clone())),
@@ -307,14 +306,16 @@ impl PromotePlan {
     ) -> Result<Vec<ChildPlan>> {
         let mut source_by_id = HashMap::with_capacity(source_fields.len());
         for (idx, field) in source_fields.iter().enumerate() {
-            if let Some(id) = try_get_field_id_from_metadata(field)? {
-                source_by_id.insert(id, idx);
+            if let Some(id) = try_get_field_id_from_metadata(field)?
+                && source_by_id.insert(id, idx).is_some()
+            {
+                return Err(invalid_data!("duplicate field id {id} in struct"));
             }
         }
-        // Name mapping only assigns top-level ids (#1845). Fully id-less children
-        // match by position when the counts line up, and `build` checks each pair.
-        // A same-type reorder cannot be detected without ids. Any missing id
-        // errors instead of nulling that child.
+        // Name mapping only assigns top-level ids, so fully id-less children match
+        // by position when the counts line up, and `build` checks each pair. This is
+        // a compatibility fallback until recursive name mapping (#1845): a same-type
+        // reorder reads positionally. Any missing id errors instead of nulling that child.
         if source_by_id.len() != source_fields.len() {
             if source_by_id.is_empty() && source_fields.len() == target_fields.len() {
                 return source_fields
@@ -1633,6 +1634,7 @@ mod test {
             None,
             false,
         );
+        assert_eq!(out.data_type(), expected.data_type());
         assert_eq!(out.as_map(), &expected);
     }
 
@@ -1692,6 +1694,30 @@ mod test {
         let err = promote(&source, &evolved_struct_type(), &empty_schema()).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.to_string().contains("do not all have field ids"));
+    }
+
+    #[test]
+    fn promote_rejects_invalid_source_at_build() {
+        let duplicate_ids = DataType::Struct(Fields::from(vec![
+            field_with_id("x", DataType::Int32, true, 5),
+            field_with_id("y", DataType::Int32, true, 5),
+        ]));
+        let map_of =
+            |entries| DataType::Map(Arc::new(Field::new("entries", entries, false)), false);
+        for (source, target, message) in [
+            (duplicate_ids, evolved_struct_type(), "duplicate field id 5"),
+            (unevolved_struct_type(), DataType::Int32, "cannot promote"),
+            (
+                map_of(DataType::Int32),
+                map_of(DataType::Int64),
+                "expected struct-typed map entries",
+            ),
+        ] {
+            let err =
+                PromotePlan::build(&source, &target, &empty_schema(), &HashMap::new()).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.to_string().contains(message), "{err}");
+        }
     }
 
     #[test]
@@ -1896,7 +1922,40 @@ mod test {
             None,
             false,
         );
+        // Map array equality skips the entries field name.
+        assert_eq!(out.data_type(), expected.data_type());
         assert_eq!(out.as_map(), &expected);
+    }
+
+    #[test]
+    fn promote_idless_same_type_reorder_stays_positional() {
+        // Without ids a same-type reorder is undetectable; #1845 replaces this fallback.
+        let source = Arc::new(StructArray::new(
+            Fields::from(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int32, true),
+            ]),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef,
+            ],
+            None,
+        )) as ArrayRef;
+        let fields = Fields::from(vec![
+            field_with_id("b", DataType::Int32, true, 6),
+            field_with_id("a", DataType::Int32, true, 5),
+        ]);
+
+        let out = promote(&source, &DataType::Struct(fields.clone()), &empty_schema()).unwrap();
+        let expected = StructArray::new(
+            fields,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef,
+            ],
+            None,
+        );
+        assert_eq!(out.as_struct(), &expected);
     }
 
     #[test]
