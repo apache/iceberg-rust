@@ -438,28 +438,20 @@ impl<'a> PageIndexEvaluator<'a> {
                     .enumerate()
                     .zip(row_counts.iter())
                 {
-                    // A bound that won't decode (e.g. a min/max stat truncated
-                    // by column_index_truncate_length, whose byte prefix no
-                    // longer preserves the two's-complement decimal ordering)
+                    // An undecodable bound (only a non-conforming writer
+                    // produces one, see fixed_len_byte_array_decimal_bound_to_datum)
                     // means this column's page index can't be trusted, so skip
                     // pruning for the whole column rather than abort the scan.
+                    let decode = |val: &[u8]| {
+                        Self::fixed_len_byte_array_decimal_bound_to_datum(
+                            field_type,
+                            val,
+                            type_length,
+                        )
+                    };
                     let (min, max) = match (
-                        min.map(|val| {
-                            Self::fixed_len_byte_array_decimal_bound_to_datum(
-                                field_type,
-                                val,
-                                type_length,
-                            )
-                        })
-                        .transpose(),
-                        max.map(|val| {
-                            Self::fixed_len_byte_array_decimal_bound_to_datum(
-                                field_type,
-                                val,
-                                type_length,
-                            )
-                        })
-                        .transpose(),
+                        min.map(decode).transpose(),
+                        max.map(decode).transpose(),
                     ) {
                         (Ok(min), Ok(max)) => (min, max),
                         (Err(err), _) | (_, Err(err)) => {
@@ -548,9 +540,11 @@ impl<'a> PageIndexEvaluator<'a> {
     /// Parquet stores Iceberg decimals with precision > 18 as big-endian
     /// two's-complement `FIXED_LEN_BYTE_ARRAY` of width `type_length`.
     ///
-    /// Returns an error for a bound whose width differs from `type_length`: that
-    /// signals a `column_index_truncate_length` truncation, and a truncated byte
-    /// prefix decodes to the wrong number under two's-complement.
+    /// Returns an error for a bound whose width differs from `type_length`.
+    /// Conforming writers never truncate a decimal column index (a truncated
+    /// two's-complement prefix would not preserve numeric order), so a short
+    /// bound comes from a non-conforming writer and would decode to the wrong
+    /// value. Reject it rather than prune on a bad bound.
     fn fixed_len_byte_array_decimal_bound_to_datum(
         field_type: &PrimitiveType,
         bytes: &[u8],
@@ -1242,6 +1236,18 @@ mod tests {
         scale: i8,
         unscaled: &[i128],
     ) -> Result<(Arc<ParquetMetaData>, NamedTempFile)> {
+        let pages: Vec<Option<i128>> = unscaled.iter().copied().map(Some).collect();
+        create_decimal_parquet_file_with_null_pages(precision, scale, &pages)
+    }
+
+    /// Like [`create_decimal_parquet_file`], but each entry in `pages` is one
+    /// 1024-row page: `Some(v)` writes that repeated unscaled value, `None`
+    /// writes an all-null page (whose column index carries no min/max bound).
+    fn create_decimal_parquet_file_with_null_pages(
+        precision: u8,
+        scale: i8,
+        pages: &[Option<i128>],
+    ) -> Result<(Arc<ParquetMetaData>, NamedTempFile)> {
         let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "col_decimal",
             DataType::Decimal128(precision, scale),
@@ -1258,11 +1264,16 @@ mod tests {
 
         let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
 
-        for &unscaled in unscaled {
+        for page in pages {
             let array = Arc::new(
-                Decimal128Array::from_iter_values(std::iter::repeat_n(unscaled, 1024))
-                    .with_precision_and_scale(precision, scale)
-                    .unwrap(),
+                match page {
+                    Some(unscaled) => {
+                        Decimal128Array::from_iter_values(std::iter::repeat_n(*unscaled, 1024))
+                    }
+                    None => Decimal128Array::from(vec![None; 1024]),
+                }
+                .with_precision_and_scale(precision, scale)
+                .unwrap(),
             ) as ArrayRef;
             let batch = RecordBatch::try_new(arrow_schema.clone(), vec![array]).unwrap();
             // Write rows one at a time so the writer splits into per-value pages.
@@ -2182,6 +2193,121 @@ mod tests {
 
         // Truncated bounds -> no page pruning: every row survives.
         assert_eq!(result, vec![RowSelector::select(2048)]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inequality_prunes_precision_38_fixed_len_byte_array_decimal_pages() -> Result<()> {
+        // precision 38 is the max Iceberg decimal precision -> 16-byte
+        // FIXED_LEN_BYTE_ARRAY bounds, the width extreme where decoding fills
+        // the full i128 with no sign-extension padding. Values near +/-(10^38-1)
+        // carry significant bits in the high-order bytes, and span both signs.
+        let max = 10_i128.pow(38) - 1;
+        let (metadata, _temp_file) = create_decimal_parquet_file(38, 2, &[-max, 0, max])?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(38, 2)?;
+
+        // `> 0` keeps only the +max page; the -max and 0 pages are pruned.
+        let filter = Reference::new("col_decimal")
+            .greater_than(decimal_datum(0, 2, 38)?)
+            .bind(iceberg_schema.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            row_group_metadata,
+            &field_id_map,
+            iceberg_schema.as_ref(),
+        )?;
+
+        assert_eq!(result, vec![
+            RowSelector::skip(2048),
+            RowSelector::select(1024)
+        ]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inequality_prunes_precision_widened_fixed_len_byte_array_decimal_pages() -> Result<()> {
+        // Precision widening keeps a file's original FIXED_LEN_BYTE_ARRAY width,
+        // so a decimal(20,2) file's 9-byte bounds are read here as decimal(30,2).
+        // The guard keys off the file's type_length (9), not the field
+        // precision's canonical width (13).
+        let (metadata, _temp_file) = create_decimal_parquet_file(20, 2, &[-400, 100, 300])?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        // Read the 9-byte column as decimal(30,2).
+        let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(30, 2)?;
+
+        // Pages hold -4.00, 1.00, 3.00. `> 1.50` keeps only the 3.00 page.
+        let filter = Reference::new("col_decimal")
+            .greater_than(decimal_datum(150, 2, 30)?)
+            .bind(iceberg_schema.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            row_group_metadata,
+            &field_id_map,
+            iceberg_schema.as_ref(),
+        )?;
+
+        assert_eq!(result, vec![
+            RowSelector::skip(2048),
+            RowSelector::select(1024)
+        ]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_is_null_selects_all_null_fixed_len_byte_array_decimal_page() -> Result<()> {
+        // precision 30 -> FIXED_LEN_BYTE_ARRAY page bounds. Page 0 is all-null,
+        // so its column index carries no min/max; the arm must pass those absent
+        // bounds straight to the predicate rather than try to decode them. Pages
+        // 1-2 hold 2.00 and 3.00.
+        let (metadata, _temp_file) =
+            create_decimal_parquet_file_with_null_pages(30, 2, &[None, Some(200), Some(300)])?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+
+        // The column is optional so IS NULL binds to a real predicate (on a
+        // required field it would simplify to always-false).
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_fields([Arc::new(NestedField::new(
+                    1,
+                    "col_decimal",
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: 30,
+                        scale: 2,
+                    }),
+                    false,
+                ))])
+                .build()?,
+        );
+        let field_id_map = HashMap::from_iter([(1, 0)]);
+
+        // IS NULL keeps the all-null page and prunes the two value pages.
+        let filter = Reference::new("col_decimal")
+            .is_null()
+            .bind(iceberg_schema.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            row_group_metadata,
+            &field_id_map,
+            iceberg_schema.as_ref(),
+        )?;
+
+        assert_eq!(result, vec![
+            RowSelector::select(1024),
+            RowSelector::skip(2048)
+        ]);
 
         Ok(())
     }
