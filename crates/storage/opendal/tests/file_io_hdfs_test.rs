@@ -106,15 +106,21 @@ mod tests {
     }
 
     /// The HA flow: table locations carry a logical authority, and
-    /// `hdfs.name-node.<nameservice>` declares its comma-separated endpoints
-    /// (the single-node fixture is listed twice to drive the list path).
+    /// `hdfs.name-node.<nameservice>` declares its comma-separated endpoints.
+    /// The first one refuses connections, so every call must fail over to
+    /// the fixture through opendal's synthetic nameservice.
     #[tokio::test]
     async fn test_file_io_hdfs_declared_nameservice() {
         let endpoint = get_hdfs_endpoint();
+        // A local port nothing listens on once the listener is dropped.
+        let dead = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
         let file_io = file_io_builder(Arc::new(OpenDalStorageFactory::HdfsNative))
             .with_prop(
                 format!("{HDFS_NAME_NODE}.logical-nameservice"),
-                format!("{endpoint},{endpoint}"),
+                format!("hdfs://{dead},{endpoint}"),
             )
             .build();
 
