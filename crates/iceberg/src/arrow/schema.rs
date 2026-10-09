@@ -721,6 +721,10 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                     .unwrap_or(DataType::LargeBinary),
             )),
             PrimitiveType::Binary => Ok(ArrowSchemaOrFieldOrType::Type(DataType::LargeBinary)),
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!("Converting {p} to an Arrow schema is not supported yet"),
+            )),
         }
     }
 
@@ -1178,6 +1182,7 @@ pub(crate) fn primitive_type_to_arrow_type_with_ree(primitive_type: &PrimitiveTy
         PrimitiveType::Uuid => make_ree(DataType::Binary),
         PrimitiveType::Fixed(_) => make_ree(DataType::Binary),
         PrimitiveType::Binary => make_ree(DataType::Binary),
+        PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => make_ree(DataType::LargeBinary),
         PrimitiveType::Decimal { precision, scale } => {
             make_ree(DataType::Decimal128(*precision as u8, *scale as i8))
         }
@@ -2169,6 +2174,24 @@ mod tests {
             err.to_string().contains("requires Struct storage"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn test_geospatial_arrow_schema_conversion_is_unsupported() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(
+                    1,
+                    "geom",
+                    Type::Primitive(PrimitiveType::Geometry(Default::default())),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let err = schema_to_arrow_schema(&schema).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
     }
 
     #[test]

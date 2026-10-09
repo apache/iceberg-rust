@@ -28,6 +28,7 @@ use serde::de::{Error, IntoDeserializer};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
 
+use super::geospatial::{GeographyType, GeometryType, parse_geography, parse_geometry};
 use super::values::Literal;
 use crate::ensure_data_valid;
 use crate::error::Result;
@@ -133,7 +134,7 @@ impl Type {
     /// Minimum [`FormatVersion`] required to support this type, **without** taking
     /// nested field types into account.
     ///
-    /// `Unknown` / `TimestampNs` / `TimestamptzNs` / `Variant` require
+    /// `Unknown` / `TimestampNs` / `TimestamptzNs` / `Geometry` / `Geography` / `Variant` require
     /// [`FormatVersion::V3`]; every other type is valid from [`FormatVersion::V1`]. Mirrors Java's
     /// `Schema.MIN_FORMAT_VERSIONS` (a shallow lookup keyed by type id), so it
     /// intentionally does not recurse: callers needing the floor for a whole schema
@@ -143,7 +144,11 @@ impl Type {
     pub(crate) fn min_format_version(&self) -> FormatVersion {
         match self {
             Type::Primitive(
-                PrimitiveType::Unknown | PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+                PrimitiveType::Unknown
+                | PrimitiveType::TimestampNs
+                | PrimitiveType::TimestamptzNs
+                | PrimitiveType::Geometry(_)
+                | PrimitiveType::Geography(_),
             )
             | Type::Variant(_) => FormatVersion::V3,
             _ => FormatVersion::V1,
@@ -274,6 +279,10 @@ pub enum PrimitiveType {
     Binary,
     /// Default / null column type used when a more specific type is not known.
     Unknown,
+    /// Geometry values encoded as well-known binary.
+    Geometry(GeometryType),
+    /// Geography values encoded as well-known binary.
+    Geography(GeographyType),
 }
 
 impl PrimitiveType {
@@ -297,6 +306,8 @@ impl PrimitiveType {
                 | (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(_))
                 | (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(_))
                 | (PrimitiveType::Binary, PrimitiveLiteral::Binary(_))
+                | (PrimitiveType::Geometry(_), PrimitiveLiteral::Binary(_))
+                | (PrimitiveType::Geography(_), PrimitiveLiteral::Binary(_))
         )
     }
 }
@@ -325,6 +336,10 @@ impl<'de> Deserialize<'de> for PrimitiveType {
             deserialize_decimal(s.into_deserializer())
         } else if s.starts_with("fixed") {
             deserialize_fixed(s.into_deserializer())
+        } else if s.starts_with("geometry") {
+            parse_geometry(&s).map_err(D::Error::custom)
+        } else if s.starts_with("geography") {
+            parse_geography(&s).map_err(D::Error::custom)
         } else {
             PrimitiveType::deserialize(s.into_deserializer())
         }
@@ -339,6 +354,9 @@ impl Serialize for PrimitiveType {
                 serialize_decimal(precision, scale, serializer)
             }
             PrimitiveType::Fixed(l) => serialize_fixed(l, serializer),
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+                serializer.serialize_str(&self.to_string())
+            }
             _ => PrimitiveType::serialize(self, serializer),
         }
     }
@@ -435,6 +453,13 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Uuid => write!(f, "uuid"),
             PrimitiveType::Fixed(size) => write!(f, "fixed({size})"),
             PrimitiveType::Binary => write!(f, "binary"),
+            PrimitiveType::Geometry(geometry) => write!(f, "geometry({})", geometry.crs()),
+            PrimitiveType::Geography(geography) => write!(
+                f,
+                "geography({}, {})",
+                geography.crs(),
+                geography.algorithm().as_str()
+            ),
         }
     }
 }
@@ -944,10 +969,15 @@ impl<'de> Deserialize<'de> for VariantType {
 
 #[cfg(test)]
 mod tests {
+    use std::hash::{Hash, Hasher};
+
     use pretty_assertions::assert_eq;
     use uuid::Uuid;
 
     use super::*;
+    use crate::spec::geospatial::{
+        DEFAULT_GEOSPATIAL_CRS, EdgeInterpolationAlgorithm, MAX_GEOSPATIAL_CRS_BYTES,
+    };
     use crate::spec::values::PrimitiveLiteral;
 
     fn check_type_serde(json: &str, expected_type: Type) {
@@ -1074,6 +1104,68 @@ mod tests {
                 name_lookup: OnceLock::default(),
             }),
         )
+    }
+
+    #[test]
+    fn primitive_type_geospatial() {
+        let cases = vec![
+            (
+                r#""geometry""#,
+                PrimitiveType::Geometry(GeometryType::default()),
+                "geometry(OGC:CRS84)",
+            ),
+            (
+                r#""geometry ( EPSG:3857 )""#,
+                PrimitiveType::Geometry(GeometryType::new(Some("EPSG:3857".to_string())).unwrap()),
+                "geometry(EPSG:3857)",
+            ),
+            (
+                r#""geography""#,
+                PrimitiveType::Geography(GeographyType::default()),
+                "geography(OGC:CRS84, spherical)",
+            ),
+            (
+                r#""geography ( OGC:CRS27 , karney )""#,
+                PrimitiveType::Geography(
+                    GeographyType::new(
+                        Some("OGC:CRS27".to_string()),
+                        EdgeInterpolationAlgorithm::Karney,
+                    )
+                    .unwrap(),
+                ),
+                "geography(OGC:CRS27, karney)",
+            ),
+        ];
+
+        for (json, expected, display) in cases {
+            let actual: PrimitiveType = serde_json::from_str(json).unwrap();
+            assert_eq!(
+                actual, expected,
+                "parsed primitive type did not match expectation"
+            );
+            assert_eq!(actual.to_string(), display, "display impl did not match");
+            assert_eq!(
+                serde_json::to_string(&actual).unwrap(),
+                format!(r#""{display}""#),
+                "JSON serialization did not match expectation"
+            );
+        }
+
+        let equivalent_default = GeometryType::new(Some("EPSG:4326".to_string())).unwrap();
+        assert_eq!(equivalent_default.crs(), "EPSG:4326");
+        assert_ne!(equivalent_default, GeometryType::default());
+        let lowercase_default =
+            GeometryType::new(Some(DEFAULT_GEOSPATIAL_CRS.to_ascii_lowercase())).unwrap();
+        assert_eq!(lowercase_default, GeometryType::default());
+        let mut lowercase_hash = std::collections::hash_map::DefaultHasher::new();
+        lowercase_default.hash(&mut lowercase_hash);
+        let mut default_hash = std::collections::hash_map::DefaultHasher::new();
+        GeometryType::default().hash(&mut default_hash);
+        assert_eq!(lowercase_hash.finish(), default_hash.finish());
+        assert!(
+            serde_json::from_str::<PrimitiveType>(r#""geography(OGC:CRS27,unknown)""#).is_err()
+        );
+        assert!(GeometryType::new(Some("x".repeat(MAX_GEOSPATIAL_CRS_BYTES + 1))).is_err());
     }
 
     #[test]
@@ -1551,6 +1643,14 @@ mod tests {
             ),
             (PrimitiveType::Fixed(8), PrimitiveLiteral::Binary(vec![1])),
             (PrimitiveType::Binary, PrimitiveLiteral::Binary(vec![1])),
+            (
+                PrimitiveType::Geometry(GeometryType::default()),
+                PrimitiveLiteral::Binary(vec![1]),
+            ),
+            (
+                PrimitiveType::Geography(GeographyType::default()),
+                PrimitiveLiteral::Binary(vec![1]),
+            ),
         ];
         for (ty, literal) in pairs {
             assert!(ty.compatible(&literal));
