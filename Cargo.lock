@@ -2725,6 +2725,7 @@ dependencies = [
  "fnv",
  "form_urlencoded",
  "futures",
+ "hashlink",
  "iceberg-property-macro",
  "iceberg_test_utils",
  "itertools 0.13.0",

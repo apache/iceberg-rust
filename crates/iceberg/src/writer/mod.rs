@@ -252,7 +252,10 @@
 //!
 //! Wraps the data file writer to handle unsorted data by maintaining multiple active writers.
 //! Use this when your data is not pre-sorted by partition key. Writes to different partitions
-//! can happen in any order, even interleaved.
+//! can happen in any order, even interleaved. To limit memory used by active writers,
+//! use `FanoutWriter::new_with_max_open_partitions` with a nonzero partition limit.
+//! The least recently used writer is closed when opening another would exceed the limit;
+//! revisiting a closed partition opens a new writer and may produce smaller files.
 //!
 //! ```rust, no_run
 //! # // Same setup as the simple example above...
