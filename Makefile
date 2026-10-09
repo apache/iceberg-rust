@@ -106,7 +106,7 @@ unit-test: doc-test
 
 test: docker-up
 	@trap '$(MAKE) docker-down' EXIT; \
-	$(MAKE) nextest
+	ICEBERG_REQUIRE_STORAGE=1 $(MAKE) nextest
 
 clean:
 	cargo clean
