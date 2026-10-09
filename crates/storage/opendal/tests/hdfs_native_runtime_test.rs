@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A cached HDFS operator is bound to the tokio runtime that built it; once
-//! that runtime is gone it must be rebuilt rather than reused. Needs no
-//! HDFS: the NameNode is a local listener that only counts dials.
+//! A cached HDFS operator must keep working after the runtime that first
+//! used it is dropped. Needs no HDFS: the NameNode is a local listener that
+//! only counts dials.
 
 #[cfg(feature = "opendal-hdfs-native")]
 mod tests {
@@ -55,7 +55,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hdfs_operator_is_rebuilt_after_its_runtime_is_dropped() {
+    fn test_hdfs_operator_outlives_the_runtime_that_first_used_it() {
         let (port, dials) = fake_name_node();
         let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::HdfsNative))
             .with_prop(HDFS_NAME_NODE, format!("hdfs://127.0.0.1:{port}"))
