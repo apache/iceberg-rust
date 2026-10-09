@@ -23,6 +23,7 @@ use std::sync::{Arc, PoisonError, RwLock, Weak};
 
 use iceberg::io::{HDFS_HADOOP_CONF_PREFIX, HDFS_HOST, HDFS_NAME_NODE, HDFS_PORT};
 use iceberg::{Error, ErrorKind, Result};
+use iceberg_property_macro::Properties;
 use opendal::Operator;
 use opendal::services::HdfsNativeConfig;
 use serde::{Deserialize, Serialize};
@@ -86,6 +87,44 @@ fn hdfs_native_name_node_list(property: &str, value: &str) -> Result<Vec<String>
         .collect()
 }
 
+/// Prefix of `hdfs.name-node.<nameservice>`, which declares one HA nameservice.
+const HDFS_NAME_NODE_DECLARATION_PREFIX: &str = "hdfs.name-node.";
+
+/// The properties this backend reads; unknown keys are ignored. Blank values
+/// count as unset, as in PyIceberg.
+#[derive(Properties)]
+struct HdfsNativeProperties {
+    /// `hdfs.name-node`, each entry normalized.
+    #[property(
+        key = HDFS_NAME_NODE,
+        default = Vec::new(),
+        parse_with = parse_name_node_list
+    )]
+    name_node: Vec<String>,
+    /// `hdfs.name-node.<nameservice>` declarations, keyed by nameservice.
+    #[property(prefix = HDFS_NAME_NODE_DECLARATION_PREFIX)]
+    nameservices: HashMap<String, String>,
+    #[property(key = HDFS_HOST, default = "", parse_with = parse_trimmed)]
+    host: String,
+    #[property(key = HDFS_PORT, default = "", parse_with = parse_trimmed)]
+    port: String,
+    /// `hadoop.*` keys with the prefix stripped, forwarded to the client.
+    #[property(prefix = HDFS_HADOOP_CONF_PREFIX)]
+    hadoop: HashMap<String, String>,
+}
+
+// Entries are trimmed one by one: opendal splits the list on `,` as is, so a
+// space after a comma would break failover to that NameNode. An empty list
+// stays unset because `Operator::from_config` bypasses the builder's
+// empty-string guard and `Some("")` would shadow the path-authority fallback.
+fn parse_name_node_list(value: &str) -> Result<Vec<String>> {
+    hdfs_native_name_node_list(HDFS_NAME_NODE, value)
+}
+
+fn parse_trimmed(value: &str) -> Result<String> {
+    Ok(value.trim().to_string())
+}
+
 /// Parse iceberg properties to [`HdfsNativeConfig`]; dropped properties are
 /// logged as warnings.
 pub(crate) fn hdfs_native_config_parse(m: HashMap<String, String>) -> Result<HdfsNativeConfig> {
@@ -95,40 +134,22 @@ pub(crate) fn hdfs_native_config_parse(m: HashMap<String, String>) -> Result<Hdf
 /// The parser proper, with the warning sink injected so tests can see what
 /// was dropped without a tracing subscriber.
 fn hdfs_native_config_parse_with(
-    mut m: HashMap<String, String>,
+    m: HashMap<String, String>,
     mut warn: impl FnMut(String),
 ) -> Result<HdfsNativeConfig> {
-    let mut cfg = HdfsNativeConfig::default();
-
-    // Entries are trimmed one by one: opendal splits the list on `,` as is,
-    // so a space after a comma would break failover to that NameNode. An
-    // empty result is dropped because `Operator::from_config` bypasses the
-    // builder's empty-string guard and `Some("")` would shadow the
-    // path-authority fallback below.
-    if let Some(name_node) = m.remove(HDFS_NAME_NODE) {
-        let entries = hdfs_native_name_node_list(HDFS_NAME_NODE, &name_node)?;
-        if !entries.is_empty() {
-            cfg.name_node = Some(entries.join(","));
-        }
-    }
+    let props = HdfsNativeProperties::from_properties(&m)?;
+    let mut options = props.hadoop;
 
     // `hdfs.name-node.<nameservice>` is sugar for Hadoop's own declaration of
     // an HA nameservice, which the resolver reads back from the options.
-    let nameservice_prefix = format!("{HDFS_NAME_NODE}.");
-    let declared_keys: Vec<String> = m
-        .keys()
-        .filter(|key| key.starts_with(&nameservice_prefix))
-        .cloned()
-        .collect();
-    let mut declared = Vec::new();
-    for key in declared_keys {
-        let value = m.remove(&key).unwrap_or_default();
-        let nameservice = key[nameservice_prefix.len()..].to_string();
+    // Explicit `hadoop.` keys win over the sugar.
+    for (nameservice, value) in props.nameservices {
+        let key = format!("{HDFS_NAME_NODE_DECLARATION_PREFIX}{nameservice}");
         if nameservice.is_empty() || nameservice.chars().any(char::is_whitespace) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!(
-                    "Invalid property `{key}`: a nameservice name must follow `{nameservice_prefix}`"
+                    "Invalid property `{key}`: a nameservice name must follow `{HDFS_NAME_NODE_DECLARATION_PREFIX}`"
                 ),
             ));
         }
@@ -139,13 +160,23 @@ fn hdfs_native_config_parse_with(
                 format!("Invalid property `{key}`: no NameNodes"),
             ));
         }
-        declared.push((nameservice, entries));
+        let ids: Vec<String> = (0..entries.len()).map(|i| format!("nn{i}")).collect();
+        options
+            .entry(format!("{HA_NAMENODES_PREFIX}.{nameservice}"))
+            .or_insert_with(|| ids.join(","));
+        for (id, entry) in ids.iter().zip(&entries) {
+            options
+                .entry(format!(
+                    "{HA_NAMENODE_RPC_ADDRESS_PREFIX}.{nameservice}.{id}"
+                ))
+                .or_insert_with(|| entry.trim_start_matches("hdfs://").to_string());
+        }
     }
 
     // A config carried over from PyIceberg would otherwise change identity
     // silently; the client reads `HADOOP_USER_NAME` and the Kerberos cache.
     for key in HDFS_UNSUPPORTED_KEYS {
-        if m.remove(key).is_some() {
+        if m.contains_key(key) {
             warn(format!(
                 "`{key}` is not supported by the hdfs-native backend and is ignored"
             ));
@@ -160,55 +191,31 @@ fn hdfs_native_config_parse_with(
         ));
     }
 
-    let host = m
-        .remove(HDFS_HOST)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let port = m
-        .remove(HDFS_PORT)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .map(|port| {
-            port.parse::<u16>().map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Invalid `{HDFS_PORT}`: {port}: {e}"),
-                )
-            })
-        })
-        .transpose()?;
-
-    let mut options: HashMap<String, String> = m
-        .into_iter()
-        .filter_map(|(key, value)| {
-            key.strip_prefix(HDFS_HADOOP_CONF_PREFIX)
-                .map(|stripped| (stripped.to_string(), value))
-        })
-        .collect();
-    // Explicit `hadoop.` keys win over the sugar.
-    for (nameservice, entries) in declared {
-        let ids: Vec<String> = (0..entries.len()).map(|i| format!("nn{i}")).collect();
-        options
-            .entry(format!("{HA_NAMENODES_PREFIX}.{nameservice}"))
-            .or_insert_with(|| ids.join(","));
-        for (id, entry) in ids.iter().zip(&entries) {
-            options
-                .entry(format!(
-                    "{HA_NAMENODE_RPC_ADDRESS_PREFIX}.{nameservice}.{id}"
-                ))
-                .or_insert_with(|| entry.trim_start_matches("hdfs://").to_string());
-        }
-    }
+    let port = match props.port.as_str() {
+        "" => None,
+        port => Some(port.parse::<u16>().map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid `{HDFS_PORT}`: {port}: {e}"),
+            )
+        })?),
+    };
     // PyIceberg's `hdfs.host`/`hdfs.port` name the filesystem for
     // authority-less paths, which is what Hadoop's `fs.defaultFS` means; an
     // explicit `hadoop.fs.defaultFS` wins.
-    match host {
-        Some(host) => {
+    match props.host.as_str() {
+        "" if port.is_some() => {
+            warn(format!(
+                "`{HDFS_PORT}` has no effect without `{HDFS_HOST}` and is ignored"
+            ));
+        }
+        "" => {}
+        host => {
             // An IPv6 literal needs brackets in a URI authority.
             let bracketed = if host.contains(':') && !host.starts_with('[') {
                 format!("[{host}]")
             } else {
-                host.clone()
+                host.to_string()
             };
             let port = port.unwrap_or(HDFS_DEFAULT_PORT);
             // Validated like every other NameNode spelling, so a host that
@@ -227,17 +234,15 @@ fn hdfs_native_config_parse_with(
                 .entry(FS_DEFAULT_FS.to_string())
                 .or_insert(default_fs);
         }
-        None if port.is_some() => {
-            warn(format!(
-                "`{HDFS_PORT}` has no effect without `{HDFS_HOST}` and is ignored"
-            ));
-        }
-        None => {}
+    }
+
+    let mut cfg = HdfsNativeConfig::default();
+    if !props.name_node.is_empty() {
+        cfg.name_node = Some(props.name_node.join(","));
     }
     if !options.is_empty() {
         cfg.options = Some(options);
     }
-
     Ok(cfg)
 }
 
