@@ -32,6 +32,7 @@ services:
     environment:
       - RUSTFS_ACCESS_KEY=admin
       - RUSTFS_SECRET_KEY=password
+      - RUSTFS_OBS_LOG_STDOUT_ENABLED=true
       - RUSTFS_SERVER_DOMAINS=object-store
     hostname: object-store
     networks:
