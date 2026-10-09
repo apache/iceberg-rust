@@ -818,7 +818,7 @@ fn test_raw_literal_bytes_unsupported_type() {
 }
 
 #[test]
-fn raw_literal_boolean_round_trip() {
+fn test_raw_literal_boolean_round_trip() {
     for value in [false, true] {
         let ty = Primitive(PrimitiveType::Boolean);
         check_raw_literal_json_serde(Literal::bool(value), &ty);
@@ -837,7 +837,7 @@ fn raw_literal_boolean_round_trip() {
 }
 
 #[test]
-fn datum_json_boolean_rejects_type_mismatch() {
+fn test_datum_json_boolean_rejects_type_mismatch() {
     for ty in ["int", "long", "string", "unknown"] {
         for value in [false, true] {
             for json in [
@@ -853,7 +853,7 @@ fn datum_json_boolean_rejects_type_mismatch() {
 }
 
 #[test]
-fn raw_literal_boolean_null() {
+fn test_raw_literal_null_for_boolean_type() {
     let ty = Primitive(PrimitiveType::Boolean);
     let avro_literal: RawLiteral = apache_avro::from_value(&Value::Null).unwrap();
     let json_literal: RawLiteral = serde_json::from_str("null").unwrap();
@@ -864,7 +864,7 @@ fn raw_literal_boolean_null() {
 }
 
 #[test]
-fn raw_literal_boolean_rejects_type_mismatch() {
+fn test_raw_literal_boolean_rejects_type_mismatch() {
     let types = [
         Primitive(PrimitiveType::Int),
         Primitive(PrimitiveType::Long),
@@ -913,7 +913,7 @@ fn raw_literal_boolean_rejects_type_mismatch() {
 }
 
 #[test]
-fn raw_literal_boolean_rejects_nested_type_mismatch() {
+fn test_raw_literal_boolean_rejects_nested_type_mismatch() {
     let cases = [
         (
             serde_json::json!({"col": true}),
@@ -958,6 +958,7 @@ fn raw_literal_boolean_rejects_nested_type_mismatch() {
             let error = literal.try_into(&ty).unwrap_err();
             assert_eq!(error.kind(), ErrorKind::DataInvalid);
             assert!(error.to_string().contains("raw literal (boolean)"));
+            assert!(error.to_string().contains("type mismatch"));
         }
     }
 }
