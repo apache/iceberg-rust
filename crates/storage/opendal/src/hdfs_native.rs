@@ -241,6 +241,18 @@ fn hdfs_native_config_parse_with(
     if !options.is_empty() {
         cfg.options = Some(options);
     }
+
+    // Every declaration, sugar or passed through, and the default filesystem
+    // fail here rather than at the first path that uses them.
+    for nameservice in cfg.options.iter().flat_map(|options| {
+        options.keys().filter_map(|key| {
+            key.strip_prefix(HA_NAMENODES_PREFIX)
+                .and_then(|rest| rest.strip_prefix('.'))
+        })
+    }) {
+        hdfs_native_nameservice(&cfg, nameservice)?;
+    }
+    hdfs_native_default_name_node(&cfg)?;
     Ok(cfg)
 }
 
@@ -271,9 +283,20 @@ fn hdfs_native_invalid_path(path: &str, reason: impl std::fmt::Display) -> Error
     )
 }
 
-/// Parse an HDFS path into `Some("hdfs://<authority>")` (`None` when
-/// authority-less) and the relative path (no leading `/`, opendal style).
-pub(crate) fn hdfs_native_parse_path(path: &str) -> Result<(Option<String>, &str)> {
+/// A path's authority, as the resolver reads it.
+#[derive(Debug, PartialEq)]
+pub(crate) enum HdfsNativeAuthority {
+    /// `hdfs://host:port`, normalized: dialed as is.
+    NameNode(String),
+    /// `hdfs://name` without a port: a nameservice that must be declared.
+    Nameservice(String),
+    /// `hdfs:///path`: served by `hdfs.name-node`, else `fs.defaultFS`.
+    Default,
+}
+
+/// Parse an HDFS path into its authority and the relative path (no leading
+/// `/`, opendal style).
+pub(crate) fn hdfs_native_parse_path(path: &str) -> Result<(HdfsNativeAuthority, &str)> {
     let url = Url::parse(path).map_err(|e| hdfs_native_invalid_path(path, e))?;
     // Non-special schemes parse even without `//` (e.g. `hdfs:x` is a valid
     // non-hierarchical URL), so require the literal prefix before slicing.
@@ -289,11 +312,11 @@ pub(crate) fn hdfs_native_parse_path(path: &str) -> Result<(Option<String>, &str
         return Err(hdfs_native_invalid_path(path, "port 0 cannot be dialed"));
     }
 
-    let name_node = url.host_str().filter(|h| !h.is_empty()).map(|host| {
-        url.port()
-            .map(|port| format!("hdfs://{host}:{port}"))
-            .unwrap_or_else(|| format!("hdfs://{host}"))
-    });
+    let authority = match (url.host_str().filter(|h| !h.is_empty()), url.port()) {
+        (Some(host), Some(port)) => HdfsNativeAuthority::NameNode(format!("hdfs://{host}:{port}")),
+        (Some(host), None) => HdfsNativeAuthority::Nameservice(host.to_string()),
+        (None, _) => HdfsNativeAuthority::Default,
+    };
 
     // `url.path()` borrows from `url` and can't be returned with the input's
     // lifetime. Slice the path component out of the original input instead;
@@ -304,7 +327,7 @@ pub(crate) fn hdfs_native_parse_path(path: &str) -> Result<(Option<String>, &str
         None => "",
     };
 
-    Ok((name_node, rel))
+    Ok((authority, rel))
 }
 
 /// Resolves the effective NameNode for a path, plus the relative path. An
@@ -317,43 +340,52 @@ pub(crate) fn hdfs_native_effective_name_node<'a>(
     path: &'a str,
 ) -> Result<(String, &'a str)> {
     let (authority, relative_path) = hdfs_native_parse_path(path)?;
-    let invalid = |reason: String| hdfs_native_invalid_path(path, reason);
     let name_node = match authority {
-        Some(authority) if hdfs_native_name_node(&authority).is_some() => authority,
-        Some(portless) => {
-            let nameservice = portless.trim_start_matches("hdfs://");
-            hdfs_native_nameservice(config, nameservice)?.ok_or_else(|| {
-                invalid(format!(
-                    "`{nameservice}` has no port and is not a declared nameservice; add the port or set `{HDFS_NAME_NODE}.{nameservice}`"
-                ))
+        HdfsNativeAuthority::NameNode(name_node) => name_node,
+        HdfsNativeAuthority::Nameservice(nameservice) => {
+            hdfs_native_nameservice(config, &nameservice)?.ok_or_else(|| {
+                hdfs_native_invalid_path(
+                    path,
+                    format!(
+                        "`{nameservice}` has no port and is not a declared nameservice; add the port or set `{HDFS_NAME_NODE}.{nameservice}`"
+                    ),
+                )
             })?
         }
-        None => match (&config.name_node, hdfs_native_default_fs(config)) {
-            (Some(name_node), _) => name_node.clone(),
-            (None, Some(default_fs)) => hdfs_native_name_node(default_fs).ok_or_else(|| {
-                invalid(format!(
-                    "`{FS_DEFAULT_FS}` {} is not an HDFS host:port, a logical nameservice requires `{HDFS_NAME_NODE}`",
-                    hdfs_native_redact(default_fs)
-                ))
-            })?,
-            (None, None) => {
-                return Err(invalid(format!(
-                    "authority-less paths require `{HDFS_NAME_NODE}` or `{HDFS_HOST}`"
-                )));
-            }
-        },
+        HdfsNativeAuthority::Default => hdfs_native_default_name_node(config)?.ok_or_else(|| {
+            hdfs_native_invalid_path(
+                path,
+                format!("authority-less paths require `{HDFS_NAME_NODE}` or `{HDFS_HOST}`"),
+            )
+        })?,
     };
     Ok((name_node, relative_path))
 }
 
-/// `fs.defaultFS` from the forwarded options, as written.
-fn hdfs_native_default_fs(config: &HdfsNativeConfig) -> Option<&str> {
-    config
+/// The NameNode that serves authority-less paths: `hdfs.name-node`, else
+/// `fs.defaultFS`, which must then be an HDFS `host:port`.
+fn hdfs_native_default_name_node(config: &HdfsNativeConfig) -> Result<Option<String>> {
+    if let Some(name_node) = &config.name_node {
+        return Ok(Some(name_node.clone()));
+    }
+    let Some(default_fs) = config
         .options
-        .as_ref()?
-        .get(FS_DEFAULT_FS)
+        .as_ref()
+        .and_then(|options| options.get(FS_DEFAULT_FS))
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
+    else {
+        return Ok(None);
+    };
+    hdfs_native_name_node(default_fs).map(Some).ok_or_else(|| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Invalid `{FS_DEFAULT_FS}`: {} is not an HDFS host:port, a logical nameservice requires `{HDFS_NAME_NODE}`",
+                hdfs_native_redact(default_fs)
+            ),
+        )
+    })
 }
 
 /// The NameNodes that Hadoop's keys in the forwarded options declare for a
@@ -705,31 +737,43 @@ mod tests {
 
     #[test]
     fn test_hdfs_native_default_fs_must_be_hdfs() {
-        let parse = |default_fs: &str| {
-            hdfs_native_config_parse(HashMap::from([(
-                "hadoop.fs.defaultFS".to_string(),
-                default_fs.to_string(),
-            )]))
-            .unwrap()
+        let parse = |props: &[(&str, &str)]| {
+            hdfs_native_config_parse(
+                props
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            )
         };
+        let default_fs = |value| parse(&[("hadoop.fs.defaultFS", value)]);
 
         let (nn, _) =
-            hdfs_native_effective_name_node(&parse("hdfs://nn:8020/"), "hdfs:///a").unwrap();
+            hdfs_native_effective_name_node(&default_fs("hdfs://nn:8020/").unwrap(), "hdfs:///a")
+                .unwrap();
         assert_eq!(nn, "hdfs://nn:8020");
         // Not an HDFS `host:port`, including the portless logical-name form,
-        // which only a declaration resolves.
-        for default_fs in ["viewfs://cluster/", "hdfs://", "hdfs://ns1"] {
-            let err = hdfs_native_effective_name_node(&parse(default_fs), "hdfs:///a").unwrap_err();
+        // which only a declaration resolves: rejected when the config is
+        // parsed, since it serves every authority-less path.
+        for value in ["viewfs://cluster/", "hdfs://", "hdfs://ns1"] {
+            let err = default_fs(value).unwrap_err();
             assert!(
                 err.to_string().contains(FS_DEFAULT_FS) && err.to_string().contains(HDFS_NAME_NODE),
-                "{default_fs}: {err}"
+                "{value}: {err}"
             );
         }
+        // Not checked when `hdfs.name-node` serves those paths instead.
+        parse(&[
+            ("hadoop.fs.defaultFS", "viewfs://cluster/"),
+            (HDFS_NAME_NODE, "nn:8020"),
+        ])
+        .unwrap();
         // Empty is unset, so the authority-less path has nothing to resolve to.
-        let err = hdfs_native_effective_name_node(&parse(""), "hdfs:///a").unwrap_err();
+        let err =
+            hdfs_native_effective_name_node(&default_fs("").unwrap(), "hdfs:///a").unwrap_err();
         assert!(err.to_string().contains(HDFS_HOST), "{err}");
         // Normalized like every other source.
-        let (nn, _) = hdfs_native_effective_name_node(&parse("nn:9000"), "hdfs:///a").unwrap();
+        let (nn, _) =
+            hdfs_native_effective_name_node(&default_fs("nn:9000").unwrap(), "hdfs:///a").unwrap();
         assert_eq!(nn, "hdfs://nn:9000");
     }
 
@@ -807,13 +851,17 @@ mod tests {
                 .unwrap_err();
             assert!(err.to_string().contains(&key), "{key}={value}: {err}");
         }
-        // A declaration with a broken address is an error, not a silent fallback.
-        let broken = hdfs_native_config_parse(HashMap::from([(
+        // A passed-through declaration with a missing address fails when the
+        // config is parsed, not at the first path that names it.
+        let err = hdfs_native_config_parse(HashMap::from([(
             "hadoop.dfs.ha.namenodes.ns-d".to_string(),
             "a".to_string(),
         )]))
-        .unwrap();
-        assert!(hdfs_native_nameservice(&broken, "ns-d").is_err());
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("dfs.namenode.rpc-address.ns-d.a"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -929,7 +977,10 @@ mod tests {
     fn test_hdfs_native_parse_path_with_authority_and_rel() {
         let (nn, rel) = hdfs_native_parse_path("hdfs://nameservice1/a/b").unwrap();
 
-        assert_eq!(nn.as_deref(), Some("hdfs://nameservice1"));
+        assert_eq!(
+            nn,
+            HdfsNativeAuthority::Nameservice("nameservice1".to_string())
+        );
         assert_eq!(rel, "a/b");
     }
 
@@ -937,14 +988,20 @@ mod tests {
     fn test_hdfs_native_parse_path_with_authority_and_port() {
         let (nn, rel) = hdfs_native_parse_path("hdfs://nn:8020/foo").unwrap();
 
-        assert_eq!(nn.as_deref(), Some("hdfs://nn:8020"));
+        assert_eq!(
+            nn,
+            HdfsNativeAuthority::NameNode("hdfs://nn:8020".to_string())
+        );
         assert_eq!(rel, "foo");
     }
 
     #[test]
     fn test_hdfs_native_parse_path_ipv6_authority_keeps_brackets() {
         let (nn, rel) = hdfs_native_parse_path("hdfs://[::1]:8020/a/b").unwrap();
-        assert_eq!(nn.as_deref(), Some("hdfs://[::1]:8020"));
+        assert_eq!(
+            nn,
+            HdfsNativeAuthority::NameNode("hdfs://[::1]:8020".to_string())
+        );
         assert_eq!(rel, "a/b");
     }
 
@@ -1027,7 +1084,10 @@ mod tests {
     fn test_hdfs_native_parse_path_with_authority_no_path() {
         let (nn, rel) = hdfs_native_parse_path("hdfs://nameservice1").unwrap();
 
-        assert_eq!(nn.as_deref(), Some("hdfs://nameservice1"));
+        assert_eq!(
+            nn,
+            HdfsNativeAuthority::Nameservice("nameservice1".to_string())
+        );
         assert_eq!(rel, "");
     }
 
@@ -1035,7 +1095,10 @@ mod tests {
     fn test_hdfs_native_parse_path_with_authority_trailing_slash() {
         let (nn, rel) = hdfs_native_parse_path("hdfs://nameservice1/").unwrap();
 
-        assert_eq!(nn.as_deref(), Some("hdfs://nameservice1"));
+        assert_eq!(
+            nn,
+            HdfsNativeAuthority::Nameservice("nameservice1".to_string())
+        );
         assert_eq!(rel, "");
     }
 
@@ -1043,7 +1106,7 @@ mod tests {
     fn test_hdfs_native_parse_path_authority_less_returns_none() {
         let (nn, rel) = hdfs_native_parse_path("hdfs:///a/b").unwrap();
 
-        assert_eq!(nn, None);
+        assert_eq!(nn, HdfsNativeAuthority::Default);
         assert_eq!(rel, "a/b");
     }
 
