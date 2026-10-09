@@ -32,7 +32,7 @@
 
 mod azdls;
 mod gcs;
-mod hdfs;
+mod hdfs_native;
 mod hf;
 mod oss;
 mod s3;
@@ -41,7 +41,7 @@ use std::collections::HashMap;
 
 pub use azdls::*;
 pub use gcs::*;
-pub use hdfs::*;
+pub use hdfs_native::*;
 pub use hf::*;
 pub use oss::*;
 pub use s3::*;
