@@ -32,4 +32,11 @@
         <name>dfs.datanode.data.dir</name>
         <value>file:///tmp/hadoop-root/dfs/data</value>
     </property>
+    <!-- What clients outside the container network dial for the DataNode,
+         through its published port, when they set
+         dfs.client.use.datanode.hostname. -->
+    <property>
+        <name>dfs.datanode.hostname</name>
+        <value>127.0.0.1</value>
+    </property>
 </configuration>

@@ -140,18 +140,17 @@ services:
   # =============================================================================
   # HDFS - single-node NameNode + DataNode for HDFS tests
   # =============================================================================
-  # hdfs-native connects to DataNodes by their registered IP — unroutable on
-  # a docker bridge, hence host networking (needs Linux or a recent runtime).
-  # Opt-in: `COMPOSE_PROFILES=hdfs make docker-up`.
+  # The DataNode advertises 127.0.0.1, so clients that set
+  # `dfs.client.use.datanode.hostname` reach it through its published port.
   hdfs-namenode:
     image: apache/hadoop:3.5.0
-    profiles: [hdfs]
-    network_mode: "host"
+    networks:
+      iceberg_test:
     command: ["hdfs", "namenode"]
     environment:
       ENSURE_NAMENODE_DIR: "/tmp/hadoop-root/dfs/name"
-    extra_hosts:
-      - "docker-desktop:127.0.0.1"
+    ports:
+      - "8020:8020"
     volumes:
       - ./hdfs/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
       - ./hdfs/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
@@ -164,14 +163,14 @@ services:
 
   hdfs-datanode:
     image: apache/hadoop:3.5.0
-    profiles: [hdfs]
-    network_mode: "host"
+    networks:
+      iceberg_test:
     command: ["hdfs", "datanode"]
     depends_on:
       hdfs-namenode:
         condition: service_healthy
-    extra_hosts:
-      - "docker-desktop:127.0.0.1"
+    ports:
+      - "9866:9866"
     volumes:
       - ./hdfs/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
       - ./hdfs/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro

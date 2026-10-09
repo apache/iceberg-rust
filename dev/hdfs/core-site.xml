@@ -18,7 +18,7 @@
 <configuration>
     <property>
         <name>fs.defaultFS</name>
-        <value>hdfs://localhost:8020</value>
+        <value>hdfs://hdfs-namenode:8020</value>
     </property>
     <property>
         <name>hadoop.http.staticuser.user</name>
