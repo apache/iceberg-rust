@@ -46,7 +46,7 @@ unused_qualifications = "deny"
 [workspace.dependencies]
 aes-gcm = "0.10"
 anyhow = "1.0.72"
-apache-avro = { version = "0.21", features = ["snappy", "zstandard"] }
+apache-avro = { version = "0.22", features = ["snappy", "zstandard"] }
 array-init = "2"
 arrow = "59.2"
 arrow-arith = "59.2"

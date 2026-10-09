@@ -19,3 +19,15 @@ When reviewing pull requests, follow these rules to avoid noise and redundancy:
 - First-time contributors: For users new to this repository,
   explicitly instruct them to "Please check and address all review
   comments in this PR."
+
+Also flag these, once per PR with the locations:
+
+- Comment churn: Code comments or docs that restate the code, narrate
+  history, or justify review decisions.
+- Unrelated edits: Renames, reformatting, or reordering of code the
+  change does not otherwise need.
+- Duplication: New helpers, types, or tests that duplicate existing ones.
+- API growth: New public API the change does not need. Check new entries
+  in `public-api.txt`.
+- PR description: Descriptions that restate the diff or pad the
+  template. Mention it in the review summary.

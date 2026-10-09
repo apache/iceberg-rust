@@ -28,6 +28,7 @@ use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
+use crate::spec::decimal_utils::i128_from_be_bytes;
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, Schema};
 use crate::{Error, ErrorKind, Result};
 
@@ -167,6 +168,17 @@ impl<'a> PageIndexEvaluator<'a> {
             return self.select_all_rows();
         };
 
+        // Declared byte width of a FIXED_LEN_BYTE_ARRAY column, used to detect
+        // truncated page-index bounds when decoding decimals. `None` when the
+        // column metadata is absent or reports no fixed width.
+        let type_length = self
+            .row_group_metadata
+            .columns()
+            .get(parquet_column_index)
+            .map(|column| column.column_descr().type_length())
+            .filter(|&len| len > 0)
+            .map(|len| len as usize);
+
         let row_counts = {
             // Caches row count calculations for columns that appear multiple times in
             // the predicate
@@ -194,6 +206,7 @@ impl<'a> PageIndexEvaluator<'a> {
             field_id,
             predicate,
             field_type,
+            type_length,
             column_index,
             &row_counts,
         )?
@@ -242,6 +255,7 @@ impl<'a> PageIndexEvaluator<'a> {
         field_id: i32,
         predicate: F,
         field_type: &PrimitiveType,
+        type_length: Option<usize>,
         column_index: &ColumnIndexMetaData,
         row_counts: &[usize],
     ) -> Result<Option<Vec<bool>>>
@@ -394,14 +408,89 @@ impl<'a> PageIndexEvaluator<'a> {
 
                 Ok(page_filter)
             }
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(idx) => {
+                // Parquet stores Iceberg decimals with precision > 18 as
+                // FIXED_LEN_BYTE_ARRAY. Other field types on such a column
+                // (fixed, uuid) aren't decoded here, so skip page pruning for
+                // them rather than risk pruning pages that match.
+                if !matches!(field_type, PrimitiveType::Decimal { .. }) {
+                    tracing::debug!(
+                        field_id,
+                        %field_type,
+                        "Skipping page-index pruning: FIXED_LEN_BYTE_ARRAY column index on a non-decimal field"
+                    );
+                    return Ok(None);
+                }
+
+                let Some(type_length) = type_length else {
+                    tracing::debug!(
+                        field_id,
+                        %field_type,
+                        "Skipping page-index pruning: unknown FIXED_LEN_BYTE_ARRAY decimal column width"
+                    );
+                    return Ok(None);
+                };
+
+                let mut page_filter = Vec::with_capacity(row_counts.len());
+                for ((i, (min, max)), &row_count) in idx
+                    .min_values_iter()
+                    .zip(idx.max_values_iter())
+                    .enumerate()
+                    .zip(row_counts.iter())
+                {
+                    // A bound that won't decode (e.g. a min/max stat truncated
+                    // by column_index_truncate_length, whose byte prefix no
+                    // longer preserves the two's-complement decimal ordering)
+                    // means this column's page index can't be trusted, so skip
+                    // pruning for the whole column rather than abort the scan.
+                    let (min, max) = match (
+                        min.map(|val| {
+                            Self::fixed_len_byte_array_decimal_bound_to_datum(
+                                field_type,
+                                val,
+                                type_length,
+                            )
+                        })
+                        .transpose(),
+                        max.map(|val| {
+                            Self::fixed_len_byte_array_decimal_bound_to_datum(
+                                field_type,
+                                val,
+                                type_length,
+                            )
+                        })
+                        .transpose(),
+                    ) {
+                        (Ok(min), Ok(max)) => (min, max),
+                        (Err(err), _) | (_, Err(err)) => {
+                            tracing::debug!(
+                                field_id,
+                                %field_type,
+                                page_index = i,
+                                %err,
+                                "Skipping page-index pruning: undecodable FIXED_LEN_BYTE_ARRAY decimal page bound"
+                            );
+                            return Ok(None);
+                        }
+                    };
+
+                    page_filter.push(predicate(
+                        min,
+                        max,
+                        PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
+                    )?);
+                }
+
+                Ok(page_filter)
+            }
             // Column index types we can't interpret: skip page pruning rather
             // than abort the scan. Row-group filtering and the Arrow row filter
             // still apply the predicate.
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(_) | ColumnIndexMetaData::INT96(_) => {
+            ColumnIndexMetaData::INT96(_) => {
                 tracing::debug!(
                     field_id,
                     %field_type,
-                    "Skipping page-index pruning: unsupported FIXED_LEN_BYTE_ARRAY or INT96 column index"
+                    "Skipping page-index pruning: unsupported INT96 column index"
                 );
                 return Ok(None);
             }
@@ -453,6 +542,40 @@ impl<'a> PageIndexEvaluator<'a> {
                 format!("Unsupported primitive type for BYTE_ARRAY page bound: {field_type}"),
             )),
         }
+    }
+
+    /// Converts a `FIXED_LEN_BYTE_ARRAY` decimal page bound into a [`Datum`].
+    /// Parquet stores Iceberg decimals with precision > 18 as big-endian
+    /// two's-complement `FIXED_LEN_BYTE_ARRAY` of width `type_length`.
+    ///
+    /// Returns an error for a bound whose width differs from `type_length`: that
+    /// signals a `column_index_truncate_length` truncation, and a truncated byte
+    /// prefix decodes to the wrong number under two's-complement.
+    fn fixed_len_byte_array_decimal_bound_to_datum(
+        field_type: &PrimitiveType,
+        bytes: &[u8],
+        type_length: usize,
+    ) -> Result<Datum> {
+        if bytes.len() != type_length {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Truncated FIXED_LEN_BYTE_ARRAY decimal page bound: {} bytes (expected {type_length})",
+                    bytes.len()
+                ),
+            ));
+        }
+
+        let value = i128_from_be_bytes(bytes).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Can't convert bytes to i128: {bytes:?}"),
+            )
+        })?;
+        Ok(Datum::new(
+            field_type.clone(),
+            PrimitiveLiteral::Int128(value),
+        ))
     }
 
     fn visit_inequality(
@@ -1062,11 +1185,58 @@ mod tests {
         Ok((metadata, temp_file))
     }
 
+    /// Creates a single-column `FixedSizeBinary(width)` parquet file whose column
+    /// index is truncated to `truncate_length` bytes (`< width`), producing
+    /// `FIXED_LEN_BYTE_ARRAY` page bounds narrower than the declared `type_length`.
+    /// Writes one 1024-row page per value in `pages`; each value must be `width`
+    /// bytes.
+    fn create_truncated_flba_file(
+        width: i32,
+        truncate_length: usize,
+        pages: &[&[u8]],
+    ) -> Result<(Arc<ParquetMetaData>, NamedTempFile)> {
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "col_fixed",
+            DataType::FixedSizeBinary(width),
+            true,
+        )]));
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let file = temp_file.reopen().unwrap();
+
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(1024)
+            .set_write_batch_size(512)
+            .set_column_index_truncate_length(Some(truncate_length))
+            .build();
+
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+
+        for value in pages {
+            let array = Arc::new(
+                FixedSizeBinaryArray::try_from_iter(std::iter::repeat_n(*value, 1024)).unwrap(),
+            ) as ArrayRef;
+            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![array]).unwrap();
+            for i in 0..batch.num_rows() {
+                writer.write(&batch.slice(i, 1)).unwrap();
+            }
+        }
+
+        writer.close().unwrap();
+
+        let file = temp_file.reopen().unwrap();
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+        let metadata = reader.metadata().clone();
+
+        Ok((metadata, temp_file))
+    }
+
     /// Creates a single-column `Decimal128(precision, scale)` parquet file.
-    /// Parquet encodes precision <= 9 as `INT32` and precision 10..=18 as
-    /// `INT64`, so `precision` selects which page-index encoding is exercised.
-    /// Writes one 1024-row page per value in `unscaled`, so page bounds
-    /// partition the value range.
+    /// Parquet encodes precision <= 9 as `INT32`, precision 10..=18 as `INT64`,
+    /// and precision > 18 as `FIXED_LEN_BYTE_ARRAY`, so `precision` selects which
+    /// page-index encoding is exercised. Writes one 1024-row page per value in
+    /// `unscaled`, so page bounds partition the value range.
     fn create_decimal_parquet_file(
         precision: u8,
         scale: i8,
@@ -1490,8 +1660,9 @@ mod tests {
     #[test]
     fn eval_skips_pruning_for_fixed_len_byte_array() -> Result<()> {
         // FIXED_LEN_BYTE_ARRAY page indexes back spec-conforming fixed, uuid,
-        // and decimal(P > 18) columns. The evaluator can't interpret those
-        // bounds, so it skips page pruning rather than abort the scan.
+        // and decimal(P > 18) columns. Only decimals are decoded; fixed and uuid
+        // bounds aren't, so the evaluator skips page pruning for them rather than
+        // abort the scan.
         let (metadata, _temp_file) = create_fixed_len_byte_array_parquet_file()?;
         let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
 
@@ -1876,6 +2047,141 @@ mod tests {
             RowSelector::skip(1024),
             RowSelector::select(3072)
         ]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inequality_prunes_fixed_len_byte_array_decimal_pages() -> Result<()> {
+        // precision 30 -> Parquet FIXED_LEN_BYTE_ARRAY page bounds.
+        let (metadata, _temp_file) = create_decimal_parquet_file(30, 2, &[100, 200, 300, 400])?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(30, 2)?;
+
+        // Pages hold 1.00, 2.00, 3.00, 4.00. `> 2.50` keeps the pages whose
+        // upper bound exceeds 2.50 (3.00 and 4.00).
+        let filter = Reference::new("col_decimal")
+            .greater_than(decimal_datum(250, 2, 30)?)
+            .bind(iceberg_schema.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            row_group_metadata,
+            &field_id_map,
+            iceberg_schema.as_ref(),
+        )?;
+
+        assert_eq!(result, vec![
+            RowSelector::skip(2048),
+            RowSelector::select(2048)
+        ]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_in_prunes_fixed_len_byte_array_decimal_pages() -> Result<()> {
+        // precision 30 -> Parquet FIXED_LEN_BYTE_ARRAY page bounds.
+        let (metadata, _temp_file) = create_decimal_parquet_file(30, 2, &[100, 200, 300, 400])?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(30, 2)?;
+
+        // Pages hold 1.00, 2.00, 3.00, 4.00. IN (2.00, 4.00) keeps only the
+        // pages whose single value is one of the literals.
+        let filter = Reference::new("col_decimal")
+            .is_in([decimal_datum(200, 2, 30)?, decimal_datum(400, 2, 30)?])
+            .bind(iceberg_schema.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            row_group_metadata,
+            &field_id_map,
+            iceberg_schema.as_ref(),
+        )?;
+
+        assert_eq!(result, vec![
+            RowSelector::skip(1024),
+            RowSelector::select(1024),
+            RowSelector::skip(1024),
+            RowSelector::select(1024),
+        ]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inequality_prunes_negative_fixed_len_byte_array_decimal_pages() -> Result<()> {
+        // precision 30 -> Parquet FIXED_LEN_BYTE_ARRAY page bounds, spanning
+        // negative values. Negative decimals have a 0xff high byte in two's
+        // complement, so this only prunes correctly if the bounds are compared
+        // numerically rather than by raw byte order.
+        let (metadata, _temp_file) = create_decimal_parquet_file(30, 2, &[-400, -200, 100, 300])?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(30, 2)?;
+
+        // Pages hold -4.00, -2.00, 1.00, 3.00. `>= -2.00` keeps the pages whose
+        // upper bound is at least -2.00, including page 1 whose bound equals it.
+        let filter = Reference::new("col_decimal")
+            .greater_than_or_equal_to(decimal_datum(-200, 2, 30)?)
+            .bind(iceberg_schema.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            row_group_metadata,
+            &field_id_map,
+            iceberg_schema.as_ref(),
+        )?;
+
+        assert_eq!(result, vec![
+            RowSelector::skip(1024),
+            RowSelector::select(3072)
+        ]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_skips_pruning_for_truncated_fixed_len_byte_array_decimal_bound() -> Result<()> {
+        // A non-Iceberg writer can store a decimal as a plain FIXED_LEN_BYTE_ARRAY
+        // and truncate its column index (parquet-rs truncates FLBA bounds but not
+        // decimal/float16 ones). A bound narrower than the column's declared
+        // type_length can't be decoded as an i128 without changing its value, so
+        // the evaluator skips page pruning for the column rather than aborting the
+        // file read.
+        //
+        // Page 0 is 0.00, page 1 is 2.55; with full-width bounds `> 1.00` would
+        // prune page 0. The 13-byte values are truncated to 4-byte column-index
+        // bounds (!= type_length 13), so neither page is pruned instead.
+        let page0 = [0u8; 13]; // unscaled 0 -> 0.00
+        let mut page1 = [0u8; 13];
+        page1[12] = 0xff; // unscaled 255 -> 2.55
+        let (metadata, _temp_file) = create_truncated_flba_file(13, 4, &[&page0, &page1])?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+
+        // The Iceberg schema calls the 13-byte column a Decimal(30,2).
+        let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(30, 2)?;
+
+        let filter = Reference::new("col_decimal")
+            .greater_than(decimal_datum(100, 2, 30)?) // > 1.00
+            .bind(iceberg_schema.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            row_group_metadata,
+            &field_id_map,
+            iceberg_schema.as_ref(),
+        )?;
+
+        // Truncated bounds -> no page pruning: every row survives.
+        assert_eq!(result, vec![RowSelector::select(2048)]);
 
         Ok(())
     }
