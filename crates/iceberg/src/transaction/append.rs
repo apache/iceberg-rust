@@ -765,6 +765,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_snapshot_summary_records_writer_identity() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+
+        let snapshot_properties = HashMap::from([
+            ("key".to_string(), "val".to_string()),
+            ("iceberg-version".to_string(), "caller".to_string()),
+        ]);
+
+        let action = tx
+            .fast_append()
+            .set_snapshot_properties(snapshot_properties);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            snapshot
+        } else {
+            unreachable!()
+        };
+        let props = &new_snapshot.summary().additional_properties;
+        let version = env!("CARGO_PKG_VERSION");
+
+        assert_eq!(
+            props.get("iceberg-version").unwrap(),
+            &format!("Apache Iceberg Rust {version}")
+        );
+        assert_eq!(props.get("key").unwrap(), "val");
+    }
+
+    #[tokio::test]
     async fn test_append_snapshot_properties() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
