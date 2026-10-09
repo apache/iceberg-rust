@@ -1572,6 +1572,43 @@ mod test {
     }
 
     #[test]
+    fn promote_sliced_list_with_null_slot() {
+        let source = ListArray::new(
+            Arc::new(field_with_id("element", unevolved_struct_type(), true, 4)),
+            OffsetBuffer::new(vec![0, 1, 1, 3, 4].into()),
+            unevolved_struct_data(vec![10, 30, 31, 40]),
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        );
+        let source = Arc::new(source.slice(1, 3)) as ArrayRef;
+        let target = DataType::List(Arc::new(field_with_id(
+            "element",
+            evolved_struct_type(),
+            true,
+            4,
+        )));
+
+        let out = promote(&source, &target, &empty_schema()).unwrap();
+        let values = StructArray::new(
+            Fields::from(vec![
+                field_with_id("x", DataType::Int32, true, 5),
+                field_with_id("y", DataType::Int32, true, 6),
+            ]),
+            vec![
+                Arc::new(Int32Array::from(vec![30, 31, 40])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![None, None, None])) as ArrayRef,
+            ],
+            None,
+        );
+        let expected = ListArray::new(
+            Arc::new(field_with_id("element", evolved_struct_type(), true, 4)),
+            OffsetBuffer::new(vec![0, 0, 2, 3].into()),
+            Arc::new(values),
+            Some(NullBuffer::from(vec![false, true, true])),
+        );
+        assert_eq!(out.as_list::<i32>(), &expected);
+    }
+
+    #[test]
     fn promote_map_value_struct_fills_added_field_by_id() {
         let entries = StructArray::new(
             Fields::from(vec![
