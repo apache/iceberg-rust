@@ -137,5 +137,26 @@ git push origin "v0.9.1"
 Verify every dependency's license is one the project allows:
 
 ```shell
-dev/release/dependencies.sh check
+python3 dev/release/licenses.py dependencies check
 ```
+
+CI also runs this check on every pull request.
+
+## Wheel license files
+
+The pyiceberg-core wheels ship a compiled extension module that statically links
+every Rust dependency, so they redistribute those dependencies and must carry
+their license texts and relay their NOTICE files. The release workflows do this,
+per wheel; these commands are for reproducing it locally.
+
+```shell
+python3 dev/release/licenses.py wheel generate bindings/python
+python3 dev/release/licenses.py wheel stage bindings/python --maturin-target universal2-apple-darwin
+python3 dev/release/licenses.py wheel verify bindings/python/dist --maturin-target universal2-apple-darwin
+```
+
+`wheel generate` writes one set of `LICENSE`, `NOTICE` and `THIRD-PARTY-LICENSES`
+per published wheel, because each platform links a different set of crates. None
+of it is checked in. `wheel stage` copies one wheel's set to where maturin picks
+it up, which replaces the checked-in `LICENSE` and `NOTICE` symlinks; restore
+them with `git checkout` afterwards. Source distributions carry none of this.

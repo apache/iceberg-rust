@@ -17,7 +17,7 @@
 
 [build-system]
 build-backend = "maturin"
-requires = ["maturin>=1.9.4,<2.0"]
+requires = ["maturin>=1.12.1,<2.0"]
 
 [project]
 classifiers = [
@@ -34,22 +34,13 @@ classifiers = [
   "Programming Language :: Rust",
 ]
 dynamic = ["version"]
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-LICENSES"]
 name = "pyiceberg-core"
 readme = "project-description.md"
 requires-python = ">=3.10,<4"
 
 [tool.maturin]
-include = [
-  { path = "LICENSE", format = [
-    "sdist",
-    "wheel",
-  ] },
-  { path = "NOTICE", format = [
-    "sdist",
-    "wheel",
-  ] },
-]
 module-name = "pyiceberg_core.pyiceberg_core_rust"
 profile = "release"
 python-source = "python"
@@ -69,7 +60,7 @@ filterwarnings = ["error"]
 
 [dependency-groups]
 dev = [
-  "maturin>=1.9.4,<2.0",
+  "maturin>=1.12.1,<2.0",
   "pytest>=8.3.2",
   # Set a PyIceberg lower bound; otherwise the resolver may select the
   # unrelated 0.0.2 stub.

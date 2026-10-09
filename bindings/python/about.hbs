@@ -1,0 +1,75 @@
+{{!--
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+--}}
+Third-party licenses for pyiceberg-core
+=======================================
+
+Wheel:        @@REPORT_NAME@@
+Rust targets: @@TARGET_TRIPLES@@
+
+This file is generated at build time and is not checked into the source
+repository. Do not edit it by hand: regenerate it with
+`dev/release/licenses.py wheel generate bindings/python`.
+
+The pyiceberg-core wheels ships compiled code that statically
+links the Rust crates listed below. Their license texts are reproduced in full to
+satisfy the attribution conditions those licenses place on redistribution in
+binary form.
+
+pyiceberg-core itself is licensed under the Apache License 2.0. See the LICENSE and NOTICE
+files distributed alongside this file.
+
+This listing is specific to the wheel named above. The crate graph is resolved
+for that wheel's Rust target triple(s), so it describes what this wheel actually
+contains: a wheel for a different platform links a different set of crates and
+carries its own copy of this file. Where more than one triple is listed the wheel
+is a fat binary containing code for each, and the listing covers all of them.
+
+Most of these crates are offered under a choice of licenses, typically "MIT OR
+Apache-2.0". Where that is so, the license reproduced below is the one selected for
+this distribution.
+
+A few crates vendor third-party code.
+For those, the license shown is the one covering what the wheel actually contains, which
+may differ from the license the crate's own Cargo manifest declares for its Rust sources.
+Clarifications can be read in about.toml in the project's source repository.
+
+The license texts below are grouped by license and by distinct copyright notice.
+
+The NOTICE files that some of these dependencies ship are not reproduced here.
+Apache License 2.0 section 4(d) requires those to be relayed in a NOTICE file, so
+they appear in the NOTICE distributed alongside this file instead.
+
+Summary
+-------
+{{#each overview}}
+  * {{{name}}} ({{id}}): {{count}} attribution(s), {{len indices}} distinct notice(s)
+{{/each}}
+{{#each licenses}}
+
+================================================================================
+{{{name}}} ({{id}})
+
+Applies to:
+{{#each used_by}}
+  * {{crate.name}} {{crate.version}}{{#if crate.repository}} <{{crate.repository}}>{{/if}}
+{{/each}}
+--------------------------------------------------------------------------------
+
+{{{text}}}
+{{/each}}
