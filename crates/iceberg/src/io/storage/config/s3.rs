@@ -65,6 +65,16 @@ pub const S3_ALLOW_ANONYMOUS: &str = "s3.allow-anonymous";
 pub const S3_DISABLE_EC2_METADATA: &str = "s3.disable-ec2-metadata";
 /// Option to skip loading configuration from config file and the env.
 pub const S3_DISABLE_CONFIG_LOAD: &str = "s3.disable-config-load";
+/// Size in bytes of each part of a multipart upload. Defaults to 32 MiB, matching Java
+/// `S3FileIOProperties.MULTIPART_SIZE_DEFAULT`. Must be at least 5 MiB, the S3 minimum,
+/// and at most `i32::MAX`, since Java reads the property as an `int`.
+///
+/// Each part travels as one request, so the part size bounds how much data has to
+/// transfer within the per-operation IO timeout. Lower it on a slow connection; if a
+/// 5 MiB part still cannot finish in time, raise `opendal.io-timeout-ms` instead.
+///
+/// Only `iceberg-storage-opendal` reads this property, so [`S3Config`] has no matching field.
+pub const S3_MULTIPART_PART_SIZE_BYTES: &str = "s3.multipart.part-size-bytes";
 
 /// Amazon S3 storage configuration.
 ///
