@@ -151,7 +151,7 @@
 <a href=#151 id=151 data-nosnippet>151</a>        <span class="kw">for </span>file <span class="kw">in </span>files {
 <a href=#152 id=152 data-nosnippet>152</a>            <span class="macro">assert_eq!</span>(file.scan_task.deletes().len(), <span class="number">1</span>);
 <a href=#153 id=153 data-nosnippet>153</a>            <span class="macro">assert_eq!</span>(
-<a href=#154 id=154 data-nosnippet>154</a>                file.scan_task.deletes()[<span class="number">0</span>].file_path,
+<a href=#154 id=154 data-nosnippet>154</a>                file.scan_task.deletes()[<span class="number">0</span>].file_path(),
 <a href=#155 id=155 data-nosnippet>155</a>                <span class="macro">format!</span>(<span class="string">"{}/del.parquet"</span>, fixture.table_location)
 <a href=#156 id=156 data-nosnippet>156</a>            );
 <a href=#157 id=157 data-nosnippet>157</a>        }
