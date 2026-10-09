@@ -49,17 +49,26 @@ impl ArrowReader {
         visit(&mut collector, predicate)?;
 
         let iceberg_field_ids = collector.field_ids();
+        let field_id_map =
+            Self::resolve_field_id_map(parquet_schema, arrow_schema, use_position_fallback)?;
 
-        let field_id_map = match build_field_id_map(parquet_schema)? {
+        Ok((iceberg_field_ids, field_id_map))
+    }
+
+    /// Resolves the field-id-to-leaf-column-index map for a Parquet file
+    pub(super) fn resolve_field_id_map(
+        parquet_schema: &SchemaDescriptor,
+        arrow_schema: &ArrowSchemaRef,
+        use_position_fallback: bool,
+    ) -> Result<HashMap<i32, usize>> {
+        Ok(match build_field_id_map(parquet_schema)? {
             Some(map) => map,
             // No embedded field IDs and no name mapping: position-based fallback
             None if use_position_fallback => build_fallback_field_id_map(parquet_schema),
             // No embedded field IDs, but a name mapping assigned them to the Arrow
             // schema: resolve columns through the mapped Arrow field-id metadata
             None => build_field_id_map_from_arrow_schema(arrow_schema),
-        };
-
-        Ok((iceberg_field_ids, field_id_map))
+        })
     }
 
     /// Recursively extract leaf field IDs because Parquet projection works at the leaf column level.
