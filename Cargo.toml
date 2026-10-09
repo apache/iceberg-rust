@@ -86,6 +86,7 @@ flate2 = "1.1.5"
 fnv = "1.0.7"
 form_urlencoded = "1.2.2"
 futures = "0.3"
+hashlink = "0.10"
 hive_metastore = "0.2.0"
 http = "1.2"
 iceberg = { version = "0.10.0", path = "./crates/iceberg" }

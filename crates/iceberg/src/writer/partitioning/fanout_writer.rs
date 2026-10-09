@@ -17,10 +17,11 @@
 
 //! This module provides the `FanoutWriter` implementation.
 
-use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::num::NonZeroUsize;
 
 use async_trait::async_trait;
+use hashlink::LinkedHashMap;
 
 use crate::spec::{PartitionKey, Struct};
 use crate::writer::partitioning::PartitioningWriter;
@@ -31,8 +32,12 @@ use crate::{Error, ErrorKind, Result};
 ///
 /// Unlike `ClusteredWriter` which expects sorted input and maintains only one active writer,
 /// `FanoutWriter` can handle unsorted data by maintaining multiple active writers in a map.
-/// This allows writing to any partition at any time, but uses more memory as all writers
-/// remain active until the writer is closed.
+/// By default, all writers remain active until the writer is closed. Use
+/// [`Self::new_with_max_open_partitions`] to limit the number of active writers.
+/// When the limit is reached, the least recently used writer is closed before a new
+/// one is opened. Writing to a closed partition opens a new writer for that partition.
+/// This reduces memory used by active writers, but may produce more, smaller files.
+/// Metadata for completed files is retained until this writer is closed.
 ///
 /// # Type Parameters
 ///
@@ -46,7 +51,8 @@ where
     <O as IntoIterator>::Item: Clone,
 {
     inner_builder: B,
-    partition_writers: HashMap<Struct, B::R>,
+    partition_writers: LinkedHashMap<Struct, B::R>,
+    max_open_partitions: Option<NonZeroUsize>,
     output: Vec<<O as IntoIterator>::Item>,
     _phantom: PhantomData<I>,
 }
@@ -58,19 +64,42 @@ where
     O: IntoIterator + FromIterator<<O as IntoIterator>::Item>,
     <O as IntoIterator>::Item: Send + Clone,
 {
-    /// Create a new `FanoutWriter`.
+    /// Create a new `FanoutWriter` with no limit on the number of active partitions.
     pub fn new(inner_builder: B) -> Self {
         Self {
             inner_builder,
-            partition_writers: HashMap::new(),
+            partition_writers: LinkedHashMap::new(),
+            max_open_partitions: None,
             output: Vec::new(),
             _phantom: PhantomData,
+        }
+    }
+
+    /// Create a `FanoutWriter` with at most `max_open_partitions` active writers.
+    ///
+    /// Before opening a writer that would exceed the limit, the least recently used
+    /// writer is closed and its output is retained. A later write to that partition
+    /// opens a new writer, which may result in more, smaller files.
+    pub fn new_with_max_open_partitions(
+        inner_builder: B,
+        max_open_partitions: NonZeroUsize,
+    ) -> Self {
+        Self {
+            max_open_partitions: Some(max_open_partitions),
+            ..Self::new(inner_builder)
         }
     }
 
     /// Get or create a writer for the specified partition.
     async fn get_or_create_writer(&mut self, partition_key: &PartitionKey) -> Result<&mut B::R> {
         if !self.partition_writers.contains_key(partition_key.data()) {
+            if let Some(limit) = self.max_open_partitions
+                && self.partition_writers.len() >= limit.get()
+                && let Some((_, mut writer)) = self.partition_writers.pop_front()
+            {
+                self.output.extend(writer.close().await?);
+            }
+
             let writer = self
                 .inner_builder
                 .build(Some(partition_key.clone()))
@@ -80,7 +109,7 @@ where
         }
 
         self.partition_writers
-            .get_mut(partition_key.data())
+            .to_back(partition_key.data())
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::Unexpected,
@@ -117,7 +146,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
@@ -137,6 +166,179 @@ mod tests {
         DefaultFileNameGenerator, DefaultLocationGenerator,
     };
     use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+
+    type TestOutput = Vec<(Struct, Vec<i32>)>;
+
+    #[derive(Default)]
+    struct WriterState {
+        active: usize,
+        peak_active: usize,
+        built: usize,
+        closed: Vec<Struct>,
+        fail_build: bool,
+        fail_close: bool,
+    }
+
+    #[derive(Clone, Default)]
+    struct TestWriterBuilder(Arc<Mutex<WriterState>>);
+
+    struct TestWriter {
+        state: Arc<Mutex<WriterState>>,
+        partition: Struct,
+        rows: Vec<i32>,
+    }
+
+    #[async_trait]
+    impl IcebergWriterBuilder<i32, TestOutput> for TestWriterBuilder {
+        type R = TestWriter;
+
+        async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
+            let mut state = self.0.lock().unwrap();
+            if state.fail_build {
+                return Err(Error::new(ErrorKind::Unexpected, "build failed"));
+            }
+            state.active += 1;
+            state.peak_active = state.peak_active.max(state.active);
+            state.built += 1;
+            Ok(TestWriter {
+                state: self.0.clone(),
+                partition: partition_key.unwrap().data().clone(),
+                rows: Vec::new(),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl IcebergWriter<i32, TestOutput> for TestWriter {
+        async fn write(&mut self, input: i32) -> Result<()> {
+            self.rows.push(input);
+            Ok(())
+        }
+
+        async fn close(&mut self) -> Result<TestOutput> {
+            let mut state = self.state.lock().unwrap();
+            state.closed.push(self.partition.clone());
+            if state.fail_close {
+                return Err(Error::new(ErrorKind::Unexpected, "close failed"));
+            }
+            Ok(vec![(
+                self.partition.clone(),
+                std::mem::take(&mut self.rows),
+            )])
+        }
+    }
+
+    impl Drop for TestWriter {
+        fn drop(&mut self) {
+            self.state.lock().unwrap().active -= 1;
+        }
+    }
+
+    fn test_partition(value: i32) -> PartitionKey {
+        let schema = Arc::new(crate::spec::Schema::builder().build().unwrap());
+        let spec = PartitionSpec::builder(schema.clone()).build().unwrap();
+        PartitionKey::new(spec, schema, Struct::from_iter([Some(Literal::int(value))]))
+    }
+
+    #[tokio::test]
+    async fn test_fanout_writer_limits_and_lru() -> Result<()> {
+        for limit in [
+            None,
+            NonZeroUsize::new(1),
+            NonZeroUsize::new(2),
+            NonZeroUsize::new(3),
+        ] {
+            let builder = TestWriterBuilder::default();
+            let mut writer = match limit {
+                Some(limit) => FanoutWriter::new_with_max_open_partitions(builder.clone(), limit),
+                None => FanoutWriter::new(builder.clone()),
+            };
+            for (row, partition) in [0, 1, 0, 2, 1, 0].into_iter().enumerate() {
+                writer.write(test_partition(partition), row as i32).await?;
+            }
+            if limit == NonZeroUsize::new(2) {
+                assert_eq!(builder.0.lock().unwrap().closed, vec![
+                    test_partition(1).data().clone(),
+                    test_partition(0).data().clone(),
+                    test_partition(2).data().clone(),
+                ]);
+            }
+            let output = writer.close().await?;
+            let state = builder.0.lock().unwrap();
+            assert_eq!(state.active, 0);
+            assert_eq!(state.closed.len(), state.built);
+            assert_eq!(output.len(), state.built);
+            assert!(state.peak_active <= limit.map_or(3, NonZeroUsize::get));
+            assert_eq!(state.built, match limit.map(NonZeroUsize::get) {
+                Some(1) => 6,
+                Some(2) => 5,
+                _ => 3,
+            });
+            let mut rows_by_partition: HashMap<Struct, Vec<i32>> = HashMap::new();
+            for (partition, rows) in output {
+                rows_by_partition.entry(partition).or_default().extend(rows);
+            }
+            assert_eq!(
+                rows_by_partition,
+                HashMap::from([
+                    (test_partition(0).data().clone(), vec![0, 2, 5]),
+                    (test_partition(1).data().clone(), vec![1, 4]),
+                    (test_partition(2).data().clone(), vec![3]),
+                ])
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fanout_writer_empty_with_limit() -> Result<()> {
+        let builder = TestWriterBuilder::default();
+        let writer = FanoutWriter::new_with_max_open_partitions(
+            builder.clone(),
+            NonZeroUsize::new(1).unwrap(),
+        );
+        assert!(writer.close().await?.is_empty());
+        assert_eq!(builder.0.lock().unwrap().built, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fanout_writer_eviction_close_failure() -> Result<()> {
+        let builder = TestWriterBuilder::default();
+        let mut writer = FanoutWriter::new_with_max_open_partitions(
+            builder.clone(),
+            NonZeroUsize::new(1).unwrap(),
+        );
+        writer.write(test_partition(0), 0).await?;
+        builder.0.lock().unwrap().fail_close = true;
+        let error = writer.write(test_partition(1), 1).await.unwrap_err();
+        assert!(error.to_string().contains("close failed"));
+        let state = builder.0.lock().unwrap();
+        assert_eq!(state.built, 1);
+        assert_eq!(state.active, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fanout_writer_build_failure_after_eviction() -> Result<()> {
+        let builder = TestWriterBuilder::default();
+        let mut writer = FanoutWriter::new_with_max_open_partitions(
+            builder.clone(),
+            NonZeroUsize::new(1).unwrap(),
+        );
+        writer.write(test_partition(0), 0).await?;
+        builder.0.lock().unwrap().fail_build = true;
+        let error = writer.write(test_partition(1), 1).await.unwrap_err();
+        assert!(error.to_string().contains("build failed"));
+        assert_eq!(builder.0.lock().unwrap().active, 0);
+        builder.0.lock().unwrap().fail_build = false;
+        writer.write(test_partition(1), 1).await?;
+        assert_eq!(writer.close().await?, vec![
+            (test_partition(0).data().clone(), vec![0]),
+            (test_partition(1).data().clone(), vec![1]),
+        ]);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_fanout_writer_single_partition() -> Result<()> {
@@ -236,6 +438,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_fanout_writer_multiple_partitions() -> Result<()> {
+        for limit in [None, NonZeroUsize::new(1), NonZeroUsize::new(2)] {
+            check_fanout_writer_multiple_partitions(limit).await?;
+        }
+        Ok(())
+    }
+
+    async fn check_fanout_writer_multiple_partitions(
+        max_open_partitions: Option<NonZeroUsize>,
+    ) -> Result<()> {
         let temp_dir = TempDir::new()?;
         let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
@@ -298,7 +509,12 @@ mod tests {
         let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 
         // Create fanout writer
-        let mut writer = FanoutWriter::new(data_file_writer_builder);
+        let mut writer = match max_open_partitions {
+            Some(limit) => {
+                FanoutWriter::new_with_max_open_partitions(data_file_writer_builder, limit)
+            }
+            None => FanoutWriter::new(data_file_writer_builder),
+        };
 
         // Create test data with proper field ID metadata
         let arrow_schema = Schema::new(vec![
@@ -352,6 +568,27 @@ mod tests {
 
         // Close writer and get data files
         let data_files = writer.close().await?;
+
+        let expected_files = if max_open_partitions == NonZeroUsize::new(1) {
+            4
+        } else {
+            3
+        };
+        assert_eq!(data_files.len(), expected_files);
+        let mut rows_by_partition = HashMap::new();
+        for data_file in &data_files {
+            *rows_by_partition
+                .entry(data_file.partition.clone())
+                .or_insert(0) += data_file.record_count;
+        }
+        assert_eq!(
+            rows_by_partition,
+            HashMap::from([
+                (partition_value_us.clone(), 3),
+                (partition_value_eu.clone(), 2),
+                (partition_value_asia.clone(), 2),
+            ])
+        );
 
         // Verify files were created for all partitions
         assert!(
