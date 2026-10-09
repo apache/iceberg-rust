@@ -25,6 +25,9 @@ mod utils;
 mod visitor;
 pub use self::visitor::*;
 pub(super) mod _serde;
+// TODO: Use for table replacement in https://github.com/apache/iceberg-rust/issues/3056.
+#[allow(dead_code)]
+pub(crate) mod assign_fresh_ids;
 mod id_reassigner;
 mod index;
 mod prune_columns;

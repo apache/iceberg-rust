@@ -53,7 +53,7 @@ impl ReassignFieldIds {
         outer_fields
             .into_iter()
             .map(|field| {
-                if field.field_type.is_primitive() {
+                if !field.field_type.is_nested() {
                     Ok(field)
                 } else {
                     let mut new_field = Arc::unwrap_or_clone(field);
@@ -122,7 +122,7 @@ impl ReassignFieldIds {
                 self.old_to_new_id
                     .get(&id)
                     .copied()
-                    .ok_or_else(|| invalid_data!("Identifier Field ID {id} not found"))
+                    .ok_or_else(|| invalid_data!("identifier field id {id} not found"))
             })
             .collect()
     }
