@@ -194,8 +194,9 @@ fn hdfs_native_config_parse_with(
         port => Some(port.parse::<u16>().map_err(|e| {
             Error::new(
                 ErrorKind::DataInvalid,
-                format!("Invalid `{HDFS_PORT}`: {port}: {e}"),
+                format!("Invalid `{HDFS_PORT}`: {port}"),
             )
+            .with_source(e)
         })?),
     };
     // PyIceberg's `hdfs.host`/`hdfs.port` name the filesystem for
@@ -655,6 +656,11 @@ mod tests {
         ] {
             let err = parse(props).unwrap_err();
             assert!(err.to_string().contains(HDFS_PORT), "{props:?}: {err}");
+            // The parse error rides along as the source, not in the message.
+            assert!(
+                std::error::Error::source(&err).is_some(),
+                "{props:?}: {err}"
+            );
         }
         // The composed value is validated like any other NameNode spelling.
         for props in [
