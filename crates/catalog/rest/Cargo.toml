@@ -29,8 +29,16 @@ keywords = ["iceberg", "rest", "catalog"]
 license = { workspace = true }
 repository = { workspace = true }
 
+[features]
+default = []
+# SigV4 request signing. Off by default to keep the AWS crates out.
+sigv4 = ["dep:aws-credential-types", "dep:aws-sigv4", "dep:base64", "dep:sha2"]
+
 [dependencies]
 async-trait = { workspace = true }
+aws-credential-types = { workspace = true, optional = true }
+aws-sigv4 = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
 chrono = { workspace = true }
 http = { workspace = true }
 iceberg = { workspace = true }
@@ -39,6 +47,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true, optional = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 typed-builder = { workspace = true }

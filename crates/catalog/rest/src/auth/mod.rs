@@ -19,14 +19,20 @@
 //! `AuthManager`/`AuthSession` API.
 
 mod oauth2;
+#[cfg(feature = "sigv4")]
+mod sigv4;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[cfg(feature = "sigv4")]
+pub use aws_credential_types::Credentials;
 use iceberg::{Result, SessionContext};
 pub use oauth2::OAuth2Manager;
+#[cfg(feature = "sigv4")]
+pub use sigv4::{PayloadHashMode, SigV4Signer};
 
 use crate::client::HttpClient;
 use crate::request::HttpRequest;
