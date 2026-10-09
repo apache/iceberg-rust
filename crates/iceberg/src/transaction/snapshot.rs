@@ -109,7 +109,7 @@ pub(crate) trait ManifestProcess: Send + Sync {
 
 pub(crate) struct SnapshotProducer<'a> {
     pub(crate) table: &'a Table,
-    snapshot_id: i64,
+    pub(crate) snapshot_id: i64,
     commit_uuid: Uuid,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
@@ -140,7 +140,9 @@ impl<'a> SnapshotProducer<'a> {
         for data_file in &self.added_data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {
                 return Err(invalid_data!(
-                    "Only data content type is allowed for fast append"
+                    "Only data content type is allowed in added data files, but {} is {:?}",
+                    data_file.file_path,
+                    data_file.content_type()
                 ));
             }
             // Check if the data file partition spec id matches the table default partition spec id.
@@ -435,6 +437,43 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_produce_operation: OP,
         process: MP,
     ) -> Result<ActionCommit> {
+        // Calling self.summary() before self.produce_manifests() is important because self.added_data_files
+        // will be set to an empty vec after self.produce_manifests() returns, resulting in an empty summary
+        // being generated.
+        let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
+            Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
+        })?;
+
+        let new_manifests = self
+            .produce_manifests(&snapshot_produce_operation, &process)
+            .await?;
+
+        self.write_snapshot(new_manifests, summary).await
+    }
+
+    /// Commit a snapshot from externally produced manifests and summary.
+    ///
+    /// This is used by [`MergingSnapshotProducer`] which manages manifest
+    /// creation (including filtering deleted files) on its own and only needs
+    /// `SnapshotProducer` to write the manifest list, build the snapshot object,
+    /// and return the [`ActionCommit`].
+    pub(crate) async fn commit_with_manifests(
+        self,
+        manifests: Vec<ManifestFile>,
+        summary: Summary,
+    ) -> Result<ActionCommit> {
+        self.write_snapshot(manifests, summary).await
+    }
+
+    /// Writes the manifest list, builds the snapshot, and returns the [`ActionCommit`].
+    ///
+    /// This is the shared implementation used by both [`commit`] and
+    /// [`commit_with_manifests`].
+    async fn write_snapshot(
+        self,
+        manifests: Vec<ManifestFile>,
+        summary: Summary,
+    ) -> Result<ActionCommit> {
         let manifest_list_path = self.generate_manifest_list_file_path(0)?;
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
@@ -472,18 +511,7 @@ impl<'a> SnapshotProducer<'a> {
             ),
         };
 
-        // Calling self.summary() before self.produce_manifests() is important because self.added_data_files
-        // will be set to an empty vec after self.produce_manifests() returns, resulting in an empty summary
-        // being generated.
-        let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
-        })?;
-
-        let new_manifests = self
-            .produce_manifests(&snapshot_produce_operation, &process)
-            .await?;
-
-        manifest_list_writer.add_manifests(new_manifests.into_iter())?;
+        manifest_list_writer.add_manifests(manifests.into_iter())?;
         let writer_next_row_id = manifest_list_writer.next_row_id();
         let file_metadata = manifest_list_writer.close().await?;
         let encryption_key_id = match encrypted_output {

@@ -3315,6 +3315,11 @@ pub fn iceberg::transaction::ReplaceSortOrderAction::asc(self, name: &str, null_
 pub fn iceberg::transaction::ReplaceSortOrderAction::asc_with_transform(self, name: &str, transform: iceberg::spec::Transform, null_order: iceberg::spec::NullOrder) -> Self
 pub fn iceberg::transaction::ReplaceSortOrderAction::desc(self, name: &str, null_order: iceberg::spec::NullOrder) -> Self
 pub fn iceberg::transaction::ReplaceSortOrderAction::desc_with_transform(self, name: &str, transform: iceberg::spec::Transform, null_order: iceberg::spec::NullOrder) -> Self
+pub struct iceberg::transaction::RewriteFilesAction
+impl iceberg::transaction::RewriteFilesAction
+pub fn iceberg::transaction::RewriteFilesAction::add_file(self, file: iceberg::spec::DataFile) -> Self
+pub fn iceberg::transaction::RewriteFilesAction::data_sequence_number(self, sequence_number: i64) -> Self
+pub fn iceberg::transaction::RewriteFilesAction::delete_file(self, file: iceberg::spec::DataFile) -> Self
 pub struct iceberg::transaction::Transaction
 impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
@@ -3322,6 +3327,7 @@ pub fn iceberg::transaction::Transaction::expire_snapshots(&self) -> iceberg::tr
 pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transaction::FastAppendAction
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::ReplaceSortOrderAction
+pub fn iceberg::transaction::Transaction::rewrite_files(&self) -> iceberg::transaction::RewriteFilesAction
 pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::UpdateLocationAction
 pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::UpdateSchemaAction
 pub fn iceberg::transaction::Transaction::update_statistics(&self) -> iceberg::transaction::UpdateStatisticsAction
