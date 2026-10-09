@@ -91,6 +91,22 @@ impl CompressionCodec {
             CompressionCodec::Snappy => "snappy",
         }
     }
+
+    /// Parses a codec name (case-insensitive), returning `None` for unrecognized names.
+    /// Codecs that carry a level get their default level.
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        Some(match name.to_lowercase().as_str() {
+            "none" | "uncompressed" => CompressionCodec::None,
+            "lz4" => CompressionCodec::Lz4,
+            "lz4_raw" => CompressionCodec::Lz4Raw,
+            "zstd" => CompressionCodec::zstd_default(),
+            "gzip" => CompressionCodec::gzip_default(),
+            "brotli" => CompressionCodec::brotli_default(),
+            "lzo" => CompressionCodec::Lzo,
+            "snappy" => CompressionCodec::Snappy,
+            _ => return None,
+        })
+    }
 }
 
 // Note: serialize/deserialize do not round-trip the compression level. Iceberg configuration
@@ -106,16 +122,8 @@ impl Serialize for CompressionCodec {
 impl<'de> Deserialize<'de> for CompressionCodec {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        match s.to_lowercase().as_str() {
-            "none" | "uncompressed" => Ok(CompressionCodec::None),
-            "lz4" => Ok(CompressionCodec::Lz4),
-            "lz4_raw" => Ok(CompressionCodec::Lz4Raw),
-            "zstd" => Ok(CompressionCodec::zstd_default()),
-            "gzip" => Ok(CompressionCodec::gzip_default()),
-            "brotli" => Ok(CompressionCodec::brotli_default()),
-            "lzo" => Ok(CompressionCodec::Lzo),
-            "snappy" => Ok(CompressionCodec::Snappy),
-            other => Err(serde::de::Error::unknown_variant(other, &[
+        Self::from_name(&s).ok_or_else(|| {
+            serde::de::Error::unknown_variant(&s, &[
                 "none",
                 "uncompressed",
                 "lz4",
@@ -125,8 +133,8 @@ impl<'de> Deserialize<'de> for CompressionCodec {
                 "brotli",
                 "lzo",
                 "snappy",
-            ])),
-        }
+            ])
+        })
     }
 }
 
@@ -216,6 +224,17 @@ impl CompressionCodec {
                 ErrorKind::FeatureUnsupported,
                 "Snappy compression is not supported currently",
             )),
+        }
+    }
+
+    /// Replace the compression level, if this variant carries one.
+    /// Variants without a level are returned unchanged.
+    pub(crate) fn with_level(self, level: u8) -> Self {
+        match self {
+            CompressionCodec::Zstd(_) => CompressionCodec::Zstd(level),
+            CompressionCodec::Gzip(_) => CompressionCodec::Gzip(level),
+            CompressionCodec::Brotli(_) => CompressionCodec::Brotli(level),
+            other => other,
         }
     }
 
@@ -313,6 +332,23 @@ mod tests {
 
         let zstd_err = CompressionCodec::zstd_default().suffix().unwrap_err();
         assert!(zstd_err.to_string().contains("suffix not defined for Zstd"));
+    }
+
+    #[test]
+    fn test_with_level() {
+        for (codec, expected) in [
+            (CompressionCodec::zstd_default(), CompressionCodec::Zstd(5)),
+            (CompressionCodec::gzip_default(), CompressionCodec::Gzip(5)),
+            (
+                CompressionCodec::brotli_default(),
+                CompressionCodec::Brotli(5),
+            ),
+            (CompressionCodec::None, CompressionCodec::None),
+            (CompressionCodec::Lz4, CompressionCodec::Lz4),
+            (CompressionCodec::Snappy, CompressionCodec::Snappy),
+        ] {
+            assert_eq!(codec.with_level(5), expected);
+        }
     }
 
     #[test]

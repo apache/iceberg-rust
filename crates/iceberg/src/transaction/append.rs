@@ -161,6 +161,7 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
+    use crate::compression::CompressionCodec;
     use crate::encryption::kms::MemoryKeyManagementClient;
     use crate::encryption::{SensitiveBytes, StandardKeyMetadata};
     use crate::io::FileIO;
@@ -240,7 +241,9 @@ mod tests {
             Some(current_snapshot.snapshot_id()),
             schema.clone(),
             partition_spec.as_ref().clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_data();
         data_writer
             .add_entry(
@@ -269,7 +272,9 @@ mod tests {
             Some(current_snapshot.snapshot_id()),
             schema.clone(),
             partition_spec.as_ref().clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_data();
         delete_writer
             .add_delete_entry(
@@ -311,7 +316,9 @@ mod tests {
             current_snapshot.snapshot_id(),
             current_snapshot.parent_snapshot_id(),
             current_snapshot.sequence_number(),
-        );
+            CompressionCodec::None,
+        )
+        .unwrap();
         manifest_list_writer
             .add_manifests(vec![data_manifest, delete_manifest].into_iter())
             .unwrap();

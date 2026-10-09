@@ -23,6 +23,7 @@ use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
 use uuid::Uuid;
 
+use crate::compression::CompressionCodec;
 use crate::error::{Result, invalid_data};
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
@@ -158,6 +159,13 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
+    fn avro_compression_codec(&self) -> Result<CompressionCodec> {
+        self.table
+            .metadata()
+            .table_properties()
+            .avro_compression_codec()
+    }
+
     pub(crate) async fn validate_duplicate_files(&self) -> Result<()> {
         let Some(current_snapshot) = self.table.metadata().current_snapshot() else {
             return Ok(());
@@ -245,6 +253,7 @@ impl<'a> SnapshotProducer<'a> {
             .as_ref()
             .clone();
         let schema = self.table.metadata().current_schema().clone();
+        let compression = self.avro_compression_codec()?;
 
         let builder = if let Some(em) = self.table.encryption_manager() {
             ManifestWriterBuilder::new_from_encrypted(
@@ -252,9 +261,16 @@ impl<'a> SnapshotProducer<'a> {
                 Some(self.snapshot_id),
                 schema,
                 partition_spec,
+                compression,
             )?
         } else {
-            ManifestWriterBuilder::new(output_file, Some(self.snapshot_id), schema, partition_spec)
+            ManifestWriterBuilder::new(
+                output_file,
+                Some(self.snapshot_id),
+                schema,
+                partition_spec,
+                compression,
+            )?
         };
 
         match self.table.metadata().format_version() {
@@ -456,20 +472,27 @@ impl<'a> SnapshotProducer<'a> {
         };
 
         let parent_snapshot_id = self.table.metadata().current_snapshot_id();
+        let compression = self.avro_compression_codec()?;
+
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => {
-                ManifestListWriter::v1(writer, self.snapshot_id, parent_snapshot_id)
+                ManifestListWriter::v1(writer, self.snapshot_id, parent_snapshot_id, compression)?
             }
-            FormatVersion::V2 => {
-                ManifestListWriter::v2(writer, self.snapshot_id, parent_snapshot_id, next_seq_num)
-            }
+            FormatVersion::V2 => ManifestListWriter::v2(
+                writer,
+                self.snapshot_id,
+                parent_snapshot_id,
+                next_seq_num,
+                compression,
+            )?,
             FormatVersion::V3 => ManifestListWriter::v3(
                 writer,
                 self.snapshot_id,
                 parent_snapshot_id,
                 next_seq_num,
                 Some(first_row_id),
-            ),
+                compression,
+            )?,
         };
 
         // Calling self.summary() before self.produce_manifests() is important because self.added_data_files

@@ -35,6 +35,7 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use crate::TableIdent;
+use crate::compression::CompressionCodec;
 use crate::io::{FileIO, OutputFile};
 use crate::metadata_columns::{
     RESERVED_COL_NAME_DELETE_FILE_PATH, RESERVED_COL_NAME_DELETE_FILE_POS,
@@ -294,7 +295,9 @@ impl TableTestFixture {
             Some(current_snapshot.snapshot_id()),
             current_schema.clone(),
             current_partition_spec.as_ref().clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_data();
         writer
             .add_entry(
@@ -376,7 +379,9 @@ impl TableTestFixture {
             current_snapshot.snapshot_id(),
             current_snapshot.parent_snapshot_id(),
             current_snapshot.sequence_number(),
-        );
+            CompressionCodec::None,
+        )
+        .unwrap();
         manifest_list_write
             .add_manifests(vec![data_file_manifest].into_iter())
             .unwrap();
@@ -416,7 +421,9 @@ impl TableTestFixture {
             Some(current_snapshot.snapshot_id()),
             current_schema.clone(),
             current_partition_spec.as_ref().clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v3_data();
         writer
             .add_entry(
@@ -454,7 +461,9 @@ impl TableTestFixture {
             current_snapshot.parent_snapshot_id(),
             current_snapshot.sequence_number(),
             Some(42),
-        );
+            CompressionCodec::None,
+        )
+        .unwrap();
         manifest_list_write
             .add_manifests(vec![data_file_manifest].into_iter())
             .unwrap();
@@ -477,7 +486,9 @@ impl TableTestFixture {
             Some(current_snapshot.snapshot_id()),
             current_schema.clone(),
             current_partition_spec.as_ref().clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_data();
         writer
             .add_entry(
@@ -571,7 +582,9 @@ impl TableTestFixture {
             current_snapshot.snapshot_id(),
             current_snapshot.parent_snapshot_id(),
             current_snapshot.sequence_number(),
-        );
+            CompressionCodec::None,
+        )
+        .unwrap();
         manifest_list_write
             .add_manifests(vec![data_file_manifest].into_iter())
             .unwrap();
@@ -709,7 +722,9 @@ impl TableTestFixture {
             Some(current_snapshot.snapshot_id()),
             current_schema.clone(),
             current_partition_spec.as_ref().clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_data();
 
         // Create an empty partition value.
@@ -798,7 +813,9 @@ impl TableTestFixture {
             current_snapshot.snapshot_id(),
             current_snapshot.parent_snapshot_id(),
             current_snapshot.sequence_number(),
-        );
+            CompressionCodec::None,
+        )
+        .unwrap();
         manifest_list_write
             .add_manifests(vec![data_file_manifest].into_iter())
             .unwrap();
@@ -819,7 +836,9 @@ impl TableTestFixture {
             Some(current_snapshot.snapshot_id()),
             current_schema.clone(),
             current_partition_spec.as_ref().clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_data();
 
         // Add 10 data entries
@@ -853,7 +872,9 @@ impl TableTestFixture {
             Some(current_snapshot.snapshot_id()),
             current_schema.clone(),
             current_partition_spec.as_ref().clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_deletes();
 
         writer
@@ -892,7 +913,9 @@ impl TableTestFixture {
             current_snapshot.snapshot_id(),
             current_snapshot.parent_snapshot_id(),
             current_snapshot.sequence_number(),
-        );
+            CompressionCodec::None,
+        )
+        .unwrap();
         manifest_list_write
             .add_manifests(vec![data_manifest, delete_manifest].into_iter())
             .unwrap();
@@ -925,7 +948,9 @@ impl TableTestFixture {
             Some(current_snapshot.snapshot_id()),
             current_schema.clone(),
             current_partition_spec.as_ref().clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_data();
         data_writer
             .add_entry(
@@ -960,7 +985,9 @@ impl TableTestFixture {
                 Some(current_snapshot.snapshot_id()),
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
+                CompressionCodec::None,
             )
+            .unwrap()
             .build_v2_deletes();
             delete_writer
                 .add_entry(
@@ -997,7 +1024,9 @@ impl TableTestFixture {
             current_snapshot.snapshot_id(),
             current_snapshot.parent_snapshot_id(),
             current_snapshot.sequence_number(),
-        );
+            CompressionCodec::None,
+        )
+        .unwrap();
         manifest_list_write
             .add_manifests(manifests.into_iter())
             .unwrap();
@@ -1022,7 +1051,9 @@ impl TableTestFixture {
             Some(current_snapshot.snapshot_id()),
             current_schema.clone(),
             current_partition_spec.as_ref().clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_data();
 
         for (i, sort_order_id) in sort_order_ids.into_iter().enumerate() {
@@ -1067,7 +1098,9 @@ impl TableTestFixture {
             current_snapshot.snapshot_id(),
             current_snapshot.parent_snapshot_id(),
             current_snapshot.sequence_number(),
-        );
+            CompressionCodec::None,
+        )
+        .unwrap();
         manifest_list_write
             .add_manifests(std::iter::once(data_file_manifest))
             .unwrap();

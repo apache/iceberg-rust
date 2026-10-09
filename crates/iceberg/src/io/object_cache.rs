@@ -225,6 +225,7 @@ mod tests {
 
     use super::*;
     use crate::TableIdent;
+    use crate::compression::CompressionCodec;
     use crate::io::{FileIO, OutputFile};
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal,
@@ -307,7 +308,9 @@ mod tests {
                 Some(current_snapshot.snapshot_id()),
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
+                CompressionCodec::None,
             )
+            .unwrap()
             .build_v2_data();
             writer
                 .add_entry(
@@ -344,7 +347,9 @@ mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
-            );
+                CompressionCodec::None,
+            )
+            .unwrap();
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
                 .unwrap();
@@ -362,7 +367,9 @@ mod tests {
                 Some(current_snapshot.snapshot_id()),
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
+                CompressionCodec::None,
             )
+            .unwrap()
             .build_v1();
             writer
                 .add_entry(
@@ -398,7 +405,9 @@ mod tests {
                 manifest_list_writer,
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
-            );
+                CompressionCodec::None,
+            )
+            .unwrap();
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
                 .unwrap();
@@ -618,7 +627,9 @@ mod tests {
             Some(1),
             schema,
             partition_spec,
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v3_data();
         writer
             .add_entry(

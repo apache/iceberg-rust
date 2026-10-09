@@ -22,7 +22,7 @@ use iceberg_property_macro::properties_view;
 use crate::compression::CompressionCodec;
 use crate::encryption::AesKeySize;
 use crate::error::{Result, invalid_data};
-use crate::spec::NameMapping;
+use crate::spec::{NameMapping, avro_util};
 use crate::util::location::strip_trailing_slash;
 
 fn parse_location_property(path: &str) -> Result<String> {
@@ -86,21 +86,46 @@ fn parse_parquet_compression(
         .transpose()?
         .unwrap_or(default);
 
+    apply_compression_level(properties, level_key, codec)
+}
+
+/// Parse the Avro compression codec for manifests and manifest lists
+/// (`write.avro.compression-codec`) and fold in the compression level
+/// (`write.avro.compression-level`) for the codecs that accept one (`zstd`, `gzip`).
+fn parse_avro_compression(
+    properties: &HashMap<String, String>,
+    codec_key: &str,
+    additional_keys: &[&str],
+    default: CompressionCodec,
+) -> Result<CompressionCodec> {
+    let codec = properties
+        .get(codec_key)
+        .map(|value| avro_util::parse_avro_codec(value))
+        .transpose()?
+        .unwrap_or(default);
+    let codec = apply_compression_level(properties, additional_keys[0], codec)?;
+    // Reject codecs and levels that Avro cannot write (e.g. lz4, gzip level 10) when the
+    // property is read, rather than deep inside a later commit.
+    avro_util::to_avro_codec(codec)?;
+    Ok(codec)
+}
+
+/// Override the level of `codec` with the value of `level_key`, if set.
+fn apply_compression_level(
+    properties: &HashMap<String, String>,
+    level_key: &str,
+    codec: CompressionCodec,
+) -> Result<CompressionCodec> {
     let level = properties
         .get(level_key)
         .map(|value| {
             value
                 .parse::<u8>()
-                .map_err(|error| invalid_data!("Invalid value for {level_key}: {error}"))
+                .map_err(|error| invalid_data!("Invalid value for {level_key}: {value} ({error})"))
         })
         .transpose()?;
 
-    Ok(match (codec, level) {
-        (CompressionCodec::Zstd(_), Some(level)) => CompressionCodec::Zstd(level),
-        (CompressionCodec::Gzip(_), Some(level)) => CompressionCodec::Gzip(level),
-        (CompressionCodec::Brotli(_), Some(level)) => CompressionCodec::Brotli(level),
-        (codec, _) => codec,
-    })
+    Ok(level.map_or(codec, |level| codec.with_level(level)))
 }
 
 properties_view! {
@@ -166,6 +191,17 @@ pub struct TableProperties {
         getter
     )]
     metadata_compression_codec: CompressionCodec,
+    /// Compression codec for Avro files (manifests, manifest lists), with the
+    /// resolved compression level folded in (from `write.avro.compression-level`,
+    /// or the codec's Avro default when unset).
+    #[property(
+        key = Self::PROPERTY_AVRO_COMPRESSION_CODEC,
+        additional_keys = [Self::PROPERTY_AVRO_COMPRESSION_LEVEL],
+        default = avro_util::DEFAULT_AVRO_CODEC,
+        parse_properties_with = parse_avro_compression,
+        getter
+    )]
+    avro_compression_codec: CompressionCodec,
     /// Whether to use `FanoutWriter` for partitioned tables.
     #[property(
         key = Self::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
@@ -444,6 +480,14 @@ impl TableProperties<'_> {
         "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
     pub const PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &'static str = "none";
+
+    /// Compression codec for Avro files (manifests, manifest lists)
+    pub const PROPERTY_AVRO_COMPRESSION_CODEC: &'static str = "write.avro.compression-codec";
+    /// Default Avro compression codec - gzip
+    pub const PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT: &'static str = "gzip";
+    /// Compression level for Avro files, interpreted per the configured codec (gzip 0–9,
+    /// zstd 0–22). Ignored by codecs that carry no level.
+    pub const PROPERTY_AVRO_COMPRESSION_LEVEL: &'static str = "write.avro.compression-level";
     /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
     /// If false, uses `ClusteredWriter` (requires sorted data, more memory efficient).
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &'static str =
@@ -590,6 +634,12 @@ mod tests {
             table_properties.metadata_compression_codec().unwrap(),
             CompressionCodec::None
         );
+        // Keeps the public default codec name in sync with `avro_util::DEFAULT_AVRO_CODEC`.
+        assert_eq!(
+            table_properties.avro_compression_codec().unwrap(),
+            avro_util::parse_avro_codec(TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT)
+                .unwrap()
+        );
         assert_eq!(
             table_properties.gc_enabled().unwrap(),
             TableProperties::PROPERTY_GC_ENABLED_DEFAULT
@@ -695,6 +745,69 @@ mod tests {
                 _ => unreachable!(),
             };
             assert_eq!(parsed.as_deref(), Some("s3://other-bucket/custom-path"));
+        }
+    }
+
+    fn avro_compression_props(codec: Option<&str>, level: Option<&str>) -> HashMap<String, String> {
+        [
+            codec.map(|c| (TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC, c)),
+            level.map(|l| (TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL, l)),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+    }
+
+    #[test]
+    fn test_table_properties_avro_compression() {
+        for (codec, level, expected) in [
+            (Some("zstd"), Some("3"), CompressionCodec::Zstd(3)),
+            (
+                Some("zstd"),
+                None,
+                avro_util::parse_avro_codec("zstd").unwrap(),
+            ),
+            // A level without a codec applies to the default (gzip) codec.
+            (None, Some("5"), CompressionCodec::Gzip(5)),
+            // Codecs without a level ignore it.
+            (Some("snappy"), Some("5"), CompressionCodec::Snappy),
+            // zstd levels above 22 are accepted; the writer clamps them, as zstd does.
+            (Some("zstd"), Some("200"), CompressionCodec::Zstd(200)),
+        ] {
+            let props = avro_compression_props(codec, level);
+            assert_eq!(
+                TableProperties::new(&props)
+                    .avro_compression_codec()
+                    .unwrap(),
+                expected,
+                "codec {codec:?}, level {level:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_table_properties_avro_compression_invalid() {
+        // Each case must fail when the property is read, with an error naming the bad value.
+        for (codec, level, bad_value) in [
+            // Not a number.
+            (None, Some("abc"), "abc"),
+            // Overflows u8.
+            (None, Some("300"), "300"),
+            // Above Java's Deflater range of 0-9.
+            (Some("gzip"), Some("10"), "10"),
+            // No Avro representation.
+            (Some("lz4"), None, "lz4"),
+        ] {
+            let props = avro_compression_props(codec, level);
+            let err = TableProperties::new(&props)
+                .avro_compression_codec()
+                .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(
+                err.to_string().contains(bad_value),
+                "unexpected error for codec {codec:?}, level {level:?}: {err}"
+            );
         }
     }
 

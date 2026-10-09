@@ -17,7 +17,7 @@
 
 use std::cmp::min;
 
-use apache_avro::{Writer as AvroWriter, to_value};
+use apache_avro::{Codec, Writer as AvroWriter, to_value};
 use bytes::Bytes;
 use itertools::Itertools;
 use serde_json::to_vec;
@@ -26,6 +26,7 @@ use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
+use crate::compression::CompressionCodec;
 use crate::encryption::EncryptedOutputFile;
 use crate::error::{Result, invalid_data};
 use crate::io::{FileMetadata, FileWrite, OutputFile};
@@ -33,7 +34,7 @@ use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
 use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2};
 use crate::spec::{
     DataContentType, DataFile, FieldSummary, ManifestEntry, ManifestFile, ManifestMetadata,
-    ManifestStatus, PrimitiveLiteral, SchemaRef, StructType, Type,
+    ManifestStatus, PrimitiveLiteral, SchemaRef, StructType, Type, avro_util,
 };
 
 /// Placeholder for snapshot ID. The field with this value must be replaced
@@ -74,42 +75,68 @@ pub struct ManifestWriterBuilder {
     snapshot_id: Option<i64>,
     schema: SchemaRef,
     partition_spec: PartitionSpec,
+    codec: Codec,
 }
 
 impl ManifestWriterBuilder {
     /// Create a new builder for unencrypted manifests.
+    ///
+    /// Returns an error if `compression` is not supported for Avro files.
     pub fn new(
         output: OutputFile,
         snapshot_id: Option<i64>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
-    ) -> Self {
+        compression: CompressionCodec,
+    ) -> Result<Self> {
         let location = output.location().to_owned();
-        Self {
-            output: ManifestOutput::Plain(output),
+        Self::from_output(
+            ManifestOutput::Plain(output),
             location,
             snapshot_id,
             schema,
             partition_spec,
-        }
+            compression,
+        )
     }
 
     /// Create a new builder from an [`EncryptedOutputFile`].
     ///
     /// Use this when writing manifests with transparent encryption.
+    /// Returns an error if `compression` is not supported for Avro files.
     pub fn new_from_encrypted(
         encrypted_output: EncryptedOutputFile,
         snapshot_id: Option<i64>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
+        compression: CompressionCodec,
     ) -> Result<Self> {
         let location = encrypted_output.location().to_owned();
-        Ok(Self {
-            output: ManifestOutput::Encrypted(encrypted_output),
+        Self::from_output(
+            ManifestOutput::Encrypted(encrypted_output),
             location,
             snapshot_id,
             schema,
             partition_spec,
+            compression,
+        )
+    }
+
+    fn from_output(
+        output: ManifestOutput,
+        location: String,
+        snapshot_id: Option<i64>,
+        schema: SchemaRef,
+        partition_spec: PartitionSpec,
+        compression: CompressionCodec,
+    ) -> Result<Self> {
+        Ok(Self {
+            output,
+            location,
+            snapshot_id,
+            schema,
+            partition_spec,
+            codec: avro_util::to_avro_codec(compression)?,
         })
     }
 
@@ -122,7 +149,14 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V1)
             .content(ManifestContentType::Data)
             .build();
-        ManifestWriter::new(self.output, self.location, self.snapshot_id, metadata, None)
+        ManifestWriter::new(
+            self.output,
+            self.location,
+            self.snapshot_id,
+            metadata,
+            None,
+            self.codec,
+        )
     }
 
     /// Build a [`ManifestWriter`] for format version 2, data content.
@@ -135,7 +169,14 @@ impl ManifestWriterBuilder {
             .content(ManifestContentType::Data)
             .build();
 
-        ManifestWriter::new(self.output, self.location, self.snapshot_id, metadata, None)
+        ManifestWriter::new(
+            self.output,
+            self.location,
+            self.snapshot_id,
+            metadata,
+            None,
+            self.codec,
+        )
     }
 
     /// Build a [`ManifestWriter`] for format version 2, deletes content.
@@ -147,7 +188,14 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V2)
             .content(ManifestContentType::Deletes)
             .build();
-        ManifestWriter::new(self.output, self.location, self.snapshot_id, metadata, None)
+        ManifestWriter::new(
+            self.output,
+            self.location,
+            self.snapshot_id,
+            metadata,
+            None,
+            self.codec,
+        )
     }
 
     /// Build a [`ManifestWriter`] for format version 2, data content.
@@ -167,6 +215,7 @@ impl ManifestWriterBuilder {
             // First row id is assigned by the [`ManifestListWriter`] when the manifest
             // is added to the list.
             None,
+            self.codec,
         )
     }
 
@@ -179,7 +228,14 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V3)
             .content(ManifestContentType::Deletes)
             .build();
-        ManifestWriter::new(self.output, self.location, self.snapshot_id, metadata, None)
+        ManifestWriter::new(
+            self.output,
+            self.location,
+            self.snapshot_id,
+            metadata,
+            None,
+            self.codec,
+        )
     }
 }
 
@@ -203,6 +259,8 @@ pub struct ManifestWriter {
     manifest_entries: Vec<ManifestEntry>,
 
     metadata: ManifestMetadata,
+
+    codec: Codec,
 }
 
 impl ManifestWriter {
@@ -213,6 +271,7 @@ impl ManifestWriter {
         snapshot_id: Option<i64>,
         metadata: ManifestMetadata,
         first_row_id: Option<u64>,
+        codec: Codec,
     ) -> Self {
         Self {
             output,
@@ -228,6 +287,7 @@ impl ManifestWriter {
             min_seq_num: None,
             manifest_entries: Vec::new(),
             metadata,
+            codec,
         }
     }
 
@@ -432,7 +492,8 @@ impl ManifestWriter {
             // Manifest schema did not change between V2 and V3
             FormatVersion::V2 | FormatVersion::V3 => manifest_schema_v2(&partition_type)?,
         };
-        let mut avro_writer = AvroWriter::new(&avro_schema, Vec::new());
+
+        let mut avro_writer = AvroWriter::with_codec(&avro_schema, Vec::new(), self.codec);
         avro_writer.add_user_metadata(
             "schema".to_string(),
             to_vec(table_schema)
@@ -575,13 +636,19 @@ impl PartitionFieldStats {
 mod tests {
     use std::collections::HashMap;
     use std::fs;
+    use std::path::Path;
     use std::sync::Arc;
 
     use tempfile::TempDir;
 
     use super::*;
+    use crate::ErrorKind;
+    use crate::encryption::StandardKeyMetadata;
     use crate::io::FileIO;
-    use crate::spec::{DataFileFormat, Manifest, NestedField, PrimitiveType, Schema, Struct, Type};
+    use crate::spec::{
+        DataFileBuilder, DataFileFormat, Manifest, ManifestReader, NestedField, PrimitiveType,
+        Schema, Struct, Type,
+    };
 
     #[tokio::test]
     async fn test_add_delete_existing() {
@@ -712,7 +779,9 @@ mod tests {
             Some(3),
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v2_data();
         writer.add_entry(entries[0].clone()).unwrap();
         writer.add_delete_entry(entries[1].clone()).unwrap();
@@ -730,6 +799,116 @@ mod tests {
         // file sequence number is assigned to None when the entry is added and delete to the manifest.
         entries[0].file_sequence_number = None;
         assert_eq!(actual_manifest, Manifest::new(metadata, entries));
+    }
+
+    fn added_entry(snapshot_id: i64, path: String, size: u64, records: u64) -> ManifestEntry {
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path)
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::empty())
+            .file_size_in_bytes(size)
+            .record_count(records)
+            .build()
+            .unwrap();
+        ManifestEntry::builder()
+            .status(ManifestStatus::Added)
+            .snapshot_id(snapshot_id)
+            .sequence_number(1)
+            .file_sequence_number(1)
+            .data_file(data_file)
+            .build()
+    }
+
+    #[test]
+    fn test_manifest_writer_builder_rejects_unsupported_codec() {
+        let io = FileIO::new_with_memory();
+        let output = io.new_output("memory:///test/lz4_manifest.avro").unwrap();
+        let err = ManifestWriterBuilder::new(
+            output,
+            Some(1),
+            Arc::new(Schema::builder().build().unwrap()),
+            PartitionSpec::unpartition_spec(),
+            CompressionCodec::Lz4,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.to_string().contains("lz4"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_manifest_writer_with_compression() {
+        let metadata = {
+            let schema = Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::required(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Int),
+                ))])
+                .build()
+                .unwrap();
+
+            ManifestMetadata {
+                schema_id: 0,
+                schema: Arc::new(schema),
+                partition_spec: PartitionSpec::unpartition_spec(),
+                format_version: FormatVersion::V2,
+                content: ManifestContentType::Data,
+            }
+        };
+
+        async fn write_manifest(
+            io: &FileIO,
+            path: &Path,
+            metadata: &ManifestMetadata,
+            compression: CompressionCodec,
+        ) {
+            let output_file = io.new_output(path.to_str().unwrap()).unwrap();
+            let mut writer = ManifestWriterBuilder::new(
+                output_file,
+                Some(1),
+                metadata.schema.clone(),
+                metadata.partition_spec.clone(),
+                compression,
+            )
+            .unwrap()
+            .build_v2_data();
+            for i in 0..1000 {
+                let entry = added_entry(
+                    1,
+                    format!(
+                        "/very/long/path/to/data/directory/with/many/subdirectories/file_{i}.parquet"
+                    ),
+                    100000 + i,
+                    1000 + i,
+                );
+                writer.add_entry(entry).unwrap();
+            }
+            writer.write_manifest_file().await.unwrap();
+        }
+
+        let tmp_dir = TempDir::new().unwrap();
+        let io = FileIO::new_with_fs();
+        let uncompressed_path = tmp_dir.path().join("uncompressed_manifest.avro");
+        let compressed_path = tmp_dir.path().join("compressed_manifest.avro");
+
+        write_manifest(&io, &uncompressed_path, &metadata, CompressionCodec::None).await;
+        write_manifest(&io, &compressed_path, &metadata, CompressionCodec::Gzip(9)).await;
+
+        let uncompressed_size = fs::metadata(&uncompressed_path).unwrap().len();
+        let compressed_size = fs::metadata(&compressed_path).unwrap().len();
+
+        assert!(
+            compressed_size < uncompressed_size,
+            "Compressed size ({compressed_size}) should be less than uncompressed size ({uncompressed_size})"
+        );
+
+        // Verify the compressed file can be read back correctly
+        let compressed_bytes = fs::read(&compressed_path).unwrap();
+        let manifest = Manifest::parse_avro(&compressed_bytes).unwrap();
+        assert_eq!(manifest.metadata.format_version, FormatVersion::V2);
+        assert_eq!(manifest.entries.len(), 1000);
     }
 
     #[tokio::test]
@@ -799,7 +978,9 @@ mod tests {
             Some(1),
             schema.clone(),
             partition_spec.clone(),
+            CompressionCodec::None,
         )
+        .unwrap()
         .build_v3_deletes();
 
         writer.add_entry(delete_entry).unwrap();
@@ -818,5 +999,50 @@ mod tests {
             actual_manifest.metadata().content,
             ManifestContentType::Deletes,
         );
+    }
+
+    #[tokio::test]
+    async fn test_manifest_writer_encrypted_with_compression() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::required(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Int),
+                ))])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::unpartition_spec();
+        let key_metadata = StandardKeyMetadata::try_new(b"0123456789abcdef")
+            .unwrap()
+            .with_aad_prefix(b"test-aad-prefix!");
+
+        let io = FileIO::new_with_memory();
+        let path = "memory:///test/encrypted_manifest.avro";
+        let output = io.new_output(path).unwrap();
+        let encrypted_output = EncryptedOutputFile::new(output, key_metadata);
+
+        let mut writer = ManifestWriterBuilder::new_from_encrypted(
+            encrypted_output,
+            Some(42),
+            schema.clone(),
+            partition_spec.clone(),
+            CompressionCodec::Gzip(9),
+        )
+        .unwrap()
+        .build_v2_data();
+
+        for i in 0..10 {
+            let entry = added_entry(42, format!("/data/file_{i}.parquet"), 1000 + i, 100 + i);
+            writer.add_entry(entry).unwrap();
+        }
+        let manifest_file = writer.write_manifest_file().await.unwrap();
+        assert_eq!(manifest_file.added_files_count, Some(10));
+
+        // Read back via the recorded key metadata and verify the manifest parses correctly.
+        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        assert_eq!(manifest.entries().len(), 10);
+        assert_eq!(manifest.metadata().format_version, FormatVersion::V2);
     }
 }
