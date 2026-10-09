@@ -261,16 +261,19 @@ fn hdfs_native_config_parse_with(
 /// `?`, `#` or `://` that a URL parser would split elsewhere. An `@` further
 /// along the path is masked the same way, which only costs context.
 fn hdfs_native_redact(s: &str) -> String {
-    let start = s
-        .find("://")
-        .filter(|&i| {
-            s[..i]
+    // Only a real scheme is kept; anything else before `://` may be userinfo.
+    let (scheme, rest) = match s.split_once("://") {
+        Some((scheme, rest))
+            if scheme
                 .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
-        })
-        .map_or(0, |i| i + 3);
-    match s[start..].rfind('@') {
-        Some(at) => format!("{}***{}", &s[..start], &s[start + at..]),
+                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)) =>
+        {
+            (format!("{scheme}://"), rest)
+        }
+        _ => (String::new(), s),
+    };
+    match rest.rsplit_once('@') {
+        Some((_, after)) => format!("{scheme}***@{after}"),
         None => s.to_string(),
     }
 }
@@ -319,13 +322,12 @@ pub(crate) fn hdfs_native_parse_path(path: &str) -> Result<(HdfsNativeAuthority,
     };
 
     // `url.path()` borrows from `url` and can't be returned with the input's
-    // lifetime. Slice the path component out of the original input instead;
-    // it starts after the first `/` following the `hdfs://` prefix. Opendal
-    // paths must not start with `/` (`Deleter::delete` rejects them).
-    let rel = match after_scheme.find('/') {
-        Some(i) => after_scheme[i..].trim_start_matches('/'),
-        None => "",
-    };
+    // lifetime. Take the path from the original input instead: everything
+    // after the first `/` following the `hdfs://` prefix. Opendal paths must
+    // not start with `/` (`Deleter::delete` rejects them).
+    let rel = after_scheme
+        .split_once('/')
+        .map_or("", |(_, path)| path.trim_start_matches('/'));
 
     Ok((authority, rel))
 }
@@ -398,25 +400,22 @@ fn hdfs_native_nameservice(config: &HdfsNativeConfig, nameservice: &str) -> Resu
     let Some(ids) = options.get(&format!("{HA_NAMENODES_PREFIX}.{nameservice}")) else {
         return Ok(None);
     };
-    let name_nodes = ids
-        .split(',')
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(|id| {
-            let key = format!("{HA_NAMENODE_RPC_ADDRESS_PREFIX}.{nameservice}.{id}");
-            options
-                .get(&key)
-                .and_then(|value| hdfs_native_name_node(value))
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Nameservice `{nameservice}` declares NameNode `{id}` but `{key}` is missing or not host:port"
-                        ),
-                    )
-                })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut name_nodes = Vec::new();
+    for id in ids.split(',').map(str::trim).filter(|id| !id.is_empty()) {
+        let key = format!("{HA_NAMENODE_RPC_ADDRESS_PREFIX}.{nameservice}.{id}");
+        let Some(name_node) = options
+            .get(&key)
+            .and_then(|value| hdfs_native_name_node(value))
+        else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Nameservice `{nameservice}` declares NameNode `{id}` but `{key}` is missing or not host:port"
+                ),
+            ));
+        };
+        name_nodes.push(name_node);
+    }
     if name_nodes.is_empty() {
         return Err(Error::new(
             ErrorKind::DataInvalid,
@@ -987,6 +986,11 @@ mod tests {
     #[test]
     fn test_hdfs_native_parse_path_with_authority_and_port() {
         let (nn, rel) = hdfs_native_parse_path("hdfs://nn:8020/foo").unwrap();
+        // Extra leading slashes go too: opendal rejects paths starting with `/`.
+        assert_eq!(
+            hdfs_native_parse_path("hdfs://nn:8020//foo").unwrap().1,
+            "foo"
+        );
 
         assert_eq!(
             nn,
