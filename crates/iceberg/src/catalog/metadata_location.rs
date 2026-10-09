@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 
 use uuid::Uuid;
 
 use crate::compression::CompressionCodec;
-use crate::spec::{TableMetadata, parse_metadata_file_compression};
+use crate::spec::TableMetadata;
 use crate::{Error, ErrorKind, Result};
 
 /// Default folder name for metadata files under the table location, used when the
@@ -43,12 +42,6 @@ pub struct MetadataLocation {
 }
 
 impl MetadataLocation {
-    /// Determines the compression codec from table properties.
-    /// Parse errors result in CompressionCodec::None.
-    fn compression_from_properties(properties: &HashMap<String, String>) -> CompressionCodec {
-        parse_metadata_file_compression(properties).unwrap_or(CompressionCodec::None)
-    }
-
     /// Creates a completely new metadata location starting at version 0, deriving the
     /// metadata directory and compression settings from the table metadata.
     /// Only used for creating a new table. For updates, see `with_next_version` and
@@ -58,7 +51,7 @@ impl MetadataLocation {
             location: metadata.metadata_location()?,
             version: 0,
             id: Uuid::new_v4(),
-            compression_codec: Self::compression_from_properties(metadata.properties()),
+            compression_codec: metadata.metadata_compression_codec()?,
         })
     }
 
@@ -80,7 +73,7 @@ impl MetadataLocation {
             location: new_metadata.metadata_location()?,
             version: self.version,
             id: self.id,
-            compression_codec: Self::compression_from_properties(new_metadata.properties()),
+            compression_codec: new_metadata.metadata_compression_codec()?,
         })
     }
 

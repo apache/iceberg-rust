@@ -27,9 +27,9 @@ use super::_serde::DataFileSerde;
 use super::{
     Datum, FormatVersion, Schema, data_file_schema_v1, data_file_schema_v2, data_file_schema_v3,
 };
-use crate::error::Result;
+use crate::Error;
+use crate::error::{Result, invalid_data};
 use crate::spec::{DEFAULT_PARTITION_SPEC_ID, Struct, StructType, Type};
-use crate::{Error, ErrorKind};
 
 /// Data file carries data file path, partition tuple, metrics, …
 #[derive(Debug, PartialEq, Clone, Eq, Builder)]
@@ -155,7 +155,7 @@ pub struct DataFile {
     /// field id: 142
     ///
     /// The _row_id for the first row in the data file.
-    /// For more details, refer to https://github.com/apache/iceberg/blob/main/format/spec.md#first-row-id-inheritance
+    /// For more details, refer to <https://github.com/apache/iceberg/blob/main/format/spec.md#first-row-id-inheritance>
     #[builder(default)]
     pub(crate) first_row_id: Option<i64>,
     /// This field is not included in spec. It is just store in memory representation used
@@ -301,7 +301,7 @@ pub fn write_data_files_to_avro<W: Write>(
         FormatVersion::V2 => data_file_schema_v2(partition_type).unwrap(),
         FormatVersion::V3 => data_file_schema_v3(partition_type).unwrap(),
     };
-    let mut writer = AvroWriter::new(&avro_schema, writer);
+    let mut writer = AvroWriter::new(&avro_schema, writer)?;
 
     // Wrap once and reuse across files so the field-name lookup is not rebuilt
     // for each data file.
@@ -313,7 +313,7 @@ pub fn write_data_files_to_avro<W: Write>(
             FormatVersion::V1,
         )?)?
         .resolve(&avro_schema)?;
-        writer.append(value)?;
+        writer.append_value(value)?;
     }
 
     Ok(writer.flush()?)
@@ -333,7 +333,9 @@ pub fn read_data_files_from_avro<R: Read>(
         FormatVersion::V3 => data_file_schema_v3(partition_type).unwrap(),
     };
 
-    let reader = AvroReader::with_schema(&avro_schema, reader)?;
+    let reader = AvroReader::builder(reader)
+        .reader_schema(&avro_schema)
+        .build()?;
     // Wrap once and reuse across files so the field-name lookup is not rebuilt
     // for each data file.
     let partition_struct_type = Type::Struct(partition_type.clone());
@@ -370,10 +372,7 @@ impl TryFrom<i32> for DataContentType {
             0 => Ok(DataContentType::Data),
             1 => Ok(DataContentType::PositionDeletes),
             2 => Ok(DataContentType::EqualityDeletes),
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("data content type {v} is invalid"),
-            )),
+            _ => Err(invalid_data!("data content type {v} is invalid")),
         }
     }
 }
@@ -400,10 +399,7 @@ impl FromStr for DataFileFormat {
             "orc" => Ok(Self::Orc),
             "parquet" => Ok(Self::Parquet),
             "puffin" => Ok(Self::Puffin),
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Unsupported data file format: {s}"),
-            )),
+            _ => Err(invalid_data!("Unsupported data file format: {s}")),
         }
     }
 }

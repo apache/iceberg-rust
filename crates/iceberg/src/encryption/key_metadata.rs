@@ -24,6 +24,7 @@ use aes_gcm::aead::OsRng;
 use aes_gcm::aead::rand_core::RngCore;
 
 use super::{AesKeySize, SecureKey};
+use crate::error::invalid_data;
 use crate::{Error, ErrorKind, Result};
 
 /// Standard key metadata for Iceberg table encryption.
@@ -74,7 +75,7 @@ impl StandardKeyMetadata {
         self
     }
 
-    /// Adds a file length.
+    /// Sets the encrypted file length in bytes, required for AGS1 truncation protection.
     pub fn with_file_length(mut self, length: u64) -> Self {
         self.file_length = Some(length);
         self
@@ -90,14 +91,14 @@ impl StandardKeyMetadata {
         self.aad_prefix.as_deref()
     }
 
-    /// Returns the optional file length.
+    /// Returns the optional encrypted file length in bytes; AGS1 readers require it to be set.
     pub fn file_length(&self) -> Option<u64> {
         self.file_length
     }
 
     /// Encodes to Java-compatible format: `[0x01] [Avro binary datum]`
     pub fn encode(&self) -> Result<Box<[u8]>> {
-        _serde::StandardKeyMetadataV1::from(self).encode()
+        _serde::StandardKeyMetadataV1::try_from(self)?.encode()
     }
 
     /// Decodes from Java-compatible format.
@@ -130,7 +131,9 @@ mod _serde {
     use std::io::Cursor;
     use std::sync::{Arc, LazyLock};
 
-    use apache_avro::{Schema as AvroSchema, from_avro_datum, from_value, to_avro_datum, to_value};
+    use apache_avro::reader::datum::GenericDatumReader;
+    use apache_avro::writer::datum::GenericDatumWriter;
+    use apache_avro::{Schema as AvroSchema, from_value, to_value};
     use serde::{Deserialize, Serialize};
 
     use super::*;
@@ -172,7 +175,7 @@ mod _serde {
     pub(super) struct StandardKeyMetadataV1 {
         pub encryption_key: serde_bytes::ByteBuf,
         pub aad_prefix: Option<serde_bytes::ByteBuf>,
-        pub file_length: Option<u64>,
+        pub file_length: Option<i64>,
     }
 
     impl StandardKeyMetadataV1 {
@@ -184,9 +187,13 @@ mod _serde {
                         .with_source(e)
                 })?;
 
-            let datum = to_avro_datum(&AVRO_SCHEMA_V1, value).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "Failed to encode key metadata").with_source(e)
-            })?;
+            let datum = GenericDatumWriter::builder(&AVRO_SCHEMA_V1)
+                .build()
+                .and_then(|writer| writer.write_value_to_vec(value))
+                .map_err(|e| {
+                    Error::new(ErrorKind::Unexpected, "Failed to encode key metadata")
+                        .with_source(e)
+                })?;
 
             let mut result = Vec::with_capacity(1 + datum.len());
             result.push(V1);
@@ -196,45 +203,51 @@ mod _serde {
 
         pub(super) fn decode(bytes: &[u8]) -> Result<Self> {
             if bytes.is_empty() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Empty key metadata buffer",
-                ));
+                return Err(invalid_data!("Empty key metadata buffer"));
             }
 
             let version = bytes[0];
             if version != V1 {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
-                    format!("Cannot resolve schema for version: {version}"),
+                    format!("Unsupported key metadata version: {version} (supported: {V1})"),
                 ));
             }
 
             let mut reader = Cursor::new(&bytes[1..]);
-            let value = from_avro_datum(&AVRO_SCHEMA_V1, &mut reader, None).map_err(|e| {
-                Error::new(ErrorKind::DataInvalid, "Failed to decode key metadata").with_source(e)
-            })?;
+            let value = GenericDatumReader::builder(&AVRO_SCHEMA_V1)
+                .build()
+                .and_then(|datum_reader| datum_reader.read_value(&mut reader))
+                .map_err(|e| invalid_data!("Failed to decode key metadata").with_source(e))?;
 
-            from_value(&value).map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Failed to decode key metadata fields",
-                )
-                .with_source(e)
-            })
+            from_value(&value)
+                .map_err(|e| invalid_data!("Failed to decode key metadata fields").with_source(e))
         }
     }
 
-    impl From<&StandardKeyMetadata> for StandardKeyMetadataV1 {
-        fn from(metadata: &StandardKeyMetadata) -> Self {
-            Self {
+    impl TryFrom<&StandardKeyMetadata> for StandardKeyMetadataV1 {
+        type Error = Error;
+
+        fn try_from(metadata: &StandardKeyMetadata) -> Result<Self> {
+            let file_length = metadata
+                .file_length
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Key metadata file length exceeds the Avro long range",
+                    )
+                    .with_source(e)
+                })?;
+            Ok(Self {
                 encryption_key: serde_bytes::ByteBuf::from(metadata.encryption_key.as_bytes()),
                 aad_prefix: metadata
                     .aad_prefix
                     .as_ref()
                     .map(|b| serde_bytes::ByteBuf::from(b.as_ref())),
-                file_length: metadata.file_length,
-            }
+                file_length,
+            })
         }
     }
 
@@ -243,16 +256,14 @@ mod _serde {
 
         fn try_from(v1: StandardKeyMetadataV1) -> Result<Self> {
             let encryption_key = SecureKey::new(&v1.encryption_key).map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Invalid encryption key in key metadata",
-                )
-                .with_source(e)
+                invalid_data!("Invalid encryption key in key metadata").with_source(e)
             })?;
             Ok(Self {
                 encryption_key,
                 aad_prefix: v1.aad_prefix.map(|b| b.into_vec().into_boxed_slice()),
-                file_length: v1.file_length,
+                file_length: v1.file_length.map(u64::try_from).transpose().map_err(|e| {
+                    invalid_data!("Negative file length in key metadata").with_source(e)
+                })?,
             })
         }
     }
@@ -302,6 +313,10 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert_eq!(
+            err.message(),
+            "Unsupported key metadata version: 2 (supported: 1)"
+        );
     }
 
     #[test]
@@ -337,6 +352,30 @@ mod tests {
     }
 
     #[test]
+    fn test_encode_rejects_file_length_above_long_max() {
+        let metadata = StandardKeyMetadata::try_new(&[0u8; 16])
+            .unwrap()
+            .with_file_length(i64::MAX as u64 + 1);
+
+        let err = metadata.encode().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[test]
+    fn test_decode_rejects_negative_file_length() {
+        let serialized = _serde::StandardKeyMetadataV1 {
+            encryption_key: serde_bytes::ByteBuf::from(vec![0u8; 16]),
+            aad_prefix: None,
+            file_length: Some(-1),
+        }
+        .encode()
+        .unwrap();
+
+        let err = StandardKeyMetadata::decode(&serialized).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[test]
     fn test_decode_rejects_invalid_key_length() {
         // Craft wire bytes carrying an invalid-length DEK directly via the
         // serde struct (bypassing the validated public constructors) to prove
@@ -356,6 +395,37 @@ mod tests {
                 err.to_string()
                     .contains("Invalid encryption key in key metadata")
             );
+        }
+    }
+
+    #[test]
+    fn test_decode_tolerates_trailing_bytes() {
+        // Deliberate, not an oversight: Java's RawDecoder reads a single datum without
+        // checking for EOF, and Iceberg depends on that leniency — `file_length` was
+        // appended to SCHEMA_V1 without bumping the version byte. Requiring EOF here
+        // would stop older readers tolerating fields a newer writer appended.
+        let key = b"0123456789012345";
+        let aad = b"1234567890123456";
+        let file_length = 1024;
+
+        let serialized = StandardKeyMetadata::try_new(key)
+            .unwrap()
+            .with_aad_prefix(aad)
+            .with_file_length(file_length)
+            .encode()
+            .unwrap();
+
+        // Arbitrary junk, then bytes shaped like a further optional field appended by a
+        // newer writer (union tag "present", then a 4-byte value).
+        for trailing in [b"\xde\xad\xbe\xef".as_slice(), b"\x02\x08more".as_slice()] {
+            let mut extended = serialized.to_vec();
+            extended.extend_from_slice(trailing);
+
+            let parsed = StandardKeyMetadata::decode(&extended).unwrap();
+
+            assert_eq!(parsed.encryption_key().as_bytes(), key);
+            assert_eq!(parsed.aad_prefix(), Some(aad.as_slice()));
+            assert_eq!(parsed.file_length(), Some(file_length));
         }
     }
 }

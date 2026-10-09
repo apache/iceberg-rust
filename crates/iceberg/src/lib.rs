@@ -83,6 +83,7 @@ pub mod table;
 mod avro;
 pub mod cache;
 pub mod compression;
+pub mod cow_rewrite;
 pub mod io;
 pub mod spec;
 
@@ -94,12 +95,13 @@ pub mod transaction;
 pub mod transform;
 
 mod runtime;
-pub use runtime::{Runtime, RuntimeHandle};
+pub use runtime::{JoinHandle, Runtime, RuntimeHandle};
 
 pub mod arrow;
 pub(crate) mod delete_file_index;
 pub mod encryption;
-pub mod test_utils;
+#[cfg(test)]
+mod test_utils;
 pub mod writer;
 
 mod delete_vector;

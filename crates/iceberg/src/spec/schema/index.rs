@@ -17,6 +17,7 @@
 
 use super::utils::try_insert_field;
 use super::*;
+use crate::error::invalid_data;
 use crate::spec::VariantType;
 
 /// Creates a field id to field map.
@@ -183,11 +184,8 @@ impl IndexByName {
             .chain(vec![name])
             .join(".");
         if let Some(existing_field_id) = self.name_to_id.get(full_name.as_str()) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
-                ),
+            return Err(invalid_data!(
+                "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
             ));
         } else {
             self.name_to_id.insert(full_name, field_id);

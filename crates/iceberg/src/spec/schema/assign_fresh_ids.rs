@@ -17,6 +17,7 @@
 
 use super::utils::try_insert_field;
 use super::*;
+use crate::error::invalid_data;
 
 /// Reassigns `schema`'s field ids, reusing ids from `base` for fields whose full name is unchanged
 /// and drawing fresh ids from `last_column_id + 1` upwards for everything else.
@@ -37,21 +38,15 @@ pub(crate) fn assign_fresh_ids(
     last_column_id: i32,
 ) -> Result<Schema> {
     if last_column_id < base.highest_field_id() {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "last_column_id ({last_column_id}) is below base.highest_field_id() ({}); pass table_metadata.last_column_id()",
-                base.highest_field_id()
-            ),
+        return Err(invalid_data!(
+            "last_column_id ({last_column_id}) is below base.highest_field_id() ({}); pass table_metadata.last_column_id()",
+            base.highest_field_id()
         ));
     }
 
-    let start_from = last_column_id.checked_add(1).ok_or_else(|| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            "Field ID overflowed, cannot add more fields",
-        )
-    })?;
+    let start_from = last_column_id
+        .checked_add(1)
+        .ok_or_else(|| invalid_data!("Field ID overflowed, cannot add more fields"))?;
 
     let Schema {
         r#struct,
@@ -107,12 +102,10 @@ impl AssignFreshIds {
         }
 
         let id = self.next_field_id;
-        self.next_field_id = self.next_field_id.checked_add(1).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Field ID overflowed, cannot add more fields",
-            )
-        })?;
+        self.next_field_id = self
+            .next_field_id
+            .checked_add(1)
+            .ok_or_else(|| invalid_data!("Field ID overflowed, cannot add more fields"))?;
         Ok(id)
     }
 
@@ -185,12 +178,10 @@ impl AssignFreshIds {
         field_ids
             .into_iter()
             .map(|id| {
-                self.old_to_new_id.get(&id).copied().ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("identifier field id {id} not found"),
-                    )
-                })
+                self.old_to_new_id
+                    .get(&id)
+                    .copied()
+                    .ok_or_else(|| invalid_data!("identifier field id {id} not found"))
             })
             .collect()
     }
@@ -202,12 +193,7 @@ impl AssignFreshIds {
                 self.old_to_new_id
                     .get(&id)
                     .copied()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Field with id {id} for alias {name} not found"),
-                        )
-                    })
+                    .ok_or_else(|| invalid_data!("Field with id {id} for alias {name} not found"))
                     .map(|new_id| (name, new_id))
             })
             .collect()

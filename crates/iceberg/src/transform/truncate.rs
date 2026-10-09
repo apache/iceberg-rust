@@ -22,6 +22,7 @@ use arrow_schema::DataType;
 
 use super::TransformFunction;
 use crate::Error;
+use crate::error::invalid_data;
 use crate::spec::decimal_utils::decimal_from_i128_with_scale;
 use crate::spec::{Datum, PrimitiveLiteral};
 
@@ -69,10 +70,7 @@ impl TransformFunction for Truncate {
         match input.data_type() {
             DataType::Int32 => {
                 let width: i32 = self.width.try_into().map_err(|_| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "width is failed to convert to i32 when truncate Int32Array",
-                    )
+                    invalid_data!("width is failed to convert to i32 when truncate Int32Array")
                 })?;
                 let res: arrow_array::Int32Array = input
                     .as_any()
@@ -151,10 +149,7 @@ impl TransformFunction for Truncate {
         match input.literal() {
             PrimitiveLiteral::Int(v) => Ok(Some({
                 let width: i32 = self.width.try_into().map_err(|_| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "width is failed to convert to i32 when truncate Int32Array",
-                    )
+                    invalid_data!("width is failed to convert to i32 when truncate Int32Array")
                 })?;
                 Datum::int(Self::truncate_i32(*v, width))
             })),

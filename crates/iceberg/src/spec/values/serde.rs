@@ -18,15 +18,18 @@
 //\! Serialization and deserialization support for Iceberg values
 
 pub(crate) mod _serde {
+    use std::collections::HashMap;
+
     use serde::de::Visitor;
     use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
     use serde::{Deserialize, Serialize};
     use serde_bytes::ByteBuf;
     use serde_derive::{Deserialize as DeserializeDerive, Serialize as SerializeDerive};
 
+    use crate::Error;
+    use crate::error::invalid_data;
     use crate::spec::values::{Literal, Map, PrimitiveLiteral, Struct};
-    use crate::spec::{MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, PrimitiveType, Type};
-    use crate::{Error, ErrorKind};
+    use crate::spec::{MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, PrimitiveType, StructType, Type};
 
     #[derive(SerializeDerive, DeserializeDerive, Debug)]
     #[serde(transparent)]
@@ -42,6 +45,53 @@ pub(crate) mod _serde {
         /// Convert raw literal to literal.
         pub fn try_into(self, ty: &Type) -> Result<Option<Literal>, Error> {
             self.0.try_into(ty)
+        }
+
+        /// Matches the fields of a record to `struct_type` by name, the way Avro
+        /// schema resolution matches record fields. The result has
+        /// `struct_type`'s fields in its order, with null for an optional field the
+        /// record lacks. Record fields that `struct_type` lacks are dropped. Values
+        /// other than records are returned unchanged.
+        ///
+        /// Fields aren't matched by field ID. A writer that stores a field under
+        /// another name, such as Java replacing characters that Avro names don't
+        /// allow, reads as a missing field.
+        pub fn project_by_name(self, struct_type: &StructType) -> Result<Self, Error> {
+            let (mut required, optional) = match self.0 {
+                RawLiteralEnum::Record(Record { required, optional }) => (required, optional),
+                other => return Ok(Self(other)),
+            };
+            required.extend(
+                optional
+                    .into_iter()
+                    .map(|(name, value)| (name, value.unwrap_or(RawLiteralEnum::Null))),
+            );
+            let fields = struct_type.fields();
+            let required = if required.len() == fields.len()
+                && required
+                    .iter()
+                    .zip(fields)
+                    .all(|((name, _), field)| *name == field.name)
+            {
+                required
+            } else {
+                let mut values: HashMap<String, RawLiteralEnum> = required.into_iter().collect();
+                fields
+                    .iter()
+                    .map(|field| match values.remove(&field.name) {
+                        Some(value) => Ok((field.name.clone(), value)),
+                        None if field.required => Err(invalid_data!(
+                            "Record has no value for required field {}",
+                            field.name
+                        )),
+                        None => Ok((field.name.clone(), RawLiteralEnum::Null)),
+                    })
+                    .collect::<Result<_, Error>>()?
+            };
+            Ok(Self(RawLiteralEnum::Record(Record {
+                required,
+                optional: Vec::new(),
+            })))
         }
     }
 
@@ -245,10 +295,7 @@ pub(crate) mod _serde {
                         RawLiteralEnum::Bytes(ByteBuf::from(v.to_be_bytes()))
                     }
                     PrimitiveLiteral::AboveMax | PrimitiveLiteral::BelowMin => {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "Can't convert AboveMax or BelowMax",
-                        ));
+                        return Err(invalid_data!("Can't convert AboveMax or BelowMax"));
                     }
                 },
                 Literal::Struct(r#struct) => {
@@ -263,9 +310,8 @@ pub(crate) mod _serde {
                                         RawLiteralEnum::try_from(value, &field.field_type)?,
                                     ));
                                 } else {
-                                    return Err(Error::new(
-                                        ErrorKind::DataInvalid,
-                                        "Can't convert null to required field",
+                                    return Err(invalid_data!(
+                                        "Can't convert null to required field"
                                     ));
                                 }
                             } else if let Some(value) = value {
@@ -278,10 +324,7 @@ pub(crate) mod _serde {
                             }
                         }
                     } else {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Type {ty} should be a struct"),
-                        ));
+                        return Err(invalid_data!("Type {ty} should be a struct"));
                     }
                     RawLiteralEnum::Record(Record { required, optional })
                 }
@@ -301,10 +344,7 @@ pub(crate) mod _serde {
                             required: list_ty.element_field.required,
                         })
                     } else {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Type {ty} should be a list"),
-                        ));
+                        return Err(invalid_data!("Type {ty} should be a list"));
                     }
                 }
                 Literal::Map(map) => {
@@ -325,9 +365,8 @@ pub(crate) mod _serde {
                                         .transpose()?,
                                     ));
                                 } else {
-                                    return Err(Error::new(
-                                        ErrorKind::DataInvalid,
-                                        "literal type is inconsistent with type",
+                                    return Err(invalid_data!(
+                                        "literal type is inconsistent with type"
                                     ));
                                 }
                             }
@@ -348,7 +387,7 @@ pub(crate) mod _serde {
                                     Ok(Some(RawLiteralEnum::Record(Record {
                                         required: vec![
                                             (MAP_KEY_FIELD_NAME.to_string(), raw_k),
-                                            (MAP_VALUE_FIELD_NAME.to_string(), raw_v.ok_or_else(||Error::new(ErrorKind::DataInvalid, "Map value is required, value cannot be null"))?),
+                                            (MAP_VALUE_FIELD_NAME.to_string(), raw_v.ok_or_else(||invalid_data!("Map value is required, value cannot be null"))?),
                                         ],
                                         optional: vec![],
                                     })))
@@ -369,10 +408,7 @@ pub(crate) mod _serde {
                             })
                         }
                     } else {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Type {ty} should be a map"),
-                        ));
+                        return Err(invalid_data!("Type {ty} should be a map"));
                     }
                 }
             };
@@ -381,19 +417,13 @@ pub(crate) mod _serde {
 
         pub fn try_into(self, ty: &Type) -> Result<Option<Literal>, Error> {
             let invalid_err = |v: &str| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Unable to convert raw literal ({v}) fail convert to type {ty} for: type mismatch"
-                    ),
+                invalid_data!(
+                    "Unable to convert raw literal ({v}) fail convert to type {ty} for: type mismatch"
                 )
             };
             let invalid_err_with_reason = |v: &str, reason: &str| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Unable to convert raw literal ({v}) fail convert to type {ty} for: {reason}"
-                    ),
+                invalid_data!(
+                    "Unable to convert raw literal ({v}) fail convert to type {ty} for: {reason}"
                 )
             };
             match self {
@@ -417,6 +447,12 @@ pub(crate) mod _serde {
                     Type::Primitive(PrimitiveType::Timestamp) => Ok(Some(Literal::timestamp(v))),
                     Type::Primitive(PrimitiveType::Timestamptz) => {
                         Ok(Some(Literal::timestamptz(v)))
+                    }
+                    Type::Primitive(PrimitiveType::TimestampNs) => {
+                        Ok(Some(Literal::timestamp_nano(v)))
+                    }
+                    Type::Primitive(PrimitiveType::TimestamptzNs) => {
+                        Ok(Some(Literal::timestamptz_nano(v)))
                     }
                     _ => Err(invalid_err("long")),
                 },
@@ -681,7 +717,7 @@ pub(crate) mod _serde {
                                     .ok_or_else(|| {
                                         invalid_err_with_reason(
                                             "record",
-                                            &format!("field {} is not exist", &field_name),
+                                            &format!("field {} is not exist", field_name),
                                         )
                                     })?;
                                 let value = value.try_into(&field.field_type)?;

@@ -61,7 +61,9 @@ impl ManifestList {
     pub fn parse_with_version(bs: &[u8], version: FormatVersion) -> Result<ManifestList> {
         match version {
             FormatVersion::V1 => {
-                let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V1, bs)?;
+                let reader = Reader::builder(bs)
+                    .reader_schema(&MANIFEST_LIST_AVRO_SCHEMA_V1)
+                    .build()?;
                 let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
                 from_value::<_serde::ManifestListV1>(&values)?.try_into()
             }
@@ -196,7 +198,7 @@ mod test {
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
                     partitions: Some(
-                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1).to_bytes().unwrap())}]
+                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1_f32).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1_f32).to_bytes().unwrap())}]
                     ),
                     key_metadata: None,
                     first_row_id: None,
@@ -265,7 +267,7 @@ mod test {
 
         let manifest_entry: ManifestFileV2 = manifest_list.entries[0].clone().try_into().unwrap();
         let mut writer =
-            Writer::with_codec(&MANIFEST_LIST_AVRO_SCHEMA_V2, Vec::new(), Codec::Snappy);
+            Writer::with_codec(&MANIFEST_LIST_AVRO_SCHEMA_V2, Vec::new(), Codec::Snappy).unwrap();
         writer.append_ser(manifest_entry).unwrap();
         let bs = writer.into_inner().unwrap();
 
@@ -314,7 +316,7 @@ mod test {
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
                     partitions: Some(
-                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1).to_bytes().unwrap())}]
+                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1_f32).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1_f32).to_bytes().unwrap())}]
                     ),
                     key_metadata: None,
                     first_row_id: Some(13),
