@@ -1192,8 +1192,8 @@ For details on how to run a release, please refer to: https://rust.iceberg.apach
 <h3 id="update-dependencies"><a class="header" href="#update-dependencies">Update dependencies</a></h3>
 <p>Dependabot runs monthly to reduce update noise, so dependencies may be out of date by the time of a release.
 Before cutting a release candidate, open the repository's <a href="https://github.com/apache/iceberg-rust/network/updates">Dependabot page</a> and trigger a manual check for each configured ecosystem: <code>cargo</code> and <code>github-actions</code> at <code>/</code>, and <code>uv</code> at <code>/bindings/python</code>.
-Review and merge the applicable dependency update PRs before creating the release branch and regenerating the dependency lists.
-For an existing release branch, backport the applicable updates to that branch before regenerating its dependency lists and cutting the release candidate.</p>
+Review and merge the applicable dependency update PRs before creating the release branch.
+For an existing release branch, backport the applicable updates to that branch before cutting the release candidate.</p>
 <p>Only a committer with write access to the repository can trigger Dependabot manually.
 Work with a committer if you do not have write access.</p>
 <h3 id="create-a-minor-version-release-branch-if-it-doesnt-already-exist"><a class="header" href="#create-a-minor-version-release-branch-if-it-doesnt-already-exist">Create a minor version release branch, if it doesn't already exist</a></h3>
@@ -1210,7 +1210,7 @@ It is correct that the tag does not exist at this stage, as it will be created l
 <li>Use the minor version branch created earlier as the branch target. For example, <code>v0.9.x</code>.</li>
 <li>Save the draft.</li>
 </ul>
-<h3 id="update-crate-versions-dependencies-list-and-changelog"><a class="header" href="#update-crate-versions-dependencies-list-and-changelog">Update crate versions, dependencies list, and changelog</a></h3>
+<h3 id="update-crate-versions-and-changelog"><a class="header" href="#update-crate-versions-and-changelog">Update crate versions and changelog</a></h3>
 <p>The following changes can be made in one pull request against the minor version branch (e.g. <code>v0.9.x</code>).</p>
 <h4 id="bump-crate-versions"><a class="header" href="#bump-crate-versions">Bump crate versions</a></h4>
 <p>Bump all components' version in the project to the new Iceberg Rust version.
@@ -1223,10 +1223,7 @@ This version is the final version, not the release candidate version.</p>
 <p>Update <code>CHANGELOG.md</code> based on the changes since the previous version.
 You may use generative AI to assist making this update, but please review the proposed changes for correctness.
 The changelog should reflect a summary of each commit in the new release.</p>
-<h4 id="update-dependency-lists"><a class="header" href="#update-dependency-lists">Update dependency lists</a></h4>
-<p>Run the following command to update the dependencies list of every package:</p>
-<pre><code class="language-shell">dev/release/dependencies.sh generate
-</code></pre>
+<h4 id="verify-dependency-licenses"><a class="header" href="#verify-dependency-licenses">Verify dependency licenses</a></h4>
 <p>Run the following command to verify the licenses meet the project's policy.</p>
 <pre><code class="language-shell">dev/release/dependencies.sh check
 </code></pre>
