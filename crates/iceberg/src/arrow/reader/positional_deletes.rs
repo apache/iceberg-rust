@@ -452,7 +452,8 @@ mod tests {
                     .with_file_type(DataContentType::PositionDeletes)
                     .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .with_case_sensitive(false)
             .build()
@@ -672,7 +673,8 @@ mod tests {
                     .with_file_type(DataContentType::PositionDeletes)
                     .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .with_case_sensitive(false)
             .build()
@@ -886,7 +888,8 @@ mod tests {
                     .with_file_type(DataContentType::PositionDeletes)
                     .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .with_case_sensitive(false)
             .build()
@@ -975,8 +978,8 @@ mod tests {
         // Deletion vector deleting positions 1 and 3 (ids 2 and 4), serialized as a
         // deletion-vector-v1 blob and embedded in a Puffin-like file at a non-zero offset.
         let blob = encode_dv_blob([1u64, 3]);
-        let content_offset = 12i64;
-        let content_size = blob.len() as i64;
+        let content_offset = 12u64;
+        let content_size = blob.len() as u64;
         let mut dv_file_bytes = vec![0u8; content_offset as usize];
         dv_file_bytes.extend_from_slice(&blob);
         let dv_path = format!("{table_location}/deletes.puffin");
@@ -1005,12 +1008,14 @@ mod tests {
                     .with_content_offset(Some(content_offset))
                     .with_content_size_in_bytes(Some(content_size))
                     .with_record_count(Some(2))
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
-        let tasks = Box::pin(futures::stream::iter(vec![task])) as FileScanTaskStream;
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result = reader
             .read(tasks)
             .unwrap()
@@ -1100,14 +1105,16 @@ mod tests {
                     .with_partition_spec_id(0)
                     .with_referenced_data_file(Some(data_file_path.clone()))
                     .with_content_offset(Some(0))
-                    .with_content_size_in_bytes(Some(blob.len() as i64))
+                    .with_content_size_in_bytes(Some(blob.len() as u64))
                     .with_record_count(Some(5))
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
-        let tasks = Box::pin(futures::stream::iter(vec![task])) as FileScanTaskStream;
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result: Result<Vec<RecordBatch>, _> =
             reader.read(tasks).unwrap().stream().try_collect().await;
 
