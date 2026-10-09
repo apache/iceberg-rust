@@ -61,7 +61,14 @@ fn hdfs_native_name_node(entry: &str) -> Option<String> {
         || !matches!(url.path(), "" | "/")
         || url.query().is_some()
         || url.fragment().is_some();
-    (!plain).then(|| format!("hdfs://{host}:{port}"))
+    (!plain).then(|| hdfs_native_endpoint(host, port))
+}
+
+/// An endpoint as every source spells it, the host lowercased because host
+/// names are case-insensitive: `NN1:8020` and `nn1:8020` share one client,
+/// as they share one `FileSystem` in Hadoop's cache.
+fn hdfs_native_endpoint(host: &str, port: u16) -> String {
+    format!("hdfs://{}:{port}", host.to_ascii_lowercase())
 }
 
 /// Parses a comma-separated NameNode list, each entry normalized; an empty
@@ -317,7 +324,7 @@ pub(crate) fn hdfs_native_parse_path(path: &str) -> Result<(HdfsNativeAuthority,
     }
 
     let authority = match (url.host_str().filter(|h| !h.is_empty()), url.port()) {
-        (Some(host), Some(port)) => HdfsNativeAuthority::NameNode(format!("hdfs://{host}:{port}")),
+        (Some(host), Some(port)) => HdfsNativeAuthority::NameNode(hdfs_native_endpoint(host, port)),
         (Some(host), None) => HdfsNativeAuthority::Nameservice(host.to_string()),
         (None, _) => HdfsNativeAuthority::Default,
     };
@@ -448,8 +455,10 @@ impl HdfsNativeStorage {
     }
 }
 
-/// Operators cached per effective NameNode; the cache lives as long as the
-/// storage that owns it (clones share it).
+/// Operators cached per effective NameNode: one per endpoint or nameservice
+/// the storage's paths reach, which in practice is a handful of clusters, so
+/// it is not bounded. The cache lives as long as the storage that owns it
+/// (clones share it).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct HdfsNativeOperatorCache(Arc<RwLock<HashMap<String, Operator>>>);
 
@@ -598,6 +607,7 @@ mod tests {
             (" hdfs://nn:8020/ ", "hdfs://nn:8020"),
             ("nn:8020", "hdfs://nn:8020"),
             ("[::1]:8020", "hdfs://[::1]:8020"),
+            ("NN:8020", "hdfs://nn:8020"),
             (
                 "hdfs://nn1:8020/, nn2:8020,",
                 "hdfs://nn1:8020,hdfs://nn2:8020",
@@ -795,7 +805,7 @@ mod tests {
         );
         let operators = HdfsNativeOperatorCache::default();
 
-        for path in ["hdfs:///a", "hdfs://nn:8020/b"] {
+        for path in ["hdfs:///a", "hdfs://nn:8020/b", "hdfs://NN:8020/c"] {
             hdfs_native_create_operator(path, &config, &operators).unwrap();
         }
 
