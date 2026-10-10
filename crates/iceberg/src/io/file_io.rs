@@ -25,7 +25,7 @@ use futures::{Stream, StreamExt, stream};
 use super::storage::{
     LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageFactory,
 };
-use crate::Result;
+use crate::{Error, ErrorKind, Result};
 
 /// FileIO implementation, used to manipulate files in underlying storage.
 ///
@@ -307,6 +307,12 @@ impl FileIO {
     /// - Files under the path that route to a deeper per-prefix storage are removed through that
     ///   storage, which deletes only within its own prefix; the storage serving the path deletes
     ///   the rest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::FeatureUnsupported`], before deleting anything, if a per-prefix
+    /// storage beneath the path has a prefix that does not end with `/`: it serves a raw string
+    /// prefix, which cannot be deleted as a directory.
     pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()> {
         let path = path.as_ref();
         let dir = if path.ends_with('/') {
@@ -315,16 +321,31 @@ impl FileIO {
             format!("{path}/")
         };
         // Credentials scoped to a prefix may not reach beyond it.
-        for ps in self
+        let nested: Vec<&PrefixedStorage> = self
             .prefixed
             .iter()
-            .filter(|ps| ps.prefix != path && ps.prefix.starts_with(&dir))
-        {
+            .filter(|ps| ps.prefix.len() > dir.len() && ps.prefix.starts_with(&dir))
+            .collect();
+        if let Some(ps) = nested.iter().find(|ps| !ps.prefix.ends_with('/')) {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "cannot delete `{path}` recursively: the credential prefix `{}` beneath it \
+                     is not a directory",
+                    ps.prefix
+                ),
+            ));
+        }
+        for ps in nested {
             Self::get_or_build(&ps.storage, &self.factory, &ps.config)?
                 .delete_prefix(&ps.prefix)
                 .await?;
         }
-        self.get_storage(path)?.delete_prefix(path).await
+        // Route by the directory, so `table` and `table/` reach the same storage.
+        let (cell, config) = self.route(&dir);
+        Self::get_or_build(cell, &self.factory, config)?
+            .delete_prefix(path)
+            .await
     }
 
     /// Delete multiple files from a stream of paths.
@@ -655,10 +676,10 @@ mod tests {
     use super::{
         FileIO, FileIOBuilder, InputFile, OutputFile, Storage, StorageConfig, StorageFactory,
     };
-    use crate::Result;
     use crate::io::{
         FileMetadata, FileRead, FileWrite, LocalFsStorageFactory, MemoryStorageFactory,
     };
+    use crate::{ErrorKind, Result};
 
     fn create_local_file_io() -> FileIO {
         FileIO::new_with_fs()
@@ -938,16 +959,18 @@ mod tests {
         }
     }
 
+    type DeleteLog = Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
     /// Records the `delete_prefix` calls of every storage it builds, tagged
     /// with the storage's `scope` property.
     #[derive(Debug, Default, Serialize, Deserialize)]
-    struct RecordingFactory(#[serde(skip)] Arc<std::sync::Mutex<Vec<(String, String)>>>);
+    struct RecordingFactory(#[serde(skip)] DeleteLog);
 
     #[derive(Debug, Serialize, Deserialize)]
     struct RecordingStorage {
         scope: String,
         #[serde(skip)]
-        calls: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        calls: DeleteLog,
     }
 
     #[typetag::serde]
@@ -1002,27 +1025,70 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_delete_prefix_keeps_each_storage_within_its_prefix() {
+    /// A FileIO over a [`RecordingFactory`] with `prefixes` as (prefix, scope),
+    /// and the log its storages record into.
+    fn recording_file_io(prefixes: &[(&str, &str)]) -> (FileIO, DeleteLog) {
         let factory = RecordingFactory::default();
         let calls = factory.0.clone();
-        let file_io = FileIOBuilder::new(Arc::new(factory))
-            .with_prop("scope", "default")
-            .with_prefixed_props("s3://bucket/table/data/", [("scope", "data")])
-            .with_prefixed_props("s3://bucket/table/meta", [("scope", "meta")])
-            .build();
+        let mut builder = FileIOBuilder::new(Arc::new(factory)).with_prop("scope", "default");
+        for (prefix, scope) in prefixes {
+            builder = builder.with_prefixed_props(*prefix, [("scope", *scope)]);
+        }
+        (builder.build(), calls)
+    }
+
+    fn recorded(calls: &[(&str, &str)]) -> Vec<(String, String)> {
+        calls
+            .iter()
+            .map(|(scope, path)| (scope.to_string(), path.to_string()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_delete_prefix_keeps_each_storage_within_its_prefix() {
+        let (file_io, calls) = recording_file_io(&[
+            ("s3://bucket/table/data/", "data"),
+            ("s3://bucket/table/metadata/", "metadata"),
+        ]);
 
         file_io.delete_prefix("s3://bucket/table/").await.unwrap();
 
-        let expected: Vec<(String, String)> = [
-            ("data", "s3://bucket/table/data/"),
-            ("meta", "s3://bucket/table/meta"),
-            ("default", "s3://bucket/table/"),
-        ]
-        .into_iter()
-        .map(|(scope, path)| (scope.to_string(), path.to_string()))
-        .collect();
-        assert_eq!(*calls.lock().unwrap(), expected);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            recorded(&[
+                ("metadata", "s3://bucket/table/metadata/"),
+                ("data", "s3://bucket/table/data/"),
+                ("default", "s3://bucket/table/"),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_prefix_routes_a_directory_with_or_without_its_slash() {
+        for path in ["s3://bucket/table", "s3://bucket/table/"] {
+            let (file_io, calls) = recording_file_io(&[("s3://bucket/table/", "vended")]);
+
+            file_io.delete_prefix(path).await.unwrap();
+
+            assert_eq!(*calls.lock().unwrap(), recorded(&[("vended", path)]));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_prefix_rejects_a_nested_raw_prefix() {
+        let (file_io, calls) = recording_file_io(&[
+            ("s3://bucket/table/data/", "data"),
+            ("s3://bucket/table/meta", "meta"),
+        ]);
+
+        let err = file_io
+            .delete_prefix("s3://bucket/table/")
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(err.message().contains("s3://bucket/table/meta"), "{err}");
+        assert!(calls.lock().unwrap().is_empty());
     }
 
     /// Once a storage is initialized its own Debug is reachable through
@@ -1229,7 +1295,7 @@ mod tests {
     async fn test_delete_prefix_reaches_nested_prefix_storages() {
         let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
             .with_prefixed_props("memory:/table/data/", [("k", "data")])
-            .with_prefixed_props("memory:/table/metadata", [("k", "metadata")])
+            .with_prefixed_props("memory:/table/metadata/", [("k", "metadata")])
             .with_prefixed_props("memory:/tablex/", [("k", "sibling")])
             .build();
         let deleted = [
