@@ -2890,6 +2890,7 @@ name = "iceberg-catalog-sql"
 version = "0.10.1"
 dependencies = [
  "async-trait",
+ "backon",
  "iceberg",
  "iceberg-property-macro",
  "itertools 0.13.0",
@@ -5985,6 +5986,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sqlx-core",
+ "sqlx-postgres",
  "sqlx-sqlite",
  "syn",
  "tokio",
