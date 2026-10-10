@@ -37,8 +37,9 @@ use uuid::Uuid;
 use crate::error::{Result, invalid_data};
 use crate::spec::decimal_utils::i128_from_be_bytes;
 use crate::spec::{
-    Datum, FIRST_FIELD_ID, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral,
-    PrimitiveType, Schema, SchemaVisitor, StructType, Type, VariantType,
+    Datum, FIRST_FIELD_ID, LIST_FIELD_NAME, ListType, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
+    MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema, SchemaVisitor,
+    StructType, Type, VariantType,
 };
 use crate::{Error, ErrorKind};
 
@@ -1212,10 +1213,10 @@ impl MetadataStripVisitor {
     }
 
     /// Records a field whose type is about to be visited.
-    fn start_field(&mut self, field: &FieldRef) -> Result<()> {
+    fn start_field(&mut self, name: &str, nullable: bool) -> Result<()> {
         self.pending_fields.push(PendingField {
-            name: field.name().clone(),
-            nullable: field.is_nullable(),
+            name: name.to_string(),
+            nullable,
         });
         Ok(())
     }
@@ -1238,22 +1239,32 @@ impl ArrowSchemaVisitor for MetadataStripVisitor {
     type U = ArrowSchema;
 
     fn before_field(&mut self, field: &FieldRef) -> Result<()> {
-        self.start_field(field)
+        self.start_field(field.name(), field.is_nullable())
     }
 
     fn before_list_element(&mut self, field: &FieldRef) -> Result<()> {
-        self.start_field(field)
+        self.start_field(LIST_FIELD_NAME, field.is_nullable())
     }
 
-    fn before_map_key(&mut self, field: &FieldRef) -> Result<()> {
-        self.start_field(field)
+    fn before_map_key(&mut self, _field: &FieldRef) -> Result<()> {
+        // Map keys are always required, as `schema_to_arrow_schema` builds them.
+        self.start_field(MAP_KEY_FIELD_NAME, false)
     }
 
     fn before_map_value(&mut self, field: &FieldRef) -> Result<()> {
-        self.start_field(field)
+        self.start_field(MAP_VALUE_FIELD_NAME, field.is_nullable())
     }
 
     fn schema(&mut self, _schema: &ArrowSchema, values: Vec<Self::T>) -> Result<Self::U> {
+        if !self.pending_fields.is_empty() {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "{} fields left on the field stack after traversal",
+                    self.pending_fields.len()
+                ),
+            ));
+        }
         Ok(ArrowSchema::new(values))
     }
 
@@ -1310,16 +1321,20 @@ impl ArrowSchemaVisitor for MetadataStripVisitor {
 /// including nested struct, list, and map fields. This is useful for schema comparison
 /// where metadata differences should be ignored.
 ///
-/// Two other differences are normalized away too, so that schemas that differ only in
-/// them compare equal once stripped:
-/// - A map's entries field is renamed to [`DEFAULT_MAP_FIELD_NAME`] and made non-nullable,
-///   as [`schema_to_arrow_schema`] builds it.
+/// Some other differences are normalized away too, so that schemas that differ only in
+/// them compare equal once stripped. The fields inside lists and maps are renamed as
+/// [`schema_to_arrow_schema`] names them, and dictionaries are unwrapped:
+/// - A list's element field is renamed to [`LIST_FIELD_NAME`], so `item` (the arrow-rs
+///   default) becomes `element`.
+/// - A map's entries field is renamed to [`DEFAULT_MAP_FIELD_NAME`] and made non-nullable.
+/// - A map's key and value fields are renamed to [`MAP_KEY_FIELD_NAME`] and
+///   [`MAP_VALUE_FIELD_NAME`], so `keys` and `values` (the arrow-rs `MapBuilder` default)
+///   become `key` and `value`, and the key is made non-nullable.
 /// - A dictionary-encoded field becomes a field of the dictionary's value type.
 ///
-/// All other field names are kept, including a map's key and value fields and a list's
-/// element field. A list whose element is named `item` (arrow-rs's default) therefore
-/// still differs from a table's, whose element is named
-/// [`LIST_FIELD_NAME`](crate::spec::LIST_FIELD_NAME).
+/// The names of the schema's fields and of struct fields are kept. Extension type
+/// metadata (`ARROW:extension:*`) is dropped with the rest, so a variant field becomes a
+/// plain struct of its `metadata` and `value` fields.
 ///
 /// # Arguments
 /// * `schema` - The Arrow schema to strip metadata from
@@ -2602,6 +2617,10 @@ mod tests {
         assert_eq!(schema.highest_field_id(), 17);
     }
 
+    /// Every field is rebuilt without metadata, at any depth and inside any
+    /// container. Fields are rebuilt in nesting order rather than looked up by
+    /// name, so a path that repeats names (`a.b.a.b`) keeps each level's name
+    /// and nullability.
     #[test]
     fn test_strip_metadata_from_nested_schema() {
         // The same schema, built with and without metadata on the schema and every field.
@@ -2616,26 +2635,62 @@ mod tests {
             let field = |name: &str, ty: DataType, nullable: bool| {
                 Field::new(name, ty, nullable).with_metadata(metadata(name))
             };
-            let element = || Arc::new(field("element", DataType::Int32, false));
-            let map = |sorted| {
+            let element = |ty: DataType| Arc::new(field(LIST_FIELD_NAME, ty, false));
+            let ints = || DataType::List(element(DataType::Int32));
+            let map = |value: DataType, sorted: bool| {
                 let entries = Fields::from(vec![
-                    field("key", DataType::Utf8, false),
-                    field("value", DataType::List(element()), true),
+                    field(MAP_KEY_FIELD_NAME, DataType::Utf8, false),
+                    field(MAP_VALUE_FIELD_NAME, value, true),
                 ]);
                 let entries = field(DEFAULT_MAP_FIELD_NAME, DataType::Struct(entries), false);
                 DataType::Map(Arc::new(entries), sorted)
             };
-            let nested = Fields::from(vec![field("m", map(false), true)]);
+            let struct_of = |fields: Vec<Field>| DataType::Struct(Fields::from(fields));
+
+            let a_b_a_b = struct_of(vec![field(
+                "b",
+                struct_of(vec![field(
+                    "a",
+                    struct_of(vec![field("b", DataType::Int32, true)]),
+                    false,
+                )]),
+                false,
+            )]);
             ArrowSchema::new(vec![
-                field("list", DataType::List(element()), true),
-                field("large_list", DataType::LargeList(element()), false),
-                field("fixed_list", DataType::FixedSizeList(element(), 2), true),
-                field("sorted_map", map(true), false),
+                field("list", ints(), true),
                 field(
-                    "list_of_struct",
-                    DataType::List(Arc::new(field("element", DataType::Struct(nested), true))),
+                    "large_list",
+                    DataType::LargeList(element(DataType::Int32)),
+                    false,
+                ),
+                field(
+                    "fixed_list",
+                    DataType::FixedSizeList(element(DataType::Int32), 2),
                     true,
                 ),
+                field("list_of_list", DataType::List(element(ints())), false),
+                field("sorted_map", map(ints(), true), false),
+                field(
+                    "map_of_struct",
+                    map(
+                        struct_of(vec![
+                            field("a", DataType::Int32, true),
+                            field("b", ints(), false),
+                        ]),
+                        false,
+                    ),
+                    true,
+                ),
+                field(
+                    "list_of_struct",
+                    DataType::List(element(struct_of(vec![field(
+                        "m",
+                        map(ints(), false),
+                        true,
+                    )]))),
+                    true,
+                ),
+                field("a", a_b_a_b, true),
             ])
             .with_metadata(metadata("schema"))
         };
@@ -2646,57 +2701,136 @@ mod tests {
         pretty_assertions::assert_eq!(strip_metadata_from_schema(&input).unwrap(), expected);
     }
 
-    /// Fields are rebuilt in nesting order, not looked up by name, so a path
-    /// that repeats names (`a.b.a.b`) keeps each level's name and nullability.
+    /// arrow-rs names a list's element `item`, and an arrow-rs `MapBuilder` names
+    /// a map's fields `entries`, `keys` and `values`. Once stripped, a schema
+    /// using those names, with a nullable map key, compares equal to the same
+    /// schema from `schema_to_arrow_schema`.
     #[test]
-    fn test_strip_metadata_with_repeated_nested_names() {
-        let schema = |with_metadata: bool| {
-            let field = |name: &str, ty: DataType, nullable: bool| {
-                let metadata = if with_metadata {
-                    HashMap::from([("k".to_string(), name.to_string())])
-                } else {
-                    HashMap::new()
-                };
-                Field::new(name, ty, nullable).with_metadata(metadata)
-            };
-            let struct_of = |child: Field| DataType::Struct(Fields::from(vec![child]));
-            let inner_b = field("b", DataType::Int32, true);
-            let inner_a = field("a", struct_of(inner_b), false);
-            let outer_b = field("b", struct_of(inner_a), false);
-            ArrowSchema::new(vec![field("a", struct_of(outer_b), true)])
+    fn test_strip_metadata_normalizes_container_field_names() {
+        // A list of ints and a map from string to a list of ints, with the given
+        // names for the list elements and the map's entries, key and value.
+        let schema = |[element, entries, key, value]: [&str; 4], key_nullable: bool| {
+            let ints =
+                |nullable| DataType::List(Arc::new(Field::new(element, DataType::Int32, nullable)));
+            let key_value = Fields::from(vec![
+                Field::new(key, DataType::Utf8, key_nullable),
+                Field::new(value, ints(false), true),
+            ]);
+            let entries = Field::new(entries, DataType::Struct(key_value), false);
+            ArrowSchema::new(vec![
+                Field::new("l", ints(true), true),
+                Field::new("m", DataType::Map(Arc::new(entries), false), true),
+            ])
         };
+        let arrow_rs = schema(["item", "entries", "keys", "values"], true);
+        let expected = schema(
+            [
+                LIST_FIELD_NAME,
+                DEFAULT_MAP_FIELD_NAME,
+                MAP_KEY_FIELD_NAME,
+                MAP_VALUE_FIELD_NAME,
+            ],
+            false,
+        );
 
-        let (input, expected) = (schema(true), schema(false));
-        assert_ne!(input, expected);
-        pretty_assertions::assert_eq!(strip_metadata_from_schema(&input).unwrap(), expected);
+        // The same schema as an Iceberg table's.
+        let int_list = |id, required| {
+            let int = Type::Primitive(PrimitiveType::Int);
+            Type::List(ListType::new(
+                NestedField::list_element(id, int, required).into(),
+            ))
+        };
+        let string_to_int_list = MapType::new(
+            NestedField::map_key_element(4, Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::map_value_element(5, int_list(6, true), false).into(),
+        );
+        let iceberg = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "l", int_list(2, false)).into(),
+                NestedField::optional(3, "m", Type::Map(string_to_int_list)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        pretty_assertions::assert_eq!(strip_metadata_from_schema(&arrow_rs).unwrap(), expected);
+        pretty_assertions::assert_eq!(
+            strip_metadata_from_schema(&schema_to_arrow_schema(&iceberg).unwrap()).unwrap(),
+            expected
+        );
     }
 
-    /// arrow-rs and DataFusion name a map's entries field `entries`, and
-    /// `schema_to_arrow_schema` names it `DEFAULT_MAP_FIELD_NAME`. Stripping
-    /// renames only the entries field: the key and value fields keep their
-    /// names, such as `keys` and `values` from an arrow-rs `MapBuilder`.
+    /// Names and nullability that `schema_to_arrow_schema` doesn't fix, such as a
+    /// struct field's name or a list element's nullability, still tell schemas apart.
     #[test]
-    fn test_strip_metadata_renames_map_entries() {
-        let schema = |entries: &str, metadata: HashMap<String, String>| {
-            let field = |name: &str, ty: DataType, nullable: bool| {
-                Field::new(name, ty, nullable).with_metadata(metadata.clone())
-            };
-            let key_value = Fields::from(vec![
-                field("keys", DataType::Utf8, false),
-                field("values", DataType::Int32, true),
-            ]);
-            let entries = field(entries, DataType::Struct(key_value), false);
-            ArrowSchema::new(vec![field(
-                "m",
-                DataType::Map(Arc::new(entries), false),
-                true,
-            )])
+    fn test_strip_metadata_keeps_other_differences() {
+        let schema = |child: &str, element_nullable: bool| {
+            let child = Field::new(child, DataType::Int32, true);
+            let element = Field::new("item", DataType::Int32, element_nullable);
+            ArrowSchema::new(vec![
+                Field::new("s", DataType::Struct(Fields::from(vec![child])), true),
+                Field::new("l", DataType::List(Arc::new(element)), true),
+            ])
         };
-        let metadata = HashMap::from([("k".to_string(), "v".to_string())]);
+        let strip = |schema: ArrowSchema| strip_metadata_from_schema(&schema).unwrap();
+
+        assert_ne!(strip(schema("a", true)), strip(schema("b", true)));
+        assert_ne!(strip(schema("a", true)), strip(schema("a", false)));
+    }
+
+    /// Stripping drops the `arrow.parquet.variant` extension type with the rest of
+    /// the metadata, so a variant becomes a plain struct, in a list or map too.
+    #[test]
+    fn test_strip_metadata_turns_variants_into_structs() {
+        let variant = || Type::Variant(VariantType);
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "v", variant()).into(),
+                NestedField::optional(
+                    2,
+                    "l",
+                    Type::List(ListType::new(
+                        NestedField::list_element(3, variant(), false).into(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(
+                    4,
+                    "m",
+                    Type::Map(MapType::new(
+                        NestedField::map_key_element(5, Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::map_value_element(6, variant(), false).into(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let storage = || {
+            DataType::Struct(Fields::from(vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, true),
+            ]))
+        };
+        let entries = Fields::from(vec![
+            Field::new(MAP_KEY_FIELD_NAME, DataType::Utf8, false),
+            Field::new(MAP_VALUE_FIELD_NAME, storage(), true),
+        ]);
+        let entries = Field::new(DEFAULT_MAP_FIELD_NAME, DataType::Struct(entries), false);
+        let expected = ArrowSchema::new(vec![
+            Field::new("v", storage(), true),
+            Field::new(
+                "l",
+                DataType::List(Arc::new(Field::new(LIST_FIELD_NAME, storage(), true))),
+                true,
+            ),
+            Field::new("m", DataType::Map(Arc::new(entries), false), true),
+        ]);
 
         pretty_assertions::assert_eq!(
-            strip_metadata_from_schema(&schema("entries", metadata)).unwrap(),
-            schema(DEFAULT_MAP_FIELD_NAME, HashMap::new())
+            strip_metadata_from_schema(&schema_to_arrow_schema(&schema).unwrap()).unwrap(),
+            expected
         );
     }
 
@@ -2704,32 +2838,28 @@ mod tests {
     /// type once stripped, at any depth.
     #[test]
     fn test_strip_metadata_unwraps_dictionaries() {
-        let schema = |dictionary_encoded: bool, metadata: HashMap<String, String>| {
-            let field = |name: &str, ty: DataType, nullable: bool| {
-                Field::new(name, ty, nullable).with_metadata(metadata.clone())
-            };
-            let string = |key: DataType, value: DataType| {
+        let schema = |dictionary_encoded: bool| {
+            let maybe_dictionary = |key: DataType, value: DataType| {
                 if dictionary_encoded {
                     DataType::Dictionary(Box::new(key), Box::new(value))
                 } else {
                     value
                 }
             };
-            let element = field(
-                "element",
-                string(DataType::Int8, DataType::LargeUtf8),
+            let element = Field::new(
+                LIST_FIELD_NAME,
+                maybe_dictionary(DataType::Int8, DataType::LargeUtf8),
                 false,
             );
             ArrowSchema::new(vec![
-                field("d", string(DataType::Int32, DataType::Utf8), true),
-                field("l", DataType::List(Arc::new(element)), true),
+                Field::new("d", maybe_dictionary(DataType::Int32, DataType::Utf8), true),
+                Field::new("l", DataType::List(Arc::new(element)), true),
             ])
         };
-        let metadata = HashMap::from([("k".to_string(), "v".to_string())]);
 
         pretty_assertions::assert_eq!(
-            strip_metadata_from_schema(&schema(true, metadata)).unwrap(),
-            schema(false, HashMap::new())
+            strip_metadata_from_schema(&schema(true)).unwrap(),
+            schema(false)
         );
     }
 }
