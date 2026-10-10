@@ -415,6 +415,7 @@ impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::UpdateNames
 pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub const iceberg_catalog_rest::AUTH_TYPE_NONE: &str
 pub const iceberg_catalog_rest::AUTH_TYPE_OAUTH2: &str
+pub const iceberg_catalog_rest::AUTH_TYPE_SIGV4: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_ACCESS_KEY_ID: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_AUTH_TYPE: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str
@@ -422,6 +423,8 @@ pub const iceberg_catalog_rest::REST_CATALOG_PROP_SECRET_ACCESS_KEY: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_SESSION_TOKEN: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGNING_NAME: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGNING_REGION: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGV4_ENABLED: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_URI: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_WAREHOUSE: &str
 pub const iceberg_catalog_rest::SIGNING_NAME_DEFAULT: &str
