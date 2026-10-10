@@ -138,6 +138,51 @@ services:
       retries: 5
 
   # =============================================================================
+  # HDFS - single-node NameNode + DataNode for HDFS tests
+  # =============================================================================
+  # The DataNode advertises 127.0.0.1, so clients that set
+  # `dfs.client.use.datanode.hostname` reach it through its published port.
+  hdfs-namenode:
+    image: apache/hadoop:3.5.0
+    networks:
+      iceberg_test:
+    command: ["hdfs", "namenode"]
+    environment:
+      ENSURE_NAMENODE_DIR: "/tmp/hadoop-root/dfs/name"
+    ports:
+      - "8020:8020"
+    volumes:
+      - ./hdfs/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ./hdfs/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "hdfs dfsadmin -safemode get | grep -q OFF"]
+      interval: 5s
+      timeout: 15s
+      retries: 30
+      start_period: 30s
+
+  hdfs-datanode:
+    image: apache/hadoop:3.5.0
+    networks:
+      iceberg_test:
+    command: ["hdfs", "datanode"]
+    depends_on:
+      hdfs-namenode:
+        condition: service_healthy
+    ports:
+      - "9866:9866"
+    volumes:
+      - ./hdfs/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ./hdfs/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
+    # Healthy only once registered with the NameNode — writes fail until then.
+    healthcheck:
+      test: ["CMD-SHELL", "hdfs dfsadmin -report | grep -q 'Live datanodes (1)'"]
+      interval: 5s
+      timeout: 15s
+      retries: 30
+      start_period: 10s
+
+  # =============================================================================
   # Fake GCS Server - GCS emulator for GCS tests
   # =============================================================================
   gcs-server:
