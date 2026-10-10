@@ -21,6 +21,8 @@ use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use ordered_float::{Float, OrderedFloat};
 use serde::de::{self, MapAccess};
@@ -1209,12 +1211,49 @@ impl Datum {
 
     /// Returns a human-readable string representation of this literal.
     ///
-    /// For string literals, this returns the raw string value without quotes.
-    /// For all other literals, it falls back to [`to_string()`](ToString::to_string).
+    /// This is the value written into partition paths, so it mirrors the output of
+    /// iceberg-java's `Transform.toHumanString`:
+    /// - string literals are returned without quotes;
+    /// - timestamps use `yyyy-MM-ddTHH:mm:ss` with trailing zeros of the fraction trimmed,
+    ///   followed by `+00:00` when the type has a zone (`TransformUtil.humanTimestamp*`);
+    /// - binary and fixed values are standard Base64 with padding
+    ///   (`TransformUtil.base64encode`).
+    ///
+    /// All other literals fall back to [`to_string()`](ToString::to_string).
     pub fn to_human_string(&self) -> String {
-        match self.literal() {
-            PrimitiveLiteral::String(s) => s.to_string(),
+        match (&self.r#type, self.literal()) {
+            (_, PrimitiveLiteral::String(s)) => s.to_string(),
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(micros)) => {
+                human_timestamp(timestamp::microseconds_to_datetime(*micros))
+            }
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(nanos)) => {
+                human_timestamp(timestamp::nanoseconds_to_datetime(*nanos))
+            }
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(micros)) => {
+                let datetime = timestamptz::microseconds_to_datetimetz(*micros).naive_utc();
+                format!("{}+00:00", human_timestamp(datetime))
+            }
+            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(nanos)) => {
+                let datetime = timestamptz::nanoseconds_to_datetimetz(*nanos).naive_utc();
+                format!("{}+00:00", human_timestamp(datetime))
+            }
+            (_, PrimitiveLiteral::Binary(bytes)) => BASE64.encode(bytes),
             _ => self.to_string(),
         }
     }
+}
+
+/// Formats a timestamp as `yyyy-MM-ddTHH:mm:ss`, then the fraction of a second with its
+/// trailing zeros trimmed, so `.120000` is written as `.12` and a whole second has no
+/// fraction.
+///
+/// Mirrors the output of `TransformUtil.humanTimestampWithoutZone`.
+fn human_timestamp(datetime: NaiveDateTime) -> String {
+    let mut human = datetime.format("%Y-%m-%dT%H:%M:%S").to_string();
+    let nanos = datetime.and_utc().timestamp_subsec_nanos();
+    if nanos > 0 {
+        human.push('.');
+        human.push_str(format!("{nanos:09}").trim_end_matches('0'));
+    }
+    human
 }
