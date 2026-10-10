@@ -15,94 +15,112 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Conversion of manifest entries to Arrow.
+//! Reading manifest entries into Arrow.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::builder::{
-    ArrayBuilder, Int32Builder, Int64Builder, LargeBinaryBuilder, ListBuilder, MapBuilder,
-    MapFieldNames, StringBuilder,
-};
+use arrow_arith::boolean::{and, is_null};
+use arrow_array::cast::AsArray;
+use arrow_array::types::{TimestampMicrosecondType, TimestampNanosecondType};
 use arrow_array::{
-    ArrayRef, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray, Float32Array,
-    Float64Array, Int32Array, Int64Array, LargeBinaryArray, NullArray, RecordBatch, StringArray,
-    StructArray, Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
+    Array, ArrayRef, BooleanArray, Int32Array, Int64Array, ListArray, MapArray, RecordBatch,
+    StructArray, new_null_array,
 };
-use arrow_schema::{DataType, Field, FieldRef};
+use arrow_avro::reader::ReaderBuilder;
+use arrow_avro::schema::AvroSchema;
+use arrow_cast::{CastOptions, cast_with_options};
+use arrow_ord::cmp::eq;
+use arrow_schema::{ArrowError, DataType, Field, Fields, TimeUnit};
+use arrow_select::zip::zip;
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use serde_json::Value as JsonValue;
 
-use crate::arrow::{UTC_TIME_ZONE, schema_to_arrow_schema};
+use crate::arrow::schema_to_arrow_schema;
 use crate::error::invalid_data;
 use crate::spec::{
-    DataFileFormat, Datum, Literal, Manifest, ManifestEntryRef, NestedField, PrimitiveLiteral,
-    PrimitiveType, Schema, StructType, manifest_entry_fields,
+    ManifestContentType, ManifestFile, ManifestMetadata, ManifestStatus, Schema,
+    manifest_entry_fields,
 };
-use crate::{Error, ErrorKind, Result};
+use crate::{Error, Result};
 
-/// Converts the entries of `manifest` into a [`RecordBatch`] with one row per
-/// entry.
+/// Field ID of `data_file`.
+const DATA_FILE_FIELD_ID: i64 = 2;
+/// Field ID of `data_file.partition`.
+const PARTITION_FIELD_ID: i64 = 102;
+/// Field ID of `data_file.content`.
+const CONTENT_FIELD_ID: i32 = 134;
+/// Field ID of `sequence_number`.
+const SEQUENCE_NUMBER_FIELD_ID: i32 = 3;
+/// Field ID of `file_sequence_number`.
+const FILE_SEQUENCE_NUMBER_FIELD_ID: i32 = 4;
+
+/// Reads the entries of a manifest file into a [`RecordBatch`] with one row
+/// per entry.
 ///
-/// The schema is the spec's `manifest_entry` struct for the latest format
-/// version, with field IDs in the Arrow field metadata, so manifests of every
-/// format version convert to the same schema apart from `data_file.partition`,
-/// which follows the manifest's partition spec. Lower and upper bounds use the
-/// spec's binary single-value serialization. The metric maps list their
-/// entries in no particular order, and a metric map with no entries is empty
-/// rather than null.
+/// `bytes` is the manifest file and `manifest_file` is its entry in the
+/// manifest list. The schema is the spec's `manifest_entry` struct for the
+/// latest format version, with field IDs in the Arrow field metadata, so
+/// manifests of every format version read into the same schema apart from
+/// `data_file.partition`, which follows the manifest's partition spec.
 ///
-/// Entries are converted as they are in `manifest`. Fields that readers
-/// inherit from the manifest list, such as `snapshot_id` and
-/// `sequence_number`, stay null in a manifest from [`Manifest::parse_avro`].
-/// [`ManifestReader::read`](crate::spec::ManifestReader::read) fills them in.
+/// Fields are matched to the manifest's Avro schema by field ID. A v1
+/// manifest reads with the spec's v2+ defaults, and null snapshot IDs,
+/// sequence numbers, and first row IDs are inherited from `manifest_file`.
+/// Lower and upper bounds keep the binary single-value serialization they were
+/// written with.
 ///
 /// # Example
 ///
 /// ```
-/// use std::sync::Arc;
+/// use iceberg::arrow::read_manifest_entries;
+/// use iceberg::spec::{ManifestContentType, ManifestFile};
 ///
-/// use iceberg::arrow::manifest_to_record_batch;
-/// use iceberg::spec::{
-///     DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Manifest,
-///     ManifestContentType, ManifestEntry, ManifestMetadata, ManifestStatus, NestedField,
-///     PartitionSpec, PrimitiveType, Schema, Type,
+/// let bytes = std::fs::read(concat!(
+///     env!("CARGO_MANIFEST_DIR"),
+///     "/testdata/manifests/pyiceberg-v2-data.avro"
+/// ))?;
+/// let manifest_file = ManifestFile {
+///     manifest_path: "s3://bucket/metadata/manifest.avro".to_string(),
+///     manifest_length: bytes.len() as i64,
+///     partition_spec_id: 0,
+///     content: ManifestContentType::Data,
+///     sequence_number: 1,
+///     min_sequence_number: 1,
+///     added_snapshot_id: 1,
+///     added_files_count: None,
+///     existing_files_count: None,
+///     deleted_files_count: None,
+///     added_rows_count: None,
+///     existing_rows_count: None,
+///     deleted_rows_count: None,
+///     partitions: None,
+///     key_metadata: None,
+///     first_row_id: None,
 /// };
 ///
-/// let schema = Arc::new(
-///     Schema::builder()
-///         .with_fields(vec![
-///             NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
-///         ])
-///         .build()?,
-/// );
-/// let data_file = DataFileBuilder::default()
-///     .content(DataContentType::Data)
-///     .file_path("s3://bucket/data/0.parquet".to_string())
-///     .file_format(DataFileFormat::Parquet)
-///     .record_count(100)
-///     .file_size_in_bytes(4096)
-///     .build()?;
-/// let manifest = Manifest::new(
-///     ManifestMetadata {
-///         schema: schema.clone(),
-///         schema_id: 0,
-///         partition_spec: PartitionSpec::builder(schema).build()?,
-///         format_version: FormatVersion::V2,
-///         content: ManifestContentType::Data,
-///     },
-///     vec![
-///         ManifestEntry::builder()
-///             .status(ManifestStatus::Added)
-///             .data_file(data_file)
-///             .build(),
-///     ],
-/// );
-///
-/// let batch = manifest_to_record_batch(&manifest)?;
-/// assert_eq!(batch.num_rows(), 1);
+/// let batch = read_manifest_entries(&bytes, &manifest_file)?;
+/// assert_eq!(batch.num_rows(), 2);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub fn manifest_to_record_batch(manifest: &Manifest) -> Result<RecordBatch> {
-    let metadata = manifest.metadata();
+pub fn read_manifest_entries(bytes: &[u8], manifest_file: &ManifestFile) -> Result<RecordBatch> {
+    // usize::MAX decodes the whole manifest into one batch. First row ID
+    // inheritance is a running sum over every entry in the file, and an empty
+    // manifest still returns its schema. arrow-avro sizes its buffers
+    // independently of the batch size, so this doesn't preallocate.
+    let builder = || ReaderBuilder::new().with_batch_size(usize::MAX);
+    let mut reader = builder().build(bytes).map_err(invalid_manifest)?;
+    let header = reader.avro_header();
+    let metadata: HashMap<String, Vec<u8>> = header
+        .metadata()
+        .map(|(key, value)| (String::from_utf8_lossy(key).into_owned(), value.to_vec()))
+        .collect();
+    let metadata = ManifestMetadata::parse(&metadata)?;
+    let mut avro_schema: JsonValue = serde_json::from_slice(
+        header
+            .get("avro.schema")
+            .ok_or_else(|| invalid_data!("manifest has no avro.schema"))?,
+    )?;
     let partition_type = metadata
         .partition_spec()
         .partition_type(metadata.schema())?;
@@ -111,382 +129,299 @@ pub fn manifest_to_record_batch(manifest: &Manifest) -> Result<RecordBatch> {
             .with_fields(manifest_entry_fields(&partition_type))
             .build()?,
     )?);
-    let DataType::Struct(data_file_fields) = schema.field_with_name("data_file")?.data_type()
-    else {
-        unreachable!()
-    };
-    let child = |name: &str| data_file_fields.find(name).unwrap().1;
 
-    let entries = manifest.entries();
-    let len = entries.len();
-    let mut status = Int32Builder::with_capacity(len);
-    let mut snapshot_id = Int64Builder::with_capacity(len);
-    let mut sequence_number = Int64Builder::with_capacity(len);
-    let mut file_sequence_number = Int64Builder::with_capacity(len);
-    let mut content = Int32Builder::with_capacity(len);
-    let mut file_path = StringBuilder::new();
-    let mut file_format = StringBuilder::new();
-    let mut record_count = Int64Builder::with_capacity(len);
-    let mut file_size_in_bytes = Int64Builder::with_capacity(len);
-    let mut column_sizes = map_builder(child("column_sizes"), Int64Builder::new());
-    let mut value_counts = map_builder(child("value_counts"), Int64Builder::new());
-    let mut null_value_counts = map_builder(child("null_value_counts"), Int64Builder::new());
-    let mut nan_value_counts = map_builder(child("nan_value_counts"), Int64Builder::new());
-    let mut lower_bounds = map_builder(child("lower_bounds"), LargeBinaryBuilder::new());
-    let mut upper_bounds = map_builder(child("upper_bounds"), LargeBinaryBuilder::new());
-    let mut key_metadata = LargeBinaryBuilder::new();
-    let mut split_offsets =
-        ListBuilder::new(Int64Builder::new()).with_field(list_element(child("split_offsets")));
-    let mut equality_ids =
-        ListBuilder::new(Int32Builder::new()).with_field(list_element(child("equality_ids")));
-    let mut sort_order_id = Int32Builder::with_capacity(len);
-    let mut first_row_id = Int64Builder::with_capacity(len);
-    let mut referenced_data_file = StringBuilder::new();
-    let mut content_offset = Int64Builder::with_capacity(len);
-    let mut content_size_in_bytes = Int64Builder::with_capacity(len);
-
-    for entry in entries {
-        status.append_value(entry.status as i32);
-        snapshot_id.append_option(entry.snapshot_id);
-        sequence_number.append_option(entry.sequence_number);
-        file_sequence_number.append_option(entry.file_sequence_number);
-
-        let data_file = &entry.data_file;
-        content.append_value(data_file.content as i32);
-        file_path.append_value(&data_file.file_path);
-        // Writers store the format name in upper case.
-        file_format.append_value(match data_file.file_format {
-            DataFileFormat::Avro => "AVRO",
-            DataFileFormat::Orc => "ORC",
-            DataFileFormat::Parquet => "PARQUET",
-            DataFileFormat::Puffin => "PUFFIN",
-        });
-        record_count.append_value(data_file.record_count.try_into()?);
-        file_size_in_bytes.append_value(data_file.file_size_in_bytes.try_into()?);
-        append_counts(&mut column_sizes, &data_file.column_sizes)?;
-        append_counts(&mut value_counts, &data_file.value_counts)?;
-        append_counts(&mut null_value_counts, &data_file.null_value_counts)?;
-        append_counts(&mut nan_value_counts, &data_file.nan_value_counts)?;
-        append_bounds(&mut lower_bounds, &data_file.lower_bounds)?;
-        append_bounds(&mut upper_bounds, &data_file.upper_bounds)?;
-        key_metadata.append_option(data_file.key_metadata.as_deref());
-        match &data_file.split_offsets {
-            Some(offsets) => {
-                split_offsets.values().append_slice(offsets);
-                split_offsets.append(true);
-            }
-            None => split_offsets.append(false),
-        }
-        match &data_file.equality_ids {
-            Some(ids) => {
-                equality_ids.values().append_slice(ids);
-                equality_ids.append(true);
-            }
-            None => equality_ids.append(false),
-        }
-        sort_order_id.append_option(data_file.sort_order_id);
-        first_row_id.append_option(data_file.first_row_id);
-        referenced_data_file.append_option(data_file.referenced_data_file.as_deref());
-        content_offset.append_option(data_file.content_offset);
-        content_size_in_bytes.append_option(data_file.content_size_in_bytes);
+    // TODO(#3257): arrow-avro 59 can't decode a record with no fields, which
+    // is the partition of every unpartitioned manifest, so project it out and
+    // build it in `missing_field`. arrow-avro 60 fixes this
+    // (apache/arrow-rs#10771).
+    if remove_empty_partition(&mut avro_schema) {
+        reader = builder()
+            .with_reader_schema(AvroSchema::new(avro_schema.to_string()))
+            .build(bytes)
+            .map_err(invalid_manifest)?;
     }
 
-    let partition = partition_column(entries, &partition_type, child("partition"))?;
-    let data_file = StructArray::try_new(
-        data_file_fields.clone(),
-        vec![
-            Arc::new(content.finish()),
-            Arc::new(file_path.finish()),
-            Arc::new(file_format.finish()),
-            partition,
-            Arc::new(record_count.finish()),
-            Arc::new(file_size_in_bytes.finish()),
-            Arc::new(column_sizes.finish()),
-            Arc::new(value_counts.finish()),
-            Arc::new(null_value_counts.finish()),
-            Arc::new(nan_value_counts.finish()),
-            Arc::new(lower_bounds.finish()),
-            Arc::new(upper_bounds.finish()),
-            Arc::new(key_metadata.finish()),
-            Arc::new(split_offsets.finish()),
-            Arc::new(equality_ids.finish()),
-            Arc::new(sort_order_id.finish()),
-            Arc::new(first_row_id.finish()),
-            Arc::new(referenced_data_file.finish()),
-            Arc::new(content_offset.finish()),
-            Arc::new(content_size_in_bytes.finish()),
-        ],
-        None,
+    let Some(batch) = reader.next() else {
+        return Ok(RecordBatch::new_empty(schema));
+    };
+    let entries = project_struct(
+        &StructArray::from(batch.map_err(invalid_manifest)?),
+        &avro_schema,
+        schema.fields(),
     )?;
-
-    Ok(RecordBatch::try_new(schema, vec![
-        Arc::new(status.finish()),
-        Arc::new(snapshot_id.finish()),
-        Arc::new(sequence_number.finish()),
-        Arc::new(file_sequence_number.finish()),
-        Arc::new(data_file),
-    ])?)
+    Ok(RecordBatch::from(inherit(entries, manifest_file)?))
 }
 
-fn list_element(field: &Field) -> FieldRef {
-    let DataType::List(element) = field.data_type() else {
-        unreachable!()
+/// Removes `data_file.partition` from a manifest's Avro schema if it has no
+/// fields, and returns whether it did.
+fn remove_empty_partition(avro_schema: &mut JsonValue) -> bool {
+    let has_field_id = |field: &JsonValue, id: i64| field["field-id"].as_i64() == Some(id);
+    let Some(data_file_fields) = avro_schema["fields"]
+        .as_array_mut()
+        .and_then(|fields| {
+            fields
+                .iter_mut()
+                .find(|field| has_field_id(field, DATA_FILE_FIELD_ID))
+        })
+        .and_then(|data_file| data_file["type"]["fields"].as_array_mut())
+    else {
+        return false;
     };
-    element.clone()
+    let len = data_file_fields.len();
+    data_file_fields.retain(|field| {
+        !(has_field_id(field, PARTITION_FIELD_ID)
+            && field["type"]["fields"]
+                .as_array()
+                .is_some_and(Vec::is_empty))
+    });
+    data_file_fields.len() != len
 }
 
-/// Creates a builder for the `map<int, ...>` column `field` that produces the
-/// key and value fields of its schema, including their field IDs.
-fn map_builder<V: ArrayBuilder>(field: &Field, values: V) -> MapBuilder<Int32Builder, V> {
-    let DataType::Map(entries, _) = field.data_type() else {
-        unreachable!()
-    };
-    let DataType::Struct(key_value) = entries.data_type() else {
-        unreachable!()
-    };
-    let (key, value) = (&key_value[0], &key_value[1]);
-    let names = MapFieldNames {
-        entry: entries.name().clone(),
-        key: key.name().clone(),
-        value: value.name().clone(),
-    };
-    MapBuilder::new(Some(names), Int32Builder::new(), values)
-        .with_keys_field(key.clone())
-        .with_values_field(value.clone())
+fn invalid_manifest(err: ArrowError) -> Error {
+    invalid_data!("failed to read manifest").with_source(err)
 }
 
-fn append_counts(
-    builder: &mut MapBuilder<Int32Builder, Int64Builder>,
-    counts: &HashMap<i32, u64>,
-) -> Result<()> {
-    for (&field_id, &count) in counts {
-        builder.keys().append_value(field_id);
-        builder.values().append_value(count.try_into()?);
+/// Returns the field ID of a field in the schema built from
+/// `manifest_entry_fields`, which gives every field one.
+fn field_id(field: &Field) -> i32 {
+    field.metadata()[PARQUET_FIELD_ID_META_KEY].parse().unwrap()
+}
+
+/// Returns the type of a nullable Avro field, `["null", T]`, as `T`.
+fn non_null_type(avro_type: &JsonValue) -> &JsonValue {
+    match avro_type.as_array().map(Vec::as_slice) {
+        Some([JsonValue::String(null), branch] | [branch, JsonValue::String(null)])
+            if null == "null" =>
+        {
+            branch
+        }
+        _ => avro_type,
     }
-    Ok(builder.append(true)?)
 }
 
-fn append_bounds(
-    builder: &mut MapBuilder<Int32Builder, LargeBinaryBuilder>,
-    bounds: &HashMap<i32, Datum>,
-) -> Result<()> {
-    for (&field_id, bound) in bounds {
-        builder.keys().append_value(field_id);
-        builder.values().append_value(bound.to_bytes()?);
-    }
-    Ok(builder.append(true)?)
-}
-
-/// Builds the `data_file.partition` column, one child array per partition field.
-fn partition_column(
-    entries: &[ManifestEntryRef],
-    partition_type: &StructType,
-    field: &Field,
-) -> Result<ArrayRef> {
-    if let Some(entry) = entries
+/// Builds each of `fields` from the column of `array` that the Avro record
+/// `record` gives the same field ID.
+fn project_struct(array: &StructArray, record: &JsonValue, fields: &Fields) -> Result<StructArray> {
+    let avro_fields = record["fields"]
+        .as_array()
+        .ok_or_else(|| invalid_data!("manifest Avro type {record} is not a record"))?;
+    let columns = fields
         .iter()
-        .find(|entry| entry.data_file.partition.fields().len() != partition_type.fields().len())
-    {
-        return Err(invalid_data!(
-            "partition of {} has {} values, but the partition spec has {} fields",
-            entry.data_file.file_path,
-            entry.data_file.partition.fields().len(),
-            partition_type.fields().len()
-        ));
-    }
-
-    let DataType::Struct(fields) = field.data_type() else {
-        unreachable!()
-    };
-    if fields.is_empty() {
-        return Ok(Arc::new(StructArray::new_empty_fields(entries.len(), None)));
-    }
-    let columns = partition_type
-        .fields()
-        .iter()
-        .zip(fields)
-        .enumerate()
-        .map(|(index, (partition_field, arrow_field))| {
-            let values: Vec<_> = entries
+        .map(|field| {
+            let id = field_id(field);
+            match avro_fields
                 .iter()
-                .map(|entry| match &entry.data_file.partition[index] {
-                    None => Ok(None),
-                    Some(Literal::Primitive(value)) => Ok(Some(value)),
-                    Some(value) => Err(invalid_data!(
-                        "partition field {} has non-primitive value {value:?}",
-                        partition_field.name
-                    )),
-                })
-                .collect::<Result<_>>()?;
-            partition_array(partition_field, arrow_field.data_type(), &values)
+                .position(|avro_field| avro_field["field-id"].as_i64() == Some(id.into()))
+            {
+                Some(index) => project(
+                    array.column(index),
+                    non_null_type(&avro_fields[index]["type"]),
+                    field,
+                ),
+                None => missing_field(field, array.len()),
+            }
         })
         .collect::<Result<_>>()?;
-    Ok(Arc::new(StructArray::try_new(
-        fields.clone(),
-        columns,
-        None,
-    )?))
+    StructArray::try_new_with_length(fields.clone(), columns, array.nulls().cloned(), array.len())
+        .map_err(invalid_manifest)
 }
 
-/// Builds the array of one partition field from its values in each entry.
-fn partition_array(
-    field: &NestedField,
-    data_type: &DataType,
-    values: &[Option<&PrimitiveLiteral>],
-) -> Result<ArrayRef> {
-    let primitive_type = field.field_type.as_primitive_type().ok_or_else(|| {
+/// Builds the column for a field that the manifest doesn't have.
+fn missing_field(field: &Field, len: usize) -> Result<ArrayRef> {
+    // v1 manifests have no content or sequence number columns, which v2+
+    // readers read as 0.
+    match field_id(field) {
+        CONTENT_FIELD_ID => Ok(Arc::new(Int32Array::from_value(0, len))),
+        SEQUENCE_NUMBER_FIELD_ID | FILE_SEQUENCE_NUMBER_FIELD_ID => {
+            Ok(Arc::new(Int64Array::from_value(0, len)))
+        }
+        _ if field.is_nullable() => Ok(new_null_array(field.data_type(), len)),
+        _ if matches!(field.data_type(), DataType::Struct(fields) if fields.is_empty()) => {
+            Ok(Arc::new(StructArray::new_empty_fields(len, None)))
+        }
+        id => Err(invalid_data!(
+            "manifest has no required field {} with field ID {id}",
+            field.name()
+        )),
+    }
+}
+
+/// Converts the decoded `array` of Avro type `avro_type` to `field`, the
+/// spec's Arrow field for it.
+fn project(array: &ArrayRef, avro_type: &JsonValue, field: &Field) -> Result<ArrayRef> {
+    let type_mismatch = || {
         invalid_data!(
-            "partition field {} has non-primitive type {}",
-            field.name,
-            field.field_type
+            "manifest field {} has Avro type {avro_type}, which doesn't match {}",
+            field.name(),
+            field.data_type()
         )
-    })?;
-    // Collects the values, returning an error for a value of another type.
-    fn collect<'a, T, A: FromIterator<Option<T>>>(
-        field: &NestedField,
-        values: &[Option<&'a PrimitiveLiteral>],
-        value: impl Fn(&'a PrimitiveLiteral) -> Option<T>,
-    ) -> Result<A> {
-        values
-            .iter()
-            .map(|literal| {
-                literal
-                    .map(|literal| {
-                        value(literal).ok_or_else(|| {
-                            invalid_data!(
-                                "partition field {} of type {} can't hold {literal:?}",
-                                field.name,
-                                field.field_type
-                            )
-                        })
-                    })
-                    .transpose()
-            })
-            .collect()
-    }
-    fn int(literal: &PrimitiveLiteral) -> Option<i32> {
-        match literal {
-            PrimitiveLiteral::Int(v) => Some(*v),
-            _ => None,
-        }
-    }
-    fn long(literal: &PrimitiveLiteral) -> Option<i64> {
-        match literal {
-            PrimitiveLiteral::Long(v) => Some(*v),
-            _ => None,
-        }
-    }
-    fn binary(literal: &PrimitiveLiteral) -> Option<&[u8]> {
-        match literal {
-            PrimitiveLiteral::Binary(v) => Some(v),
-            _ => None,
-        }
-    }
-    let array: ArrayRef =
-        match primitive_type {
-            PrimitiveType::Boolean => Arc::new(collect::<_, BooleanArray>(
-                field,
-                values,
-                |literal| match literal {
-                    PrimitiveLiteral::Boolean(v) => Some(*v),
-                    _ => None,
-                },
-            )?),
-            PrimitiveType::Int => Arc::new(collect::<_, Int32Array>(field, values, int)?),
-            PrimitiveType::Date => Arc::new(collect::<_, Date32Array>(field, values, int)?),
-            PrimitiveType::Long => Arc::new(collect::<_, Int64Array>(field, values, long)?),
-            PrimitiveType::Time => {
-                Arc::new(collect::<_, Time64MicrosecondArray>(field, values, long)?)
-            }
-            PrimitiveType::Timestamp => Arc::new(collect::<_, TimestampMicrosecondArray>(
-                field, values, long,
-            )?),
-            PrimitiveType::Timestamptz => Arc::new(
-                collect::<_, TimestampMicrosecondArray>(field, values, long)?
-                    .with_timezone(UTC_TIME_ZONE),
-            ),
-            PrimitiveType::TimestampNs => {
-                Arc::new(collect::<_, TimestampNanosecondArray>(field, values, long)?)
-            }
-            PrimitiveType::TimestamptzNs => Arc::new(
-                collect::<_, TimestampNanosecondArray>(field, values, long)?
-                    .with_timezone(UTC_TIME_ZONE),
-            ),
-            PrimitiveType::Float => Arc::new(collect::<_, Float32Array>(
-                field,
-                values,
-                |literal| match literal {
-                    PrimitiveLiteral::Float(v) => Some(v.0),
-                    _ => None,
-                },
-            )?),
-            PrimitiveType::Double => Arc::new(collect::<_, Float64Array>(
-                field,
-                values,
-                |literal| match literal {
-                    PrimitiveLiteral::Double(v) => Some(v.0),
-                    _ => None,
-                },
-            )?),
-            PrimitiveType::Decimal { .. } => {
-                let DataType::Decimal128(precision, scale) = *data_type else {
-                    unreachable!()
-                };
-                Arc::new(
-                    collect::<_, Decimal128Array>(field, values, |literal| match literal {
-                        PrimitiveLiteral::Int128(v) => Some(*v),
-                        _ => None,
-                    })?
-                    .with_precision_and_scale(precision, scale)?,
+    };
+    Ok(match field.data_type() {
+        DataType::Struct(fields) => Arc::new(project_struct(
+            array.as_struct_opt().ok_or_else(type_mismatch)?,
+            avro_type,
+            fields,
+        )?),
+        DataType::List(element) => {
+            let list = array.as_list_opt::<i32>().ok_or_else(type_mismatch)?;
+            let values = project(list.values(), non_null_type(&avro_type["items"]), element)?;
+            Arc::new(
+                ListArray::try_new(
+                    element.clone(),
+                    list.offsets().clone(),
+                    values,
+                    list.nulls().cloned(),
                 )
-            }
-            PrimitiveType::String => Arc::new(collect::<_, StringArray>(
-                field,
-                values,
-                |literal| match literal {
-                    PrimitiveLiteral::String(v) => Some(v.as_str()),
-                    _ => None,
-                },
-            )?),
-            PrimitiveType::Uuid => {
-                let uuids: Vec<_> = collect(field, values, |literal| match literal {
-                    PrimitiveLiteral::UInt128(v) => Some(v.to_be_bytes()),
-                    _ => None,
-                })?;
-                Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-                    uuids.into_iter(),
-                    16,
-                )?)
-            }
-            PrimitiveType::Fixed(_) => {
-                let DataType::FixedSizeBinary(width) = *data_type else {
-                    return Err(Error::new(
-                        ErrorKind::FeatureUnsupported,
-                        format!("fixed partition field {} is {data_type}", field.name),
-                    ));
-                };
-                let bytes: Vec<_> = collect(field, values, binary)?;
-                Arc::new(
-                    FixedSizeBinaryArray::try_from_sparse_iter_with_size(bytes.into_iter(), width)
-                        .map_err(|err| {
-                            invalid_data!(
-                                "partition field {} has a value of the wrong width",
-                                field.name
-                            )
-                            .with_source(err)
-                        })?,
+                .map_err(invalid_manifest)?,
+            )
+        }
+        // Avro stores maps with int keys as arrays of key-value records.
+        DataType::Map(entries, _) => {
+            let list = array.as_list_opt::<i32>().ok_or_else(type_mismatch)?;
+            let DataType::Struct(key_value) = entries.data_type() else {
+                unreachable!()
+            };
+            let entries_array = project_struct(
+                list.values().as_struct_opt().ok_or_else(type_mismatch)?,
+                &avro_type["items"],
+                key_value,
+            )?;
+            Arc::new(
+                MapArray::try_new(
+                    entries.clone(),
+                    list.offsets().clone(),
+                    entries_array,
+                    list.nulls().cloned(),
+                    false,
                 )
-            }
-            PrimitiveType::Binary => {
-                Arc::new(collect::<_, LargeBinaryArray>(field, values, binary)?)
-            }
-            PrimitiveType::Unknown => {
-                // Only nulls fit, so this returns an error for any value.
-                collect::<(), Vec<_>>(field, values, |_| None)?;
-                Arc::new(NullArray::new(values.len()))
-            }
-        };
-    Ok(array)
+                .map_err(invalid_manifest)?,
+            )
+        }
+        // arrow-avro gives every timestamp a UTC time zone, so only the type
+        // changes.
+        DataType::Timestamp(TimeUnit::Microsecond, time_zone) => Arc::new(
+            array
+                .as_primitive_opt::<TimestampMicrosecondType>()
+                .ok_or_else(type_mismatch)?
+                .clone()
+                .with_timezone_opt(time_zone.clone()),
+        ),
+        DataType::Timestamp(TimeUnit::Nanosecond, time_zone) => Arc::new(
+            array
+                .as_primitive_opt::<TimestampNanosecondType>()
+                .ok_or_else(type_mismatch)?
+                .clone()
+                .with_timezone_opt(time_zone.clone()),
+        ),
+        data_type if array.data_type() == data_type => array.clone(),
+        // Without `safe: false`, a value that doesn't fit the spec's type would
+        // become null instead of an error.
+        data_type => cast_with_options(array, data_type, &CastOptions {
+            safe: false,
+            ..Default::default()
+        })
+        .map_err(invalid_manifest)?,
+    })
+}
+
+/// Fills in the values that the spec says entries inherit from the manifest
+/// list.
+fn inherit(entries: StructArray, manifest_file: &ManifestFile) -> Result<StructArray> {
+    let (fields, mut columns, nulls) = entries.into_parts();
+    let index = |name: &str| fields.find(name).unwrap().0;
+    let (status, snapshot_id, sequence_number, file_sequence_number, data_file) = (
+        index("status"),
+        index("snapshot_id"),
+        index("sequence_number"),
+        index("file_sequence_number"),
+        index("data_file"),
+    );
+
+    columns[snapshot_id] =
+        fill_nulls(&columns[snapshot_id], None, manifest_file.added_snapshot_id)?;
+    if columns[sequence_number].null_count() > 0 || columns[file_sequence_number].null_count() > 0 {
+        let added = eq(
+            &columns[status],
+            &Int32Array::new_scalar(ManifestStatus::Added as i32),
+        )?;
+        for column in [sequence_number, file_sequence_number] {
+            columns[column] = fill_nulls(
+                &columns[column],
+                Some(&added),
+                manifest_file.sequence_number,
+            )?;
+        }
+    }
+    if manifest_file.content == ManifestContentType::Data {
+        let (data_file_fields, mut data_file_columns, data_file_nulls) =
+            columns[data_file].as_struct().clone().into_parts();
+        let index = |name: &str| data_file_fields.find(name).unwrap().0;
+        let first_row_id = index("first_row_id");
+        data_file_columns[first_row_id] = inherit_first_row_ids(
+            data_file_columns[first_row_id].as_primitive(),
+            columns[status].as_primitive(),
+            data_file_columns[index("record_count")].as_primitive(),
+            manifest_file,
+        )?;
+        columns[data_file] = Arc::new(StructArray::new(
+            data_file_fields,
+            data_file_columns,
+            data_file_nulls,
+        ));
+    }
+    Ok(StructArray::new(fields, columns, nulls))
+}
+
+/// Replaces the nulls of `array` with `value`, only in the rows that `rows`
+/// selects when given.
+fn fill_nulls(array: &ArrayRef, rows: Option<&BooleanArray>, value: i64) -> Result<ArrayRef> {
+    if array.null_count() == 0 {
+        return Ok(array.clone());
+    }
+    let mask = match rows {
+        Some(rows) => and(&is_null(array)?, rows)?,
+        None => is_null(array)?,
+    };
+    Ok(zip(&mask, &Int64Array::new_scalar(value), array)?)
+}
+
+/// Assigns first row IDs to the data files that lack one, following first row
+/// ID inheritance. As in Java's `ManifestReader`, deleted entries take no row
+/// IDs, and a manifest without a first row ID clears them all.
+fn inherit_first_row_ids(
+    first_row_ids: &Int64Array,
+    status: &Int32Array,
+    record_counts: &Int64Array,
+    manifest_file: &ManifestFile,
+) -> Result<ArrayRef> {
+    let Some(manifest_first_row_id) = manifest_file.first_row_id else {
+        return Ok(new_null_array(&DataType::Int64, first_row_ids.len()));
+    };
+    if first_row_ids.null_count() == 0 {
+        return Ok(Arc::new(first_row_ids.clone()));
+    }
+    let mut next_row_id = i64::try_from(manifest_first_row_id)?;
+    let first_row_ids: Int64Array = first_row_ids
+        .iter()
+        .zip(status.values())
+        .zip(record_counts.values())
+        .map(
+            |((first_row_id, &status), &record_count)| match first_row_id {
+                None if status != ManifestStatus::Deleted as i32 => {
+                    let assigned = next_row_id;
+                    next_row_id = next_row_id.checked_add(record_count).ok_or_else(|| {
+                        invalid_data!(
+                            "row ID overflow assigning first row IDs in {}",
+                            manifest_file.manifest_path
+                        )
+                    })?;
+                    Ok(Some(assigned))
+                }
+                first_row_id => Ok(first_row_id),
+            },
+        )
+        .collect::<Result<_>>()?;
+    Ok(Arc::new(first_row_ids))
 }
 
 #[cfg(test)]
@@ -494,27 +429,25 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use apache_avro::Reader as AvroReader;
     use apache_avro::types::Value as AvroValue;
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Int32Type, Int64Type};
     use arrow_array::{
         Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray,
-        Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray, NullArray,
-        StringArray, StructArray, Time64MicrosecondArray, TimestampMicrosecondArray,
-        TimestampNanosecondArray,
+        Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray, StringArray,
+        Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
     };
-    use uuid::Uuid;
 
     use super::*;
+    use crate::ErrorKind;
     use crate::arrow::arrow_schema_to_schema;
+    use crate::io::FileIO;
     use crate::spec::{
-        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Datum, FormatVersion, ListType,
-        Literal, ManifestContentType, ManifestEntry, ManifestMetadata, ManifestStatus, MapType,
-        NestedField, PartitionSpec, PrimitiveType, Schema, Struct, StructType, Transform, Type,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Datum, ListType, Literal,
+        Manifest, ManifestEntry, ManifestStatus, ManifestWriter, ManifestWriterBuilder, MapType,
+        NestedField, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema, Struct, StructType,
+        Transform, Type,
     };
-
-    const UUID: &str = "f79c3e09-677c-4bbd-a479-3f349cb785e7";
 
     fn table_schema() -> Schema {
         let columns = [
@@ -534,10 +467,8 @@ mod tests {
             (11, "ts_ns", PrimitiveType::TimestampNs),
             (12, "tstz_ns", PrimitiveType::TimestamptzNs),
             (13, "s", PrimitiveType::String),
-            (14, "u", PrimitiveType::Uuid),
-            (15, "fx", PrimitiveType::Fixed(3)),
-            (16, "bin", PrimitiveType::Binary),
-            (17, "unk", PrimitiveType::Unknown),
+            (14, "fx", PrimitiveType::Fixed(3)),
+            (15, "bin", PrimitiveType::Binary),
         ];
         Schema::builder()
             .with_fields(
@@ -564,19 +495,6 @@ mod tests {
             .unwrap()
     }
 
-    fn manifest(partition_spec: PartitionSpec, entries: Vec<ManifestEntry>) -> Manifest {
-        Manifest::new(
-            ManifestMetadata {
-                schema: Arc::new(table_schema()),
-                schema_id: 0,
-                partition_spec,
-                format_version: FormatVersion::V2,
-                content: ManifestContentType::Data,
-            },
-            entries,
-        )
-    }
-
     fn data_file(content: DataContentType, path: &str) -> DataFileBuilder {
         let mut builder = DataFileBuilder::default();
         builder
@@ -588,20 +506,40 @@ mod tests {
         builder
     }
 
-    fn entry(status: ManifestStatus, data_file: DataFile) -> ManifestEntry {
-        ManifestEntry {
-            status,
-            snapshot_id: None,
-            sequence_number: None,
-            file_sequence_number: None,
-            data_file,
-        }
+    /// Writes a manifest with `ManifestWriter` and returns its bytes and its
+    /// manifest list entry.
+    async fn write_manifest(
+        spec: PartitionSpec,
+        snapshot_id: Option<i64>,
+        build: impl FnOnce(ManifestWriterBuilder) -> ManifestWriter,
+        add: impl FnOnce(&mut ManifestWriter),
+    ) -> (Vec<u8>, ManifestFile) {
+        let io = FileIO::new_with_memory();
+        let output = io.new_output("memory:///manifest.avro").unwrap();
+        let mut writer = build(ManifestWriterBuilder::new(
+            output,
+            snapshot_id,
+            Arc::new(table_schema()),
+            spec,
+        ));
+        add(&mut writer);
+        let manifest_file = writer.write_manifest_file().await.unwrap();
+        let bytes = io
+            .new_input("memory:///manifest.avro")
+            .unwrap()
+            .read()
+            .await
+            .unwrap()
+            .to_vec();
+        (bytes, manifest_file)
+    }
+
+    fn column(batch: &RecordBatch, name: &str) -> ArrayRef {
+        batch.column_by_name(name).unwrap().clone()
     }
 
     fn data_file_column(batch: &RecordBatch, name: &str) -> ArrayRef {
-        batch
-            .column_by_name("data_file")
-            .unwrap()
+        column(batch, "data_file")
             .as_struct()
             .column_by_name(name)
             .unwrap()
@@ -651,10 +589,80 @@ mod tests {
         ))
     }
 
-    #[test]
-    fn test_schema_is_spec_manifest_entry() {
+    /// Rewrites a manifest with `edit_schema` applied to its Avro schema and
+    /// `edit_record` applied to each record.
+    fn rewrite_manifest(
+        bytes: &[u8],
+        edit_schema: impl Fn(&mut serde_json::Value),
+        edit_record: impl Fn(&mut AvroValue),
+    ) -> Vec<u8> {
+        let reader = apache_avro::Reader::new(bytes).unwrap();
+        let mut schema = serde_json::to_value(reader.writer_schema()).unwrap();
+        edit_schema(&mut schema);
+        let schema = apache_avro::Schema::parse(&schema).unwrap();
+        let metadata = reader.user_metadata().clone();
+        let mut writer = apache_avro::Writer::new(&schema, Vec::new()).unwrap();
+        for (key, value) in metadata {
+            writer.add_user_metadata(key, value).unwrap();
+        }
+        for record in reader {
+            let mut record = record.unwrap();
+            edit_record(&mut record);
+            writer.append_value(record).unwrap();
+        }
+        writer.into_inner().unwrap()
+    }
+
+    /// Calls `edit` on every record field object in an Avro schema.
+    fn for_each_avro_field(schema: &mut serde_json::Value, edit: &impl Fn(&mut serde_json::Value)) {
+        match schema {
+            serde_json::Value::Object(object) => {
+                if let Some(serde_json::Value::Array(fields)) = object.get_mut("fields") {
+                    for field in fields {
+                        edit(field);
+                        for_each_avro_field(field.get_mut("type").unwrap(), edit);
+                    }
+                }
+                if let Some(items) = object.get_mut("items") {
+                    for_each_avro_field(items, edit);
+                }
+            }
+            serde_json::Value::Array(branches) => {
+                for branch in branches {
+                    for_each_avro_field(branch, edit);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Renames the record field `from` to `to` in every Avro record value.
+    fn rename_avro_field(value: &mut AvroValue, from: &str, to: &str) {
+        match value {
+            AvroValue::Record(fields) => {
+                for (name, field) in fields {
+                    if name == from {
+                        *name = to.to_string();
+                    }
+                    rename_avro_field(field, from, to);
+                }
+            }
+            AvroValue::Union(_, value) => rename_avro_field(value, from, to),
+            AvroValue::Array(items) => {
+                for item in items {
+                    rename_avro_field(item, from, to);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[tokio::test]
+    async fn test_schema_is_spec_manifest_entry() {
         let spec = partition_spec(&[("i", Transform::Identity), ("s", Transform::Truncate(2))]);
-        let batch = manifest_to_record_batch(&manifest(spec, vec![])).unwrap();
+        let (bytes, manifest_file) =
+            write_manifest(spec, Some(1), |b| b.build_v2_data(), |_| {}).await;
+        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
         assert_eq!(batch.num_rows(), 0);
 
         let long = || Type::Primitive(PrimitiveType::Long);
@@ -737,25 +745,105 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_entry_and_data_file_columns() {
+    #[tokio::test]
+    async fn test_data_file_columns() {
         let added = DataFile {
             column_sizes: HashMap::from([(1, 11)]),
-            value_counts: HashMap::from([(1, 10)]),
+            value_counts: HashMap::from([(1, 10), (3, 9)]),
             null_value_counts: HashMap::from([(1, 1)]),
             nan_value_counts: HashMap::from([(4, 0)]),
-            lower_bounds: HashMap::from([(2, Datum::int(-1))]),
+            lower_bounds: HashMap::from([(2, Datum::int(-1)), (13, Datum::string("abc"))]),
             upper_bounds: HashMap::from([(2, Datum::int(7))]),
             key_metadata: Some(vec![1, 2]),
             split_offsets: Some(vec![4, 100]),
             sort_order_id: Some(0),
-            first_row_id: Some(1000),
             ..data_file(DataContentType::Data, "s3://b/data/0.parquet")
                 .record_count(10)
                 .file_size_in_bytes(100)
                 .build()
                 .unwrap()
         };
+        let existing = data_file(DataContentType::Data, "s3://b/data/1.parquet")
+            .build()
+            .unwrap();
+        let (bytes, manifest_file) = write_manifest(
+            partition_spec(&[]),
+            Some(1),
+            |b| b.build_v2_data(),
+            |writer| {
+                writer.add_file(added, 2).unwrap();
+                writer.add_existing_file(existing, 5, 3, Some(3)).unwrap();
+            },
+        )
+        .await;
+        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        assert_eq!(batch.num_rows(), 2);
+
+        assert_eq!(
+            column(&batch, "status").as_ref(),
+            &Int32Array::from(vec![1, 0]) as &dyn Array
+        );
+        assert_eq!(
+            column(&batch, "snapshot_id").as_ref(),
+            &Int64Array::from(vec![1, 5]) as &dyn Array
+        );
+        assert_eq!(
+            column(&batch, "sequence_number").as_ref(),
+            &Int64Array::from(vec![2, 3]) as &dyn Array
+        );
+
+        let column = |name: &str| data_file_column(&batch, name);
+        assert_eq!(
+            column("content").as_ref(),
+            &Int32Array::from(vec![0, 0]) as &dyn Array
+        );
+        assert_eq!(
+            column("file_path").as_ref(),
+            &StringArray::from(vec!["s3://b/data/0.parquet", "s3://b/data/1.parquet"])
+                as &dyn Array
+        );
+        assert_eq!(
+            column("file_format").as_ref(),
+            &StringArray::from(vec!["PARQUET", "PARQUET"]) as &dyn Array
+        );
+        assert_eq!(
+            column("record_count").as_ref(),
+            &Int64Array::from(vec![10, 1]) as &dyn Array
+        );
+        assert_eq!(
+            column("file_size_in_bytes").as_ref(),
+            &Int64Array::from(vec![100, 10]) as &dyn Array
+        );
+        assert_eq!(long_map(&column("column_sizes"), 0), vec![(1, 11)]);
+        assert_eq!(long_map(&column("value_counts"), 0), vec![(1, 10), (3, 9)]);
+        assert_eq!(long_map(&column("null_value_counts"), 0), vec![(1, 1)]);
+        assert_eq!(long_map(&column("nan_value_counts"), 0), vec![(4, 0)]);
+        assert_eq!(long_map(&column("value_counts"), 1), vec![]);
+        assert_eq!(binary_map(&column("lower_bounds"), 0), vec![
+            (2, (-1i32).to_le_bytes().to_vec()),
+            (13, b"abc".to_vec()),
+        ]);
+        assert_eq!(binary_map(&column("upper_bounds"), 0), vec![(
+            2,
+            7i32.to_le_bytes().to_vec()
+        )]);
+        assert_eq!(
+            column("key_metadata").as_ref(),
+            &LargeBinaryArray::from(vec![Some(&[1u8, 2][..]), None]) as &dyn Array
+        );
+        let split_offsets = column("split_offsets");
+        assert_eq!(
+            split_offsets.as_list::<i32>().value(0).as_ref(),
+            &Int64Array::from(vec![4, 100]) as &dyn Array
+        );
+        assert_eq!(
+            column("sort_order_id").as_ref(),
+            &Int32Array::from(vec![Some(0), None]) as &dyn Array
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_file_columns() {
         let position_deletes = DataFile {
             file_format: DataFileFormat::Puffin,
             referenced_data_file: Some("s3://b/data/0.parquet".to_string()),
@@ -767,174 +855,57 @@ mod tests {
         };
         let equality_deletes = DataFile {
             equality_ids: Some(vec![1, 3]),
-            split_offsets: Some(vec![]),
             ..data_file(DataContentType::EqualityDeletes, "s3://b/data/2.parquet")
                 .build()
                 .unwrap()
         };
-        let entries = vec![
-            ManifestEntry {
-                snapshot_id: Some(1),
-                sequence_number: Some(2),
-                file_sequence_number: Some(3),
-                ..entry(ManifestStatus::Added, added)
+        let (bytes, manifest_file) = write_manifest(
+            partition_spec(&[]),
+            Some(1),
+            |b| b.build_v3_deletes(),
+            |writer| {
+                writer.add_file(position_deletes, 2).unwrap();
+                writer.add_file(equality_deletes, 2).unwrap();
             },
-            entry(ManifestStatus::Existing, position_deletes),
-            ManifestEntry {
-                snapshot_id: Some(5),
-                ..entry(ManifestStatus::Deleted, equality_deletes)
-            },
-        ];
-        let batch = manifest_to_record_batch(&manifest(partition_spec(&[]), entries)).unwrap();
-        assert_eq!(batch.num_rows(), 3);
-
-        let column = |name: &str| batch.column_by_name(name).unwrap().clone();
-        assert_eq!(
-            column("status").as_ref(),
-            &Int32Array::from(vec![1, 0, 2]) as &dyn Array
-        );
-        assert_eq!(
-            column("snapshot_id").as_ref(),
-            &Int64Array::from(vec![Some(1), None, Some(5)]) as &dyn Array
-        );
-        assert_eq!(
-            column("sequence_number").as_ref(),
-            &Int64Array::from(vec![Some(2), None, None]) as &dyn Array
-        );
-        assert_eq!(
-            column("file_sequence_number").as_ref(),
-            &Int64Array::from(vec![Some(3), None, None]) as &dyn Array
-        );
+        )
+        .await;
+        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
 
         let column = |name: &str| data_file_column(&batch, name);
         assert_eq!(
             column("content").as_ref(),
-            &Int32Array::from(vec![0, 1, 2]) as &dyn Array
+            &Int32Array::from(vec![1, 2]) as &dyn Array
         );
-        assert_eq!(
-            column("file_path").as_ref(),
-            &StringArray::from(vec![
-                "s3://b/data/0.parquet",
-                "s3://b/data/1.puffin",
-                "s3://b/data/2.parquet"
-            ]) as &dyn Array
-        );
-        // Writers, including `ManifestWriter`, store the format name in upper case.
         assert_eq!(
             column("file_format").as_ref(),
-            &StringArray::from(vec!["PARQUET", "PUFFIN", "PARQUET"]) as &dyn Array
-        );
-        assert_eq!(
-            column("record_count").as_ref(),
-            &Int64Array::from(vec![10, 1, 1]) as &dyn Array
-        );
-        assert_eq!(
-            column("file_size_in_bytes").as_ref(),
-            &Int64Array::from(vec![100, 10, 10]) as &dyn Array
-        );
-        for (name, expected) in [
-            ("column_sizes", (1, 11)),
-            ("value_counts", (1, 10)),
-            ("null_value_counts", (1, 1)),
-            ("nan_value_counts", (4, 0)),
-        ] {
-            let map = column(name);
-            assert_eq!(map.null_count(), 0, "{name}");
-            assert_eq!(long_map(&map, 0), vec![expected], "{name}");
-            assert_eq!(long_map(&map, 1), vec![], "{name}");
-            assert_eq!(long_map(&map, 2), vec![], "{name}");
-        }
-        assert_eq!(binary_map(&column("lower_bounds"), 0), vec![(
-            2,
-            (-1i32).to_le_bytes().to_vec()
-        )]);
-        assert_eq!(binary_map(&column("upper_bounds"), 0), vec![(
-            2,
-            7i32.to_le_bytes().to_vec()
-        )]);
-        assert_eq!(binary_map(&column("lower_bounds"), 1), vec![]);
-        assert_eq!(
-            column("key_metadata").as_ref(),
-            &LargeBinaryArray::from(vec![Some(&[1u8, 2][..]), None, None]) as &dyn Array
-        );
-        let split_offsets = column("split_offsets");
-        let split_offsets = split_offsets.as_list::<i32>();
-        assert!(split_offsets.is_valid(0) && split_offsets.is_null(1) && split_offsets.is_valid(2));
-        assert_eq!(
-            split_offsets.value(0).as_ref(),
-            &Int64Array::from(vec![4, 100]) as &dyn Array
-        );
-        assert_eq!(split_offsets.value(2).len(), 0);
-        let equality_ids = column("equality_ids");
-        let equality_ids = equality_ids.as_list::<i32>();
-        assert!(equality_ids.is_null(0) && equality_ids.is_null(1) && equality_ids.is_valid(2));
-        assert_eq!(
-            equality_ids.value(2).as_ref(),
-            &Int32Array::from(vec![1, 3]) as &dyn Array
-        );
-        assert_eq!(
-            column("sort_order_id").as_ref(),
-            &Int32Array::from(vec![Some(0), None, None]) as &dyn Array
-        );
-        assert_eq!(
-            column("first_row_id").as_ref(),
-            &Int64Array::from(vec![Some(1000), None, None]) as &dyn Array
+            &StringArray::from(vec!["PUFFIN", "PARQUET"]) as &dyn Array
         );
         assert_eq!(
             column("referenced_data_file").as_ref(),
-            &StringArray::from(vec![None, Some("s3://b/data/0.parquet"), None]) as &dyn Array
+            &StringArray::from(vec![Some("s3://b/data/0.parquet"), None]) as &dyn Array
         );
         assert_eq!(
             column("content_offset").as_ref(),
-            &Int64Array::from(vec![None, Some(4), None]) as &dyn Array
+            &Int64Array::from(vec![Some(4), None]) as &dyn Array
         );
         assert_eq!(
             column("content_size_in_bytes").as_ref(),
-            &Int64Array::from(vec![None, Some(40), None]) as &dyn Array
+            &Int64Array::from(vec![Some(40), None]) as &dyn Array
+        );
+        let equality_ids = column("equality_ids");
+        let equality_ids = equality_ids.as_list::<i32>();
+        assert!(equality_ids.is_null(0));
+        assert_eq!(
+            equality_ids.value(1).as_ref(),
+            &Int32Array::from(vec![1, 3]) as &dyn Array
         );
     }
 
-    #[test]
-    fn test_metric_maps_with_several_columns() {
-        let uuid = Uuid::parse_str(UUID).unwrap();
-        let file = DataFile {
-            value_counts: HashMap::from([(1, 5), (3, 6), (13, 7)]),
-            lower_bounds: HashMap::from([
-                (1, Datum::bool(false)),
-                (3, Datum::long(-2)),
-                (13, Datum::string("abc")),
-                (14, Datum::uuid(uuid)),
-            ]),
-            ..data_file(DataContentType::Data, "s3://b/data/0.parquet")
-                .build()
-                .unwrap()
-        };
-        let batch = manifest_to_record_batch(&manifest(partition_spec(&[]), vec![entry(
-            ManifestStatus::Added,
-            file,
-        )]))
-        .unwrap();
-
-        assert_eq!(
-            long_map(&data_file_column(&batch, "value_counts"), 0),
-            vec![(1, 5), (3, 6), (13, 7)]
-        );
-        assert_eq!(
-            binary_map(&data_file_column(&batch, "lower_bounds"), 0),
-            vec![
-                (1, vec![0]),
-                (3, (-2i64).to_le_bytes().to_vec()),
-                (13, b"abc".to_vec()),
-                (14, uuid.as_bytes().to_vec()),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_partition_values() {
+    #[tokio::test]
+    async fn test_partition_values() {
         let identity_columns = [
             "b", "i", "l", "f", "d", "dec", "date", "time", "ts", "tstz", "ts_ns", "tstz_ns", "s",
-            "u", "fx", "bin",
+            "fx", "bin",
         ];
         let mut fields: Vec<_> = identity_columns
             .iter()
@@ -948,7 +919,6 @@ mod tests {
         ]);
         let spec = partition_spec(&fields);
 
-        let uuid = Uuid::parse_str(UUID).unwrap();
         let values = Struct::from_iter([
             Some(Literal::bool(true)),
             Some(Literal::int(-7)),
@@ -963,7 +933,6 @@ mod tests {
             Some(Literal::timestamp_nano(1_700_000_000_000_000_002)),
             Some(Literal::timestamptz_nano(1_700_000_000_000_000_003)),
             Some(Literal::string("abc")),
-            Some(Literal::uuid(uuid)),
             Some(Literal::fixed([1u8, 2, 3])),
             Some(Literal::binary([9u8])),
             Some(Literal::int(3)),
@@ -972,22 +941,27 @@ mod tests {
             None,
         ]);
         let nulls = Struct::from_iter(fields.iter().map(|_| None));
-        let entries = [values, nulls]
-            .into_iter()
-            .map(|partition| {
-                entry(ManifestStatus::Added, DataFile {
-                    partition,
-                    ..data_file(DataContentType::Data, "s3://b/data/0.parquet")
-                        .build()
-                        .unwrap()
-                })
-            })
-            .collect();
-        let batch = manifest_to_record_batch(&manifest(spec, entries)).unwrap();
+        let (bytes, manifest_file) = write_manifest(
+            spec,
+            Some(1),
+            |b| b.build_v2_data(),
+            |writer| {
+                for (i, partition) in [values, nulls].into_iter().enumerate() {
+                    let file = DataFile {
+                        partition,
+                        ..data_file(DataContentType::Data, &format!("s3://b/data/{i}.parquet"))
+                            .build()
+                            .unwrap()
+                    };
+                    writer.add_file(file, 1).unwrap();
+                }
+            },
+        )
+        .await;
+        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
 
         let partition = data_file_column(&batch, "partition");
         let partition = partition.as_struct();
-        assert_eq!(partition.null_count(), 0);
         let expected: Vec<ArrayRef> = vec![
             Arc::new(BooleanArray::from(vec![Some(true), None])),
             Arc::new(Int32Array::from(vec![Some(-7), None])),
@@ -1023,13 +997,6 @@ mod tests {
             Arc::new(StringArray::from(vec![Some("abc"), None])),
             Arc::new(
                 FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-                    [Some(uuid.as_bytes().to_vec()), None].into_iter(),
-                    16,
-                )
-                .unwrap(),
-            ),
-            Arc::new(
-                FixedSizeBinaryArray::try_from_sparse_iter_with_size(
                     [Some(vec![1u8, 2, 3]), None].into_iter(),
                     3,
                 )
@@ -1052,215 +1019,254 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_unpartitioned_partition_column() {
-        let entries = (0..3)
-            .map(|i| {
-                entry(
-                    ManifestStatus::Added,
-                    data_file(DataContentType::Data, &format!("s3://b/data/{i}.parquet"))
-                        .build()
-                        .unwrap(),
-                )
-            })
-            .collect();
-        let batch = manifest_to_record_batch(&manifest(partition_spec(&[]), entries)).unwrap();
-        let partition = data_file_column(&batch, "partition");
-        let partition: &StructArray = partition.as_struct();
-        assert_eq!(partition.num_columns(), 0);
-        assert_eq!(partition.len(), 3);
-        assert_eq!(partition.null_count(), 0);
+    #[tokio::test]
+    async fn test_v1_manifest_reads_with_v2_defaults() {
+        let file = data_file(DataContentType::Data, "s3://b/data/0.parquet")
+            .build()
+            .unwrap();
+        let (bytes, mut manifest_file) = write_manifest(
+            partition_spec(&[]),
+            Some(1),
+            |b| b.build_v1(),
+            |writer| writer.add_file(file, -1).unwrap(),
+        )
+        .await;
+        // The v1 default must win over inheritance, so give the manifest list
+        // entry a sequence number that inheritance would use.
+        manifest_file.sequence_number = 9;
+        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+
+        assert_eq!(
+            data_file_column(&batch, "content").as_ref(),
+            &Int32Array::from(vec![0]) as &dyn Array
+        );
+        for name in ["sequence_number", "file_sequence_number"] {
+            assert_eq!(
+                column(&batch, name).as_ref(),
+                &Int64Array::from(vec![0]) as &dyn Array,
+                "{name}"
+            );
+        }
+        assert_eq!(
+            column(&batch, "snapshot_id").as_ref(),
+            &Int64Array::from(vec![1]) as &dyn Array
+        );
     }
 
-    #[test]
-    fn test_unknown_partition_field() {
-        let spec = || partition_spec(&[("unk", Transform::Void)]);
-        let entries = vec![entry(ManifestStatus::Added, DataFile {
-            partition: Struct::from_iter([None]),
+    #[tokio::test]
+    async fn test_snapshot_id_and_sequence_number_inheritance() {
+        let file = |i: usize| {
+            data_file(DataContentType::Data, &format!("s3://b/data/{i}.parquet"))
+                .build()
+                .unwrap()
+        };
+        let (bytes, mut manifest_file) = write_manifest(
+            partition_spec(&[]),
+            None,
+            |b| b.build_v2_data(),
+            |writer| {
+                writer.add_file(file(0), -1).unwrap();
+                writer.add_existing_file(file(1), 3, 4, Some(4)).unwrap();
+            },
+        )
+        .await;
+        manifest_file.added_snapshot_id = 42;
+        manifest_file.sequence_number = 7;
+        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+
+        assert_eq!(
+            column(&batch, "snapshot_id").as_ref(),
+            &Int64Array::from(vec![42, 3]) as &dyn Array
+        );
+        for name in ["sequence_number", "file_sequence_number"] {
+            assert_eq!(
+                column(&batch, name).as_ref(),
+                &Int64Array::from(vec![7, 4]) as &dyn Array,
+                "{name}"
+            );
+        }
+    }
+
+    async fn first_row_id_manifest() -> (Vec<u8>, ManifestFile) {
+        let file = |i: usize, record_count: u64, first_row_id: Option<i64>| DataFile {
+            first_row_id,
+            ..data_file(DataContentType::Data, &format!("s3://b/data/{i}.parquet"))
+                .record_count(record_count)
+                .build()
+                .unwrap()
+        };
+        let entry = |status, data_file| ManifestEntry {
+            status,
+            snapshot_id: Some(1),
+            sequence_number: Some(1),
+            file_sequence_number: Some(1),
+            data_file,
+        };
+        write_manifest(
+            partition_spec(&[]),
+            Some(1),
+            |b| b.build_v3_data(),
+            |writer| {
+                writer.add_file(file(0, 10, None), 1).unwrap();
+                writer
+                    .add_existing_entry(entry(ManifestStatus::Existing, file(1, 3, Some(5))))
+                    .unwrap();
+                writer
+                    .add_delete_entry(entry(ManifestStatus::Deleted, file(2, 4, None)))
+                    .unwrap();
+                writer
+                    .add_existing_entry(entry(ManifestStatus::Existing, file(3, 6, None)))
+                    .unwrap();
+                writer.add_file(file(4, 2, None), 1).unwrap();
+            },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_first_row_id_inheritance() {
+        let (bytes, mut manifest_file) = first_row_id_manifest().await;
+        manifest_file.first_row_id = Some(100);
+        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        // Deleted entries don't take row IDs, and entries with a first_row_id keep it.
+        assert_eq!(
+            data_file_column(&batch, "first_row_id").as_ref(),
+            &Int64Array::from(vec![Some(100), Some(5), None, Some(110), Some(116)]) as &dyn Array
+        );
+
+        manifest_file.first_row_id = None;
+        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        assert_eq!(data_file_column(&batch, "first_row_id").null_count(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_first_row_id_overflow_is_an_error() {
+        let (bytes, mut manifest_file) = first_row_id_manifest().await;
+        manifest_file.first_row_id = Some(i64::MAX as u64 - 5);
+        let err = read_manifest_entries(&bytes, &manifest_file).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[tokio::test]
+    async fn test_fields_are_matched_by_field_id() {
+        let file = DataFile {
+            partition: Struct::from_iter([Some(Literal::int(7))]),
             ..data_file(DataContentType::Data, "s3://b/data/0.parquet")
                 .build()
                 .unwrap()
-        })];
-        let batch = manifest_to_record_batch(&manifest(spec(), entries)).unwrap();
+        };
+        let (bytes, manifest_file) = write_manifest(
+            partition_spec(&[("i", Transform::Identity)]),
+            Some(1),
+            |b| b.build_v2_data(),
+            |writer| writer.add_file(file, 1).unwrap(),
+        )
+        .await;
+        let renames = [("file_path", "path"), ("i_identity", "renamed_partition")];
+        let bytes = rewrite_manifest(
+            &bytes,
+            |schema| {
+                for_each_avro_field(schema, &|field| {
+                    for (from, to) in renames {
+                        if field["name"] == from {
+                            field["name"] = to.into();
+                        }
+                    }
+                })
+            },
+            |record| {
+                for (from, to) in renames {
+                    rename_avro_field(record, from, to);
+                }
+            },
+        );
+        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+
+        assert_eq!(
+            data_file_column(&batch, "file_path").as_ref(),
+            &StringArray::from(vec!["s3://b/data/0.parquet"]) as &dyn Array
+        );
         let partition = data_file_column(&batch, "partition");
         assert_eq!(
             partition.as_struct().column(0).as_ref(),
-            &NullArray::new(1) as &dyn Array
+            &Int32Array::from(vec![7]) as &dyn Array
         );
+    }
 
-        let entries = vec![entry(ManifestStatus::Added, DataFile {
-            partition: Struct::from_iter([Some(Literal::int(1))]),
-            ..data_file(DataContentType::Data, "s3://b/data/0.parquet")
-                .build()
-                .unwrap()
-        })];
-        let err = manifest_to_record_batch(&manifest(spec(), entries)).unwrap_err();
+    #[tokio::test]
+    async fn test_missing_required_field_is_an_error() {
+        let file = data_file(DataContentType::Data, "s3://b/data/0.parquet")
+            .build()
+            .unwrap();
+        let (bytes, manifest_file) = write_manifest(
+            partition_spec(&[]),
+            Some(1),
+            |b| b.build_v2_data(),
+            |writer| writer.add_file(file, 1).unwrap(),
+        )
+        .await;
+        // A file_path under another field ID leaves the required file_path missing.
+        let bytes = rewrite_manifest(
+            &bytes,
+            |schema| {
+                for_each_avro_field(schema, &|field| {
+                    if field["name"] == "file_path" {
+                        field["field-id"] = 999.into();
+                    }
+                })
+            },
+            |_| {},
+        );
+        let err = read_manifest_entries(&bytes, &manifest_file).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
-    #[test]
-    fn test_partition_value_of_wrong_type_is_an_error() {
-        let file = DataFile {
-            partition: Struct::from_iter([Some(Literal::string("not an int"))]),
-            ..data_file(DataContentType::Data, "s3://b/data/0.parquet")
-                .build()
-                .unwrap()
-        };
-        let manifest = manifest(partition_spec(&[("i", Transform::Identity)]), vec![entry(
-            ManifestStatus::Added,
-            file,
-        )]);
-        let err = manifest_to_record_batch(&manifest).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-    }
-
-    #[test]
-    fn test_fixed_partition_value_of_wrong_width_is_an_error() {
-        let file = DataFile {
-            partition: Struct::from_iter([Some(Literal::fixed([1u8, 2]))]),
-            ..data_file(DataContentType::Data, "s3://b/data/0.parquet")
-                .build()
-                .unwrap()
-        };
-        let manifest = manifest(partition_spec(&[("fx", Transform::Identity)]), vec![entry(
-            ManifestStatus::Added,
-            file,
-        )]);
-        let err = manifest_to_record_batch(&manifest).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-    }
-
-    #[test]
-    fn test_partition_value_with_wrong_arity_is_an_error() {
-        let file = DataFile {
-            partition: Struct::from_iter([Some(Literal::int(1)), Some(Literal::int(2))]),
-            ..data_file(DataContentType::Data, "s3://b/data/0.parquet")
-                .build()
-                .unwrap()
-        };
-        let manifest = manifest(partition_spec(&[("i", Transform::Identity)]), vec![entry(
-            ManifestStatus::Added,
-            file,
-        )]);
-        let err = manifest_to_record_batch(&manifest).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-    }
-
-    #[test]
-    fn test_every_format_version_has_the_same_schema() {
-        let schemas: Vec<_> = [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3]
-            .into_iter()
-            .map(|format_version| {
-                let manifest = Manifest::new(
-                    ManifestMetadata {
-                        format_version,
-                        ..manifest(partition_spec(&[("i", Transform::Identity)]), vec![])
-                            .metadata()
-                            .clone()
-                    },
-                    vec![],
-                );
-                manifest_to_record_batch(&manifest).unwrap().schema()
-            })
-            .collect();
-        assert_eq!(schemas[0], schemas[1]);
-        assert_eq!(schemas[1], schemas[2]);
-    }
-
-    #[test]
-    fn test_count_beyond_long_range_is_an_error() {
-        let file = DataFile {
-            column_sizes: HashMap::from([(1, u64::MAX)]),
-            ..data_file(DataContentType::Data, "s3://b/data/0.parquet")
-                .build()
-                .unwrap()
-        };
-        let manifest = manifest(partition_spec(&[]), vec![entry(
-            ManifestStatus::Added,
-            file,
-        )]);
-        let err = manifest_to_record_batch(&manifest).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-    }
-
-    /// `(key, value)` pairs of the map field `name` of an Avro `data_file`
-    /// record, sorted by key.
-    fn avro_map<T: Ord>(
-        data_file: &[(String, AvroValue)],
-        name: &str,
-        value: impl Fn(&AvroValue) -> T,
-    ) -> Vec<(i32, T)> {
-        let (_, AvroValue::Union(_, map)) =
-            data_file.iter().find(|(field, _)| field == name).unwrap()
-        else {
-            panic!("{name} is not a union");
-        };
-        let AvroValue::Array(pairs) = map.as_ref() else {
-            panic!("{name} is not an array");
-        };
-        let mut pairs: Vec<_> = pairs
-            .iter()
-            .map(|pair| {
-                let AvroValue::Record(pair) = pair else {
-                    panic!("{name} entry is not a record");
-                };
-                let AvroValue::Int(key) = pair[0].1 else {
-                    panic!("{name} key is not an int");
-                };
-                (key, value(&pair[1].1))
-            })
-            .collect();
-        pairs.sort_unstable();
-        pairs
-    }
-
-    #[test]
-    fn test_manifest_written_by_pyiceberg() {
-        let bs = std::fs::read(format!(
+    #[tokio::test]
+    async fn test_manifest_written_by_pyiceberg() {
+        let bytes = std::fs::read(format!(
             "{}/testdata/manifests/pyiceberg-v2-data.avro",
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap();
-        let batch = manifest_to_record_batch(&Manifest::parse_avro(&bs).unwrap()).unwrap();
+        let manifest = Manifest::parse_avro(&bytes).unwrap();
+        let (_, manifest_file) =
+            write_manifest(partition_spec(&[]), Some(1), |b| b.build_v2_data(), |_| {}).await;
+        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
 
-        let records: Vec<_> = AvroReader::new(bs.as_slice())
-            .unwrap()
-            .map(|record| match record.unwrap() {
-                AvroValue::Record(fields) => fields,
-                _ => panic!("manifest entry is not a record"),
-            })
-            .collect();
-        assert_eq!(batch.num_rows(), records.len());
-        for (row, record) in records.iter().enumerate() {
-            let Some((_, AvroValue::Record(data_file))) =
-                record.iter().find(|(name, _)| name == "data_file")
+        assert_eq!(batch.num_rows(), manifest.entries().len());
+        let paths = data_file_column(&batch, "file_path");
+        let partition = data_file_column(&batch, "partition");
+        let category = partition.as_struct().column(0).as_string::<i32>().clone();
+        for (row, entry) in manifest.entries().iter().enumerate() {
+            let data_file = entry.data_file();
+            assert_eq!(paths.as_string::<i32>().value(row), data_file.file_path());
+            let Some(Literal::Primitive(PrimitiveLiteral::String(expected))) =
+                &data_file.partition()[0]
             else {
-                panic!("data_file is not a record");
+                panic!("partition value is not a string");
             };
-            let long = |value: &AvroValue| match value {
-                AvroValue::Long(v) => *v,
-                _ => panic!("map value is not a long"),
-            };
-            let bytes = |value: &AvroValue| match value {
-                AvroValue::Bytes(v) => v.clone(),
-                _ => panic!("map value is not bytes"),
-            };
-            for name in ["column_sizes", "value_counts", "null_value_counts"] {
-                assert_eq!(
-                    long_map(&data_file_column(&batch, name), row),
-                    avro_map(data_file, name, long),
-                    "{name}"
-                );
-            }
-            for name in ["lower_bounds", "upper_bounds"] {
-                let expected = avro_map(data_file, name, bytes);
-                assert!(!expected.is_empty(), "{name}");
-                assert_eq!(
-                    binary_map(&data_file_column(&batch, name), row),
-                    expected,
-                    "{name}"
-                );
-            }
+            assert_eq!(category.value(row), expected);
+            let mut lower_bounds: Vec<_> = data_file
+                .lower_bounds()
+                .iter()
+                .map(|(id, bound)| (*id, bound.to_bytes().unwrap().to_vec()))
+                .collect();
+            lower_bounds.sort_unstable();
+            assert!(!lower_bounds.is_empty());
+            assert_eq!(
+                binary_map(&data_file_column(&batch, "lower_bounds"), row),
+                lower_bounds
+            );
+            let mut value_counts: Vec<_> = data_file
+                .value_counts()
+                .iter()
+                .map(|(id, count)| (*id, *count as i64))
+                .collect();
+            value_counts.sort_unstable();
+            assert_eq!(
+                long_map(&data_file_column(&batch, "value_counts"), row),
+                value_counts
+            );
         }
     }
 }
