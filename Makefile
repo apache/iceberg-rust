@@ -26,6 +26,9 @@ check-fmt:
 check-clippy:
 	cargo clippy --all-targets --all-features --workspace -- -D warnings
 
+check-doc:
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --workspace
+
 # Keep version in sync with the CI lint install step in .github/workflows/ci.yml.
 install-cargo-machete:
 	cargo install --locked cargo-machete@0.7.0
@@ -96,7 +99,7 @@ install-cargo-deny:
 check-dependency-licenses: install-cargo-deny
 	python3 ./dev/release/licenses.py dependencies check
 
-check: check-fmt check-clippy check-toml cargo-machete check-license-notice check-dependency-licenses
+check: check-fmt check-clippy check-doc check-toml cargo-machete check-license-notice check-dependency-licenses
 
 doc-test:
 	cargo test --no-fail-fast --doc --all-features --workspace
