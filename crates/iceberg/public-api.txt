@@ -3311,6 +3311,13 @@ pub fn iceberg::transaction::FastAppendAction::add_data_files(self, data_files: 
 pub fn iceberg::transaction::FastAppendAction::set_commit_uuid(self, commit_uuid: uuid::Uuid) -> Self
 pub fn iceberg::transaction::FastAppendAction::set_snapshot_properties(self, snapshot_properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
 pub fn iceberg::transaction::FastAppendAction::with_check_duplicate(self, v: bool) -> Self
+pub struct iceberg::transaction::OverwriteAction
+impl iceberg::transaction::OverwriteAction
+pub fn iceberg::transaction::OverwriteAction::add_data_files(self, data_files: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::DataFile>) -> Self
+pub fn iceberg::transaction::OverwriteAction::delete_data_files(self, data_files: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::DataFile>) -> Self
+pub fn iceberg::transaction::OverwriteAction::set_commit_uuid(self, commit_uuid: uuid::Uuid) -> Self
+pub fn iceberg::transaction::OverwriteAction::set_snapshot_properties(self, snapshot_properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
+pub fn iceberg::transaction::OverwriteAction::with_check_duplicate(self, v: bool) -> Self
 pub struct iceberg::transaction::ReplaceSortOrderAction
 impl iceberg::transaction::ReplaceSortOrderAction
 pub fn iceberg::transaction::ReplaceSortOrderAction::asc(self, name: &str, null_order: iceberg::spec::NullOrder) -> Self
@@ -3323,6 +3330,7 @@ pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn icebe
 pub fn iceberg::transaction::Transaction::expire_snapshots(&self) -> iceberg::transaction::ExpireSnapshotsAction
 pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transaction::FastAppendAction
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
+pub fn iceberg::transaction::Transaction::overwrite(&self) -> iceberg::transaction::OverwriteAction
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::ReplaceSortOrderAction
 pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::UpdateLocationAction
 pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::UpdateSchemaAction
