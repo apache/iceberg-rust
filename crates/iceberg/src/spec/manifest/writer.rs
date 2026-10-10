@@ -432,7 +432,7 @@ impl ManifestWriter {
             // Manifest schema did not change between V2 and V3
             FormatVersion::V2 | FormatVersion::V3 => manifest_schema_v2(&partition_type)?,
         };
-        let mut avro_writer = AvroWriter::new(&avro_schema, Vec::new());
+        let mut avro_writer = AvroWriter::new(&avro_schema, Vec::new())?;
         avro_writer.add_user_metadata(
             "schema".to_string(),
             to_vec(table_schema)
@@ -479,7 +479,7 @@ impl ManifestWriter {
                 }
             };
 
-            avro_writer.append(value)?;
+            avro_writer.append_value(value)?;
         }
 
         let content = avro_writer.into_inner()?;
@@ -580,8 +580,12 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::avro::define_named_types_repeatedly;
     use crate::io::FileIO;
-    use crate::spec::{DataFileFormat, Manifest, NestedField, PrimitiveType, Schema, Struct, Type};
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, Manifest, NestedField,
+        PrimitiveType, Schema, Struct, Transform, Type,
+    };
 
     #[tokio::test]
     async fn test_add_delete_existing() {
@@ -818,5 +822,103 @@ mod tests {
             actual_manifest.metadata().content,
             ManifestContentType::Deletes,
         );
+    }
+
+    /// Writes a manifest partitioned by identity on two columns of `field_type`,
+    /// reads it back, and returns the manifest file.
+    async fn roundtrip_two_partition_fields_of_type(
+        field_type: Type,
+        values: [Literal; 2],
+    ) -> Vec<u8> {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "a", field_type.clone()).into(),
+                    NestedField::optional(2, "b", field_type).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_partition_field("a", "a", Transform::Identity)
+            .unwrap()
+            .add_partition_field("b", "b", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        let partition = Struct::from_iter(values.map(Some));
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("manifest.avro");
+        let output_file = FileIO::new_with_fs()
+            .new_output(path.to_str().unwrap())
+            .unwrap();
+        let mut writer = ManifestWriterBuilder::new(output_file, Some(1), schema, partition_spec)
+            .build_v2_data();
+        writer
+            .add_file(
+                DataFileBuilder::default()
+                    .content(DataContentType::Data)
+                    .file_path("s3://bucket/table/data/a.parquet".to_string())
+                    .file_format(DataFileFormat::Parquet)
+                    .partition(partition.clone())
+                    .record_count(1)
+                    .file_size_in_bytes(1)
+                    .partition_spec_id(0)
+                    .build()
+                    .unwrap(),
+                1,
+            )
+            .unwrap();
+        writer.write_manifest_file().await.unwrap();
+        let bs = fs::read(&path).unwrap();
+
+        // Also read the manifest as iceberg-rust wrote it before defining each
+        // named type once.
+        for bs in [bs.clone(), define_named_types_repeatedly(&bs)] {
+            let manifest = Manifest::parse_avro(&bs).unwrap();
+
+            assert_eq!(*manifest.entries()[0].data_file().partition(), partition);
+        }
+        bs
+    }
+
+    #[tokio::test]
+    async fn test_write_manifest_header_marks_int_keyed_maps() {
+        // Java and PyIceberg read an array of key-value records as a map only if
+        // it has `logicalType: map`. apache-avro 0.22 drops the attribute when it
+        // parses a schema (https://github.com/apache/avro-rs/issues/654), so this
+        // checks the schema JSON in the written header.
+        let bs = roundtrip_two_partition_fields_of_type(Type::Primitive(PrimitiveType::Int), [
+            Literal::int(1),
+            Literal::int(2),
+        ])
+        .await;
+
+        let file = String::from_utf8_lossy(&bs);
+        // `column_sizes`, `value_counts`, `null_value_counts`,
+        // `nan_value_counts`, `lower_bounds`, and `upper_bounds`.
+        assert_eq!(file.matches(r#""logicalType":"map""#).count(), 6);
+    }
+
+    #[tokio::test]
+    async fn test_write_manifest_with_repeated_decimal_partition_type() {
+        roundtrip_two_partition_fields_of_type(
+            Type::Primitive(PrimitiveType::Decimal {
+                precision: 10,
+                scale: 2,
+            }),
+            [Literal::decimal(12345), Literal::decimal(-678)],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_write_manifest_with_repeated_fixed_partition_type() {
+        roundtrip_two_partition_fields_of_type(Type::Primitive(PrimitiveType::Fixed(4)), [
+            Literal::fixed(vec![1, 2, 3, 4]),
+            Literal::fixed(vec![5, 6, 7, 8]),
+        ])
+        .await;
     }
 }
