@@ -25,7 +25,12 @@ use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
-use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
+use iceberg::io::{
+    ADLS_ACCOUNT_KEY, ADLS_CLIENT_ID, ADLS_CLIENT_SECRET, ADLS_CONNECTION_STRING, ADLS_SAS_TOKEN,
+    ADLS_TENANT_ID, FileIO, FileIOBuilder, GCS_CREDENTIALS_JSON, GCS_TOKEN, HF_TOKEN,
+    OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY,
+    S3_SESSION_TOKEN, StorageFactory,
+};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, Runtime,
@@ -915,14 +920,59 @@ impl RestSessionCatalog {
         // above, which carry no credentials.
         if let Some(creds) = storage_credentials {
             for cred in creds {
-                let mut prefixed = props.clone();
-                prefixed.extend(cred.config.clone());
-                builder = builder.with_prefixed_props(cred.prefix.clone(), prefixed);
+                builder = builder.with_prefixed_props(
+                    cred.prefix.clone(),
+                    with_vended_credentials(&props, &cred.config),
+                );
             }
         }
 
         Ok(builder.build())
     }
+}
+
+/// Storage credential properties that only work together. A key also covers
+/// its scoped variants, such as `adls.sas-token.<account>`.
+const CREDENTIAL_SETS: [&[&str]; 5] = [
+    &[S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN],
+    &[OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET],
+    &[GCS_CREDENTIALS_JSON, GCS_TOKEN],
+    &[
+        ADLS_CONNECTION_STRING,
+        ADLS_ACCOUNT_KEY,
+        ADLS_SAS_TOKEN,
+        ADLS_TENANT_ID,
+        ADLS_CLIENT_ID,
+        ADLS_CLIENT_SECRET,
+    ],
+    &[HF_TOKEN],
+];
+
+fn in_credential_set(key: &str, set: &[&str]) -> bool {
+    set.iter().any(|name| {
+        key.strip_prefix(name)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+    })
+}
+
+/// `base` overlaid with a vended `config`. Each credential set the vended
+/// config touches replaces the inherited one whole, so credentials from two
+/// identities never mix; other settings, such as the endpoint, are inherited.
+fn with_vended_credentials(
+    base: &HashMap<String, String>,
+    config: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let replaced: Vec<&[&str]> = CREDENTIAL_SETS
+        .into_iter()
+        .filter(|set| config.keys().any(|key| in_credential_set(key, set)))
+        .collect();
+    let mut props: HashMap<String, String> = base
+        .iter()
+        .filter(|(key, _)| !replaced.iter().any(|set| in_credential_set(key, set)))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    props.extend(config.clone());
+    props
 }
 
 /// All requests and expected responses are derived from the REST catalog API spec:
@@ -4159,6 +4209,42 @@ mod tests {
 
         config_mock.assert_async().await;
         load_table_mock.assert_async().await;
+    }
+
+    #[test]
+    fn test_vended_credentials_replace_inherited_credential_sets() {
+        let props = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let base = props(&[
+            ("s3.endpoint", "https://s3.example.com"),
+            ("client.region", "us-east-1"),
+            ("s3.access-key-id", "catalog-key"),
+            ("s3.secret-access-key", "catalog-secret"),
+            ("s3.session-token", "catalog-token"),
+            ("adls.sas-token.account.dfs.core.windows.net", "catalog-sas"),
+            ("gcs.oauth2.token", "catalog-gcs-token"),
+        ]);
+        let vended = props(&[
+            ("s3.access-key-id", "vended-key"),
+            ("s3.secret-access-key", "vended-secret"),
+            ("adls.account-key", "vended-account-key"),
+        ]);
+
+        assert_eq!(
+            with_vended_credentials(&base, &vended),
+            props(&[
+                ("s3.endpoint", "https://s3.example.com"),
+                ("client.region", "us-east-1"),
+                ("s3.access-key-id", "vended-key"),
+                ("s3.secret-access-key", "vended-secret"),
+                ("adls.account-key", "vended-account-key"),
+                ("gcs.oauth2.token", "catalog-gcs-token"),
+            ])
+        );
     }
 
     #[tokio::test]
