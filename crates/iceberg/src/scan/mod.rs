@@ -134,6 +134,8 @@ pub struct TableScanBuilder<'a> {
     column_names: Option<Vec<String>>,
     snapshot_id: Option<i64>,
     batch_size: Option<usize>,
+    metadata_size_hint: Option<usize>,
+    range_coalesce_bytes: Option<u64>,
     case_sensitive: bool,
     filter: Option<Predicate>,
     concurrency_limit_data_files: usize,
@@ -153,6 +155,8 @@ impl<'a> TableScanBuilder<'a> {
             column_names: None,
             snapshot_id: None,
             batch_size: None,
+            metadata_size_hint: None,
+            range_coalesce_bytes: None,
             case_sensitive: true,
             filter: None,
             concurrency_limit_data_files: num_cpus,
@@ -168,6 +172,25 @@ impl<'a> TableScanBuilder<'a> {
     /// to something other than the default
     pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
         self.batch_size = batch_size;
+        self
+    }
+
+    /// Sets the prefetch size hint in bytes for Parquet footer metadata.
+    ///
+    /// Defaults to 512 KiB. Values below 8 fetch the 8-byte footer tail first;
+    /// hints larger than the file size fetch the entire file. Small hints may
+    /// require additional reads to obtain the metadata.
+    pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
+        self.metadata_size_hint = Some(metadata_size_hint);
+        self
+    }
+
+    /// Sets the maximum gap in bytes for merging nearby ranges into one request.
+    ///
+    /// Defaults to 1 MiB. Zero merges only overlapping or adjacent ranges.
+    /// This does not limit request size; large thresholds can increase bytes read.
+    pub fn with_range_coalesce_bytes(mut self, range_coalesce_bytes: u64) -> Self {
+        self.range_coalesce_bytes = Some(range_coalesce_bytes);
         self
     }
 
@@ -294,6 +317,8 @@ impl<'a> TableScanBuilder<'a> {
                 let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
                     return Ok(TableScan {
                         batch_size: self.batch_size,
+                        metadata_size_hint: self.metadata_size_hint,
+                        range_coalesce_bytes: self.range_coalesce_bytes,
                         column_names: self.column_names,
                         file_io: self.table.file_io().clone(),
                         plan_context: None,
@@ -352,6 +377,8 @@ impl<'a> TableScanBuilder<'a> {
 
         Ok(TableScan {
             batch_size: self.batch_size,
+            metadata_size_hint: self.metadata_size_hint,
+            range_coalesce_bytes: self.range_coalesce_bytes,
             column_names: self.column_names,
             file_io: self.table.file_io().clone(),
             plan_context: Some(plan_context),
@@ -374,6 +401,8 @@ pub struct TableScan {
     /// If this is None, then the scan contains no rows.
     plan_context: Option<PlanContext>,
     batch_size: Option<usize>,
+    metadata_size_hint: Option<usize>,
+    range_coalesce_bytes: Option<u64>,
     file_io: FileIO,
     column_names: Option<Vec<String>>,
     /// The maximum number of manifest files that will be
@@ -550,6 +579,15 @@ impl TableScan {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
         }
 
+        if let Some(metadata_size_hint) = self.metadata_size_hint {
+            arrow_reader_builder = arrow_reader_builder.with_metadata_size_hint(metadata_size_hint);
+        }
+
+        if let Some(range_coalesce_bytes) = self.range_coalesce_bytes {
+            arrow_reader_builder =
+                arrow_reader_builder.with_range_coalesce_bytes(range_coalesce_bytes);
+        }
+
         arrow_reader_builder
             .build()
             .read(self.plan_files().await?)
@@ -682,19 +720,30 @@ mod tests {
     //! shared tests for the table scan API
 
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::fs::File;
+    use std::ops::Range;
+    use std::sync::{Arc, Mutex};
 
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RunArray, StringArray,
+        Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, RunArray,
+        StringArray,
     };
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use futures::stream::BoxStream;
     use futures::{TryStreamExt, stream};
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
-    use crate::io::FileIO;
+    use crate::io::{
+        FileIO, FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, LocalFsStorage,
+        OutputFile, Storage, StorageConfig, StorageFactory,
+    };
     use crate::metadata_columns::{
         RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
         RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_POS,
@@ -709,7 +758,7 @@ mod tests {
     use crate::table::Table;
     use crate::test_utils::scan::{TableTestFixture, assert_last_updated_seq_all};
     use crate::test_utils::test_runtime;
-    use crate::{ErrorKind, TableIdent};
+    use crate::{ErrorKind, Result, TableIdent};
 
     #[tokio::test]
     async fn test_table_scan_columns() {
@@ -3012,5 +3061,244 @@ mod tests {
             })
             .collect();
         assert_eq!(y, (1100..1200).collect::<Vec<i64>>());
+    }
+
+    type ReadLog = Arc<Mutex<HashMap<String, Vec<Range<u64>>>>>;
+
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    struct ScanReadAheadStorage {
+        #[serde(skip)]
+        reads: ReadLog,
+    }
+
+    #[typetag::serde]
+    impl StorageFactory for ScanReadAheadStorage {
+        fn build(&self, _config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+            Ok(Arc::new(self.clone()))
+        }
+    }
+
+    #[async_trait]
+    #[typetag::serde]
+    impl Storage for ScanReadAheadStorage {
+        async fn exists(&self, path: &str) -> Result<bool> {
+            LocalFsStorage::new().exists(path).await
+        }
+
+        async fn metadata(&self, path: &str) -> Result<FileMetadata> {
+            LocalFsStorage::new().metadata(path).await
+        }
+
+        async fn read(&self, path: &str) -> Result<Bytes> {
+            LocalFsStorage::new().read(path).await
+        }
+
+        async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
+            Ok(Box::new(RecordingFileRead {
+                reader: LocalFsStorage::new().reader(path).await?,
+                path: path.to_string(),
+                reads: self.reads.clone(),
+            }))
+        }
+
+        async fn write(&self, path: &str, bytes: Bytes) -> Result<()> {
+            LocalFsStorage::new().write(path, bytes).await
+        }
+
+        async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
+            LocalFsStorage::new().writer(path).await
+        }
+
+        async fn delete(&self, path: &str) -> Result<()> {
+            LocalFsStorage::new().delete(path).await
+        }
+
+        async fn delete_prefix(&self, path: &str) -> Result<()> {
+            LocalFsStorage::new().delete_prefix(path).await
+        }
+
+        async fn delete_stream(&self, paths: BoxStream<'static, String>) -> Result<()> {
+            LocalFsStorage::new().delete_stream(paths).await
+        }
+
+        fn new_input(&self, path: &str) -> Result<InputFile> {
+            Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
+        }
+
+        fn new_output(&self, path: &str) -> Result<OutputFile> {
+            LocalFsStorage::new().new_output(path)
+        }
+    }
+
+    struct RecordingFileRead {
+        reader: Box<dyn FileRead>,
+        path: String,
+        reads: ReadLog,
+    }
+
+    #[async_trait]
+    impl FileRead for RecordingFileRead {
+        async fn read(&self, range: Range<u64>) -> Result<Bytes> {
+            self.reads
+                .lock()
+                .unwrap()
+                .entry(self.path.clone())
+                .or_default()
+                .push(range.clone());
+            self.reader.read(range).await
+        }
+    }
+
+    async fn setup_read_ahead() -> (Table, ScanReadAheadStorage) {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let storage = ScanReadAheadStorage::default();
+        let table = Table::builder()
+            .metadata(fixture.table.metadata_ref())
+            .identifier(fixture.table.identifier().clone())
+            .file_io(FileIOBuilder::new(Arc::new(storage.clone())).build())
+            .runtime(fixture.table.runtime().clone())
+            .build()
+            .unwrap();
+        (table, storage)
+    }
+
+    async fn assert_scan_with_read_ahead(
+        table: &Table,
+        metadata_size_hint: Option<usize>,
+        range_coalesce_bytes: Option<u64>,
+    ) {
+        let mut scan = table
+            .scan()
+            .select(["x", "z"])
+            .with_data_file_concurrency_limit(1)
+            .with_row_selection_enabled(false);
+        if let Some(hint) = metadata_size_hint {
+            scan = scan.with_metadata_size_hint(hint);
+        }
+        if let Some(gap) = range_coalesce_bytes {
+            scan = scan.with_range_coalesce_bytes(gap);
+        }
+        let batches: Vec<RecordBatch> = scan
+            .build()
+            .unwrap()
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        let rows: Vec<_> = batches
+            .iter()
+            .flat_map(|batch| {
+                let x = batch
+                    .column(0)
+                    .as_primitive::<arrow_array::types::Int64Type>();
+                let z = batch
+                    .column(1)
+                    .as_primitive::<arrow_array::types::Int64Type>();
+                (0..batch.num_rows()).map(move |i| (x.value(i), z.value(i)))
+            })
+            .collect();
+        let mut expected = vec![(1, 3); 512];
+        expected.extend(vec![(1, 4); 512]);
+        assert_eq!(rows, expected.repeat(2));
+    }
+
+    #[tokio::test]
+    async fn test_scan_metadata_size_hint_controls_footer_reads() {
+        let (table, storage) = setup_read_ahead().await;
+        for hint in [
+            None,
+            Some(0),
+            Some(1),
+            Some(7),
+            Some(8),
+            Some(64),
+            Some(512 * 1024),
+            Some(usize::MAX),
+        ] {
+            storage.reads.lock().unwrap().clear();
+            assert_scan_with_read_ahead(&table, hint, None).await;
+
+            let reads = storage.reads.lock().unwrap();
+            assert_eq!(reads.len(), 2);
+            for (path, ranges) in reads.iter() {
+                let size = std::fs::metadata(path).unwrap().len();
+                let prefetch = hint.unwrap_or(512 * 1024).max(8) as u64;
+                assert_eq!(
+                    ranges[0],
+                    size.saturating_sub(prefetch)..size,
+                    "hint: {hint:?}"
+                );
+                assert!(
+                    ranges
+                        .iter()
+                        .all(|range| range.start <= range.end && range.end <= size)
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_scan_range_coalesce_bytes_controls_data_reads() {
+        let (table, storage) = setup_read_ahead().await;
+        let path = format!("{}/1.parquet", table.metadata().location());
+        let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(path).unwrap()).unwrap();
+        let row_group = reader.metadata().row_group(0);
+        let columns: Vec<_> = [0, 2]
+            .map(|i| {
+                let (start, length) = row_group.column(i).byte_range();
+                start..start + length
+            })
+            .into_iter()
+            .collect();
+        let gap = columns[1].start - columns[0].end;
+        assert!(gap > 0 && gap < 1024 * 1024);
+        let merged = columns[0].start..columns[1].end;
+        assert!(merged.end - merged.start > gap);
+
+        for threshold in [None, Some(0), Some(gap - 1), Some(gap), Some(u64::MAX)] {
+            storage.reads.lock().unwrap().clear();
+            assert_scan_with_read_ahead(&table, Some(8), threshold).await;
+
+            let expected = if threshold.unwrap_or(1024 * 1024) >= gap {
+                vec![merged.clone()]
+            } else {
+                columns.clone()
+            };
+            let reads = storage.reads.lock().unwrap();
+            assert_eq!(reads.len(), 2);
+            for ranges in reads.values() {
+                let mut data_reads: Vec<_> = ranges
+                    .iter()
+                    .filter(|range| range.end <= merged.end)
+                    .cloned()
+                    .collect();
+                data_reads.sort_by_key(|range| range.start);
+                assert_eq!(data_reads, expected, "threshold: {threshold:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_empty_scan_retains_last_read_ahead_settings() {
+        let table = TableTestFixture::new_empty().table;
+        for (hint, gap) in [(0, 0), (usize::MAX, u64::MAX)] {
+            let scan = table
+                .scan()
+                .with_metadata_size_hint(123)
+                .with_metadata_size_hint(hint)
+                .with_range_coalesce_bytes(456)
+                .with_range_coalesce_bytes(gap)
+                .build()
+                .unwrap();
+            assert_eq!(
+                (scan.metadata_size_hint, scan.range_coalesce_bytes),
+                (Some(hint), Some(gap))
+            );
+            let batches: Vec<_> = scan.to_arrow().await.unwrap().try_collect().await.unwrap();
+            assert!(batches.is_empty());
+        }
     }
 }

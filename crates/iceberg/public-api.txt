@@ -1427,6 +1427,8 @@ pub fn iceberg::scan::TableScanBuilder<'a>::with_concurrency_limit(self, limit: 
 pub fn iceberg::scan::TableScanBuilder<'a>::with_data_file_concurrency_limit(self, limit: usize) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_filter(self, predicate: iceberg::expr::Predicate) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_manifest_entry_concurrency_limit(self, limit: usize) -> Self
+pub fn iceberg::scan::TableScanBuilder<'a>::with_metadata_size_hint(self, metadata_size_hint: usize) -> Self
+pub fn iceberg::scan::TableScanBuilder<'a>::with_range_coalesce_bytes(self, range_coalesce_bytes: u64) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_row_group_filtering_enabled(self, row_group_filtering_enabled: bool) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_row_selection_enabled(self, row_selection_enabled: bool) -> Self
 pub type iceberg::scan::ArrowRecordBatchStream = futures_core::stream::BoxStream<'static, iceberg::Result<arrow_array::record_batch::RecordBatch>>
