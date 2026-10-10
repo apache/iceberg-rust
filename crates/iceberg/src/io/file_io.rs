@@ -68,8 +68,8 @@ pub struct FileIO {
     factory: Arc<dyn StorageFactory>,
     /// Cached storage instance (lazily initialized)
     storage: Arc<OnceLock<Arc<dyn Storage>>>,
-    /// Per-prefix storages (longest prefix first) for tables that vend distinct
-    /// credentials per location prefix. Paths matching none use `storage` above.
+    /// Per-prefix storages, longest prefix first. Paths matching none use
+    /// `storage`.
     prefixed: Arc<Vec<PrefixedStorage>>,
 }
 
@@ -80,8 +80,8 @@ struct PrefixedStorage {
     storage: OnceLock<Arc<dyn Storage>>,
 }
 
-// A backend's Debug may print the raw credential map that `StorageConfig`
-// redacts, so neither cached storage is shown.
+// Neither cached storage is shown: a backend's Debug may print raw
+// credentials.
 impl std::fmt::Debug for FileIO {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FileIO")
@@ -112,8 +112,7 @@ mod _serde {
     pub(super) struct SerializableFileIO<'a> {
         pub(super) config: &'a StorageConfig,
         pub(super) factory: &'a Arc<dyn StorageFactory>,
-        /// Per-prefix credentials travel too: a worker that deserializes this
-        /// FileIO has to read the same data the catalog vended them for.
+        /// Per-prefix credentials, so a deserialized FileIO reads the same data.
         pub(super) prefixed: Vec<SerializablePrefixed<'a>>,
     }
 
@@ -204,8 +203,7 @@ impl FileIO {
             factory,
             prefixed,
         } = serde_json::from_slice(bytes)?;
-        // Order is preserved from `serialize_all`, so this is still longest
-        // prefix first.
+        // `serialize_all` kept the longest-first order.
         let prefixed = prefixed
             .into_iter()
             .map(|p| PrefixedStorage {
@@ -239,27 +237,23 @@ impl FileIO {
                 .all(|(a, b)| a.prefix == b.prefix && a.config == b.config)
     }
 
-    /// The configuration `path` routes to: the longest-matching prefix's if
-    /// any, else the default. Vended credentials live on the prefix configs,
-    /// so this answers "which credentials apply to this path".
+    /// The configuration `path` routes to: the longest matching prefix's,
+    /// else the default.
     pub fn config_for(&self, path: &str) -> &StorageConfig {
         self.route(path).1
     }
 
-    /// Get or create the storage for `path`, routing to the longest-matching
-    /// prefix storage if any, else the default. Built once, then cached.
+    /// The storage for `path`, built on first use.
     fn get_storage(&self, path: &str) -> Result<Arc<dyn Storage>> {
         let (cell, config) = self.route(path);
         Self::get_or_build(cell, &self.factory, config)
     }
 
-    /// The storage cell and configuration serving `path`.
-    ///
-    /// `prefixed` is sorted longest-first, so the first match is the most
-    /// specific one, per the Iceberg REST spec's storage-credentials semantics.
+    /// The storage cell and configuration serving `path`: the first, so
+    /// longest, matching prefix, else the default.
     ///
     /// Matching is on the raw string, so `s3://bucket/data` also serves
-    /// `s3://bucket/database/` — as in Java's `S3FileIO.clientForStoragePath`.
+    /// `s3://bucket/database/`, as in Java's `S3FileIO.clientForStoragePath`.
     fn route(&self, path: &str) -> (&OnceLock<Arc<dyn Storage>>, &StorageConfig) {
         for ps in self.prefixed.iter() {
             if path.starts_with(&ps.prefix) {
@@ -304,15 +298,13 @@ impl FileIO {
     /// - If the path is a file or not exist, this function will be no-op.
     /// - If the path is a empty directory, this function will remove the directory itself.
     /// - If the path is a non-empty directory, this function will remove the directory and all nested files and directories.
-    /// - Files under the path that route to a deeper per-prefix storage are removed through that
-    ///   storage, which deletes only within its own prefix; the storage serving the path deletes
-    ///   the rest.
+    /// - Files routed to a deeper per-prefix storage are deleted through it, within its own prefix.
     ///
     /// # Errors
     ///
     /// Returns [`ErrorKind::FeatureUnsupported`], before deleting anything, if a per-prefix
-    /// storage beneath the path has a prefix that does not end with `/`: it serves a raw string
-    /// prefix, which cannot be deleted as a directory.
+    /// storage beneath the path has a prefix not ending in `/`, which cannot be deleted as a
+    /// directory.
     pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()> {
         let path = path.as_ref();
         let dir = if path.ends_with('/') {
@@ -357,13 +349,11 @@ impl FileIO {
         &self,
         paths: impl Stream<Item = String> + Send + 'static,
     ) -> Result<()> {
-        // No per-prefix storages: delete the whole batch on the default storage.
         if self.prefixed.is_empty() {
             return self.get_storage("")?.delete_stream(paths.boxed()).await;
         }
 
-        // Route by prefix, flushing bounded batches as we iterate so memory stays
-        // bounded on large streams (like Java's `S3FileIO.deleteFiles`).
+        // Flush bounded batches per prefix, as Java's `S3FileIO.deleteFiles` does.
         const DELETE_BATCH_SIZE: usize = 1000;
         let mut groups: HashMap<String, Vec<String>> = HashMap::new();
         let mut paths = paths.boxed();
@@ -384,7 +374,6 @@ impl FileIO {
             }
         }
 
-        // Flush remainders.
         for batch in groups.into_values() {
             if batch.is_empty() {
                 continue;
@@ -872,8 +861,6 @@ mod tests {
         assert!(deserialized.storage.get().is_some());
     }
 
-    /// Per-prefix vended credentials must survive serialization, or a worker
-    /// that receives this FileIO cannot read the data they were vended for.
     #[tokio::test]
     async fn test_prefixed_credentials_survive_serialization_roundtrip() {
         let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
@@ -1091,8 +1078,6 @@ mod tests {
         assert!(calls.lock().unwrap().is_empty());
     }
 
-    /// Once a storage is initialized its own Debug is reachable through
-    /// `FileIO`; the vended secret must not come out that way.
     #[tokio::test]
     async fn test_debug_omits_initialized_storages() {
         let file_io = FileIOBuilder::new(Arc::new(LeakyFactory))
@@ -1102,20 +1087,16 @@ mod tests {
                 "VENDED-SECRET",
             )])
             .build();
-        // Initialize both the default and the prefixed storage.
         file_io.exists("memory://elsewhere/f").await.unwrap();
         file_io.exists("memory://warehouse/t/f").await.unwrap();
 
         let debug = format!("{file_io:?}");
         assert!(!debug.contains("VENDED-SECRET"), "{debug}");
         assert!(!debug.contains("DEFAULT-SECRET"), "{debug}");
-        // Still informative: the prefix and the redacted config keys show.
         assert!(debug.contains("memory://warehouse/t"), "{debug}");
         assert!(debug.contains("s3.secret-access-key"), "{debug}");
     }
 
-    /// Two prefixes where one nests in the other: the longest-first order
-    /// that routing depends on has to survive the roundtrip.
     #[tokio::test]
     async fn test_overlapping_prefixes_survive_serialization_roundtrip() {
         let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
@@ -1164,9 +1145,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_routes_a_path_to_its_longest_matching_prefix() {
-        // Overlapping prefixes: the more specific credentials must win, so
-        // sorting alone isn't enough — the lookup has to respect that order.
-        // Each prefix owns a storage cell, so identity tells them apart.
         let factory = Arc::new(MemoryStorageFactory);
         let file_io = FileIOBuilder::new(factory)
             .with_prefixed_props("memory://bucket/data", [("k", "short")])
@@ -1179,11 +1157,9 @@ mod tests {
         let short = file_io.get_storage("memory://bucket/data/other/f").unwrap();
         let default = file_io.get_storage("memory://elsewhere/f").unwrap();
 
-        // Routing the shortest prefix first would collapse these two.
         assert!(!Arc::ptr_eq(&long, &short));
         assert!(!Arc::ptr_eq(&short, &default));
         assert!(!Arc::ptr_eq(&long, &default));
-        // The same prefix keeps serving the same storage.
         assert!(Arc::ptr_eq(
             &long,
             &file_io
@@ -1200,14 +1176,12 @@ mod tests {
             .with_prefixed_props("memory://a/longer/", [("k", "long")])
             .build();
 
-        // Longest prefix first so the most specific match wins at routing time.
         let prefixes: Vec<&str> = file_io.prefixed.iter().map(|p| p.prefix.as_str()).collect();
         assert_eq!(prefixes, vec!["memory://a/longer/", "memory://a/"]);
     }
 
     #[tokio::test]
     async fn test_prefixed_config_carries_credential_values() {
-        // Prefix config gets the vended credentials; default config keeps only base props.
         let factory = Arc::new(MemoryStorageFactory);
         let file_io = FileIOBuilder::new(factory)
             .with_prop("s3.region", "us-east-1")
@@ -1218,14 +1192,12 @@ mod tests {
             ])
             .build();
 
-        // Default: base props, no credentials.
         assert_eq!(
             file_io.config().get("s3.region"),
             Some(&"us-east-1".to_string())
         );
         assert_eq!(file_io.config().get("s3.access-key-id"), None);
 
-        // Prefix: base props + vended credentials.
         let prefixed = &file_io.prefixed[0].config;
         assert_eq!(prefixed.get("s3.region"), Some(&"us-east-1".to_string()));
         assert_eq!(
@@ -1251,10 +1223,8 @@ mod tests {
         let prefixed_a = file_io.get_storage("memory://creds/x").unwrap();
         let prefixed_b = file_io.get_storage("memory://creds/y").unwrap();
 
-        // Repeated routing to the same bucket returns the memoized storage...
         assert!(Arc::ptr_eq(&default_a, &default_b));
         assert!(Arc::ptr_eq(&prefixed_a, &prefixed_b));
-        // ...and a prefix-matching path resolves to a distinct storage from the default.
         assert!(!Arc::ptr_eq(&default_a, &prefixed_a));
     }
 
@@ -1265,7 +1235,6 @@ mod tests {
             .with_prefixed_props("memory:/creds/", [("k", "v")])
             .build();
 
-        // One file under each routing bucket (default vs prefixed storage).
         let default_path = "memory:/other/a.txt";
         let prefixed_path = "memory:/creds/b.txt";
         for path in [default_path, prefixed_path] {
@@ -1278,7 +1247,6 @@ mod tests {
             assert!(file_io.exists(path).await.unwrap());
         }
 
-        // delete_stream must route each path to the storage that holds it.
         file_io
             .delete_stream(futures::stream::iter(vec![
                 default_path.to_string(),
@@ -1326,7 +1294,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_stream_flushes_across_batches() {
-        // More than the flush threshold (1000): exercises mid-stream flush + remainder.
+        // More than one flush batch (1000).
         let factory = Arc::new(MemoryStorageFactory);
         let file_io = FileIOBuilder::new(factory)
             .with_prefixed_props("memory:/creds/", [("k", "v")])

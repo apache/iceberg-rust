@@ -217,10 +217,8 @@ impl Transaction {
             self.table = refreshed.clone();
         }
 
-        // Actions read and write manifests, so they need the credentials the
-        // refresh load vended, whether or not the base was stale. Identical
-        // settings keep the original: a rebuilt FileIO would drop a backend
-        // the table has already initialized.
+        // Actions need the credentials the refresh load vended. Identical
+        // settings keep the original FileIO, whose backend may be initialized.
         let mut current_table = self.table.clone();
         if !current_table.file_io().same_routing_as(refreshed.file_io()) {
             current_table = current_table.with_file_io(refreshed.file_io().clone());
@@ -250,15 +248,12 @@ impl Transaction {
             .build();
 
         let committed = catalog.update_table(table_commit).await?;
-        // A location change moves metadata/data to a new prefix that the refresh
-        // load's vended credentials do not cover, so it needs a post-commit
-        // reload. Another writer may have moved the table meanwhile: a
-        // property-only commit carries no requirement that would catch that.
+        // A new location is outside the refreshed credentials' prefix, so reload
+        // after committing. Check the committed metadata: another writer may have
+        // moved the table, and a property-only commit has no requirement to catch it.
         let location_changed =
             moves_location || committed.metadata().location() != refreshed.metadata().location();
         if location_changed {
-            // The new location has its own vended credentials; the reused FileIO is
-            // scoped to the old prefix, so reload the table to pick them up.
             match catalog.load_table(committed.identifier()).await {
                 Ok(reloaded) => return Ok(reloaded),
                 // The commit is already durable: returning this error would let the
@@ -270,8 +265,7 @@ impl Transaction {
             }
         }
         // The commit response carries no credentials, so keep the FileIO the
-        // actions ran with: the refreshed one, or the original when its settings
-        // were unchanged and it holds an initialized backend.
+        // actions ran with.
         Ok(committed.with_file_io(current_table.file_io().clone()))
     }
 }
@@ -434,9 +428,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_commit_keeps_the_refreshed_file_io() {
-        // The commit response carries no vended credentials, so the FileIO from
-        // the refresh load has to survive; taking the committed table's own
-        // would silently drop them.
         let refreshed = make_v2_table().with_file_io(
             FileIOBuilder::new(Arc::new(MemoryStorageFactory))
                 .with_prefixed_props("memory://warehouse", [("s3.access-key-id", "vended")])
@@ -493,8 +484,6 @@ mod tests {
         }
     }
 
-    /// The refresh load may carry rotated credentials while the metadata is
-    /// unchanged; actions still have to run with those, not the stale ones.
     #[tokio::test]
     async fn test_actions_run_with_the_refreshed_file_io() {
         let seen = Arc::new(std::sync::Mutex::new(None));
@@ -514,8 +503,8 @@ mod tests {
         assert_eq!(seen.lock().unwrap().as_deref(), Some("refreshed"));
     }
 
-    /// A reload that changed nothing must not cost the table its initialized
-    /// backend: `MemoryStorageFactory` builds a fresh, empty store each time.
+    /// `MemoryStorageFactory` builds an empty store per FileIO, so a rebuilt
+    /// FileIO loses the data.
     #[tokio::test]
     async fn test_unchanged_settings_keep_the_initialized_storage() {
         let table = table_with_marker("same");
@@ -547,7 +536,6 @@ mod tests {
             seen.lock().unwrap().as_deref(),
             Some("written-before-commit")
         );
-        // The returned table keeps that backend too, not the reload's empty one.
         let after = committed
             .file_io()
             .new_input("memory://warehouse/manifest")
@@ -596,8 +584,6 @@ mod tests {
             .unwrap()
     }
 
-    /// The commit is durable before the reload runs, so a failed reload must
-    /// not send the transaction round the retry loop to be committed again.
     #[tokio::test]
     async fn test_a_failed_reload_does_not_replay_the_commit() {
         let loads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -607,7 +593,6 @@ mod tests {
             let n = counter.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move {
                 if n == 1 {
-                    // The post-commit reload.
                     Err(Error::new(ErrorKind::Unexpected, "503").with_retryable(true))
                 } else {
                     Ok(make_v2_table())
@@ -630,8 +615,6 @@ mod tests {
         );
     }
 
-    /// Another writer moved the table between our refresh and our commit; the
-    /// committed metadata says so even though we sent no `SetLocation`.
     #[tokio::test]
     async fn test_commit_reloads_when_someone_else_moved_the_table() {
         let loads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
