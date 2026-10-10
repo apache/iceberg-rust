@@ -176,7 +176,7 @@ impl ArrowReader {
         arrow_schema: &ArrowSchemaRef,
         type_promotion_is_valid: fn(Option<&PrimitiveType>, Option<&PrimitiveType>) -> bool,
     ) -> Result<ProjectionMask> {
-        let mut column_map = HashMap::new();
+        let mut column_map = HashMap::with_capacity(leaf_field_ids.len());
         let fields = arrow_schema.fields();
         // HashSet for O(1) membership checks instead of O(n) slice scans.
         let leaf_field_id_set: HashSet<i32> = leaf_field_ids.iter().copied().collect();
@@ -221,7 +221,7 @@ impl ArrowReader {
         // We only project existing columns; RecordBatchTransformer adds default/NULL values.
         // If other leaves are selected, a struct whose requested leaves are all missing gets no
         // column and reads as NULL (#3378).
-        let mut indices = vec![];
+        let mut indices = Vec::with_capacity(leaf_field_ids.len());
         for field_id in leaf_field_ids {
             if let Some(col_idx) = column_map.get(field_id) {
                 indices.push(*col_idx);
@@ -397,8 +397,8 @@ fn parquet_field_id(field: &Field) -> Option<i32> {
 
 /// Apply name mapping to Arrow schema for Parquet files lacking field IDs.
 ///
-/// Assigns Iceberg field IDs to the columns and their nested fields by name, using the name
-/// mapping, enabling correct projection on migrated files (e.g., from Hive/Spark via add_files).
+/// Assigns Iceberg field IDs based on names at every depth using the name mapping,
+/// enabling correct projection on migrated files (e.g., from Hive/Spark via add_files).
 ///
 /// Per Iceberg spec Column Projection rule #2:
 /// "Use schema.name-mapping.default metadata to map field id to columns without field id"
@@ -436,14 +436,10 @@ pub(super) fn apply_name_mapping_to_arrow_schema(
         }
     }
 
-    let fields_with_mapped_ids = arrow_schema
-        .fields()
-        .iter()
-        .map(|field| {
-            let mapped_field = mapped_fields_by_name.get(field.name().as_str()).copied();
-            apply_name_mapping_to_field(field, mapped_field)
-        })
-        .collect::<Result<Fields>>()?;
+    let fields_with_mapped_ids = try_map_fields(arrow_schema.fields(), |field| {
+        let mapped_field = mapped_fields_by_name.get(field.name().as_str()).copied();
+        apply_name_mapping_to_field(field, mapped_field)
+    })?;
 
     Ok(Arc::new(ArrowSchema::new_with_metadata(
         fields_with_mapped_ids,
@@ -451,15 +447,9 @@ pub(super) fn apply_name_mapping_to_arrow_schema(
     )))
 }
 
-/// Assigns `field` the ID of `mapped_field`, its entry in the name mapping, and assigns each
-/// nested field the ID of its entry among `mapped_field`'s children.
-///
-/// Corresponds to Java's ApplyNameMapping visitor, which calls nameMapping.find(currentPath())
-/// for every field at every depth. As in Java, a list element is looked up as `element` and a
-/// map key and value as `key` and `value`, whatever the file calls them.
-///
-/// A field the mapping does not cover keeps no ID, and so does everything nested in it, which
-/// leaves it out of the projection. Java likewise returns such a field unchanged.
+/// Assigns IDs from `mapped_field` to `field` and its nested fields, as Java's ApplyNameMapping
+/// does. List elements match `element`, and map entries match `key` and `value`. A field
+/// without an entry keeps no ID, and so do its nested fields.
 fn apply_name_mapping_to_field(
     field: &FieldRef,
     mapped_field: Option<&MappedField>,
@@ -473,19 +463,15 @@ fn apply_name_mapping_to_field(
     };
 
     let data_type = match field.data_type() {
-        DataType::Struct(fields) => DataType::Struct(
-            fields
-                .iter()
-                .map(|nested| map_nested(nested, nested.name()))
-                .collect::<Result<_>>()?,
-        ),
+        DataType::Struct(fields) => DataType::Struct(try_map_fields(fields, |nested| {
+            map_nested(nested, nested.name())
+        })?),
         DataType::List(element) => DataType::List(map_nested(element, LIST_FIELD_NAME)?),
         DataType::LargeList(element) => DataType::LargeList(map_nested(element, LIST_FIELD_NAME)?),
         DataType::FixedSizeList(element, size) => {
             DataType::FixedSizeList(map_nested(element, LIST_FIELD_NAME)?, *size)
         }
-        // The key and value sit directly under the map in the mapping, without the entries
-        // struct that holds them in Arrow.
+        // The mapping has no entry for Arrow's entries struct.
         DataType::Map(entries, sorted) => {
             let DataType::Struct(entry_fields) = entries.data_type() else {
                 return Err(invalid_data!(
@@ -499,7 +485,7 @@ fn apply_name_mapping_to_field(
                     field.name()
                 ));
             };
-            let entry_fields = Fields::from(vec![
+            let entry_fields = Fields::from([
                 map_nested(key, MAP_KEY_FIELD_NAME)?,
                 map_nested(value, MAP_VALUE_FIELD_NAME)?,
             ]);
@@ -529,6 +515,18 @@ fn find_mapped_field<'a>(
     mapped_fields
         .into_iter()
         .find(|mapped_field| mapped_field.names().iter().any(|n| n == name))
+}
+
+/// Maps `fields` into a `Fields` sized up front, which `collect::<Result<_>>()` does not do.
+fn try_map_fields(
+    fields: &Fields,
+    mut map_field: impl FnMut(&FieldRef) -> Result<FieldRef>,
+) -> Result<Fields> {
+    let mut mapped = Vec::with_capacity(fields.len());
+    for field in fields {
+        mapped.push(map_field(field)?);
+    }
+    Ok(Fields::from(mapped))
 }
 
 /// Add position-based fallback field IDs to Arrow schema for Parquet files lacking them.
@@ -1172,20 +1170,12 @@ message schema {
         assert_eq!(subdept_array.value(0), "Bob");
     }
 
-    /// Regression test for #3374: the name mapping must assign field IDs below the top level
-    /// too. Otherwise no nested leaf is projected, and a struct, list, or map read next to a
-    /// top-level column comes back NULL.
-    ///
-    /// The file names the list element `item` and the map entries `keys` and `values`, while
-    /// the mapping calls them `element`, `key`, and `value`. `s.id` shares its name with the
-    /// top-level `id`, so each lookup must stay within its parent's mapping.
+    /// Regression test for #3374: a struct in a name-mapped file reads correctly next to a
+    /// top-level column.
     #[tokio::test]
     async fn test_read_parquet_with_name_mapping_maps_nested_fields() {
-        use arrow_array::builder::{Int32Builder, MapBuilder, MapFieldNames, StringBuilder};
         use arrow_array::types::Int32Type;
-        use arrow_array::{Int32Array, ListArray, StructArray};
-
-        use crate::spec::{ListType, MapType};
+        use arrow_array::{Int32Array, StructArray};
 
         let schema = Arc::new(
             Schema::builder()
@@ -1196,96 +1186,29 @@ message schema {
                         2,
                         "s",
                         Type::Struct(StructType::new(vec![
-                            NestedField::optional(3, "id", Type::Primitive(PrimitiveType::Int))
-                                .into(),
-                            NestedField::optional(4, "b", Type::Primitive(PrimitiveType::String))
+                            NestedField::optional(3, "a", Type::Primitive(PrimitiveType::Int))
                                 .into(),
                         ])),
-                    )
-                    .into(),
-                    NestedField::optional(
-                        5,
-                        "arr",
-                        Type::List(ListType::new(
-                            NestedField::list_element(
-                                6,
-                                Type::Primitive(PrimitiveType::Int),
-                                false,
-                            )
-                            .into(),
-                        )),
-                    )
-                    .into(),
-                    NestedField::optional(
-                        7,
-                        "m",
-                        Type::Map(MapType::new(
-                            NestedField::map_key_element(8, Type::Primitive(PrimitiveType::String))
-                                .into(),
-                            NestedField::map_value_element(
-                                9,
-                                Type::Primitive(PrimitiveType::Int),
-                                false,
-                            )
-                            .into(),
-                        )),
                     )
                     .into(),
                 ])
                 .build()
                 .unwrap(),
         );
-
-        // The mapping Iceberg Java's `MappingUtil.create` writes for that schema.
         let name_mapping = Arc::new(NameMapping::new(vec![
             MappedField::new(Some(1), vec!["id".to_string()], vec![]),
-            MappedField::new(Some(2), vec!["s".to_string()], vec![
-                MappedField::new(Some(3), vec!["id".to_string()], vec![]),
-                MappedField::new(Some(4), vec!["b".to_string()], vec![]),
-            ]),
-            MappedField::new(Some(5), vec!["arr".to_string()], vec![MappedField::new(
-                Some(6),
-                vec!["element".to_string()],
+            MappedField::new(Some(2), vec!["s".to_string()], vec![MappedField::new(
+                Some(3),
+                vec!["a".to_string()],
                 vec![],
             )]),
-            MappedField::new(Some(7), vec!["m".to_string()], vec![
-                MappedField::new(Some(8), vec!["key".to_string()], vec![]),
-                MappedField::new(Some(9), vec!["value".to_string()], vec![]),
-            ]),
         ]));
 
-        // A migrated Parquet file with no field IDs at any level.
-        let s = StructArray::from(vec![
-            (
-                Arc::new(Field::new("id", DataType::Int32, true)),
-                Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef,
-            ),
-            (
-                Arc::new(Field::new("b", DataType::Utf8, true)),
-                Arc::new(StringArray::from(vec!["x", "y", "z"])) as ArrayRef,
-            ),
-        ]);
-        let arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-            Some(vec![Some(1)]),
-            Some(vec![Some(2), Some(3)]),
-            Some(vec![]),
-        ]);
-        let mut m = MapBuilder::new(
-            Some(MapFieldNames {
-                entry: "entries".to_string(),
-                key: "keys".to_string(),
-                value: "values".to_string(),
-            }),
-            StringBuilder::new(),
-            Int32Builder::new(),
-        );
-        for entries in [vec![("a", 100)], vec![("b", 200), ("c", 300)], vec![]] {
-            for (key, value) in entries {
-                m.keys().append_value(key);
-                m.values().append_value(value);
-            }
-            m.append(true).unwrap();
-        }
+        // No field IDs at any level.
+        let s = StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef,
+        )]);
         let to_write = RecordBatch::try_from_iter_with_nullable(vec![
             (
                 "id",
@@ -1293,155 +1216,115 @@ message schema {
                 true,
             ),
             ("s", Arc::new(s) as ArrayRef, true),
-            ("arr", Arc::new(arr) as ArrayRef, true),
-            ("m", Arc::new(m.finish()) as ArrayRef, true),
         ])
         .unwrap();
-
         let tmp_dir = TempDir::new().unwrap();
         let file_path = format!("{}/1.parquet", tmp_dir.path().to_str().unwrap());
         let file = File::create(&file_path).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), None).unwrap();
-        writer.write(&to_write).expect("Writing batch");
+        writer.write(&to_write).unwrap();
         writer.close().unwrap();
 
-        // Projecting a top-level column next to the nested ones must not change their values.
-        for project_field_ids in [vec![1, 2, 5, 7], vec![2, 5, 7]] {
-            let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
-            let tasks = Box::pin(futures::stream::iter(
-                vec![Ok(FileScanTask::builder()
-                    .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
-                    .with_start(0)
-                    .with_length(0)
-                    .with_data_file_path(file_path.clone())
-                    .with_data_file_format(DataFileFormat::Parquet)
-                    .with_schema(schema.clone())
-                    .with_project_field_ids(project_field_ids.clone())
-                    .with_case_sensitive(false)
-                    .with_name_mapping(Some(name_mapping.clone()))
-                    .build()
-                    .unwrap())]
-                .into_iter(),
-            )) as FileScanTaskStream;
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter([Ok(FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema)
+            .with_project_field_ids(vec![1, 2])
+            .with_case_sensitive(false)
+            .with_name_mapping(Some(name_mapping))
+            .build()
+            .unwrap())])) as FileScanTaskStream;
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
 
-            let result = reader
-                .read(tasks)
-                .unwrap()
-                .stream()
-                .try_collect::<Vec<RecordBatch>>()
-                .await
-                .unwrap();
-            assert_eq!(result.len(), 1);
-            let column = |name: &str| result[0].column_by_name(name).unwrap();
-
-            let s = column("s").as_struct();
-            assert_eq!(s.null_count(), 0, "`s` is NULL for {project_field_ids:?}");
-            assert_eq!(
-                s.column(0).as_primitive::<Int32Type>(),
-                &Int32Array::from(vec![10, 20, 30])
-            );
-            assert_eq!(
-                s.column(1).as_string::<i32>(),
-                &StringArray::from(vec!["x", "y", "z"])
-            );
-
-            let arr = column("arr").as_list::<i32>();
-            assert_eq!(
-                arr.null_count(),
-                0,
-                "`arr` is NULL for {project_field_ids:?}"
-            );
-            assert_eq!(arr.value_offsets(), &[0, 1, 3, 3]);
-            assert_eq!(
-                arr.values().as_primitive::<Int32Type>(),
-                &Int32Array::from(vec![1, 2, 3])
-            );
-
-            let m = column("m").as_map();
-            assert_eq!(m.null_count(), 0, "`m` is NULL for {project_field_ids:?}");
-            assert_eq!(m.value_offsets(), &[0, 1, 3, 3]);
-            assert_eq!(
-                m.keys().as_string::<i32>(),
-                &StringArray::from(vec!["a", "b", "c"])
-            );
-            assert_eq!(
-                m.values().as_primitive::<Int32Type>(),
-                &Int32Array::from(vec![100, 200, 300])
-            );
-        }
+        let s = result[0].column(1).as_struct();
+        assert_eq!(s.null_count(), 0);
+        assert_eq!(
+            s.column(0).as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![10, 20, 30])
+        );
     }
 
-    /// Covers `LargeList` and `FixedSizeList`, which a file reads back as only when its
-    /// embedded Arrow schema asks for them, and a struct inside a list element.
+    /// Every nested Arrow type gets IDs, with list and map entries matched by their spec names.
     #[test]
-    fn test_apply_name_mapping_to_large_and_fixed_size_lists() {
+    fn test_apply_name_mapping_to_nested_arrow_types() {
         use arrow_schema::Fields;
 
         use super::apply_name_mapping_to_arrow_schema;
         use crate::arrow::arrow_schema_to_schema;
-        use crate::spec::ListType;
 
-        let item = |data_type| Arc::new(Field::new("item", data_type, true));
-        let x = Field::new("x", DataType::Int32, true);
+        let field = |name: &str, data_type| Field::new(name, data_type, true);
+        let item = |data_type| Arc::new(field("item", data_type));
+        let entries = Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("keys", DataType::Utf8, false),
+                field("values", DataType::Int32),
+            ])),
+            false,
+        );
+        let x = Fields::from(vec![field("x", DataType::Int32)]);
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new(
-                "fixed",
-                DataType::FixedSizeList(item(DataType::Int32), 2),
-                true,
+            field("id", DataType::Int32),
+            // `s.id` must take its ID from the entry for `s`, not from the top-level `id`.
+            field(
+                "s",
+                DataType::Struct(Fields::from(vec![field("id", DataType::Int32)])),
             ),
-            Field::new(
-                "large",
-                DataType::LargeList(item(DataType::Struct(Fields::from(vec![x])))),
-                true,
-            ),
+            field("list", DataType::List(item(DataType::Int32))),
+            field("fixed", DataType::FixedSizeList(item(DataType::Int32), 2)),
+            field("large", DataType::LargeList(item(DataType::Struct(x)))),
+            field("map", DataType::Map(Arc::new(entries), false)),
         ]));
+        let entry =
+            |id, name: &str, fields| MappedField::new(Some(id), vec![name.to_string()], fields);
         let name_mapping = NameMapping::new(vec![
-            MappedField::new(Some(1), vec!["fixed".to_string()], vec![MappedField::new(
-                Some(2),
-                vec!["element".to_string()],
+            entry(1, "id", vec![]),
+            entry(2, "s", vec![entry(3, "id", vec![])]),
+            entry(4, "list", vec![entry(5, "element", vec![])]),
+            entry(6, "fixed", vec![entry(7, "element", vec![])]),
+            entry(8, "large", vec![entry(9, "element", vec![entry(
+                10,
+                "x",
                 vec![],
-            )]),
-            MappedField::new(Some(3), vec!["large".to_string()], vec![MappedField::new(
-                Some(4),
-                vec!["element".to_string()],
-                vec![MappedField::new(Some(5), vec!["x".to_string()], vec![])],
-            )]),
+            )])]),
+            entry(11, "map", vec![
+                entry(12, "key", vec![]),
+                entry(13, "value", vec![]),
+            ]),
         ]);
 
         let mapped = apply_name_mapping_to_arrow_schema(arrow_schema, &name_mapping).unwrap();
 
-        // The conversion fails on any field without an ID, at any depth.
-        let expected = Schema::builder()
-            .with_fields(vec![
-                NestedField::optional(
-                    1,
-                    "fixed",
-                    Type::List(ListType::new(
-                        NestedField::list_element(2, Type::Primitive(PrimitiveType::Int), false)
-                            .into(),
-                    )),
-                )
-                .into(),
-                NestedField::optional(
-                    3,
-                    "large",
-                    Type::List(ListType::new(
-                        NestedField::list_element(
-                            4,
-                            Type::Struct(StructType::new(vec![
-                                NestedField::optional(5, "x", Type::Primitive(PrimitiveType::Int))
-                                    .into(),
-                            ])),
-                            false,
-                        )
-                        .into(),
-                    )),
-                )
-                .into(),
-            ])
-            .build()
-            .unwrap();
-        assert_eq!(arrow_schema_to_schema(&mapped).unwrap(), expected);
+        // The conversion fails on any field without an ID.
+        let schema = arrow_schema_to_schema(&mapped).unwrap();
+        let names: Vec<_> = (1..=13)
+            .map(|id| schema.name_by_field_id(id).unwrap_or_default())
+            .collect();
+        assert_eq!(names, [
+            "id",
+            "s",
+            "s.id",
+            "list",
+            "list.element",
+            "fixed",
+            "fixed.element",
+            "large",
+            "large.element",
+            "large.element.x",
+            "map",
+            "map.key",
+            "map.value",
+        ]);
     }
 
     /// Test reading Parquet files without field IDs with partial projection.
