@@ -915,9 +915,8 @@ impl RestSessionCatalog {
 
         let mut builder = FileIOBuilder::new(factory).with_props(props.clone());
 
-        // Vended credentials are scoped per location prefix: give each its own
-        // storage. Paths under no vended prefix fall back to the default `props`
-        // above, which carry no credentials.
+        // Each vended prefix gets its own storage; other paths use the
+        // credential-free default.
         if let Some(creds) = storage_credentials {
             for cred in creds {
                 builder = builder.with_prefixed_props(
@@ -1314,9 +1313,8 @@ impl SessionCatalog for RestSessionCatalog {
     ) -> Result<Table> {
         let client = self.client().await?;
 
-        // Vended credentials are opt-in via a `header.X-Iceberg-Access-Delegation`
-        // catalog property (applied to every request like the Iceberg Java client);
-        // any returned `storage_credentials` are wired into the FileIO below.
+        // Vended credentials are opt-in through a configured
+        // `header.X-Iceberg-Access-Delegation`, as in Java.
         let request = HttpRequest::build(
             client
                 .http_client
@@ -1577,10 +1575,8 @@ impl SessionCatalog for RestSessionCatalog {
             }
         };
 
-        // The commit response carries no credentials, so this FileIO has only the
-        // catalog-level config. `Transaction::do_commit` swaps in the credentialed
-        // one from its pre-commit load, and it is the only caller there can be:
-        // `TableCommit` is buildable inside the `iceberg` crate alone.
+        // The commit response carries no credentials. `Transaction::do_commit`,
+        // the only possible caller, keeps the FileIO from its pre-commit load.
         let file_io = self
             .load_file_io(Some(&response.metadata_location), None, None)
             .await?;
@@ -4146,9 +4142,6 @@ mod tests {
 
         let config_mock = create_config_mock(&mut server).await;
 
-        // Vended credentials are opt-in via a `header.*` catalog property (like the
-        // Java client). With it configured, the header is sent and the response's
-        // `storage-credentials` are accepted (the FileIO builds).
         let load_table_mock = server
             .mock("GET", "/v1/namespaces/ns1/tables/test1")
             .match_header("x-iceberg-access-delegation", "vended-credentials")
@@ -4187,8 +4180,6 @@ mod tests {
             table.metadata_location().unwrap()
         );
 
-        // The point of the feature: the vended credentials reach the FileIO,
-        // scoped to the prefix the server sent them for.
         let file_io = table.file_io();
         let vended = file_io.config_for("s3://warehouse/database/table/data/f.parquet");
         assert_eq!(
@@ -4199,7 +4190,6 @@ mod tests {
             vended.get("s3.session-token"),
             Some(&"vended-token".to_string())
         );
-        // A path outside the prefix keeps the credential-free default.
         assert_eq!(
             file_io
                 .config_for("s3://warehouse/other/f.parquet")
@@ -4253,7 +4243,6 @@ mod tests {
 
         let config_mock = create_config_mock(&mut server).await;
 
-        // No delegation header is hardcoded: without a `header.*` prop, none is sent.
         let load_table_mock = server
             .mock("GET", "/v1/namespaces/ns1/tables/test1")
             .match_header("x-iceberg-access-delegation", mockito::Matcher::Missing)
@@ -4766,8 +4755,6 @@ mod tests {
         register_table_mock.assert_async().await;
     }
 
-    /// The register response is a `LoadTableResult`, so the vended credentials
-    /// it carries have to reach the table's FileIO like `load_table`'s do.
     #[tokio::test]
     async fn test_register_table_uses_vended_credentials() {
         let mut server = Server::new_async().await;
@@ -4801,12 +4788,10 @@ mod tests {
             vended.get("s3.access-key-id").map(String::as_str),
             Some("vended-key-id")
         );
-        // Scoped to the prefix the server sent them for.
         let outside = table
             .file_io()
             .config_for("s3://other-bucket/data/f.parquet");
         assert_eq!(outside.get("s3.access-key-id"), None);
-        // The response's table config reaches the FileIO too, as in load_table.
         assert_eq!(
             table.file_io().config().get("region").map(String::as_str),
             Some("us-west-2")

@@ -58,9 +58,8 @@ pub struct StorageConfig {
 
 impl std::fmt::Debug for StorageConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Property values may hold vended credentials (e.g. `s3.secret-access-key`,
-        // `s3.session-token`). Debug is reachable through the `FileIO`/`Table`
-        // derives, so print only the keys and never the secret values.
+        // Values may hold vended credentials, and Debug is reachable through
+        // `FileIO` and `Table`: print keys only.
         f.debug_struct("StorageConfig")
             .field("keys", &self.props.keys().collect::<Vec<_>>())
             .finish_non_exhaustive()
@@ -173,7 +172,6 @@ mod tests {
         ]));
 
         let rendered = format!("{config:?}");
-        // Secret values must never appear in Debug output (reachable via FileIO/Table).
         assert!(
             !rendered.contains("super-secret"),
             "leaked secret: {rendered}"
@@ -182,7 +180,6 @@ mod tests {
             !rendered.contains("vended-token"),
             "leaked token: {rendered}"
         );
-        // Keys stay visible so routing/config is still diagnosable.
         assert!(
             rendered.contains("s3.secret-access-key"),
             "keys hidden: {rendered}"
