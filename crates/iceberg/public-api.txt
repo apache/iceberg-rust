@@ -3311,6 +3311,7 @@ pub fn iceberg::transaction::FastAppendAction::add_data_files(self, data_files: 
 pub fn iceberg::transaction::FastAppendAction::set_commit_uuid(self, commit_uuid: uuid::Uuid) -> Self
 pub fn iceberg::transaction::FastAppendAction::set_snapshot_properties(self, snapshot_properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
 pub fn iceberg::transaction::FastAppendAction::with_check_duplicate(self, v: bool) -> Self
+pub fn iceberg::transaction::FastAppendAction::with_idempotency_key(self, key: impl core::convert::Into<alloc::string::String>) -> Self
 pub struct iceberg::transaction::ReplaceSortOrderAction
 impl iceberg::transaction::ReplaceSortOrderAction
 pub fn iceberg::transaction::ReplaceSortOrderAction::asc(self, name: &str, null_order: iceberg::spec::NullOrder) -> Self
@@ -3349,6 +3350,7 @@ pub fn iceberg::transaction::UpdateStatisticsAction::set_statistics(self, statis
 pub struct iceberg::transaction::UpgradeFormatVersionAction
 impl iceberg::transaction::UpgradeFormatVersionAction
 pub fn iceberg::transaction::UpgradeFormatVersionAction::set_format_version(self, format_version: iceberg::spec::FormatVersion) -> Self
+pub const iceberg::transaction::IDEMPOTENCY_KEY_SUMMARY_PROPERTY: &str
 pub trait iceberg::transaction::ApplyTransactionAction
 pub fn iceberg::transaction::ApplyTransactionAction::apply(self, tx: iceberg::transaction::Transaction) -> iceberg::Result<iceberg::transaction::Transaction>
 impl<T: TransactionAction + 'static> iceberg::transaction::ApplyTransactionAction for T

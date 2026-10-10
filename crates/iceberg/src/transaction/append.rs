@@ -22,18 +22,37 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
+use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation, SnapshotRef};
 use crate::table::Table;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
+use crate::util::snapshot::ancestors_of;
+
+/// Snapshot summary property that records the idempotency key of a fast append.
+/// See [`FastAppendAction::with_idempotency_key`].
+pub const IDEMPOTENCY_KEY_SUMMARY_PROPERTY: &str = "iceberg-rust.idempotency-key";
+
+/// The snapshot on the `main` branch of `table` whose summary records
+/// idempotency key `key`, if any.
+fn snapshot_with_idempotency_key(table: &Table, key: &str) -> Option<SnapshotRef> {
+    let head = table.metadata().current_snapshot_id()?;
+    ancestors_of(&table.metadata_ref(), head).find(|snapshot| {
+        snapshot
+            .summary()
+            .additional_properties
+            .get(IDEMPOTENCY_KEY_SUMMARY_PROPERTY)
+            .is_some_and(|v| v == key)
+    })
+}
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
 pub struct FastAppendAction {
     check_duplicate: bool,
     // below are properties used to create SnapshotProducer when commit
     commit_uuid: Option<Uuid>,
+    idempotency_key: Option<String>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
 }
@@ -43,6 +62,7 @@ impl FastAppendAction {
         Self {
             check_duplicate: true,
             commit_uuid: None,
+            idempotency_key: None,
             snapshot_properties: HashMap::default(),
             added_data_files: vec![],
         }
@@ -66,6 +86,24 @@ impl FastAppendAction {
         self
     }
 
+    /// Makes this append idempotent: if a snapshot on `main` already records
+    /// `key`, the append commits nothing.
+    ///
+    /// Use one key per logical write: an append whose key is already committed
+    /// is dropped whatever its files, and the commit returns `Ok`. A rerun
+    /// appending the files the first attempt committed is skipped, not
+    /// rejected as a duplicate, so after a skip delete only files the table
+    /// does not reference.
+    ///
+    /// The key is checked on every commit attempt, so of two racing attempts
+    /// only one commits. An append with no data files and no snapshot
+    /// properties commits nothing. Keys on snapshots expired or rolled back off
+    /// `main` are not found.
+    pub fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
+        self.idempotency_key = Some(key.into());
+        self
+    }
+
     /// Set snapshot summary properties.
     pub fn set_snapshot_properties(mut self, snapshot_properties: HashMap<String, String>) -> Self {
         self.snapshot_properties = snapshot_properties;
@@ -83,15 +121,42 @@ impl FastAppendAction {
             .cloned()
             .collect()
     }
+
+    /// The snapshot summary properties set by the caller, plus the idempotency
+    /// key.
+    fn summary_properties(&self) -> HashMap<String, String> {
+        let mut properties = self.snapshot_properties.clone();
+        if let Some(key) = &self.idempotency_key {
+            properties.insert(IDEMPOTENCY_KEY_SUMMARY_PROPERTY.to_string(), key.clone());
+        }
+        properties
+    }
 }
 
 #[async_trait]
 impl TransactionAction for FastAppendAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+        if self.idempotency_key.is_some()
+            && self.added_data_files.is_empty()
+            && self.snapshot_properties.is_empty()
+        {
+            return Ok(ActionCommit::new(vec![], vec![]));
+        }
+
+        if let Some(key) = self.idempotency_key.as_deref()
+            && let Some(snapshot) = snapshot_with_idempotency_key(table, key)
+        {
+            tracing::info!(
+                "Skipping fast append: idempotency key '{key}' was already committed in snapshot {}",
+                snapshot.snapshot_id()
+            );
+            return Ok(ActionCommit::new(vec![], vec![]));
+        }
+
         let snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
-            self.snapshot_properties.clone(),
+            self.summary_properties(),
             self.dedupe_added_files(),
         );
 
@@ -950,5 +1015,216 @@ mod tests {
             manifest.entries()[0].snapshot_id().unwrap()
         );
         assert_eq!(data_file, *manifest.entries()[0].data_file());
+    }
+}
+
+#[cfg(test)]
+mod idempotency_key_tests {
+    use std::collections::HashMap;
+
+    use mockall::Sequence;
+
+    use super::{IDEMPOTENCY_KEY_SUMMARY_PROPERTY, snapshot_with_idempotency_key};
+    use crate::Catalog;
+    use crate::catalog::MockCatalog;
+    use crate::memory::tests::new_memory_catalog;
+    use crate::spec::{
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
+    };
+    use crate::table::Table;
+    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+    use crate::transaction::{ApplyTransactionAction, Transaction};
+
+    fn data_file(path: &str) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(10)
+            .partition(Struct::from_iter([Some(Literal::long(1))]))
+            .partition_spec_id(0)
+            .build()
+            .unwrap()
+    }
+
+    /// Fast-appends a data file at each of `paths` to `table` under
+    /// idempotency key `key`, and returns the table the commit leaves.
+    async fn append(catalog: &dyn Catalog, table: &Table, paths: &[&str], key: &str) -> Table {
+        let tx = Transaction::new(table);
+        tx.fast_append()
+            .add_data_files(paths.iter().map(|path| data_file(path)))
+            .with_idempotency_key(key)
+            .apply(tx)
+            .unwrap()
+            .commit(catalog)
+            .await
+            .unwrap()
+    }
+
+    /// What identifies a version of a table: its metadata and where that is
+    /// stored. A commit that writes nothing leaves both unchanged.
+    fn version(table: &Table) -> (&TableMetadata, Option<&str>) {
+        (table.metadata(), table.metadata_location())
+    }
+
+    #[tokio::test]
+    async fn test_rerun_from_a_stale_table_commits_nothing() {
+        let catalog = new_memory_catalog().await;
+        let base = make_v3_minimal_table_in_catalog(&catalog).await;
+        let committed = append(&catalog, &base, &["a.parquet"], "job-1").await;
+
+        // The rerun starts from `base`, which predates the first commit.
+        let rerun = append(&catalog, &base, &["a-rerun.parquet"], "job-1").await;
+
+        assert_eq!(version(&rerun), version(&committed));
+    }
+
+    /// Rerunning only the commit appends the files the first run committed.
+    #[tokio::test]
+    async fn test_rerun_of_the_same_files_commits_nothing() {
+        let catalog = new_memory_catalog().await;
+        let base = make_v3_minimal_table_in_catalog(&catalog).await;
+        let committed = append(&catalog, &base, &["a.parquet"], "job-1").await;
+
+        let rerun = append(&catalog, &committed, &["a.parquet"], "job-1").await;
+
+        assert_eq!(version(&rerun), version(&committed));
+    }
+
+    #[tokio::test]
+    async fn test_append_without_files_commits_nothing() {
+        let catalog = new_memory_catalog().await;
+        let base = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let appended = append(&catalog, &base, &[], "job-1").await;
+
+        assert_eq!(version(&appended), version(&base));
+    }
+
+    #[tokio::test]
+    async fn test_append_without_files_but_with_properties_commits() {
+        let catalog = new_memory_catalog().await;
+        let base = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let tx = Transaction::new(&base);
+        let table = tx
+            .fast_append()
+            .set_snapshot_properties(HashMap::from([("p".to_string(), "v".to_string())]))
+            .with_idempotency_key("job-1")
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let properties = &table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .summary()
+            .additional_properties;
+        assert_eq!(
+            (
+                properties.get("p").map(String::as_str),
+                properties
+                    .get(IDEMPOTENCY_KEY_SUMMARY_PROPERTY)
+                    .map(String::as_str)
+            ),
+            (Some("v"), Some("job-1"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_skipped_append_keeps_the_other_updates() {
+        let catalog = new_memory_catalog().await;
+        let base = make_v3_minimal_table_in_catalog(&catalog).await;
+        let committed = append(&catalog, &base, &["a.parquet"], "job-1").await;
+
+        let tx = Transaction::new(&committed);
+        let tx = tx
+            .update_table_properties()
+            .set("k".to_string(), "v".to_string())
+            .apply(tx)
+            .unwrap();
+        let tx = tx
+            .fast_append()
+            .add_data_files([data_file("a-rerun.parquet")])
+            .with_idempotency_key("job-1")
+            .apply(tx)
+            .unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let snapshot_ids = |table: &Table| {
+            let mut ids: Vec<_> = table
+                .metadata()
+                .snapshots()
+                .map(|s| s.snapshot_id())
+                .collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(
+            table.metadata().properties(),
+            &HashMap::from([("k".to_string(), "v".to_string())])
+        );
+        assert_eq!(snapshot_ids(&table), snapshot_ids(&committed));
+    }
+
+    /// Two runs race: the loser loads the table before the winner commits and
+    /// commits after it.
+    #[tokio::test]
+    async fn test_loser_of_a_race_commits_nothing() {
+        let catalog = new_memory_catalog().await;
+        let base = make_v3_minimal_table_in_catalog(&catalog).await;
+        let winner = append(&catalog, &base, &["winner.parquet"], "job-1").await;
+
+        // What the loser sees of the catalog, in order.
+        let mut loser_view = MockCatalog::new();
+        let mut seq = Sequence::new();
+        let (before, current, after) = (base.clone(), winner.clone(), winner.clone());
+        loser_view
+            .expect_load_table()
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_once_st(|_| Box::pin(async move { Ok(before) }));
+        loser_view
+            .expect_update_table()
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_once_st(|commit| Box::pin(async move { commit.apply(current) }));
+        loser_view
+            .expect_load_table()
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_once_st(|_| Box::pin(async move { Ok(after) }));
+
+        let loser = append(&loser_view, &base, &["loser.parquet"], "job-1").await;
+
+        assert_eq!(version(&loser), version(&winner));
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_with_idempotency_key_finds_each_key() {
+        let catalog = new_memory_catalog().await;
+        let base = make_v3_minimal_table_in_catalog(&catalog).await;
+        let first = append(&catalog, &base, &["a.parquet"], "job-1").await;
+        let second = append(&catalog, &first, &["b.parquet"], "job-2").await;
+
+        let snapshot_id =
+            |key| snapshot_with_idempotency_key(&second, key).map(|s| s.snapshot_id());
+        assert_eq!(
+            [
+                snapshot_id("job-1"),
+                snapshot_id("job-2"),
+                snapshot_id("job-3")
+            ],
+            [
+                first.metadata().current_snapshot_id(),
+                second.metadata().current_snapshot_id(),
+                None,
+            ]
+        );
+        assert_eq!(snapshot_with_idempotency_key(&base, "job-1"), None);
     }
 }
