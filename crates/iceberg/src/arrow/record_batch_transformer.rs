@@ -73,7 +73,7 @@ fn field_with_id(
 /// # References
 /// - Spec: https://iceberg.apache.org/spec/#column-projection
 /// - Java: core/src/main/java/org/apache/iceberg/util/PartitionUtil.java:constantsMap()
-fn constants_map(
+pub(crate) fn constants_map(
     partition_spec: &PartitionSpec,
     partition_data: &Struct,
     schema: &IcebergSchema,
