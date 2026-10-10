@@ -57,9 +57,13 @@ jobs:
 
       - name: Install lint tools
         # Keep versions in sync with the local install targets in Makefile.
-        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: taplo@0.9.3,cargo-machete@0.7.0,cargo-deny@0.19.9
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: 3.12
 
       - name: Check License Header
         uses: apache/skywalking-eyes/header@a196742f472feaffafea537ce5a2a4c3c53a8de4 # v0.9.0
@@ -80,7 +84,7 @@ jobs:
         run: make check-license-notice
 
       - name: Check dependency licenses
-        run: dev/release/dependencies.sh check
+        run: python3 ./dev/release/licenses.py dependencies check
 
       # Trusted publishing cannot create a crate (https://crates.io/docs/trusted-publishing),
       # so a new publishable crate must be reserved on crates.io before it is merged.
@@ -102,7 +106,7 @@ jobs:
         run: cargo machete
 
       - name: Check typos
-        uses: crate-ci/typos@d43b6c087ac471e2ea7b8af622ff15f05c0c365b # v1.50.1
+        uses: crate-ci/typos@512fc24f32f44ab01972217aaaf3dc86ec234d53 # v1.50.2
 
   clippy:
     needs: lint
@@ -238,7 +242,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: matrix.test-suite.name == 'default'
-        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-nextest
 

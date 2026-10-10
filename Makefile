@@ -89,13 +89,12 @@ check-public-api: install-cargo-public-api
 check-license-notice:
 	bash ./dev/check_license_notice.sh
 
-# Keep version in sync with the CI lint install step in .github/workflows/ci.yml
-# and EXPECTED_CARGO_DENY_VERSION in dev/release/dependencies.sh.
+# Keep version in sync with the CI lint install step in .github/workflows/ci.yml.
 install-cargo-deny:
 	cargo install --locked cargo-deny@0.19.9
 
 check-dependency-licenses: install-cargo-deny
-	bash ./dev/release/dependencies.sh check
+	python3 ./dev/release/licenses.py dependencies check
 
 check: check-fmt check-clippy check-toml cargo-machete check-license-notice check-dependency-licenses
 

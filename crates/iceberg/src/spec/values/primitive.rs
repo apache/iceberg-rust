@@ -17,10 +17,21 @@
 
 //! Primitive literal types
 
-use ordered_float::OrderedFloat;
+use std::cmp::Ordering;
+
+use ordered_float::{FloatCore, OrderedFloat};
 
 /// Values present in iceberg type
-#[derive(Clone, Debug, PartialOrd, PartialEq, Hash, Eq)]
+///
+/// `Float` and `Double` compare as Java's `Float.compare` and `Double.compare` do: `-0.0` is
+/// less than `0.0`, and every NaN is the same value, greater than all others. iceberg-java
+/// compares partition values this way, so `-0.0` and `0.0` are different partitions. The
+/// [spec](https://iceberg.apache.org/spec/#scan-planning) states the same rule: floating point
+/// partition values are equal if their IEEE 754 bit layouts are equal, with NaNs normalized.
+// The derived `Hash` gives `-0.0` and `0.0` the same hash. That is coarser than `eq`, which is
+// allowed: equal values still hash alike.
+#[allow(clippy::derived_hash_with_manual_eq)]
+#[derive(Clone, Debug, Hash, Eq)]
 pub enum PrimitiveLiteral {
     /// 0x00 for false, non-zero byte for true
     Boolean(bool),
@@ -46,7 +57,72 @@ pub enum PrimitiveLiteral {
     BelowMin,
 }
 
+impl PartialEq for PrimitiveLiteral {
+    fn eq(&self, other: &Self) -> bool {
+        self.partial_cmp(other) == Some(Ordering::Equal)
+    }
+}
+
+impl PartialOrd for PrimitiveLiteral {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (Self::Boolean(a), Self::Boolean(b)) => a.partial_cmp(b),
+            (Self::Int(a), Self::Int(b)) => a.partial_cmp(b),
+            (Self::Long(a), Self::Long(b)) => a.partial_cmp(b),
+            (Self::Float(a), Self::Float(b)) => Some(float_cmp(a, b)),
+            (Self::Double(a), Self::Double(b)) => Some(float_cmp(a, b)),
+            (Self::String(a), Self::String(b)) => a.partial_cmp(b),
+            (Self::Binary(a), Self::Binary(b)) => a.partial_cmp(b),
+            (Self::Int128(a), Self::Int128(b)) => a.partial_cmp(b),
+            (Self::UInt128(a), Self::UInt128(b)) => a.partial_cmp(b),
+            (Self::AboveMax, Self::AboveMax) | (Self::BelowMin, Self::BelowMin) => {
+                Some(Ordering::Equal)
+            }
+            // Different variants order by declaration, as the derived impl did. A variant that
+            // lacks an arm above lands here against itself; fail closed instead of calling the
+            // two values equal.
+            _ => {
+                debug_assert_ne!(std::mem::discriminant(self), std::mem::discriminant(other));
+                match self.variant_index().cmp(&other.variant_index()) {
+                    Ordering::Equal => None,
+                    ordering => Some(ordering),
+                }
+            }
+        }
+    }
+}
+
+/// Compares floats as Java's `Float.compare` and `Double.compare` do. `OrderedFloat` already
+/// treats every NaN as one value above all others; it only lacks `-0.0` before `0.0`.
+fn float_cmp<T: FloatCore>(a: &OrderedFloat<T>, b: &OrderedFloat<T>) -> Ordering {
+    a.cmp(b).then_with(|| {
+        if a.is_nan() {
+            Ordering::Equal
+        } else {
+            b.is_sign_negative().cmp(&a.is_sign_negative())
+        }
+    })
+}
+
 impl PrimitiveLiteral {
+    /// Must follow the declaration order of the variants: `partial_cmp` uses it to order
+    /// different variants the way the derived `PartialOrd` did.
+    fn variant_index(&self) -> u8 {
+        match self {
+            Self::Boolean(_) => 0,
+            Self::Int(_) => 1,
+            Self::Long(_) => 2,
+            Self::Float(_) => 3,
+            Self::Double(_) => 4,
+            Self::String(_) => 5,
+            Self::Binary(_) => 6,
+            Self::Int128(_) => 7,
+            Self::UInt128(_) => 8,
+            Self::AboveMax => 9,
+            Self::BelowMin => 10,
+        }
+    }
+
     /// Returns true if the Literal represents a primitive type
     /// that can be a NaN, and that it's value is NaN
     pub fn is_nan(&self) -> bool {

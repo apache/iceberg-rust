@@ -134,9 +134,10 @@ git push origin "v0.9.1"
 
 ## Dependencies
 
-Use the dependency helper to update or verify dependency license lists:
+Verify every dependency's license is one the project allows:
 
 ```shell
-dev/release/dependencies.sh generate
-dev/release/dependencies.sh check
+python3 dev/release/licenses.py dependencies check
 ```
+
+CI also runs this check on every pull request.
