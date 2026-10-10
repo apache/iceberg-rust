@@ -43,6 +43,7 @@ chrono = { workspace = true }
 http = { workspace = true }
 iceberg = { workspace = true }
 itertools = { workspace = true }
+moka = { version = "0.12.10", features = ["sync"] }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }

@@ -403,6 +403,8 @@ pub const iceberg_catalog_rest::AUTH_TYPE_NONE: &str
 pub const iceberg_catalog_rest::AUTH_TYPE_OAUTH2: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_AUTH_TYPE: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_URI: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_WAREHOUSE: &str
 pub trait iceberg_catalog_rest::AuthManager: core::fmt::Debug + core::marker::Send + core::marker::Sync
