@@ -70,7 +70,7 @@ pub const REST_CATALOG_PROP_AUTH_TYPE: &str = "rest.auth.type";
 /// to 100; 0 disables the cache).
 pub const REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES: &str = "rest-table-cache.max-entries";
 /// How long a loaded table stays cached for freshness-aware loading, in
-/// milliseconds (defaults to 5 minutes).
+/// milliseconds (defaults to 5 minutes; must be positive and at most 1000 years).
 pub const REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS: &str =
     "rest-table-cache.expire-after-write-ms";
 
@@ -318,12 +318,24 @@ impl RestCatalogConfig {
                 })
             })
         };
+        let expire_after_write = Duration::from_millis(parse(
+            REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS,
+            300_000,
+        )?);
+        // Zero is ambiguous (disable or never expire), and moka panics beyond 1000 years.
+        if expire_after_write.is_zero()
+            || expire_after_write > Duration::from_secs(1000 * 365 * 24 * 3600)
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid {REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS}: must be between 1 ms and 1000 years"
+                ),
+            ));
+        }
         Ok(TableCache::builder()
             .max_capacity(parse(REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES, 100)?)
-            .time_to_live(Duration::from_millis(parse(
-                REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS,
-                300_000,
-            )?))
+            .time_to_live(expire_after_write)
             .build())
     }
 
@@ -4186,6 +4198,24 @@ mod tests {
         catalog.load_table(&context, &test1()).await.unwrap();
 
         load.assert_async().await;
+    }
+
+    #[test]
+    fn test_table_cache_rejects_out_of_range_expiry() {
+        for value in ["0", "31536000000001"] {
+            let config = RestCatalogConfig::builder()
+                .uri("http://localhost".to_string())
+                .props(HashMap::from([(
+                    REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS.to_string(),
+                    value.to_string(),
+                )]))
+                .build();
+
+            assert_eq!(
+                config.table_cache().unwrap_err().kind(),
+                ErrorKind::DataInvalid
+            );
+        }
     }
 
     #[tokio::test]
