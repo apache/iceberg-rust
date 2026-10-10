@@ -51,6 +51,11 @@ array-init = "2"
 arrow = "59.2"
 arrow-arith = "59.2"
 arrow-array = "59.2"
+arrow-avro = { version = "59.2", default-features = false, features = [
+  "deflate",
+  "snappy",
+  "zstd",
+] }
 arrow-buffer = "59.2"
 arrow-cast = "59.2"
 arrow-ord = "59.2"
