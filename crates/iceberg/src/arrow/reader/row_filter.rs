@@ -35,6 +35,7 @@ use crate::expr::visitors::bound_predicate_visitor::visit;
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::spec::Schema;
+use crate::{Error, ErrorKind};
 
 impl ArrowReader {
     pub(super) fn get_row_filter(
@@ -77,7 +78,15 @@ impl ArrowReader {
         let mut results = Vec::with_capacity(candidate_row_groups.len());
 
         for &idx in candidate_row_groups {
-            let row_group_metadata = &row_groups_metadata[idx];
+            let row_group_metadata = row_groups_metadata.get(idx).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "row group index {idx} out of range ({} row groups)",
+                        row_groups_metadata.len()
+                    ),
+                )
+            })?;
             if RowGroupMetricsEvaluator::eval(
                 predicate,
                 row_group_metadata,
@@ -647,6 +656,21 @@ mod tests {
             .bind(schema.clone(), true)
             .unwrap();
 
+        // Test the pruning decision directly, not just the final filtered rows.
+        let parquet_metadata = Arc::new((*metadata).clone());
+        let field_id_map = HashMap::from([(1, 0)]);
+        for (candidates, expected) in [(vec![1, 2], vec![2]), (vec![0, 1], vec![0])] {
+            let selected = ArrowReader::get_selected_row_group_indices(
+                &predicate,
+                &parquet_metadata,
+                &field_id_map,
+                schema.as_ref(),
+                &candidates,
+            )
+            .unwrap();
+            assert_eq!(selected, expected);
+        }
+
         let task = FileScanTask::builder()
             .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
             .with_start(rg1_start)
@@ -949,6 +973,24 @@ mod tests {
                 .set_offset_index(Some(vec![]))
                 .build(),
         )
+    }
+
+    #[test]
+    fn test_row_group_pruning_rejects_invalid_candidate() {
+        let schema = int_schema();
+        let predicate = simple_predicate(schema.clone());
+        let metadata = metadata_no_page_indexes();
+
+        let err = ArrowReader::get_selected_row_group_indices(
+            &predicate,
+            &metadata,
+            &field_id_map(),
+            schema.as_ref(),
+            &[0],
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), crate::ErrorKind::DataInvalid);
     }
 
     /// Testing suite regarding: https://github.com/apache/iceberg-rust/issues/2452

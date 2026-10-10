@@ -538,21 +538,25 @@ mod tests {
             DataType::Utf8,
             true,
         )]));
-        let name_mapping = NameMapping::new(vec![
-            MappedField::new(Some(2), vec!["name".to_string()], vec![]),
-            MappedField::new(Some(4), vec!["name".to_string()], vec![]),
-        ]);
+        for (first_id, expected) in [(Some(2), Some("2")), (None, None)] {
+            let name_mapping = NameMapping::new(vec![
+                MappedField::new(first_id, vec!["name".to_string()], vec![]),
+                MappedField::new(Some(4), vec!["name".to_string()], vec![]),
+            ]);
 
-        let mapped =
-            super::apply_name_mapping_to_arrow_schema(arrow_schema, &name_mapping).unwrap();
+            let mapped =
+                super::apply_name_mapping_to_arrow_schema(arrow_schema.clone(), &name_mapping)
+                    .unwrap();
 
-        assert_eq!(
-            mapped.fields()[0]
-                .metadata()
-                .get(PARQUET_FIELD_ID_META_KEY)
-                .map(String::as_str),
-            Some("2")
-        );
+            assert_eq!(
+                mapped.fields()[0]
+                    .metadata()
+                    .get(PARQUET_FIELD_ID_META_KEY)
+                    .map(String::as_str),
+                expected,
+                "first matching field ID: {first_id:?}"
+            );
+        }
     }
 
     #[test]
