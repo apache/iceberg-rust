@@ -449,12 +449,14 @@ pub(super) fn apply_name_mapping_to_arrow_schema(
 
 /// Assigns IDs from `mapped_field` to `field` and its nested fields, as Java's ApplyNameMapping
 /// does. List elements match `element`, and map entries match `key` and `value`. A field
-/// without an entry keeps no ID, and so do its nested fields.
+/// without an entry, or whose entry has no field ID, keeps no ID, and so do its nested fields.
 fn apply_name_mapping_to_field(
     field: &FieldRef,
     mapped_field: Option<&MappedField>,
 ) -> Result<FieldRef> {
-    let Some(mapped_field) = mapped_field else {
+    let Some((mapped_field, field_id)) =
+        mapped_field.zip(mapped_field.and_then(MappedField::field_id))
+    else {
         return Ok(Arc::clone(field));
     };
     let map_nested = |nested: &FieldRef, name: &str| {
@@ -471,7 +473,8 @@ fn apply_name_mapping_to_field(
         DataType::FixedSizeList(element, size) => {
             DataType::FixedSizeList(map_nested(element, LIST_FIELD_NAME)?, *size)
         }
-        // The mapping has no entry for Arrow's entries struct.
+        // The mapping has no entry for Arrow's entries struct. The shape checks are defensive,
+        // because parquet-rs builds every map as a struct of key and value.
         DataType::Map(entries, sorted) => {
             let DataType::Struct(entry_fields) = entries.data_type() else {
                 return Err(invalid_data!(
@@ -481,8 +484,9 @@ fn apply_name_mapping_to_field(
             };
             let [key, value] = &entry_fields[..] else {
                 return Err(invalid_data!(
-                    "Map field `{}` must have exactly 2 fields",
-                    field.name()
+                    "Map field `{}` must have exactly 2 fields, found {}",
+                    field.name(),
+                    entry_fields.len()
                 ));
             };
             let entry_fields = Fields::from([
@@ -495,15 +499,15 @@ fn apply_name_mapping_to_field(
                 .with_data_type(DataType::Struct(entry_fields));
             DataType::Map(Arc::new(entries), *sorted)
         }
+        // `Fields::filter_leaves` treats `ListView` and `LargeListView` as leaves, so projection
+        // cannot select their elements even with IDs.
         other => other.clone(),
     };
 
     let mut field = field.as_ref().clone().with_data_type(data_type);
-    if let Some(field_id) = mapped_field.field_id() {
-        field
-            .metadata_mut()
-            .insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
-    }
+    field
+        .metadata_mut()
+        .insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
     Ok(Arc::new(field))
 }
 
@@ -1171,7 +1175,7 @@ message schema {
     }
 
     /// Regression test for #3374: a struct in a name-mapped file reads correctly next to a
-    /// top-level column.
+    /// top-level column, and predicates resolve its fields.
     #[tokio::test]
     async fn test_read_parquet_with_name_mapping_maps_nested_fields() {
         use arrow_array::types::Int32Type;
@@ -1205,7 +1209,7 @@ message schema {
         ]));
 
         // No field IDs at any level.
-        let s = StructArray::from(vec![(
+        let s_col = StructArray::from(vec![(
             Arc::new(Field::new("a", DataType::Int32, true)),
             Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef,
         )]);
@@ -1215,7 +1219,7 @@ message schema {
                 Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
                 true,
             ),
-            ("s", Arc::new(s) as ArrayRef, true),
+            ("s", Arc::new(s_col) as ArrayRef, true),
         ])
         .unwrap();
         let tmp_dir = TempDir::new().unwrap();
@@ -1225,33 +1229,53 @@ message schema {
         writer.write(&to_write).unwrap();
         writer.close().unwrap();
 
+        let file_size = std::fs::metadata(&file_path).unwrap().len();
+        let tasks = |predicate| {
+            Box::pin(futures::stream::iter([Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(file_size)
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path.clone())
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1, 2])
+                .with_case_sensitive(false)
+                .with_name_mapping(Some(name_mapping.clone()))
+                .with_predicate(predicate)
+                .build()
+                .unwrap())])) as FileScanTaskStream
+        };
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
-        let tasks = Box::pin(futures::stream::iter([Ok(FileScanTask::builder()
-            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
-            .with_start(0)
-            .with_length(0)
-            .with_data_file_path(file_path)
-            .with_data_file_format(DataFileFormat::Parquet)
-            .with_schema(schema)
-            .with_project_field_ids(vec![1, 2])
-            .with_case_sensitive(false)
-            .with_name_mapping(Some(name_mapping))
-            .build()
-            .unwrap())])) as FileScanTaskStream;
+
         let result = reader
-            .read(tasks)
+            .clone()
+            .read(tasks(None))
             .unwrap()
             .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
-
         let s = result[0].column(1).as_struct();
         assert_eq!(s.null_count(), 0);
         assert_eq!(
             s.column(0).as_primitive::<Int32Type>(),
             &Int32Array::from(vec![10, 20, 30])
         );
+
+        // `s.a` resolves, so the row filter rejects the nested predicate as it does for files
+        // with embedded IDs, rather than matching no rows.
+        let predicate = Reference::new("s.a")
+            .greater_than(Datum::int(15))
+            .bind(schema.clone(), true)
+            .unwrap();
+        let err = reader
+            .read(tasks(Some(predicate)))
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
     /// Every nested Arrow type gets IDs, with list and map entries matched by their spec names.
@@ -1283,7 +1307,7 @@ message schema {
             field("list", DataType::List(item(DataType::Int32))),
             field("fixed", DataType::FixedSizeList(item(DataType::Int32), 2)),
             field("large", DataType::LargeList(item(DataType::Struct(x)))),
-            field("map", DataType::Map(Arc::new(entries), false)),
+            field("map", DataType::Map(Arc::new(entries), true)),
         ]));
         let entry =
             |id, name: &str, fields| MappedField::new(Some(id), vec![name.to_string()], fields);
@@ -1305,6 +1329,15 @@ message schema {
 
         let mapped = apply_name_mapping_to_arrow_schema(arrow_schema, &name_mapping).unwrap();
 
+        // The list size and the map ordering carry over.
+        assert!(matches!(
+            mapped.field(3).data_type(),
+            DataType::FixedSizeList(_, 2)
+        ));
+        assert!(matches!(
+            mapped.field(5).data_type(),
+            DataType::Map(_, true)
+        ));
         // The conversion fails on any field without an ID.
         let schema = arrow_schema_to_schema(&mapped).unwrap();
         let names: Vec<_> = (1..=13)
@@ -1325,6 +1358,39 @@ message schema {
             "map.key",
             "map.value",
         ]);
+    }
+
+    /// A field without an entry, or whose entry has no field ID, keeps no ID, and so do its
+    /// nested fields.
+    #[test]
+    fn test_apply_name_mapping_skips_unmapped_fields() {
+        use arrow_schema::Fields;
+
+        use super::{apply_name_mapping_to_arrow_schema, build_field_id_map_from_arrow_schema};
+
+        let int = |name: &str| Field::new(name, DataType::Int32, true);
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new(
+                "s",
+                DataType::Struct(Fields::from(vec![int("a"), int("b")])),
+                true,
+            ),
+            Field::new("t", DataType::Struct(Fields::from(vec![int("c")])), true),
+        ]));
+        let entry = |id, name: &str, fields| MappedField::new(id, vec![name.to_string()], fields);
+        let name_mapping = NameMapping::new(vec![
+            // No entry for `s.b`.
+            entry(Some(1), "s", vec![entry(Some(2), "a", vec![])]),
+            entry(None, "t", vec![entry(Some(3), "c", vec![])]),
+        ]);
+
+        let mapped = apply_name_mapping_to_arrow_schema(arrow_schema, &name_mapping).unwrap();
+
+        // Only `s.a`, leaf 0, resolves to an ID.
+        assert_eq!(
+            build_field_id_map_from_arrow_schema(&mapped),
+            HashMap::from([(2, 0)])
+        );
     }
 
     /// Test reading Parquet files without field IDs with partial projection.
