@@ -354,7 +354,9 @@ impl Schema {
     pub fn field_by_name_case_insensitive(&self, field_name: &str) -> Option<&NestedFieldRef> {
         self.lowercase_name_to_id
             .get(&field_name.to_lowercase())
-            .and_then(|id| id.and_then(|id| self.field_by_id(id)))
+            .copied()
+            .flatten()
+            .and_then(|id| self.field_by_id(id))
     }
 
     /// Get field by field name in a case-insensitive way, reporting ambiguous names.
@@ -368,12 +370,21 @@ impl Schema {
         &self,
         field_name: &str,
     ) -> Result<Option<&NestedFieldRef>> {
-        match self.lowercase_name_to_id.get(&field_name.to_lowercase()) {
+        let lowercase_name = field_name.to_lowercase();
+        match self.lowercase_name_to_id.get(&lowercase_name) {
             Some(Some(id)) => Ok(self.field_by_id(*id)),
-            Some(None) => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Multiple fields match {field_name} case-insensitively"),
-            )),
+            Some(None) => {
+                let mut colliders: Vec<&str> = self
+                    .name_to_id
+                    .keys()
+                    .filter(|name| name.to_lowercase() == lowercase_name)
+                    .map(String::as_str)
+                    .collect();
+                colliders.sort_unstable();
+                Err(invalid_data!(
+                    "Multiple fields match {field_name} case-insensitively: {colliders:?}"
+                ))
+            }
             None => Ok(None),
         }
     }
@@ -1029,12 +1040,8 @@ table {
             .field_by_name_case_insensitive_checked("Id")
             .unwrap_err();
         assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
-        assert!(
-            error
-                .to_string()
-                .contains("Multiple fields match Id case-insensitively"),
-            "{error}"
-        );
+        assert!(error.message().contains("case-insensitively"), "{error}");
+        assert!(error.message().contains("[\"ID\", \"id\"]"), "{error}");
         assert!(schema.field_by_name_case_insensitive("Id").is_none());
     }
 

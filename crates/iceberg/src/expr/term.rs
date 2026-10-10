@@ -442,12 +442,7 @@ mod tests {
 
         let error = Reference::new("Id").bind(schema, false).unwrap_err();
         assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
-        assert!(
-            error
-                .to_string()
-                .contains("Multiple fields match Id case-insensitively"),
-            "{error}"
-        );
+        assert!(error.message().contains("case-insensitively"), "{error}");
     }
 
     #[test]

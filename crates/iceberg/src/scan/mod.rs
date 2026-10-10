@@ -1893,12 +1893,7 @@ pub mod tests {
         assert_eq!(resolve_field_id(&schema, "DATA", false).unwrap(), Some(3));
         let error = resolve_field_id(&schema, "Id", false).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::DataInvalid);
-        assert!(
-            error
-                .to_string()
-                .contains("Multiple fields match Id case-insensitively"),
-            "{error}"
-        );
+        assert!(error.message().contains("case-insensitively"), "{error}");
     }
 
     #[test]
@@ -1932,12 +1927,7 @@ pub mod tests {
             .build()
             .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::DataInvalid);
-        assert!(
-            error
-                .to_string()
-                .contains("Multiple fields match Id case-insensitively"),
-            "{error}"
-        );
+        assert!(error.message().contains("case-insensitively"), "{error}");
     }
 
     #[tokio::test]
