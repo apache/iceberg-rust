@@ -50,6 +50,11 @@ use crate::{Error, ErrorKind, Result};
 /// entries in no particular order, and a metric map with no entries is empty
 /// rather than null.
 ///
+/// Entries are converted as they are in `manifest`. Fields that readers
+/// inherit from the manifest list, such as `snapshot_id` and
+/// `sequence_number`, stay null in a manifest from [`Manifest::parse_avro`].
+/// [`ManifestReader::read`](crate::spec::ManifestReader::read) fills them in.
+///
 /// # Example
 ///
 /// ```
@@ -510,6 +515,8 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use apache_avro::Reader as AvroReader;
+    use apache_avro::types::Value as AvroValue;
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Int32Type, Int64Type};
     use arrow_array::{
@@ -1158,5 +1165,123 @@ mod tests {
         )]);
         let err = manifest_to_record_batch(&manifest).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[test]
+    fn test_every_format_version_has_the_same_schema() {
+        let schemas: Vec<_> = [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3]
+            .into_iter()
+            .map(|format_version| {
+                let manifest = Manifest::new(
+                    ManifestMetadata {
+                        format_version,
+                        ..manifest(partition_spec(&[("i", Transform::Identity)]), vec![])
+                            .metadata()
+                            .clone()
+                    },
+                    vec![],
+                );
+                manifest_to_record_batch(&manifest).unwrap().schema()
+            })
+            .collect();
+        assert_eq!(schemas[0], schemas[1]);
+        assert_eq!(schemas[1], schemas[2]);
+    }
+
+    #[test]
+    fn test_count_beyond_long_range_is_an_error() {
+        let file = DataFile {
+            column_sizes: HashMap::from([(1, u64::MAX)]),
+            ..data_file(DataContentType::Data, "s3://b/data/0.parquet")
+                .build()
+                .unwrap()
+        };
+        let manifest = manifest(partition_spec(&[]), vec![entry(
+            ManifestStatus::Added,
+            file,
+        )]);
+        let err = manifest_to_record_batch(&manifest).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    /// `(key, value)` pairs of the map field `name` of an Avro `data_file`
+    /// record, sorted by key.
+    fn avro_map<T: Ord>(
+        data_file: &[(String, AvroValue)],
+        name: &str,
+        value: impl Fn(&AvroValue) -> T,
+    ) -> Vec<(i32, T)> {
+        let (_, AvroValue::Union(_, map)) =
+            data_file.iter().find(|(field, _)| field == name).unwrap()
+        else {
+            panic!("{name} is not a union");
+        };
+        let AvroValue::Array(pairs) = map.as_ref() else {
+            panic!("{name} is not an array");
+        };
+        let mut pairs: Vec<_> = pairs
+            .iter()
+            .map(|pair| {
+                let AvroValue::Record(pair) = pair else {
+                    panic!("{name} entry is not a record");
+                };
+                let AvroValue::Int(key) = pair[0].1 else {
+                    panic!("{name} key is not an int");
+                };
+                (key, value(&pair[1].1))
+            })
+            .collect();
+        pairs.sort_unstable();
+        pairs
+    }
+
+    #[test]
+    fn test_manifest_written_by_pyiceberg() {
+        let bs = std::fs::read(format!(
+            "{}/testdata/manifests/pyiceberg-v2-data.avro",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let batch = manifest_to_record_batch(&Manifest::parse_avro(&bs).unwrap()).unwrap();
+
+        let records: Vec<_> = AvroReader::new(bs.as_slice())
+            .unwrap()
+            .map(|record| match record.unwrap() {
+                AvroValue::Record(fields) => fields,
+                _ => panic!("manifest entry is not a record"),
+            })
+            .collect();
+        assert_eq!(batch.num_rows(), records.len());
+        for (row, record) in records.iter().enumerate() {
+            let Some((_, AvroValue::Record(data_file))) =
+                record.iter().find(|(name, _)| name == "data_file")
+            else {
+                panic!("data_file is not a record");
+            };
+            let long = |value: &AvroValue| match value {
+                AvroValue::Long(v) => *v,
+                _ => panic!("map value is not a long"),
+            };
+            let bytes = |value: &AvroValue| match value {
+                AvroValue::Bytes(v) => v.clone(),
+                _ => panic!("map value is not bytes"),
+            };
+            for name in ["column_sizes", "value_counts", "null_value_counts"] {
+                assert_eq!(
+                    long_map(&data_file_column(&batch, name), row),
+                    avro_map(data_file, name, long),
+                    "{name}"
+                );
+            }
+            for name in ["lower_bounds", "upper_bounds"] {
+                let expected = avro_map(data_file, name, bytes);
+                assert!(!expected.is_empty(), "{name}");
+                assert_eq!(
+                    binary_map(&data_file_column(&batch, name), row),
+                    expected,
+                    "{name}"
+                );
+            }
+        }
     }
 }
