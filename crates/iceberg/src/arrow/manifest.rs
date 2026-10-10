@@ -29,7 +29,7 @@ use arrow_array::{
     Float64Array, Int32Array, Int64Array, LargeBinaryArray, NullArray, RecordBatch, StringArray,
     StructArray, Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
 };
-use arrow_schema::{DataType, Field, FieldRef, Fields};
+use arrow_schema::{DataType, Field, FieldRef};
 
 use crate::arrow::{UTC_TIME_ZONE, schema_to_arrow_schema};
 use crate::error::invalid_data;
@@ -111,13 +111,11 @@ pub fn manifest_to_record_batch(manifest: &Manifest) -> Result<RecordBatch> {
             .with_fields(manifest_entry_fields(&partition_type))
             .build()?,
     )?);
-    let data_file_fields = struct_fields(schema.field_with_name("data_file")?)?;
-    let child = |name: &str| -> Result<&FieldRef> {
-        data_file_fields
-            .find(name)
-            .map(|(_, field)| field)
-            .ok_or_else(|| Error::new(ErrorKind::Unexpected, format!("no data_file field {name}")))
+    let DataType::Struct(data_file_fields) = schema.field_with_name("data_file")?.data_type()
+    else {
+        unreachable!()
     };
+    let child = |name: &str| data_file_fields.find(name).unwrap().1;
 
     let entries = manifest.entries();
     let len = entries.len();
@@ -130,17 +128,17 @@ pub fn manifest_to_record_batch(manifest: &Manifest) -> Result<RecordBatch> {
     let mut file_format = StringBuilder::new();
     let mut record_count = Int64Builder::with_capacity(len);
     let mut file_size_in_bytes = Int64Builder::with_capacity(len);
-    let mut column_sizes = map_builder(child("column_sizes")?, Int64Builder::new())?;
-    let mut value_counts = map_builder(child("value_counts")?, Int64Builder::new())?;
-    let mut null_value_counts = map_builder(child("null_value_counts")?, Int64Builder::new())?;
-    let mut nan_value_counts = map_builder(child("nan_value_counts")?, Int64Builder::new())?;
-    let mut lower_bounds = map_builder(child("lower_bounds")?, LargeBinaryBuilder::new())?;
-    let mut upper_bounds = map_builder(child("upper_bounds")?, LargeBinaryBuilder::new())?;
+    let mut column_sizes = map_builder(child("column_sizes"), Int64Builder::new());
+    let mut value_counts = map_builder(child("value_counts"), Int64Builder::new());
+    let mut null_value_counts = map_builder(child("null_value_counts"), Int64Builder::new());
+    let mut nan_value_counts = map_builder(child("nan_value_counts"), Int64Builder::new());
+    let mut lower_bounds = map_builder(child("lower_bounds"), LargeBinaryBuilder::new());
+    let mut upper_bounds = map_builder(child("upper_bounds"), LargeBinaryBuilder::new());
     let mut key_metadata = LargeBinaryBuilder::new();
     let mut split_offsets =
-        ListBuilder::new(Int64Builder::new()).with_field(list_element(child("split_offsets")?)?);
+        ListBuilder::new(Int64Builder::new()).with_field(list_element(child("split_offsets")));
     let mut equality_ids =
-        ListBuilder::new(Int32Builder::new()).with_field(list_element(child("equality_ids")?)?);
+        ListBuilder::new(Int32Builder::new()).with_field(list_element(child("equality_ids")));
     let mut sort_order_id = Int32Builder::with_capacity(len);
     let mut first_row_id = Int64Builder::with_capacity(len);
     let mut referenced_data_file = StringBuilder::new();
@@ -193,7 +191,7 @@ pub fn manifest_to_record_batch(manifest: &Manifest) -> Result<RecordBatch> {
         content_size_in_bytes.append_option(data_file.content_size_in_bytes);
     }
 
-    let partition = partition_column(entries, &partition_type, child("partition")?)?;
+    let partition = partition_column(entries, &partition_type, child("partition"))?;
     let data_file = StructArray::try_new(
         data_file_fields.clone(),
         vec![
@@ -230,49 +228,31 @@ pub fn manifest_to_record_batch(manifest: &Manifest) -> Result<RecordBatch> {
     ])?)
 }
 
-fn struct_fields(field: &Field) -> Result<&Fields> {
-    match field.data_type() {
-        DataType::Struct(fields) => Ok(fields),
-        data_type => Err(Error::new(
-            ErrorKind::Unexpected,
-            format!("field {} is {data_type}, not a struct", field.name()),
-        )),
-    }
-}
-
-fn list_element(field: &Field) -> Result<FieldRef> {
-    match field.data_type() {
-        DataType::List(element) => Ok(element.clone()),
-        data_type => Err(Error::new(
-            ErrorKind::Unexpected,
-            format!("field {} is {data_type}, not a list", field.name()),
-        )),
-    }
+fn list_element(field: &Field) -> FieldRef {
+    let DataType::List(element) = field.data_type() else {
+        unreachable!()
+    };
+    element.clone()
 }
 
 /// Creates a builder for the `map<int, ...>` column `field` that produces the
 /// key and value fields of its schema, including their field IDs.
-fn map_builder<V: ArrayBuilder>(field: &Field, values: V) -> Result<MapBuilder<Int32Builder, V>> {
+fn map_builder<V: ArrayBuilder>(field: &Field, values: V) -> MapBuilder<Int32Builder, V> {
     let DataType::Map(entries, _) = field.data_type() else {
-        return Err(Error::new(
-            ErrorKind::Unexpected,
-            format!("field {} is {}, not a map", field.name(), field.data_type()),
-        ));
+        unreachable!()
     };
-    let [key, value] = &struct_fields(entries)?[..] else {
-        return Err(Error::new(
-            ErrorKind::Unexpected,
-            format!("map {} doesn't have two entry fields", field.name()),
-        ));
+    let DataType::Struct(key_value) = entries.data_type() else {
+        unreachable!()
     };
+    let (key, value) = (&key_value[0], &key_value[1]);
     let names = MapFieldNames {
         entry: entries.name().clone(),
         key: key.name().clone(),
         value: value.name().clone(),
     };
-    Ok(MapBuilder::new(Some(names), Int32Builder::new(), values)
+    MapBuilder::new(Some(names), Int32Builder::new(), values)
         .with_keys_field(key.clone())
-        .with_values_field(value.clone()))
+        .with_values_field(value.clone())
 }
 
 fn append_counts(
@@ -315,7 +295,9 @@ fn partition_column(
         ));
     }
 
-    let fields = struct_fields(field)?;
+    let DataType::Struct(fields) = field.data_type() else {
+        unreachable!()
+    };
     if fields.is_empty() {
         return Ok(Arc::new(StructArray::new_empty_fields(entries.len(), None)));
     }
@@ -448,10 +430,7 @@ fn partition_array(
             )?),
             PrimitiveType::Decimal { .. } => {
                 let DataType::Decimal128(precision, scale) = *data_type else {
-                    return Err(Error::new(
-                        ErrorKind::Unexpected,
-                        format!("decimal partition field {} is {data_type}", field.name),
-                    ));
+                    unreachable!()
                 };
                 Arc::new(
                     collect::<_, Decimal128Array>(field, values, |literal| match literal {
