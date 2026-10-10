@@ -15,16 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, stream};
 
 use super::storage::{
     LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageFactory,
 };
-use crate::Result;
+use crate::{Error, ErrorKind, Result};
 
 /// FileIO implementation, used to manipulate files in underlying storage.
 ///
@@ -59,7 +60,7 @@ use crate::Result;
 ///     .with_prop("key", "value")
 ///     .build();
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct FileIO {
     /// Storage configuration containing properties
     config: StorageConfig,
@@ -67,6 +68,37 @@ pub struct FileIO {
     factory: Arc<dyn StorageFactory>,
     /// Cached storage instance (lazily initialized)
     storage: Arc<OnceLock<Arc<dyn Storage>>>,
+    /// Per-prefix storages, longest prefix first. Paths matching none use
+    /// `storage`.
+    prefixed: Arc<Vec<PrefixedStorage>>,
+}
+
+/// A storage scoped to a location `prefix`, lazily built from its own config.
+struct PrefixedStorage {
+    prefix: String,
+    config: StorageConfig,
+    storage: OnceLock<Arc<dyn Storage>>,
+}
+
+// Neither cached storage is shown: a backend's Debug may print raw
+// credentials.
+impl std::fmt::Debug for FileIO {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileIO")
+            .field("config", &self.config)
+            .field("factory", &self.factory)
+            .field("prefixed", &self.prefixed)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for PrefixedStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrefixedStorage")
+            .field("prefix", &self.prefix)
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
 }
 
 mod _serde {
@@ -80,12 +112,28 @@ mod _serde {
     pub(super) struct SerializableFileIO<'a> {
         pub(super) config: &'a StorageConfig,
         pub(super) factory: &'a Arc<dyn StorageFactory>,
+        /// Per-prefix credentials, so a deserialized FileIO reads the same data.
+        pub(super) prefixed: Vec<SerializablePrefixed<'a>>,
+    }
+
+    #[derive(Serialize)]
+    pub(super) struct SerializablePrefixed<'a> {
+        pub(super) prefix: &'a str,
+        pub(super) config: &'a StorageConfig,
     }
 
     #[derive(Deserialize)]
     pub(super) struct DeserializedFileIO {
         pub(super) config: StorageConfig,
         pub(super) factory: Arc<dyn StorageFactory>,
+        #[serde(default)]
+        pub(super) prefixed: Vec<DeserializedPrefixed>,
+    }
+
+    #[derive(Deserialize)]
+    pub(super) struct DeserializedPrefixed {
+        pub(super) prefix: String,
+        pub(super) config: StorageConfig,
     }
 }
 
@@ -98,6 +146,7 @@ impl FileIO {
             config: StorageConfig::new(),
             factory: Arc::new(MemoryStorageFactory),
             storage: Arc::new(OnceLock::new()),
+            prefixed: Arc::new(Vec::new()),
         }
     }
 
@@ -109,6 +158,7 @@ impl FileIO {
             config: StorageConfig::new(),
             factory: Arc::new(LocalFsStorageFactory),
             storage: Arc::new(OnceLock::new()),
+            prefixed: Arc::new(Vec::new()),
         }
     }
 
@@ -131,6 +181,14 @@ impl FileIO {
         Ok(serde_json::to_vec(&_serde::SerializableFileIO {
             config: &self.config,
             factory: &self.factory,
+            prefixed: self
+                .prefixed
+                .iter()
+                .map(|p| _serde::SerializablePrefixed {
+                    prefix: &p.prefix,
+                    config: &p.config,
+                })
+                .collect(),
         })?)
     }
 
@@ -140,11 +198,25 @@ impl FileIO {
     /// implementation so it is registered with `typetag`. Backend-specific requirements are
     /// documented by each storage factory implementation.
     pub fn deserialize_all(bytes: &[u8]) -> Result<Self> {
-        let _serde::DeserializedFileIO { config, factory } = serde_json::from_slice(bytes)?;
+        let _serde::DeserializedFileIO {
+            config,
+            factory,
+            prefixed,
+        } = serde_json::from_slice(bytes)?;
+        // `serialize_all` kept the longest-first order.
+        let prefixed = prefixed
+            .into_iter()
+            .map(|p| PrefixedStorage {
+                prefix: p.prefix,
+                config: p.config,
+                storage: OnceLock::new(),
+            })
+            .collect();
         Ok(Self {
             config,
             factory,
             storage: Arc::new(OnceLock::new()),
+            prefixed: Arc::new(prefixed),
         })
     }
 
@@ -153,24 +225,57 @@ impl FileIO {
         &self.config
     }
 
-    /// Get or create the storage instance.
+    /// Whether `other` would route and authenticate identically. Used to keep
+    /// an initialized backend when a reload brought back the same settings.
+    pub(crate) fn same_routing_as(&self, other: &FileIO) -> bool {
+        self.config == other.config
+            && self.prefixed.len() == other.prefixed.len()
+            && self
+                .prefixed
+                .iter()
+                .zip(other.prefixed.iter())
+                .all(|(a, b)| a.prefix == b.prefix && a.config == b.config)
+    }
+
+    /// The configuration `path` routes to: the longest matching prefix's,
+    /// else the default.
+    pub fn config_for(&self, path: &str) -> &StorageConfig {
+        self.route(path).1
+    }
+
+    /// The storage for `path`, built on first use.
+    fn get_storage(&self, path: &str) -> Result<Arc<dyn Storage>> {
+        let (cell, config) = self.route(path);
+        Self::get_or_build(cell, &self.factory, config)
+    }
+
+    /// The storage cell and configuration serving `path`: the first, so
+    /// longest, matching prefix, else the default.
     ///
-    /// The factory is invoked on first access and the result is cached
-    /// for all subsequent operations.
-    fn get_storage(&self) -> Result<Arc<dyn Storage>> {
-        // Check if already initialized
-        if let Some(storage) = self.storage.get() {
+    /// Matching is on the raw string, so `s3://bucket/data` also serves
+    /// `s3://bucket/database/`, as in Java's `S3FileIO.clientForStoragePath`.
+    fn route(&self, path: &str) -> (&OnceLock<Arc<dyn Storage>>, &StorageConfig) {
+        for ps in self.prefixed.iter() {
+            if path.starts_with(&ps.prefix) {
+                return (&ps.storage, &ps.config);
+            }
+        }
+        (&self.storage, &self.config)
+    }
+
+    /// Get a cached storage from `cell`, building it from `config` on first use.
+    fn get_or_build(
+        cell: &OnceLock<Arc<dyn Storage>>,
+        factory: &Arc<dyn StorageFactory>,
+        config: &StorageConfig,
+    ) -> Result<Arc<dyn Storage>> {
+        if let Some(storage) = cell.get() {
             return Ok(storage.clone());
         }
-
-        // Build the storage
-        let storage = self.factory.build(&self.config)?;
-
-        // Try to set it (another thread might have set it first)
-        let _ = self.storage.set(storage.clone());
-
-        // Return whatever is in the cell (either ours or another thread's)
-        Ok(self.storage.get().unwrap().clone())
+        let storage = factory.build(config)?;
+        // Another thread might have set it first; keep whatever ends up in the cell.
+        let _ = cell.set(storage);
+        Ok(cell.get().unwrap().clone())
     }
 
     /// Deletes file.
@@ -179,7 +284,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn delete(&self, path: impl AsRef<str>) -> Result<()> {
-        self.get_storage()?.delete(path.as_ref()).await
+        self.get_storage(path.as_ref())?.delete(path.as_ref()).await
     }
 
     /// Remove the path and all nested dirs and files recursively.
@@ -193,8 +298,46 @@ impl FileIO {
     /// - If the path is a file or not exist, this function will be no-op.
     /// - If the path is a empty directory, this function will remove the directory itself.
     /// - If the path is a non-empty directory, this function will remove the directory and all nested files and directories.
+    /// - Files routed to a deeper per-prefix storage are deleted through it, within its own prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::FeatureUnsupported`], before deleting anything, if a per-prefix
+    /// storage beneath the path has a prefix not ending in `/`, which cannot be deleted as a
+    /// directory.
     pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()> {
-        self.get_storage()?.delete_prefix(path.as_ref()).await
+        let path = path.as_ref();
+        let dir = if path.ends_with('/') {
+            path.to_string()
+        } else {
+            format!("{path}/")
+        };
+        // Credentials scoped to a prefix may not reach beyond it.
+        let nested: Vec<&PrefixedStorage> = self
+            .prefixed
+            .iter()
+            .filter(|ps| ps.prefix.len() > dir.len() && ps.prefix.starts_with(&dir))
+            .collect();
+        if let Some(ps) = nested.iter().find(|ps| !ps.prefix.ends_with('/')) {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "cannot delete `{path}` recursively: the credential prefix `{}` beneath it \
+                     is not a directory",
+                    ps.prefix
+                ),
+            ));
+        }
+        for ps in nested {
+            Self::get_or_build(&ps.storage, &self.factory, &ps.config)?
+                .delete_prefix(&ps.prefix)
+                .await?;
+        }
+        // Route by the directory, so `table` and `table/` reach the same storage.
+        let (cell, config) = self.route(&dir);
+        Self::get_or_build(cell, &self.factory, config)?
+            .delete_prefix(path)
+            .await
     }
 
     /// Delete multiple files from a stream of paths.
@@ -206,7 +349,40 @@ impl FileIO {
         &self,
         paths: impl Stream<Item = String> + Send + 'static,
     ) -> Result<()> {
-        self.get_storage()?.delete_stream(paths.boxed()).await
+        if self.prefixed.is_empty() {
+            return self.get_storage("")?.delete_stream(paths.boxed()).await;
+        }
+
+        // Flush bounded batches per prefix, as Java's `S3FileIO.deleteFiles` does.
+        const DELETE_BATCH_SIZE: usize = 1000;
+        let mut groups: HashMap<String, Vec<String>> = HashMap::new();
+        let mut paths = paths.boxed();
+        while let Some(path) = paths.next().await {
+            let key = self
+                .prefixed
+                .iter()
+                .find(|ps| path.starts_with(&ps.prefix))
+                .map(|ps| ps.prefix.clone())
+                .unwrap_or_default();
+            let buf = groups.entry(key).or_default();
+            buf.push(path);
+            if buf.len() >= DELETE_BATCH_SIZE {
+                let full = std::mem::take(buf);
+                self.get_storage(&full[0])?
+                    .delete_stream(stream::iter(full).boxed())
+                    .await?;
+            }
+        }
+
+        for batch in groups.into_values() {
+            if batch.is_empty() {
+                continue;
+            }
+            self.get_storage(&batch[0])?
+                .delete_stream(stream::iter(batch).boxed())
+                .await?;
+        }
+        Ok(())
     }
 
     /// Check file exists.
@@ -215,7 +391,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn exists(&self, path: impl AsRef<str>) -> Result<bool> {
-        self.get_storage()?.exists(path.as_ref()).await
+        self.get_storage(path.as_ref())?.exists(path.as_ref()).await
     }
 
     /// Creates input file.
@@ -224,7 +400,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_input(&self, path: impl AsRef<str>) -> Result<InputFile> {
-        self.get_storage()?.new_input(path.as_ref())
+        self.get_storage(path.as_ref())?.new_input(path.as_ref())
     }
 
     /// Creates output file.
@@ -233,7 +409,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile> {
-        self.get_storage()?.new_output(path.as_ref())
+        self.get_storage(path.as_ref())?.new_output(path.as_ref())
     }
 }
 
@@ -247,6 +423,8 @@ pub struct FileIOBuilder {
     factory: Arc<dyn StorageFactory>,
     /// Storage configuration
     config: StorageConfig,
+    /// Per-location-prefix configs (prefix, config).
+    prefixed: Vec<(String, StorageConfig)>,
 }
 
 impl FileIOBuilder {
@@ -255,6 +433,7 @@ impl FileIOBuilder {
         Self {
             factory,
             config: StorageConfig::new(),
+            prefixed: Vec::new(),
         }
     }
 
@@ -275,6 +454,23 @@ impl FileIOBuilder {
         self
     }
 
+    /// Add a per-prefix storage config. Paths starting with `prefix` (longest
+    /// match wins) use these props instead of the default config.
+    pub fn with_prefixed_props(
+        mut self,
+        prefix: impl Into<String>,
+        props: impl IntoIterator<Item = (impl ToString, impl ToString)>,
+    ) -> Self {
+        let config = StorageConfig::from_props(
+            props
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        );
+        self.prefixed.push((prefix.into(), config));
+        self
+    }
+
     /// Get the storage configuration.
     pub fn config(&self) -> &StorageConfig {
         &self.config
@@ -282,10 +478,22 @@ impl FileIOBuilder {
 
     /// Builds [`FileIO`].
     pub fn build(self) -> FileIO {
+        let mut prefixed: Vec<PrefixedStorage> = self
+            .prefixed
+            .into_iter()
+            .map(|(prefix, config)| PrefixedStorage {
+                prefix,
+                config,
+                storage: OnceLock::new(),
+            })
+            .collect();
+        // Longest prefix first so routing picks the most specific match.
+        prefixed.sort_by_key(|item| std::cmp::Reverse(item.prefix.len()));
         FileIO {
             config: self.config,
             factory: self.factory,
             storage: Arc::new(OnceLock::new()),
+            prefixed: Arc::new(prefixed),
         }
     }
 }
@@ -450,10 +658,17 @@ mod tests {
     use bytes::Bytes;
     use futures::AsyncReadExt;
     use futures::io::AllowStdIo;
+    use futures::stream::BoxStream;
+    use serde::{Deserialize, Serialize};
     use tempfile::TempDir;
 
-    use super::{FileIO, FileIOBuilder};
-    use crate::io::{LocalFsStorageFactory, MemoryStorageFactory};
+    use super::{
+        FileIO, FileIOBuilder, InputFile, OutputFile, Storage, StorageConfig, StorageFactory,
+    };
+    use crate::io::{
+        FileMetadata, FileRead, FileWrite, LocalFsStorageFactory, MemoryStorageFactory,
+    };
+    use crate::{ErrorKind, Result};
 
     fn create_local_file_io() -> FileIO {
         FileIO::new_with_fs()
@@ -647,6 +862,256 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_prefixed_credentials_survive_serialization_roundtrip() {
+        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+            .with_prop("s3.access-key-id", "default-key")
+            .with_prefixed_props("memory://warehouse/t", [("s3.access-key-id", "vended-key")])
+            .build();
+
+        let deserialized = FileIO::deserialize_all(&file_io.serialize_all().unwrap()).unwrap();
+
+        assert_eq!(
+            deserialized
+                .config_for("memory://warehouse/t/data/f.parquet")
+                .get("s3.access-key-id"),
+            Some(&"vended-key".to_string())
+        );
+        assert_eq!(
+            deserialized
+                .config_for("memory://elsewhere/f.parquet")
+                .get("s3.access-key-id"),
+            Some(&"default-key".to_string())
+        );
+    }
+
+    /// Stands in for a backend whose Debug prints its raw props.
+    #[derive(Serialize, Deserialize)]
+    struct LeakyStorage(String);
+
+    impl std::fmt::Debug for LeakyStorage {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "LeakyStorage {{ secret: {} }}", self.0)
+        }
+    }
+
+    #[typetag::serde]
+    #[async_trait::async_trait]
+    impl Storage for LeakyStorage {
+        async fn exists(&self, _: &str) -> Result<bool> {
+            Ok(false)
+        }
+        async fn metadata(&self, _: &str) -> Result<FileMetadata> {
+            unimplemented!()
+        }
+        async fn read(&self, _: &str) -> Result<Bytes> {
+            unimplemented!()
+        }
+        async fn reader(&self, _: &str) -> Result<Box<dyn FileRead>> {
+            unimplemented!()
+        }
+        async fn write(&self, _: &str, _: Bytes) -> Result<()> {
+            unimplemented!()
+        }
+        async fn writer(&self, _: &str) -> Result<Box<dyn FileWrite>> {
+            unimplemented!()
+        }
+        async fn delete(&self, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn delete_prefix(&self, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn delete_stream(&self, _: BoxStream<'static, String>) -> Result<()> {
+            unimplemented!()
+        }
+        fn new_input(&self, _: &str) -> Result<InputFile> {
+            unimplemented!()
+        }
+        fn new_output(&self, _: &str) -> Result<OutputFile> {
+            unimplemented!()
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct LeakyFactory;
+
+    #[typetag::serde]
+    impl StorageFactory for LeakyFactory {
+        fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+            let secret = config
+                .get("s3.secret-access-key")
+                .cloned()
+                .unwrap_or_default();
+            Ok(Arc::new(LeakyStorage(secret)))
+        }
+    }
+
+    type DeleteLog = Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+    /// Records the `delete_prefix` calls of every storage it builds, tagged
+    /// with the storage's `scope` property.
+    #[derive(Debug, Default, Serialize, Deserialize)]
+    struct RecordingFactory(#[serde(skip)] DeleteLog);
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct RecordingStorage {
+        scope: String,
+        #[serde(skip)]
+        calls: DeleteLog,
+    }
+
+    #[typetag::serde]
+    #[async_trait::async_trait]
+    impl Storage for RecordingStorage {
+        async fn exists(&self, _: &str) -> Result<bool> {
+            unimplemented!()
+        }
+        async fn metadata(&self, _: &str) -> Result<FileMetadata> {
+            unimplemented!()
+        }
+        async fn read(&self, _: &str) -> Result<Bytes> {
+            unimplemented!()
+        }
+        async fn reader(&self, _: &str) -> Result<Box<dyn FileRead>> {
+            unimplemented!()
+        }
+        async fn write(&self, _: &str, _: Bytes) -> Result<()> {
+            unimplemented!()
+        }
+        async fn writer(&self, _: &str) -> Result<Box<dyn FileWrite>> {
+            unimplemented!()
+        }
+        async fn delete(&self, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn delete_prefix(&self, path: &str) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((self.scope.clone(), path.to_string()));
+            Ok(())
+        }
+        async fn delete_stream(&self, _: BoxStream<'static, String>) -> Result<()> {
+            unimplemented!()
+        }
+        fn new_input(&self, _: &str) -> Result<InputFile> {
+            unimplemented!()
+        }
+        fn new_output(&self, _: &str) -> Result<OutputFile> {
+            unimplemented!()
+        }
+    }
+
+    #[typetag::serde]
+    impl StorageFactory for RecordingFactory {
+        fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+            Ok(Arc::new(RecordingStorage {
+                scope: config.get("scope").cloned().unwrap_or_default(),
+                calls: self.0.clone(),
+            }))
+        }
+    }
+
+    /// A FileIO over a [`RecordingFactory`] with `prefixes` as (prefix, scope),
+    /// and the log its storages record into.
+    fn recording_file_io(prefixes: &[(&str, &str)]) -> (FileIO, DeleteLog) {
+        let factory = RecordingFactory::default();
+        let calls = factory.0.clone();
+        let mut builder = FileIOBuilder::new(Arc::new(factory)).with_prop("scope", "default");
+        for (prefix, scope) in prefixes {
+            builder = builder.with_prefixed_props(*prefix, [("scope", *scope)]);
+        }
+        (builder.build(), calls)
+    }
+
+    fn recorded(calls: &[(&str, &str)]) -> Vec<(String, String)> {
+        calls
+            .iter()
+            .map(|(scope, path)| (scope.to_string(), path.to_string()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_delete_prefix_keeps_each_storage_within_its_prefix() {
+        let (file_io, calls) = recording_file_io(&[
+            ("s3://bucket/table/data/", "data"),
+            ("s3://bucket/table/metadata/", "metadata"),
+        ]);
+
+        file_io.delete_prefix("s3://bucket/table/").await.unwrap();
+
+        assert_eq!(
+            *calls.lock().unwrap(),
+            recorded(&[
+                ("metadata", "s3://bucket/table/metadata/"),
+                ("data", "s3://bucket/table/data/"),
+                ("default", "s3://bucket/table/"),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_prefix_routes_a_directory_with_or_without_its_slash() {
+        for path in ["s3://bucket/table", "s3://bucket/table/"] {
+            let (file_io, calls) = recording_file_io(&[("s3://bucket/table/", "vended")]);
+
+            file_io.delete_prefix(path).await.unwrap();
+
+            assert_eq!(*calls.lock().unwrap(), recorded(&[("vended", path)]));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_prefix_rejects_a_nested_raw_prefix() {
+        let (file_io, calls) = recording_file_io(&[
+            ("s3://bucket/table/data/", "data"),
+            ("s3://bucket/table/meta", "meta"),
+        ]);
+
+        let err = file_io
+            .delete_prefix("s3://bucket/table/")
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(err.message().contains("s3://bucket/table/meta"), "{err}");
+        assert!(calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_debug_omits_initialized_storages() {
+        let file_io = FileIOBuilder::new(Arc::new(LeakyFactory))
+            .with_prop("s3.secret-access-key", "DEFAULT-SECRET")
+            .with_prefixed_props("memory://warehouse/t", [(
+                "s3.secret-access-key",
+                "VENDED-SECRET",
+            )])
+            .build();
+        file_io.exists("memory://elsewhere/f").await.unwrap();
+        file_io.exists("memory://warehouse/t/f").await.unwrap();
+
+        let debug = format!("{file_io:?}");
+        assert!(!debug.contains("VENDED-SECRET"), "{debug}");
+        assert!(!debug.contains("DEFAULT-SECRET"), "{debug}");
+        assert!(debug.contains("memory://warehouse/t"), "{debug}");
+        assert!(debug.contains("s3.secret-access-key"), "{debug}");
+    }
+
+    #[tokio::test]
+    async fn test_overlapping_prefixes_survive_serialization_roundtrip() {
+        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+            .with_prefixed_props("memory://w/t", [("s3.access-key-id", "outer")])
+            .with_prefixed_props("memory://w/t/nested", [("s3.access-key-id", "inner")])
+            .build();
+
+        let deserialized = FileIO::deserialize_all(&file_io.serialize_all().unwrap()).unwrap();
+
+        let key = |p: &str| deserialized.config_for(p).get("s3.access-key-id").cloned();
+        assert_eq!(key("memory://w/t/nested/f"), Some("inner".to_string()));
+        assert_eq!(key("memory://w/t/other/f"), Some("outer".to_string()));
+    }
+
+    #[tokio::test]
     async fn test_local_fs_file_io_serialization_roundtrip() {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("roundtrip.txt");
@@ -676,5 +1141,185 @@ mod tests {
             Bytes::from("roundtrip")
         );
         assert!(deserialized.storage.get().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_routes_a_path_to_its_longest_matching_prefix() {
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prefixed_props("memory://bucket/data", [("k", "short")])
+            .with_prefixed_props("memory://bucket/data/warehouse", [("k", "long")])
+            .build();
+
+        let long = file_io
+            .get_storage("memory://bucket/data/warehouse/t/f")
+            .unwrap();
+        let short = file_io.get_storage("memory://bucket/data/other/f").unwrap();
+        let default = file_io.get_storage("memory://elsewhere/f").unwrap();
+
+        assert!(!Arc::ptr_eq(&long, &short));
+        assert!(!Arc::ptr_eq(&short, &default));
+        assert!(!Arc::ptr_eq(&long, &default));
+        assert!(Arc::ptr_eq(
+            &long,
+            &file_io
+                .get_storage("memory://bucket/data/warehouse/other")
+                .unwrap()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_prefixed_props_sorted_by_descending_prefix_length() {
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prefixed_props("memory://a/", [("k", "short")])
+            .with_prefixed_props("memory://a/longer/", [("k", "long")])
+            .build();
+
+        let prefixes: Vec<&str> = file_io.prefixed.iter().map(|p| p.prefix.as_str()).collect();
+        assert_eq!(prefixes, vec!["memory://a/longer/", "memory://a/"]);
+    }
+
+    #[tokio::test]
+    async fn test_prefixed_config_carries_credential_values() {
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prop("s3.region", "us-east-1")
+            .with_prefixed_props("s3://bucket/table", [
+                ("s3.region", "us-east-1"),
+                ("s3.access-key-id", "vended-key"),
+                ("s3.secret-access-key", "vended-secret"),
+            ])
+            .build();
+
+        assert_eq!(
+            file_io.config().get("s3.region"),
+            Some(&"us-east-1".to_string())
+        );
+        assert_eq!(file_io.config().get("s3.access-key-id"), None);
+
+        let prefixed = &file_io.prefixed[0].config;
+        assert_eq!(prefixed.get("s3.region"), Some(&"us-east-1".to_string()));
+        assert_eq!(
+            prefixed.get("s3.access-key-id"),
+            Some(&"vended-key".to_string())
+        );
+        assert_eq!(
+            prefixed.get("s3.secret-access-key"),
+            Some(&"vended-secret".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_storage_routes_by_prefix() {
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prop("scope", "default")
+            .with_prefixed_props("memory://creds/", [("scope", "prefixed")])
+            .build();
+
+        let default_a = file_io.get_storage("memory://other/x").unwrap();
+        let default_b = file_io.get_storage("memory://other/y").unwrap();
+        let prefixed_a = file_io.get_storage("memory://creds/x").unwrap();
+        let prefixed_b = file_io.get_storage("memory://creds/y").unwrap();
+
+        assert!(Arc::ptr_eq(&default_a, &default_b));
+        assert!(Arc::ptr_eq(&prefixed_a, &prefixed_b));
+        assert!(!Arc::ptr_eq(&default_a, &prefixed_a));
+    }
+
+    #[tokio::test]
+    async fn test_delete_stream_routes_by_prefix() {
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prefixed_props("memory:/creds/", [("k", "v")])
+            .build();
+
+        let default_path = "memory:/other/a.txt";
+        let prefixed_path = "memory:/creds/b.txt";
+        for path in [default_path, prefixed_path] {
+            file_io
+                .new_output(path)
+                .unwrap()
+                .write("x".into())
+                .await
+                .unwrap();
+            assert!(file_io.exists(path).await.unwrap());
+        }
+
+        file_io
+            .delete_stream(futures::stream::iter(vec![
+                default_path.to_string(),
+                prefixed_path.to_string(),
+            ]))
+            .await
+            .unwrap();
+
+        assert!(!file_io.exists(default_path).await.unwrap());
+        assert!(!file_io.exists(prefixed_path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_delete_prefix_reaches_nested_prefix_storages() {
+        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+            .with_prefixed_props("memory:/table/data/", [("k", "data")])
+            .with_prefixed_props("memory:/table/metadata/", [("k", "metadata")])
+            .with_prefixed_props("memory:/tablex/", [("k", "sibling")])
+            .build();
+        let deleted = [
+            "memory:/table/version-hint.text",
+            "memory:/table/data/a.parquet",
+            "memory:/table/metadata/v1.json",
+        ];
+        let kept = "memory:/tablex/c.parquet";
+        for path in deleted.iter().chain([&kept]) {
+            file_io
+                .new_output(path)
+                .unwrap()
+                .write("x".into())
+                .await
+                .unwrap();
+        }
+
+        file_io.delete_prefix("memory:/table").await.unwrap();
+
+        let mut remaining = Vec::new();
+        for path in deleted.iter().chain([&kept]) {
+            if file_io.exists(path).await.unwrap() {
+                remaining.push(*path);
+            }
+        }
+        assert_eq!(remaining, [kept]);
+    }
+
+    #[tokio::test]
+    async fn test_delete_stream_flushes_across_batches() {
+        // More than one flush batch (1000).
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prefixed_props("memory:/creds/", [("k", "v")])
+            .build();
+
+        let n = 1050;
+        let mut paths = Vec::with_capacity(n);
+        for i in 0..n {
+            let p = format!("memory:/creds/f{i}.txt");
+            file_io
+                .new_output(&p)
+                .unwrap()
+                .write("x".into())
+                .await
+                .unwrap();
+            paths.push(p);
+        }
+
+        file_io
+            .delete_stream(futures::stream::iter(paths.clone()))
+            .await
+            .unwrap();
+
+        for p in &paths {
+            assert!(!file_io.exists(p).await.unwrap());
+        }
     }
 }
