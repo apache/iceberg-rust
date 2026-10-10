@@ -149,7 +149,9 @@ impl ManifestListWriter {
             FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
             FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
         };
-        let mut avro_writer = Writer::new(avro_schema, Vec::new());
+        let mut avro_writer = Writer::new(avro_schema, Vec::new()).expect(
+            "Manifest list Avro schemas should resolve because they refer to no named types.",
+        );
         for (key, value) in metadata {
             avro_writer
                 .add_user_metadata(key, value)
