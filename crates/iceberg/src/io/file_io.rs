@@ -304,7 +304,9 @@ impl FileIO {
     /// - If the path is a file or not exist, this function will be no-op.
     /// - If the path is a empty directory, this function will remove the directory itself.
     /// - If the path is a non-empty directory, this function will remove the directory and all nested files and directories.
-    /// - Files under the path that route to a deeper per-prefix storage are removed through that storage.
+    /// - Files under the path that route to a deeper per-prefix storage are removed through that
+    ///   storage, which deletes only within its own prefix; the storage serving the path deletes
+    ///   the rest.
     pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()> {
         let path = path.as_ref();
         let dir = if path.ends_with('/') {
@@ -312,20 +314,14 @@ impl FileIO {
         } else {
             format!("{path}/")
         };
-        // A prefix that is not a directory also serves its siblings under
-        // `path` (raw-string matching), so that storage clears all of `path`.
+        // Credentials scoped to a prefix may not reach beyond it.
         for ps in self
             .prefixed
             .iter()
             .filter(|ps| ps.prefix != path && ps.prefix.starts_with(&dir))
         {
-            let scope = if ps.prefix.ends_with('/') {
-                ps.prefix.as_str()
-            } else {
-                path
-            };
             Self::get_or_build(&ps.storage, &self.factory, &ps.config)?
-                .delete_prefix(scope)
+                .delete_prefix(&ps.prefix)
                 .await?;
         }
         self.get_storage(path)?.delete_prefix(path).await
@@ -942,6 +938,93 @@ mod tests {
         }
     }
 
+    /// Records the `delete_prefix` calls of every storage it builds, tagged
+    /// with the storage's `scope` property.
+    #[derive(Debug, Default, Serialize, Deserialize)]
+    struct RecordingFactory(#[serde(skip)] Arc<std::sync::Mutex<Vec<(String, String)>>>);
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct RecordingStorage {
+        scope: String,
+        #[serde(skip)]
+        calls: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    }
+
+    #[typetag::serde]
+    #[async_trait::async_trait]
+    impl Storage for RecordingStorage {
+        async fn exists(&self, _: &str) -> Result<bool> {
+            unimplemented!()
+        }
+        async fn metadata(&self, _: &str) -> Result<FileMetadata> {
+            unimplemented!()
+        }
+        async fn read(&self, _: &str) -> Result<Bytes> {
+            unimplemented!()
+        }
+        async fn reader(&self, _: &str) -> Result<Box<dyn FileRead>> {
+            unimplemented!()
+        }
+        async fn write(&self, _: &str, _: Bytes) -> Result<()> {
+            unimplemented!()
+        }
+        async fn writer(&self, _: &str) -> Result<Box<dyn FileWrite>> {
+            unimplemented!()
+        }
+        async fn delete(&self, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn delete_prefix(&self, path: &str) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((self.scope.clone(), path.to_string()));
+            Ok(())
+        }
+        async fn delete_stream(&self, _: BoxStream<'static, String>) -> Result<()> {
+            unimplemented!()
+        }
+        fn new_input(&self, _: &str) -> Result<InputFile> {
+            unimplemented!()
+        }
+        fn new_output(&self, _: &str) -> Result<OutputFile> {
+            unimplemented!()
+        }
+    }
+
+    #[typetag::serde]
+    impl StorageFactory for RecordingFactory {
+        fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+            Ok(Arc::new(RecordingStorage {
+                scope: config.get("scope").cloned().unwrap_or_default(),
+                calls: self.0.clone(),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_prefix_keeps_each_storage_within_its_prefix() {
+        let factory = RecordingFactory::default();
+        let calls = factory.0.clone();
+        let file_io = FileIOBuilder::new(Arc::new(factory))
+            .with_prop("scope", "default")
+            .with_prefixed_props("s3://bucket/table/data/", [("scope", "data")])
+            .with_prefixed_props("s3://bucket/table/meta", [("scope", "meta")])
+            .build();
+
+        file_io.delete_prefix("s3://bucket/table/").await.unwrap();
+
+        let expected: Vec<(String, String)> = [
+            ("data", "s3://bucket/table/data/"),
+            ("meta", "s3://bucket/table/meta"),
+            ("default", "s3://bucket/table/"),
+        ]
+        .into_iter()
+        .map(|(scope, path)| (scope.to_string(), path.to_string()))
+        .collect();
+        assert_eq!(*calls.lock().unwrap(), expected);
+    }
+
     /// Once a storage is initialized its own Debug is reachable through
     /// `FileIO`; the vended secret must not come out that way.
     #[tokio::test]
@@ -1146,14 +1229,13 @@ mod tests {
     async fn test_delete_prefix_reaches_nested_prefix_storages() {
         let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
             .with_prefixed_props("memory:/table/data/", [("k", "data")])
-            .with_prefixed_props("memory:/table/meta", [("k", "meta")])
+            .with_prefixed_props("memory:/table/metadata", [("k", "metadata")])
             .with_prefixed_props("memory:/tablex/", [("k", "sibling")])
             .build();
         let deleted = [
             "memory:/table/version-hint.text",
             "memory:/table/data/a.parquet",
             "memory:/table/metadata/v1.json",
-            "memory:/table/meta-extra/b.json",
         ];
         let kept = "memory:/tablex/c.parquet";
         for path in deleted.iter().chain([&kept]) {
