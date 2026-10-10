@@ -304,10 +304,31 @@ impl FileIO {
     /// - If the path is a file or not exist, this function will be no-op.
     /// - If the path is a empty directory, this function will remove the directory itself.
     /// - If the path is a non-empty directory, this function will remove the directory and all nested files and directories.
+    /// - Files under the path that route to a deeper per-prefix storage are removed through that storage.
     pub async fn delete_prefix(&self, path: impl AsRef<str>) -> Result<()> {
-        self.get_storage(path.as_ref())?
-            .delete_prefix(path.as_ref())
-            .await
+        let path = path.as_ref();
+        let dir = if path.ends_with('/') {
+            path.to_string()
+        } else {
+            format!("{path}/")
+        };
+        // A prefix that is not a directory also serves its siblings under
+        // `path` (raw-string matching), so that storage clears all of `path`.
+        for ps in self
+            .prefixed
+            .iter()
+            .filter(|ps| ps.prefix != path && ps.prefix.starts_with(&dir))
+        {
+            let scope = if ps.prefix.ends_with('/') {
+                ps.prefix.as_str()
+            } else {
+                path
+            };
+            Self::get_or_build(&ps.storage, &self.factory, &ps.config)?
+                .delete_prefix(scope)
+                .await?;
+        }
+        self.get_storage(path)?.delete_prefix(path).await
     }
 
     /// Delete multiple files from a stream of paths.
@@ -1119,6 +1140,40 @@ mod tests {
 
         assert!(!file_io.exists(default_path).await.unwrap());
         assert!(!file_io.exists(prefixed_path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_delete_prefix_reaches_nested_prefix_storages() {
+        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+            .with_prefixed_props("memory:/table/data/", [("k", "data")])
+            .with_prefixed_props("memory:/table/meta", [("k", "meta")])
+            .with_prefixed_props("memory:/tablex/", [("k", "sibling")])
+            .build();
+        let deleted = [
+            "memory:/table/version-hint.text",
+            "memory:/table/data/a.parquet",
+            "memory:/table/metadata/v1.json",
+            "memory:/table/meta-extra/b.json",
+        ];
+        let kept = "memory:/tablex/c.parquet";
+        for path in deleted.iter().chain([&kept]) {
+            file_io
+                .new_output(path)
+                .unwrap()
+                .write("x".into())
+                .await
+                .unwrap();
+        }
+
+        file_io.delete_prefix("memory:/table").await.unwrap();
+
+        let mut remaining = Vec::new();
+        for path in deleted.iter().chain([&kept]) {
+            if file_io.exists(path).await.unwrap() {
+                remaining.push(*path);
+            }
+        }
+        assert_eq!(remaining, [kept]);
     }
 
     #[tokio::test]
