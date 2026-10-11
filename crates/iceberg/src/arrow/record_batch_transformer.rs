@@ -133,6 +133,12 @@ fn constants_map(
     Ok(constants)
 }
 
+/// Whether a file column needs casting to the table's Arrow type. Shared with
+/// runtime-filter planning, which must not filter values before this cast.
+pub(crate) fn column_needs_type_promotion(source_type: &DataType, target_type: &DataType) -> bool {
+    !source_type.equals_datatype(target_type)
+}
+
 /// Indicates how a particular column in a processed RecordBatch should
 /// be sourced.
 #[derive(Debug)]
@@ -831,7 +837,7 @@ impl RecordBatchTransformer {
                 // No conflict detection needed - schema resolution happened in reader.rs.
                 let field_by_id = field_id_to_source_schema_map.get(field_id).map(
                     |(source_field, source_index)| {
-                        if source_field.data_type().equals_datatype(target_type) {
+                        if !column_needs_type_promotion(source_field.data_type(), target_type) {
                             ColumnSource::PassThrough {
                                 source_index: *source_index,
                             }
