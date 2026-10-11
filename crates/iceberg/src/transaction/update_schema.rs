@@ -22,8 +22,8 @@ use async_trait::async_trait;
 use typed_builder::TypedBuilder;
 
 use crate::spec::{
-    ListType, Literal, MapType, NestedField, NestedFieldRef, SCHEMA_NAME_DELIMITER, Schema,
-    StructType, Type,
+    ListType, Literal, MapType, NestedField, NestedFieldRef, ReassignFieldIds,
+    SCHEMA_NAME_DELIMITER, Schema, StructType, Type,
 };
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
@@ -146,65 +146,6 @@ impl UpdateSchemaAction {
     pub fn delete_column(mut self, name: impl ToString) -> Self {
         self.deletes.push(name.to_string());
         self
-    }
-}
-
-// ---------------------------------------------------------------------------
-// ID assignment helpers
-// ---------------------------------------------------------------------------
-
-/// Recursively assign fresh field IDs to a `NestedField` and all its nested sub-fields.
-///
-/// This follows the same recursive pattern as `ReassignFieldIds::reassign_ids_visit_type`
-/// from `crate::spec::schema::id_reassigner`, but operates on new fields with placeholder
-/// IDs rather than reassigning an existing schema. `ReassignFieldIds` cannot be used
-/// directly here because it rejects duplicate old IDs (all new fields share placeholder
-/// ID `DEFAULT_FIELD_ID`).
-fn assign_fresh_ids(field: &NestedField, next_id: &mut i32) -> NestedFieldRef {
-    *next_id += 1;
-    let new_id = *next_id;
-    let new_type = assign_fresh_ids_to_type(&field.field_type, next_id);
-
-    Arc::new(NestedField {
-        id: new_id,
-        name: field.name.clone(),
-        required: field.required,
-        field_type: Box::new(new_type),
-        doc: field.doc.clone(),
-        initial_default: field.initial_default.clone(),
-        write_default: field.write_default.clone(),
-    })
-}
-
-/// Recursively assign fresh field IDs to all nested fields within a `Type`.
-fn assign_fresh_ids_to_type(field_type: &Type, next_id: &mut i32) -> Type {
-    match field_type {
-        Type::Primitive(_) => field_type.clone(),
-        // Variant carries no nested fields, so there is nothing to reassign
-        // (matches id_reassigner.rs).
-        Type::Variant(v) => Type::Variant(*v),
-        Type::Struct(struct_type) => {
-            let new_fields: Vec<NestedFieldRef> = struct_type
-                .fields()
-                .iter()
-                .map(|f| assign_fresh_ids(f, next_id))
-                .collect();
-            Type::Struct(StructType::new(new_fields))
-        }
-        Type::List(list_type) => {
-            let new_element = assign_fresh_ids(&list_type.element_field, next_id);
-            Type::List(ListType {
-                element_field: new_element,
-            })
-        }
-        Type::Map(map_type) => {
-            let new_key = assign_fresh_ids(&map_type.key_field, next_id);
-            let new_value = assign_fresh_ids(&map_type.value_field, next_id);
-            Type::Map(MapType {
-                key_field: new_key,
-                value_field: new_value,
-            })
-        }
     }
 }
 
@@ -435,7 +376,8 @@ impl TransactionAction for UpdateSchemaAction {
             };
 
             // Assign fresh IDs immediately, preserving insertion order.
-            let field = assign_fresh_ids(&pending_field, &mut last_column_id);
+            let field = ReassignFieldIds::for_new_fields(&mut last_column_id)
+                .reassign_field(pending_field)?;
 
             additions_by_parent
                 .entry(parent_id)
@@ -478,8 +420,8 @@ mod tests {
     use as_any::Downcast;
 
     use crate::spec::{
-        DEFAULT_SCHEMA_ID, Literal, NestedField, PrimitiveType, StructType, TableMetadata, Type,
-        VariantType,
+        DEFAULT_SCHEMA_ID, ListType, Literal, MapType, NestedField, PrimitiveType,
+        ReassignFieldIds, StructType, TableMetadata, Type, VariantType,
     };
     use crate::table::Table;
     use crate::transaction::Transaction;
@@ -601,11 +543,86 @@ mod tests {
         // itself and leaves the type untouched.
         let mut next_id = 10;
         let field = NestedField::optional(1, "data", Type::Variant(VariantType));
-        let assigned = super::assign_fresh_ids(&field, &mut next_id);
+        let assigned = ReassignFieldIds::for_new_fields(&mut next_id)
+            .reassign_field(field.into())
+            .unwrap();
 
         assert_eq!(assigned.id, 11);
         assert_eq!(*assigned.field_type, Type::Variant(VariantType));
         assert_eq!(next_id, 11);
+    }
+
+    #[tokio::test]
+    async fn test_add_nested_fields_preserves_depth_first_ids_and_metadata() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+        let leaf = NestedField::optional(DEFAULT_FIELD_ID, "leaf", PrimitiveType::Int.into())
+            .with_doc("nested field")
+            .with_initial_default(Literal::int(42))
+            .with_write_default(Literal::int(43));
+        let action = tx.update_schema().add_column(AddColumn::optional(
+            "nested",
+            Type::Struct(StructType::new(vec![
+                NestedField::optional(
+                    DEFAULT_FIELD_ID,
+                    "map",
+                    Type::Map(MapType::new(
+                        NestedField::map_key_element(
+                            DEFAULT_FIELD_ID,
+                            Type::Struct(StructType::new(vec![leaf.clone().into()])),
+                        )
+                        .into(),
+                        NestedField::map_value_element(
+                            DEFAULT_FIELD_ID,
+                            Type::List(ListType::new(
+                                NestedField::list_element(
+                                    DEFAULT_FIELD_ID,
+                                    PrimitiveType::String.into(),
+                                    false,
+                                )
+                                .into(),
+                            )),
+                            true,
+                        )
+                        .into(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(DEFAULT_FIELD_ID, "sibling", PrimitiveType::Int.into())
+                    .into(),
+            ])),
+        ));
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = commit.take_updates();
+        let TableUpdate::AddSchema { schema } = &updates[0] else {
+            panic!("expected AddSchema");
+        };
+        for (name, id) in [
+            ("nested", 4),
+            ("nested.map", 5),
+            ("nested.map.key", 6),
+            ("nested.map.key.leaf", 7),
+            ("nested.map.value", 8),
+            ("nested.map.value.element", 9),
+            ("nested.sibling", 10),
+        ] {
+            assert_eq!(schema.field_by_name(name).unwrap().id, id, "{name}");
+        }
+        assert_eq!(
+            schema
+                .field_by_name("nested.map.key.leaf")
+                .unwrap()
+                .as_ref(),
+            &leaf.with_id(7),
+        );
+        assert!(schema.field_by_name("nested.map.key").unwrap().required);
+        assert!(schema.field_by_name("nested.map.value").unwrap().required);
+        assert!(
+            !schema
+                .field_by_name("nested.map.value.element")
+                .unwrap()
+                .required
+        );
     }
 
     #[tokio::test]
