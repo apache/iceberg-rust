@@ -53,7 +53,7 @@
 <a href=#53 id=53 data-nosnippet>53</a>        </span>outer_fields
 <a href=#54 id=54 data-nosnippet>54</a>            .into_iter()
 <a href=#55 id=55 data-nosnippet>55</a>            .map(|field| {
-<a href=#56 id=56 data-nosnippet>56</a>                <span class="kw">if </span>field.field_type.is_primitive() {
+<a href=#56 id=56 data-nosnippet>56</a>                <span class="kw">if </span>!field.field_type.is_nested() {
 <a href=#57 id=57 data-nosnippet>57</a>                    <span class="prelude-val">Ok</span>(field)
 <a href=#58 id=58 data-nosnippet>58</a>                } <span class="kw">else </span>{
 <a href=#59 id=59 data-nosnippet>59</a>                    <span class="kw">let </span><span class="kw-2">mut </span>new_field = Arc::unwrap_or_clone(field);
@@ -122,7 +122,7 @@
 <a href=#122 id=122 data-nosnippet>122</a>                <span class="self">self</span>.old_to_new_id
 <a href=#123 id=123 data-nosnippet>123</a>                    .get(<span class="kw-2">&amp;</span>id)
 <a href=#124 id=124 data-nosnippet>124</a>                    .copied()
-<a href=#125 id=125 data-nosnippet>125</a>                    .ok_or_else(|| <span class="macro">invalid_data!</span>(<span class="string">"Identifier Field ID {id} not found"</span>))
+<a href=#125 id=125 data-nosnippet>125</a>                    .ok_or_else(|| <span class="macro">invalid_data!</span>(<span class="string">"identifier field id {id} not found"</span>))
 <a href=#126 id=126 data-nosnippet>126</a>            })
 <a href=#127 id=127 data-nosnippet>127</a>            .collect()
 <a href=#128 id=128 data-nosnippet>128</a>    }
