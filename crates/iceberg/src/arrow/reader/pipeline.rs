@@ -20,6 +20,7 @@
 //! predicates, row-group / row selection, and delete handling into a stream
 //! of transformed Arrow `RecordBatch`es.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -131,6 +132,17 @@ struct FileScanTaskReader {
     bloom_filter_enabled: bool,
     parquet_read_options: ParquetReadOptions,
     scan_metrics: ScanMetrics,
+}
+
+// Borrow an existing selection, or enumerate all groups for a whole-file scan.
+fn candidate_row_groups(
+    selected_row_groups: Option<&[usize]>,
+    num_row_groups: usize,
+) -> Cow<'_, [usize]> {
+    match selected_row_groups {
+        Some(indices) => Cow::Borrowed(indices),
+        None => Cow::Owned((0..num_row_groups).collect()),
+    }
 }
 
 impl FileScanTaskReader {
@@ -525,48 +537,35 @@ impl FileScanTaskReader {
             record_batch_stream_builder = record_batch_stream_builder.with_row_filter(row_filter);
 
             if self.row_group_filtering_enabled {
-                let predicate_filtered_row_groups = ArrowReader::get_selected_row_group_indices(
+                let candidates = candidate_row_groups(
+                    selected_row_group_indices.as_deref(),
+                    record_batch_stream_builder.metadata().num_row_groups(),
+                );
+
+                selected_row_group_indices = Some(ArrowReader::get_selected_row_group_indices(
                     &predicate,
                     record_batch_stream_builder.metadata(),
                     &field_id_map,
                     task.schema(),
-                )?;
-
-                // Merge predicate-based filtering with byte range filtering (if present)
-                // by taking the intersection of both filters
-                selected_row_group_indices = match selected_row_group_indices {
-                    Some(byte_range_filtered) => {
-                        // Keep only row groups that are in both filters
-                        let intersection: Vec<usize> = byte_range_filtered
-                            .into_iter()
-                            .filter(|idx| predicate_filtered_row_groups.contains(idx))
-                            .collect();
-                        Some(intersection)
-                    }
-                    None => Some(predicate_filtered_row_groups),
-                };
+                    candidates.as_ref(),
+                )?);
             }
 
             if self.bloom_filter_enabled {
-                let all_rgs;
-                let candidate_rgs = match &selected_row_group_indices {
-                    Some(indices) => indices.as_slice(),
-                    None => {
-                        all_rgs = (0..record_batch_stream_builder.metadata().num_row_groups())
-                            .collect::<Vec<_>>();
-                        &all_rgs
-                    }
-                };
+                let candidates = candidate_row_groups(
+                    selected_row_group_indices.as_deref(),
+                    record_batch_stream_builder.metadata().num_row_groups(),
+                );
 
                 let bloom_filtered = Self::filter_row_groups_by_bloom_filter(
                     &predicate,
                     &mut record_batch_stream_builder,
-                    candidate_rgs,
+                    candidates.as_ref(),
                     &field_id_map,
                 )
                 .await?;
 
-                if bloom_filtered.len() < candidate_rgs.len() {
+                if bloom_filtered.len() < candidates.len() {
                     selected_row_group_indices = Some(bloom_filtered);
                 }
             }

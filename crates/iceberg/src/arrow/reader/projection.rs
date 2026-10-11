@@ -421,6 +421,16 @@ pub(super) fn apply_name_mapping_to_arrow_schema(
         "Schema already has field IDs - name mapping should not be applied"
     );
 
+    let mut field_ids_by_name = HashMap::with_capacity(name_mapping.fields().len());
+    for mapped_field in name_mapping.fields() {
+        for name in mapped_field.names() {
+            // Preserve the existing first-match behavior for duplicate aliases.
+            field_ids_by_name
+                .entry(name.as_str())
+                .or_insert(mapped_field.field_id());
+        }
+    }
+
     let fields_with_mapped_ids: Vec<_> = arrow_schema
         .fields()
         .iter()
@@ -432,15 +442,12 @@ pub(super) fn apply_name_mapping_to_arrow_schema(
             // If the field isn't in the mapping, leave it WITHOUT assigning an ID
             // (matching Java's behavior of returning the field unchanged).
             // Later, during projection, fields without IDs are filtered out.
-            let mapped_field_opt = name_mapping
-                .fields()
-                .iter()
-                .find(|f| f.names().contains(&field.name().to_string()));
-
             let mut metadata = field.metadata().clone();
 
-            if let Some(mapped_field) = mapped_field_opt
-                && let Some(field_id) = mapped_field.field_id()
+            if let Some(field_id) = field_ids_by_name
+                .get(field.name().as_str())
+                .copied()
+                .flatten()
             {
                 // Field found in mapping with a field_id → assign it
                 metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
@@ -522,6 +529,34 @@ mod tests {
         StructType, Type, VariantType,
     };
     use crate::{ErrorKind, Runtime};
+
+    #[test]
+    fn test_name_mapping_duplicate_alias_preserves_first_match() {
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "name",
+            DataType::Utf8,
+            true,
+        )]));
+        for (first_id, expected) in [(Some(2), Some("2")), (None, None)] {
+            let name_mapping = NameMapping::new(vec![
+                MappedField::new(first_id, vec!["name".to_string()], vec![]),
+                MappedField::new(Some(4), vec!["name".to_string()], vec![]),
+            ]);
+
+            let mapped =
+                super::apply_name_mapping_to_arrow_schema(arrow_schema.clone(), &name_mapping)
+                    .unwrap();
+
+            assert_eq!(
+                mapped.fields()[0]
+                    .metadata()
+                    .get(PARQUET_FIELD_ID_META_KEY)
+                    .map(String::as_str),
+                expected,
+                "first matching field ID: {first_id:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_arrow_projection_mask() {
