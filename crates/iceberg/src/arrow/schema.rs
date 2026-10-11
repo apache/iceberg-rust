@@ -317,15 +317,23 @@ pub fn arrow_type_to_type(ty: &DataType) -> Result<Type> {
 
 const ARROW_FIELD_DOC_KEY: &str = "doc";
 
+pub(super) fn try_get_field_id_from_metadata(field: &Field) -> Result<Option<i32>> {
+    field
+        .metadata()
+        .get(PARQUET_FIELD_ID_META_KEY)
+        .map(|value| {
+            value.parse::<i32>().map_err(|e| {
+                invalid_data!("Failed to parse field id")
+                    .with_context("value", value)
+                    .with_source(e)
+            })
+        })
+        .transpose()
+}
+
 pub(super) fn get_field_id_from_metadata(field: &FieldRef) -> Result<i32> {
-    if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
-        return value.parse::<i32>().map_err(|e| {
-            invalid_data!("Failed to parse field id")
-                .with_context("value", value)
-                .with_source(e)
-        });
-    }
-    Err(invalid_data!("Field id not found in metadata"))
+    try_get_field_id_from_metadata(field)?
+        .ok_or_else(|| invalid_data!("Field id not found in metadata"))
 }
 
 fn get_field_doc(field: &FieldRef) -> Option<String> {

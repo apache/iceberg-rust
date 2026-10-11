@@ -221,6 +221,8 @@ impl ArrowReader {
 
         // Schema evolution: New columns may not exist in old Parquet files.
         // We only project existing columns; RecordBatchTransformer adds default/NULL values.
+        // If other leaves are selected, a struct whose requested leaves are all missing gets no
+        // column and reads as NULL (#3378).
         let mut indices = vec![];
         for field_id in leaf_field_ids {
             if let Some(col_idx) = column_map.get(field_id) {
@@ -2045,5 +2047,127 @@ message schema {
             })
             .collect();
         assert_eq!(ids, vec![2, 3]);
+    }
+
+    /// Reads a file written with an older nested schema through an evolved one. This relies
+    /// on parquet-rs attaching `PARQUET:field_id` to struct children, list elements, and map
+    /// keys and values, which the hand-built fixtures in `record_batch_transformer` assume.
+    #[tokio::test]
+    async fn test_read_evolved_nested_fields_by_field_id() {
+        use serde_json::{Value, json};
+
+        use crate::arrow::schema_to_arrow_schema;
+        use crate::spec::PrimitiveType::{Int, Long};
+        use crate::spec::{ListType, MapType};
+
+        fn struct_of(fields: &[(i32, &str, PrimitiveType)]) -> Type {
+            Type::Struct(StructType::new(
+                fields
+                    .iter()
+                    .map(|(id, name, ty)| {
+                        NestedField::optional(*id, *name, Type::Primitive(ty.clone())).into()
+                    })
+                    .collect(),
+            ))
+        }
+        fn schema(s: Type, element: Type, value: Type) -> Schema {
+            let string = Type::Primitive(PrimitiveType::String);
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(Int)).into(),
+                    NestedField::optional(2, "s", s).into(),
+                    NestedField::optional(
+                        3,
+                        "l",
+                        Type::List(ListType::new(
+                            NestedField::list_element(7, element, true).into(),
+                        )),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        4,
+                        "m",
+                        Type::Map(MapType::required(9, string, 10, value)),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap()
+        }
+        fn to_batch(schema: &Schema, rows: Value) -> RecordBatch {
+            let fields = schema_to_arrow_schema(schema).unwrap().fields().to_vec();
+            serde_arrow::to_record_batch(&fields, &rows).unwrap()
+        }
+
+        let old_schema = schema(
+            struct_of(&[(5, "a", Int), (6, "b", PrimitiveType::String)]),
+            struct_of(&[(8, "x", Int)]),
+            struct_of(&[(11, "x", Int)]),
+        );
+        // Reorders `s`, adds children before, between, and after existing ones, and
+        // promotes int to long.
+        let new_schema = Arc::new(schema(
+            struct_of(&[
+                (6, "b", PrimitiveType::String),
+                (12, "c", Int),
+                (5, "a", Long),
+            ]),
+            struct_of(&[(13, "y", Int), (8, "x", Int)]),
+            struct_of(&[(11, "x", Long), (14, "y", Int)]),
+        ));
+        let old_batch = to_batch(
+            &old_schema,
+            json!([
+                {"id": 1, "s": {"a": 1, "b": "p"}, "l": [{"x": 10}, {"x": 11}], "m": {"k1": {"x": 100}}},
+                {"id": 2, "s": null, "l": null, "m": {"k2": {"x": 200}}},
+                {"id": 3, "s": {"a": 3, "b": null}, "l": [{"x": 30}], "m": null},
+            ]),
+        );
+        let expected = to_batch(
+            &new_schema,
+            json!([
+                {
+                    "id": 1,
+                    "s": {"b": "p", "c": null, "a": 1},
+                    "l": [{"y": null, "x": 10}, {"y": null, "x": 11}],
+                    "m": {"k1": {"x": 100, "y": null}},
+                },
+                {"id": 2, "s": null, "l": null, "m": {"k2": {"x": 200, "y": null}}},
+                {"id": 3, "s": {"b": null, "c": null, "a": 3}, "l": [{"y": null, "x": 30}], "m": null},
+            ]),
+        );
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = format!("{}/old.parquet", tmp_dir.path().to_str().unwrap());
+        let mut writer =
+            ArrowWriter::try_new(File::create(&file_path).unwrap(), old_batch.schema(), None)
+                .unwrap();
+        writer.write(&old_batch).unwrap();
+        writer.close().unwrap();
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path)
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(new_schema)
+                .with_project_field_ids(vec![1, 2, 3, 4])
+                .with_case_sensitive(false)
+                .build()
+                .unwrap())]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+        assert_eq!(result, vec![expected]);
     }
 }
