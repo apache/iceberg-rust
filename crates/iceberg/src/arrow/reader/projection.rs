@@ -178,23 +178,16 @@ impl ArrowReader {
 
         // Pre-project only the fields that have been selected, possibly avoiding converting
         // some Arrow types that are not yet supported.
-        let mut projected_fields: HashMap<arrow_schema::FieldRef, i32> = HashMap::new();
         let projected_arrow_schema = ArrowSchema::new_with_metadata(
             fields.filter_leaves(|_, f| {
-                f.metadata()
-                    .get(PARQUET_FIELD_ID_META_KEY)
-                    .and_then(|field_id| i32::from_str(field_id).ok())
-                    .is_some_and(|field_id| {
-                        projected_fields.insert((*f).clone(), field_id);
-                        leaf_field_id_set.contains(&field_id)
-                    })
+                parquet_field_id(f).is_some_and(|field_id| leaf_field_id_set.contains(&field_id))
             }),
             arrow_schema.metadata().clone(),
         );
         let iceberg_schema = arrow_schema_to_schema(&projected_arrow_schema)?;
 
         fields.filter_leaves(|idx, field| {
-            let Some(field_id) = projected_fields.get(field).cloned() else {
+            let Some(field_id) = parquet_field_id(field) else {
                 return false;
             };
 
@@ -381,16 +374,20 @@ pub(super) fn build_fallback_field_id_map(
 fn build_field_id_map_from_arrow_schema(arrow_schema: &ArrowSchemaRef) -> HashMap<i32, usize> {
     let mut column_map = HashMap::new();
     arrow_schema.fields().filter_leaves(|idx, field| {
-        if let Some(field_id) = field
-            .metadata()
-            .get(PARQUET_FIELD_ID_META_KEY)
-            .and_then(|value| i32::from_str(value).ok())
-        {
+        if let Some(field_id) = parquet_field_id(field) {
             column_map.insert(field_id, idx);
         }
         false
     });
     column_map
+}
+
+/// Returns the field ID in `field`'s `PARQUET:field_id` metadata, if it has a valid one.
+fn parquet_field_id(field: &Field) -> Option<i32> {
+    field
+        .metadata()
+        .get(PARQUET_FIELD_ID_META_KEY)
+        .and_then(|field_id| i32::from_str(field_id).ok())
 }
 
 /// Apply name mapping to Arrow schema for Parquet files lacking field IDs.
