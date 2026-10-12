@@ -321,20 +321,28 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
-        let snapshot_id = match self.snapshot_selection {
-            Some(SnapshotSelection::SnapshotId(id)) => Some(id),
-            Some(SnapshotSelection::AsOfTime(timestamp_ms)) => Some(snapshot_id_as_of_time(
-                &self.table.metadata_ref(),
-                timestamp_ms,
-            )?),
+        let selected_snapshot = match self.snapshot_selection {
+            Some(SnapshotSelection::SnapshotId(id)) => {
+                Some((id, format!("Snapshot with id {id} not found")))
+            }
+            Some(SnapshotSelection::AsOfTime(timestamp_ms)) => {
+                let id = snapshot_id_as_of_time(&self.table.metadata_ref(), timestamp_ms)?;
+                // History outlives expired snapshots; name the timestamp that resolved to `id`.
+                Some((
+                    id,
+                    format!(
+                        "Snapshot with id {id} resolved from timestamp {timestamp_ms} ms not found; it may have expired"
+                    ),
+                ))
+            }
             None => None,
         };
-        let snapshot = match snapshot_id {
-            Some(snapshot_id) => self
+        let snapshot = match selected_snapshot {
+            Some((snapshot_id, not_found_message)) => self
                 .table
                 .metadata()
                 .snapshot_by_id(snapshot_id)
-                .ok_or_else(|| invalid_data!("Snapshot with id {snapshot_id} not found"))?
+                .ok_or_else(|| invalid_data!(not_found_message))?
                 .clone(),
             None => {
                 let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
@@ -1024,7 +1032,10 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert_eq!(
             err.message(),
-            format!("Snapshot with id {} not found", entry.snapshot_id)
+            format!(
+                "Snapshot with id {} resolved from timestamp {} ms not found; it may have expired",
+                entry.snapshot_id, entry.timestamp_ms
+            )
         );
     }
 
