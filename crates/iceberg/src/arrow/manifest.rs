@@ -145,11 +145,15 @@ pub fn read_manifest_entries(bytes: &[u8], manifest_file: &ManifestFile) -> Resu
     let Some(batch) = reader.next() else {
         return Ok(RecordBatch::new_empty(schema));
     };
-    let entries = project_struct(
-        &StructArray::from(batch.map_err(invalid_manifest)?),
-        &avro_schema,
-        schema.fields(),
-    )?;
+    let batch = batch.map_err(invalid_manifest)?;
+    // Taking only the first batch relies on arrow-avro filling it to the batch
+    // size, so fail instead of dropping entries if that changes.
+    if reader.next().is_some() {
+        return Err(invalid_data!(
+            "arrow-avro split the manifest into more than one batch"
+        ));
+    }
+    let entries = project_struct(&StructArray::from(batch), &avro_schema, schema.fields())?;
     Ok(RecordBatch::from(inherit(entries, manifest_file)?))
 }
 
