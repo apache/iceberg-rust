@@ -19,7 +19,7 @@ use async_trait::async_trait;
 
 use crate::error::invalid_data;
 use crate::table::Table;
-use crate::transaction::action::{ActionCommit, CommitStatus, TransactionAction};
+use crate::transaction::action::{ActionCommit, StatelessAction};
 use crate::{Result, TableUpdate};
 
 /// A transaction action that sets or updates the location of a table.
@@ -54,12 +54,8 @@ impl UpdateLocationAction {
 }
 
 #[async_trait]
-impl TransactionAction for UpdateLocationAction {
-    type State = ();
-
-    fn new_state(&self) -> Self::State {}
-
-    async fn commit(&self, _state: &mut (), _table: &Table) -> Result<ActionCommit> {
+impl StatelessAction for UpdateLocationAction {
+    async fn apply(&self, _table: &Table) -> Result<ActionCommit> {
         let updates: Vec<TableUpdate>;
         if let Some(location) = self.location.as_deref() {
             updates = vec![TableUpdate::SetLocation {
@@ -73,8 +69,6 @@ impl TransactionAction for UpdateLocationAction {
 
         Ok(ActionCommit::new(updates, vec![]))
     }
-
-    async fn cleanup(self: Box<Self>, _state: (), _table: &Table, _status: CommitStatus) {}
 }
 
 #[cfg(test)]

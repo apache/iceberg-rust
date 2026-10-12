@@ -22,7 +22,7 @@ use crate::TableUpdate::UpgradeFormatVersion;
 use crate::error::invalid_data;
 use crate::spec::FormatVersion;
 use crate::table::Table;
-use crate::transaction::action::{ActionCommit, CommitStatus, TransactionAction};
+use crate::transaction::action::{ActionCommit, StatelessAction};
 
 /// A transaction action to upgrade a table's format version.
 ///
@@ -58,12 +58,8 @@ impl UpgradeFormatVersionAction {
 }
 
 #[async_trait]
-impl TransactionAction for UpgradeFormatVersionAction {
-    type State = ();
-
-    fn new_state(&self) -> Self::State {}
-
-    async fn commit(&self, _state: &mut (), _table: &Table) -> Result<ActionCommit> {
+impl StatelessAction for UpgradeFormatVersionAction {
+    async fn apply(&self, _table: &Table) -> Result<ActionCommit> {
         let format_version = self.format_version.ok_or_else(|| {
             invalid_data!("FormatVersion is not set for UpgradeFormatVersionAction!")
         })?;
@@ -73,8 +69,6 @@ impl TransactionAction for UpgradeFormatVersionAction {
             vec![],
         ))
     }
-
-    async fn cleanup(self: Box<Self>, _state: (), _table: &Table, _status: CommitStatus) {}
 }
 
 #[cfg(test)]

@@ -40,7 +40,8 @@ pub(crate) type TransactionActionEntry = Box<dyn ErasedActionEntry>;
 #[async_trait]
 pub(crate) trait TransactionAction: Clone + Send + Sync + 'static {
     /// Retry-persistent state exclusively owned by one logical execution of this
-    /// action. Stateless actions use `State = ()`.
+    /// action. Stateless actions implement [`StatelessAction`] instead, which
+    /// supplies `State = ()`.
     type State: Send + Sync + 'static;
 
     /// Creates fresh state for one logical execution.
@@ -76,7 +77,34 @@ pub(crate) trait TransactionAction: Clone + Send + Sync + 'static {
     // TODO: invoke this from `Transaction::commit` once terminal status
     // classification is wired up (stateful transaction RFC, milestone 3).
     #[allow(dead_code)]
-    async fn cleanup(self: Box<Self>, state: Self::State, table: &Table, status: CommitStatus);
+    async fn cleanup(self, state: Self::State, table: &Table, status: CommitStatus);
+}
+
+/// Convenience trait for actions that carry no per-attempt state.
+///
+/// Implementing `StatelessAction` yields a [`TransactionAction`] impl with
+/// `State = ()`, a no-op [`TransactionAction::new_state`], a no-op
+/// [`TransactionAction::cleanup`], and a [`TransactionAction::commit`] that
+/// forwards to [`StatelessAction::apply`]. Actions that need retry-persistent
+/// state (e.g. a persistent snapshot producer) implement `TransactionAction`
+/// directly instead.
+#[async_trait]
+pub(crate) trait StatelessAction: Clone + Send + Sync + 'static {
+    /// One attempt against the current transaction-local table.
+    async fn apply(&self, table: &Table) -> Result<ActionCommit>;
+}
+
+#[async_trait]
+impl<T: StatelessAction> TransactionAction for T {
+    type State = ();
+
+    fn new_state(&self) -> Self::State {}
+
+    async fn commit(&self, _state: &mut (), table: &Table) -> Result<ActionCommit> {
+        StatelessAction::apply(self, table).await
+    }
+
+    async fn cleanup(self, _state: (), _table: &Table, _status: CommitStatus) {}
 }
 
 /// Classification of a transaction's terminal result, consumed by
@@ -111,17 +139,14 @@ pub(crate) enum CommitStatus {
 /// The pairing is preserved by construction: the entry is created with fresh
 /// state and owns both exclusively, so terminal cleanup can consume them together.
 pub(crate) struct ActionEntry<A: TransactionAction> {
-    action: Box<A>,
+    action: A,
     state: A::State,
 }
 
 impl<A: TransactionAction> ActionEntry<A> {
     fn new(action: A) -> Self {
         let state = action.new_state();
-        Self {
-            action: Box::new(action),
-            state,
-        }
+        Self { action, state }
     }
 
     /// The action (intent) held by this entry.
@@ -159,12 +184,12 @@ impl<A: TransactionAction> ErasedActionEntry for ActionEntry<A> {
     }
 
     async fn cleanup(self: Box<Self>, table: &Table, status: CommitStatus) {
-        let entry = *self;
-        entry.action.cleanup(entry.state, table, status).await
+        let ActionEntry { action, state } = *self;
+        action.cleanup(state, table, status).await
     }
 
     fn clone_with_new_state(&self) -> TransactionActionEntry {
-        Box::new(ActionEntry::new((*self.action).clone()))
+        Box::new(ActionEntry::new(self.action.clone()))
     }
 }
 
@@ -231,10 +256,11 @@ mod tests {
     use uuid::Uuid;
 
     use crate::table::Table;
+    use crate::test_utils::commit_with_fresh_state;
     use crate::transaction::Transaction;
     use crate::transaction::action::{
-        ActionCommit, ActionEntry, ApplyTransactionAction, CommitStatus, TransactionAction,
-        commit_with_fresh_state,
+        ActionCommit, ActionEntry, ApplyTransactionAction, CommitStatus, ErasedActionEntry,
+        StatelessAction, TransactionAction,
     };
     use crate::transaction::tests::make_v2_table;
     use crate::{Result, TableRequirement, TableUpdate};
@@ -259,7 +285,22 @@ mod tests {
             ))
         }
 
-        async fn cleanup(self: Box<Self>, _state: (), _table: &Table, _status: CommitStatus) {}
+        async fn cleanup(self, _state: (), _table: &Table, _status: CommitStatus) {}
+    }
+
+    #[derive(Clone)]
+    struct StatelessTestAction;
+
+    #[async_trait]
+    impl StatelessAction for StatelessTestAction {
+        async fn apply(&self, _table: &Table) -> Result<ActionCommit> {
+            Ok(ActionCommit::new(
+                vec![TableUpdate::SetLocation {
+                    location: String::from("s3://bucket/prefix/stateless/"),
+                }],
+                vec![],
+            ))
+        }
     }
 
     #[tokio::test]
@@ -296,19 +337,38 @@ mod tests {
     }
 
     #[test]
-    fn test_transaction_clone_creates_fresh_entries() {
+    fn test_clone_with_new_state_creates_fresh_entry() {
         let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let tx = TestAction.apply(tx).unwrap();
+        let tx = TestAction.apply(Transaction::new(&table)).unwrap();
 
-        let cloned = tx.clone();
-
-        // The clone is a new execution of the same action plan: intent is
-        // duplicated, entries are independent.
-        assert_eq!(cloned.actions.len(), 1);
-        (*cloned.actions[0])
+        // A new logical execution of the same action: intent is duplicated,
+        // the entry is independent and holds fresh state.
+        let cloned = tx.actions[0].clone_with_new_state();
+        (*cloned)
             .downcast_ref::<ActionEntry<TestAction>>()
-            .expect("cloned transaction should hold the same action type");
+            .expect("new entry should hold the same action type");
+    }
+
+    #[tokio::test]
+    async fn test_stateless_action_blanket_impl() {
+        let table = make_v2_table();
+
+        // commit goes through the blanket TransactionAction impl
+        let mut commit = commit_with_fresh_state(StatelessTestAction, &table)
+            .await
+            .unwrap();
+        assert_eq!(commit.take_updates(), vec![TableUpdate::SetLocation {
+            location: String::from("s3://bucket/prefix/stateless/"),
+        }]);
+
+        // ApplyTransactionAction is available through the blanket impl too
+        let tx = StatelessTestAction.apply(Transaction::new(&table)).unwrap();
+        assert_eq!(tx.actions.len(), 1);
+
+        // and the erased cleanup forwarding chain compiles and runs
+        let entry: Box<ActionEntry<StatelessTestAction>> =
+            Box::new(ActionEntry::new(StatelessTestAction));
+        entry.cleanup(&table, CommitStatus::Committed).await;
     }
 
     #[test]

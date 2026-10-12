@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use async_trait::async_trait;
 
 use crate::table::Table;
-use crate::transaction::action::{ActionCommit, CommitStatus, TransactionAction};
+use crate::transaction::action::{ActionCommit, StatelessAction};
 use crate::{Error, ErrorKind, Result, TableUpdate};
 
 /// A transactional action that updates or removes table properties
@@ -75,12 +75,8 @@ impl UpdatePropertiesAction {
 }
 
 #[async_trait]
-impl TransactionAction for UpdatePropertiesAction {
-    type State = ();
-
-    fn new_state(&self) -> Self::State {}
-
-    async fn commit(&self, _state: &mut (), _table: &Table) -> Result<ActionCommit> {
+impl StatelessAction for UpdatePropertiesAction {
+    async fn apply(&self, _table: &Table) -> Result<ActionCommit> {
         if let Some(overlapping_key) = self.removals.iter().find(|k| self.updates.contains_key(*k))
         {
             return Err(Error::new(
@@ -100,8 +96,6 @@ impl TransactionAction for UpdatePropertiesAction {
 
         Ok(ActionCommit::new(updates, vec![]))
     }
-
-    async fn cleanup(self: Box<Self>, _state: (), _table: &Table, _status: CommitStatus) {}
 }
 
 #[cfg(test)]

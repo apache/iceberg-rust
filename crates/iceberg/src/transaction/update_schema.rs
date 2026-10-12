@@ -26,7 +26,7 @@ use crate::spec::{
     StructType, Type,
 };
 use crate::table::Table;
-use crate::transaction::action::{ActionCommit, CommitStatus, TransactionAction};
+use crate::transaction::action::{ActionCommit, StatelessAction};
 use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 
 // Default ID for a new column. This will be re-assigned to a fresh ID at commit time.
@@ -329,16 +329,12 @@ fn rebuild_field(
 }
 
 // ---------------------------------------------------------------------------
-// TransactionAction implementation
+// StatelessAction implementation
 // ---------------------------------------------------------------------------
 
 #[async_trait]
-impl TransactionAction for UpdateSchemaAction {
-    type State = ();
-
-    fn new_state(&self) -> Self::State {}
-
-    async fn commit(&self, _state: &mut (), table: &Table) -> Result<ActionCommit> {
+impl StatelessAction for UpdateSchemaAction {
+    async fn apply(&self, table: &Table) -> Result<ActionCommit> {
         let base_schema = table.metadata().current_schema();
         let mut last_column_id = table.metadata().last_column_id();
 
@@ -473,8 +469,6 @@ impl TransactionAction for UpdateSchemaAction {
 
         Ok(ActionCommit::new(updates, requirements))
     }
-
-    async fn cleanup(self: Box<Self>, _state: (), _table: &Table, _status: CommitStatus) {}
 }
 
 #[cfg(test)]
@@ -488,10 +482,9 @@ mod tests {
         VariantType,
     };
     use crate::table::Table;
+    use crate::test_utils::commit_with_fresh_state;
     use crate::transaction::Transaction;
-    use crate::transaction::action::{
-        ActionEntry, ApplyTransactionAction, commit_with_fresh_state,
-    };
+    use crate::transaction::action::{ActionEntry, ApplyTransactionAction};
     use crate::transaction::tests::make_v2_table;
     use crate::transaction::update_schema::{AddColumn, DEFAULT_FIELD_ID, UpdateSchemaAction};
     use crate::{ErrorKind, TableIdent, TableRequirement, TableUpdate};

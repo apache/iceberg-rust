@@ -3338,8 +3338,6 @@ pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::trans
 pub fn iceberg::transaction::Transaction::update_statistics(&self) -> iceberg::transaction::UpdateStatisticsAction
 pub fn iceberg::transaction::Transaction::update_table_properties(&self) -> iceberg::transaction::UpdatePropertiesAction
 pub fn iceberg::transaction::Transaction::upgrade_table_version(&self) -> iceberg::transaction::UpgradeFormatVersionAction
-impl core::clone::Clone for iceberg::transaction::Transaction
-pub fn iceberg::transaction::Transaction::clone(&self) -> Self
 pub struct iceberg::transaction::UpdateLocationAction
 impl iceberg::transaction::UpdateLocationAction
 pub fn iceberg::transaction::UpdateLocationAction::set_location(self, location: alloc::string::String) -> Self

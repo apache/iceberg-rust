@@ -86,6 +86,9 @@ impl FastAppendAction {
     }
 }
 
+// Deliberately a direct `TransactionAction` impl rather than `StatelessAction`:
+// this action is slated to become stateful, so only `State` and the member
+// bodies below should need to change when that happens.
 #[async_trait]
 impl TransactionAction for FastAppendAction {
     // TODO: replace with a persistent `SimpleSnapshotProducer` once snapshot
@@ -115,7 +118,7 @@ impl TransactionAction for FastAppendAction {
             .await
     }
 
-    async fn cleanup(self: Box<Self>, _state: (), _table: &Table, _status: CommitStatus) {
+    async fn cleanup(self, _state: (), _table: &Table, _status: CommitStatus) {
         // Stateless for now: generated manifests are not yet tracked for
         // terminal cleanup (stateful transaction RFC, milestone 2/3).
     }
@@ -182,9 +185,8 @@ mod tests {
         Struct, TableMetadata,
     };
     use crate::table::Table;
-    use crate::test_utils::{make_encrypted_table, test_runtime};
+    use crate::test_utils::{commit_with_fresh_state, make_encrypted_table, test_runtime};
     use crate::transaction::Transaction;
-    use crate::transaction::action::commit_with_fresh_state;
     use crate::transaction::tests::make_v2_minimal_table;
     use crate::{TableIdent, TableRequirement, TableUpdate};
 

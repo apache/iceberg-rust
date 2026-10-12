@@ -21,8 +21,7 @@ use async_trait::async_trait;
 
 use crate::spec::StatisticsFile;
 use crate::table::Table;
-use crate::transaction::action::CommitStatus;
-use crate::transaction::{ActionCommit, TransactionAction};
+use crate::transaction::{ActionCommit, StatelessAction};
 use crate::{Result, TableUpdate};
 
 /// A transactional action for updating statistics files in a table
@@ -70,12 +69,8 @@ impl UpdateStatisticsAction {
 }
 
 #[async_trait]
-impl TransactionAction for UpdateStatisticsAction {
-    type State = ();
-
-    fn new_state(&self) -> Self::State {}
-
-    async fn commit(&self, _state: &mut (), _table: &Table) -> Result<ActionCommit> {
+impl StatelessAction for UpdateStatisticsAction {
+    async fn apply(&self, _table: &Table) -> Result<ActionCommit> {
         let mut updates: Vec<TableUpdate> = vec![];
 
         self.statistics_to_set
@@ -94,8 +89,6 @@ impl TransactionAction for UpdateStatisticsAction {
 
         Ok(ActionCommit::new(updates, vec![]))
     }
-
-    async fn cleanup(self: Box<Self>, _state: (), _table: &Table, _status: CommitStatus) {}
 }
 
 #[cfg(test)]

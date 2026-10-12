@@ -20,8 +20,7 @@ use async_trait::async_trait;
 use crate::error::{Result, invalid_data};
 use crate::spec::{NullOrder, SchemaRef, SortDirection, SortField, SortOrder, Transform};
 use crate::table::Table;
-use crate::transaction::action::CommitStatus;
-use crate::transaction::{ActionCommit, TransactionAction};
+use crate::transaction::{ActionCommit, StatelessAction};
 use crate::{TableRequirement, TableUpdate};
 
 /// Represents a sort field whose construction and validation are deferred until commit time.
@@ -137,12 +136,8 @@ impl ReplaceSortOrderAction {
 }
 
 #[async_trait]
-impl TransactionAction for ReplaceSortOrderAction {
-    type State = ();
-
-    fn new_state(&self) -> Self::State {}
-
-    async fn commit(&self, _state: &mut (), table: &Table) -> Result<ActionCommit> {
+impl StatelessAction for ReplaceSortOrderAction {
+    async fn apply(&self, table: &Table) -> Result<ActionCommit> {
         let current_schema = table.metadata().current_schema();
         let sort_fields: Result<Vec<SortField>> = self
             .pending_sort_fields
@@ -172,8 +167,6 @@ impl TransactionAction for ReplaceSortOrderAction {
 
         Ok(ActionCommit::new(updates, requirements))
     }
-
-    async fn cleanup(self: Box<Self>, _state: (), _table: &Table, _status: CommitStatus) {}
 }
 
 #[cfg(test)]
@@ -183,7 +176,8 @@ mod tests {
     use crate::catalog::Catalog;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{NullOrder, SortDirection, Transform};
-    use crate::transaction::action::{ActionEntry, commit_with_fresh_state};
+    use crate::test_utils::commit_with_fresh_state;
+    use crate::transaction::action::ActionEntry;
     use crate::transaction::sort_order::{PendingSortField, ReplaceSortOrderAction};
     use crate::transaction::tests::{make_v2_table, make_v3_minimal_table_in_catalog};
     use crate::transaction::{ApplyTransactionAction, Transaction};

@@ -25,7 +25,7 @@ use crate::spec::{
     MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMetadata, TableProperties,
 };
 use crate::table::Table;
-use crate::transaction::action::{ActionCommit, CommitStatus, TransactionAction};
+use crate::transaction::action::{ActionCommit, StatelessAction};
 use crate::{Error, Result, TableRequirement, TableUpdate};
 
 /// A transaction action that removes snapshots from table metadata.
@@ -296,12 +296,8 @@ struct ExpirePlan {
 }
 
 #[async_trait]
-impl TransactionAction for ExpireSnapshotsAction {
-    type State = ();
-
-    fn new_state(&self) -> Self::State {}
-
-    async fn commit(&self, _state: &mut (), table: &Table) -> Result<ActionCommit> {
+impl StatelessAction for ExpireSnapshotsAction {
+    async fn apply(&self, table: &Table) -> Result<ActionCommit> {
         let metadata = table.metadata();
         let properties = metadata.table_properties();
 
@@ -362,8 +358,6 @@ impl TransactionAction for ExpireSnapshotsAction {
             },
         ]))
     }
-
-    async fn cleanup(self: Box<Self>, _state: (), _table: &Table, _status: CommitStatus) {}
 }
 
 #[cfg(test)]
@@ -378,8 +372,9 @@ mod tests {
         SnapshotRetention, StatisticsFile, Summary,
     };
     use crate::table::Table;
+    use crate::test_utils::commit_with_fresh_state;
     use crate::transaction::Transaction;
-    use crate::transaction::action::{ApplyTransactionAction, commit_with_fresh_state};
+    use crate::transaction::action::ApplyTransactionAction;
     use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
     use crate::transaction::tests::{make_v2_minimal_table, make_v2_table};
     use crate::{TableRequirement, TableUpdate};
