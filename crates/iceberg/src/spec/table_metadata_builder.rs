@@ -209,8 +209,8 @@ impl TableMetadataBuilder {
     /// - The table is format version 1, which is not supported.
     /// - `format-version` is invalid or would downgrade the table.
     /// - The partition spec or sort order names a column missing from `schema`.
-    /// - `schema` names a column after a partition field in one of the table's specs, unless one
-    ///   of its schemas already has that column. Iceberg Java allows this.
+    /// - `schema` takes the name of a partition field in one of the table's specs without being
+    ///   that field's source column.
     pub fn build_replacement(
         self,
         schema: Schema,
