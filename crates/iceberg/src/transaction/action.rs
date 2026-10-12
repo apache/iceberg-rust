@@ -291,6 +291,25 @@ mod tests {
     }
 
     #[derive(Clone)]
+    struct CountingAction;
+
+    #[async_trait]
+    impl TransactionAction for CountingAction {
+        type State = u32;
+
+        fn new_state(&self) -> Self::State {
+            0
+        }
+
+        async fn commit(&self, state: &mut u32, _table: &Table) -> Result<ActionCommit> {
+            *state += 1;
+            Ok(ActionCommit::new(vec![], vec![]))
+        }
+
+        async fn cleanup(self, _state: u32, _table: &Table, _status: CommitStatus) {}
+    }
+
+    #[derive(Clone)]
     struct StatelessTestAction;
 
     #[async_trait]
@@ -338,17 +357,37 @@ mod tests {
             .expect("TestAction was not applied to Transaction!");
     }
 
-    #[test]
-    fn test_clone_with_new_state_creates_fresh_entry() {
+    #[tokio::test]
+    async fn test_entry_retains_state_across_commits() {
         let table = make_v2_table();
-        let tx = TestAction.apply(Transaction::new(&table)).unwrap();
+        let mut tx = CountingAction.apply(Transaction::new(&table)).unwrap();
 
-        // A new logical execution of the same action: intent is duplicated,
-        // the entry is independent and holds fresh state.
+        let entry = &mut tx.actions[0];
+        entry.commit(&table).await.unwrap();
+        entry.commit(&table).await.unwrap();
+
+        let entry = (**entry)
+            .downcast_ref::<ActionEntry<CountingAction>>()
+            .unwrap();
+        assert_eq!(entry.state, 2);
+    }
+
+    #[tokio::test]
+    async fn test_clone_with_new_state_resets_state() {
+        let table = make_v2_table();
+        let mut tx = CountingAction.apply(Transaction::new(&table)).unwrap();
+        tx.actions[0].commit(&table).await.unwrap();
+
         let cloned = tx.actions[0].clone_with_new_state();
-        (*cloned)
-            .downcast_ref::<ActionEntry<TestAction>>()
-            .expect("new entry should hold the same action type");
+
+        let original = (*tx.actions[0])
+            .downcast_ref::<ActionEntry<CountingAction>>()
+            .unwrap();
+        let cloned = (*cloned)
+            .downcast_ref::<ActionEntry<CountingAction>>()
+            .unwrap();
+        assert_eq!(original.state, 1);
+        assert_eq!(cloned.state, 0);
     }
 
     #[tokio::test]
