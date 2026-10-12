@@ -67,7 +67,7 @@ pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-red
 pub const REST_CATALOG_PROP_AUTH_TYPE: &str = "rest.auth.type";
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
-const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+const USER_AGENT_LIBRARY_TOKEN: &str = concat!("iceberg-rust/", env!("CARGO_PKG_VERSION"));
 const PATH_V1: &str = "v1";
 
 /// Builder for [`RestCatalog`], the [`Catalog`]-compatible façade over a
@@ -342,7 +342,8 @@ pub(crate) fn credential_from_props(
 /// - `content-type`
 /// - `x-client-version`
 /// - `user-agent`
-/// - All headers specified by `header.xxx` in props.
+/// - All headers specified by `header.xxx` in props, with a `header.user-agent`
+///   extended by the Iceberg library token.
 pub(crate) fn extra_headers_from_props(props: &HashMap<String, String>) -> Result<HeaderMap> {
     let mut headers = HeaderMap::from_iter([
         (
@@ -355,13 +356,28 @@ pub(crate) fn extra_headers_from_props(props: &HashMap<String, String>) -> Resul
         ),
         (
             header::USER_AGENT,
-            HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
+            HeaderValue::from_static(USER_AGENT_LIBRARY_TOKEN),
         ),
     ]);
 
     headers.extend(explicit_headers_from_props(props)?);
 
     Ok(headers)
+}
+
+/// Appends the Iceberg library token to a caller-supplied `User-Agent`, which
+/// the REST spec requires whenever the header is sent. The token goes after
+/// the caller's product tokens and before any trailing `(comment)`, keeping
+/// the outermost-first order and the comment last.
+fn with_library_token(user_agent: &str) -> String {
+    let (products, comment) = user_agent
+        .find('(')
+        .map_or((user_agent, ""), |i| user_agent.split_at(i));
+    [products.trim(), USER_AGENT_LIBRARY_TOKEN, comment.trim()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The default OAuth2 token endpoint for a catalog `uri`.
@@ -376,14 +392,20 @@ pub(crate) fn explicit_headers_from_props(props: &HashMap<String, String>) -> Re
         .iter()
         .filter_map(|(k, v)| k.strip_prefix("header.").map(|k| (k, v)))
     {
+        let name = HeaderName::from_str(key).map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid header name: {key}"),
+            )
+            .with_source(e)
+        })?;
+        let value = if name == header::USER_AGENT {
+            &with_library_token(value)
+        } else {
+            value
+        };
         headers.insert(
-            HeaderName::from_str(key).map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Invalid header name: {key}"),
-                )
-                .with_source(e)
-            })?,
+            name,
             HeaderValue::from_str(value).map_err(|e| {
                 Error::new(
                     ErrorKind::DataInvalid,
@@ -2129,7 +2151,7 @@ mod tests {
             ),
             (
                 header::USER_AGENT,
-                HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
+                HeaderValue::from_static(USER_AGENT_LIBRARY_TOKEN),
             ),
         ]);
         assert_eq!(headers, expected_headers);
@@ -2166,7 +2188,7 @@ mod tests {
             ),
             (
                 header::USER_AGENT,
-                HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
+                HeaderValue::from_static(USER_AGENT_LIBRARY_TOKEN),
             ),
             (
                 HeaderName::from_static("customized-header"),
@@ -2174,6 +2196,48 @@ mod tests {
             ),
         ]);
         assert_eq!(headers, expected_headers);
+    }
+
+    #[test]
+    fn test_custom_user_agent_keeps_library_token() {
+        let props = HashMap::from([(
+            "header.user-agent".to_string(),
+            "DataFusion/50.0.0 (rust 1.95)".to_string(),
+        )]);
+
+        let headers = extra_headers_from_props(&props).unwrap();
+
+        assert_eq!(
+            headers.get(header::USER_AGENT).unwrap(),
+            &format!("DataFusion/50.0.0 {USER_AGENT_LIBRARY_TOKEN} (rust 1.95)")
+        );
+    }
+
+    #[test]
+    fn test_with_library_token() {
+        let cases = [
+            ("", USER_AGENT_LIBRARY_TOKEN.to_string()),
+            (
+                "Engine/1.0",
+                format!("Engine/1.0 {USER_AGENT_LIBRARY_TOKEN}"),
+            ),
+            (
+                "Engine/1.0 connector/2.0",
+                format!("Engine/1.0 connector/2.0 {USER_AGENT_LIBRARY_TOKEN}"),
+            ),
+            (
+                "Engine/1.0 (jvm 17; linux)",
+                format!("Engine/1.0 {USER_AGENT_LIBRARY_TOKEN} (jvm 17; linux)"),
+            ),
+            (
+                "(build abc)",
+                format!("{USER_AGENT_LIBRARY_TOKEN} (build abc)"),
+            ),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(with_library_token(input), expected, "input: {input:?}");
+        }
     }
 
     #[tokio::test]
