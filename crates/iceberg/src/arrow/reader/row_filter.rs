@@ -975,6 +975,88 @@ mod tests {
         )
     }
 
+    /// A `FileScanTask` built or deserialized outside `TableScan` carries an
+    /// un-normalized predicate, so a raw `Not(...)` can reach the reader. Driving
+    /// it through a full read with row-group filtering and row selection enabled
+    /// exercises both the row-group and page-index evaluators, which negate NOT
+    /// unsoundly. `NOT(x > 5)` over values 0..=10 must return exactly 0..=5.
+    #[tokio::test]
+    async fn test_not_predicate_read_returns_matching_rows() {
+        use arrow_array::Int32Array;
+
+        let schema = int_schema();
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("x", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_path = format!("{table_location}/not_pred.parquet");
+
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), None).unwrap();
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int32Array::from(
+            (0..=10).collect::<Vec<i32>>(),
+        ))])
+        .unwrap();
+        writer.write(&batch).expect("Writing batch");
+        writer.close().unwrap();
+
+        // NOT(x > 5) == x <= 5, bound without rewriting, as a non-TableScan caller
+        // would supply it.
+        let predicate = (!Reference::new("x").greater_than(Datum::int(5)))
+            .bind(schema.clone(), false)
+            .unwrap();
+        assert!(
+            matches!(predicate, BoundPredicate::Not(_)),
+            "test must drive a raw Not(...) node"
+        );
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+            .with_row_group_filtering_enabled(true)
+            .with_row_selection_enabled(true)
+            .build();
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema.clone())
+            .with_project_field_ids(vec![1])
+            .with_predicate(Some(predicate))
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        let mut values = Vec::new();
+        for batch in &batches {
+            let col = batch
+                .column(0)
+                .as_primitive::<arrow_array::types::Int32Type>();
+            values.extend(col.values().iter().copied());
+        }
+
+        assert_eq!(
+            values,
+            (0..=5).collect::<Vec<i32>>(),
+            "NOT(x > 5) must return exactly the rows with x <= 5"
+        );
+    }
+
     #[test]
     fn test_row_group_pruning_rejects_invalid_candidate() {
         let schema = int_schema();
