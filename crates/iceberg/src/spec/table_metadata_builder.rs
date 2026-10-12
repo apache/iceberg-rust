@@ -22,10 +22,10 @@ use uuid::Uuid;
 
 use super::{
     DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
-    ONE_MINUTE_MS, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile, Schema, SchemaRef,
-    Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef,
-    StatisticsFile, StructType, TableMetadata, TableProperties, UNPARTITIONED_LAST_ASSIGNED_ID,
-    UnboundPartitionSpec,
+    ONE_MINUTE_MS, PartitionField, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile,
+    Schema, SchemaRef, Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder,
+    SortOrderRef, StatisticsFile, StructType, TableMetadata, TableProperties, Transform,
+    UNPARTITIONED_LAST_ASSIGNED_ID, UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result, invalid_data};
 use crate::spec::{EncryptedKey, INITIAL_ROW_ID, MIN_FORMAT_VERSION_ROW_LINEAGE};
@@ -750,8 +750,7 @@ impl TableMetadataBuilder {
 
             // If name exists in schemas, validate against current schema rules
             if let Some(schema_field) = current_schema.field_by_name(partition_field.name()) {
-                let is_identity_transform =
-                    partition_field.transform() == crate::spec::Transform::Identity;
+                let is_identity_transform = partition_field.transform() == Transform::Identity;
                 let has_matching_source_id = schema_field.id == partition_field.source_id()?;
 
                 if !is_identity_transform {
@@ -844,20 +843,12 @@ impl TableMetadataBuilder {
         &self,
         unbound_spec: UnboundPartitionSpec,
     ) -> Result<UnboundPartitionSpec> {
-        // Build a map of (source_id, transform) -> field_id from existing specs. Keep the highest
-        // id of each pair so the result doesn't depend on the iteration order of `partition_specs`.
-        let mut equivalent_field_ids = HashMap::new();
-        for field in self
-            .metadata
-            .partition_specs
-            .values()
-            .flat_map(|spec| spec.fields())
-        {
-            equivalent_field_ids
-                .entry((vec![field.source_id], field.transform))
-                .and_modify(|id: &mut i32| *id = (*id).max(field.field_id))
-                .or_insert(field.field_id);
-        }
+        let equivalent_field_ids = Self::highest_equivalent_field_ids(
+            self.metadata
+                .partition_specs
+                .values()
+                .flat_map(|spec| spec.fields()),
+        );
 
         // Create new fields with reused field IDs where possible
         let fields = unbound_spec
@@ -879,6 +870,23 @@ impl TableMetadataBuilder {
             spec_id: unbound_spec.spec_id,
             fields,
         })
+    }
+
+    /// Map each (source_ids, transform) pair to the highest field id assigned to it.
+    ///
+    /// Taking the highest keeps the result independent of the order `fields` arrive in, which for
+    /// the specs of a `TableMetadata` is an arbitrary `HashMap` iteration order.
+    fn highest_equivalent_field_ids<'a>(
+        fields: impl Iterator<Item = &'a PartitionField>,
+    ) -> HashMap<(Vec<i32>, Transform), i32> {
+        let mut equivalent_field_ids = HashMap::new();
+        for field in fields {
+            equivalent_field_ids
+                .entry((vec![field.source_id], field.transform))
+                .and_modify(|id: &mut i32| *id = (*id).max(field.field_id))
+                .or_insert(field.field_id);
+        }
+        equivalent_field_ids
     }
 
     /// Set the default partition spec.
@@ -3699,6 +3707,39 @@ mod tests {
         let spec2 = result.metadata.partition_spec_by_id(2).unwrap();
         let field_ids: Vec<i32> = spec2.fields().iter().map(|f| f.field_id).collect();
         assert_eq!(field_ids, vec![1000, 1001, 1002]); // Reused 1000, 1001; new 1002
+    }
+
+    #[test]
+    fn test_highest_equivalent_field_ids_is_independent_of_field_order() {
+        let field = |source_id, field_id, transform| PartitionField {
+            source_id,
+            field_id,
+            name: format!("f{field_id}"),
+            transform,
+        };
+        let fields = vec![
+            field(1, 1000, Transform::Identity),
+            field(2, 1003, Transform::Identity),
+            field(1, 1006, Transform::Identity),
+            field(1, 1005, Transform::Bucket(16)),
+            field(2, 1001, Transform::Identity),
+            field(1, 1002, Transform::Identity),
+            field(1, 1004, Transform::Bucket(16)),
+        ];
+        let expected = HashMap::from([
+            ((vec![1], Transform::Identity), 1006),
+            ((vec![2], Transform::Identity), 1003),
+            ((vec![1], Transform::Bucket(16)), 1005),
+        ]);
+
+        assert_eq!(
+            TableMetadataBuilder::highest_equivalent_field_ids(fields.iter()),
+            expected
+        );
+        assert_eq!(
+            TableMetadataBuilder::highest_equivalent_field_ids(fields.iter().rev()),
+            expected
+        );
     }
 
     #[test]
