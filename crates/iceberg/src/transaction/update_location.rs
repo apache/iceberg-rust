@@ -61,8 +61,10 @@ impl TransactionAction for UpdateLocationAction {
 
     async fn commit(&self, _state: &mut (), _table: &Table) -> Result<ActionCommit> {
         let updates: Vec<TableUpdate>;
-        if let Some(location) = self.location.clone() {
-            updates = vec![TableUpdate::SetLocation { location }];
+        if let Some(location) = self.location.as_deref() {
+            updates = vec![TableUpdate::SetLocation {
+                location: location.to_owned(),
+            }];
         } else {
             return Err(invalid_data!(
                 "Location is not set for UpdateLocationAction!"

@@ -99,7 +99,7 @@ impl Clone for Transaction {
             actions: self
                 .actions
                 .iter()
-                .map(|entry| entry.fresh_clone())
+                .map(|entry| entry.clone_with_new_state())
                 .collect(),
         }
     }

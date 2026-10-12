@@ -125,7 +125,7 @@ impl<A: TransactionAction> ActionEntry<A> {
     }
 
     /// The action (intent) held by this entry.
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn action(&self) -> &A {
         &self.action
     }
@@ -148,7 +148,7 @@ pub(crate) trait ErasedActionEntry: AsAny + Send + Sync {
     /// the action (intent) is cloned, and it is paired with fresh state from
     /// [`TransactionAction::new_state`]. Accrued retry state is never carried
     /// over to the new entry.
-    fn fresh_clone(&self) -> TransactionActionEntry;
+    fn clone_with_new_state(&self) -> TransactionActionEntry;
 }
 
 #[async_trait]
@@ -162,7 +162,7 @@ impl<A: TransactionAction> ErasedActionEntry for ActionEntry<A> {
         entry.action.cleanup(entry.state, table, status).await
     }
 
-    fn fresh_clone(&self) -> TransactionActionEntry {
+    fn clone_with_new_state(&self) -> TransactionActionEntry {
         Box::new(ActionEntry::new((*self.action).clone()))
     }
 }
