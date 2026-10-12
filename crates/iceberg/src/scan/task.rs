@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::stream::BoxStream;
@@ -24,8 +25,8 @@ use typed_builder::TypedBuilder;
 use crate::error::invalid_data;
 use crate::expr::BoundPredicate;
 use crate::spec::{
-    DataContentType, DataFileFormat, ManifestEntryRef, NameMapping, PartitionSpec, Schema,
-    SchemaRef, SortOrderRef, Struct, StructType,
+    DataContentType, DataFile, DataFileFormat, Datum, ManifestEntryRef, NameMapping, PartitionSpec,
+    Schema, SchemaRef, SortOrderRef, Struct, StructType,
 };
 use crate::{Error, Result};
 
@@ -136,6 +137,12 @@ pub struct FileScanTask {
     /// to tell those cases apart.
     #[builder(default)]
     sort_order: Option<SortOrderRef>,
+
+    /// The data file's column statistics for the columns requested with
+    /// [`TableScanBuilder::with_column_stats`](crate::scan::TableScanBuilder::with_column_stats).
+    /// `None` if no statistics were requested.
+    #[builder(default)]
+    column_stats: Option<FileScanTaskColumnStats>,
 
     /// Whether this scan task should treat column names as case-sensitive when binding predicates.
     case_sensitive: bool,
@@ -256,6 +263,13 @@ impl FileScanTask {
     /// Returns the sort order this file's rows are sorted by, if resolved.
     pub fn sort_order(&self) -> Option<&SortOrderRef> {
         self.sort_order.as_ref()
+    }
+
+    /// Returns the data file's column statistics for the columns requested with
+    /// [`TableScanBuilder::with_column_stats`](crate::scan::TableScanBuilder::with_column_stats),
+    /// or `None` if none were requested.
+    pub fn column_stats(&self) -> Option<&FileScanTaskColumnStats> {
+        self.column_stats.as_ref()
     }
 
     /// Returns whether names are treated as case-sensitive.
@@ -434,7 +448,7 @@ mod _serde {
 
     use serde::{Deserialize, Serialize};
 
-    use super::{FileScanTask, FileScanTaskDeleteFile};
+    use super::{FileScanTask, FileScanTaskColumnStats, FileScanTaskDeleteFile};
     use crate::error::invalid_data;
     use crate::expr::BoundPredicate;
     use crate::spec::{
@@ -469,6 +483,8 @@ mod _serde {
         sort_order_id: Option<i32>,
         #[serde(default)]
         sort_order: Option<SortOrderRef>,
+        #[serde(default)]
+        column_stats: Option<FileScanTaskColumnStats>,
         case_sensitive: bool,
         #[serde(default)]
         key_metadata: Option<Box<[u8]>>,
@@ -504,6 +520,8 @@ mod _serde {
         sort_order_id: Option<i32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         sort_order: Option<&'a SortOrderRef>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        column_stats: Option<&'a FileScanTaskColumnStats>,
         case_sensitive: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         key_metadata: Option<&'a [u8]>,
@@ -553,6 +571,7 @@ mod _serde {
                 unified_partition_type: value.unified_partition_type.as_ref(),
                 sort_order_id: value.sort_order_id,
                 sort_order: value.sort_order.as_ref(),
+                column_stats: value.column_stats.as_ref(),
                 case_sensitive: value.case_sensitive,
                 key_metadata: value.key_metadata.as_deref(),
             })
@@ -603,6 +622,7 @@ mod _serde {
                 .with_unified_partition_type(value.unified_partition_type)
                 .with_sort_order_id(value.sort_order_id)
                 .with_sort_order(value.sort_order)
+                .with_column_stats(value.column_stats)
                 .with_case_sensitive(value.case_sensitive)
                 .with_key_metadata(value.key_metadata)
                 .build()
@@ -757,6 +777,88 @@ impl From<FileScanTaskDeleteFile> for Result<FileScanTaskDeleteFile> {
     fn from(task: FileScanTaskDeleteFile) -> Self {
         task.validate()?;
         Ok(task)
+    }
+}
+
+/// Column statistics of a [`FileScanTask`]'s data file, from its manifest entry.
+///
+/// Each map is keyed by field id and holds only the columns requested for the scan. A
+/// requested column missing from a map has unknown statistics of that kind: metrics mode
+/// `none` records nothing for the column, while metrics mode `counts` and an all-null column
+/// record counts but no bounds.
+///
+/// Bounds are inclusive. A truncated lower bound is still less than or equal to every value in
+/// the file, and a truncated upper bound is still greater than or equal to every value. Bounds
+/// are typed with the schema the manifest was written with, so after type promotion a bound
+/// can be an `int` while the scan schema says `long`.
+///
+/// The statistics describe the whole data file: they are not adjusted for delete files, the
+/// scan's filter, or the byte range of a split task.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TypedBuilder)]
+#[builder(field_defaults(default, setter(prefix = "with_")))]
+pub struct FileScanTaskColumnStats {
+    /// Number of values per field id, including nulls and NaNs.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    value_counts: HashMap<i32, u64>,
+
+    /// Number of null values per field id.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    null_value_counts: HashMap<i32, u64>,
+
+    /// Number of NaN values per field id.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    nan_value_counts: HashMap<i32, u64>,
+
+    /// Inclusive lower bound per field id.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    lower_bounds: HashMap<i32, Datum>,
+
+    /// Inclusive upper bound per field id.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    upper_bounds: HashMap<i32, Datum>,
+}
+
+impl FileScanTaskColumnStats {
+    pub(crate) fn from_data_file(data_file: &DataFile, field_ids: &[i32]) -> Self {
+        fn retain<V: Clone>(map: &HashMap<i32, V>, field_ids: &[i32]) -> HashMap<i32, V> {
+            field_ids
+                .iter()
+                .filter_map(|id| map.get(id).map(|value| (*id, value.clone())))
+                .collect()
+        }
+
+        Self {
+            value_counts: retain(data_file.value_counts(), field_ids),
+            null_value_counts: retain(data_file.null_value_counts(), field_ids),
+            nan_value_counts: retain(data_file.nan_value_counts(), field_ids),
+            lower_bounds: retain(data_file.lower_bounds(), field_ids),
+            upper_bounds: retain(data_file.upper_bounds(), field_ids),
+        }
+    }
+
+    /// Returns the number of values per field id, including nulls and NaNs.
+    pub fn value_counts(&self) -> &HashMap<i32, u64> {
+        &self.value_counts
+    }
+
+    /// Returns the number of null values per field id.
+    pub fn null_value_counts(&self) -> &HashMap<i32, u64> {
+        &self.null_value_counts
+    }
+
+    /// Returns the number of NaN values per field id.
+    pub fn nan_value_counts(&self) -> &HashMap<i32, u64> {
+        &self.nan_value_counts
+    }
+
+    /// Returns the inclusive lower bound per field id.
+    pub fn lower_bounds(&self) -> &HashMap<i32, Datum> {
+        &self.lower_bounds
+    }
+
+    /// Returns the inclusive upper bound per field id.
+    pub fn upper_bounds(&self) -> &HashMap<i32, Datum> {
+        &self.upper_bounds
     }
 }
 

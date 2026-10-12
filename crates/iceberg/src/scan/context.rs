@@ -25,8 +25,8 @@ use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
 use crate::scan::{
-    BoundPredicates, ExpressionEvaluatorCache, FileScanTask, ManifestEvaluatorCache,
-    PartitionFilterCache,
+    BoundPredicates, ExpressionEvaluatorCache, FileScanTask, FileScanTaskColumnStats,
+    ManifestEvaluatorCache, PartitionFilterCache,
 };
 use crate::spec::{
     ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
@@ -52,6 +52,7 @@ pub(crate) struct ManifestFileContext {
     partition_spec: Option<PartitionSpecRef>,
     unified_partition_type: Option<Arc<StructType>>,
     sort_orders: Arc<HashMap<i64, SortOrderRef>>,
+    column_stats_field_ids: Option<Arc<Vec<i32>>>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -71,6 +72,7 @@ pub(crate) struct ManifestEntryContext {
     pub unified_partition_type: Option<Arc<StructType>>,
     pub sort_order_id: Option<i32>,
     pub sort_order: Option<SortOrderRef>,
+    pub column_stats_field_ids: Option<Arc<Vec<i32>>>,
 }
 
 impl ManifestFileContext {
@@ -91,6 +93,7 @@ impl ManifestFileContext {
             partition_spec,
             unified_partition_type,
             sort_orders,
+            column_stats_field_ids,
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
@@ -122,6 +125,7 @@ impl ManifestFileContext {
                 unified_partition_type: unified_partition_type.clone(),
                 sort_order_id,
                 sort_order,
+                column_stats_field_ids: column_stats_field_ids.clone(),
             };
 
             sender
@@ -170,6 +174,9 @@ impl ManifestEntryContext {
             .with_key_metadata(self.manifest_entry.data_file.key_metadata().map(Box::from))
             .with_sort_order_id(self.sort_order_id)
             .with_sort_order(self.sort_order)
+            .with_column_stats(self.column_stats_field_ids.map(|field_ids| {
+                FileScanTaskColumnStats::from_data_file(self.manifest_entry.data_file(), &field_ids)
+            }))
             .build()
     }
 
@@ -216,6 +223,9 @@ pub(crate) struct PlanContext {
     /// [`ManifestFileContext`] carries only this narrow map rather than the full table
     /// metadata. Mirrors how `unified_partition_type` carries a precomputed value.
     pub sort_orders: Arc<HashMap<i64, SortOrderRef>>,
+
+    /// Field ids whose column statistics each [`FileScanTask`] retains, or `None` to retain none.
+    pub column_stats_field_ids: Option<Arc<Vec<i32>>>,
 }
 
 impl PlanContext {
@@ -347,6 +357,7 @@ impl PlanContext {
                 .cloned(),
             unified_partition_type: self.unified_partition_type.clone(),
             sort_orders: self.sort_orders.clone(),
+            column_stats_field_ids: self.column_stats_field_ids.clone(),
         }
     }
 }

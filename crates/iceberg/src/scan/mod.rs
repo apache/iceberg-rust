@@ -103,6 +103,26 @@ fn collect_scan_field_ids(
         .collect()
 }
 
+fn collect_column_stats_field_ids(
+    schema: &Schema,
+    column_names: &[String],
+    case_sensitive: bool,
+) -> Result<Option<Arc<Vec<i32>>>> {
+    if column_names.is_empty() {
+        return Ok(None);
+    }
+
+    column_names
+        .iter()
+        .map(|column_name| {
+            resolve_field_id(schema, column_name, case_sensitive)?.ok_or_else(|| {
+                invalid_data!("Column {column_name} not found in table. Schema: {schema}")
+            })
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|field_ids| Some(Arc::new(field_ids)))
+}
+
 fn bind_scan_predicate(
     schema: &SchemaRef,
     predicate: Option<&Predicate>,
@@ -135,6 +155,7 @@ pub struct TableScanBuilder<'a> {
     table: &'a Table,
     // Defaults to none which means select all columns
     column_names: Option<Vec<String>>,
+    column_stats_names: Vec<String>,
     snapshot_id: Option<i64>,
     batch_size: Option<usize>,
     case_sensitive: bool,
@@ -154,6 +175,7 @@ impl<'a> TableScanBuilder<'a> {
         Self {
             table,
             column_names: None,
+            column_stats_names: vec![],
             snapshot_id: None,
             batch_size: None,
             case_sensitive: true,
@@ -208,6 +230,25 @@ impl<'a> TableScanBuilder<'a> {
                 .map(|item| item.to_string())
                 .collect(),
         );
+        self
+    }
+
+    /// Retains the data file's column statistics for the named columns on each planned
+    /// [`FileScanTask`], exposed as [`FileScanTask::column_stats`].
+    ///
+    /// Names resolve against the scan's schema with the scan's case sensitivity and may name
+    /// nested fields. An empty list retains no statistics, which is the default.
+    ///
+    /// [`build`](Self::build) fails if a name matches no field, or more than one field when the
+    /// scan is case-insensitive.
+    pub fn with_column_stats(
+        mut self,
+        column_names: impl IntoIterator<Item = impl ToString>,
+    ) -> Self {
+        self.column_stats_names = column_names
+            .into_iter()
+            .map(|item| item.to_string())
+            .collect();
         self
     }
 
@@ -316,6 +357,8 @@ impl<'a> TableScanBuilder<'a> {
         let schema = snapshot.schema(self.table.metadata())?;
         let field_ids =
             collect_scan_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
+        let column_stats_field_ids =
+            collect_column_stats_field_ids(&schema, &self.column_stats_names, self.case_sensitive)?;
         let snapshot_bound_predicate =
             bind_scan_predicate(&schema, self.filter.as_ref(), self.case_sensitive)?;
         let name_mapping = self
@@ -351,6 +394,7 @@ impl<'a> TableScanBuilder<'a> {
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
             unified_partition_type,
             sort_orders,
+            column_stats_field_ids,
         };
 
         Ok(TableScan {
@@ -703,7 +747,7 @@ mod tests {
         RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
         RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_POS,
     };
-    use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
+    use crate::scan::{FileScanTask, FileScanTaskColumnStats, FileScanTaskDeleteFile, TableScan};
     use crate::spec::{
         DataContentType, DataFileFormat, Datum, Literal, MAIN_BRANCH, MappedField, NameMapping,
         NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema, Snapshot,
@@ -1104,6 +1148,112 @@ mod tests {
             unsorted.sort_order().is_none(),
             "the reserved unsorted order (id 0) resolves to no sort_order"
         );
+    }
+
+    /// One column's statistics: field id, value count, null count, NaN count, lower bound
+    /// and upper bound.
+    type ColumnStat = (i32, u64, u64, Option<u64>, Datum, Datum);
+
+    fn column_stats(columns: &[ColumnStat]) -> FileScanTaskColumnStats {
+        FileScanTaskColumnStats::builder()
+            .with_value_counts(columns.iter().map(|c| (c.0, c.1)).collect())
+            .with_null_value_counts(columns.iter().map(|c| (c.0, c.2)).collect())
+            .with_nan_value_counts(columns.iter().filter_map(|c| Some((c.0, c.3?))).collect())
+            .with_lower_bounds(columns.iter().map(|c| (c.0, c.4.clone())).collect())
+            .with_upper_bounds(columns.iter().map(|c| (c.0, c.5.clone())).collect())
+            .build()
+    }
+
+    async fn column_stats_by_file(scan: TableScan) -> Vec<Option<FileScanTaskColumnStats>> {
+        let mut tasks: Vec<_> = scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        tasks.sort_by(|a, b| a.data_file_path().cmp(b.data_file_path()));
+        tasks
+            .into_iter()
+            .map(|task| task.column_stats().cloned())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_retains_requested_column_stats() {
+        let mut fixture = TableTestFixture::new();
+
+        let x: ColumnStat = (1, 1, 0, None, Datum::long(1), Datum::long(10));
+        let a: ColumnStat = (4, 1, 0, None, Datum::string("apple"), Datum::string("pear"));
+        let dbl: ColumnStat = (5, 1, 0, Some(1), Datum::double(1.5), Datum::double(2.5));
+
+        // The second file has no statistics for `x`.
+        fixture
+            .setup_manifest_files_with_column_stats(&[
+                column_stats(&[x.clone(), a.clone(), dbl.clone()]),
+                column_stats(&[a.clone(), dbl.clone()]),
+            ])
+            .await;
+        let table = &fixture.table;
+
+        assert_eq!(
+            column_stats_by_file(table.scan().build().unwrap()).await,
+            vec![None, None]
+        );
+        assert_eq!(
+            column_stats_by_file(
+                table
+                    .scan()
+                    .with_column_stats(Vec::<String>::new())
+                    .build()
+                    .unwrap()
+            )
+            .await,
+            vec![None, None]
+        );
+        assert_eq!(
+            column_stats_by_file(
+                table
+                    .scan()
+                    .with_column_stats(["x", "dbl"])
+                    .build()
+                    .unwrap()
+            )
+            .await,
+            vec![
+                Some(column_stats(&[x, dbl.clone()])),
+                Some(column_stats(&[dbl])),
+            ]
+        );
+        assert_eq!(
+            column_stats_by_file(
+                table
+                    .scan()
+                    .with_case_sensitive(false)
+                    .with_column_stats(["A"])
+                    .build()
+                    .unwrap()
+            )
+            .await,
+            vec![
+                Some(column_stats(std::slice::from_ref(&a))),
+                Some(column_stats(&[a])),
+            ]
+        );
+
+        for column in ["unknown", "A"] {
+            let err = table
+                .scan()
+                .with_column_stats([column])
+                .build()
+                .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(
+                err.message()
+                    .starts_with(&format!("Column {column} not found in table")),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1950,11 +2100,41 @@ mod tests {
             .with_unified_partition_type(Some(unified_partition_type))
             .with_sort_order_id(Some(1))
             .with_sort_order(Some(sort_order))
+            .with_column_stats(Some(
+                FileScanTaskColumnStats::builder()
+                    .with_value_counts(HashMap::from([(1, 10), (2, 10)]))
+                    .with_null_value_counts(HashMap::from([(1, 0), (2, 1)]))
+                    .with_nan_value_counts(HashMap::from([(3, 2)]))
+                    .with_lower_bounds(HashMap::from([
+                        (1, Datum::string("apple")),
+                        (2, Datum::decimal_from_str("-12.34").unwrap()),
+                    ]))
+                    .with_upper_bounds(HashMap::from([
+                        (1, Datum::string("pear")),
+                        (2, Datum::decimal_from_str("56.78").unwrap()),
+                    ]))
+                    .build(),
+            ))
             .with_case_sensitive(true)
             .with_key_metadata(Some(vec![1, 2, 3].into_boxed_slice()))
             .build()
             .unwrap();
         assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_omits_absent_column_stats() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Long,
+            Transform::Identity,
+            Literal::long(42),
+        );
+
+        let serialized = serde_json::to_value(&task).unwrap();
+        assert!(serialized.get("column_stats").is_none());
+
+        let deserialized: FileScanTask = serde_json::from_value(serialized).unwrap();
+        assert_eq!(deserialized.column_stats(), None);
     }
 
     #[test]
