@@ -153,12 +153,10 @@ impl TableMetadata {
         TableMetadataBuilder::new_from_metadata(self, current_file_location)
     }
 
-    /// Check if a partition field name exists in any partition spec.
+    /// Check if a partition field name exists in the current partition spec.
     #[inline]
-    pub(crate) fn partition_name_exists(&self, name: &str) -> bool {
-        self.partition_specs
-            .values()
-            .any(|spec| spec.fields().iter().any(|pf| pf.name == name))
+    pub(crate) fn default_partition_name_exists(&self, name: &str) -> bool {
+        self.default_spec.fields().iter().any(|pf| pf.name == name)
     }
 
     /// Check if a field name exists in any schema.
@@ -3800,7 +3798,7 @@ mod tests {
     }
 
     #[test]
-    fn test_partition_name_exists() {
+    fn test_default_partition_name_exists() {
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
@@ -3840,16 +3838,17 @@ mod tests {
         .unwrap()
         .metadata;
 
-        assert!(metadata.partition_name_exists("data_partition"));
-        assert!(metadata.partition_name_exists("partition_bucket"));
+        assert!(metadata.default_partition_name_exists("data_partition"));
+        // In spec 2, which is not the current spec.
+        assert!(!metadata.default_partition_name_exists("partition_bucket"));
 
-        assert!(!metadata.partition_name_exists("nonexistent_field"));
-        assert!(!metadata.partition_name_exists("data")); // schema field name, not partition field name
-        assert!(!metadata.partition_name_exists(""));
+        assert!(!metadata.default_partition_name_exists("nonexistent_field"));
+        assert!(!metadata.default_partition_name_exists("data")); // schema field name, not partition field name
+        assert!(!metadata.default_partition_name_exists(""));
     }
 
     #[test]
-    fn test_partition_name_exists_empty_specs() {
+    fn test_default_partition_name_exists_empty_specs() {
         // Create metadata with no partition specs (unpartitioned table)
         let schema = Schema::builder()
             .with_fields(vec![
@@ -3871,8 +3870,8 @@ mod tests {
         .unwrap()
         .metadata;
 
-        assert!(!metadata.partition_name_exists("any_field"));
-        assert!(!metadata.partition_name_exists("data"));
+        assert!(!metadata.default_partition_name_exists("any_field"));
+        assert!(!metadata.default_partition_name_exists("data"));
     }
 
     #[test]
@@ -4003,7 +4002,7 @@ mod tests {
             .unwrap()
             .metadata;
 
-        assert!(!final_metadata.partition_name_exists("nonexistent_partition")); // unpartitioned table
+        assert!(!final_metadata.default_partition_name_exists("nonexistent_partition")); // unpartitioned table
 
         assert!(final_metadata.name_exists_in_any_schema("id")); // exists in both schemas
         assert!(final_metadata.name_exists_in_any_schema("name")); // exists in both schemas
