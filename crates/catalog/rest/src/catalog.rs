@@ -67,15 +67,21 @@ pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-red
 /// otherwise.
 pub const REST_CATALOG_PROP_AUTH_TYPE: &str = "rest.auth.type";
 /// Maximum number of loaded tables kept for freshness-aware loading (defaults
-/// to 100; 0 disables the cache).
+/// to 100; 0 disables the cache). The cache is keyed by session id, so it only
+/// helps callers that reuse a [`SessionContext`].
 pub const REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES: &str = "rest-table-cache.max-entries";
 /// How long a loaded table stays cached for freshness-aware loading, in
 /// milliseconds (defaults to 5 minutes; must be positive and at most 1000 years).
 pub const REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS: &str =
     "rest-table-cache.expire-after-write-ms";
 
-/// Tables loaded with an `ETag`, keyed by session id and identifier. Stale
-/// entries are harmless: the server answers `304` only while the `ETag` matches.
+const TABLE_CACHE_MAX_ENTRIES_DEFAULT: u64 = 100;
+const TABLE_CACHE_EXPIRE_AFTER_WRITE_MS_DEFAULT: u64 = 5 * 60 * 1000;
+/// moka panics on a time-to-live beyond 1000 years.
+const TABLE_CACHE_EXPIRE_AFTER_WRITE_MAX: Duration = Duration::from_secs(1000 * 365 * 24 * 3600);
+
+/// Tables loaded with an `ETag`, keyed by session id and identifier. Loads that
+/// vend storage credentials are not cached, since a `304` cannot refresh them.
 type TableCache = moka::sync::Cache<(String, TableIdent), (String, Table)>;
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
@@ -320,21 +326,22 @@ impl RestCatalogConfig {
         };
         let expire_after_write = Duration::from_millis(parse(
             REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS,
-            300_000,
+            TABLE_CACHE_EXPIRE_AFTER_WRITE_MS_DEFAULT,
         )?);
-        // Zero is ambiguous (disable or never expire), and moka panics beyond 1000 years.
-        if expire_after_write.is_zero()
-            || expire_after_write > Duration::from_secs(1000 * 365 * 24 * 3600)
-        {
+        // Zero is ambiguous: it could mean "disable" or "never expire".
+        if expire_after_write.is_zero() || expire_after_write > TABLE_CACHE_EXPIRE_AFTER_WRITE_MAX {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!(
-                    "Invalid {REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS}: must be between 1 ms and 1000 years"
+                    "Invalid {REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS}: {expire_after_write:?} (must be between 1 ms and 1000 years)"
                 ),
             ));
         }
         Ok(TableCache::builder()
-            .max_capacity(parse(REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES, 100)?)
+            .max_capacity(parse(
+                REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES,
+                TABLE_CACHE_MAX_ENTRIES_DEFAULT,
+            )?)
             .time_to_live(expire_after_write)
             .build())
     }
@@ -530,6 +537,11 @@ impl RestCatalogClient {
             http_client,
             endpoints,
         })
+    }
+
+    fn invalidate_table(&self, context: &SessionContext, table: &TableIdent) {
+        self.table_cache
+            .invalidate(&(context.session_id().to_string(), table.clone()));
     }
 
     /// Testing only: the bearer token the catalog session would attach.
@@ -812,6 +824,7 @@ impl RestSessionCatalog {
 
         let request = HttpRequest::build(request_builder)?;
         let http_response = client.query_catalog(context, request).await?;
+        client.invalidate_table(context, table);
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
@@ -1307,14 +1320,19 @@ impl SessionCatalog for RestSessionCatalog {
         let request = HttpRequest::build(request_builder)?;
 
         let http_response = client.query_catalog(context, request).await?;
-        let etag = http_response
-            .headers()
-            .get(header::ETAG)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
 
-        let response = match http_response.status() {
-            StatusCode::OK => deserialize_catalog_response::<LoadTableResult>(http_response)?,
+        let (response, etag) = match http_response.status() {
+            StatusCode::OK => {
+                let etag = http_response
+                    .headers()
+                    .get(header::ETAG)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                (
+                    deserialize_catalog_response::<LoadTableResult>(http_response)?,
+                    etag,
+                )
+            }
             StatusCode::NOT_MODIFIED => {
                 return cached.map(|(_, table)| table).ok_or_else(|| {
                     Error::new(
@@ -1324,6 +1342,7 @@ impl SessionCatalog for RestSessionCatalog {
                 });
             }
             StatusCode::NOT_FOUND => {
+                client.invalidate_table(context, table_ident);
                 return Err(Error::new(
                     ErrorKind::TableNotFound,
                     "Tried to load a table that does not exist",
@@ -1336,6 +1355,12 @@ impl SessionCatalog for RestSessionCatalog {
                 ));
             }
         };
+
+        let vends_credentials = response
+            .storage_credentials
+            .as_ref()
+            .is_some_and(|credentials| !credentials.is_empty())
+            || response.config.keys().any(|key| is_sensitive_prop(key));
 
         let config = response
             .config
@@ -1362,8 +1387,11 @@ impl SessionCatalog for RestSessionCatalog {
             table_builder.build()
         }?;
 
-        if let Some(etag) = etag {
-            client.table_cache.insert(cache_key, (etag, table.clone()));
+        match etag {
+            Some(etag) if !vends_credentials => {
+                client.table_cache.insert(cache_key, (etag, table.clone()))
+            }
+            _ => client.table_cache.invalidate(&cache_key),
         }
         Ok(table)
     }
@@ -1417,6 +1445,7 @@ impl SessionCatalog for RestSessionCatalog {
         )?;
 
         let http_response = client.query_catalog(context, request).await?;
+        client.invalidate_table(context, src);
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
@@ -1460,6 +1489,7 @@ impl SessionCatalog for RestSessionCatalog {
         )?;
 
         let http_response = client.query_catalog(context, request).await?;
+        client.invalidate_table(context, table_ident);
 
         let response: LoadTableResult = match http_response.status() {
             StatusCode::OK => deserialize_catalog_response::<LoadTableResult>(http_response)?,
@@ -1524,6 +1554,7 @@ impl SessionCatalog for RestSessionCatalog {
         )?;
 
         let http_response = client.query_catalog(context, request).await?;
+        client.invalidate_table(context, commit.identifier());
 
         let response: CommitTableResponse = match http_response.status() {
             StatusCode::OK => deserialize_catalog_response(http_response)?,
@@ -1772,7 +1803,7 @@ mod tests {
     };
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
     use iceberg_test_utils::test_runtime;
-    use mockito::{Mock, Server, ServerGuard};
+    use mockito::{Matcher, Mock, Server, ServerGuard};
     use serde_json::json;
     use uuid::uuid;
 
@@ -2135,13 +2166,9 @@ mod tests {
         let mut server = Server::new_async().await;
         let oauth_mock = server
             .mock("POST", "/v1/oauth/tokens")
-            .match_body(mockito::Matcher::Regex("scope=custom_scope".to_string()))
-            .match_body(mockito::Matcher::Regex(
-                "audience=custom_audience".to_string(),
-            ))
-            .match_body(mockito::Matcher::Regex(
-                "resource=custom_resource".to_string(),
-            ))
+            .match_body(Matcher::Regex("scope=custom_scope".to_string()))
+            .match_body(Matcher::Regex("audience=custom_audience".to_string()))
+            .match_body(Matcher::Regex("resource=custom_resource".to_string()))
             .with_status(200)
             .with_body(
                 r#"{
@@ -2568,9 +2595,9 @@ mod tests {
             .match_header("x-tenant", "t1")
             // The default catalog scope must survive alongside the injected
             // audience (with_extra_oauth_params merges onto the defaults).
-            .match_body(mockito::Matcher::AllOf(vec![
-                mockito::Matcher::Regex("scope=catalog".to_string()),
-                mockito::Matcher::Regex("audience=aud-1".to_string()),
+            .match_body(Matcher::AllOf(vec![
+                Matcher::Regex("scope=catalog".to_string()),
+                Matcher::Regex("audience=aud-1".to_string()),
             ]))
             .with_status(200)
             .with_body(
@@ -2661,7 +2688,7 @@ mod tests {
         let token_mock = server
             .mock("POST", "/v1/oauth/tokens")
             .match_header("x-from", "manager")
-            .match_header("x-catalog-only", mockito::Matcher::Missing)
+            .match_header("x-catalog-only", Matcher::Missing)
             .with_status(200)
             .with_body(r#"{"access_token": "tok", "token_type": "Bearer"}"#)
             .create_async()
@@ -2836,7 +2863,7 @@ mod tests {
         let mut server = Server::new_async().await;
         let config_mock = server
             .mock("GET", "/v1/config")
-            .match_query(mockito::Matcher::UrlEncoded(
+            .match_query(Matcher::UrlEncoded(
                 "warehouse".to_string(),
                 "client-wh".to_string(),
             ))
@@ -2868,7 +2895,7 @@ mod tests {
         let mut server = Server::new_async().await;
         let config_mock = server
             .mock("GET", "/v1/config")
-            .match_query(mockito::Matcher::UrlEncoded(
+            .match_query(Matcher::UrlEncoded(
                 "warehouse".to_string(),
                 "client-wh".to_string(),
             ))
@@ -4088,11 +4115,23 @@ mod tests {
         rename_table_mock.assert_async().await;
     }
 
+    /// A `loadTable` body for `ns1.test1` whose `metadata-location` names `tag`.
+    fn load_table_body(tag: &str) -> serde_json::Value {
+        let file = File::open(format!(
+            "{}/testdata/load_table_response.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let mut body: serde_json::Value = serde_json::from_reader(BufReader::new(file)).unwrap();
+        body["metadata-location"] = json!(format!("s3://warehouse/{tag}.metadata.json"));
+        body
+    }
+
     /// Mocks one `loadTable` of `ns1.test1` that expects `if_none_match` and
     /// answers `status`, carrying `etag` if given.
     async fn load_table_mock(
         server: &mut ServerGuard,
-        if_none_match: mockito::Matcher,
+        if_none_match: Matcher,
         status: usize,
         etag: Option<&str>,
     ) -> Mock {
@@ -4102,17 +4141,14 @@ mod tests {
             .with_status(status);
         if let Some(etag) = etag {
             mock = mock.with_header("etag", etag);
-        }
-        if status == 200 {
-            mock = mock.with_body_from_file(format!(
-                "{}/testdata/load_table_response.json",
-                env!("CARGO_MANIFEST_DIR")
-            ));
+            if status == 200 {
+                mock = mock.with_body(load_table_body(etag.trim_matches('"')).to_string());
+            }
         }
         mock.create_async().await
     }
 
-    fn test1() -> TableIdent {
+    fn test_table_ident() -> TableIdent {
         TableIdent::from_strs(["ns1", "test1"]).unwrap()
     }
 
@@ -4120,23 +4156,24 @@ mod tests {
     async fn test_load_table_revalidates_cached_table_with_etag() {
         let mut server = Server::new_async().await;
         let _config = create_config_mock(&mut server).await;
-        let v1 = load_table_mock(&mut server, mockito::Matcher::Missing, 200, Some("\"v1\"")).await;
+        let _v1 = load_table_mock(&mut server, Matcher::Missing, 200, Some("\"v1\"")).await;
         let reuse_v1 = load_table_mock(&mut server, "\"v1\"".into(), 304, None).await;
         let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
         let context = SessionContext::empty();
+        let location = |table: Table| table.metadata_location().unwrap().to_string();
 
-        let loaded = catalog.load_table(&context, &test1()).await.unwrap();
-        let reused = catalog.load_table(&context, &test1()).await.unwrap();
-        assert_eq!(loaded.metadata_location(), reused.metadata_location());
-        v1.assert_async().await;
-        reuse_v1.assert_async().await;
+        let v1 = "s3://warehouse/v1.metadata.json";
+        let v2 = "s3://warehouse/v2.metadata.json";
+        let ident = test_table_ident();
+        let load = || catalog.load_table(&context, &ident);
+        assert_eq!(location(load().await.unwrap()), v1);
+        assert_eq!(location(load().await.unwrap()), v1);
 
         reuse_v1.remove_async().await;
-        let v2 = load_table_mock(&mut server, "\"v1\"".into(), 200, Some("\"v2\"")).await;
+        let _v2 = load_table_mock(&mut server, "\"v1\"".into(), 200, Some("\"v2\"")).await;
         let reuse_v2 = load_table_mock(&mut server, "\"v2\"".into(), 304, None).await;
-        catalog.load_table(&context, &test1()).await.unwrap();
-        catalog.load_table(&context, &test1()).await.unwrap();
-        v2.assert_async().await;
+        assert_eq!(location(load().await.unwrap()), v2);
+        assert_eq!(location(load().await.unwrap()), v2);
         reuse_v2.assert_async().await;
     }
 
@@ -4144,11 +4181,11 @@ mod tests {
     async fn test_load_table_not_modified_without_cached_table() {
         let mut server = Server::new_async().await;
         let _config = create_config_mock(&mut server).await;
-        let _load = load_table_mock(&mut server, mockito::Matcher::Missing, 304, None).await;
+        let _load = load_table_mock(&mut server, Matcher::Missing, 304, None).await;
         let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         let err = catalog
-            .load_table(&SessionContext::empty(), &test1())
+            .load_table(&SessionContext::empty(), &test_table_ident())
             .await
             .unwrap_err();
 
@@ -4159,28 +4196,29 @@ mod tests {
     async fn test_table_cache_is_per_session() {
         let mut server = Server::new_async().await;
         let _config = create_config_mock(&mut server).await;
-        let load = load_table_mock(&mut server, mockito::Matcher::Missing, 200, Some("\"v1\""))
+        let miss = load_table_mock(&mut server, Matcher::Missing, 200, Some("\"v1\""))
             .await
             .expect(2);
+        let hit = load_table_mock(&mut server, "\"v1\"".into(), 304, None).await;
         let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let session = |id: &str| SessionContext::builder().session_id(id.to_string()).build();
 
-        catalog
-            .load_table(&SessionContext::empty(), &test1())
-            .await
-            .unwrap();
-        catalog
-            .load_table(&SessionContext::empty(), &test1())
-            .await
-            .unwrap();
+        for id in ["a", "b", "a"] {
+            catalog
+                .load_table(&session(id), &test_table_ident())
+                .await
+                .unwrap();
+        }
 
-        load.assert_async().await;
+        miss.assert_async().await;
+        hit.assert_async().await;
     }
 
     #[tokio::test]
     async fn test_table_cache_disabled_with_zero_max_entries() {
         let mut server = Server::new_async().await;
         let _config = create_config_mock(&mut server).await;
-        let load = load_table_mock(&mut server, mockito::Matcher::Missing, 200, Some("\"v1\""))
+        let load = load_table_mock(&mut server, Matcher::Missing, 200, Some("\"v1\""))
             .await
             .expect(2);
         let catalog = session_catalog(
@@ -4194,8 +4232,75 @@ mod tests {
         );
         let context = SessionContext::empty();
 
-        catalog.load_table(&context, &test1()).await.unwrap();
-        catalog.load_table(&context, &test1()).await.unwrap();
+        catalog
+            .load_table(&context, &test_table_ident())
+            .await
+            .unwrap();
+        catalog
+            .load_table(&context, &test_table_ident())
+            .await
+            .unwrap();
+
+        load.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_drop_table_invalidates_cached_table() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let load = load_table_mock(&mut server, Matcher::Missing, 200, Some("\"v1\""))
+            .await
+            .expect(2);
+        let _drop = server
+            .mock("DELETE", "/v1/namespaces/ns1/tables/test1")
+            .with_status(204)
+            .create_async()
+            .await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let context = SessionContext::empty();
+
+        catalog
+            .load_table(&context, &test_table_ident())
+            .await
+            .unwrap();
+        catalog
+            .drop_table(&context, &test_table_ident())
+            .await
+            .unwrap();
+        catalog
+            .load_table(&context, &test_table_ident())
+            .await
+            .unwrap();
+
+        load.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_load_table_with_vended_credentials_is_not_cached() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let mut body = load_table_body("v1");
+        body["config"] = json!({ "s3.session-token": "token" });
+        let load = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .match_header("if-none-match", Matcher::Missing)
+            .with_status(200)
+            .with_header("etag", "\"v1\"")
+            .with_body(body.to_string())
+            .expect(2)
+            .create_async()
+            .await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let context = SessionContext::empty();
+
+        catalog
+            .load_table(&context, &test_table_ident())
+            .await
+            .unwrap();
+        catalog
+            .load_table(&context, &test_table_ident())
+            .await
+            .unwrap();
 
         load.assert_async().await;
     }
