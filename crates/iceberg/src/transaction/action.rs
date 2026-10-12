@@ -148,6 +148,7 @@ pub(crate) trait ErasedActionEntry: AsAny + Send + Sync {
     /// the action (intent) is cloned, and it is paired with fresh state from
     /// [`TransactionAction::new_state`]. Accrued retry state is never carried
     /// over to the new entry.
+    #[allow(dead_code)]
     fn clone_with_new_state(&self) -> TransactionActionEntry;
 }
 
@@ -219,18 +220,6 @@ impl ActionCommit {
     pub fn take_requirements(&mut self) -> Vec<TableRequirement> {
         take(&mut self.requirements)
     }
-}
-
-/// Runs a single commit attempt of an action with fresh state.
-///
-/// Test-only convenience mirroring how a transaction drives one attempt.
-#[cfg(test)]
-pub(crate) async fn commit_with_fresh_state<A: TransactionAction>(
-    action: A,
-    table: &Table,
-) -> Result<ActionCommit> {
-    let mut state = action.new_state();
-    action.commit(&mut state, table).await
 }
 
 #[cfg(test)]

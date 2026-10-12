@@ -89,22 +89,6 @@ pub struct Transaction {
     actions: Vec<TransactionActionEntry>,
 }
 
-impl Clone for Transaction {
-    /// Cloning a transaction creates a new execution of the action plan:
-    /// the actions (immutable intent) are duplicated and paired with fresh
-    /// state. Retry state is never shared between transaction executions.
-    fn clone(&self) -> Self {
-        Self {
-            table: self.table.clone(),
-            actions: self
-                .actions
-                .iter()
-                .map(|entry| entry.clone_with_new_state())
-                .collect(),
-        }
-    }
-}
-
 impl Transaction {
     /// Creates a new transaction.
     pub fn new(table: &Table) -> Self {
