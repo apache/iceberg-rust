@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::cmp::Reverse;
 use std::collections::HashSet;
 
 use crate::spec::{SnapshotRef, TableMetadataRef};
@@ -82,8 +81,10 @@ pub fn ancestors_between(
 /// at or before `timestamp_ms` (milliseconds since the Unix epoch), taking the first
 /// entry on ties.
 ///
-/// This matches Java's ordering. PyIceberg takes the last qualifying log entry,
-/// so ties or out-of-order timestamps can produce different results.
+/// This matches Java's ordering, except that an entry at `i64::MIN` can match here
+/// but never matches in Java, which seeds its search with `Long.MIN_VALUE`.
+/// PyIceberg takes the last qualifying log entry, so ties or out-of-order
+/// timestamps can produce different results.
 ///
 /// Returns [`ErrorKind::DataInvalid`] if no matching history exists.
 /// The returned snapshot may have expired, so
@@ -113,8 +114,12 @@ pub fn snapshot_id_as_of_time(table_metadata: &TableMetadataRef, timestamp_ms: i
         .iter()
         .enumerate()
         .filter(|(_, entry)| entry.timestamp_ms() <= timestamp_ms)
-        // Keep the first entry on ties, matching Java's timestamp selection.
-        .max_by_key(|(idx, entry)| (entry.timestamp_ms(), Reverse(*idx)))
+        .max_by(|(idx_a, a), (idx_b, b)| {
+            a.timestamp_ms()
+                .cmp(&b.timestamp_ms())
+                // Earlier entries win ties, matching Java's timestamp selection.
+                .then(idx_b.cmp(idx_a))
+        })
         .map(|(_, entry)| entry.snapshot_id)
         .ok_or_else(|| {
             Error::new(
@@ -165,13 +170,13 @@ mod tests {
             (&[(1000, S1), (2000, S2)], 3000, S2),
             // Rollback records when an existing snapshot becomes current again.
             (&[(1000, S1), (2000, S2), (3000, S1)], 3500, S1),
-            // Without Reverse(idx), max_by_key would pick S3 on ties.
+            // The first entry wins on ties.
             (&[(1000, S1), (2000, S2), (2000, S3)], 2000, S2),
             // Clock skew means the log need not be sorted by timestamp.
             (&[(1000, S1), (3000, S2), (2500, S3)], 3500, S2),
             (&[(1000, S1), (3000, S2), (2500, S3)], 2600, S3),
             (&[(-2000, S1), (-1000, S2)], -1500, S1),
-            // max_by_key accepts i64::MIN; Java's sentinel-based lookup returns no match.
+            // Java returns no match here; see the docstring.
             (&[(i64::MIN, S1), (0, S2)], i64::MIN, S1),
             (&[(0, S1), (i64::MAX, S2)], i64::MAX, S2),
         ];
