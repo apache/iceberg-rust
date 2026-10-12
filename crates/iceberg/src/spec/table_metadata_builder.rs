@@ -3717,7 +3717,7 @@ mod tests {
             name: format!("f{field_id}"),
             transform,
         };
-        let fields = vec![
+        let fields = [
             field(1, 1000, Transform::Identity),
             field(2, 1003, Transform::Identity),
             field(1, 1006, Transform::Identity),
