@@ -549,9 +549,9 @@ mod tests {
     use rand::Rng;
 
     use super::RowGroupMetricsEvaluator;
-    use crate::Result;
     use crate::expr::{Bind, Reference};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
+    use crate::{ErrorKind, Result};
 
     #[test]
     fn eval_matches_no_rows_for_empty_row_group() -> Result<()> {
@@ -609,14 +609,16 @@ mod tests {
         let filter = (!Reference::new("col_float").greater_than(Datum::float(5.0_f32)))
             .bind(iceberg_schema_ref.clone(), false)?;
 
-        let result = RowGroupMetricsEvaluator::eval(
+        let err = RowGroupMetricsEvaluator::eval(
             &filter,
             &row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
-        );
+        )
+        .unwrap_err();
 
-        assert!(result.is_err());
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.message().contains("NOT"));
 
         Ok(())
     }
