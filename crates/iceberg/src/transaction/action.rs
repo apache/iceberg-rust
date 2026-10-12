@@ -68,9 +68,9 @@ pub(crate) trait TransactionAction: Clone + Send + Sync + 'static {
 
     /// Best-effort cleanup after the transaction reaches a terminal result.
     ///
-    /// Consumes the action and its state: the type system guarantees that no
-    /// further attempt can run for this entry after cleanup. Cleanup must not
-    /// change the already-determined transaction result.
+    /// Consumes the action and its state: ownership makes any further use
+    /// of this action after cleanup a compile error.
+    /// Cleanup must not change the already-determined transaction result.
     ///
     /// See [`CommitStatus`] for what each terminal status allows cleanup to do.
     // TODO: invoke this from `Transaction::commit` once terminal status
@@ -97,7 +97,7 @@ pub(crate) enum CommitStatus {
     Failed,
     /// The commit request was submitted, but its outcome could not be
     /// resolved: the catalog may or may not have applied it. Cleanup must
-    /// delete nothing.
+    /// delete nothing and this action won't be retryable.
     ///
     /// Example: every action executed and validated successfully, but the
     /// connection failed while awaiting the catalog's response to
