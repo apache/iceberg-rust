@@ -844,6 +844,8 @@ impl TableMetadataBuilder {
         &self,
         unbound_spec: UnboundPartitionSpec,
     ) -> Result<UnboundPartitionSpec> {
+        // Build a map of (source_id, transform) -> field_id from existing specs. Keep the highest
+        // id of each pair so the result doesn't depend on the iteration order of `partition_specs`.
         let mut equivalent_field_ids = HashMap::new();
         for field in self
             .metadata
@@ -3741,7 +3743,7 @@ mod tests {
         }))
         .unwrap();
 
-        // Two fields, so this is not compatible with either existing spec and is added as a new
+        // Two fields, so this is not compatible with any existing spec and is added as a new
         // one rather than resolving to an existing spec id.
         let new_spec = UnboundPartitionSpec::builder()
             .add_partition_field(
