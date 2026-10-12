@@ -158,18 +158,20 @@ impl TransformFunction for Truncate {
             })),
             PrimitiveLiteral::Int128(v) => Ok(Some({
                 let width = self.width as i128;
-                Datum::new(
-                    input.data_type().clone(),
-                    PrimitiveLiteral::Int128(Self::truncate_decimal_i128(*v, width)),
-                )
+                input.with_decimal_mantissa(Self::truncate_decimal_i128(*v, width))?
             })),
             PrimitiveLiteral::String(v) => Ok(Some({
                 let len = self.width as usize;
                 Datum::string(Self::truncate_str(v, len).to_string())
             })),
-            PrimitiveLiteral::Binary(v) if input.data_type() == &PrimitiveType::Binary => Ok(Some(
-                Datum::binary(Self::truncate_binary(v, self.width as usize).to_vec()),
-            )),
+            // Fixed shares this literal variant with Binary but does not support truncate.
+            PrimitiveLiteral::Binary(v) if matches!(input.data_type(), PrimitiveType::Binary) => {
+                Ok(Some(Datum::binary(
+                    Self::truncate_binary(v, self.width as usize)
+                        .iter()
+                        .copied(),
+                )))
+            }
             _ => Err(Error::new(
                 crate::ErrorKind::FeatureUnsupported,
                 format!(
@@ -249,6 +251,128 @@ mod test {
         };
 
         fixture.assert_transform(trans);
+    }
+
+    #[test]
+    fn test_projection_truncate_binary() -> Result<()> {
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(3),
+            "name",
+            NestedField::required(1, "value", Primitive(Binary)),
+        );
+
+        for (value, prefix) in [
+            (vec![0x00, 0xff, 0x80, 0x01], "00FF80"),
+            (vec![0x00, 0xff, 0x80], "00FF80"),
+            (vec![0x00, 0xff], "00FF"),
+        ] {
+            for (op, projected_op) in [
+                (PredicateOperator::Eq, "="),
+                (PredicateOperator::LessThanOrEq, "<="),
+            ] {
+                fixture.assert_projection(
+                    &fixture.binary_predicate(op, Datum::binary(value.iter().copied())),
+                    Some(&format!("name {projected_op} {prefix}")),
+                )?;
+            }
+        }
+
+        // Both source values share one truncated prefix, so the projected set has one value.
+        fixture.assert_projection(
+            &fixture.set_predicate(PredicateOperator::In, vec![
+                Datum::binary([0x00, 0xff, 0x80, 0x01]),
+                Datum::binary([0x00, 0xff, 0x80, 0x02]),
+            ]),
+            Some("name IN (00FF80)"),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_strict_projection_truncate_binary() -> Result<()> {
+        let transform = Transform::Truncate(3);
+        let fixture = TestProjectionFixture::new(
+            transform,
+            "name",
+            NestedField::required(1, "value", Primitive(Binary)),
+        );
+
+        for (op, expected) in [
+            (PredicateOperator::LessThanOrEq, Some("name < 00FF80")),
+            (PredicateOperator::NotEq, Some("name != 00FF80")),
+            (PredicateOperator::Eq, None),
+        ] {
+            let predicate = fixture.binary_predicate(op, Datum::binary([0x00, 0xff, 0x80, 0x01]));
+            let result = transform.strict_project("name", &predicate)?;
+            assert_eq!(result.map(|p| p.to_string()).as_deref(), expected);
+        }
+
+        for (op, expected) in [
+            (PredicateOperator::NotIn, Some("name NOT IN (00FF80)")),
+            (PredicateOperator::In, None),
+        ] {
+            let predicate = fixture.set_predicate(op, vec![
+                Datum::binary([0x00, 0xff, 0x80, 0x01]),
+                Datum::binary([0x00, 0xff, 0x80, 0x02]),
+            ]);
+            let result = transform.strict_project("name", &predicate)?;
+            assert_eq!(result.map(|p| p.to_string()).as_deref(), expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_truncate_decimal_outside_precision() -> Result<()> {
+        let transform = Transform::Truncate(10);
+        let fixture = TestProjectionFixture::new(
+            transform,
+            "name",
+            NestedField::required(
+                1,
+                "value",
+                Primitive(Decimal {
+                    precision: 2,
+                    scale: 1,
+                }),
+            ),
+        );
+
+        for (value, inclusive_op, inclusive_expected, strict_op, strict_expected) in [
+            (
+                99,
+                PredicateOperator::GreaterThan,
+                "name >= 10.0",
+                PredicateOperator::LessThanOrEq,
+                "name < 10.0",
+            ),
+            (
+                -99,
+                PredicateOperator::LessThan,
+                "name <= -10.0",
+                PredicateOperator::GreaterThanOrEq,
+                "name > -10.0",
+            ),
+        ] {
+            let datum = Datum::new(
+                Decimal {
+                    precision: 2,
+                    scale: 1,
+                },
+                PrimitiveLiteral::Int128(value),
+            );
+            fixture.assert_projection(
+                &fixture.binary_predicate(inclusive_op, datum.clone()),
+                Some(inclusive_expected),
+            )?;
+            let result = transform
+                .strict_project("name", &fixture.binary_predicate(strict_op, datum))?
+                .unwrap();
+            assert_eq!(result.to_string(), strict_expected);
+        }
+
+        Ok(())
     }
 
     #[test]

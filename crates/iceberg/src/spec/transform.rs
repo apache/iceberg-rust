@@ -932,10 +932,9 @@ impl Transform {
         match (datum.data_type(), datum.literal()) {
             (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Ok(Datum::int(v + 1)),
             (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Ok(Datum::long(v + 1)),
-            (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => Ok(Datum::new(
-                datum.data_type().clone(),
-                PrimitiveLiteral::Int128(v + 1),
-            )),
+            (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => {
+                datum.with_decimal_mantissa(v + 1)
+            }
             (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Ok(Datum::date(v + 1)),
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
                 Ok(Datum::timestamp_micros(v + 1))
@@ -971,10 +970,9 @@ impl Transform {
         match (datum.data_type(), datum.literal()) {
             (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Ok(Datum::int(v - 1)),
             (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Ok(Datum::long(v - 1)),
-            (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => Ok(Datum::new(
-                datum.data_type().clone(),
-                PrimitiveLiteral::Int128(v - 1),
-            )),
+            (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => {
+                datum.with_decimal_mantissa(v - 1)
+            }
             (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Ok(Datum::date(v - 1)),
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
                 Ok(Datum::timestamp_micros(v - 1))
