@@ -728,14 +728,18 @@ mod tests {
     //! shared tests for the table scan API
 
     use std::collections::HashMap;
+    use std::fs;
+    use std::fs::File;
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RunArray, StringArray,
+        Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, RunArray,
+        StringArray,
     };
     use futures::{TryStreamExt, stream};
+    use parquet::arrow::ArrowWriter;
     use uuid::Uuid;
 
     use super::resolve_field_id;
@@ -748,9 +752,10 @@ mod tests {
     };
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
     use crate::spec::{
-        DataContentType, DataFileFormat, Datum, Literal, MAIN_BRANCH, MappedField, NameMapping,
-        NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema, Snapshot,
-        SortDirection, SortField, SortOrder, Struct, Summary, TableMetadataBuilder,
+        DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, MAIN_BRANCH,
+        ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, MappedField,
+        NameMapping, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
+        Snapshot, SortDirection, SortField, SortOrder, Struct, Summary, TableMetadataBuilder,
         TableProperties, Transform, Type, UnboundPartitionSpec,
     };
     use crate::table::Table;

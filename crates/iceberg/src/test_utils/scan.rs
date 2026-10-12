@@ -269,7 +269,7 @@ impl TableTestFixture {
         }
     }
 
-    fn next_manifest_file(&self) -> OutputFile {
+    pub(crate) fn next_manifest_file(&self) -> OutputFile {
         self.table
             .file_io()
             .new_output(format!(
