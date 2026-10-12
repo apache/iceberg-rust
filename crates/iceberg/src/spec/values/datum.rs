@@ -1099,6 +1099,22 @@ impl Datum {
         }
     }
 
+    /// Replaces a decimal's unscaled value while preserving its precision and scale.
+    ///
+    /// The value is not checked against precision because transform projections
+    /// may use boundaries outside the source type's range.
+    pub(crate) fn with_decimal_mantissa(&self, mantissa: i128) -> Result<Self> {
+        ensure_data_valid!(
+            matches!(self.r#type, PrimitiveType::Decimal { .. }),
+            "Expected a decimal datum, got: {:?}",
+            self.r#type
+        );
+        Ok(Self::new(
+            self.r#type.clone(),
+            PrimitiveLiteral::Int128(mantissa),
+        ))
+    }
+
     /// Convert the datum to `target_type`.
     pub fn to(self, target_type: &Type) -> Result<Datum> {
         match target_type {

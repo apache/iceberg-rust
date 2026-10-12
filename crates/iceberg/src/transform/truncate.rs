@@ -23,8 +23,7 @@ use arrow_schema::DataType;
 use super::TransformFunction;
 use crate::Error;
 use crate::error::invalid_data;
-use crate::spec::decimal_utils::decimal_from_i128_with_scale;
-use crate::spec::{Datum, PrimitiveLiteral};
+use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 
 #[derive(Debug)]
 pub struct Truncate {
@@ -159,15 +158,20 @@ impl TransformFunction for Truncate {
             })),
             PrimitiveLiteral::Int128(v) => Ok(Some({
                 let width = self.width as i128;
-                Datum::decimal(decimal_from_i128_with_scale(
-                    Self::truncate_decimal_i128(*v, width),
-                    0,
-                ))?
+                input.with_decimal_mantissa(Self::truncate_decimal_i128(*v, width))?
             })),
             PrimitiveLiteral::String(v) => Ok(Some({
                 let len = self.width as usize;
                 Datum::string(Self::truncate_str(v, len).to_string())
             })),
+            // Fixed shares this literal variant with Binary but does not support truncate.
+            PrimitiveLiteral::Binary(v) if matches!(input.data_type(), PrimitiveType::Binary) => {
+                Ok(Some(Datum::binary(
+                    Self::truncate_binary(v, self.width as usize)
+                        .iter()
+                        .copied(),
+                )))
+            }
             _ => Err(Error::new(
                 crate::ErrorKind::FeatureUnsupported,
                 format!(
@@ -194,8 +198,7 @@ mod test {
         TimestampNs, Timestamptz, TimestamptzNs, Uuid,
     };
     use crate::spec::Type::{Primitive, Struct};
-    use crate::spec::decimal_utils::decimal_new;
-    use crate::spec::{Datum, NestedField, PrimitiveType, StructType, Transform};
+    use crate::spec::{Datum, NestedField, PrimitiveLiteral, PrimitiveType, StructType, Transform};
     use crate::transform::TransformFunction;
     use crate::transform::test::{TestProjectionFixture, TestTransformFixture};
 
@@ -248,6 +251,128 @@ mod test {
         };
 
         fixture.assert_transform(trans);
+    }
+
+    #[test]
+    fn test_projection_truncate_binary() -> Result<()> {
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(3),
+            "name",
+            NestedField::required(1, "value", Primitive(Binary)),
+        );
+
+        for (value, prefix) in [
+            (vec![0x00, 0xff, 0x80, 0x01], "00FF80"),
+            (vec![0x00, 0xff, 0x80], "00FF80"),
+            (vec![0x00, 0xff], "00FF"),
+        ] {
+            for (op, projected_op) in [
+                (PredicateOperator::Eq, "="),
+                (PredicateOperator::LessThanOrEq, "<="),
+            ] {
+                fixture.assert_projection(
+                    &fixture.binary_predicate(op, Datum::binary(value.iter().copied())),
+                    Some(&format!("name {projected_op} {prefix}")),
+                )?;
+            }
+        }
+
+        // Both source values share one truncated prefix, so the projected set has one value.
+        fixture.assert_projection(
+            &fixture.set_predicate(PredicateOperator::In, vec![
+                Datum::binary([0x00, 0xff, 0x80, 0x01]),
+                Datum::binary([0x00, 0xff, 0x80, 0x02]),
+            ]),
+            Some("name IN (00FF80)"),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_strict_projection_truncate_binary() -> Result<()> {
+        let transform = Transform::Truncate(3);
+        let fixture = TestProjectionFixture::new(
+            transform,
+            "name",
+            NestedField::required(1, "value", Primitive(Binary)),
+        );
+
+        for (op, expected) in [
+            (PredicateOperator::LessThanOrEq, Some("name < 00FF80")),
+            (PredicateOperator::NotEq, Some("name != 00FF80")),
+            (PredicateOperator::Eq, None),
+        ] {
+            let predicate = fixture.binary_predicate(op, Datum::binary([0x00, 0xff, 0x80, 0x01]));
+            let result = transform.strict_project("name", &predicate)?;
+            assert_eq!(result.map(|p| p.to_string()).as_deref(), expected);
+        }
+
+        for (op, expected) in [
+            (PredicateOperator::NotIn, Some("name NOT IN (00FF80)")),
+            (PredicateOperator::In, None),
+        ] {
+            let predicate = fixture.set_predicate(op, vec![
+                Datum::binary([0x00, 0xff, 0x80, 0x01]),
+                Datum::binary([0x00, 0xff, 0x80, 0x02]),
+            ]);
+            let result = transform.strict_project("name", &predicate)?;
+            assert_eq!(result.map(|p| p.to_string()).as_deref(), expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_truncate_decimal_outside_precision() -> Result<()> {
+        let transform = Transform::Truncate(10);
+        let fixture = TestProjectionFixture::new(
+            transform,
+            "name",
+            NestedField::required(
+                1,
+                "value",
+                Primitive(Decimal {
+                    precision: 2,
+                    scale: 1,
+                }),
+            ),
+        );
+
+        for (value, inclusive_op, inclusive_expected, strict_op, strict_expected) in [
+            (
+                99,
+                PredicateOperator::GreaterThan,
+                "name >= 10.0",
+                PredicateOperator::LessThanOrEq,
+                "name < 10.0",
+            ),
+            (
+                -99,
+                PredicateOperator::LessThan,
+                "name <= -10.0",
+                PredicateOperator::GreaterThanOrEq,
+                "name > -10.0",
+            ),
+        ] {
+            let datum = Datum::new(
+                Decimal {
+                    precision: 2,
+                    scale: 1,
+                },
+                PrimitiveLiteral::Int128(value),
+            );
+            fixture.assert_projection(
+                &fixture.binary_predicate(inclusive_op, datum.clone()),
+                Some(inclusive_expected),
+            )?;
+            let result = transform
+                .strict_project("name", &fixture.binary_predicate(strict_op, datum))?
+                .unwrap();
+            assert_eq!(result.to_string(), strict_expected);
+        }
+
+        Ok(())
     }
 
     #[test]
@@ -359,7 +484,7 @@ mod test {
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::LessThan, Datum::decimal_from_str(curr)?),
-            Some("name <= 9990"),
+            Some("name <= 99.90"),
         )?;
 
         fixture.assert_projection(
@@ -367,7 +492,7 @@ mod test {
                 PredicateOperator::LessThanOrEq,
                 Datum::decimal_from_str(curr)?,
             ),
-            Some("name <= 9990"),
+            Some("name <= 99.90"),
         )?;
 
         fixture.assert_projection(
@@ -375,12 +500,12 @@ mod test {
                 PredicateOperator::GreaterThanOrEq,
                 Datum::decimal_from_str(curr)?,
             ),
-            Some("name >= 9990"),
+            Some("name >= 99.90"),
         )?;
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::Eq, Datum::decimal_from_str(curr)?),
-            Some("name = 9990"),
+            Some("name = 99.90"),
         )?;
 
         fixture.assert_projection(
@@ -394,7 +519,7 @@ mod test {
                 Datum::decimal_from_str(curr)?,
                 Datum::decimal_from_str(next)?,
             ]),
-            Some("name IN (9890, 9990, 10090)"),
+            Some("name IN (99.90, 100.90, 98.90)"),
         )?;
 
         fixture.assert_projection(
@@ -429,7 +554,7 @@ mod test {
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::LessThan, Datum::decimal_from_str(curr)?),
-            Some("name <= 9990"),
+            Some("name <= 99.90"),
         )?;
 
         fixture.assert_projection(
@@ -437,7 +562,7 @@ mod test {
                 PredicateOperator::LessThanOrEq,
                 Datum::decimal_from_str(curr)?,
             ),
-            Some("name <= 10000"),
+            Some("name <= 100.00"),
         )?;
 
         fixture.assert_projection(
@@ -445,12 +570,12 @@ mod test {
                 PredicateOperator::GreaterThanOrEq,
                 Datum::decimal_from_str(curr)?,
             ),
-            Some("name >= 10000"),
+            Some("name >= 100.00"),
         )?;
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::Eq, Datum::decimal_from_str(curr)?),
-            Some("name = 10000"),
+            Some("name = 100.00"),
         )?;
 
         fixture.assert_projection(
@@ -464,7 +589,7 @@ mod test {
                 Datum::decimal_from_str(curr)?,
                 Datum::decimal_from_str(next)?,
             ]),
-            Some("name IN (10000, 10100, 9900)"),
+            Some("name IN (99.00, 100.00, 101.00)"),
         )?;
 
         fixture.assert_projection(
@@ -796,6 +921,34 @@ mod test {
     }
 
     #[test]
+    fn test_literal_spec_examples() -> Result<()> {
+        // https://iceberg.apache.org/spec/#truncate-transform-details
+        let cases = [
+            (10, Datum::int(1), Datum::int(0)),
+            (10, Datum::int(-1), Datum::int(-10)),
+            (10, Datum::long(1), Datum::long(0)),
+            (10, Datum::long(-1), Datum::long(-10)),
+            (
+                50,
+                Datum::decimal_from_str("10.65")?,
+                Datum::decimal_from_str("10.50")?,
+            ),
+            (3, Datum::string("iceberg"), Datum::string("ice")),
+            (
+                3,
+                Datum::binary(vec![0x01, 0x02, 0x03, 0x04, 0x05]),
+                Datum::binary(vec![0x01, 0x02, 0x03]),
+            ),
+        ];
+
+        for (width, input, expected) in cases {
+            let result = super::Truncate::new(width).transform_literal(&input)?;
+            assert_eq!(result, Some(expected), "width: {width}, input: {input:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_literal_int() {
         let input = Datum::int(1);
         let res = super::Truncate::new(10)
@@ -831,12 +984,52 @@ mod test {
 
     #[test]
     fn test_decimal_literal() {
-        let input = Datum::decimal(decimal_new(1065, 0)).unwrap();
-        let res = super::Truncate::new(50)
-            .transform_literal(&input)
-            .unwrap()
-            .unwrap();
-        assert_eq!(res, Datum::decimal(decimal_new(1050, 0)).unwrap(),);
+        for (precision, scale, value, expected) in [
+            (9, 0, 1065, 1050),
+            (9, 2, 1065, 1050),
+            (9, 2, -1065, -1100),
+            (9, 2, 1050, 1050),
+            (9, 2, 0, 0),
+            (9, 5, 1065, 1050),
+            (38, 2, 1065, 1050),
+        ] {
+            let data_type = Decimal { precision, scale };
+            let input = Datum::new(data_type.clone(), PrimitiveLiteral::Int128(value));
+            let res = super::Truncate::new(50)
+                .transform_literal(&input)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                res,
+                Datum::new(data_type, PrimitiveLiteral::Int128(expected)),
+                "input: {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_binary_literal() {
+        for (value, width, expected) in [
+            (vec![0x00, 0xff, 0x80, 0x01], 2, vec![0x00, 0xff]),
+            (vec![0x00, 0xff], 2, vec![0x00, 0xff]),
+            (vec![0x00, 0xff], 4, vec![0x00, 0xff]),
+            (vec![], 2, vec![]),
+        ] {
+            let input = Datum::binary(value);
+            let res = super::Truncate::new(width)
+                .transform_literal(&input)
+                .unwrap()
+                .unwrap();
+            assert_eq!(res, Datum::binary(expected));
+        }
+    }
+
+    #[test]
+    fn test_fixed_literal_is_unsupported() {
+        let error = super::Truncate::new(2)
+            .transform_literal(&Datum::fixed(vec![0x00, 0xff, 0x80]))
+            .unwrap_err();
+        assert_eq!(error.kind(), crate::ErrorKind::FeatureUnsupported);
     }
 
     #[test]
