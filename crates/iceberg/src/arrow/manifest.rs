@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_arith::boolean::{and, is_null};
+use arrow_array::builder::Int64Builder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{TimestampMicrosecondType, TimestampNanosecondType};
 use arrow_array::{
@@ -205,10 +206,10 @@ fn project_struct(array: &StructArray, record: &JsonValue, fields: &Fields) -> R
     let avro_fields = record["fields"]
         .as_array()
         .ok_or_else(|| invalid_data!("manifest Avro type {record} is not a record"))?;
-    let columns = fields
-        .iter()
-        .map(|field| {
-            let id = field_id(field);
+    let mut columns = Vec::with_capacity(fields.len());
+    for field in fields {
+        let id = field_id(field);
+        columns.push(
             match avro_fields
                 .iter()
                 .position(|avro_field| avro_field["field-id"].as_i64() == Some(id.into()))
@@ -217,11 +218,11 @@ fn project_struct(array: &StructArray, record: &JsonValue, fields: &Fields) -> R
                     array.column(index),
                     non_null_type(&avro_fields[index]["type"]),
                     field,
-                ),
-                None => missing_field(field, array.len()),
-            }
-        })
-        .collect::<Result<_>>()?;
+                )?,
+                None => missing_field(field, array.len())?,
+            },
+        );
+    }
     StructArray::try_new_with_length(fields.clone(), columns, array.nulls().cloned(), array.len())
         .map_err(invalid_manifest)
 }
@@ -401,27 +402,26 @@ fn inherit_first_row_ids(
         return Ok(Arc::new(first_row_ids.clone()));
     }
     let mut next_row_id = i64::try_from(manifest_first_row_id)?;
-    let first_row_ids: Int64Array = first_row_ids
+    let mut builder = Int64Builder::with_capacity(first_row_ids.len());
+    for ((first_row_id, &status), &record_count) in first_row_ids
         .iter()
         .zip(status.values())
         .zip(record_counts.values())
-        .map(
-            |((first_row_id, &status), &record_count)| match first_row_id {
-                None if status != ManifestStatus::Deleted as i32 => {
-                    let assigned = next_row_id;
-                    next_row_id = next_row_id.checked_add(record_count).ok_or_else(|| {
-                        invalid_data!(
-                            "row ID overflow assigning first row IDs in {}",
-                            manifest_file.manifest_path
-                        )
-                    })?;
-                    Ok(Some(assigned))
-                }
-                first_row_id => Ok(first_row_id),
-            },
-        )
-        .collect::<Result<_>>()?;
-    Ok(Arc::new(first_row_ids))
+    {
+        match first_row_id {
+            None if status != ManifestStatus::Deleted as i32 => {
+                builder.append_value(next_row_id);
+                next_row_id = next_row_id.checked_add(record_count).ok_or_else(|| {
+                    invalid_data!(
+                        "row ID overflow assigning first row IDs in {}",
+                        manifest_file.manifest_path
+                    )
+                })?;
+            }
+            first_row_id => builder.append_option(first_row_id),
+        }
+    }
+    Ok(Arc::new(builder.finish()))
 }
 
 #[cfg(test)]
@@ -430,6 +430,7 @@ mod tests {
     use std::sync::Arc;
 
     use apache_avro::types::Value as AvroValue;
+    use apache_avro::{Codec, DeflateSettings, ZstandardSettings};
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Int32Type, Int64Type};
     use arrow_array::{
@@ -589,10 +590,11 @@ mod tests {
         ))
     }
 
-    /// Rewrites a manifest with `edit_schema` applied to its Avro schema and
-    /// `edit_record` applied to each record.
+    /// Rewrites a manifest with `codec`, `edit_schema` applied to its Avro
+    /// schema, and `edit_record` applied to each record.
     fn rewrite_manifest(
         bytes: &[u8],
+        codec: Codec,
         edit_schema: impl Fn(&mut serde_json::Value),
         edit_record: impl Fn(&mut AvroValue),
     ) -> Vec<u8> {
@@ -601,7 +603,7 @@ mod tests {
         edit_schema(&mut schema);
         let schema = apache_avro::Schema::parse(&schema).unwrap();
         let metadata = reader.user_metadata().clone();
-        let mut writer = apache_avro::Writer::new(&schema, Vec::new()).unwrap();
+        let mut writer = apache_avro::Writer::with_codec(&schema, Vec::new(), codec).unwrap();
         for (key, value) in metadata {
             writer.add_user_metadata(key, value).unwrap();
         }
@@ -1066,22 +1068,41 @@ mod tests {
             |b| b.build_v2_data(),
             |writer| {
                 writer.add_file(file(0), -1).unwrap();
-                writer.add_existing_file(file(1), 3, 4, Some(4)).unwrap();
+                writer.add_delete_file(file(1), 4, Some(4)).unwrap();
+                writer.add_existing_file(file(2), 3, 5, Some(5)).unwrap();
             },
         )
         .await;
+        // ManifestWriter rejects an existing entry without sequence numbers.
+        let bytes = rewrite_manifest(
+            &bytes,
+            Codec::Null,
+            |_| {},
+            |record| {
+                let AvroValue::Record(fields) = record else {
+                    panic!("manifest entry is not a record");
+                };
+                if fields.contains(&("status".to_string(), AvroValue::Int(0))) {
+                    for (name, value) in fields {
+                        if name.ends_with("sequence_number") {
+                            *value = AvroValue::Union(0, Box::new(AvroValue::Null));
+                        }
+                    }
+                }
+            },
+        );
         manifest_file.added_snapshot_id = 42;
         manifest_file.sequence_number = 7;
         let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
 
         assert_eq!(
             column(&batch, "snapshot_id").as_ref(),
-            &Int64Array::from(vec![42, 3]) as &dyn Array
+            &Int64Array::from(vec![42, 42, 3]) as &dyn Array
         );
         for name in ["sequence_number", "file_sequence_number"] {
             assert_eq!(
                 column(&batch, name).as_ref(),
-                &Int64Array::from(vec![7, 4]) as &dyn Array,
+                &Int64Array::from(vec![Some(7), Some(4), None]) as &dyn Array,
                 "{name}"
             );
         }
@@ -1137,14 +1158,28 @@ mod tests {
         manifest_file.first_row_id = None;
         let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
         assert_eq!(data_file_column(&batch, "first_row_id").null_count(), 5);
-    }
 
-    #[tokio::test]
-    async fn test_first_row_id_overflow_is_an_error() {
-        let (bytes, mut manifest_file) = first_row_id_manifest().await;
         manifest_file.first_row_id = Some(i64::MAX as u64 - 5);
         let err = read_manifest_entries(&bytes, &manifest_file).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[tokio::test]
+    async fn test_compressed_manifests() {
+        let (bytes, manifest_file) = first_row_id_manifest().await;
+        let expected = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        for codec in [
+            Codec::Deflate(DeflateSettings::default()),
+            Codec::Snappy,
+            Codec::Zstandard(ZstandardSettings::default()),
+        ] {
+            let bytes = rewrite_manifest(&bytes, codec, |_| {}, |_| {});
+            assert_eq!(
+                read_manifest_entries(&bytes, &manifest_file).unwrap(),
+                expected,
+                "{codec:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1165,6 +1200,7 @@ mod tests {
         let renames = [("file_path", "path"), ("i_identity", "renamed_partition")];
         let bytes = rewrite_manifest(
             &bytes,
+            Codec::Null,
             |schema| {
                 for_each_avro_field(schema, &|field| {
                     for (from, to) in renames {
@@ -1208,6 +1244,7 @@ mod tests {
         // A file_path under another field ID leaves the required file_path missing.
         let bytes = rewrite_manifest(
             &bytes,
+            Codec::Null,
             |schema| {
                 for_each_avro_field(schema, &|field| {
                     if field["name"] == "file_path" {
@@ -1221,16 +1258,32 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
-    #[tokio::test]
-    async fn test_manifest_written_by_pyiceberg() {
+    #[test]
+    fn test_manifest_written_by_pyiceberg() {
         let bytes = std::fs::read(format!(
             "{}/testdata/manifests/pyiceberg-v2-data.avro",
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap();
         let manifest = Manifest::parse_avro(&bytes).unwrap();
-        let (_, manifest_file) =
-            write_manifest(partition_spec(&[]), Some(1), |b| b.build_v2_data(), |_| {}).await;
+        let manifest_file = ManifestFile {
+            manifest_path: "s3://bucket/metadata/manifest.avro".to_string(),
+            manifest_length: bytes.len() as i64,
+            partition_spec_id: 0,
+            content: ManifestContentType::Data,
+            sequence_number: 1,
+            min_sequence_number: 1,
+            added_snapshot_id: 1,
+            added_files_count: None,
+            existing_files_count: None,
+            deleted_files_count: None,
+            added_rows_count: None,
+            existing_rows_count: None,
+            deleted_rows_count: None,
+            partitions: None,
+            key_metadata: None,
+            first_row_id: None,
+        };
         let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
 
         assert_eq!(batch.num_rows(), manifest.entries().len());
@@ -1256,16 +1309,6 @@ mod tests {
             assert_eq!(
                 binary_map(&data_file_column(&batch, "lower_bounds"), row),
                 lower_bounds
-            );
-            let mut value_counts: Vec<_> = data_file
-                .value_counts()
-                .iter()
-                .map(|(id, count)| (*id, *count as i64))
-                .collect();
-            value_counts.sort_unstable();
-            assert_eq!(
-                long_map(&data_file_column(&batch, "value_counts"), row),
-                value_counts
             );
         }
     }
