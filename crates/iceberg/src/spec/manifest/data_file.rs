@@ -301,7 +301,7 @@ pub fn write_data_files_to_avro<W: Write>(
         FormatVersion::V2 => data_file_schema_v2(partition_type).unwrap(),
         FormatVersion::V3 => data_file_schema_v3(partition_type).unwrap(),
     };
-    let mut writer = AvroWriter::new(&avro_schema, writer);
+    let mut writer = AvroWriter::new(&avro_schema, writer)?;
 
     // Wrap once and reuse across files so the field-name lookup is not rebuilt
     // for each data file.
@@ -313,7 +313,7 @@ pub fn write_data_files_to_avro<W: Write>(
             FormatVersion::V1,
         )?)?
         .resolve(&avro_schema)?;
-        writer.append(value)?;
+        writer.append_value(value)?;
     }
 
     Ok(writer.flush()?)
@@ -333,7 +333,9 @@ pub fn read_data_files_from_avro<R: Read>(
         FormatVersion::V3 => data_file_schema_v3(partition_type).unwrap(),
     };
 
-    let reader = AvroReader::with_schema(&avro_schema, reader)?;
+    let reader = AvroReader::builder(reader)
+        .reader_schema(&avro_schema)
+        .build()?;
     // Wrap once and reuse across files so the field-name lookup is not rebuilt
     // for each data file.
     let partition_struct_type = Type::Struct(partition_type.clone());

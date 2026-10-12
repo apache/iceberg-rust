@@ -35,6 +35,7 @@ use crate::expr::visitors::bound_predicate_visitor::visit;
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::spec::Schema;
+use crate::{Error, ErrorKind};
 
 impl ArrowReader {
     pub(super) fn get_row_filter(
@@ -71,11 +72,21 @@ impl ArrowReader {
         parquet_metadata: &Arc<ParquetMetaData>,
         field_id_map: &HashMap<i32, usize>,
         snapshot_schema: &Schema,
+        candidate_row_groups: &[usize],
     ) -> Result<Vec<usize>> {
         let row_groups_metadata = parquet_metadata.row_groups();
-        let mut results = Vec::with_capacity(row_groups_metadata.len());
+        let mut results = Vec::with_capacity(candidate_row_groups.len());
 
-        for (idx, row_group_metadata) in row_groups_metadata.iter().enumerate() {
+        for &idx in candidate_row_groups {
+            let row_group_metadata = row_groups_metadata.get(idx).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "row group index {idx} out of range ({} row groups)",
+                        row_groups_metadata.len()
+                    ),
+                )
+            })?;
             if RowGroupMetricsEvaluator::eval(
                 predicate,
                 row_group_metadata,
@@ -634,6 +645,67 @@ mod tests {
 
             assert_eq!(first_val, 100, "Task 2 should start with id=100, not id=0");
         }
+
+        // Combining byte-range and predicate row-group filtering should narrow the
+        // split's candidates instead of evaluating and intersecting independent lists.
+        // This task owns row groups 1 and 2, while the predicate can match row groups
+        // 0 and 2. Only row group 2 should be read.
+        let predicate = Reference::new("id")
+            .less_than(Datum::int(100))
+            .or(Reference::new("id").greater_than_or_equal_to(Datum::int(200)))
+            .bind(schema.clone(), true)
+            .unwrap();
+
+        // Test the pruning decision directly, not just the final filtered rows.
+        let parquet_metadata = Arc::new((*metadata).clone());
+        let field_id_map = HashMap::from([(1, 0)]);
+        for (candidates, expected) in [(vec![1, 2], vec![2]), (vec![0, 1], vec![0])] {
+            let selected = ArrowReader::get_selected_row_group_indices(
+                &predicate,
+                &parquet_metadata,
+                &field_id_map,
+                schema.as_ref(),
+                &candidates,
+            )
+            .unwrap();
+            assert_eq!(selected, expected);
+        }
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(rg1_start)
+            .with_length(file_end - rg1_start)
+            .with_data_file_path(file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema.clone())
+            .with_project_field_ids(vec![1])
+            .with_predicate(Some(predicate))
+            .with_record_count(Some(200))
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+            .with_row_group_filtering_enabled(true)
+            .build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        let mut ids = Vec::new();
+        for batch in &result {
+            let id_col = batch
+                .column(0)
+                .as_primitive::<arrow_array::types::Int32Type>();
+            ids.extend((0..id_col.len()).map(|index| id_col.value(index)));
+        }
+
+        assert_eq!(ids, (200..300).collect::<Vec<_>>());
     }
 
     /// A single data file split into multiple sub-row-group byte ranges (as Spark/Iceberg
@@ -901,6 +973,24 @@ mod tests {
                 .set_offset_index(Some(vec![]))
                 .build(),
         )
+    }
+
+    #[test]
+    fn test_row_group_pruning_rejects_invalid_candidate() {
+        let schema = int_schema();
+        let predicate = simple_predicate(schema.clone());
+        let metadata = metadata_no_page_indexes();
+
+        let err = ArrowReader::get_selected_row_group_indices(
+            &predicate,
+            &metadata,
+            &field_id_map(),
+            schema.as_ref(),
+            &[0],
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), crate::ErrorKind::DataInvalid);
     }
 
     /// Testing suite regarding: https://github.com/apache/iceberg-rust/issues/2452
@@ -1235,19 +1325,16 @@ mod tests {
             .with_schema(iceberg_schema.clone())
             .with_project_field_ids(vec![1, 2])
             .with_predicate(Some(predicate_sub2))
-            .with_deletes(vec![FileScanTaskDeleteFile {
-                file_path: pos_del_path.clone(),
-                file_type: DataContentType::PositionDeletes,
-                file_format: DataFileFormat::Parquet,
-                partition_spec_id: 0,
-                equality_ids: None,
-                file_size_in_bytes: std::fs::metadata(&pos_del_path).unwrap().len(),
-                referenced_data_file: None,
-                content_offset: None,
-                content_size_in_bytes: None,
-                record_count: None,
-                key_metadata: None,
-            }])
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_path(pos_del_path.clone())
+                    .with_file_type(DataContentType::PositionDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
+                    .with_partition_spec_id(0)
+                    .with_file_size_in_bytes(std::fs::metadata(&pos_del_path).unwrap().len())
+                    .build()
+                    .unwrap(),
+            ])
             .with_case_sensitive(false)
             .build()
             .unwrap();

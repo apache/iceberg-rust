@@ -125,8 +125,8 @@ The following steps should be followed once the release is ready to begin.
 
 Dependabot runs monthly to reduce update noise, so dependencies may be out of date by the time of a release.
 Before cutting a release candidate, open the repository's [Dependabot page](https://github.com/apache/iceberg-rust/network/updates) and trigger a manual check for each configured ecosystem: `cargo` and `github-actions` at `/`, and `uv` at `/bindings/python`.
-Review and merge the applicable dependency update PRs before creating the release branch and regenerating the dependency lists.
-For an existing release branch, backport the applicable updates to that branch before regenerating its dependency lists and cutting the release candidate.
+Review and merge the applicable dependency update PRs before creating the release branch.
+For an existing release branch, backport the applicable updates to that branch before cutting the release candidate.
 
 Only a committer with write access to the repository can trigger Dependabot manually.
 Work with a committer if you do not have write access.
@@ -151,7 +151,7 @@ git switch -c ${iceberg_minor_release_branch} && git push upstream ${iceberg_min
 - Use the minor version branch created earlier as the branch target. For example, `v0.9.x`.
 - Save the draft.
 
-### Update crate versions, dependencies list, and changelog
+### Update crate versions and changelog
 
 The following changes can be made in one pull request against the minor version branch (e.g. `v0.9.x`).
 
@@ -170,18 +170,12 @@ Update `CHANGELOG.md` based on the changes since the previous version.
 You may use generative AI to assist making this update, but please review the proposed changes for correctness.
 The changelog should reflect a summary of each commit in the new release.
 
-#### Update dependency lists
-
-Run the following command to update the dependencies list of every package:
-
-```shell
-dev/release/dependencies.sh generate
-```
+#### Verify dependency licenses
 
 Run the following command to verify the licenses meet the project's policy.
 
 ```shell
-dev/release/dependencies.sh check
+python3 dev/release/licenses.py dependencies check
 ```
 
 #### Open pull request

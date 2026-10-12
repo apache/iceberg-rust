@@ -16,5 +16,11 @@
 // under the License.
 
 //! Avro related codes.
+mod deserializer;
+mod named_types;
 mod schema;
+pub(crate) use deserializer::Resolved;
+pub(crate) use named_types::define_named_types_once;
+#[cfg(test)]
+pub(crate) use named_types::define_named_types_repeatedly;
 pub(crate) use schema::*;
