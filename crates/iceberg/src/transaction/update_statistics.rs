@@ -70,7 +70,7 @@ impl UpdateStatisticsAction {
 
 #[async_trait]
 impl StatelessAction for UpdateStatisticsAction {
-    async fn apply(&self, _table: &Table) -> Result<ActionCommit> {
+    async fn commit(&self, _table: &Table) -> Result<ActionCommit> {
         let mut updates: Vec<TableUpdate> = vec![];
 
         self.statistics_to_set

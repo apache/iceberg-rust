@@ -137,7 +137,7 @@ impl ReplaceSortOrderAction {
 
 #[async_trait]
 impl StatelessAction for ReplaceSortOrderAction {
-    async fn apply(&self, table: &Table) -> Result<ActionCommit> {
+    async fn commit(&self, table: &Table) -> Result<ActionCommit> {
         let current_schema = table.metadata().current_schema();
         let sort_fields: Result<Vec<SortField>> = self
             .pending_sort_fields

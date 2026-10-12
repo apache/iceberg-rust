@@ -297,7 +297,7 @@ struct ExpirePlan {
 
 #[async_trait]
 impl StatelessAction for ExpireSnapshotsAction {
-    async fn apply(&self, table: &Table) -> Result<ActionCommit> {
+    async fn commit(&self, table: &Table) -> Result<ActionCommit> {
         let metadata = table.metadata();
         let properties = metadata.table_properties();
 

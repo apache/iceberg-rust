@@ -334,7 +334,7 @@ fn rebuild_field(
 
 #[async_trait]
 impl StatelessAction for UpdateSchemaAction {
-    async fn apply(&self, table: &Table) -> Result<ActionCommit> {
+    async fn commit(&self, table: &Table) -> Result<ActionCommit> {
         let base_schema = table.metadata().current_schema();
         let mut last_column_id = table.metadata().last_column_id();
 

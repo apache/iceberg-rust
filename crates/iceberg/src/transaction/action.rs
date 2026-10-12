@@ -85,13 +85,15 @@ pub(crate) trait TransactionAction: Clone + Send + Sync + 'static {
 /// Implementing `StatelessAction` yields a [`TransactionAction`] impl with
 /// `State = ()`, a no-op [`TransactionAction::new_state`], a no-op
 /// [`TransactionAction::cleanup`], and a [`TransactionAction::commit`] that
-/// forwards to [`StatelessAction::apply`]. Actions that need retry-persistent
+/// forwards to [`StatelessAction::commit`]. Actions that need retry-persistent
 /// state (e.g. a persistent snapshot producer) implement `TransactionAction`
 /// directly instead.
 #[async_trait]
 pub(crate) trait StatelessAction: Clone + Send + Sync + 'static {
-    /// One attempt against the current transaction-local table.
-    async fn apply(&self, table: &Table) -> Result<ActionCommit>;
+    /// One commit attempt against the current transaction-local table.
+    ///
+    /// Same contract as [`TransactionAction::commit`], minus the state parameter.
+    async fn commit(&self, table: &Table) -> Result<ActionCommit>;
 }
 
 #[async_trait]
@@ -101,7 +103,7 @@ impl<T: StatelessAction> TransactionAction for T {
     fn new_state(&self) -> Self::State {}
 
     async fn commit(&self, _state: &mut (), table: &Table) -> Result<ActionCommit> {
-        StatelessAction::apply(self, table).await
+        StatelessAction::commit(self, table).await
     }
 
     async fn cleanup(self, _state: (), _table: &Table, _status: CommitStatus) {}
@@ -293,7 +295,7 @@ mod tests {
 
     #[async_trait]
     impl StatelessAction for StatelessTestAction {
-        async fn apply(&self, _table: &Table) -> Result<ActionCommit> {
+        async fn commit(&self, _table: &Table) -> Result<ActionCommit> {
             Ok(ActionCommit::new(
                 vec![TableUpdate::SetLocation {
                     location: String::from("s3://bucket/prefix/stateless/"),

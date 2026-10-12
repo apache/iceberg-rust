@@ -86,9 +86,6 @@ impl FastAppendAction {
     }
 }
 
-// Deliberately a direct `TransactionAction` impl rather than `StatelessAction`:
-// this action is slated to become stateful, so only `State` and the member
-// bodies below should need to change when that happens.
 #[async_trait]
 impl TransactionAction for FastAppendAction {
     // TODO: replace with a persistent `SimpleSnapshotProducer` once snapshot

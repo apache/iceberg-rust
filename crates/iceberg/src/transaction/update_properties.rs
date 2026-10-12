@@ -76,7 +76,7 @@ impl UpdatePropertiesAction {
 
 #[async_trait]
 impl StatelessAction for UpdatePropertiesAction {
-    async fn apply(&self, _table: &Table) -> Result<ActionCommit> {
+    async fn commit(&self, _table: &Table) -> Result<ActionCommit> {
         if let Some(overlapping_key) = self.removals.iter().find(|k| self.updates.contains_key(*k))
         {
             return Err(Error::new(

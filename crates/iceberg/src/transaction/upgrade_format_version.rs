@@ -59,7 +59,7 @@ impl UpgradeFormatVersionAction {
 
 #[async_trait]
 impl StatelessAction for UpgradeFormatVersionAction {
-    async fn apply(&self, _table: &Table) -> Result<ActionCommit> {
+    async fn commit(&self, _table: &Table) -> Result<ActionCommit> {
         let format_version = self.format_version.ok_or_else(|| {
             invalid_data!("FormatVersion is not set for UpgradeFormatVersionAction!")
         })?;

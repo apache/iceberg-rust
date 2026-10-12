@@ -55,7 +55,7 @@ impl UpdateLocationAction {
 
 #[async_trait]
 impl StatelessAction for UpdateLocationAction {
-    async fn apply(&self, _table: &Table) -> Result<ActionCommit> {
+    async fn commit(&self, _table: &Table) -> Result<ActionCommit> {
         let updates: Vec<TableUpdate>;
         if let Some(location) = self.location.as_deref() {
             updates = vec![TableUpdate::SetLocation {
