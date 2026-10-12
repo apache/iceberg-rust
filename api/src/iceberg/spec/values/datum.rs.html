@@ -1099,123 +1099,139 @@
 <a href=#1099 id=1099 data-nosnippet>1099</a>        }
 <a href=#1100 id=1100 data-nosnippet>1100</a>    }
 <a href=#1101 id=1101 data-nosnippet>1101</a>
-<a href=#1102 id=1102 data-nosnippet>1102</a>    <span class="doccomment">/// Convert the datum to `target_type`.
-<a href=#1103 id=1103 data-nosnippet>1103</a>    </span><span class="kw">pub fn </span>to(<span class="self">self</span>, target_type: <span class="kw-2">&amp;</span>Type) -&gt; <span class="prelude-ty">Result</span>&lt;Datum&gt; {
-<a href=#1104 id=1104 data-nosnippet>1104</a>        <span class="kw">match </span>target_type {
-<a href=#1105 id=1105 data-nosnippet>1105</a>            Type::Primitive(target_primitive_type) =&gt; {
-<a href=#1106 id=1106 data-nosnippet>1106</a>                <span class="kw">match </span>(<span class="kw-2">&amp;</span><span class="self">self</span>.literal, <span class="kw-2">&amp;</span><span class="self">self</span>.r#type, target_primitive_type) {
-<a href=#1107 id=1107 data-nosnippet>1107</a>                    (PrimitiveLiteral::Int(val), <span class="kw">_</span>, PrimitiveType::Int) =&gt; <span class="prelude-val">Ok</span>(Datum::int(<span class="kw-2">*</span>val)),
-<a href=#1108 id=1108 data-nosnippet>1108</a>                    (PrimitiveLiteral::Int(val), <span class="kw">_</span>, PrimitiveType::Date) =&gt; <span class="prelude-val">Ok</span>(Datum::date(<span class="kw-2">*</span>val)),
-<a href=#1109 id=1109 data-nosnippet>1109</a>                    (PrimitiveLiteral::Int(val), <span class="kw">_</span>, PrimitiveType::Long) =&gt; <span class="prelude-val">Ok</span>(Datum::long(<span class="kw-2">*</span>val)),
-<a href=#1110 id=1110 data-nosnippet>1110</a>                    (PrimitiveLiteral::Long(val), <span class="kw">_</span>, PrimitiveType::Int) =&gt; {
-<a href=#1111 id=1111 data-nosnippet>1111</a>                        <span class="prelude-val">Ok</span>(Datum::i64_to_i32(<span class="kw-2">*</span>val))
-<a href=#1112 id=1112 data-nosnippet>1112</a>                    }
-<a href=#1113 id=1113 data-nosnippet>1113</a>                    (PrimitiveLiteral::Double(val), <span class="kw">_</span>, PrimitiveType::Float) =&gt; {
-<a href=#1114 id=1114 data-nosnippet>1114</a>                        <span class="prelude-val">Ok</span>(Datum::f64_to_f32(val.<span class="number">0</span>))
-<a href=#1115 id=1115 data-nosnippet>1115</a>                    }
-<a href=#1116 id=1116 data-nosnippet>1116</a>                    (PrimitiveLiteral::Float(val), <span class="kw">_</span>, PrimitiveType::Double) =&gt; {
-<a href=#1117 id=1117 data-nosnippet>1117</a>                        <span class="prelude-val">Ok</span>(Datum::double(val.<span class="number">0 </span><span class="kw">as </span>f64))
-<a href=#1118 id=1118 data-nosnippet>1118</a>                    }
-<a href=#1119 id=1119 data-nosnippet>1119</a>                    (PrimitiveLiteral::Long(val), <span class="kw">_</span>, PrimitiveType::Timestamp) =&gt; {
-<a href=#1120 id=1120 data-nosnippet>1120</a>                        <span class="prelude-val">Ok</span>(Datum::timestamp_micros(<span class="kw-2">*</span>val))
-<a href=#1121 id=1121 data-nosnippet>1121</a>                    }
-<a href=#1122 id=1122 data-nosnippet>1122</a>                    (PrimitiveLiteral::Long(val), <span class="kw">_</span>, PrimitiveType::Timestamptz) =&gt; {
-<a href=#1123 id=1123 data-nosnippet>1123</a>                        <span class="prelude-val">Ok</span>(Datum::timestamptz_micros(<span class="kw-2">*</span>val))
-<a href=#1124 id=1124 data-nosnippet>1124</a>                    }
-<a href=#1125 id=1125 data-nosnippet>1125</a>                    <span class="comment">// Let's wait with nano's until this clears up: https://github.com/apache/iceberg/pull/11775
-<a href=#1126 id=1126 data-nosnippet>1126</a>                    </span>(PrimitiveLiteral::Int128(val), <span class="kw">_</span>, PrimitiveType::Long) =&gt; {
-<a href=#1127 id=1127 data-nosnippet>1127</a>                        <span class="prelude-val">Ok</span>(Datum::i128_to_i64(<span class="kw-2">*</span>val))
+<a href=#1102 id=1102 data-nosnippet>1102</a>    <span class="doccomment">/// Replaces a decimal's unscaled value while preserving its precision and scale.
+<a href=#1103 id=1103 data-nosnippet>1103</a>    ///
+<a href=#1104 id=1104 data-nosnippet>1104</a>    /// The value is not checked against precision because transform projections
+<a href=#1105 id=1105 data-nosnippet>1105</a>    /// may use boundaries outside the source type's range.
+<a href=#1106 id=1106 data-nosnippet>1106</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>with_decimal_mantissa(<span class="kw-2">&amp;</span><span class="self">self</span>, mantissa: i128) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#1107 id=1107 data-nosnippet>1107</a>        <span class="macro">ensure_data_valid!</span>(
+<a href=#1108 id=1108 data-nosnippet>1108</a>            <span class="macro">matches!</span>(<span class="self">self</span>.r#type, PrimitiveType::Decimal { .. }),
+<a href=#1109 id=1109 data-nosnippet>1109</a>            <span class="string">"Expected a decimal datum, got: {:?}"</span>,
+<a href=#1110 id=1110 data-nosnippet>1110</a>            <span class="self">self</span>.r#type
+<a href=#1111 id=1111 data-nosnippet>1111</a>        );
+<a href=#1112 id=1112 data-nosnippet>1112</a>        <span class="prelude-val">Ok</span>(<span class="self">Self</span>::new(
+<a href=#1113 id=1113 data-nosnippet>1113</a>            <span class="self">self</span>.r#type.clone(),
+<a href=#1114 id=1114 data-nosnippet>1114</a>            PrimitiveLiteral::Int128(mantissa),
+<a href=#1115 id=1115 data-nosnippet>1115</a>        ))
+<a href=#1116 id=1116 data-nosnippet>1116</a>    }
+<a href=#1117 id=1117 data-nosnippet>1117</a>
+<a href=#1118 id=1118 data-nosnippet>1118</a>    <span class="doccomment">/// Convert the datum to `target_type`.
+<a href=#1119 id=1119 data-nosnippet>1119</a>    </span><span class="kw">pub fn </span>to(<span class="self">self</span>, target_type: <span class="kw-2">&amp;</span>Type) -&gt; <span class="prelude-ty">Result</span>&lt;Datum&gt; {
+<a href=#1120 id=1120 data-nosnippet>1120</a>        <span class="kw">match </span>target_type {
+<a href=#1121 id=1121 data-nosnippet>1121</a>            Type::Primitive(target_primitive_type) =&gt; {
+<a href=#1122 id=1122 data-nosnippet>1122</a>                <span class="kw">match </span>(<span class="kw-2">&amp;</span><span class="self">self</span>.literal, <span class="kw-2">&amp;</span><span class="self">self</span>.r#type, target_primitive_type) {
+<a href=#1123 id=1123 data-nosnippet>1123</a>                    (PrimitiveLiteral::Int(val), <span class="kw">_</span>, PrimitiveType::Int) =&gt; <span class="prelude-val">Ok</span>(Datum::int(<span class="kw-2">*</span>val)),
+<a href=#1124 id=1124 data-nosnippet>1124</a>                    (PrimitiveLiteral::Int(val), <span class="kw">_</span>, PrimitiveType::Date) =&gt; <span class="prelude-val">Ok</span>(Datum::date(<span class="kw-2">*</span>val)),
+<a href=#1125 id=1125 data-nosnippet>1125</a>                    (PrimitiveLiteral::Int(val), <span class="kw">_</span>, PrimitiveType::Long) =&gt; <span class="prelude-val">Ok</span>(Datum::long(<span class="kw-2">*</span>val)),
+<a href=#1126 id=1126 data-nosnippet>1126</a>                    (PrimitiveLiteral::Long(val), <span class="kw">_</span>, PrimitiveType::Int) =&gt; {
+<a href=#1127 id=1127 data-nosnippet>1127</a>                        <span class="prelude-val">Ok</span>(Datum::i64_to_i32(<span class="kw-2">*</span>val))
 <a href=#1128 id=1128 data-nosnippet>1128</a>                    }
-<a href=#1129 id=1129 data-nosnippet>1129</a>                    (
-<a href=#1130 id=1130 data-nosnippet>1130</a>                        PrimitiveLiteral::Int128(val),
-<a href=#1131 id=1131 data-nosnippet>1131</a>                        PrimitiveType::Decimal {
-<a href=#1132 id=1132 data-nosnippet>1132</a>                            scale: self_scale, ..
-<a href=#1133 id=1133 data-nosnippet>1133</a>                        },
-<a href=#1134 id=1134 data-nosnippet>1134</a>                        PrimitiveType::Decimal {
-<a href=#1135 id=1135 data-nosnippet>1135</a>                            precision,
-<a href=#1136 id=1136 data-nosnippet>1136</a>                            scale: target_scale,
-<a href=#1137 id=1137 data-nosnippet>1137</a>                        },
-<a href=#1138 id=1138 data-nosnippet>1138</a>                    ) <span class="kw">if </span>self_scale == target_scale =&gt; {
-<a href=#1139 id=1139 data-nosnippet>1139</a>                        Datum::decimal_from_mantissa(<span class="kw-2">*</span>val, <span class="kw-2">*</span>precision, <span class="kw-2">*</span>target_scale)
+<a href=#1129 id=1129 data-nosnippet>1129</a>                    (PrimitiveLiteral::Double(val), <span class="kw">_</span>, PrimitiveType::Float) =&gt; {
+<a href=#1130 id=1130 data-nosnippet>1130</a>                        <span class="prelude-val">Ok</span>(Datum::f64_to_f32(val.<span class="number">0</span>))
+<a href=#1131 id=1131 data-nosnippet>1131</a>                    }
+<a href=#1132 id=1132 data-nosnippet>1132</a>                    (PrimitiveLiteral::Float(val), <span class="kw">_</span>, PrimitiveType::Double) =&gt; {
+<a href=#1133 id=1133 data-nosnippet>1133</a>                        <span class="prelude-val">Ok</span>(Datum::double(val.<span class="number">0 </span><span class="kw">as </span>f64))
+<a href=#1134 id=1134 data-nosnippet>1134</a>                    }
+<a href=#1135 id=1135 data-nosnippet>1135</a>                    (PrimitiveLiteral::Long(val), <span class="kw">_</span>, PrimitiveType::Timestamp) =&gt; {
+<a href=#1136 id=1136 data-nosnippet>1136</a>                        <span class="prelude-val">Ok</span>(Datum::timestamp_micros(<span class="kw-2">*</span>val))
+<a href=#1137 id=1137 data-nosnippet>1137</a>                    }
+<a href=#1138 id=1138 data-nosnippet>1138</a>                    (PrimitiveLiteral::Long(val), <span class="kw">_</span>, PrimitiveType::Timestamptz) =&gt; {
+<a href=#1139 id=1139 data-nosnippet>1139</a>                        <span class="prelude-val">Ok</span>(Datum::timestamptz_micros(<span class="kw-2">*</span>val))
 <a href=#1140 id=1140 data-nosnippet>1140</a>                    }
-<a href=#1141 id=1141 data-nosnippet>1141</a>                    <span class="comment">// Java's DecimalLiteral.to() is a no-op for decimal targets, even when scales
-<a href=#1142 id=1142 data-nosnippet>1142</a>                    // differ. We intentionally do not mirror that here: the same mantissa with a
-<a href=#1143 id=1143 data-nosnippet>1143</a>                    // different scale represents a different value, so scale conversion needs
-<a href=#1144 id=1144 data-nosnippet>1144</a>                    // explicit rescaling.
-<a href=#1145 id=1145 data-nosnippet>1145</a>                    </span>(
-<a href=#1146 id=1146 data-nosnippet>1146</a>                        PrimitiveLiteral::Int128(<span class="kw">_</span>),
+<a href=#1141 id=1141 data-nosnippet>1141</a>                    <span class="comment">// Let's wait with nano's until this clears up: https://github.com/apache/iceberg/pull/11775
+<a href=#1142 id=1142 data-nosnippet>1142</a>                    </span>(PrimitiveLiteral::Int128(val), <span class="kw">_</span>, PrimitiveType::Long) =&gt; {
+<a href=#1143 id=1143 data-nosnippet>1143</a>                        <span class="prelude-val">Ok</span>(Datum::i128_to_i64(<span class="kw-2">*</span>val))
+<a href=#1144 id=1144 data-nosnippet>1144</a>                    }
+<a href=#1145 id=1145 data-nosnippet>1145</a>                    (
+<a href=#1146 id=1146 data-nosnippet>1146</a>                        PrimitiveLiteral::Int128(val),
 <a href=#1147 id=1147 data-nosnippet>1147</a>                        PrimitiveType::Decimal {
 <a href=#1148 id=1148 data-nosnippet>1148</a>                            scale: self_scale, ..
 <a href=#1149 id=1149 data-nosnippet>1149</a>                        },
 <a href=#1150 id=1150 data-nosnippet>1150</a>                        PrimitiveType::Decimal {
-<a href=#1151 id=1151 data-nosnippet>1151</a>                            scale: target_scale,
-<a href=#1152 id=1152 data-nosnippet>1152</a>                            ..
+<a href=#1151 id=1151 data-nosnippet>1151</a>                            precision,
+<a href=#1152 id=1152 data-nosnippet>1152</a>                            scale: target_scale,
 <a href=#1153 id=1153 data-nosnippet>1153</a>                        },
-<a href=#1154 id=1154 data-nosnippet>1154</a>                    ) =&gt; <span class="prelude-val">Err</span>(<span class="macro">invalid_data!</span>(
-<a href=#1155 id=1155 data-nosnippet>1155</a>                        <span class="string">"Decimal scale conversion is not supported: source scale {self_scale}, target scale {target_scale}"
-<a href=#1156 id=1156 data-nosnippet>1156</a>                    </span>)),
-<a href=#1157 id=1157 data-nosnippet>1157</a>                    (PrimitiveLiteral::String(val), <span class="kw">_</span>, PrimitiveType::Boolean) =&gt; {
-<a href=#1158 id=1158 data-nosnippet>1158</a>                        Datum::bool_from_str(val)
-<a href=#1159 id=1159 data-nosnippet>1159</a>                    }
-<a href=#1160 id=1160 data-nosnippet>1160</a>                    (PrimitiveLiteral::String(val), <span class="kw">_</span>, PrimitiveType::Int) =&gt; {
-<a href=#1161 id=1161 data-nosnippet>1161</a>                        Datum::string_to_i128(val).map(Datum::i128_to_i32)
-<a href=#1162 id=1162 data-nosnippet>1162</a>                    }
-<a href=#1163 id=1163 data-nosnippet>1163</a>                    (PrimitiveLiteral::String(val), <span class="kw">_</span>, PrimitiveType::Long) =&gt; {
-<a href=#1164 id=1164 data-nosnippet>1164</a>                        Datum::string_to_i128(val).map(Datum::i128_to_i64)
-<a href=#1165 id=1165 data-nosnippet>1165</a>                    }
-<a href=#1166 id=1166 data-nosnippet>1166</a>                    (PrimitiveLiteral::String(val), <span class="kw">_</span>, PrimitiveType::Timestamp) =&gt; {
-<a href=#1167 id=1167 data-nosnippet>1167</a>                        Datum::timestamp_from_str(val)
-<a href=#1168 id=1168 data-nosnippet>1168</a>                    }
-<a href=#1169 id=1169 data-nosnippet>1169</a>                    (PrimitiveLiteral::String(val), <span class="kw">_</span>, PrimitiveType::Timestamptz) =&gt; {
-<a href=#1170 id=1170 data-nosnippet>1170</a>                        Datum::timestamptz_from_str(val)
-<a href=#1171 id=1171 data-nosnippet>1171</a>                    }
-<a href=#1172 id=1172 data-nosnippet>1172</a>
-<a href=#1173 id=1173 data-nosnippet>1173</a>                    <span class="comment">// TODO: implement more type conversions
-<a href=#1174 id=1174 data-nosnippet>1174</a>                    </span>(<span class="kw">_</span>, self_type, target_type) <span class="kw">if </span>self_type == target_type =&gt; <span class="prelude-val">Ok</span>(<span class="self">self</span>),
-<a href=#1175 id=1175 data-nosnippet>1175</a>                    <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">invalid_data!</span>(
-<a href=#1176 id=1176 data-nosnippet>1176</a>                        <span class="string">"Can't convert datum from {} type to {} type."</span>,
-<a href=#1177 id=1177 data-nosnippet>1177</a>                        <span class="self">self</span>.r#type,
-<a href=#1178 id=1178 data-nosnippet>1178</a>                        target_primitive_type
-<a href=#1179 id=1179 data-nosnippet>1179</a>                    )),
-<a href=#1180 id=1180 data-nosnippet>1180</a>                }
-<a href=#1181 id=1181 data-nosnippet>1181</a>            }
-<a href=#1182 id=1182 data-nosnippet>1182</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">invalid_data!</span>(
-<a href=#1183 id=1183 data-nosnippet>1183</a>                <span class="string">"Can't convert datum from {} type to {} type."</span>,
-<a href=#1184 id=1184 data-nosnippet>1184</a>                <span class="self">self</span>.r#type,
-<a href=#1185 id=1185 data-nosnippet>1185</a>                target_type
-<a href=#1186 id=1186 data-nosnippet>1186</a>            )),
-<a href=#1187 id=1187 data-nosnippet>1187</a>        }
-<a href=#1188 id=1188 data-nosnippet>1188</a>    }
-<a href=#1189 id=1189 data-nosnippet>1189</a>
-<a href=#1190 id=1190 data-nosnippet>1190</a>    <span class="doccomment">/// Get the primitive literal from datum.
-<a href=#1191 id=1191 data-nosnippet>1191</a>    </span><span class="kw">pub fn </span>literal(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PrimitiveLiteral {
-<a href=#1192 id=1192 data-nosnippet>1192</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.literal
-<a href=#1193 id=1193 data-nosnippet>1193</a>    }
-<a href=#1194 id=1194 data-nosnippet>1194</a>
-<a href=#1195 id=1195 data-nosnippet>1195</a>    <span class="doccomment">/// Get the primitive type from datum.
-<a href=#1196 id=1196 data-nosnippet>1196</a>    </span><span class="kw">pub fn </span>data_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PrimitiveType {
-<a href=#1197 id=1197 data-nosnippet>1197</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.r#type
-<a href=#1198 id=1198 data-nosnippet>1198</a>    }
-<a href=#1199 id=1199 data-nosnippet>1199</a>
-<a href=#1200 id=1200 data-nosnippet>1200</a>    <span class="doccomment">/// Returns true if the Literal represents a primitive type
-<a href=#1201 id=1201 data-nosnippet>1201</a>    /// that can be a NaN, and that it's value is NaN
-<a href=#1202 id=1202 data-nosnippet>1202</a>    </span><span class="kw">pub fn </span>is_nan(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#1203 id=1203 data-nosnippet>1203</a>        <span class="kw">match </span><span class="self">self</span>.literal {
-<a href=#1204 id=1204 data-nosnippet>1204</a>            PrimitiveLiteral::Double(val) =&gt; val.is_nan(),
-<a href=#1205 id=1205 data-nosnippet>1205</a>            PrimitiveLiteral::Float(val) =&gt; val.is_nan(),
-<a href=#1206 id=1206 data-nosnippet>1206</a>            <span class="kw">_ </span>=&gt; <span class="bool-val">false</span>,
-<a href=#1207 id=1207 data-nosnippet>1207</a>        }
-<a href=#1208 id=1208 data-nosnippet>1208</a>    }
-<a href=#1209 id=1209 data-nosnippet>1209</a>
-<a href=#1210 id=1210 data-nosnippet>1210</a>    <span class="doccomment">/// Returns a human-readable string representation of this literal.
-<a href=#1211 id=1211 data-nosnippet>1211</a>    ///
-<a href=#1212 id=1212 data-nosnippet>1212</a>    /// For string literals, this returns the raw string value without quotes.
-<a href=#1213 id=1213 data-nosnippet>1213</a>    /// For all other literals, it falls back to [`to_string()`](ToString::to_string).
-<a href=#1214 id=1214 data-nosnippet>1214</a>    </span><span class="kw">pub fn </span>to_human_string(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-<a href=#1215 id=1215 data-nosnippet>1215</a>        <span class="kw">match </span><span class="self">self</span>.literal() {
-<a href=#1216 id=1216 data-nosnippet>1216</a>            PrimitiveLiteral::String(s) =&gt; s.to_string(),
-<a href=#1217 id=1217 data-nosnippet>1217</a>            <span class="kw">_ </span>=&gt; <span class="self">self</span>.to_string(),
-<a href=#1218 id=1218 data-nosnippet>1218</a>        }
-<a href=#1219 id=1219 data-nosnippet>1219</a>    }
-<a href=#1220 id=1220 data-nosnippet>1220</a>}
+<a href=#1154 id=1154 data-nosnippet>1154</a>                    ) <span class="kw">if </span>self_scale == target_scale =&gt; {
+<a href=#1155 id=1155 data-nosnippet>1155</a>                        Datum::decimal_from_mantissa(<span class="kw-2">*</span>val, <span class="kw-2">*</span>precision, <span class="kw-2">*</span>target_scale)
+<a href=#1156 id=1156 data-nosnippet>1156</a>                    }
+<a href=#1157 id=1157 data-nosnippet>1157</a>                    <span class="comment">// Java's DecimalLiteral.to() is a no-op for decimal targets, even when scales
+<a href=#1158 id=1158 data-nosnippet>1158</a>                    // differ. We intentionally do not mirror that here: the same mantissa with a
+<a href=#1159 id=1159 data-nosnippet>1159</a>                    // different scale represents a different value, so scale conversion needs
+<a href=#1160 id=1160 data-nosnippet>1160</a>                    // explicit rescaling.
+<a href=#1161 id=1161 data-nosnippet>1161</a>                    </span>(
+<a href=#1162 id=1162 data-nosnippet>1162</a>                        PrimitiveLiteral::Int128(<span class="kw">_</span>),
+<a href=#1163 id=1163 data-nosnippet>1163</a>                        PrimitiveType::Decimal {
+<a href=#1164 id=1164 data-nosnippet>1164</a>                            scale: self_scale, ..
+<a href=#1165 id=1165 data-nosnippet>1165</a>                        },
+<a href=#1166 id=1166 data-nosnippet>1166</a>                        PrimitiveType::Decimal {
+<a href=#1167 id=1167 data-nosnippet>1167</a>                            scale: target_scale,
+<a href=#1168 id=1168 data-nosnippet>1168</a>                            ..
+<a href=#1169 id=1169 data-nosnippet>1169</a>                        },
+<a href=#1170 id=1170 data-nosnippet>1170</a>                    ) =&gt; <span class="prelude-val">Err</span>(<span class="macro">invalid_data!</span>(
+<a href=#1171 id=1171 data-nosnippet>1171</a>                        <span class="string">"Decimal scale conversion is not supported: source scale {self_scale}, target scale {target_scale}"
+<a href=#1172 id=1172 data-nosnippet>1172</a>                    </span>)),
+<a href=#1173 id=1173 data-nosnippet>1173</a>                    (PrimitiveLiteral::String(val), <span class="kw">_</span>, PrimitiveType::Boolean) =&gt; {
+<a href=#1174 id=1174 data-nosnippet>1174</a>                        Datum::bool_from_str(val)
+<a href=#1175 id=1175 data-nosnippet>1175</a>                    }
+<a href=#1176 id=1176 data-nosnippet>1176</a>                    (PrimitiveLiteral::String(val), <span class="kw">_</span>, PrimitiveType::Int) =&gt; {
+<a href=#1177 id=1177 data-nosnippet>1177</a>                        Datum::string_to_i128(val).map(Datum::i128_to_i32)
+<a href=#1178 id=1178 data-nosnippet>1178</a>                    }
+<a href=#1179 id=1179 data-nosnippet>1179</a>                    (PrimitiveLiteral::String(val), <span class="kw">_</span>, PrimitiveType::Long) =&gt; {
+<a href=#1180 id=1180 data-nosnippet>1180</a>                        Datum::string_to_i128(val).map(Datum::i128_to_i64)
+<a href=#1181 id=1181 data-nosnippet>1181</a>                    }
+<a href=#1182 id=1182 data-nosnippet>1182</a>                    (PrimitiveLiteral::String(val), <span class="kw">_</span>, PrimitiveType::Timestamp) =&gt; {
+<a href=#1183 id=1183 data-nosnippet>1183</a>                        Datum::timestamp_from_str(val)
+<a href=#1184 id=1184 data-nosnippet>1184</a>                    }
+<a href=#1185 id=1185 data-nosnippet>1185</a>                    (PrimitiveLiteral::String(val), <span class="kw">_</span>, PrimitiveType::Timestamptz) =&gt; {
+<a href=#1186 id=1186 data-nosnippet>1186</a>                        Datum::timestamptz_from_str(val)
+<a href=#1187 id=1187 data-nosnippet>1187</a>                    }
+<a href=#1188 id=1188 data-nosnippet>1188</a>
+<a href=#1189 id=1189 data-nosnippet>1189</a>                    <span class="comment">// TODO: implement more type conversions
+<a href=#1190 id=1190 data-nosnippet>1190</a>                    </span>(<span class="kw">_</span>, self_type, target_type) <span class="kw">if </span>self_type == target_type =&gt; <span class="prelude-val">Ok</span>(<span class="self">self</span>),
+<a href=#1191 id=1191 data-nosnippet>1191</a>                    <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">invalid_data!</span>(
+<a href=#1192 id=1192 data-nosnippet>1192</a>                        <span class="string">"Can't convert datum from {} type to {} type."</span>,
+<a href=#1193 id=1193 data-nosnippet>1193</a>                        <span class="self">self</span>.r#type,
+<a href=#1194 id=1194 data-nosnippet>1194</a>                        target_primitive_type
+<a href=#1195 id=1195 data-nosnippet>1195</a>                    )),
+<a href=#1196 id=1196 data-nosnippet>1196</a>                }
+<a href=#1197 id=1197 data-nosnippet>1197</a>            }
+<a href=#1198 id=1198 data-nosnippet>1198</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">invalid_data!</span>(
+<a href=#1199 id=1199 data-nosnippet>1199</a>                <span class="string">"Can't convert datum from {} type to {} type."</span>,
+<a href=#1200 id=1200 data-nosnippet>1200</a>                <span class="self">self</span>.r#type,
+<a href=#1201 id=1201 data-nosnippet>1201</a>                target_type
+<a href=#1202 id=1202 data-nosnippet>1202</a>            )),
+<a href=#1203 id=1203 data-nosnippet>1203</a>        }
+<a href=#1204 id=1204 data-nosnippet>1204</a>    }
+<a href=#1205 id=1205 data-nosnippet>1205</a>
+<a href=#1206 id=1206 data-nosnippet>1206</a>    <span class="doccomment">/// Get the primitive literal from datum.
+<a href=#1207 id=1207 data-nosnippet>1207</a>    </span><span class="kw">pub fn </span>literal(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PrimitiveLiteral {
+<a href=#1208 id=1208 data-nosnippet>1208</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.literal
+<a href=#1209 id=1209 data-nosnippet>1209</a>    }
+<a href=#1210 id=1210 data-nosnippet>1210</a>
+<a href=#1211 id=1211 data-nosnippet>1211</a>    <span class="doccomment">/// Get the primitive type from datum.
+<a href=#1212 id=1212 data-nosnippet>1212</a>    </span><span class="kw">pub fn </span>data_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PrimitiveType {
+<a href=#1213 id=1213 data-nosnippet>1213</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.r#type
+<a href=#1214 id=1214 data-nosnippet>1214</a>    }
+<a href=#1215 id=1215 data-nosnippet>1215</a>
+<a href=#1216 id=1216 data-nosnippet>1216</a>    <span class="doccomment">/// Returns true if the Literal represents a primitive type
+<a href=#1217 id=1217 data-nosnippet>1217</a>    /// that can be a NaN, and that it's value is NaN
+<a href=#1218 id=1218 data-nosnippet>1218</a>    </span><span class="kw">pub fn </span>is_nan(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#1219 id=1219 data-nosnippet>1219</a>        <span class="kw">match </span><span class="self">self</span>.literal {
+<a href=#1220 id=1220 data-nosnippet>1220</a>            PrimitiveLiteral::Double(val) =&gt; val.is_nan(),
+<a href=#1221 id=1221 data-nosnippet>1221</a>            PrimitiveLiteral::Float(val) =&gt; val.is_nan(),
+<a href=#1222 id=1222 data-nosnippet>1222</a>            <span class="kw">_ </span>=&gt; <span class="bool-val">false</span>,
+<a href=#1223 id=1223 data-nosnippet>1223</a>        }
+<a href=#1224 id=1224 data-nosnippet>1224</a>    }
+<a href=#1225 id=1225 data-nosnippet>1225</a>
+<a href=#1226 id=1226 data-nosnippet>1226</a>    <span class="doccomment">/// Returns a human-readable string representation of this literal.
+<a href=#1227 id=1227 data-nosnippet>1227</a>    ///
+<a href=#1228 id=1228 data-nosnippet>1228</a>    /// For string literals, this returns the raw string value without quotes.
+<a href=#1229 id=1229 data-nosnippet>1229</a>    /// For all other literals, it falls back to [`to_string()`](ToString::to_string).
+<a href=#1230 id=1230 data-nosnippet>1230</a>    </span><span class="kw">pub fn </span>to_human_string(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+<a href=#1231 id=1231 data-nosnippet>1231</a>        <span class="kw">match </span><span class="self">self</span>.literal() {
+<a href=#1232 id=1232 data-nosnippet>1232</a>            PrimitiveLiteral::String(s) =&gt; s.to_string(),
+<a href=#1233 id=1233 data-nosnippet>1233</a>            <span class="kw">_ </span>=&gt; <span class="self">self</span>.to_string(),
+<a href=#1234 id=1234 data-nosnippet>1234</a>        }
+<a href=#1235 id=1235 data-nosnippet>1235</a>    }
+<a href=#1236 id=1236 data-nosnippet>1236</a>}
 </code></pre></div></section></main></body></html>

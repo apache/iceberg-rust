@@ -2761,7 +2761,7 @@
 <a href=#2761 id=2761 data-nosnippet>2761</a>        <span class="kw">let </span>result = strict_projection.strict_project(<span class="kw-2">&amp;</span>predicate).unwrap();
 <a href=#2762 id=2762 data-nosnippet>2762</a>        <span class="macro">assert_eq!</span>(
 <a href=#2763 id=2763 data-nosnippet>2763</a>            result.to_string(),
-<a href=#2764 id=2764 data-nosnippet>2764</a>            <span class="string">"((pcol1 &lt; 100) AND (pcol2 &lt; 100)) AND (pcol3 &lt; 10000)"</span>.to_string()
+<a href=#2764 id=2764 data-nosnippet>2764</a>            <span class="string">"((pcol1 &lt; 100) AND (pcol2 &lt; 100)) AND (pcol3 &lt; 100.00)"</span>.to_string()
 <a href=#2765 id=2765 data-nosnippet>2765</a>        );
 <a href=#2766 id=2766 data-nosnippet>2766</a>
 <a href=#2767 id=2767 data-nosnippet>2767</a>        <span class="comment">// test less or eq
@@ -2780,7 +2780,7 @@
 <a href=#2780 id=2780 data-nosnippet>2780</a>        <span class="kw">let </span>result = strict_projection.strict_project(<span class="kw-2">&amp;</span>predicate).unwrap();
 <a href=#2781 id=2781 data-nosnippet>2781</a>        <span class="macro">assert_eq!</span>(
 <a href=#2782 id=2782 data-nosnippet>2782</a>            result.to_string(),
-<a href=#2783 id=2783 data-nosnippet>2783</a>            <span class="string">"((pcol1 &lt; 100) AND (pcol2 &lt; 100)) AND (pcol3 &lt; 10000)"</span>.to_string()
+<a href=#2783 id=2783 data-nosnippet>2783</a>            <span class="string">"((pcol1 &lt; 100) AND (pcol2 &lt; 100)) AND (pcol3 &lt; 100.00)"</span>.to_string()
 <a href=#2784 id=2784 data-nosnippet>2784</a>        );
 <a href=#2785 id=2785 data-nosnippet>2785</a>
 <a href=#2786 id=2786 data-nosnippet>2786</a>        <span class="comment">// test greater
@@ -2799,7 +2799,7 @@
 <a href=#2799 id=2799 data-nosnippet>2799</a>        <span class="kw">let </span>result = strict_projection.strict_project(<span class="kw-2">&amp;</span>predicate).unwrap();
 <a href=#2800 id=2800 data-nosnippet>2800</a>        <span class="macro">assert_eq!</span>(
 <a href=#2801 id=2801 data-nosnippet>2801</a>            result.to_string(),
-<a href=#2802 id=2802 data-nosnippet>2802</a>            <span class="string">"((pcol1 &gt; 100) AND (pcol2 &gt; 100)) AND (pcol3 &gt; 10000)"</span>.to_string()
+<a href=#2802 id=2802 data-nosnippet>2802</a>            <span class="string">"((pcol1 &gt; 100) AND (pcol2 &gt; 100)) AND (pcol3 &gt; 100.00)"</span>.to_string()
 <a href=#2803 id=2803 data-nosnippet>2803</a>        );
 <a href=#2804 id=2804 data-nosnippet>2804</a>
 <a href=#2805 id=2805 data-nosnippet>2805</a>        <span class="comment">// test greater or eq
@@ -2818,7 +2818,7 @@
 <a href=#2818 id=2818 data-nosnippet>2818</a>        <span class="kw">let </span>result = strict_projection.strict_project(<span class="kw-2">&amp;</span>predicate).unwrap();
 <a href=#2819 id=2819 data-nosnippet>2819</a>        <span class="macro">assert_eq!</span>(
 <a href=#2820 id=2820 data-nosnippet>2820</a>            result.to_string(),
-<a href=#2821 id=2821 data-nosnippet>2821</a>            <span class="string">"((pcol1 &gt; 90) AND (pcol2 &gt; 90)) AND (pcol3 &gt; 9990)"</span>.to_string()
+<a href=#2821 id=2821 data-nosnippet>2821</a>            <span class="string">"((pcol1 &gt; 90) AND (pcol2 &gt; 90)) AND (pcol3 &gt; 99.90)"</span>.to_string()
 <a href=#2822 id=2822 data-nosnippet>2822</a>        );
 <a href=#2823 id=2823 data-nosnippet>2823</a>
 <a href=#2824 id=2824 data-nosnippet>2824</a>        <span class="comment">// test not eq
@@ -2837,7 +2837,7 @@
 <a href=#2837 id=2837 data-nosnippet>2837</a>        <span class="kw">let </span>result = strict_projection.strict_project(<span class="kw-2">&amp;</span>predicate).unwrap();
 <a href=#2838 id=2838 data-nosnippet>2838</a>        <span class="macro">assert_eq!</span>(
 <a href=#2839 id=2839 data-nosnippet>2839</a>            result.to_string(),
-<a href=#2840 id=2840 data-nosnippet>2840</a>            <span class="string">"((pcol1 != 100) AND (pcol2 != 100)) AND (pcol3 != 10000)"</span>.to_string()
+<a href=#2840 id=2840 data-nosnippet>2840</a>            <span class="string">"((pcol1 != 100) AND (pcol2 != 100)) AND (pcol3 != 100.00)"</span>.to_string()
 <a href=#2841 id=2841 data-nosnippet>2841</a>        );
 <a href=#2842 id=2842 data-nosnippet>2842</a>
 <a href=#2843 id=2843 data-nosnippet>2843</a>        <span class="comment">// test not in
@@ -2880,7 +2880,7 @@
 <a href=#2880 id=2880 data-nosnippet>2880</a>        <span class="kw">let </span>result = strict_projection.strict_project(<span class="kw-2">&amp;</span>predicate).unwrap();
 <a href=#2881 id=2881 data-nosnippet>2881</a>        <span class="macro">assert_eq!</span>(
 <a href=#2882 id=2882 data-nosnippet>2882</a>            result.to_string(),
-<a href=#2883 id=2883 data-nosnippet>2883</a>            <span class="string">"((pcol1 NOT IN (100, 90)) AND (pcol2 NOT IN (100, 90))) AND (pcol3 NOT IN (10000, 10100, 9900))"
+<a href=#2883 id=2883 data-nosnippet>2883</a>            <span class="string">"((pcol1 NOT IN (100, 90)) AND (pcol2 NOT IN (100, 90))) AND (pcol3 NOT IN (100.00, 99.00, 101.00))"
 <a href=#2884 id=2884 data-nosnippet>2884</a>                </span>.to_string()
 <a href=#2885 id=2885 data-nosnippet>2885</a>        );
 <a href=#2886 id=2886 data-nosnippet>2886</a>
@@ -2984,7 +2984,7 @@
 <a href=#2984 id=2984 data-nosnippet>2984</a>        <span class="kw">let </span>result = strict_projection.strict_project(<span class="kw-2">&amp;</span>predicate).unwrap();
 <a href=#2985 id=2985 data-nosnippet>2985</a>        <span class="macro">assert_eq!</span>(
 <a href=#2986 id=2986 data-nosnippet>2986</a>            result.to_string(),
-<a href=#2987 id=2987 data-nosnippet>2987</a>            <span class="string">"((pcol1 &lt; 90) AND (pcol2 &lt; 90)) AND (pcol3 &lt; 9990)"</span>.to_string()
+<a href=#2987 id=2987 data-nosnippet>2987</a>            <span class="string">"((pcol1 &lt; 90) AND (pcol2 &lt; 90)) AND (pcol3 &lt; 99.90)"</span>.to_string()
 <a href=#2988 id=2988 data-nosnippet>2988</a>        );
 <a href=#2989 id=2989 data-nosnippet>2989</a>
 <a href=#2990 id=2990 data-nosnippet>2990</a>        <span class="comment">// test less or eq
@@ -3003,7 +3003,7 @@
 <a href=#3003 id=3003 data-nosnippet>3003</a>        <span class="kw">let </span>result = strict_projection.strict_project(<span class="kw-2">&amp;</span>predicate).unwrap();
 <a href=#3004 id=3004 data-nosnippet>3004</a>        <span class="macro">assert_eq!</span>(
 <a href=#3005 id=3005 data-nosnippet>3005</a>            result.to_string(),
-<a href=#3006 id=3006 data-nosnippet>3006</a>            <span class="string">"((pcol1 &lt; 100) AND (pcol2 &lt; 100)) AND (pcol3 &lt; 10000)"</span>.to_string()
+<a href=#3006 id=3006 data-nosnippet>3006</a>            <span class="string">"((pcol1 &lt; 100) AND (pcol2 &lt; 100)) AND (pcol3 &lt; 100.00)"</span>.to_string()
 <a href=#3007 id=3007 data-nosnippet>3007</a>        );
 <a href=#3008 id=3008 data-nosnippet>3008</a>
 <a href=#3009 id=3009 data-nosnippet>3009</a>        <span class="comment">// test greater
@@ -3022,7 +3022,7 @@
 <a href=#3022 id=3022 data-nosnippet>3022</a>        <span class="kw">let </span>result = strict_projection.strict_project(<span class="kw-2">&amp;</span>predicate).unwrap();
 <a href=#3023 id=3023 data-nosnippet>3023</a>        <span class="macro">assert_eq!</span>(
 <a href=#3024 id=3024 data-nosnippet>3024</a>            result.to_string(),
-<a href=#3025 id=3025 data-nosnippet>3025</a>            <span class="string">"((pcol1 &gt; 90) AND (pcol2 &gt; 90)) AND (pcol3 &gt; 9990)"</span>.to_string()
+<a href=#3025 id=3025 data-nosnippet>3025</a>            <span class="string">"((pcol1 &gt; 90) AND (pcol2 &gt; 90)) AND (pcol3 &gt; 99.90)"</span>.to_string()
 <a href=#3026 id=3026 data-nosnippet>3026</a>        );
 <a href=#3027 id=3027 data-nosnippet>3027</a>
 <a href=#3028 id=3028 data-nosnippet>3028</a>        <span class="comment">// test greater or eq
@@ -3041,7 +3041,7 @@
 <a href=#3041 id=3041 data-nosnippet>3041</a>        <span class="kw">let </span>result = strict_projection.strict_project(<span class="kw-2">&amp;</span>predicate).unwrap();
 <a href=#3042 id=3042 data-nosnippet>3042</a>        <span class="macro">assert_eq!</span>(
 <a href=#3043 id=3043 data-nosnippet>3043</a>            result.to_string(),
-<a href=#3044 id=3044 data-nosnippet>3044</a>            <span class="string">"((pcol1 &gt; 90) AND (pcol2 &gt; 90)) AND (pcol3 &gt; 9990)"</span>.to_string()
+<a href=#3044 id=3044 data-nosnippet>3044</a>            <span class="string">"((pcol1 &gt; 90) AND (pcol2 &gt; 90)) AND (pcol3 &gt; 99.90)"</span>.to_string()
 <a href=#3045 id=3045 data-nosnippet>3045</a>        );
 <a href=#3046 id=3046 data-nosnippet>3046</a>
 <a href=#3047 id=3047 data-nosnippet>3047</a>        <span class="comment">// test not eq
@@ -3060,7 +3060,7 @@
 <a href=#3060 id=3060 data-nosnippet>3060</a>        <span class="kw">let </span>result = strict_projection.strict_project(<span class="kw-2">&amp;</span>predicate).unwrap();
 <a href=#3061 id=3061 data-nosnippet>3061</a>        <span class="macro">assert_eq!</span>(
 <a href=#3062 id=3062 data-nosnippet>3062</a>            result.to_string(),
-<a href=#3063 id=3063 data-nosnippet>3063</a>            <span class="string">"((pcol1 != 90) AND (pcol2 != 90)) AND (pcol3 != 9990)"</span>.to_string()
+<a href=#3063 id=3063 data-nosnippet>3063</a>            <span class="string">"((pcol1 != 90) AND (pcol2 != 90)) AND (pcol3 != 99.90)"</span>.to_string()
 <a href=#3064 id=3064 data-nosnippet>3064</a>        );
 <a href=#3065 id=3065 data-nosnippet>3065</a>
 <a href=#3066 id=3066 data-nosnippet>3066</a>        <span class="comment">// test not in
@@ -3103,7 +3103,7 @@
 <a href=#3103 id=3103 data-nosnippet>3103</a>        <span class="kw">let </span>result = strict_projection.strict_project(<span class="kw-2">&amp;</span>predicate).unwrap();
 <a href=#3104 id=3104 data-nosnippet>3104</a>        <span class="macro">assert_eq!</span>(
 <a href=#3105 id=3105 data-nosnippet>3105</a>            result.to_string(),
-<a href=#3106 id=3106 data-nosnippet>3106</a>            <span class="string">"((pcol1 NOT IN (100, 90)) AND (pcol2 NOT IN (100, 90))) AND (pcol3 NOT IN (9890, 9990, 10090))"
+<a href=#3106 id=3106 data-nosnippet>3106</a>            <span class="string">"((pcol1 NOT IN (100, 90)) AND (pcol2 NOT IN (100, 90))) AND (pcol3 NOT IN (98.90, 100.90, 99.90))"
 <a href=#3107 id=3107 data-nosnippet>3107</a>                </span>.to_string()
 <a href=#3108 id=3108 data-nosnippet>3108</a>        );
 <a href=#3109 id=3109 data-nosnippet>3109</a>
