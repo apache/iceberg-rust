@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::Result;
+use crate::table::Table;
+use crate::transaction::{ActionCommit, TransactionAction};
+
 /// Runs a single commit attempt of an action with fresh state.
 pub(crate) async fn commit_with_fresh_state<A: TransactionAction>(
     action: A,
