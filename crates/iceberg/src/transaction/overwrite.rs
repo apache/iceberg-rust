@@ -87,6 +87,13 @@ impl OverwriteAction {
 #[async_trait]
 impl TransactionAction for OverwriteAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+        let mut deleted_files = HashMap::new();
+        for file in &self.deleted_data_files {
+            if file.content_type() != crate::spec::DataContentType::Data {
+                return Err(invalid_data!("Only data content type is allowed"));
+            }
+            deleted_files.entry(file.file_path.as_str()).or_insert(file);
+        }
         let snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
@@ -103,11 +110,7 @@ impl TransactionAction for OverwriteAction {
 
         let operation = OverwriteOperation {
             has_added_data_files: !self.added_data_files.is_empty(),
-            deleted_file_paths: self
-                .deleted_data_files
-                .iter()
-                .map(|f| f.file_path.clone())
-                .collect(),
+            deleted_files,
         };
         snapshot_producer
             .commit(operation, DefaultManifestProcess)
@@ -115,17 +118,14 @@ impl TransactionAction for OverwriteAction {
     }
 }
 
-struct OverwriteOperation {
+struct OverwriteOperation<'a> {
     has_added_data_files: bool,
-    deleted_file_paths: HashSet<String>,
+    deleted_files: HashMap<&'a str, &'a DataFile>,
 }
 
-impl SnapshotProduceOperation for OverwriteOperation {
+impl SnapshotProduceOperation for OverwriteOperation<'_> {
     fn operation(&self) -> Operation {
-        match (
-            self.has_added_data_files,
-            !self.deleted_file_paths.is_empty(),
-        ) {
+        match (self.has_added_data_files, !self.deleted_files.is_empty()) {
             (true, true) => Operation::Overwrite,
             (false, true) => Operation::Delete,
             // Also a properties-only commit, the workaround from #1548.
@@ -164,19 +164,31 @@ impl SnapshotProduceOperation for OverwriteOperation {
                 {
                     continue;
                 }
-                if self.deleted_file_paths.is_empty() {
+                if manifest_file.content == crate::spec::ManifestContentType::Deletes
+                    || self.deleted_files.is_empty()
+                {
                     manifests.push(manifest_file.clone());
                     continue;
                 }
 
                 let manifest = table.manifest_reader().read(manifest_file).await?;
-                let deletes: Vec<&str> = manifest
-                    .entries()
-                    .iter()
-                    .filter(|entry| entry.is_alive())
-                    .filter_map(|entry| self.deleted_file_paths.get(entry.file_path()))
-                    .map(String::as_str)
-                    .collect();
+                let mut deletes = vec![];
+                for entry in manifest.entries().iter().filter(|entry| entry.is_alive()) {
+                    if let Some(requested) = self.deleted_files.get(entry.file_path()) {
+                        let actual = entry.data_file();
+                        if requested.record_count != actual.record_count
+                            || requested.file_size_in_bytes != actual.file_size_in_bytes
+                            || requested.partition_spec_id != actual.partition_spec_id
+                            || requested.partition != actual.partition
+                        {
+                            return Err(invalid_data!(
+                                "Delete file metadata does not match the table: {}",
+                                entry.file_path()
+                            ));
+                        }
+                        deletes.push(requested.file_path.as_str());
+                    }
+                }
                 if deletes.is_empty() {
                     manifests.push(manifest_file.clone());
                     continue;
@@ -190,7 +202,7 @@ impl SnapshotProduceOperation for OverwriteOperation {
                 )?;
                 // Like Java, only live entries are carried into the rewrite.
                 for entry in manifest.entries().iter().filter(|entry| entry.is_alive()) {
-                    if self.deleted_file_paths.contains(entry.file_path()) {
+                    if self.deleted_files.contains_key(entry.file_path()) {
                         writer.add_delete_entry(entry.as_ref().clone())?;
                     } else {
                         writer.add_existing_entry(entry.as_ref().clone())?;
@@ -201,9 +213,9 @@ impl SnapshotProduceOperation for OverwriteOperation {
         }
 
         let mut missing: Vec<&str> = self
-            .deleted_file_paths
-            .iter()
-            .map(String::as_str)
+            .deleted_files
+            .keys()
+            .copied()
             .filter(|path| !matched.contains(path))
             .collect();
         if !missing.is_empty() {
@@ -224,9 +236,9 @@ mod tests {
 
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, ManifestStatus,
-        Operation, PrimitiveType, SnapshotRef, Struct, Transform, Type, UnboundPartitionField,
-        UnboundPartitionSpec,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, ManifestListWriter,
+        ManifestStatus, ManifestWriterBuilder, Operation, PrimitiveType, SnapshotRef, Struct,
+        Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::transaction::tests::make_v3_minimal_table_in_catalog;
@@ -529,6 +541,218 @@ mod tests {
             err.to_string()
                 .contains("Missing required files to delete: test/never-committed.parquet"),
             "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_rejects_incorrect_delete_metrics() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+        let file = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let table = tx
+            .fast_append()
+            .add_data_files(vec![file.clone()])
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        for incorrect in [
+            DataFile {
+                record_count: 99,
+                ..file.clone()
+            },
+            DataFile {
+                file_size_in_bytes: 999,
+                ..file.clone()
+            },
+            DataFile {
+                partition: Struct::from_iter([Some(Literal::long(999))]),
+                ..file.clone()
+            },
+            DataFile {
+                partition_spec_id: 99,
+                ..file.clone()
+            },
+            DataFile {
+                partition: Struct::from_iter([Some(Literal::string("invalid"))]),
+                ..file.clone()
+            },
+        ] {
+            let action = Transaction::new(&table)
+                .overwrite()
+                .delete_data_files(vec![incorrect]);
+            let err = Arc::new(action).commit(&table).await.err().unwrap();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(
+                err.message()
+                    .contains("Delete file metadata does not match")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_rejects_non_data_deletions() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+        for content in [
+            DataContentType::PositionDeletes,
+            DataContentType::EqualityDeletes,
+        ] {
+            let file = DataFile {
+                content,
+                ..test_data_file("test/deletes.parquet", spec_id)
+            };
+            let action = Transaction::new(&table)
+                .overwrite()
+                .delete_data_files(vec![file]);
+            let err = Arc::new(action).commit(&table).await.err().unwrap();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.message().contains("Only data content type is allowed"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_preserves_v3_row_lineage() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+        let a = test_data_file("test/a.parquet", spec_id);
+        let b = test_data_file("test/b.parquet", spec_id);
+        let c = test_data_file("test/c.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let table = tx
+            .fast_append()
+            .add_data_files(vec![a, b.clone(), c])
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifests = table.manifest_list_reader(snapshot).load().await.unwrap();
+        let manifest = table
+            .manifest_reader()
+            .read(&manifests.entries()[0])
+            .await
+            .unwrap();
+        let original_ids: Vec<_> = manifest
+            .entries()
+            .iter()
+            .map(|e| (e.file_path().to_string(), e.data_file().first_row_id))
+            .collect();
+        assert!(original_ids.iter().all(|(_, id)| id.is_some()));
+        let next_row_id = table.metadata().next_row_id();
+        let replacement = test_data_file("test/d.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let table = tx
+            .overwrite()
+            .delete_data_files(vec![b])
+            .add_data_files(vec![replacement])
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        let manifests = table
+            .manifest_list_reader(table.metadata().current_snapshot().unwrap())
+            .load()
+            .await
+            .unwrap();
+        let mut actual_ids = vec![];
+        for file in manifests.entries() {
+            let manifest = table.manifest_reader().read(file).await.unwrap();
+            actual_ids.extend(
+                manifest
+                    .entries()
+                    .iter()
+                    .filter(|e| e.is_alive())
+                    .map(|e| (e.file_path().to_string(), e.data_file().first_row_id)),
+            );
+        }
+        for (path, id) in original_ids.iter().filter(|(p, _)| p != "test/b.parquet") {
+            assert!(actual_ids.contains(&(path.clone(), *id)));
+        }
+        // The rewritten manifest reserves IDs for its existing rows; their explicit IDs stay unchanged.
+        assert!(actual_ids.contains(&(
+            "test/d.parquet".to_string(),
+            Some((next_row_id + 2).try_into().unwrap())
+        )));
+        assert_eq!(table.metadata().next_row_id(), next_row_id + 3);
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_rejects_a_path_in_a_delete_manifest() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+        let tx = Transaction::new(&table);
+        let table = tx
+            .fast_append()
+            .add_data_files(vec![test_data_file("test/a.parquet", spec_id)])
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let file = test_data_file("test/deletes.parquet", spec_id);
+        let output = table
+            .file_io()
+            .new_output("test/delete-manifest.avro")
+            .unwrap();
+        let mut writer = ManifestWriterBuilder::new(
+            output,
+            Some(snapshot.snapshot_id()),
+            table.metadata().current_schema().clone(),
+            table.metadata().default_partition_spec().as_ref().clone(),
+        )
+        .build_v3_deletes();
+        writer
+            .add_file(
+                DataFile {
+                    content: DataContentType::PositionDeletes,
+                    ..file.clone()
+                },
+                snapshot.sequence_number(),
+            )
+            .unwrap();
+        let delete_manifest = writer.write_manifest_file().await.unwrap();
+        let mut manifests: Vec<_> = table
+            .manifest_list_reader(snapshot)
+            .load()
+            .await
+            .unwrap()
+            .consume_entries()
+            .into_iter()
+            .collect();
+        manifests.push(delete_manifest);
+        let mut writer = ManifestListWriter::v3(
+            table
+                .file_io()
+                .new_output(snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap(),
+            snapshot.snapshot_id(),
+            snapshot.parent_snapshot_id(),
+            snapshot.sequence_number(),
+            Some(table.metadata().next_row_id()),
+        );
+        writer.add_manifests(manifests.into_iter()).unwrap();
+        writer.close().await.unwrap();
+        let action = Transaction::new(&table)
+            .overwrite()
+            .delete_data_files(vec![file]);
+        let err = Arc::new(action).commit(&table).await.err().unwrap();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message()
+                .contains("Missing required files to delete: test/deletes.parquet")
         );
     }
 }

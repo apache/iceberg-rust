@@ -21,7 +21,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
-use itertools::Itertools;
 use uuid::Uuid;
 
 use crate::error::{Result, invalid_data};
@@ -139,17 +138,23 @@ impl<'a> SnapshotProducer<'a> {
             snapshot_id: Self::generate_unique_snapshot_id(table),
             commit_uuid,
             snapshot_properties,
-            // Collapsed to the first file per path, so a manifest never references a file twice.
-            added_data_files: added_data_files
-                .into_iter()
-                .unique_by(|f| f.file_path.clone())
-                .collect(),
-            deleted_data_files: deleted_data_files
-                .into_iter()
-                .unique_by(|f| f.file_path.clone())
-                .collect(),
+            added_data_files: Self::dedupe_data_files(added_data_files),
+            deleted_data_files: Self::dedupe_data_files(deleted_data_files),
             manifest_counter: AtomicU64::new(0),
         }
+    }
+
+    fn dedupe_data_files(files: Vec<DataFile>) -> Vec<DataFile> {
+        let mut seen = HashSet::with_capacity(files.len());
+        let keep: Vec<bool> = files
+            .iter()
+            .map(|f| seen.insert(f.file_path.as_str()))
+            .collect();
+        files
+            .into_iter()
+            .zip(keep)
+            .filter_map(|(file, keep)| keep.then_some(file))
+            .collect()
     }
 
     pub(crate) fn validate_added_data_files(&self) -> Result<()> {
@@ -355,7 +360,7 @@ impl<'a> SnapshotProducer<'a> {
         &mut self,
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
-    ) -> Result<Vec<ManifestFile>> {
+    ) -> Result<(Vec<ManifestFile>, Summary)> {
         // Assert current snapshot producer contains new content to add to new snapshot.
         //
         // TODO: Allowing snapshot property setup with no added data files is a workaround.
@@ -372,6 +377,9 @@ impl<'a> SnapshotProducer<'a> {
         }
 
         let existing_manifests = snapshot_produce_operation.existing_manifest(self).await?;
+        let summary = self.summary(snapshot_produce_operation).map_err(|err| {
+            Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
+        })?;
         let mut manifest_files = existing_manifests;
 
         // Process added entries.
@@ -384,7 +392,7 @@ impl<'a> SnapshotProducer<'a> {
         // Support process delete entries.
 
         let manifest_files = manifest_process.process_manifests(self, manifest_files);
-        Ok(manifest_files)
+        Ok((manifest_files, summary))
     }
 
     // Returns a `Summary` of the current snapshot
@@ -507,14 +515,7 @@ impl<'a> SnapshotProducer<'a> {
             ),
         };
 
-        // Calling self.summary() before self.produce_manifests() is important because self.added_data_files
-        // will be set to an empty vec after self.produce_manifests() returns, resulting in an empty summary
-        // being generated.
-        let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
-        })?;
-
-        let new_manifests = self
+        let (new_manifests, summary) = self
             .produce_manifests(&snapshot_produce_operation, &process)
             .await?;
 
