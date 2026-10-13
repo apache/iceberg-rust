@@ -1274,13 +1274,16 @@ impl SessionCatalog for RestSessionCatalog {
             "Metadata location missing in `create_table` response!",
         ))?;
 
-        let mut base_config = response.config.clone();
-        base_config.extend(self.user_config.props.clone());
+        let config = response
+            .config
+            .into_iter()
+            .chain(self.user_config.props.clone())
+            .collect();
 
         let file_io = self
             .load_file_io(
                 Some(metadata_location),
-                Some(base_config),
+                Some(config),
                 response.storage_credentials.as_deref(),
             )
             .await?;
@@ -1341,13 +1344,16 @@ impl SessionCatalog for RestSessionCatalog {
             }
         };
 
-        let mut base_config = response.config.clone();
-        base_config.extend(self.user_config.props.clone());
+        let config = response
+            .config
+            .into_iter()
+            .chain(self.user_config.props.clone())
+            .collect();
 
         let file_io = self
             .load_file_io(
                 response.metadata_location.as_deref(),
-                Some(base_config),
+                Some(config),
                 response.storage_credentials.as_deref(),
             )
             .await?;
@@ -1488,13 +1494,16 @@ impl SessionCatalog for RestSessionCatalog {
             "Metadata location missing in `register_table` response!",
         ))?;
 
-        let mut base_config = response.config.clone();
-        base_config.extend(self.user_config.props.clone());
+        let config = response
+            .config
+            .into_iter()
+            .chain(self.user_config.props.clone())
+            .collect();
 
         let file_io = self
             .load_file_io(
                 Some(metadata_location),
-                Some(base_config),
+                Some(config),
                 response.storage_credentials.as_deref(),
             )
             .await?;
