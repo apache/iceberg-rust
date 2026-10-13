@@ -51,7 +51,8 @@ impl ManifestReader {
             None => input_file.read().await?,
         };
 
-        let (metadata, mut entries) = Manifest::try_from_avro_bytes(&bytes)?;
+        let (metadata, mut entries) =
+            Manifest::try_from_avro_bytes(&bytes, Some(&manifest_file.manifest_path))?;
 
         for entry in &mut entries {
             entry.inherit_data(manifest_file);

@@ -23,14 +23,14 @@ mod manifest_file;
 mod reader;
 mod writer;
 
-use apache_avro::{Reader, from_value};
+use apache_avro::Reader;
 pub use manifest_file::*;
 pub use reader::*;
 pub use serde_bytes::ByteBuf;
 pub use writer::*;
 
-use self::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V1;
 use super::FormatVersion;
+use crate::avro::Resolved;
 use crate::error::Result;
 
 /// Placeholder for sequence number. The field with this value must be replaced with the actual sequence number before it write.
@@ -57,41 +57,23 @@ pub struct ManifestList {
 
 impl ManifestList {
     /// Parse manifest list from bytes.
-    /// Convert each Avro value immediately, retaining only the final typed entries.
-    /// A decoding or conversion error still discards the entire result.
     pub fn parse_with_version(bs: &[u8], version: FormatVersion) -> Result<ManifestList> {
-        match version {
-            FormatVersion::V1 => {
-                let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V1, bs)?;
-                let entries = reader
-                    .map(|value| {
-                        let value = value?;
-                        from_value::<_serde::ManifestFileV1>(&value)?.try_into()
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(ManifestList { entries })
-            }
-            FormatVersion::V2 => {
-                let reader = Reader::new(bs)?;
-                let entries = reader
-                    .map(|value| {
-                        let value = value?;
-                        from_value::<_serde::ManifestFileV2>(&value)?.try_into()
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(ManifestList { entries })
-            }
-            FormatVersion::V3 => {
-                let reader = Reader::new(bs)?;
-                let entries = reader
-                    .map(|value| {
-                        let value = value?;
-                        from_value::<_serde::ManifestFileV3>(&value)?.try_into()
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(ManifestList { entries })
-            }
-        }
+        let reader = Reader::new(bs)?;
+        let entries = match version {
+            FormatVersion::V1 => reader
+                .into_deser_iter::<Resolved<_serde::ManifestFileV1>>()
+                .map(|entry| entry?.0.try_into())
+                .collect::<Result<Vec<_>>>()?,
+            FormatVersion::V2 => reader
+                .into_deser_iter::<Resolved<_serde::ManifestFileV2>>()
+                .map(|entry| entry?.0.try_into())
+                .collect::<Result<Vec<_>>>()?,
+            FormatVersion::V3 => reader
+                .into_deser_iter::<Resolved<_serde::ManifestFileV3>>()
+                .map(|entry| entry?.0.try_into())
+                .collect::<Result<Vec<_>>>()?,
+        };
+        Ok(ManifestList { entries })
     }
 
     /// Get the entries in the manifest list.
@@ -281,7 +263,7 @@ mod test {
 
         let manifest_entry: ManifestFileV2 = manifest_list.entries[0].clone().try_into().unwrap();
         let mut writer =
-            Writer::with_codec(&MANIFEST_LIST_AVRO_SCHEMA_V2, Vec::new(), Codec::Snappy);
+            Writer::with_codec(&MANIFEST_LIST_AVRO_SCHEMA_V2, Vec::new(), Codec::Snappy).unwrap();
         writer.append_ser(manifest_entry).unwrap();
         let bs = writer.into_inner().unwrap();
 

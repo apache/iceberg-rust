@@ -164,7 +164,7 @@ fn manifest_parser_preserves_formats_and_bounds_intermediate_allocations() {
         Codec::Snappy,
         Codec::Zstandard(Default::default()),
     ] {
-        let mut writer = Writer::with_codec(&schema, Vec::new(), codec);
+        let mut writer = Writer::with_codec(&schema, Vec::new(), codec).unwrap();
         for index in 0..10_000 {
             let Value::Record(fields) = &mut value else {
                 panic!("expected a manifest record");
@@ -174,7 +174,7 @@ fn manifest_parser_preserves_formats_and_bounds_intermediate_allocations() {
                 .find(|(name, _)| name == "manifest_path")
                 .unwrap();
             *path = Value::String(format!("s3://test/metadata/manifest-{index:05}.avro"));
-            writer.append(value.clone()).unwrap();
+            writer.append_value(value.clone()).unwrap();
         }
         let encoded = writer.into_inner().unwrap();
         let baseline = LIVE.load(Relaxed);
