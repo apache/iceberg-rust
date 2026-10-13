@@ -58,6 +58,7 @@ mod expire_snapshots;
 mod snapshot;
 mod sort_order;
 mod update_location;
+mod update_partition_spec;
 mod update_properties;
 mod update_schema;
 mod update_statistics;
@@ -77,6 +78,7 @@ pub use crate::transaction::append::FastAppendAction;
 pub use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
 pub use crate::transaction::sort_order::ReplaceSortOrderAction;
 pub use crate::transaction::update_location::UpdateLocationAction;
+pub use crate::transaction::update_partition_spec::UpdatePartitionSpecAction;
 pub use crate::transaction::update_properties::UpdatePropertiesAction;
 pub use crate::transaction::update_schema::UpdateSchemaAction;
 pub use crate::transaction::update_statistics::UpdateStatisticsAction;
@@ -144,6 +146,11 @@ impl Transaction {
     /// Creates an update schema action.
     pub fn update_schema(&self) -> UpdateSchemaAction {
         UpdateSchemaAction::new()
+    }
+
+    /// Creates an update partition spec action.
+    pub fn update_partition_spec(&self) -> UpdatePartitionSpecAction {
+        UpdatePartitionSpecAction::new()
     }
 
     /// Creates a fast append action.
