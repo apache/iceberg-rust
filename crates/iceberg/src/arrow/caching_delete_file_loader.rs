@@ -1848,4 +1848,134 @@ mod tests {
         assert!(!positions(&fresh).is_empty());
         assert_eq!(positions(&retried), positions(&fresh));
     }
+
+    /// Takes the load of the first test task's positional delete file, then polls
+    /// `load_file_for_task` for the same file until it waits on that load.
+    async fn wait_on_pos_del_load(
+        tmp_dir: &TempDir,
+    ) -> (
+        PosDelLoadGuard,
+        std::pin::Pin<Box<impl Future<Output = Result<DeleteFileContext>>>>,
+        String,
+    ) {
+        let task = setup(tmp_dir.path()).remove(0);
+        let pos_del = task
+            .deletes()
+            .iter()
+            .find(|delete| delete.file_type() == DataContentType::PositionDeletes)
+            .unwrap()
+            .clone();
+        let loader = CachingDeleteFileLoader::new(FileIO::new_with_fs(), 10, Runtime::current());
+
+        let PosDelLoadAction::Load(guard) = loader
+            .delete_filter
+            .try_start_pos_del_load(pos_del.file_path())
+        else {
+            panic!("expected Load for a new file");
+        };
+        let path = pos_del.file_path().to_string();
+        let mut waiter = Box::pin(async move {
+            CachingDeleteFileLoader::load_file_for_task(
+                &pos_del,
+                loader.basic_delete_file_loader.clone(),
+                loader.delete_filter.clone(),
+                task.schema_ref(),
+            )
+            .await
+        });
+        assert!(futures::poll!(&mut waiter).is_pending());
+        (guard, waiter, path)
+    }
+
+    #[tokio::test]
+    async fn test_pos_del_waiter_loads_file_after_abandoned_load() {
+        let tmp_dir = TempDir::new().unwrap();
+        let (guard, waiter, _) = wait_on_pos_del_load(&tmp_dir).await;
+
+        drop(guard);
+
+        let ctx = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("waiter did not wake after the load was abandoned")
+            .unwrap();
+        assert!(matches!(ctx, DeleteFileContext::PosDels { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_pos_del_waiter_returns_open_error_after_abandoned_load() {
+        let tmp_dir = TempDir::new().unwrap();
+        let (guard, waiter, path) = wait_on_pos_del_load(&tmp_dir).await;
+
+        std::fs::remove_file(&path).unwrap();
+        drop(guard);
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("waiter did not wake after the load was abandoned");
+        let err = result.err().unwrap();
+        assert!(err.to_string().contains("Failed to open file"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_pos_del_load_can_be_retried_after_parse_failure() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("pos-del.parquet");
+        let path = path.to_str().unwrap();
+        let schema = Arc::new(Schema::builder().build().unwrap());
+        let write = |positions: Vec<i64>| {
+            let batch = RecordBatch::try_new(
+                crate::arrow::delete_filter::tests::create_pos_del_schema(),
+                vec![
+                    Arc::new(StringArray::from_iter_values(vec![
+                        "data.parquet";
+                        positions.len()
+                    ])),
+                    Arc::new(Int64Array::from_iter_values(positions)),
+                ],
+            )
+            .unwrap();
+            let mut writer =
+                ArrowWriter::try_new(File::create(path).unwrap(), batch.schema(), None).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+            FileScanTaskDeleteFile::builder()
+                .with_file_path(path.to_string())
+                .with_file_size_in_bytes(std::fs::metadata(path).unwrap().len())
+                .with_file_type(DataContentType::PositionDeletes)
+                .with_file_format(DataFileFormat::Parquet)
+                .with_partition_spec_id(0)
+                .build()
+                .unwrap()
+        };
+        let loader = CachingDeleteFileLoader::new(FileIO::new_with_fs(), 10, Runtime::current());
+
+        // The file opens but fails to parse, so the load is abandoned after the open.
+        let invalid = write(vec![-1]);
+        let err = loader
+            .load_deletes(&[invalid], Arc::clone(&schema))
+            .await
+            .unwrap()
+            .err()
+            .unwrap();
+        assert!(err.message().contains("negative position"), "{err}");
+
+        // Once the file is valid, the same loader loads it instead of waiting.
+        let valid = write(vec![1, 3]);
+        let filter = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            loader.load_deletes(&[valid], schema),
+        )
+        .await
+        .expect("retry waited on the failed load")
+        .unwrap()
+        .unwrap();
+        let positions: Vec<u64> = filter
+            .get_delete_vector_for_path("data.parquet")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .iter()
+            .collect();
+        assert_eq!(positions, vec![1, 3]);
+    }
 }
