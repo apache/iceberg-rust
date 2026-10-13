@@ -25,7 +25,7 @@ use crate::transaction::Transaction;
 use crate::{Result, TableRequirement, TableUpdate};
 
 /// A boxed entry pairing a transaction action with its retry-persistent state.
-pub(crate) type TransactionActionEntry = Box<dyn ErasedActionEntry>;
+pub(crate) type TransactionActionEntry = Box<dyn DynActionEntry>;
 
 /// A trait representing an atomic action that can be part of a transaction.
 ///
@@ -100,7 +100,7 @@ pub(crate) trait StatelessAction: Clone + Send + Sync + 'static {
 impl<T: StatelessAction> TransactionAction for T {
     type State = ();
 
-    fn new_state(&self) -> Self::State {}
+    fn new_state(&self) -> () {}
 
     async fn commit(&self, _state: &mut (), table: &Table) -> Result<ActionCommit> {
         StatelessAction::commit(self, table).await
@@ -161,7 +161,7 @@ impl<A: TransactionAction> ActionEntry<A> {
 /// Object-safe adapter over [`ActionEntry`], allowing a transaction to store
 /// heterogeneous entries while keeping each action paired with its own state.
 #[async_trait]
-pub(crate) trait ErasedActionEntry: AsAny + Send + Sync {
+pub(crate) trait DynActionEntry: AsAny + Send + Sync {
     /// One replay attempt against the current transaction-local table.
     async fn commit(&mut self, table: &Table) -> Result<ActionCommit>;
 
@@ -180,7 +180,7 @@ pub(crate) trait ErasedActionEntry: AsAny + Send + Sync {
 }
 
 #[async_trait]
-impl<A: TransactionAction> ErasedActionEntry for ActionEntry<A> {
+impl<A: TransactionAction> DynActionEntry for ActionEntry<A> {
     async fn commit(&mut self, table: &Table) -> Result<ActionCommit> {
         self.action.commit(&mut self.state, table).await
     }
@@ -261,7 +261,7 @@ mod tests {
     use crate::test_utils::commit_with_fresh_state;
     use crate::transaction::Transaction;
     use crate::transaction::action::{
-        ActionCommit, ActionEntry, ApplyTransactionAction, CommitStatus, ErasedActionEntry,
+        ActionCommit, ActionEntry, ApplyTransactionAction, CommitStatus, DynActionEntry,
         StatelessAction, TransactionAction,
     };
     use crate::transaction::tests::make_v2_table;
