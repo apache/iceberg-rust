@@ -247,10 +247,6 @@ impl Transaction {
             )?;
         }
 
-        let moves_location = existing_updates
-            .iter()
-            .any(|update| matches!(update, TableUpdate::SetLocation { .. }));
-
         let table_commit = TableCommit::builder()
             .ident(self.table.identifier().to_owned())
             .updates(existing_updates)
@@ -261,9 +257,7 @@ impl Transaction {
         // A new location is outside the refreshed credentials' prefix, so reload
         // after committing. Check the committed metadata: another writer may have
         // moved the table, and a property-only commit has no requirement to catch it.
-        let location_changed =
-            moves_location || committed.metadata().location() != refreshed.metadata().location();
-        if location_changed {
+        if committed.metadata().location() != refreshed.metadata().location() {
             match catalog.load_table(committed.identifier()).await {
                 Ok(reloaded) => return Ok(reloaded),
                 // The commit is already durable: returning this error would let the
