@@ -120,6 +120,7 @@ pub(crate) struct SnapshotProducer<'a> {
     commit_uuid: Uuid,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
+    /// Must match the data files marked Deleted by this commit, including their metrics.
     deleted_data_files: Vec<DataFile>,
     // Numbers this commit's manifest files. Atomic so `new_manifest_writer` can take `&self`.
     manifest_counter: AtomicU64,
@@ -376,6 +377,18 @@ impl<'a> SnapshotProducer<'a> {
 
         // # TODO
         // Support process delete entries.
+
+        debug_assert_eq!(
+            manifest_files
+                .iter()
+                .filter(|m| m.added_snapshot_id == self.snapshot_id
+                    && m.content == ManifestContentType::Data)
+                .filter_map(|m| m.deleted_files_count)
+                .map(u64::from)
+                .sum::<u64>(),
+            self.deleted_data_files.len() as u64,
+            "deleted files must match this commit's manifest entries"
+        );
 
         let manifest_files = manifest_process.process_manifests(self, manifest_files);
         Ok(manifest_files)
@@ -641,6 +654,29 @@ mod tests {
         assert_eq!(properties.get("deleted-data-files").unwrap(), "1");
         assert_eq!(properties.get("deleted-records").unwrap(), "2");
         assert_eq!(properties.get("removed-files-size").unwrap(), "100");
+    }
+
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    #[should_panic(expected = "deleted files must match this commit's manifest entries")]
+    async fn test_commit_rejects_unrecorded_deletions() {
+        let table = make_v2_minimal_table();
+        let deleted = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/deleted.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(2)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+        SnapshotProducer::new(&table, Uuid::now_v7(), HashMap::new(), vec![], vec![
+            deleted,
+        ])
+        .commit(DeleteOperation, DefaultManifestProcess)
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
