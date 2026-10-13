@@ -2108,10 +2108,14 @@ mod tests {
                     .with_lower_bounds(HashMap::from([
                         (1, Datum::string("apple")),
                         (2, Datum::decimal_from_str("-12.34").unwrap()),
+                        (3, Datum::float(100.1_f32)),
+                        (4, Datum::double(f64::NEG_INFINITY)),
                     ]))
                     .with_upper_bounds(HashMap::from([
                         (1, Datum::string("pear")),
                         (2, Datum::decimal_from_str("56.78").unwrap()),
+                        (3, Datum::float(f32::INFINITY)),
+                        (4, Datum::double(f64::INFINITY)),
                     ]))
                     .build(),
             ))

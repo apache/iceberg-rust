@@ -668,6 +668,52 @@ mod _serde {
                 .build()
         }
     }
+
+    /// Serializes column bounds as their type and the spec's single-value binary encoding,
+    /// because the JSON encoding of [`RawLiteral`] does not round-trip every float value.
+    pub(super) mod bounds {
+        use std::collections::HashMap;
+
+        use serde::ser::SerializeMap;
+        use serde::{Deserialize, Deserializer, Serialize, Serializer};
+        use serde_bytes::ByteBuf;
+
+        use crate::spec::{Datum, PrimitiveType};
+
+        #[derive(Serialize, Deserialize)]
+        struct BoundSerde {
+            r#type: PrimitiveType,
+            bytes: ByteBuf,
+        }
+
+        pub(in crate::scan::task) fn serialize<S: Serializer>(
+            bounds: &HashMap<i32, Datum>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error> {
+            let mut map = serializer.serialize_map(Some(bounds.len()))?;
+            for (field_id, datum) in bounds {
+                let bound = BoundSerde {
+                    r#type: datum.data_type().clone(),
+                    bytes: datum.to_bytes().map_err(serde::ser::Error::custom)?,
+                };
+                map.serialize_entry(field_id, &bound)?;
+            }
+            map.end()
+        }
+
+        pub(in crate::scan::task) fn deserialize<'de, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<HashMap<i32, Datum>, D::Error> {
+            HashMap::<i32, BoundSerde>::deserialize(deserializer)?
+                .into_iter()
+                .map(|(field_id, bound)| {
+                    Datum::try_from_bytes(&bound.bytes, bound.r#type)
+                        .map(|datum| (field_id, datum))
+                        .map_err(serde::de::Error::custom)
+                })
+                .collect()
+        }
+    }
 }
 
 impl FileScanTaskDeleteFile {
@@ -810,11 +856,19 @@ pub struct FileScanTaskColumnStats {
     nan_value_counts: HashMap<i32, u64>,
 
     /// Inclusive lower bound per field id.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        with = "crate::scan::task::_serde::bounds"
+    )]
     lower_bounds: HashMap<i32, Datum>,
 
     /// Inclusive upper bound per field id.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        with = "crate::scan::task::_serde::bounds"
+    )]
     upper_bounds: HashMap<i32, Datum>,
 }
 
