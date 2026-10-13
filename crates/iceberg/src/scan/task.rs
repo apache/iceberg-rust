@@ -366,8 +366,14 @@ pub struct FileScanTaskDeleteFile {
     /// The delete file path
     file_path: String,
 
-    /// The total size of the delete file in bytes, from the manifest entry.
-    file_size_in_bytes: u64,
+    /// The total size of the delete file in bytes. Tasks planned from manifest entries carry
+    /// the recorded size. An externally constructed task may leave it unset when the size is
+    /// unavailable; the Parquet delete-file loader then resolves it with one metadata request
+    /// when the file is first loaded. Deletion vectors do not use it.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default, setter(strip_option(fallback = with_file_size_in_bytes_opt)))]
+    file_size_in_bytes: Option<u64>,
 
     /// delete file type
     file_type: DataContentType,
@@ -612,7 +618,8 @@ mod _serde {
     #[derive(Deserialize)]
     pub(super) struct FileScanTaskDeleteFileSerde {
         file_path: String,
-        file_size_in_bytes: u64,
+        #[serde(default)]
+        file_size_in_bytes: Option<u64>,
         file_type: DataContentType,
         file_format: DataFileFormat,
         partition_spec_id: i32,
@@ -635,7 +642,7 @@ mod _serde {
         fn try_from(value: FileScanTaskDeleteFileSerde) -> Result<Self> {
             Self::builder()
                 .with_file_path(value.file_path)
-                .with_file_size_in_bytes(value.file_size_in_bytes)
+                .with_file_size_in_bytes_opt(value.file_size_in_bytes)
                 .with_file_type(value.file_type)
                 .with_file_format(value.file_format)
                 .with_partition_spec_id(value.partition_spec_id)
@@ -656,8 +663,9 @@ impl FileScanTaskDeleteFile {
         &self.file_path
     }
 
-    /// Returns the total size of the delete file in bytes.
-    pub fn file_size_in_bytes(&self) -> u64 {
+    /// Returns the total size of the delete file in bytes, or `None` if the task does not
+    /// carry it.
+    pub fn file_size_in_bytes(&self) -> Option<u64> {
         self.file_size_in_bytes
     }
 
@@ -969,7 +977,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(task.file_path(), "dv.puffin");
-        assert_eq!(task.file_size_in_bytes(), 100);
+        assert_eq!(task.file_size_in_bytes(), Some(100));
         assert_eq!(task.file_type(), DataContentType::PositionDeletes);
         assert_eq!(task.file_format(), DataFileFormat::Puffin);
         assert_eq!(task.partition_spec_id(), 7);
