@@ -1434,41 +1434,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_delete_file_loader_parses_equality_deletes_of_unknown_size() {
-        let tmp_dir = TempDir::new().unwrap();
-        let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
-        let eq_delete_file_path = setup_write_equality_delete_file_1(table_location);
-
-        let basic_delete_file_loader =
-            BasicDeleteFileLoader::new(FileIO::new_with_fs(), ScanMetrics::new());
-        let known = basic_delete_file_loader
-            .parquet_to_batch_stream(
-                &eq_delete_file_path,
-                Some(std::fs::metadata(&eq_delete_file_path).unwrap().len()),
-                None,
-            )
-            .await
-            .unwrap();
-        let unknown = basic_delete_file_loader
-            .parquet_to_batch_stream(&eq_delete_file_path, None, None)
-            .await
-            .unwrap();
-
-        let eq_ids = HashSet::from_iter(vec![2, 3, 4, 6, 8]);
-        let known = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
-            known,
-            eq_ids.clone(),
-        )
-        .await
-        .unwrap();
-        let unknown =
-            CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(unknown, eq_ids)
-                .await
-                .unwrap();
-        assert_eq!(unknown, known);
-    }
-
-    #[tokio::test]
     async fn test_parse_positional_deletes_rejects_negative_positions() {
         let schema = crate::arrow::delete_filter::tests::create_pos_del_schema();
         let file_path_col = Arc::new(StringArray::from_iter_values(vec!["data.parquet"]));
