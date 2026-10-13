@@ -53,13 +53,16 @@ use crate::{Error, ErrorKind, Result};
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
 
 /// Resolves a column name to its field ID, honouring the scan's case sensitivity.
-fn resolve_field_id(schema: &Schema, column_name: &str, case_sensitive: bool) -> Option<i32> {
+fn resolve_field_id(
+    schema: &Schema,
+    column_name: &str,
+    case_sensitive: bool,
+) -> Result<Option<i32>> {
     if case_sensitive {
-        schema.field_id_by_name(column_name)
+        Ok(schema.field_id_by_name(column_name))
     } else {
-        schema
-            .field_by_name_case_insensitive(column_name)
-            .map(|field| field.id)
+        let field = schema.field_by_name_case_insensitive_checked(column_name)?;
+        Ok(field.map(|field| field.id))
     }
 }
 
@@ -79,7 +82,7 @@ fn collect_scan_field_ids(
                 return get_metadata_field_id(column_name);
             }
 
-            let field_id = resolve_field_id(schema, column_name, case_sensitive).ok_or_else(|| {
+            let field_id = resolve_field_id(schema, column_name, case_sensitive)?.ok_or_else(|| {
                 invalid_data!("Column {column_name} not found in table. Schema: {schema}")
             })?;
 
@@ -692,6 +695,7 @@ mod tests {
     use futures::{TryStreamExt, stream};
     use uuid::Uuid;
 
+    use super::resolve_field_id;
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::FileIO;
@@ -759,6 +763,58 @@ mod tests {
                 .build()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_resolve_field_id_case_insensitive_rejects_ambiguous_name() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+                NestedField::optional(2, "ID", PrimitiveType::Int.into()).into(),
+                NestedField::optional(3, "data", PrimitiveType::Int.into()).into(),
+            ])
+            .build()
+            .unwrap();
+
+        assert_eq!(resolve_field_id(&schema, "id", true).unwrap(), Some(1));
+        assert_eq!(resolve_field_id(&schema, "DATA", false).unwrap(), Some(3));
+        let error = resolve_field_id(&schema, "Id", false).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(error.message().contains("case-insensitively"), "{error}");
+    }
+
+    #[test]
+    fn test_case_insensitive_scan_with_ambiguous_schema() {
+        let fixture = TableTestFixture::new();
+        let mut metadata = fixture.table.metadata().clone();
+        let schema = Schema::builder()
+            .with_schema_id(metadata.current_schema_id())
+            .with_fields(vec![
+                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+                NestedField::optional(2, "ID", PrimitiveType::Int.into()).into(),
+                NestedField::optional(3, "data", PrimitiveType::Int.into()).into(),
+            ])
+            .build()
+            .unwrap();
+        metadata
+            .schemas
+            .insert(metadata.current_schema_id(), Arc::new(schema));
+        let table = fixture.table.with_metadata(Arc::new(metadata));
+
+        table
+            .scan()
+            .with_case_sensitive(false)
+            .select(["DATA"])
+            .build()
+            .unwrap();
+        let error = table
+            .scan()
+            .with_case_sensitive(false)
+            .select(["Id"])
+            .build()
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(error.message().contains("case-insensitively"), "{error}");
     }
 
     #[tokio::test]
