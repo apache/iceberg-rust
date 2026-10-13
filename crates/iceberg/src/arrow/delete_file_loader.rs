@@ -66,13 +66,45 @@ impl BasicDeleteFileLoader {
     pub(crate) async fn parquet_to_batch_stream(
         &self,
         data_file_path: &str,
-        file_size_in_bytes: u64,
+        file_size_in_bytes: Option<u64>,
         key_metadata: Option<&[u8]>,
     ) -> Result<ArrowRecordBatchStream> {
         /*
            Essentially a super-cut-down ArrowReader. We can't use ArrowReader directly
            as that introduces a circular dependency.
         */
+        // `None` means the task did not carry a size (see `FileScanTaskDeleteFile`).
+        // Resolve it when the file is first loaded.
+        let file_size_in_bytes = match file_size_in_bytes {
+            Some(file_size_in_bytes) => file_size_in_bytes,
+            None => {
+                self.file_io
+                    .new_input(data_file_path)?
+                    .metadata()
+                    .await
+                    .map_err(|error| {
+                        // Keep the storage error's kind and retryability.
+                        Error::new(
+                            error.kind(),
+                            format!("Failed to stat delete file '{data_file_path}'"),
+                        )
+                        .with_retryable(error.retryable())
+                        .with_source(error)
+                    })?
+                    .size
+            }
+        };
+        // Reading a Parquet footer needs at least its last eight bytes. Reject
+        // a smaller size rather than read the file as if it had no deletes.
+        if file_size_in_bytes < 8 {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Delete file '{data_file_path}' has a size of {file_size_in_bytes} bytes, \
+                     below the Parquet footer minimum"
+                ),
+            ));
+        }
         let parquet_read_options = ParquetReadOptions::builder().build();
 
         let (parquet_file_reader, arrow_metadata) = ArrowReader::open_parquet_file(
@@ -230,27 +262,30 @@ mod tests {
                 .unwrap(),
         );
 
-        let task = FileScanTaskDeleteFile::builder()
-            .with_file_path(del_path.clone())
-            .with_file_size_in_bytes(std::fs::metadata(&del_path).unwrap().len())
-            .with_file_type(DataContentType::PositionDeletes)
-            .with_file_format(DataFileFormat::Parquet)
-            .with_partition_spec_id(0)
-            .with_key_metadata(Some(Box::from(key_metadata.as_ref())))
-            .build()
-            .unwrap();
-
         let scan_metrics = ScanMetrics::new();
         let delete_file_loader = BasicDeleteFileLoader::new(file_io, scan_metrics);
 
-        let result = delete_file_loader
-            .read_delete_file(&task, schema)
-            .await
-            .unwrap();
+        // A known size, and an unknown size resolved before decryption.
+        for file_size_in_bytes in [Some(std::fs::metadata(&del_path).unwrap().len()), None] {
+            let task = FileScanTaskDeleteFile::builder()
+                .with_file_path(del_path.clone())
+                .with_file_size_in_bytes_opt(file_size_in_bytes)
+                .with_file_type(DataContentType::PositionDeletes)
+                .with_file_format(DataFileFormat::Parquet)
+                .with_partition_spec_id(0)
+                .with_key_metadata(Some(Box::from(key_metadata.as_ref())))
+                .build()
+                .unwrap();
 
-        let batches: Vec<_> = result.try_collect().await.unwrap();
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].num_rows(), 4);
+            let result = delete_file_loader
+                .read_delete_file(&task, Arc::clone(&schema))
+                .await
+                .unwrap();
+
+            let batches: Vec<_> = result.try_collect().await.unwrap();
+            assert_eq!(batches.len(), 1);
+            assert_eq!(batches[0].num_rows(), 4);
+        }
     }
 
     #[tokio::test]
@@ -327,5 +362,70 @@ mod tests {
         let batches: Vec<_> = result.try_collect().await.unwrap();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].num_rows(), 3);
+    }
+
+    #[tokio::test]
+    async fn unknown_delete_size_still_reports_missing_and_empty_objects() {
+        let temp = TempDir::new().unwrap();
+        let loader = BasicDeleteFileLoader::new(FileIO::new_with_fs(), ScanMetrics::new());
+        let missing = temp.path().join("missing.parquet");
+        let error = loader
+            .parquet_to_batch_stream(missing.to_str().unwrap(), None, None)
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("Failed to stat delete file"));
+        // The storage error's kind and retryability are kept exactly.
+        let storage_error = FileIO::new_with_fs()
+            .new_input(missing.to_str().unwrap())
+            .unwrap()
+            .metadata()
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), storage_error.kind());
+        assert_eq!(error.retryable(), storage_error.retryable());
+
+        // A size below the Parquet footer minimum is rejected whether it was
+        // resolved from storage or supplied by the task.
+        let empty = temp.path().join("empty.parquet");
+        std::fs::write(&empty, []).unwrap();
+        for size in [None, Some(0), Some(4)] {
+            let error = loader
+                .parquet_to_batch_stream(empty.to_str().unwrap(), size, None)
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(error.kind(), ErrorKind::DataInvalid);
+            assert!(error.to_string().contains("footer minimum"), "{error}");
+        }
+
+        // A real file with an unknown size is sized lazily and read in full.
+        let present = temp.path().join("present.parquet");
+        let schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "pos",
+            arrow_schema::DataType::Int64,
+            false,
+        )]));
+        let batch = arrow_array::RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(
+            arrow_array::Int64Array::from(vec![1, 2, 3]),
+        )])
+        .unwrap();
+        let mut writer = parquet::arrow::ArrowWriter::try_new(
+            std::fs::File::create(&present).unwrap(),
+            schema,
+            None,
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let batches: Vec<_> = loader
+            .parquet_to_batch_stream(present.to_str().unwrap(), None, None)
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
     }
 }
