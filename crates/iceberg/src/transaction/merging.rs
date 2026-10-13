@@ -303,10 +303,6 @@ impl MergingSnapshotProducer {
         self.deleted_data_files.push(file);
     }
 
-    pub(crate) fn has_added_data_files(&self) -> bool {
-        !self.added_data_files.is_empty()
-    }
-
     pub(crate) fn has_deleted_data_files(&self) -> bool {
         !self.deleted_data_files.is_empty()
     }

@@ -119,11 +119,6 @@ impl RewriteFilesAction {
                 "Rewrite files requires at least one file to delete"
             ));
         }
-        if !self.producer.has_added_data_files() {
-            return Err(invalid_data!(
-                "Rewrite files requires at least one file to add"
-            ));
-        }
         Ok(())
     }
 
@@ -953,24 +948,41 @@ mod tests {
         );
     }
 
-    /// Rewrite with no adds should fail validation.
     #[tokio::test]
-    async fn test_rewrite_files_no_adds() {
+    async fn test_rewrite_files_without_output_files() {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
-
-        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
+        let removed = make_data_file(&table, "test/removed.parquet", 10, 100);
+        let kept = make_data_file(&table, "test/kept.parquet", 5, 50);
+        let table = append_files(&catalog, &table, vec![removed.clone(), kept]).await;
         let tx = Transaction::new(&table);
-        let action = tx.rewrite_files().delete_file(f1);
-        let tx = action.apply(tx).unwrap();
-        let result = tx.commit(&catalog).await;
-
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .message()
-                .contains("at least one file to add")
+        let table = tx
+            .rewrite_files()
+            .delete_file(removed)
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let summary = &snapshot.summary().additional_properties;
+        assert_eq!(summary.get("deleted-data-files").unwrap(), "1");
+        assert_eq!(summary.get("total-data-files").unwrap(), "1");
+        assert_eq!(summary.get("total-records").unwrap(), "5");
+        assert_eq!(summary.get("total-files-size").unwrap(), "50");
+        assert_eq!(
+            find_entry(&table, snapshot, "test/removed.parquet")
+                .await
+                .unwrap()
+                .status(),
+            ManifestStatus::Deleted
+        );
+        assert_eq!(
+            find_entry(&table, snapshot, "test/kept.parquet")
+                .await
+                .unwrap()
+                .status(),
+            ManifestStatus::Existing
         );
     }
 
