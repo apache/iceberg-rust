@@ -203,22 +203,14 @@ impl DeleteFilter {
     /// Removes the `Loading` marker of a positional delete file whose load failed or was
     /// dropped, and wakes any waiting tasks so they can try the load again.
     fn abandon_pos_del_load(&self, file_path: &str) {
-        let notify = {
-            let mut state = self.state.write().unwrap();
-            match state.positional_deletes.remove(file_path) {
-                Some(PosDelState::Loading(notify)) => Some(notify),
-                // Not ours to remove: keep whatever is there.
-                Some(other) => {
-                    state
-                        .positional_deletes
-                        .insert(file_path.to_string(), other);
-                    None
-                }
-                None => None,
-            }
-        };
-
-        if let Some(notify) = notify {
+        let removed = self
+            .state
+            .write()
+            .unwrap()
+            .positional_deletes
+            .remove(file_path);
+        debug_assert!(matches!(removed, Some(PosDelState::Loading(_))));
+        if let Some(PosDelState::Loading(notify)) = removed {
             notify.notify_waiters();
         }
     }
