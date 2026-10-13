@@ -456,31 +456,44 @@ mod tests {
         let row = PartitionStatistics::builder()
             .with_data_file_count(2)
             .build();
-        assert_eq!(row.data_file_count(), Some(2));
-        assert_eq!(row.data_record_count(), None);
-        assert_eq!(row.position_delete_file_count(), None);
-        assert_eq!(row.dv_count(), None);
-        assert_eq!(row.partition(), None);
-        assert_eq!(row.spec_id(), None);
+        let expected = PartitionStatistics {
+            partition: None,
+            spec_id: None,
+            data_record_count: None,
+            data_file_count: Some(2),
+            total_data_file_size_in_bytes: None,
+            position_delete_record_count: None,
+            position_delete_file_count: None,
+            equality_delete_record_count: None,
+            equality_delete_file_count: None,
+            total_record_count: None,
+            last_updated_at: None,
+            last_updated_snapshot_id: None,
+            dv_count: None,
+        };
+        assert_eq!(row, expected);
     }
 
     #[test]
     fn test_computation_row_initializes_zero_counters_and_null_total() {
         let values = partition();
         let row = PartitionStatistics::new_for_computation(values.clone(), 4);
-        assert_eq!(row.partition(), Some(&values));
-        assert_eq!(row.spec_id(), Some(4));
-        assert_eq!(row.data_record_count(), Some(0));
-        assert_eq!(row.data_file_count(), Some(0));
-        assert_eq!(row.total_data_file_size_in_bytes(), Some(0));
-        assert_eq!(row.position_delete_record_count(), Some(0));
-        assert_eq!(row.position_delete_file_count(), Some(0));
-        assert_eq!(row.equality_delete_record_count(), Some(0));
-        assert_eq!(row.equality_delete_file_count(), Some(0));
-        assert_eq!(row.dv_count(), Some(0));
-        assert_eq!(row.total_record_count(), None);
-        assert_eq!(row.last_updated_at(), None);
-        assert_eq!(row.last_updated_snapshot_id(), None);
+        let expected = PartitionStatistics {
+            partition: Some(values),
+            spec_id: Some(4),
+            data_record_count: Some(0),
+            data_file_count: Some(0),
+            total_data_file_size_in_bytes: Some(0),
+            position_delete_record_count: Some(0),
+            position_delete_file_count: Some(0),
+            equality_delete_record_count: Some(0),
+            equality_delete_file_count: Some(0),
+            total_record_count: None,
+            last_updated_at: None,
+            last_updated_snapshot_id: None,
+            dv_count: Some(0),
+        };
+        assert_eq!(row, expected);
     }
 
     #[test]
