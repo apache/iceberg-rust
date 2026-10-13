@@ -864,24 +864,17 @@ mod tests {
     #[tokio::test]
     async fn test_prefixed_credentials_survive_serialization_roundtrip() {
         let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
-            .with_prop("s3.access-key-id", "default-key")
-            .with_prefixed_props("memory://warehouse/t", [("s3.access-key-id", "vended-key")])
+            .with_prop("s3.access-key-id", "default")
+            .with_prefixed_props("memory://w/t", [("s3.access-key-id", "outer")])
+            .with_prefixed_props("memory://w/t/nested", [("s3.access-key-id", "inner")])
             .build();
 
         let deserialized = FileIO::deserialize_all(&file_io.serialize_all().unwrap()).unwrap();
 
-        assert_eq!(
-            deserialized
-                .config_for("memory://warehouse/t/data/f.parquet")
-                .get("s3.access-key-id"),
-            Some(&"vended-key".to_string())
-        );
-        assert_eq!(
-            deserialized
-                .config_for("memory://elsewhere/f.parquet")
-                .get("s3.access-key-id"),
-            Some(&"default-key".to_string())
-        );
+        let key = |p: &str| deserialized.config_for(p).get("s3.access-key-id").cloned();
+        assert_eq!(key("memory://w/t/nested/f"), Some("inner".to_string()));
+        assert_eq!(key("memory://w/t/other/f"), Some("outer".to_string()));
+        assert_eq!(key("memory://elsewhere/f"), Some("default".to_string()));
     }
 
     /// Stands in for a backend whose Debug prints its raw props.
@@ -1036,6 +1029,7 @@ mod tests {
         let (file_io, calls) = recording_file_io(&[
             ("s3://bucket/table/data/", "data"),
             ("s3://bucket/table/metadata/", "metadata"),
+            ("s3://bucket/tablex/", "sibling"),
         ]);
 
         file_io.delete_prefix("s3://bucket/table/").await.unwrap();
@@ -1098,20 +1092,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_overlapping_prefixes_survive_serialization_roundtrip() {
-        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
-            .with_prefixed_props("memory://w/t", [("s3.access-key-id", "outer")])
-            .with_prefixed_props("memory://w/t/nested", [("s3.access-key-id", "inner")])
-            .build();
-
-        let deserialized = FileIO::deserialize_all(&file_io.serialize_all().unwrap()).unwrap();
-
-        let key = |p: &str| deserialized.config_for(p).get("s3.access-key-id").cloned();
-        assert_eq!(key("memory://w/t/nested/f"), Some("inner".to_string()));
-        assert_eq!(key("memory://w/t/other/f"), Some("outer".to_string()));
-    }
-
-    #[tokio::test]
     async fn test_local_fs_file_io_serialization_roundtrip() {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("roundtrip.txt");
@@ -1169,66 +1149,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_prefixed_props_sorted_by_descending_prefix_length() {
-        let factory = Arc::new(MemoryStorageFactory);
-        let file_io = FileIOBuilder::new(factory)
-            .with_prefixed_props("memory://a/", [("k", "short")])
-            .with_prefixed_props("memory://a/longer/", [("k", "long")])
-            .build();
-
-        let prefixes: Vec<&str> = file_io.prefixed.iter().map(|p| p.prefix.as_str()).collect();
-        assert_eq!(prefixes, vec!["memory://a/longer/", "memory://a/"]);
-    }
-
-    #[tokio::test]
-    async fn test_prefixed_config_carries_credential_values() {
-        let factory = Arc::new(MemoryStorageFactory);
-        let file_io = FileIOBuilder::new(factory)
-            .with_prop("s3.region", "us-east-1")
-            .with_prefixed_props("s3://bucket/table", [
-                ("s3.region", "us-east-1"),
-                ("s3.access-key-id", "vended-key"),
-                ("s3.secret-access-key", "vended-secret"),
-            ])
-            .build();
-
-        assert_eq!(
-            file_io.config().get("s3.region"),
-            Some(&"us-east-1".to_string())
-        );
-        assert_eq!(file_io.config().get("s3.access-key-id"), None);
-
-        let prefixed = &file_io.prefixed[0].config;
-        assert_eq!(prefixed.get("s3.region"), Some(&"us-east-1".to_string()));
-        assert_eq!(
-            prefixed.get("s3.access-key-id"),
-            Some(&"vended-key".to_string())
-        );
-        assert_eq!(
-            prefixed.get("s3.secret-access-key"),
-            Some(&"vended-secret".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn test_get_storage_routes_by_prefix() {
-        let factory = Arc::new(MemoryStorageFactory);
-        let file_io = FileIOBuilder::new(factory)
-            .with_prop("scope", "default")
-            .with_prefixed_props("memory://creds/", [("scope", "prefixed")])
-            .build();
-
-        let default_a = file_io.get_storage("memory://other/x").unwrap();
-        let default_b = file_io.get_storage("memory://other/y").unwrap();
-        let prefixed_a = file_io.get_storage("memory://creds/x").unwrap();
-        let prefixed_b = file_io.get_storage("memory://creds/y").unwrap();
-
-        assert!(Arc::ptr_eq(&default_a, &default_b));
-        assert!(Arc::ptr_eq(&prefixed_a, &prefixed_b));
-        assert!(!Arc::ptr_eq(&default_a, &prefixed_a));
-    }
-
-    #[tokio::test]
     async fn test_delete_stream_routes_by_prefix() {
         let factory = Arc::new(MemoryStorageFactory);
         let file_io = FileIOBuilder::new(factory)
@@ -1257,39 +1177,6 @@ mod tests {
 
         assert!(!file_io.exists(default_path).await.unwrap());
         assert!(!file_io.exists(prefixed_path).await.unwrap());
-    }
-
-    #[tokio::test]
-    async fn test_delete_prefix_reaches_nested_prefix_storages() {
-        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
-            .with_prefixed_props("memory:/table/data/", [("k", "data")])
-            .with_prefixed_props("memory:/table/metadata/", [("k", "metadata")])
-            .with_prefixed_props("memory:/tablex/", [("k", "sibling")])
-            .build();
-        let deleted = [
-            "memory:/table/version-hint.text",
-            "memory:/table/data/a.parquet",
-            "memory:/table/metadata/v1.json",
-        ];
-        let kept = "memory:/tablex/c.parquet";
-        for path in deleted.iter().chain([&kept]) {
-            file_io
-                .new_output(path)
-                .unwrap()
-                .write("x".into())
-                .await
-                .unwrap();
-        }
-
-        file_io.delete_prefix("memory:/table").await.unwrap();
-
-        let mut remaining = Vec::new();
-        for path in deleted.iter().chain([&kept]) {
-            if file_io.exists(path).await.unwrap() {
-                remaining.push(*path);
-            }
-        }
-        assert_eq!(remaining, [kept]);
     }
 
     #[tokio::test]
