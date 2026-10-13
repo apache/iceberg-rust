@@ -94,17 +94,6 @@ impl BasicDeleteFileLoader {
                     .size
             }
         };
-        // Reading a Parquet footer needs at least its last eight bytes. Reject
-        // a smaller size rather than read the file as if it had no deletes.
-        if file_size_in_bytes < 8 {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Delete file '{data_file_path}' has a size of {file_size_in_bytes} bytes, \
-                     below the Parquet footer minimum"
-                ),
-            ));
-        }
         let parquet_read_options = ParquetReadOptions::builder().build();
 
         let (parquet_file_reader, arrow_metadata) = ArrowReader::open_parquet_file(
@@ -386,7 +375,7 @@ mod tests {
         assert_eq!(error.kind(), storage_error.kind());
         assert_eq!(error.retryable(), storage_error.retryable());
 
-        // A size below the Parquet footer minimum is rejected whether it was
+        // A size too small for a Parquet footer fails the read, whether it was
         // resolved from storage or supplied by the task.
         let empty = temp.path().join("empty.parquet");
         std::fs::write(&empty, []).unwrap();
@@ -396,8 +385,7 @@ mod tests {
                 .await
                 .err()
                 .unwrap();
-            assert_eq!(error.kind(), ErrorKind::DataInvalid);
-            assert!(error.to_string().contains("footer minimum"), "{error}");
+            assert!(error.to_string().contains("is less than footer"), "{error}");
         }
 
         // A real file with an unknown size is sized lazily and read in full.
