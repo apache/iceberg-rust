@@ -726,12 +726,13 @@ impl TableMetadataBuilder {
     /// Validate partition field names against schema field names across all historical schemas.
     ///
     /// Due to Iceberg's multi-version property, partition fields can share names with schema fields
-    /// if they meet specific requirements (identity transform + matching source field ID).
+    /// if they meet specific requirements (identity or void transform + matching source field ID).
     /// This validation enforces those rules across all historical schema versions.
     ///
     /// # Errors
-    /// - Partition field name conflicts with schema field name but doesn't use identity transform.
-    /// - Partition field uses identity transform but references wrong source field ID.
+    /// - Partition field name conflicts with schema field name but doesn't use identity or void
+    ///   transform.
+    /// - Partition field uses identity or void transform but references wrong source field ID.
     fn validate_partition_field_names(&self, unbound_spec: &UnboundPartitionSpec) -> Result<()> {
         if self.metadata.schemas.is_empty() {
             return Ok(());
@@ -750,13 +751,15 @@ impl TableMetadataBuilder {
 
             // If name exists in schemas, validate against current schema rules
             if let Some(schema_field) = current_schema.field_by_name(partition_field.name()) {
-                let is_identity_transform =
-                    partition_field.transform() == crate::spec::Transform::Identity;
+                let is_identity_or_void_transform = matches!(
+                    partition_field.transform(),
+                    crate::spec::Transform::Identity | crate::spec::Transform::Void
+                );
                 let has_matching_source_id = schema_field.id == partition_field.source_id()?;
 
-                if !is_identity_transform {
+                if !is_identity_or_void_transform {
                     return Err(invalid_data!(
-                        "Cannot create partition with name '{}' that conflicts with schema field and is not an identity transform.",
+                        "Cannot create partition with name '{}' that conflicts with schema field and is not an identity or void transform.",
                         partition_field.name()
                     ));
                 }
@@ -2458,6 +2461,35 @@ mod tests {
     }
 
     #[test]
+    fn test_add_partition_spec_accepts_void_fields_of_removed_fields() {
+        let builder = builder_without_changes(FormatVersion::V1);
+        let void_field = |field_id: i32, name: &str| {
+            UnboundPartitionField::builder()
+                .source_ids(vec![2])
+                .field_id(field_id)
+                .name(name)
+                .transform(Transform::Void)
+                .build()
+                .unwrap()
+        };
+        let added_spec = UnboundPartitionSpec {
+            spec_id: None,
+            fields: vec![void_field(1000, "y"), void_field(1001, "y_null")],
+        };
+
+        let metadata = builder
+            .add_default_partition_spec(added_spec.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let expected = added_spec.with_spec_id(1).bind(schema()).unwrap();
+        assert_eq!(metadata.default_partition_spec().as_ref(), &expected);
+        assert_eq!(metadata.last_partition_id, 1001);
+    }
+
+    #[test]
     fn test_expire_metadata_log() {
         let builder = builder_without_changes(FormatVersion::V2);
         let metadata = builder
@@ -2943,7 +2975,7 @@ mod tests {
         assert!(error_message.contains(
             "Cannot create partition with name 'existing_field' that conflicts with schema field"
         ));
-        assert!(error_message.contains("and is not an identity transform"));
+        assert!(error_message.contains("and is not an identity or void transform"));
     }
 
     #[test]
