@@ -155,6 +155,93 @@ mod test {
         assert_eq!(manifest_list, parsed_manifest_list);
     }
 
+    const VERSIONS: [FormatVersion; 3] = [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3];
+
+    fn entry(version: FormatVersion, index: i64) -> ManifestFile {
+        ManifestFile {
+            manifest_path: format!("s3://test/metadata/manifest-{index}.avro"),
+            manifest_length: 1234,
+            partition_spec_id: index as i32,
+            content: ManifestContentType::Data,
+            sequence_number: if version == FormatVersion::V1 { 0 } else { 7 },
+            min_sequence_number: if version == FormatVersion::V1 { 0 } else { 3 },
+            added_snapshot_id: 42,
+            added_files_count: Some(1),
+            existing_files_count: Some(0),
+            deleted_files_count: Some(0),
+            added_rows_count: Some(9),
+            existing_rows_count: Some(0),
+            deleted_rows_count: Some(0),
+            partitions: Some(vec![FieldSummary {
+                contains_null: true,
+                contains_nan: None,
+                lower_bound: Some(vec![1, 0, 0, 0].into()),
+                upper_bound: None,
+            }]),
+            key_metadata: Some(vec![1, 2, 3]),
+            first_row_id: (version == FormatVersion::V3).then_some(100 + index as u64 * 9),
+        }
+    }
+
+    fn two_entries(version: FormatVersion) -> Vec<ManifestFile> {
+        vec![entry(version, 0), entry(version, 1)]
+    }
+
+    async fn encode(version: FormatVersion, entries: Vec<ManifestFile>) -> Vec<u8> {
+        let io = FileIO::new_with_memory();
+        let output = io.new_output("memory:///manifest-list.avro").unwrap();
+        let writer = output.writer().await.unwrap();
+        let mut writer = match version {
+            FormatVersion::V1 => ManifestListWriter::v1(writer, 42, None),
+            FormatVersion::V2 => ManifestListWriter::v2(writer, 42, None, 7),
+            FormatVersion::V3 => ManifestListWriter::v3(writer, 42, None, 7, Some(100)),
+        };
+        writer.add_manifests(entries.into_iter()).unwrap();
+        writer.close().await.unwrap();
+        io.new_input("memory:///manifest-list.avro")
+            .unwrap()
+            .read()
+            .await
+            .unwrap()
+            .to_vec()
+    }
+
+    #[tokio::test]
+    async fn test_parse_manifest_list_round_trip() {
+        for version in VERSIONS {
+            let expected = two_entries(version);
+            let bs = encode(version, expected.clone()).await;
+            let parsed = ManifestList::parse_with_version(&bs, version).unwrap();
+            assert_eq!(parsed.entries(), expected, "{version:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parse_empty_manifest_list() {
+        for version in VERSIONS {
+            let bs = encode(version, vec![]).await;
+            let parsed = ManifestList::parse_with_version(&bs, version).unwrap();
+            assert!(parsed.entries().is_empty(), "{version:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parse_truncated_manifest_list() {
+        for version in VERSIONS {
+            let bs = encode(version, two_entries(version)).await;
+            let result = ManifestList::parse_with_version(&bs[..bs.len() - 1], version);
+            assert!(result.is_err(), "{version:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parse_manifest_list_v1_as_v2() {
+        let expected = two_entries(FormatVersion::V1);
+        let bs = encode(FormatVersion::V1, expected.clone()).await;
+        let parsed = ManifestList::parse_with_version(&bs, FormatVersion::V2).unwrap();
+        assert_eq!(parsed.entries(), expected);
+    }
+
     #[tokio::test]
     async fn test_parse_manifest_list_v2() {
         let manifest_list = ManifestList {
