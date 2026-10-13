@@ -1914,6 +1914,53 @@ mod tests {
     }
 
     #[test]
+    fn test_partition_to_path_with_dropped_source_column() {
+        for (source_type, transform, value, expected) in [
+            (
+                PrimitiveType::Int,
+                Transform::Identity,
+                Literal::int(1),
+                "p=1",
+            ),
+            (
+                PrimitiveType::Timestamp,
+                Transform::Identity,
+                Literal::long(1),
+                "p=1",
+            ),
+            (
+                PrimitiveType::Int,
+                Transform::Truncate(10),
+                Literal::int(10),
+                "p=10",
+            ),
+        ] {
+            let schema = Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "kept", PrimitiveType::Int.into()).into(),
+                    NestedField::required(2, "dropped", source_type.into()).into(),
+                ])
+                .build()
+                .unwrap();
+            let spec = PartitionSpec::builder(schema)
+                .add_partition_field("dropped", "p", transform)
+                .unwrap()
+                .build()
+                .unwrap();
+            let current_schema = Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "kept", PrimitiveType::Int.into()).into(),
+                ])
+                .build()
+                .unwrap();
+            assert_eq!(
+                spec.partition_to_path(&Struct::from_iter([Some(value)]), current_schema.into()),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn test_partition_to_path() {
         let schema = Schema::builder()
             .with_fields(vec![
