@@ -823,12 +823,14 @@ mod tests {
     use std::collections::HashMap;
     use std::fs::File;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use arrow_array::cast::AsArray;
     use arrow_array::{
         ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatch, StringArray, StructArray,
     };
     use arrow_schema::{DataType, Field, Fields};
+    use futures::stream::BoxStream;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
     use parquet::file::properties::WriterProperties;
@@ -836,9 +838,32 @@ mod tests {
 
     use super::*;
     use crate::arrow::delete_filter::tests::setup;
+    use crate::io::{
+        FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, LocalFsStorage, OutputFile,
+        Storage, StorageConfig, StorageFactory,
+    };
     use crate::scan::FileScanTaskDeleteFile;
     use crate::spec::{DataContentType, DataFileFormat, Schema};
     use crate::test_utils::encode_dv_blob;
+
+    #[test]
+    fn test_delete_file_without_size_round_trips_through_serde() {
+        let task = FileScanTaskDeleteFile::builder()
+            .with_file_path("pos-del.parquet".to_string())
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
+            .with_partition_spec_id(0)
+            .build()
+            .unwrap();
+        assert_eq!(task.file_size_in_bytes(), None);
+
+        // The unknown size is left out when serializing, and a task without the
+        // field deserializes to `None`.
+        let json = serde_json::to_value(&task).unwrap();
+        assert!(json.get("file_size_in_bytes").is_none(), "{json}");
+        let round_tripped: FileScanTaskDeleteFile = serde_json::from_value(json).unwrap();
+        assert_eq!(round_tripped, task);
+    }
 
     #[test]
     fn test_deserialized_deletion_vector_rejects_missing_fields() {
@@ -1133,7 +1158,9 @@ mod tests {
     #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
     struct MetadataCountingStorage {
         #[serde(skip)]
-        calls: Arc<std::sync::atomic::AtomicUsize>,
+        inner: LocalFsStorage,
+        #[serde(skip)]
+        calls: Arc<AtomicUsize>,
         /// Fail every metadata request with a retryable error.
         #[serde(skip)]
         fail_metadata: bool,
@@ -1141,80 +1168,72 @@ mod tests {
 
     #[async_trait::async_trait]
     #[typetag::serde(name = "test_metadata_counting_storage")]
-    impl crate::io::Storage for MetadataCountingStorage {
-        async fn exists(&self, path: &str) -> Result<bool> {
-            crate::io::LocalFsStorage::new().exists(path).await
-        }
-
-        async fn metadata(&self, path: &str) -> Result<crate::io::FileMetadata> {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    impl Storage for MetadataCountingStorage {
+        async fn metadata(&self, path: &str) -> Result<FileMetadata> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             if self.fail_metadata {
                 return Err(
                     Error::new(ErrorKind::Unexpected, "metadata temporarily unavailable")
                         .with_retryable(true),
                 );
             }
-            crate::io::LocalFsStorage::new().metadata(path).await
+            self.inner.metadata(path).await
+        }
+
+        fn new_input(&self, path: &str) -> Result<InputFile> {
+            Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
+        }
+
+        fn new_output(&self, path: &str) -> Result<OutputFile> {
+            Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
+        }
+
+        async fn exists(&self, path: &str) -> Result<bool> {
+            self.inner.exists(path).await
         }
 
         async fn read(&self, path: &str) -> Result<Bytes> {
-            crate::io::LocalFsStorage::new().read(path).await
+            self.inner.read(path).await
         }
 
-        async fn reader(&self, path: &str) -> Result<Box<dyn crate::io::FileRead>> {
-            crate::io::LocalFsStorage::new().reader(path).await
+        async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
+            self.inner.reader(path).await
         }
 
         async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
-            crate::io::LocalFsStorage::new().write(path, bs).await
+            self.inner.write(path, bs).await
         }
 
-        async fn writer(&self, path: &str) -> Result<Box<dyn crate::io::FileWrite>> {
-            crate::io::LocalFsStorage::new().writer(path).await
+        async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
+            self.inner.writer(path).await
         }
 
         async fn delete(&self, path: &str) -> Result<()> {
-            crate::io::LocalFsStorage::new().delete(path).await
+            self.inner.delete(path).await
         }
 
         async fn delete_prefix(&self, path: &str) -> Result<()> {
-            crate::io::LocalFsStorage::new().delete_prefix(path).await
+            self.inner.delete_prefix(path).await
         }
 
-        async fn delete_stream(
-            &self,
-            paths: futures::stream::BoxStream<'static, String>,
-        ) -> Result<()> {
-            crate::io::LocalFsStorage::new().delete_stream(paths).await
-        }
-
-        fn new_input(&self, path: &str) -> Result<crate::io::InputFile> {
-            Ok(crate::io::InputFile::new(
-                Arc::new(self.clone()),
-                path.to_string(),
-            ))
-        }
-
-        fn new_output(&self, path: &str) -> Result<crate::io::OutputFile> {
-            Ok(crate::io::OutputFile::new(
-                Arc::new(self.clone()),
-                path.to_string(),
-            ))
+        async fn delete_stream(&self, paths: BoxStream<'static, String>) -> Result<()> {
+            self.inner.delete_stream(paths).await
         }
     }
 
     #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
     struct MetadataCountingStorageFactory {
         #[serde(skip)]
-        calls: Arc<std::sync::atomic::AtomicUsize>,
+        calls: Arc<AtomicUsize>,
         #[serde(skip)]
         fail_metadata: bool,
     }
 
     #[typetag::serde(name = "test_metadata_counting_storage_factory")]
-    impl crate::io::StorageFactory for MetadataCountingStorageFactory {
-        fn build(&self, _config: &crate::io::StorageConfig) -> Result<Arc<dyn crate::io::Storage>> {
+    impl StorageFactory for MetadataCountingStorageFactory {
+        fn build(&self, _config: &StorageConfig) -> Result<Arc<dyn Storage>> {
             Ok(Arc::new(MetadataCountingStorage {
+                inner: LocalFsStorage,
                 calls: Arc::clone(&self.calls),
                 fail_metadata: self.fail_metadata,
             }))
@@ -1240,13 +1259,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_unknown_delete_sizes_are_resolved_once_per_file() {
-        use std::sync::atomic::Ordering;
-
         let tmp_dir = TempDir::new().unwrap();
         let file_scan_tasks = setup(tmp_dir.path());
         let factory = Arc::new(MetadataCountingStorageFactory::default());
         let calls = Arc::clone(&factory.calls);
-        let file_io = crate::io::FileIOBuilder::new(factory).build();
+        let file_io = FileIOBuilder::new(factory).build();
         let task = &file_scan_tasks[0];
         let unknown: Vec<_> = task
             .deletes()
@@ -1295,8 +1312,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_unknown_size_equality_deletes_are_resolved_once_and_cached() {
-        use std::sync::atomic::Ordering;
-
         use crate::scan::FileScanTask;
         use crate::spec::DataFileFormat;
 
@@ -1341,7 +1356,7 @@ mod tests {
 
         let factory = Arc::new(MetadataCountingStorageFactory::default());
         let calls = Arc::clone(&factory.calls);
-        let file_io = crate::io::FileIOBuilder::new(factory).build();
+        let file_io = FileIOBuilder::new(factory).build();
 
         // Known size: no metadata request.
         let known_task = data_task("known.parquet", equality_delete(Some(known_size)));
@@ -1402,7 +1417,7 @@ mod tests {
             fail_metadata: true,
             ..Default::default()
         });
-        let file_io = crate::io::FileIOBuilder::new(factory).build();
+        let file_io = FileIOBuilder::new(factory).build();
         let present = unknown_size(task.deletes()[0].file_path());
         let error = CachingDeleteFileLoader::new(file_io, 10, Runtime::current())
             .load_deletes(&[present], task.schema_ref())
