@@ -1077,7 +1077,7 @@ impl TableTestFixture {
 
     /// Writes a manifest with one live "Added" data-file entry per element of
     /// `column_stats` (`1.parquet`, `2.parquet`, ..., partitioned on `x` = 100, 200, ...),
-    /// each carrying that element's value, null and NaN counts and lower and upper bounds.
+    /// each carrying that element's column sizes, value, null and NaN counts and bounds.
     pub(crate) async fn setup_manifest_files_with_column_stats(
         &mut self,
         column_stats: &[FileScanTaskColumnStats],
@@ -1106,6 +1106,7 @@ impl TableTestFixture {
                 .partition(Struct::from_iter([Some(Literal::long(
                     100 * (i as i64 + 1),
                 ))]))
+                .column_sizes(stats.column_sizes().clone())
                 .value_counts(stats.value_counts().clone())
                 .null_value_counts(stats.null_value_counts().clone())
                 .nan_value_counts(stats.nan_value_counts().clone())

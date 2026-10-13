@@ -826,23 +826,21 @@ impl From<FileScanTaskDeleteFile> for Result<FileScanTaskDeleteFile> {
     }
 }
 
-/// Column statistics of a [`FileScanTask`]'s data file, from its manifest entry.
+/// Column statistics of a [`FileScanTask`]'s data file, keyed by field id and limited to the
+/// columns requested for the scan.
 ///
-/// Each map is keyed by field id and holds only the columns requested for the scan. A
-/// requested column missing from a map has unknown statistics of that kind: metrics mode
-/// `none` records nothing for the column, while metrics mode `counts` and an all-null column
-/// record counts but no bounds.
-///
-/// Bounds are inclusive. A truncated lower bound is still less than or equal to every value in
-/// the file, and a truncated upper bound is still greater than or equal to every value. Bounds
-/// are typed with the schema the manifest was written with, so after type promotion a bound
-/// can be an `int` while the scan schema says `long`.
-///
-/// The statistics describe the whole data file: they are not adjusted for delete files, the
-/// scan's filter, or the byte range of a split task.
+/// A requested column missing from a map has unknown statistics of that kind, for example when
+/// the table's metrics mode records no bounds. Bounds are inclusive even when truncated, and are
+/// typed with the schema the manifest was written with, so after type promotion an `int` bound
+/// can describe a `long` column. All statistics cover the whole file, before delete files, the
+/// scan's filter or task splits.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TypedBuilder)]
 #[builder(field_defaults(default, setter(prefix = "with_")))]
 pub struct FileScanTaskColumnStats {
+    /// Size in bytes of each column's data in the file, per field id.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    column_sizes: HashMap<i32, u64>,
+
     /// Number of values per field id, including nulls and NaNs.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     value_counts: HashMap<i32, u64>,
@@ -875,19 +873,31 @@ pub struct FileScanTaskColumnStats {
 impl FileScanTaskColumnStats {
     pub(crate) fn from_data_file(data_file: &DataFile, field_ids: &[i32]) -> Self {
         fn retain<V: Clone>(map: &HashMap<i32, V>, field_ids: &[i32]) -> HashMap<i32, V> {
-            field_ids
-                .iter()
-                .filter_map(|id| map.get(id).map(|value| (*id, value.clone())))
-                .collect()
+            if map.is_empty() {
+                return HashMap::new();
+            }
+            let mut retained = HashMap::with_capacity(field_ids.len().min(map.len()));
+            retained.extend(
+                field_ids
+                    .iter()
+                    .filter_map(|id| map.get(id).map(|value| (*id, value.clone()))),
+            );
+            retained
         }
 
         Self {
+            column_sizes: retain(data_file.column_sizes(), field_ids),
             value_counts: retain(data_file.value_counts(), field_ids),
             null_value_counts: retain(data_file.null_value_counts(), field_ids),
             nan_value_counts: retain(data_file.nan_value_counts(), field_ids),
             lower_bounds: retain(data_file.lower_bounds(), field_ids),
             upper_bounds: retain(data_file.upper_bounds(), field_ids),
         }
+    }
+
+    /// Returns the size in bytes of each column's data in the file, per field id.
+    pub fn column_sizes(&self) -> &HashMap<i32, u64> {
+        &self.column_sizes
     }
 
     /// Returns the number of values per field id, including nulls and NaNs.

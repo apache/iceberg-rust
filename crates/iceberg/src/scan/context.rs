@@ -52,7 +52,7 @@ pub(crate) struct ManifestFileContext {
     partition_spec: Option<PartitionSpecRef>,
     unified_partition_type: Option<Arc<StructType>>,
     sort_orders: Arc<HashMap<i64, SortOrderRef>>,
-    column_stats_field_ids: Option<Arc<Vec<i32>>>,
+    column_stats_field_ids: Option<Arc<[i32]>>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -72,7 +72,7 @@ pub(crate) struct ManifestEntryContext {
     pub unified_partition_type: Option<Arc<StructType>>,
     pub sort_order_id: Option<i32>,
     pub sort_order: Option<SortOrderRef>,
-    pub column_stats_field_ids: Option<Arc<Vec<i32>>>,
+    pub column_stats_field_ids: Option<Arc<[i32]>>,
 }
 
 impl ManifestFileContext {
@@ -225,7 +225,7 @@ pub(crate) struct PlanContext {
     pub sort_orders: Arc<HashMap<i64, SortOrderRef>>,
 
     /// Field ids whose column statistics each [`FileScanTask`] retains, or `None` to retain none.
-    pub column_stats_field_ids: Option<Arc<Vec<i32>>>,
+    pub column_stats_field_ids: Option<Arc<[i32]>>,
 }
 
 impl PlanContext {
