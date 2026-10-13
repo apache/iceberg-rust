@@ -777,7 +777,7 @@ pub(super) mod _serde {
     use crate::spec::{
         EncryptedKey, INITIAL_ROW_ID, PartitionField, PartitionSpec, PartitionSpecRef,
         PartitionStatisticsFile, Schema, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
-        SortOrder, StatisticsFile, UnboundPartitionSpec,
+        SortOrder, StatisticsFile, UNPARTITIONED_LAST_ASSIGNED_ID, UnboundPartitionSpec,
     };
     use crate::{Error, ErrorKind};
 
@@ -1254,9 +1254,16 @@ pub(super) mod _serde {
                 current_schema_id,
                 default_spec,
                 default_partition_type,
-                last_partition_id: value
-                    .last_partition_id
-                    .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default()),
+                last_partition_id: value.last_partition_id.unwrap_or_else(|| {
+                    partition_specs
+                        .values()
+                        .map(|spec| {
+                            spec.highest_field_id()
+                                .unwrap_or(UNPARTITIONED_LAST_ASSIGNED_ID)
+                        })
+                        .max()
+                        .unwrap_or(UNPARTITIONED_LAST_ASSIGNED_ID)
+                }),
                 partition_specs,
                 schemas,
                 properties: value.properties.unwrap_or_default(),
@@ -3293,7 +3300,7 @@ mod tests {
             partition_specs: HashMap::from_iter(vec![(0, partition_spec.clone().into())]),
             default_spec: Arc::new(partition_spec),
             default_partition_type,
-            last_partition_id: 0,
+            last_partition_id: 1000,
             default_sort_order_id: 0,
             // Sort order is added during deserialization for V2 compatibility
             sort_orders: HashMap::from_iter(vec![(0, SortOrder::unsorted_order().into())]),
@@ -3447,6 +3454,22 @@ mod tests {
         assert_eq!(default_spec.fields()[0].name, "y");
         assert_eq!(default_spec.fields()[0].transform, Transform::Identity);
         assert_eq!(default_spec.fields()[0].source_id, 2);
+
+        // Without last-partition-id, it is the highest partition field id of any spec.
+        assert_eq!(desered_type.last_partition_id(), 1001);
+    }
+
+    #[test]
+    fn test_table_metadata_v1_unpartitioned_without_last_partition_id() {
+        let mut metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json").unwrap(),
+        )
+        .unwrap();
+        metadata["partition-spec"] = serde_json::json!([]);
+
+        let metadata: TableMetadata = serde_json::from_value(metadata).unwrap();
+
+        assert_eq!(metadata.last_partition_id(), 999);
     }
 
     #[test]
