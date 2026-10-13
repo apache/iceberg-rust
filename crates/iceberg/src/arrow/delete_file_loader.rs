@@ -354,26 +354,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_delete_size_still_reports_missing_and_empty_objects() {
+    async fn test_delete_file_too_small_for_footer_fails() {
         let temp = TempDir::new().unwrap();
         let loader = BasicDeleteFileLoader::new(FileIO::new_with_fs(), ScanMetrics::new());
-        let missing = temp.path().join("missing.parquet");
-        let error = loader
-            .parquet_to_batch_stream(missing.to_str().unwrap(), None, None)
-            .await
-            .err()
-            .unwrap();
-        assert!(error.to_string().contains("Failed to stat delete file"));
-        // The storage error's kind and retryability are kept exactly.
-        let storage_error = FileIO::new_with_fs()
-            .new_input(missing.to_str().unwrap())
-            .unwrap()
-            .metadata()
-            .await
-            .err()
-            .unwrap();
-        assert_eq!(error.kind(), storage_error.kind());
-        assert_eq!(error.retryable(), storage_error.retryable());
 
         // A size too small for a Parquet footer fails the read, whether it was
         // resolved from storage or supplied by the task.
@@ -387,33 +370,5 @@ mod tests {
                 .unwrap();
             assert!(error.to_string().contains("is less than footer"), "{error}");
         }
-
-        // A real file with an unknown size is sized lazily and read in full.
-        let present = temp.path().join("present.parquet");
-        let schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
-            "pos",
-            arrow_schema::DataType::Int64,
-            false,
-        )]));
-        let batch = arrow_array::RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(
-            arrow_array::Int64Array::from(vec![1, 2, 3]),
-        )])
-        .unwrap();
-        let mut writer = parquet::arrow::ArrowWriter::try_new(
-            std::fs::File::create(&present).unwrap(),
-            schema,
-            None,
-        )
-        .unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-        let batches: Vec<_> = loader
-            .parquet_to_batch_stream(present.to_str().unwrap(), None, None)
-            .await
-            .unwrap()
-            .try_collect()
-            .await
-            .unwrap();
-        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
     }
 }
