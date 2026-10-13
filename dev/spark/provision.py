@@ -129,25 +129,6 @@ spark.sql("ALTER TABLE rest.default.test_promote_partition_column ALTER COLUMN b
 spark.sql("ALTER TABLE rest.default.test_promote_partition_column ALTER COLUMN baz TYPE decimal(6, 2)")
 spark.sql("INSERT INTO rest.default.test_promote_partition_column VALUES (25, 22.25, 22.25)")
 
-#  Create tables whose schema changes after their last write, so their current
-#  snapshot was written with an older schema than the table's current one
-spark.sql("CREATE OR REPLACE TABLE rest.default.test_add_column_after_last_write (id int) USING iceberg")
-spark.sql("INSERT INTO rest.default.test_add_column_after_last_write VALUES (1), (2)")
-spark.sql("ALTER TABLE rest.default.test_add_column_after_last_write ADD COLUMN added string")
-
-spark.sql("CREATE OR REPLACE TABLE rest.default.test_drop_column_after_last_write (id int, val string) USING iceberg")
-spark.sql("INSERT INTO rest.default.test_drop_column_after_last_write VALUES (1, 'a'), (2, 'b')")
-spark.sql("ALTER TABLE rest.default.test_drop_column_after_last_write DROP COLUMN val")
-
-spark.sql("CREATE OR REPLACE TABLE rest.default.test_readd_column_after_last_write (id int, val string) USING iceberg")
-spark.sql("INSERT INTO rest.default.test_readd_column_after_last_write VALUES (1, 'a'), (2, 'b')")
-spark.sql("ALTER TABLE rest.default.test_readd_column_after_last_write DROP COLUMN val")
-spark.sql("ALTER TABLE rest.default.test_readd_column_after_last_write ADD COLUMN val string")
-
-spark.sql("CREATE OR REPLACE TABLE rest.default.test_rename_column_after_last_write (id int, val string) USING iceberg")
-spark.sql("INSERT INTO rest.default.test_rename_column_after_last_write VALUES (1, 'a'), (2, 'b')")
-spark.sql("ALTER TABLE rest.default.test_rename_column_after_last_write RENAME COLUMN val TO renamed")
-
 #  Create a table with various types
 spark.sql("""
 CREATE OR REPLACE TABLE rest.default.types_test USING ICEBERG AS 
