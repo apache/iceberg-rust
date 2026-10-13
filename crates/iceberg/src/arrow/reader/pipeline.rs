@@ -136,9 +136,9 @@ struct FileScanTaskReader {
 impl FileScanTaskReader {
     async fn process(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
         let mut parquet_read_options = self.parquet_read_options;
-        // The page index is only used through a row selection: page pruning builds one
-        // from the column and offset indexes, and Parquet uses the offset index to fetch
-        // only the selected pages. A task without a predicate or deletes builds none.
+        if !self.row_selection_enabled {
+            parquet_read_options.preload_column_index = false;
+        }
         if task.predicate().is_none() && task.deletes().is_empty() {
             parquet_read_options.preload_column_index = false;
             parquet_read_options.preload_offset_index = false;
@@ -3800,26 +3800,25 @@ mod tests {
         assert_eq!(total_rows, 3);
     }
 
-    /// Total length of the column and offset indexes of every column chunk in the file.
-    fn page_index_len(file_path: &str) -> u64 {
+    fn page_index_lengths(file_path: &str) -> (u64, u64) {
         use parquet::file::reader::{FileReader, SerializedFileReader};
 
         let reader = SerializedFileReader::new(File::open(file_path).unwrap()).unwrap();
-        let len: i32 = reader
+        reader
             .metadata()
             .row_groups()
             .iter()
             .flat_map(|row_group| row_group.columns())
-            .map(|column| {
-                column.column_index_length().unwrap_or(0)
-                    + column.offset_index_length().unwrap_or(0)
+            .fold((0, 0), |(column_len, offset_len), column| {
+                (
+                    column_len + column.column_index_length().unwrap_or(0) as u64,
+                    offset_len + column.offset_index_length().unwrap_or(0) as u64,
+                )
             })
-            .sum();
-        len as u64
     }
 
     #[tokio::test]
-    async fn test_scan_without_predicate_or_deletes_does_not_read_page_index() {
+    async fn test_scan_preloads_only_page_indexes_used_by_row_selection() {
         use crate::expr::{Bind, Reference};
         use crate::spec::Datum;
 
@@ -3830,8 +3829,9 @@ mod tests {
             vec![],
             vec![],
         );
-        let page_index_len = page_index_len(&file_path);
-        assert!(page_index_len > 0, "fixture must have a page index");
+        let (column_index_len, offset_index_len) = page_index_lengths(&file_path);
+        assert!(column_index_len > 0);
+        assert!(offset_index_len > 0);
 
         let schema = Arc::new(
             Schema::builder()
@@ -3858,24 +3858,44 @@ mod tests {
         };
         // A minimal prefetch hint keeps the page index out of the footer read, so
         // fetching it shows up in `bytes_read`.
-        let bytes_read = |task: FileScanTask| async move {
+        let scan = |task: FileScanTask, row_selection_enabled| async move {
             let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
                 .with_metadata_size_hint(8)
+                .with_row_selection_enabled(row_selection_enabled)
                 .build();
             let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
             let scan = reader.read(tasks).unwrap();
             let metrics = scan.metrics().clone();
-            let _: Vec<RecordBatch> = scan.stream().try_collect().await.unwrap();
-            metrics.bytes_read()
+            let batches: Vec<RecordBatch> = scan.stream().try_collect().await.unwrap();
+            (batches, metrics.bytes_read())
         };
 
         let predicate = Reference::new("id")
             .greater_than_or_equal_to(Datum::int(0))
             .bind(Arc::clone(&schema), false)
             .unwrap();
-        let with_predicate = bytes_read(task(Some(predicate))).await;
-        let without_predicate = bytes_read(task(None)).await;
+        let (without_predicate, without_predicate_bytes) = scan(task(None), false).await;
+        let (with_predicate, with_predicate_bytes) =
+            scan(task(Some(predicate.clone())), false).await;
+        let (with_row_selection, with_row_selection_bytes) =
+            scan(task(Some(predicate)), true).await;
+        let (without_predicate_with_row_selection, without_predicate_with_row_selection_bytes) =
+            scan(task(None), true).await;
 
-        assert_eq!(with_predicate - without_predicate, page_index_len);
+        assert_eq!(with_predicate, without_predicate);
+        assert_eq!(with_row_selection, without_predicate);
+        assert_eq!(without_predicate_with_row_selection, without_predicate);
+        assert_eq!(
+            without_predicate_with_row_selection_bytes,
+            without_predicate_bytes
+        );
+        assert_eq!(
+            with_predicate_bytes - without_predicate_bytes,
+            offset_index_len
+        );
+        assert_eq!(
+            with_row_selection_bytes - with_predicate_bytes,
+            column_index_len
+        );
     }
 }
