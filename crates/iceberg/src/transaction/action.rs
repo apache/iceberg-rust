@@ -35,8 +35,7 @@ pub(crate) type TransactionActionEntry = Box<dyn DynActionEntry>;
 ///
 /// An action's intent is immutable once applied to a transaction. Retry-persistent
 /// state lives in the associated [`TransactionAction::State`], which survives replay
-/// attempts of one logical execution but is never shared between executions
-/// (cloning a transaction creates fresh state via [`TransactionAction::new_state`]).
+/// attempts of one logical execution but is never shared between executions.
 #[async_trait]
 pub(crate) trait TransactionAction: Clone + Send + Sync + 'static {
     /// Retry-persistent state exclusively owned by one logical execution of this
@@ -127,7 +126,7 @@ pub(crate) enum CommitStatus {
     Failed,
     /// The commit request was submitted, but its outcome could not be
     /// resolved: the catalog may or may not have applied it. Cleanup must
-    /// delete nothing and this action won't be retryable.
+    /// delete nothing, and the transaction must not be retried.
     ///
     /// Example: every action executed and validated successfully, but the
     /// connection failed while awaiting the catalog's response to
