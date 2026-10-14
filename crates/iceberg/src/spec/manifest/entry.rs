@@ -564,13 +564,24 @@ fn data_file_fields_v2(partition_type: &StructType) -> Vec<NestedFieldRef> {
         SPLIT_OFFSETS.clone(),
         EQUALITY_IDS.clone(),
         SORT_ORDER_ID.clone(),
-        FIRST_ROW_ID.clone(),
         REFERENCE_DATA_FILE.clone(),
-        // Why are the following two fields here in the existing v2 schema?
-        // In the spec, they are not even listed as optional for v2.
-        CONTENT_OFFSET.clone(),
-        CONTENT_SIZE_IN_BYTES.clone(),
     ]
+}
+
+pub(super) fn manifest_schema_v3(partition_type: &StructType) -> Result<AvroSchema> {
+    let fields = vec![
+        STATUS.clone(),
+        SNAPSHOT_ID_V2.clone(),
+        SEQUENCE_NUMBER.clone(),
+        FILE_SEQUENCE_NUMBER.clone(),
+        Arc::new(NestedField::required(
+            2,
+            "data_file",
+            Type::Struct(StructType::new(data_file_fields_v3(partition_type))),
+        )),
+    ];
+    let schema = Schema::builder().with_fields(fields).build()?;
+    schema_to_avro_schema("manifest_entry", &schema)
 }
 
 pub(super) fn data_file_schema_v2(partition_type: &StructType) -> Result<AvroSchema> {
