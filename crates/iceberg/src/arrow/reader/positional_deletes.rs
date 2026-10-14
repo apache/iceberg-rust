@@ -40,8 +40,10 @@ impl ArrowReader {
         let mut results: Vec<RowSelector> = Vec::new();
         let mut selected_row_groups_idx = 0;
         let mut current_row_group_base_idx: u64 = 0;
-        let mut delete_vector_iter = positional_deletes.iter();
-        let mut next_deleted_row_idx_opt = delete_vector_iter.next();
+        // Deleted positions as half-open ranges, so a run of deletes costs one step rather than
+        // one per row.
+        let mut deleted_ranges = positional_deletes.ranges();
+        let mut next_deleted_range = deleted_ranges.next();
 
         for (idx, row_group_metadata) in row_group_metadata_list.iter().enumerate() {
             let row_group_num_rows = row_group_metadata.num_rows() as u64;
@@ -60,16 +62,17 @@ impl ArrowReader {
                     // selected row group
                     selected_row_groups_idx += 1;
                 } else {
-                    // Advance iterator past all deletes in the skipped row group.
-                    // advance_to() positions the iterator to the first delete >= next_row_group_base_idx.
-                    // However, if our cached next_deleted_row_idx_opt is in the skipped range,
-                    // we need to call next() to update the cache with the newly positioned value.
-                    delete_vector_iter.advance_to(next_row_group_base_idx);
-                    // Only update the cache if the cached value is stale (in the skipped range)
-                    if let Some(cached_idx) = next_deleted_row_idx_opt
-                        && cached_idx < next_row_group_base_idx
-                    {
-                        next_deleted_row_idx_opt = delete_vector_iter.next();
+                    // Skip the deletes in this row group without walking them. A range that
+                    // continues into the next row group is cut to start there.
+                    match next_deleted_range {
+                        Some((_, end)) if end <= next_row_group_base_idx => {
+                            deleted_ranges.skip_to(next_row_group_base_idx);
+                            next_deleted_range = deleted_ranges.next();
+                        }
+                        Some((start, end)) if start < next_row_group_base_idx => {
+                            next_deleted_range = Some((next_row_group_base_idx, end));
+                        }
+                        _ => {}
                     }
 
                     // still increment the current page base index but then skip to the next row group
@@ -79,59 +82,29 @@ impl ArrowReader {
                 }
             }
 
-            let mut next_deleted_row_idx = match next_deleted_row_idx_opt {
-                Some(next_deleted_row_idx) => {
-                    // if the index of the next deleted row is beyond this row group, add a selection for
-                    // the remainder of this row group and skip to the next row group
-                    if next_deleted_row_idx >= next_row_group_base_idx {
-                        results.push(RowSelector::select(row_group_num_rows as usize));
-                        current_row_group_base_idx += row_group_num_rows;
-                        continue;
-                    }
-
-                    next_deleted_row_idx
-                }
-
-                // If there are no more pos deletes, add a selector for the entirety of this row group.
-                _ => {
-                    results.push(RowSelector::select(row_group_num_rows as usize));
-                    current_row_group_base_idx += row_group_num_rows;
-                    continue;
-                }
-            };
-
             let mut current_idx = current_row_group_base_idx;
-            'chunks: while next_deleted_row_idx < next_row_group_base_idx {
-                // `select` all rows that precede the next delete index
-                if current_idx < next_deleted_row_idx {
-                    let run_length = next_deleted_row_idx - current_idx;
-                    results.push(RowSelector::select(run_length as usize));
-                    current_idx += run_length;
+            while let Some((start, end)) = next_deleted_range {
+                if start >= next_row_group_base_idx {
+                    break;
                 }
 
-                // `skip` all consecutive deleted rows in the current row group
-                let mut run_length = 0;
-                while next_deleted_row_idx == current_idx
-                    && next_deleted_row_idx < next_row_group_base_idx
-                {
-                    run_length += 1;
-                    current_idx += 1;
+                // `select` the rows before the deleted range, then `skip` the part of the range
+                // that lies in this row group
+                let skip_start = start.max(current_idx);
+                let skip_end = end.min(next_row_group_base_idx);
+                if skip_start > current_idx {
+                    results.push(RowSelector::select((skip_start - current_idx) as usize));
+                }
+                if skip_end > skip_start {
+                    results.push(RowSelector::skip((skip_end - skip_start) as usize));
+                }
+                current_idx = current_idx.max(skip_end);
 
-                    next_deleted_row_idx_opt = delete_vector_iter.next();
-                    next_deleted_row_idx = match next_deleted_row_idx_opt {
-                        Some(next_deleted_row_idx) => next_deleted_row_idx,
-                        _ => {
-                            // We've processed the final positional delete.
-                            // Conclude the skip and then break so that we select the remaining
-                            // rows in the row group and move on to the next row group
-                            results.push(RowSelector::skip(run_length));
-                            break 'chunks;
-                        }
-                    };
+                if end > next_row_group_base_idx {
+                    // the range continues into the next row group
+                    break;
                 }
-                if run_length > 0 {
-                    results.push(RowSelector::skip(run_length));
-                }
+                next_deleted_range = deleted_ranges.next();
             }
 
             if current_idx < next_row_group_base_idx {
@@ -209,6 +182,73 @@ mod tests {
             .unwrap();
 
         Arc::new(SchemaDescriptor::new(Arc::new(schema)))
+    }
+
+    /// Row groups and deleted runs that cross the 2^32 position boundary, with and without row
+    /// group selection.
+    #[test]
+    fn test_build_deletes_row_selection_across_2_pow_32() {
+        let schema_descr = get_test_schema_descr();
+        let columns: Vec<_> = schema_descr
+            .columns()
+            .iter()
+            .map(|ptr| ColumnChunkMetaData::builder(ptr.clone()).build().unwrap())
+            .collect();
+        let row_groups = |sizes: &[i64]| -> Vec<RowGroupMetaData> {
+            sizes
+                .iter()
+                .enumerate()
+                .map(|(i, &n)| {
+                    build_test_row_group_meta(schema_descr.clone(), columns.clone(), n, i as i16)
+                })
+                .collect()
+        };
+        let select = RowSelector::select;
+        let skip = RowSelector::skip;
+        let high = 1u64 << 32;
+        let big = high as usize;
+
+        // Row group 1 starts at 2^32 - 2. The run 2^32 - 3 ..= 2^32 crosses both boundaries.
+        let meta = row_groups(&[(1 << 32) - 2, 8]);
+        let deletes = DeleteVector::new(RoaringTreemap::from_iter([
+            1,
+            high - 3,
+            high - 2,
+            high - 1,
+            high,
+            high + 3,
+        ]));
+        let build = |selected: Option<Vec<usize>>| {
+            ArrowReader::build_deletes_row_selection(&meta, &selected, &deletes).unwrap()
+        };
+        assert_eq!(
+            build(None),
+            RowSelection::from(vec![
+                select(1),
+                skip(1),
+                select(big - 5),
+                skip(4),
+                select(2),
+                skip(1),
+                select(2),
+            ])
+        );
+        assert_eq!(
+            build(Some(vec![0])),
+            RowSelection::from(vec![select(1), skip(1), select(big - 5), skip(1)])
+        );
+        assert_eq!(
+            build(Some(vec![1])),
+            RowSelection::from(vec![skip(3), select(2), skip(1), select(2)])
+        );
+
+        // Skipping row group 0 lands past 2^32, in the next bitmap.
+        let meta = row_groups(&[(1 << 32) + 1, 4]);
+        let deletes = DeleteVector::new(RoaringTreemap::from_iter([5, high - 1, high, high + 2]));
+        assert_eq!(
+            ArrowReader::build_deletes_row_selection(&meta, &Some(vec![1]), &deletes).unwrap(),
+            RowSelection::from(vec![select(1), skip(1), select(2)])
+        );
     }
 
     #[test]
