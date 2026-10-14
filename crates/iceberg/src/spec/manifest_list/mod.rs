@@ -91,7 +91,8 @@ impl ManifestList {
 mod test {
     use std::fs;
 
-    use apache_avro::{Codec, Writer};
+    use apache_avro::types::Record;
+    use apache_avro::{Codec, Schema as AvroSchema, Writer};
     use tempfile::TempDir;
 
     use super::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V2;
@@ -153,6 +154,65 @@ mod test {
             ManifestList::parse_with_version(&bs, FormatVersion::V1).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
+    }
+
+    #[test]
+    fn test_parse_manifest_list_v1_with_spec_field_names() {
+        let schema = AvroSchema::parse_str(
+            r#"{
+                "type": "record",
+                "name": "manifest_file",
+                "fields": [
+                    {"name": "manifest_path", "type": "string"},
+                    {"name": "manifest_length", "type": "long"},
+                    {"name": "partition_spec_id", "type": "int"},
+                    {"name": "added_snapshot_id", "type": "long"},
+                    {"name": "added_files_count", "type": ["null", "int"], "default": null},
+                    {"name": "existing_files_count", "type": ["null", "int"], "default": null},
+                    {"name": "deleted_files_count", "type": ["null", "int"], "default": null},
+                    {"name": "added_rows_count", "type": ["null", "long"], "default": null},
+                    {"name": "existing_rows_count", "type": ["null", "long"], "default": null},
+                    {"name": "deleted_rows_count", "type": ["null", "long"], "default": null}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let mut record = Record::new(&schema).unwrap();
+        record.put("manifest_path", "s3://test/metadata/manifest.avro");
+        record.put("manifest_length", 1234i64);
+        record.put("partition_spec_id", 0i32);
+        record.put("added_snapshot_id", 42i64);
+        record.put("added_files_count", Some(3i32));
+        record.put("existing_files_count", Some(2i32));
+        record.put("deleted_files_count", Some(1i32));
+        record.put("added_rows_count", Some(30i64));
+        record.put("existing_rows_count", Some(20i64));
+        record.put("deleted_rows_count", Some(10i64));
+        let mut writer = Writer::new(&schema, Vec::new()).unwrap();
+        writer.append_value(record).unwrap();
+        let bs = writer.into_inner().unwrap();
+
+        let parsed_manifest_list =
+            ManifestList::parse_with_version(&bs, FormatVersion::V1).unwrap();
+
+        assert_eq!(parsed_manifest_list.entries(), [ManifestFile {
+            manifest_path: "s3://test/metadata/manifest.avro".to_string(),
+            manifest_length: 1234,
+            partition_spec_id: 0,
+            content: ManifestContentType::Data,
+            sequence_number: 0,
+            min_sequence_number: 0,
+            added_snapshot_id: 42,
+            added_files_count: Some(3),
+            existing_files_count: Some(2),
+            deleted_files_count: Some(1),
+            added_rows_count: Some(30),
+            existing_rows_count: Some(20),
+            deleted_rows_count: Some(10),
+            partitions: None,
+            key_metadata: None,
+            first_row_id: None,
+        }]);
     }
 
     const VERSIONS: [FormatVersion; 3] = [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3];

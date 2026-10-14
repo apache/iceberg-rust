@@ -99,8 +99,11 @@ pub(super) struct ManifestFileV1 {
     pub manifest_length: i64,
     pub partition_spec_id: i32,
     pub added_snapshot_id: i64,
+    #[serde(alias = "added_files_count")]
     pub added_data_files_count: Option<i32>,
+    #[serde(alias = "existing_files_count")]
     pub existing_data_files_count: Option<i32>,
+    #[serde(alias = "deleted_files_count")]
     pub deleted_data_files_count: Option<i32>,
     pub added_rows_count: Option<i64>,
     pub existing_rows_count: Option<i64>,
