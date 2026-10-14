@@ -42,7 +42,7 @@ jobs:
 
   sdist:
     needs: set-version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -82,13 +82,13 @@ jobs:
         include:
           - { os: windows-latest }
           - { os: macos-latest, target: "universal2-apple-darwin" }
-          - { os: ubuntu-latest, target: "x86_64" }
+          - { os: ubuntu-24.04, target: "x86_64" }
           - {
-              os: ubuntu-latest,
+              os: ubuntu-24.04,
               target: "aarch64",
               manylinux: "manylinux_2_28",
             }
-          - { os: ubuntu-latest, target: "armv7l" }
+          - { os: ubuntu-24.04, target: "armv7l" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -151,7 +151,7 @@ jobs:
   testpypi-publish:
     if: github.repository == 'apache/iceberg-rust' # Only run for apache repo
     needs: [sdist, wheels]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     environment:
       name: testpypi
