@@ -23,6 +23,7 @@
 mod tests {
     use std::sync::Arc;
 
+    use bytes::Bytes;
     use futures::StreamExt;
     use iceberg::io::{
         FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION,
@@ -31,25 +32,53 @@ mod tests {
     use iceberg_storage_opendal::{
         AwsCredential, CustomAwsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
     };
-    use iceberg_test_utils::{get_minio_endpoint, normalize_test_name_with_parts, set_up};
+    use iceberg_test_utils::{get_object_store_endpoint, normalize_test_name_with_parts, set_up};
     use reqsign_core::Context;
 
     async fn get_file_io() -> FileIO {
         set_up();
 
-        let minio_endpoint = get_minio_endpoint();
+        let object_store_endpoint = get_object_store_endpoint();
 
         FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
             customized_credential_load: None,
         }))
         .with_props(vec![
-            (S3_ENDPOINT, minio_endpoint),
+            (S3_ENDPOINT, object_store_endpoint),
             (S3_ACCESS_KEY_ID, "admin".to_string()),
             (S3_SECRET_ACCESS_KEY, "password".to_string()),
             (S3_REGION, "us-east-1".to_string()),
             (S3_PATH_STYLE_ACCESS, "true".to_string()),
         ])
         .build()
+    }
+
+    fn roundtrip_file_io(file_io: &FileIO) -> FileIO {
+        let serialized = file_io.serialize_all().unwrap();
+        FileIO::deserialize_all(&serialized).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_file_io_s3_serialization_roundtrip() {
+        let file_io = roundtrip_file_io(&get_file_io().await);
+        let path = format!(
+            "s3://bucket1/{}",
+            normalize_test_name_with_parts!("test_file_io_s3_serialization_roundtrip")
+        );
+
+        let _ = file_io.delete(&path).await;
+        file_io
+            .new_output(&path)
+            .unwrap()
+            .write(Bytes::from_static(b"roundtrip"))
+            .await
+            .unwrap();
+        assert_eq!(
+            file_io.new_input(&path).unwrap().read().await.unwrap(),
+            Bytes::from_static(b"roundtrip")
+        );
+        file_io.delete(&path).await.unwrap();
+        assert!(!file_io.exists(&path).await.unwrap());
     }
 
     #[tokio::test]
@@ -109,7 +138,7 @@ mod tests {
             Self { credential }
         }
 
-        fn new_minio() -> Self {
+        fn new_object_store() -> Self {
             Self::new(Some(AwsCredential {
                 access_key_id: "admin".to_string(),
                 secret_access_key: "password".to_string(),
@@ -133,7 +162,7 @@ mod tests {
     #[test]
     fn test_custom_aws_credential_loader_instantiation() {
         // Test creating CustomAwsCredentialLoader with mock loader
-        let mock_loader = MockCredentialLoader::new_minio();
+        let mock_loader = MockCredentialLoader::new_object_store();
         let custom_loader = CustomAwsCredentialLoader::new(mock_loader);
 
         // Test that the loader can be used in FileIOBuilder with OpenDalStorageFactory
@@ -153,17 +182,17 @@ mod tests {
         let _file_io = get_file_io().await;
 
         // Create a mock credential loader
-        let mock_loader = MockCredentialLoader::new_minio();
+        let mock_loader = MockCredentialLoader::new_object_store();
         let custom_loader = CustomAwsCredentialLoader::new(mock_loader);
 
-        let minio_endpoint = get_minio_endpoint();
+        let object_store_endpoint = get_object_store_endpoint();
 
         // Build FileIO with custom credential loader via OpenDalStorageFactory
         let file_io_with_custom_creds = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
             customized_credential_load: Some(custom_loader),
         }))
         .with_props(vec![
-            (S3_ENDPOINT, minio_endpoint),
+            (S3_ENDPOINT, object_store_endpoint),
             (S3_REGION, "us-east-1".to_string()),
             (S3_PATH_STYLE_ACCESS, "true".to_string()),
         ])
@@ -184,14 +213,14 @@ mod tests {
         let mock_loader = MockCredentialLoader::new(None);
         let custom_loader = CustomAwsCredentialLoader::new(mock_loader);
 
-        let minio_endpoint = get_minio_endpoint();
+        let object_store_endpoint = get_object_store_endpoint();
 
         // Build FileIO with custom credential loader via OpenDalStorageFactory
         let file_io_with_custom_creds = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
             customized_credential_load: Some(custom_loader),
         }))
         .with_props(vec![
-            (S3_ENDPOINT, minio_endpoint),
+            (S3_ENDPOINT, object_store_endpoint),
             (S3_REGION, "us-east-1".to_string()),
             (S3_PATH_STYLE_ACCESS, "true".to_string()),
         ])

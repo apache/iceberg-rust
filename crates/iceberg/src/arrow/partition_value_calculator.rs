@@ -27,9 +27,10 @@ use arrow_schema::DataType;
 
 use super::record_batch_projector::RecordBatchProjector;
 use super::type_to_arrow_type;
+use crate::Result;
+use crate::error::invalid_data;
 use crate::spec::{PartitionSpec, Schema, StructType, Type};
 use crate::transform::{BoxedTransformFunction, create_transform_function};
-use crate::{Error, ErrorKind, Result};
 
 /// Calculator for partition values in Iceberg tables.
 ///
@@ -63,9 +64,8 @@ impl PartitionValueCalculator {
     /// - Projector initialization fails
     pub fn try_new(partition_spec: &PartitionSpec, table_schema: &Schema) -> Result<Self> {
         if partition_spec.is_unpartitioned() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot create partition calculator for unpartitioned table",
+            return Err(invalid_data!(
+                "Cannot create partition calculator for unpartitioned table"
             ));
         }
 
@@ -140,10 +140,7 @@ impl PartitionValueCalculator {
         let expected_struct_fields = match &self.partition_arrow_type {
             DataType::Struct(fields) => fields.clone(),
             _ => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Expected partition type must be a struct",
-                ));
+                return Err(invalid_data!("Expected partition type must be a struct"));
             }
         };
 
@@ -156,12 +153,7 @@ impl PartitionValueCalculator {
 
         // Construct the StructArray
         let struct_array = StructArray::try_new(expected_struct_fields, partition_values, None)
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Failed to create partition struct array: {e}"),
-                )
-            })?;
+            .map_err(|e| invalid_data!("Failed to create partition struct array: {e}"))?;
 
         Ok(Arc::new(struct_array))
     }

@@ -20,6 +20,7 @@
 //! predicates, row-group / row selection, and delete handling into a stream
 //! of transformed Arrow `RecordBatch`es.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -43,7 +44,11 @@ use crate::arrow::int96::coerce_int96_timestamps;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
 use crate::encryption::StandardKeyMetadata;
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
+use crate::expr::BoundPredicate;
+use crate::expr::visitors::bloom_filter_evaluator::{
+    BloomFilterEvaluator, ColumnBloomFilter, collect_bloom_filter_field_ids,
+};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::metadata_columns::{
     RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER, RESERVED_COL_NAME_POS,
@@ -70,6 +75,7 @@ impl ArrowReader {
                 .with_scan_metrics(scan_metrics.clone()),
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            bloom_filter_enabled: self.bloom_filter_enabled,
             parquet_read_options: self.parquet_read_options,
             scan_metrics: scan_metrics.clone(),
         };
@@ -102,6 +108,18 @@ impl ArrowReader {
     }
 }
 
+// Metadata columns synthesized without reading any data column, so a projection of only
+// these can be pruned to zero data columns. Narrower than `is_metadata_field`, which also
+// matches `_deleted` -- excluded here because it has no synthesis handler.
+const PRUNABLE_METADATA_FIELDS: &[i32] = &[
+    RESERVED_FIELD_ID_FILE,
+    RESERVED_FIELD_ID_SPEC_ID,
+    RESERVED_FIELD_ID_PARTITION,
+    RESERVED_FIELD_ID_POS,
+    RESERVED_FIELD_ID_ROW_ID,
+    RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+];
+
 /// Per-scan state for processing [`FileScanTask`]s. Created once per
 /// [`ArrowReader::read`] call and cloned per task.
 #[derive(Clone)]
@@ -111,29 +129,41 @@ struct FileScanTaskReader {
     delete_file_loader: CachingDeleteFileLoader,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    bloom_filter_enabled: bool,
     parquet_read_options: ParquetReadOptions,
     scan_metrics: ScanMetrics,
 }
 
+// Borrow an existing selection, or enumerate all groups for a whole-file scan.
+fn candidate_row_groups(
+    selected_row_groups: Option<&[usize]>,
+    num_row_groups: usize,
+) -> Cow<'_, [usize]> {
+    match selected_row_groups {
+        Some(indices) => Cow::Borrowed(indices),
+        None => Cow::Owned((0..num_row_groups).collect()),
+    }
+}
+
 impl FileScanTaskReader {
     async fn process(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
-        let should_load_page_index =
-            (self.row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
+        let should_load_page_index = (self.row_selection_enabled && task.predicate().is_some())
+            || !task.deletes().is_empty();
         let mut parquet_read_options = self.parquet_read_options;
         parquet_read_options.preload_page_index = should_load_page_index;
 
         let delete_filter_rx = self
             .delete_file_loader
-            .load_deletes(&task.deletes, Arc::clone(&task.schema));
+            .load_deletes(task.deletes(), task.schema_ref());
 
         // Open the Parquet file once, loading its metadata
         let (parquet_file_reader, arrow_metadata) = ArrowReader::open_parquet_file(
-            &task.data_file_path,
+            task.data_file_path(),
             &self.file_io,
-            task.file_size_in_bytes,
+            task.file_size_in_bytes(),
             parquet_read_options,
             self.scan_metrics.bytes_read_counter(),
-            task.key_metadata.as_deref(),
+            task.key_metadata(),
         )
         .await?;
 
@@ -151,75 +181,7 @@ impl FileScanTaskReader {
         // AND no name mapping is available. With a name mapping, field IDs are assigned
         // to the Arrow schema below, and projection/predicate planning must use them
         // (see #2403).
-        let use_position_fallback = missing_field_ids && task.name_mapping.is_none();
-
-        // Three-branch schema resolution strategy matching Java's ReadConf constructor
-        //
-        // Per Iceberg spec Column Projection rules:
-        // "Columns in Iceberg data files are selected by field id. The table schema's column
-        //  names and order may change after a data file is written, and projection must be done
-        //  using field ids."
-        // https://iceberg.apache.org/spec/#column-projection
-        //
-        // When Parquet files lack field IDs (e.g., Hive/Spark migrations via add_files),
-        // we must assign field IDs BEFORE reading data to enable correct projection.
-        //
-        // Java's ReadConf determines field ID strategy:
-        // - Branch 1: hasIds(fileSchema) → trust embedded field IDs, use pruneColumns()
-        // - Branch 2: nameMapping present → applyNameMapping(), then pruneColumns()
-        // - Branch 3: fallback → addFallbackIds(), then pruneColumnsFallback()
-        let arrow_metadata = if missing_field_ids {
-            // Parquet file lacks field IDs - must assign them before reading
-            let arrow_schema = if let Some(name_mapping) = &task.name_mapping {
-                // Branch 2: Apply name mapping to assign correct Iceberg field IDs
-                // Per spec rule #2: "Use schema.name-mapping.default metadata to map field id
-                // to columns without field id"
-                // Corresponds to Java's ParquetSchemaUtil.applyNameMapping()
-                apply_name_mapping_to_arrow_schema(
-                    Arc::clone(arrow_metadata.schema()),
-                    name_mapping,
-                )?
-            } else {
-                // Branch 3: No name mapping - use position-based fallback IDs
-                // Corresponds to Java's ParquetSchemaUtil.addFallbackIds()
-                add_fallback_field_ids_to_arrow_schema(arrow_metadata.schema())
-            };
-
-            let options = ArrowReaderOptions::new().with_schema(arrow_schema);
-            ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options).map_err(
-                |e| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Failed to create ArrowReaderMetadata with field ID schema",
-                    )
-                    .with_source(e)
-                },
-            )?
-        } else {
-            // Branch 1: File has embedded field IDs - trust them
-            arrow_metadata
-        };
-
-        // Coerce INT96 timestamp columns to the resolution specified by the Iceberg schema.
-        // This must happen before building the stream reader to avoid i64 overflow in arrow-rs.
-        let arrow_metadata = if let Some(coerced_schema) =
-            coerce_int96_timestamps(arrow_metadata.schema(), &task.schema)
-        {
-            let options = ArrowReaderOptions::new().with_schema(Arc::clone(&coerced_schema));
-            ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options).map_err(
-                |e| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        format!(
-                            "Failed to create ArrowReaderMetadata with INT96-coerced schema: {coerced_schema}"
-                        ),
-                    )
-                    .with_source(e)
-                },
-            )?
-        } else {
-            arrow_metadata
-        };
+        let use_position_fallback = missing_field_ids && task.name_mapping().is_none();
 
         let project_pos = task.project_field_ids().contains(&RESERVED_FIELD_ID_POS);
         let project_row_id = task.project_field_ids().contains(&RESERVED_FIELD_ID_ROW_ID);
@@ -228,34 +190,22 @@ impl FileScanTaskReader {
         // positional fallback for `_row_id` (`first_row_id + pos`), so add it whenever
         // `_row_id` is synthesized. A null `first_row_id` nulls the whole `_row_id`
         // column, so nothing is synthesized and the column is not needed.
-        let need_row_number = project_pos || (project_row_id && task.first_row_id.is_some());
+        let need_row_number = project_pos || (project_row_id && task.first_row_id().is_some());
 
-        let arrow_metadata = if need_row_number {
-            let row_number_field = Arc::new(
-                Field::new(RESERVED_COL_NAME_POS, DataType::Int64, false)
-                    .with_metadata(HashMap::from([(
-                        PARQUET_FIELD_ID_META_KEY.to_string(),
-                        RESERVED_FIELD_ID_POS.to_string(),
-                    )]))
-                    .with_extension_type(RowNumber),
-            );
+        let field_ids = task.project_field_ids();
+        let metadata_only_projection = !field_ids.is_empty()
+            && field_ids
+                .iter()
+                .all(|id| PRUNABLE_METADATA_FIELDS.contains(id));
 
-            let options = ArrowReaderOptions::new()
-                .with_schema(Arc::clone(arrow_metadata.schema()))
-                .with_virtual_columns(vec![row_number_field])?;
+        let install_row_number = need_row_number || metadata_only_projection;
 
-            ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options).map_err(
-                |e| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Failed to create ArrowReaderMetadata with the 'row_number' virtual_column",
-                    )
-                    .with_source(e)
-                },
-            )?
-        } else {
-            arrow_metadata
-        };
+        let arrow_metadata = Self::configure_arrow_reader_metadata(
+            arrow_metadata,
+            &task,
+            missing_field_ids,
+            install_row_number,
+        )?;
 
         // Build the stream reader, reusing the already-opened file reader
         let mut record_batch_stream_builder =
@@ -297,7 +247,7 @@ impl FileScanTaskReader {
         // column below, discarding any per-row values the file carries -- matching Java
         // (`ValueReaders.lastUpdated` nulls when the base row id is null).
         let coalesce_last_updated_seq_leaf = phys_last_updated_seq_leaf
-            .filter(|_| task.first_row_id.is_some() && task.data_sequence_number.is_some());
+            .filter(|_| task.first_row_id().is_some() && task.data_sequence_number().is_some());
 
         let phys_row_id_leaf = if project_row_id {
             find_leaf_by_field_id(
@@ -324,11 +274,11 @@ impl FileScanTaskReader {
 
         // Read the physical column only when first_row_id is set. A null first_row_id
         // nulls the whole column below (matching Java `ValueReaders.rowIds`).
-        let coalesce_row_id_leaf = phys_row_id_leaf.filter(|_| task.first_row_id.is_some());
+        let coalesce_row_id_leaf = phys_row_id_leaf.filter(|_| task.first_row_id().is_some());
 
         // Filter out metadata fields for Parquet projection (they don't exist in files)
         let project_field_ids_without_metadata: Vec<i32> = task
-            .project_field_ids
+            .project_field_ids()
             .iter()
             .filter(|&&id| !is_metadata_field(id))
             .copied()
@@ -341,7 +291,7 @@ impl FileScanTaskReader {
         // - Otherwise: position-based fallback projection
         let mut projection_mask = ArrowReader::get_arrow_projection_mask(
             &project_field_ids_without_metadata,
-            &task.schema,
+            task.schema(),
             record_batch_stream_builder.parquet_schema(),
             record_batch_stream_builder.schema(),
             use_position_fallback, // Whether to use position-based (true) or field-ID-based (false) projection
@@ -349,24 +299,15 @@ impl FileScanTaskReader {
 
         // A metadata-only projection leaves `project_field_ids_without_metadata` empty,
         // which `get_arrow_projection_mask` maps to "read all columns" (so `COUNT(*)` still
-        // gets a row count). Downgrade that to "read no data columns" when a row-count
-        // source exists independently of the data columns: the RowNumber virtual column
-        // (installed above under `need_row_number`, which covers `_pos` and `_row_id`
-        // synthesis) or a physical `_last_updated_sequence_number` leaf unioned in below
-        // (that column does not install RowNumber, so it is a separate source). Pure-constant
-        // / `COUNT(*)` projections have neither and must keep reading all columns to preserve
-        // the row count.
+        // gets a row count). Downgrade that to "read no data columns": `install_row_number`
+        // put the RowNumber virtual column on every metadata-only projection as a row-count
+        // source independent of the data columns, so the count survives with zero data
+        // columns read. `COUNT(*)` (an empty projection) has no RowNumber and keeps reading
+        // all columns to preserve the row count.
         //
-        // This runs BEFORE the union so the physical leaves are added onto a `none` base,
-        // pruning the read to just those leaves (`union` with an `all` base stays `all`).
-        //
-        // Known follow-up: a `_row_id`-only (or `_last_updated_sequence_number`-only)
-        // projection with a null `first_row_id` has no row-count source here, so it still
-        // reads all columns just to emit an all-null column. Pruning that to a minimal
-        // row-count source is left as a future optimization.
-        if project_field_ids_without_metadata.is_empty()
-            && (need_row_number || coalesce_last_updated_seq_leaf.is_some())
-        {
+        // This runs BEFORE the union so any physical metadata leaf is added onto a `none`
+        // base, pruning the read to just that leaf (`union` with an `all` base stays `all`).
+        if project_field_ids_without_metadata.is_empty() && install_row_number {
             projection_mask =
                 ProjectionMask::none(record_batch_stream_builder.parquet_schema().num_columns());
         }
@@ -395,7 +336,7 @@ impl FileScanTaskReader {
 
         // Add the _file metadata column if it's in the projected fields
         if task.project_field_ids().contains(&RESERVED_FIELD_ID_FILE) {
-            let file_datum = Datum::string(task.data_file_path.clone());
+            let file_datum = Datum::string(task.data_file_path().to_string());
             record_batch_transformer_builder =
                 record_batch_transformer_builder.with_constant(RESERVED_FIELD_ID_FILE, file_datum);
         }
@@ -405,8 +346,7 @@ impl FileScanTaskReader {
             .contains(&RESERVED_FIELD_ID_SPEC_ID)
         {
             let partition_spec = task
-                .partition_spec
-                .as_ref()
+                .partition_spec()
                 .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Partition spec is missing"))?;
 
             let spec_id_datum = Datum::int(partition_spec.spec_id());
@@ -419,52 +359,52 @@ impl FileScanTaskReader {
             // it this way (`ValueReaders.lastUpdated` returns nulls when the base row id is
             // null); the spec itself only says the column is assigned the manifest entry's
             // sequence number on read.
-            record_batch_transformer_builder = match (task.first_row_id, task.data_sequence_number)
-            {
-                (Some(_), Some(seq)) => {
-                    let datum = Datum::long(seq);
-                    if coalesce_last_updated_seq_leaf.is_some() {
-                        // The file physically carries the column: read the per-row value,
-                        // falling back to the data sequence number only where null.
-                        record_batch_transformer_builder.with_coalesced_last_updated_seq_column(
-                            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
-                            datum,
-                        )
-                    } else if last_updated_seq_present_by_name_only {
-                        // Present by name but without the embedded field id (name mapping /
-                        // positional fallback). The transformer keys the source column by
-                        // field id, so we can't thread it; no real writer produces this, so
-                        // reject loudly rather than silently overwrite with the constant.
-                        // Arm-local by design: only this arm reads the physical column, so
-                        // only here can a name-only column defeat us. The `(None, _)` arm
-                        // nulls the column without reading it, so it needs no such guard.
-                        return Err(Error::new(
-                            ErrorKind::FeatureUnsupported,
-                            "Reading a physically-stored _last_updated_sequence_number column \
+            record_batch_transformer_builder =
+                match (task.first_row_id(), task.data_sequence_number()) {
+                    (Some(_), Some(seq)) => {
+                        let datum = Datum::long(seq);
+                        if coalesce_last_updated_seq_leaf.is_some() {
+                            // The file physically carries the column: read the per-row value,
+                            // falling back to the data sequence number only where null.
+                            record_batch_transformer_builder.with_coalesced_last_updated_seq_column(
+                                RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+                                datum,
+                            )
+                        } else if last_updated_seq_present_by_name_only {
+                            // Present by name but without the embedded field id (name mapping /
+                            // positional fallback). The transformer keys the source column by
+                            // field id, so we can't thread it; no real writer produces this, so
+                            // reject loudly rather than silently overwrite with the constant.
+                            // Arm-local by design: only this arm reads the physical column, so
+                            // only here can a name-only column defeat us. The `(None, _)` arm
+                            // nulls the column without reading it, so it needs no such guard.
+                            return Err(Error::new(
+                                ErrorKind::FeatureUnsupported,
+                                "Reading a physically-stored _last_updated_sequence_number column \
                              without an embedded field id is not supported",
-                        ));
-                    } else {
-                        // Column absent: derive it from the data sequence number.
-                        record_batch_transformer_builder
-                            .with_constant(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER, datum)
+                            ));
+                        } else {
+                            // Column absent: derive it from the data sequence number.
+                            record_batch_transformer_builder.with_constant(
+                                RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+                                datum,
+                            )
+                        }
                     }
-                }
-                // Null first_row_id (v1/v2, or a pre-upgrade v3 snapshot): the column is null.
-                (None, _) => record_batch_transformer_builder
-                    .with_null_metadata_column(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER)?,
-                // first_row_id present but no data sequence number: after manifest
-                // inheritance a committed entry always has one, so this is a malformed
-                // manifest rather than a legitimate null.
-                (Some(_), None) => {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
+                    // Null first_row_id (v1/v2, or a pre-upgrade v3 snapshot): the column is null.
+                    (None, _) => record_batch_transformer_builder.with_null_metadata_column(
+                        RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+                    )?,
+                    // first_row_id present but no data sequence number: after manifest
+                    // inheritance a committed entry always has one, so this is a malformed
+                    // manifest rather than a legitimate null.
+                    (Some(_), None) => {
+                        return Err(invalid_data!(
                             "Data file {} has a first_row_id but no data sequence number",
-                            task.data_file_path
-                        ),
-                    ));
-                }
-            };
+                            task.data_file_path()
+                        ));
+                    }
+                };
         }
 
         if project_row_id {
@@ -473,7 +413,7 @@ impl FileScanTaskReader {
             // leaf is never read and `_row_id` is nulled out downstream (matching Java
             // `ValueReaders.rowIds`), so a pre-v3 file with a user column named `_row_id`
             // reads back as null rather than erroring.
-            if task.first_row_id.is_some() && row_id_present_by_name_only {
+            if task.first_row_id().is_some() && row_id_present_by_name_only {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     "Reading a physically-stored _row_id column without an embedded field id \
@@ -489,10 +429,10 @@ impl FileScanTaskReader {
         }
 
         if let (Some(partition_spec), Some(partition_data)) =
-            (task.partition_spec.clone(), task.partition.clone())
+            (task.partition_spec(), task.partition())
         {
-            record_batch_transformer_builder =
-                record_batch_transformer_builder.with_partition(partition_spec, partition_data)?;
+            record_batch_transformer_builder = record_batch_transformer_builder
+                .with_partition(Arc::clone(partition_spec), partition_data.clone())?;
         }
 
         if project_pos {
@@ -505,10 +445,10 @@ impl FileScanTaskReader {
         if task
             .project_field_ids()
             .contains(&RESERVED_FIELD_ID_PARTITION)
-            && let Some(unified_type) = &task.unified_partition_type
+            && let Some(unified_type) = task.unified_partition_type()
         {
-            let (spec, partition_data) = match (&task.partition_spec, &task.partition) {
-                (Some(spec), Some(data)) => (spec.clone(), data.clone()),
+            let (spec, partition_data) = match (task.partition_spec(), task.partition()) {
+                (Some(spec), Some(data)) => (Arc::clone(spec), data.clone()),
                 // A missing spec/data is only acceptable when there are no partition
                 // fields to fill (unpartitioned table). If the unified type has fields
                 // but we lack a spec or data, the task is inconsistent and we cannot
@@ -542,7 +482,7 @@ impl FileScanTaskReader {
         // we also have an optional predicate resulting from equality delete files.
         // If both are present, we logical-AND them together to form a single filter
         // predicate that we can pass to the `RecordBatchStreamBuilder`.
-        let final_predicate = match (&task.predicate, delete_predicate) {
+        let final_predicate = match (task.predicate(), delete_predicate) {
             (None, None) => None,
             (Some(predicate), None) => Some(predicate.clone()),
             (None, Some(ref predicate)) => Some(predicate.clone()),
@@ -571,11 +511,11 @@ impl FileScanTaskReader {
 
         // Filter row groups based on byte range from task.start and task.length.
         // If both start and length are 0, read the entire file (backwards compatibility).
-        if task.start != 0 || task.length != 0 {
+        if task.start() != 0 || task.length() != 0 {
             let byte_range_filtered_row_groups = ArrowReader::filter_row_groups_by_byte_range(
                 record_batch_stream_builder.metadata(),
-                task.start,
-                task.length,
+                task.start(),
+                task.length(),
             )?;
             selected_row_group_indices = Some(byte_range_filtered_row_groups);
         }
@@ -597,26 +537,37 @@ impl FileScanTaskReader {
             record_batch_stream_builder = record_batch_stream_builder.with_row_filter(row_filter);
 
             if self.row_group_filtering_enabled {
-                let predicate_filtered_row_groups = ArrowReader::get_selected_row_group_indices(
+                let candidates = candidate_row_groups(
+                    selected_row_group_indices.as_deref(),
+                    record_batch_stream_builder.metadata().num_row_groups(),
+                );
+
+                selected_row_group_indices = Some(ArrowReader::get_selected_row_group_indices(
                     &predicate,
                     record_batch_stream_builder.metadata(),
                     &field_id_map,
-                    &task.schema,
-                )?;
+                    task.schema(),
+                    candidates.as_ref(),
+                )?);
+            }
 
-                // Merge predicate-based filtering with byte range filtering (if present)
-                // by taking the intersection of both filters
-                selected_row_group_indices = match selected_row_group_indices {
-                    Some(byte_range_filtered) => {
-                        // Keep only row groups that are in both filters
-                        let intersection: Vec<usize> = byte_range_filtered
-                            .into_iter()
-                            .filter(|idx| predicate_filtered_row_groups.contains(idx))
-                            .collect();
-                        Some(intersection)
-                    }
-                    None => Some(predicate_filtered_row_groups),
-                };
+            if self.bloom_filter_enabled {
+                let candidates = candidate_row_groups(
+                    selected_row_group_indices.as_deref(),
+                    record_batch_stream_builder.metadata().num_row_groups(),
+                );
+
+                let bloom_filtered = Self::filter_row_groups_by_bloom_filter(
+                    &predicate,
+                    &mut record_batch_stream_builder,
+                    candidates.as_ref(),
+                    &field_id_map,
+                )
+                .await?;
+
+                if bloom_filtered.len() < candidates.len() {
+                    selected_row_group_indices = Some(bloom_filtered);
+                }
             }
 
             if self.row_selection_enabled {
@@ -625,7 +576,7 @@ impl FileScanTaskReader {
                     record_batch_stream_builder.metadata(),
                     &selected_row_group_indices,
                     &field_id_map,
-                    &task.schema,
+                    task.schema(),
                 )?;
             }
         }
@@ -667,7 +618,7 @@ impl FileScanTaskReader {
         // to the requester. When `_row_id` is projected, synthesize it over the raw parquet
         // batches (using the reader-produced `_pos` position) before the transformer, which
         // then passes it through as a virtual field.
-        let first_row_id = task.first_row_id;
+        let first_row_id = task.first_row_id();
         let record_batch_stream = record_batch_stream_builder.build()?.map(move |batch| {
             let mut batch = batch.map_err(|err| -> Error { err.into() })?;
             if project_row_id {
@@ -678,6 +629,143 @@ impl FileScanTaskReader {
         });
 
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
+    }
+
+    /// Applies all task-specific schema and virtual-column options, rebuilding the
+    /// Arrow reader metadata at most once.
+    fn configure_arrow_reader_metadata(
+        arrow_metadata: ArrowReaderMetadata,
+        task: &FileScanTask,
+        missing_field_ids: bool,
+        install_row_number: bool,
+    ) -> Result<ArrowReaderMetadata> {
+        // Schema resolution follows the Iceberg Column Projection rule:
+        // "Columns in Iceberg data files are selected by field id."
+        // https://iceberg.apache.org/spec/#column-projection
+        //
+        // This mirrors Java's ReadConf strategy: use embedded IDs with pruneColumns();
+        // otherwise, use applyNameMapping() followed by pruneColumns() when configured, or
+        // addFallbackIds() followed by pruneColumnsFallback() for position-based fallback.
+        // The fast path returns early without materializing an owned schema.
+        let arrow_schema = if missing_field_ids {
+            let schema = if let Some(name_mapping) = task.name_mapping() {
+                apply_name_mapping_to_arrow_schema(
+                    Arc::clone(arrow_metadata.schema()),
+                    name_mapping,
+                )?
+            } else {
+                add_fallback_field_ids_to_arrow_schema(arrow_metadata.schema())
+            };
+            // Coerce INT96 timestamp columns before building the stream reader to avoid
+            // i64 overflow in arrow-rs. Apply this after assigning any missing field IDs
+            // so the final schema contains both changes.
+            coerce_int96_timestamps(&schema, task.schema()).unwrap_or(schema)
+        } else if let Some(coerced) =
+            coerce_int96_timestamps(arrow_metadata.schema(), task.schema())
+        {
+            coerced
+        } else if install_row_number {
+            Arc::clone(arrow_metadata.schema())
+        } else {
+            return Ok(arrow_metadata);
+        };
+
+        let mut options = ArrowReaderOptions::new().with_schema(Arc::clone(&arrow_schema));
+        if install_row_number {
+            let row_number_field = Arc::new(
+                Field::new(RESERVED_COL_NAME_POS, DataType::Int64, false)
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        RESERVED_FIELD_ID_POS.to_string(),
+                    )]))
+                    .with_extension_type(RowNumber),
+            );
+            options = options.with_virtual_columns(vec![row_number_field])?;
+        }
+
+        ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options).map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "Failed to create ArrowReaderMetadata with the configured reader options \
+                     (missing_field_ids: {missing_field_ids}, \
+                      install_row_number: {install_row_number}, schema: {arrow_schema})"
+                ),
+            )
+            .with_source(e)
+        })
+    }
+
+    /// Reads bloom filters for relevant columns and evaluates the predicate
+    /// against them to filter out row groups that definitely don't match.
+    async fn filter_row_groups_by_bloom_filter(
+        predicate: &BoundPredicate,
+        builder: &mut ParquetRecordBatchStreamBuilder<ArrowFileReader>,
+        candidate_row_groups: &[usize],
+        field_id_map: &HashMap<i32, usize>,
+    ) -> Result<Vec<usize>> {
+        // Only collect field IDs from eq/in predicates — the only types
+        // bloom filters can help with. Skip columns not in the parquet schema.
+        let bloom_filter_field_ids: Vec<i32> = collect_bloom_filter_field_ids(predicate)?
+            .into_iter()
+            .filter(|id| field_id_map.contains_key(id))
+            .collect();
+
+        if bloom_filter_field_ids.is_empty() {
+            return Ok(candidate_row_groups.to_vec());
+        }
+
+        let mut result = Vec::with_capacity(candidate_row_groups.len());
+
+        for &rg_idx in candidate_row_groups {
+            let mut bloom_filters: HashMap<i32, ColumnBloomFilter> = HashMap::new();
+
+            for &field_id in &bloom_filter_field_ids {
+                let col_idx = field_id_map[&field_id];
+                let col_meta = builder.metadata().row_group(rg_idx).column(col_idx);
+
+                // Only attempt to load if this column chunk actually has a bloom filter
+                if col_meta.bloom_filter_offset().is_none() {
+                    continue;
+                }
+
+                let physical_type = col_meta.column_type();
+                let type_length = col_meta.column_descr().type_length();
+
+                match builder
+                    .get_row_group_column_bloom_filter(rg_idx, col_idx)
+                    .await
+                {
+                    Ok(Some(sbbf)) => {
+                        bloom_filters.insert(
+                            field_id,
+                            ColumnBloomFilter::new(sbbf, physical_type, type_length),
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        // Left absent from the map, so the evaluator treats the column
+                        // as might-match and the row group survives.
+                        tracing::debug!(
+                            "Bloom filter for field {field_id} in row group {rg_idx} could not be read: {e}"
+                        );
+                    }
+                }
+            }
+
+            match BloomFilterEvaluator::eval(predicate, &bloom_filters) {
+                Ok(true) => result.push(rg_idx),
+                Ok(false) => { /* Row group pruned by bloom filter */ }
+                Err(e) => {
+                    tracing::debug!(
+                        "Bloom filter evaluation failed for row group {rg_idx}, including it: {e}"
+                    );
+                    result.push(rg_idx);
+                }
+            }
+        }
+
+        Ok(result)
     }
 }
 
@@ -782,7 +870,7 @@ mod tests {
         RESERVED_COL_NAME_POS, RESERVED_COL_NAME_ROW_ID, RESERVED_FIELD_ID_FILE,
         RESERVED_FIELD_ID_POS, RESERVED_FIELD_ID_ROW_ID,
     };
-    use crate::scan::{FileScanTask, FileScanTaskStream};
+    use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     // INT96 encoding: [nanos_low_u32, nanos_high_u32, julian_day_u32]
@@ -823,7 +911,8 @@ mod tests {
             .with_schema(schema)
             .with_project_field_ids(project_field_ids)
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         reader
@@ -1012,7 +1101,8 @@ mod tests {
             .with_project_field_ids(vec![1])
             .with_case_sensitive(false)
             .with_key_metadata(Some(key_metadata))
-            .build();
+            .build()
+            .unwrap();
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let batches: Vec<RecordBatch> = reader
@@ -1084,7 +1174,8 @@ mod tests {
             .with_schema(schema)
             .with_project_field_ids(vec![1])
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result: Result<Vec<RecordBatch>, _> =
@@ -1165,6 +1256,7 @@ mod tests {
             .with_data_sequence_number(data_sequence_number)
             .with_case_sensitive(false)
             .build()
+            .unwrap()
     }
 
     /// Asserts the logical per-row values of the `_last_updated_sequence_number`
@@ -1408,7 +1500,8 @@ mod tests {
             .with_first_row_id(Some(100))
             .with_data_sequence_number(Some(9))
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -1524,6 +1617,16 @@ mod tests {
 
     /// A scan task projecting `id` + `_row_id`, with the given `first_row_id`.
     fn row_id_task(file_path: String, first_row_id: Option<i64>) -> FileScanTask {
+        row_id_task_with_options(file_path, first_row_id, 0, 0, vec![])
+    }
+
+    fn row_id_task_with_options(
+        file_path: String,
+        first_row_id: Option<i64>,
+        start: u64,
+        length: u64,
+        deletes: Vec<FileScanTaskDeleteFile>,
+    ) -> FileScanTask {
         let schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
@@ -1536,15 +1639,17 @@ mod tests {
 
         FileScanTask::builder()
             .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
-            .with_start(0)
-            .with_length(0)
+            .with_start(start)
+            .with_length(length)
             .with_data_file_path(file_path)
             .with_data_file_format(DataFileFormat::Parquet)
             .with_schema(schema)
             .with_project_field_ids(vec![1, RESERVED_FIELD_ID_ROW_ID])
             .with_first_row_id(first_row_id)
+            .with_deletes(deletes)
             .with_case_sensitive(false)
             .build()
+            .unwrap()
     }
 
     /// Asserts the logical per-row values of the `_row_id` column across all batches,
@@ -1639,29 +1744,188 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let dir = tmp_dir.path().to_str().unwrap();
 
-        let mut meta_only = metadata_projection_task(
+        let meta_only = metadata_projection_task_with_first_row_id(
             write_parquet_with_wide_column(dir, "row_id_only.parquet", vec![], vec![]),
             id_and_wide_schema(),
             vec![RESERVED_FIELD_ID_ROW_ID],
+            Some(100),
         );
-        meta_only.first_row_id = Some(100);
         let (batches, meta_only_bytes) = scan_task(meta_only).await;
 
         assert_eq!(batches[0].num_columns(), 1);
         assert_row_id_column(&batches, &[Some(100), Some(101), Some(102)]);
 
         // A scan that also projects the wide data column must read materially more.
-        let mut with_data = metadata_projection_task(
+        let with_data = metadata_projection_task_with_first_row_id(
             write_parquet_with_wide_column(dir, "row_id_only_ref.parquet", vec![], vec![]),
             id_and_wide_schema(),
             vec![2, RESERVED_FIELD_ID_ROW_ID],
+            Some(100),
         );
-        with_data.first_row_id = Some(100);
         let (_, with_data_bytes) = scan_task(with_data).await;
 
         assert!(
             meta_only_bytes < with_data_bytes,
             "_row_id-only synthesis should read fewer bytes than a scan of the wide column: \
+             {meta_only_bytes} vs {with_data_bytes}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_row_id_only_null_first_row_id_reads_no_data_columns() {
+        // A null `first_row_id` (v1/v2, or a pre-upgrade v3 snapshot) nulls the whole
+        // `_row_id` column, so nothing is synthesized -- but the column still has a length.
+        // The RowNumber counter installed for the metadata-only projection supplies it, so
+        // the scan reads no data columns instead of reading everything just for the count.
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+
+        let meta_only = metadata_projection_task_with_first_row_id(
+            write_parquet_with_wide_column(dir, "row_id_null.parquet", vec![], vec![]),
+            id_and_wide_schema(),
+            vec![RESERVED_FIELD_ID_ROW_ID],
+            None,
+        );
+        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+
+        assert_eq!(batches[0].num_columns(), 1);
+        assert_row_id_column(&batches, &[None, None, None]);
+
+        let with_data = metadata_projection_task_with_first_row_id(
+            write_parquet_with_wide_column(dir, "row_id_null_ref.parquet", vec![], vec![]),
+            id_and_wide_schema(),
+            vec![2, RESERVED_FIELD_ID_ROW_ID],
+            None,
+        );
+        let (_, with_data_bytes) = scan_task(with_data).await;
+
+        assert!(
+            meta_only_bytes < with_data_bytes,
+            "_row_id-only scan with a null first_row_id should read fewer bytes than a scan \
+             of the wide column: {meta_only_bytes} vs {with_data_bytes}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_last_updated_seq_only_reads_no_data_columns() {
+        use crate::metadata_columns::RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER;
+
+        // `SELECT _last_updated_sequence_number` derives a per-row constant (the data
+        // sequence number) with no physical column to read. The metadata-only RowNumber
+        // counter supplies the row count, so the scan prunes the data columns rather than
+        // reading them all just to size the constant.
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+
+        let lusn_only_task = |file_path: String, project_field_ids: Vec<i32>| {
+            FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path)
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(id_and_wide_schema())
+                .with_project_field_ids(project_field_ids)
+                .with_first_row_id(Some(42))
+                .with_data_sequence_number(Some(7))
+                .with_case_sensitive(false)
+                .build()
+                .unwrap()
+        };
+
+        let meta_only = lusn_only_task(
+            write_parquet_with_wide_column(dir, "lusn_only.parquet", vec![], vec![]),
+            vec![RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER],
+        );
+        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+
+        assert_eq!(batches[0].num_columns(), 1);
+        assert_last_updated_seq_column(&batches, &[Some(7), Some(7), Some(7)]);
+
+        let with_data = lusn_only_task(
+            write_parquet_with_wide_column(dir, "lusn_only_ref.parquet", vec![], vec![]),
+            vec![2, RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER],
+        );
+        let (_, with_data_bytes) = scan_task(with_data).await;
+
+        assert!(
+            meta_only_bytes < with_data_bytes,
+            "_last_updated_sequence_number-only scan should read fewer bytes than a scan of \
+             the wide column: {meta_only_bytes} vs {with_data_bytes}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_partition_only_reads_no_data_columns() {
+        use arrow_array::StructArray;
+
+        use crate::metadata_columns::{RESERVED_COL_NAME_PARTITION, RESERVED_FIELD_ID_PARTITION};
+        use crate::spec::{Literal, PartitionSpec, Struct, Transform};
+
+        // `SELECT _partition` materializes a struct constant from the task's partition
+        // metadata, with no physical column to read. It is the only struct-constant metadata
+        // column; the RowNumber counter sizes it, so the scan prunes the data columns.
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+        let schema = id_and_wide_schema();
+        let spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .with_spec_id(7)
+                .add_partition_field("id", "id", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+        let unified_type = Arc::new(spec.partition_type(&schema).unwrap());
+        let partition_data = Struct::from_iter(vec![Some(Literal::int(42))]);
+
+        let partition_task = |file_path: String, project_field_ids: Vec<i32>| {
+            FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path)
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(project_field_ids)
+                .with_partition_spec(Some(spec.clone()))
+                .with_partition(Some(partition_data.clone()))
+                .with_unified_partition_type(Some(unified_type.clone()))
+                .with_case_sensitive(false)
+                .build()
+                .unwrap()
+        };
+
+        let meta_only = partition_task(
+            write_parquet_with_wide_column(dir, "partition_only.parquet", vec![], vec![]),
+            vec![RESERVED_FIELD_ID_PARTITION],
+        );
+        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+
+        assert_eq!(batches[0].num_columns(), 1);
+        let partition_col = batches[0]
+            .column_by_name(RESERVED_COL_NAME_PARTITION)
+            .expect("_partition column should be present")
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(partition_col.len(), 3);
+        let inner = partition_col
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(inner.values(), &[42, 42, 42]);
+
+        let with_data = partition_task(
+            write_parquet_with_wide_column(dir, "partition_only_ref.parquet", vec![], vec![]),
+            vec![2, RESERVED_FIELD_ID_PARTITION],
+        );
+        let (_, with_data_bytes) = scan_task(with_data).await;
+
+        assert!(
+            meta_only_bytes < with_data_bytes,
+            "_partition-only scan should read fewer bytes than a scan of the wide column: \
              {meta_only_bytes} vs {with_data_bytes}"
         );
     }
@@ -1742,7 +2006,8 @@ mod tests {
             .with_first_row_id(Some(100))
             .with_data_sequence_number(Some(9))
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -1825,7 +2090,8 @@ mod tests {
             .with_project_field_ids(vec![1, RESERVED_FIELD_ID_POS, RESERVED_FIELD_ID_ROW_ID])
             .with_first_row_id(Some(100))
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -1992,6 +2258,7 @@ mod tests {
             .with_first_row_id(first_row_id)
             .with_case_sensitive(false)
             .build()
+            .unwrap()
     }
 
     #[tokio::test]
@@ -2152,9 +2419,7 @@ mod tests {
         let start = 4 + metadata.row_group(0).compressed_size() as u64;
         let file_size = std::fs::metadata(&file_path).unwrap().len();
 
-        let mut task = row_id_task(file_path, Some(100));
-        task.start = start;
-        task.length = file_size - start;
+        let task = row_id_task_with_options(file_path, Some(100), start, file_size - start, vec![]);
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -2210,7 +2475,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_row_id_survives_positional_delete() {
-        use crate::scan::FileScanTaskDeleteFile;
         use crate::spec::DataContentType;
 
         let tmp_dir = TempDir::new().unwrap();
@@ -2219,19 +2483,15 @@ mod tests {
         let data_path = write_plain_parquet(dir, "row_id_posdel_data.parquet", vec![], vec![]);
         let del_path = write_positional_delete(dir, "row_id_posdel.parquet", &data_path, &[1]);
 
-        let mut task = row_id_task(data_path, Some(100));
-        task.deletes = vec![FileScanTaskDeleteFile {
-            file_path: del_path.clone(),
-            file_size_in_bytes: std::fs::metadata(&del_path).unwrap().len(),
-            file_type: DataContentType::PositionDeletes,
-            partition_spec_id: 0,
-            equality_ids: None,
-            referenced_data_file: None,
-            content_offset: None,
-            content_size_in_bytes: None,
-            record_count: None,
-            key_metadata: None,
-        }];
+        let delete = FileScanTaskDeleteFile::builder()
+            .with_file_path(del_path.clone())
+            .with_file_size_in_bytes(std::fs::metadata(&del_path).unwrap().len())
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
+            .with_partition_spec_id(0)
+            .build()
+            .unwrap();
+        let task = row_id_task_with_options(data_path, Some(100), 0, 0, vec![delete]);
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -2340,7 +2600,8 @@ mod tests {
             .with_project_field_ids(vec![1])
             .with_case_sensitive(false)
             .with_key_metadata(Some(wrong_key_metadata))
-            .build();
+            .build()
+            .unwrap();
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result: Result<Vec<RecordBatch>, _> =
@@ -2429,7 +2690,8 @@ mod tests {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build()),
+                .build()
+                .unwrap()),
             Ok(FileScanTask::builder()
                 .with_file_size_in_bytes(
                     std::fs::metadata(format!("{table_location}/file_1.parquet"))
@@ -2443,7 +2705,8 @@ mod tests {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build()),
+                .build()
+                .unwrap()),
             Ok(FileScanTask::builder()
                 .with_file_size_in_bytes(
                     std::fs::metadata(format!("{table_location}/file_2.parquet"))
@@ -2457,7 +2720,8 @@ mod tests {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build()),
+                .build()
+                .unwrap()),
         ];
 
         let tasks_stream = Box::pin(futures::stream::iter(tasks)) as FileScanTaskStream;
@@ -2555,6 +2819,97 @@ mod tests {
             write_int96_parquet_file(&table_location, "no_ids.parquet", false);
 
         assert_int96_read_matches(&file_path, schema, vec![1, 2], &expected_micros).await;
+    }
+
+    #[tokio::test]
+    async fn test_read_int96_timestamps_with_fallback_ids_and_pos() {
+        use arrow_array::TimestampMicrosecondArray;
+
+        // Regression test for the combined path this refactor introduced: a field-id-less
+        // file (positional fallback IDs) with an INT96 column and a `_pos` projection.
+        // All three transforms -- field-ID assignment, INT96 coercion, and the row-number
+        // virtual column -- apply in the single ArrowReaderMetadata rebuild.
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                        .into(),
+                    NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let (file_path, expected_micros) =
+            write_int96_parquet_file(&table_location, "no_ids_with_pos.parquet", false);
+
+        let batches =
+            read_int96_batches(&file_path, schema, vec![1, 2, RESERVED_FIELD_ID_POS]).await;
+
+        assert_eq!(batches.len(), 1);
+        // The INT96 timestamps are coerced to micros...
+        let ts_col = batches[0]
+            .column_by_name("ts")
+            .expect("ts column should be present")
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .expect("Expected TimestampMicrosecondArray");
+        for (i, expected) in expected_micros.iter().enumerate() {
+            assert_eq!(ts_col.value(i), *expected, "Row {i}");
+        }
+        // ...and `_pos`, materialized by the RowNumber virtual column, counts rows 0,1,2.
+        let pos_col = batches[0]
+            .column_by_name(RESERVED_COL_NAME_POS)
+            .expect("_pos column should be present")
+            .as_primitive::<arrow_array::types::Int64Type>();
+        assert_eq!(pos_col.values(), &[0, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn test_read_int96_timestamps_with_field_ids_and_pos() {
+        use arrow_array::TimestampMicrosecondArray;
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                        .into(),
+                    NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let (file_path, expected_micros) =
+            write_int96_parquet_file(&table_location, "with_ids_with_pos.parquet", true);
+
+        let batches =
+            read_int96_batches(&file_path, schema, vec![1, 2, RESERVED_FIELD_ID_POS]).await;
+
+        assert_eq!(batches.len(), 1);
+        let ts_col = batches[0]
+            .column_by_name("ts")
+            .expect("ts column should be present")
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .expect("Expected TimestampMicrosecondArray");
+
+        for (i, expected) in expected_micros.iter().enumerate() {
+            assert_eq!(ts_col.value(i), *expected, "Row {i}");
+        }
+
+        let pos_col = batches[0]
+            .column_by_name(RESERVED_COL_NAME_POS)
+            .expect("_pos column should be present")
+            .as_primitive::<arrow_array::types::Int64Type>();
+
+        assert_eq!(pos_col.values(), &[0, 1, 2]);
     }
 
     #[tokio::test]
@@ -2944,6 +3299,15 @@ mod tests {
         schema: SchemaRef,
         project_field_ids: Vec<i32>,
     ) -> FileScanTask {
+        metadata_projection_task_with_first_row_id(file_path, schema, project_field_ids, None)
+    }
+
+    fn metadata_projection_task_with_first_row_id(
+        file_path: String,
+        schema: SchemaRef,
+        project_field_ids: Vec<i32>,
+        first_row_id: Option<i64>,
+    ) -> FileScanTask {
         FileScanTask::builder()
             .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
             .with_start(0)
@@ -2952,8 +3316,10 @@ mod tests {
             .with_data_file_format(DataFileFormat::Parquet)
             .with_schema(schema)
             .with_project_field_ids(project_field_ids)
+            .with_first_row_id(first_row_id)
             .with_case_sensitive(false)
             .build()
+            .unwrap()
     }
 
     /// Runs a single-task scan and returns the batches plus the bytes read from storage.
@@ -3035,7 +3401,8 @@ mod tests {
             .with_project_field_ids(vec![RESERVED_FIELD_ID_POS])
             .with_predicate(Some(bound))
             .with_case_sensitive(false)
-            .build();
+            .build()
+            .unwrap();
 
         // Row selection must be enabled for the predicate to filter rows. The row filter
         // reads `id` for its own evaluation even though `id` is not projected; the surviving
@@ -3131,6 +3498,7 @@ mod tests {
                 .with_data_sequence_number(Some(9))
                 .with_case_sensitive(false)
                 .build()
+                .unwrap()
         };
 
         let meta_only = seq_task(write("pos_seq.parquet"), vec![
@@ -3179,9 +3547,9 @@ mod tests {
             RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
         };
 
-        // `_last_updated_sequence_number` alone (no `_pos`, no data column). The physical
-        // leaf is the sole row source, so it -- not the RowNumber virtual column -- must
-        // drive the `none()` downgrade and prune the read to just that leaf.
+        // `_last_updated_sequence_number` alone (no `_pos`, no data column). This is a
+        // metadata-only projection, so RowNumber drives the `none()` downgrade and the
+        // physical leaf is unioned back in, pruning the read to just that leaf.
         let tmp_dir = TempDir::new().unwrap();
         let dir = tmp_dir.path().to_str().unwrap();
         let write = |name: &str| {
@@ -3205,6 +3573,7 @@ mod tests {
                 .with_data_sequence_number(Some(9))
                 .with_case_sensitive(false)
                 .build()
+                .unwrap()
         };
 
         let meta_only = seq_task(write("seq_only.parquet"), vec![
@@ -3238,7 +3607,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_seq_only_projection_null_first_row_id_preserves_row_count() {
+    async fn test_seq_only_null_first_row_id_reads_no_data_columns() {
         use crate::metadata_columns::{
             RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
             RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
@@ -3246,30 +3615,38 @@ mod tests {
 
         // Seq-only projection with a null first_row_id: the column is nulled and the
         // physical leaf is NOT read (the gated `coalesce_last_updated_seq_leaf` is None).
-        // The downgrade must therefore not fire -- keying off the raw `project_*` flag
-        // instead would drop the only readable column and lose the row count.
+        // This is a metadata-only projection, so RowNumber supplies the row count and the
+        // data columns are pruned; the row count is still 3 and the values all null.
         let tmp_dir = TempDir::new().unwrap();
         let dir = tmp_dir.path().to_str().unwrap();
-        let file_path = write_parquet_with_wide_column(
-            dir,
-            "seq_only_null_first.parquet",
-            vec![physical_last_updated_seq_field()],
-            vec![Arc::new(Int64Array::from(vec![Some(5), Some(6), Some(7)])) as ArrayRef],
-        );
-        let task = FileScanTask::builder()
-            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
-            .with_start(0)
-            .with_length(0)
-            .with_data_file_path(file_path)
-            .with_data_file_format(DataFileFormat::Parquet)
-            .with_schema(id_and_wide_schema())
-            .with_project_field_ids(vec![RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER])
-            .with_first_row_id(None)
-            .with_data_sequence_number(Some(9))
-            .with_case_sensitive(false)
-            .build();
-        let (batches, _) = scan_task(task).await;
+        let seq_task = |name: &str, ids: Vec<i32>| {
+            let file_path = write_parquet_with_wide_column(
+                dir,
+                name,
+                vec![physical_last_updated_seq_field()],
+                vec![Arc::new(Int64Array::from(vec![Some(5), Some(6), Some(7)])) as ArrayRef],
+            );
+            FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path)
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(id_and_wide_schema())
+                .with_project_field_ids(ids)
+                .with_first_row_id(None)
+                .with_data_sequence_number(Some(9))
+                .with_case_sensitive(false)
+                .build()
+                .unwrap()
+        };
 
+        let meta_only = seq_task("seq_only_null_first.parquet", vec![
+            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+        ]);
+        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+
+        assert_eq!(batches[0].num_columns(), 1);
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 3);
         let seq_col = batches[0]
@@ -3278,30 +3655,37 @@ mod tests {
         let seq_col = cast(seq_col, &DataType::Int64).unwrap();
         let seq_col = seq_col.as_any().downcast_ref::<Int64Array>().unwrap();
         assert!((0..3).all(|i| seq_col.is_null(i)));
+
+        let with_data = seq_task("seq_only_null_first_ref.parquet", vec![
+            2,
+            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+        ]);
+        let (_, with_data_bytes) = scan_task(with_data).await;
+
+        assert!(
+            meta_only_bytes < with_data_bytes,
+            "seq-only scan with a null first_row_id should read fewer bytes than a scan of \
+             the wide column: {meta_only_bytes} vs {with_data_bytes}"
+        );
     }
 
     #[tokio::test]
-    async fn test_file_only_projection_preserves_row_count() {
+    async fn test_file_only_reads_no_data_columns() {
         use crate::metadata_columns::RESERVED_COL_NAME_FILE;
 
+        // `SELECT _file` materializes a per-file string constant with no physical column to
+        // read. The metadata-only RowNumber counter sizes it, so the scan prunes the data
+        // columns rather than reading them all just to recover the row count.
         let tmp_dir = TempDir::new().unwrap();
         let dir = tmp_dir.path().to_str().unwrap();
-        let file_path = write_plain_parquet(dir, "file_only.parquet", vec![], vec![]);
-        let schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-        let task =
-            metadata_projection_task(file_path.clone(), schema, vec![RESERVED_FIELD_ID_FILE]);
-        let (batches, _) = scan_task(task).await;
 
-        // A pure-constant projection has no independent row source, so the row count must
-        // still come from the file (the `empty -> all()` path is preserved for this case).
+        let file_path = write_parquet_with_wide_column(dir, "file_only.parquet", vec![], vec![]);
+        let meta_only = metadata_projection_task(file_path.clone(), id_and_wide_schema(), vec![
+            RESERVED_FIELD_ID_FILE,
+        ]);
+        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+
+        assert_eq!(batches[0].num_columns(), 1);
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 3);
         let file_col = batches[0]
@@ -3310,6 +3694,84 @@ mod tests {
         let file_col = cast(file_col, &DataType::Utf8).unwrap();
         let file_col = file_col.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(file_col.value(0), file_path);
+
+        let with_data = metadata_projection_task(
+            write_parquet_with_wide_column(dir, "file_only_ref.parquet", vec![], vec![]),
+            id_and_wide_schema(),
+            vec![2, RESERVED_FIELD_ID_FILE],
+        );
+        let (_, with_data_bytes) = scan_task(with_data).await;
+
+        assert!(
+            meta_only_bytes < with_data_bytes,
+            "_file-only scan should read fewer bytes than a scan of the wide column: \
+             {meta_only_bytes} vs {with_data_bytes}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spec_id_only_reads_no_data_columns() {
+        use crate::metadata_columns::{RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_SPEC_ID};
+        use crate::spec::{Literal, PartitionSpec, Struct, Transform};
+
+        // `SELECT _spec_id` materializes an int constant from the task's partition spec id,
+        // with no physical column to read. The RowNumber counter sizes it, so the scan
+        // prunes the data columns rather than reading them all to recover the row count.
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+        let schema = id_and_wide_schema();
+        let spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .with_spec_id(7)
+                .add_partition_field("id", "id", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        let spec_id_task = |file_path: String, project_field_ids: Vec<i32>| {
+            FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path)
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(project_field_ids)
+                .with_partition(Some(Struct::from_iter([Some(Literal::int(42))])))
+                .with_partition_spec(Some(spec.clone()))
+                .with_case_sensitive(false)
+                .build()
+                .unwrap()
+        };
+
+        let meta_only = spec_id_task(
+            write_parquet_with_wide_column(dir, "spec_id_only.parquet", vec![], vec![]),
+            vec![RESERVED_FIELD_ID_SPEC_ID],
+        );
+        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+
+        assert_eq!(batches[0].num_columns(), 1);
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3);
+        let spec_id_col = batches[0]
+            .column_by_name(RESERVED_COL_NAME_SPEC_ID)
+            .expect("_spec_id column should be present");
+        let spec_id_col = cast(spec_id_col, &DataType::Int32).unwrap();
+        let spec_id_col = spec_id_col.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(spec_id_col.values(), &[7, 7, 7]);
+
+        let with_data = spec_id_task(
+            write_parquet_with_wide_column(dir, "spec_id_only_ref.parquet", vec![], vec![]),
+            vec![2, RESERVED_FIELD_ID_SPEC_ID],
+        );
+        let (_, with_data_bytes) = scan_task(with_data).await;
+
+        assert!(
+            meta_only_bytes < with_data_bytes,
+            "_spec_id-only scan should read fewer bytes than a scan of the wide column: \
+             {meta_only_bytes} vs {with_data_bytes}"
+        );
     }
 
     #[tokio::test]

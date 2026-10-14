@@ -24,7 +24,7 @@ mod map;
 mod primitive;
 pub(crate) mod serde;
 mod struct_value;
-mod temporal;
+pub(crate) mod temporal;
 
 #[cfg(test)]
 mod tests;

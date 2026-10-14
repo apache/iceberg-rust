@@ -23,8 +23,8 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use hive_metastore::{
-    ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
-    ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
+    GetTableRequest, ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
+    ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableReqException,
 };
 use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
@@ -583,10 +583,15 @@ impl Catalog for HmsCatalog {
         let hive_table = self
             .client
             .0
-            .get_table(db_name.clone().into(), table.name.clone().into())
+            .get_table_req(GetTableRequest {
+                db_name: db_name.clone().into(),
+                tbl_name: table.name.clone().into(),
+                ..Default::default()
+            })
             .await
             .map(from_thrift_exception)
-            .map_err(from_thrift_error)??;
+            .map_err(from_thrift_error)??
+            .table;
 
         let metadata_location = get_metadata_location(&hive_table.parameters)?;
 
@@ -661,12 +666,18 @@ impl Catalog for HmsCatalog {
         let resp = self
             .client
             .0
-            .get_table(db_name.into(), table_name.into())
+            .get_table_req(GetTableRequest {
+                db_name: db_name.into(),
+                tbl_name: table_name.into(),
+                ..Default::default()
+            })
             .await;
 
         match resp {
             Ok(MaybeException::Ok(_)) => Ok(true),
-            Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableException::O2(_))) => Ok(false),
+            Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableReqException::O2(_))) => {
+                Ok(false)
+            }
             Ok(MaybeException::Exception(exception)) => Err(Error::new(
                 ErrorKind::Unexpected,
                 "Operation failed for hitting thrift error".to_string(),
@@ -698,10 +709,15 @@ impl Catalog for HmsCatalog {
         let mut tbl = self
             .client
             .0
-            .get_table(src_dbname.clone().into(), src_tbl_name.clone().into())
+            .get_table_req(GetTableRequest {
+                db_name: src_dbname.clone().into(),
+                tbl_name: src_tbl_name.clone().into(),
+                ..Default::default()
+            })
             .await
             .map(from_thrift_exception)
-            .map_err(from_thrift_error)??;
+            .map_err(from_thrift_error)??
+            .table;
 
         tbl.db_name = Some(dest_dbname.into());
         tbl.table_name = Some(dest_tbl_name.into());

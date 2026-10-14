@@ -420,6 +420,25 @@ mod tests {
             })
             .expect("a fast append should emit an AddSnapshot update");
 
+        let manifest_list_key_metadata = table
+            .encryption_manager()
+            .unwrap()
+            .decrypt_manifest_list_key_metadata(new_snapshot.encryption_key_id().unwrap())
+            .await
+            .unwrap();
+        let manifest_list_size = table
+            .file_io()
+            .new_input(new_snapshot.manifest_list())
+            .unwrap()
+            .metadata()
+            .await
+            .unwrap()
+            .size;
+        assert_eq!(
+            manifest_list_key_metadata.file_length(),
+            Some(manifest_list_size)
+        );
+
         let manifest_list = table
             .manifest_list_reader(&new_snapshot)
             .load()
@@ -436,8 +455,18 @@ mod tests {
             .key_metadata
             .as_ref()
             .expect("encrypted manifest must record key metadata");
-        StandardKeyMetadata::decode(key_metadata_bytes)
+        let key_metadata = StandardKeyMetadata::decode(key_metadata_bytes)
             .expect("recorded key metadata must decode as StandardKeyMetadata");
+        let manifest_size = table
+            .file_io()
+            .new_input(&manifest_file.manifest_path)
+            .unwrap()
+            .metadata()
+            .await
+            .unwrap()
+            .size;
+        assert_eq!(key_metadata.file_length(), Some(manifest_size));
+        assert_eq!(manifest_file.manifest_length, manifest_size as i64);
 
         // The reader self-decrypts using the recorded key metadata and must
         // recover the entry we appended. Because the read goes through the

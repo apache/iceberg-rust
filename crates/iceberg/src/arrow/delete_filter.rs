@@ -168,17 +168,22 @@ impl DeleteFilter {
         &self,
         file_path: &str,
     ) -> Option<Predicate> {
-        let notifier = {
+        // Build the `Notified` while holding the read lock. `notified_owned()` records tokio's
+        // `notify_waiters_calls` counter at construction and completes on first poll if that
+        // counter has since advanced. Reading the counter under the lock guarantees it is taken
+        // before `insert_equality_delete` can advance it via `notify_waiters()`, so the
+        // notification is never missed even though we `.await` after releasing the lock.
+        let notified = {
             match self.state.read().unwrap().equality_deletes.get(file_path) {
                 None => return None,
-                Some(EqDelState::Loading(notifier)) => notifier.clone(),
+                Some(EqDelState::Loading(notifier)) => notifier.clone().notified_owned(),
                 Some(EqDelState::Loaded(predicate)) => {
                     return Some(predicate.clone());
                 }
             }
         };
 
-        notifier.notified().await;
+        notified.await;
 
         match self.state.read().unwrap().equality_deletes.get(file_path) {
             Some(EqDelState::Loaded(predicate)) => Some(predicate.clone()),
@@ -197,20 +202,20 @@ impl DeleteFilter {
         // * Bind the predicate to the task's schema to get a `BoundPredicate`
 
         let mut combined_predicate = AlwaysTrue;
-        for delete in &file_scan_task.deletes {
+        for delete in file_scan_task.deletes() {
             if !is_equality_delete(delete) {
                 continue;
             }
 
             let Some(predicate) = self
-                .get_equality_delete_predicate_for_delete_file_path(&delete.file_path)
+                .get_equality_delete_predicate_for_delete_file_path(delete.file_path())
                 .await
             else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!(
                         "Missing predicate for equality delete file '{}'",
-                        delete.file_path
+                        delete.file_path()
                     ),
                 ));
             };
@@ -223,7 +228,7 @@ impl DeleteFilter {
         }
 
         let bound_predicate = combined_predicate
-            .bind(file_scan_task.schema.clone(), file_scan_task.case_sensitive)?;
+            .bind(file_scan_task.schema_ref(), file_scan_task.case_sensitive())?;
         Ok(Some(bound_predicate))
     }
 
@@ -274,7 +279,7 @@ impl DeleteFilter {
 }
 
 pub(crate) fn is_equality_delete(f: &FileScanTaskDeleteFile) -> bool {
-    matches!(f.file_type, DataContentType::EqualityDeletes)
+    matches!(f.file_type(), DataContentType::EqualityDeletes)
 }
 
 #[cfg(test)]
@@ -345,7 +350,10 @@ pub(crate) mod tests {
         let file_scan_tasks = setup(table_location);
 
         let delete_filter = delete_file_loader
-            .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
+            .load_deletes(
+                file_scan_tasks[0].deletes(),
+                file_scan_tasks[0].schema_ref(),
+            )
             .await
             .unwrap()
             .unwrap();
@@ -356,7 +364,10 @@ pub(crate) mod tests {
         assert_eq!(result.lock().unwrap().len(), 12); // pos dels from pos del file 1 and 2
 
         let delete_filter = delete_file_loader
-            .load_deletes(&file_scan_tasks[1].deletes, file_scan_tasks[1].schema_ref())
+            .load_deletes(
+                file_scan_tasks[1].deletes(),
+                file_scan_tasks[1].schema_ref(),
+            )
             .await
             .unwrap()
             .unwrap();
@@ -435,8 +446,10 @@ pub(crate) mod tests {
                 .len(),
             )
             .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
-            .build();
+            .build()
+            .unwrap();
 
         let pos_del_2 = FileScanTaskDeleteFile::builder()
             .with_file_path(format!(
@@ -452,8 +465,10 @@ pub(crate) mod tests {
                 .len(),
             )
             .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
-            .build();
+            .build()
+            .unwrap();
 
         let pos_del_3 = FileScanTaskDeleteFile::builder()
             .with_file_path(format!(
@@ -469,8 +484,10 @@ pub(crate) mod tests {
                 .len(),
             )
             .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
-            .build();
+            .build()
+            .unwrap();
 
         let file_scan_tasks = vec![
             FileScanTask::builder()
@@ -483,7 +500,8 @@ pub(crate) mod tests {
                 .with_project_field_ids(vec![])
                 .with_deletes(vec![pos_del_1, pos_del_2.clone()])
                 .with_case_sensitive(false)
-                .build(),
+                .build()
+                .unwrap(),
             FileScanTask::builder()
                 .with_file_size_in_bytes(0)
                 .with_start(0)
@@ -494,7 +512,8 @@ pub(crate) mod tests {
                 .with_project_field_ids(vec![])
                 .with_deletes(vec![pos_del_3])
                 .with_case_sensitive(false)
-                .build(),
+                .build()
+                .unwrap(),
         ];
 
         file_scan_tasks
@@ -543,11 +562,14 @@ pub(crate) mod tests {
                     .with_file_path("eq-del.parquet".to_string())
                     .with_file_size_in_bytes(1) // never read; this test fails before opening the file
                     .with_file_type(DataContentType::EqualityDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .with_case_sensitive(true)
-            .build();
+            .build()
+            .unwrap();
 
         let filter = DeleteFilter::new(Runtime::current());
 
