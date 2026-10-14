@@ -25,7 +25,9 @@
 //! consumes the bytes. So a request nobody reads holds part of the window for
 //! good, and enough of them stop the server sending for any other request.
 //!
-//! [`FlowControlledStorage`] models that connection for in-memory files.
+//! [`FlowControlledStorage`] models that connection for in-memory files. It
+//! also counts the requests, which is how a dropped scan is held to sending
+//! no more of them.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -40,8 +42,8 @@ use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::TryStreamExt;
 use futures::stream::BoxStream;
+use futures::{StreamExt, TryStreamExt};
 use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
@@ -102,6 +104,11 @@ impl Connection {
 
     fn window(&self) -> usize {
         self.state.lock().unwrap().window
+    }
+
+    /// Requests the connection has carried, over all streams.
+    fn requests_sent(&self) -> u64 {
+        self.state.lock().unwrap().next_stream_id
     }
 
     /// One line per open response: how much arrived, how much was read.
@@ -477,11 +484,78 @@ async fn test_sequential_scan_over_shared_connection() {
     scan_over_shared_connection(1).await;
 }
 
-/// Opening files ahead of the reads stalls this harness at concurrency 3 to
-/// 10. Cover both ends of that range and a limit above the file count.
+/// Opening files ahead of the reads stalls this harness at every concurrency
+/// from 3 to 10. Cover both ends of that range, and a limit above the file
+/// count, where the opens run out before the flatten fills.
 #[tokio::test]
 async fn test_concurrent_scan_does_not_starve_shared_connection() {
-    for concurrency in [3, 4, 10, 16] {
+    for concurrency in [3, 10, 16] {
         scan_over_shared_connection(concurrency).await;
     }
+}
+
+/// A dropped scan must stop its opens. The window is wide here, so the only
+/// thing that can stop a request is the drop itself.
+#[tokio::test]
+async fn test_dropped_scan_stops_opening_files() {
+    const NUM_FILES: usize = 12;
+    const ROWS_PER_FILE: i64 = 1536;
+    const CONCURRENCY: usize = 8;
+    // Smaller than a footer, so every open needs a second request. An open
+    // that outlives the drop therefore shows up on the connection.
+    const METADATA_SIZE_HINT: usize = 64;
+    const WINDOW: usize = 1024 * 1024;
+    /// Scheduler turns, far more than the opens need to reach the connection.
+    const YIELDS: usize = 1000;
+
+    let connection = Connection::new(WINDOW);
+    let storage = FlowControlledStorage {
+        files: MemoryStorage::new(),
+        connection: Arc::clone(&connection),
+    };
+    let tasks = write_files(&storage, NUM_FILES, ROWS_PER_FILE)
+        .await
+        .unwrap();
+
+    let server = tokio::spawn(Arc::clone(&connection).serve());
+    let file_io = FileIOBuilder::new(Arc::new(FlowControlledStorageFactory { storage })).build();
+    let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
+        .with_data_file_concurrency_limit(CONCURRENCY)
+        .with_metadata_size_hint(METADATA_SIZE_HINT)
+        .build();
+    let tasks = Box::pin(futures::stream::iter(tasks.into_iter().map(Ok))) as FileScanTaskStream;
+
+    let mut scan = Box::pin(reader.read(tasks).unwrap().stream());
+    // One poll starts `CONCURRENCY` opens. Nothing polls the scan after this.
+    let _ = futures::poll!(scan.next());
+    for _ in 0..YIELDS {
+        if connection.requests_sent() >= CONCURRENCY as u64 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let sent_before_drop = connection.requests_sent();
+    assert!(
+        sent_before_drop >= CONCURRENCY as u64,
+        "every open must have reached the connection before the scan is dropped"
+    );
+
+    drop(scan);
+    for _ in 0..YIELDS {
+        tokio::task::yield_now().await;
+    }
+    server.abort();
+
+    let sent_after_drop = connection.requests_sent();
+    assert_eq!(
+        sent_after_drop,
+        sent_before_drop,
+        "a dropped scan sent {} more requests",
+        sent_after_drop - sent_before_drop
+    );
+    assert_eq!(
+        connection.window(),
+        WINDOW,
+        "a dropped scan leaves no unconsumed bytes on the connection"
+    );
 }
