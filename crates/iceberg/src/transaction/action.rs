@@ -99,7 +99,7 @@ pub(crate) trait StatelessAction: Clone + Send + Sync + 'static {
 impl<T: StatelessAction> TransactionAction for T {
     type State = ();
 
-    fn new_state(&self) -> () {}
+    fn new_state(&self) {}
 
     async fn commit(&self, _state: &mut (), table: &Table) -> Result<ActionCommit> {
         StatelessAction::commit(self, table).await
