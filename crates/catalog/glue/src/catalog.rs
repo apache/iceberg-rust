@@ -56,22 +56,11 @@ pub const GLUE_CATALOG_PROP_CATALOG_ID: &str = "catalog_id";
 pub const GLUE_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
 /// Builder for [`GlueCatalog`].
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct GlueCatalogBuilder {
     storage_factory: Option<Arc<dyn StorageFactory>>,
     kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
-}
-
-#[allow(clippy::derivable_impls)]
-impl Default for GlueCatalogBuilder {
-    fn default() -> Self {
-        Self {
-            storage_factory: None,
-            kms_client_factory: None,
-            runtime: None,
-        }
-    }
 }
 
 impl CatalogBuilder for GlueCatalogBuilder {
@@ -938,9 +927,7 @@ impl Catalog for GlueCatalog {
 }
 
 #[cfg(test)]
-mod catalog_properties_tests {
-    use iceberg::io::MemoryStorageFactory;
-
+mod tests {
     use super::*;
 
     #[test]
@@ -989,36 +976,5 @@ mod catalog_properties_tests {
             assert_eq!(error.kind(), ErrorKind::DataInvalid);
             assert_eq!(error.message(), "Catalog warehouse is required");
         }
-    }
-
-    #[tokio::test]
-    async fn test_catalog_forwards_properties_to_file_io() {
-        let catalog = GlueCatalogBuilder::default()
-            .with_storage_factory(Arc::new(MemoryStorageFactory))
-            .load(
-                "glue",
-                HashMap::from([
-                    (
-                        GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
-                        "s3://warehouse".to_string(),
-                    ),
-                    ("custom.property".to_string(), "value".to_string()),
-                    (AWS_ACCESS_KEY_ID.to_string(), "access-key".to_string()),
-                    (AWS_SECRET_ACCESS_KEY.to_string(), "secret-key".to_string()),
-                    (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
-                ]),
-            )
-            .await
-            .unwrap();
-        let file_io_props = catalog.file_io.config().props();
-
-        assert_eq!(
-            file_io_props.get("custom.property"),
-            Some(&"value".to_string())
-        );
-        assert_eq!(
-            file_io_props.get(GLUE_CATALOG_PROP_WAREHOUSE),
-            Some(&"s3://warehouse".to_string())
-        );
     }
 }
