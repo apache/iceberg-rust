@@ -21,7 +21,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use iceberg::encryption::kms::KmsClientFactory;
 use iceberg::io::StorageFactory;
-use iceberg::{Catalog, CatalogBuilder, Error, ErrorKind, Result};
+use iceberg::{Catalog, CatalogBuilder, Error, ErrorKind, Result, Runtime};
 use iceberg_catalog_glue::GlueCatalogBuilder;
 use iceberg_catalog_hms::HmsCatalogBuilder;
 use iceberg_catalog_rest::RestCatalogBuilder;
@@ -47,15 +47,23 @@ pub fn supported_types() -> Vec<&'static str> {
 
 #[async_trait]
 pub trait BoxedCatalogBuilder: Send {
+    /// Sets the storage factory used to build the catalog's `FileIO`; see
+    /// [`CatalogBuilder::with_storage_factory`].
     fn with_storage_factory(
         self: Box<Self>,
         storage_factory: Arc<dyn StorageFactory>,
     ) -> Box<dyn BoxedCatalogBuilder>;
 
+    /// Sets the KMS client factory used to enable table encryption; see
+    /// [`CatalogBuilder::with_kms_client_factory`].
     fn with_kms_client_factory(
         self: Box<Self>,
         kms_client_factory: Arc<dyn KmsClientFactory>,
     ) -> Box<dyn BoxedCatalogBuilder>;
+
+    /// Sets the runtime the catalog, and the tables it creates, spawn their
+    /// tasks on; see [`CatalogBuilder::with_runtime`].
+    fn with_runtime(self: Box<Self>, runtime: Runtime) -> Box<dyn BoxedCatalogBuilder>;
 
     async fn load(
         self: Box<Self>,
@@ -81,6 +89,10 @@ impl<T: CatalogBuilder + 'static> BoxedCatalogBuilder for T {
             *self,
             kms_client_factory,
         ))
+    }
+
+    fn with_runtime(self: Box<Self>, runtime: Runtime) -> Box<dyn BoxedCatalogBuilder> {
+        Box::new(CatalogBuilder::with_runtime(*self, runtime))
     }
 
     async fn load(
@@ -138,13 +150,16 @@ impl CatalogLoader<'_> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
-    use iceberg::io::LocalFsStorageFactory;
+    use iceberg::encryption::kms::KmsClientFactory;
+    use iceberg::io::{LocalFsStorageFactory, StorageFactory};
+    use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalog, MemoryCatalogBuilder};
+    use iceberg::{CatalogBuilder, Result, Runtime};
     use sqlx::migrate::MigrateDatabase;
     use tempfile::TempDir;
 
-    use crate::{CatalogLoader, load};
+    use crate::{BoxedCatalogBuilder, CatalogLoader, load};
 
     #[tokio::test]
     async fn test_load_unsupported_catalog() {
@@ -285,6 +300,77 @@ mod tests {
             .await;
 
         assert!(catalog.is_ok());
+    }
+
+    /// A memory catalog builder that records the runtime it is given.
+    #[derive(Debug, Default)]
+    struct RuntimeRecordingBuilder {
+        runtime: Arc<Mutex<Option<Runtime>>>,
+    }
+
+    impl CatalogBuilder for RuntimeRecordingBuilder {
+        type C = MemoryCatalog;
+
+        fn with_storage_factory(self, _storage_factory: Arc<dyn StorageFactory>) -> Self {
+            self
+        }
+
+        fn with_kms_client_factory(self, _kms_client_factory: Arc<dyn KmsClientFactory>) -> Self {
+            self
+        }
+
+        fn with_runtime(self, runtime: Runtime) -> Self {
+            *self.runtime.lock().unwrap() = Some(runtime);
+            self
+        }
+
+        fn load(
+            self,
+            name: impl Into<String>,
+            props: HashMap<String, String>,
+        ) -> impl Future<Output = Result<MemoryCatalog>> + Send {
+            MemoryCatalogBuilder::default().load(name, props)
+        }
+    }
+
+    #[test]
+    fn test_with_runtime_reaches_the_catalog_builder() {
+        let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("loader-test-runtime")
+            .enable_all()
+            .build()
+            .unwrap();
+        let recorded = Arc::new(Mutex::new(None));
+        let builder: Box<dyn BoxedCatalogBuilder> = Box::new(RuntimeRecordingBuilder {
+            runtime: recorded.clone(),
+        });
+
+        tokio_runtime.block_on(async {
+            builder
+                .with_runtime(Runtime::new(&tokio_runtime))
+                .load(
+                    "memory".to_string(),
+                    HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), temp_path())]),
+                )
+                .await
+                .unwrap();
+
+            // The builder got the runtime passed to the boxed builder: its
+            // tasks run on that runtime's threads.
+            let runtime = recorded.lock().unwrap().take().unwrap();
+            let thread = runtime
+                .io()
+                .spawn(async { std::thread::current().name().map(str::to_string) })
+                .await
+                .unwrap();
+            assert!(
+                thread
+                    .as_deref()
+                    .is_some_and(|n| n.starts_with("loader-test-runtime")),
+                "got: {thread:?}"
+            );
+        });
     }
 
     #[tokio::test]

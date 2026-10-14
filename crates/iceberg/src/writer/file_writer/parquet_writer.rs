@@ -40,6 +40,7 @@ use crate::arrow::{
 };
 use crate::compression::CompressionCodec;
 use crate::encryption::{EncryptionManager, StandardKeyMetadata};
+use crate::error::invalid_data;
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
@@ -155,11 +156,7 @@ fn parquet_compression(codec: CompressionCodec) -> Result<Compression> {
 }
 
 fn invalid_level_error(codec: &str, source: impl Into<anyhow::Error>) -> Error {
-    Error::new(
-        ErrorKind::DataInvalid,
-        format!("Invalid {codec} compression level"),
-    )
-    .with_source(source)
+    invalid_data!("Invalid {codec} compression level").with_source(source)
 }
 
 impl FileWriterBuilder for ParquetWriterBuilder {
@@ -288,11 +285,8 @@ impl SchemaVisitor for IndexByParquetPathName {
         let full_name = self.field_names.iter().map(String::as_str).join(".");
         let field_id = self.field_id;
         if let Some(existing_field_id) = self.name_to_id.get(full_name.as_str()) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
-                ),
+            return Err(invalid_data!(
+                "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
             ));
         } else {
             self.name_to_id.insert(full_name, field_id);
@@ -360,7 +354,7 @@ impl MinMaxColAggregator {
     }
 
     /// Update statistics
-    fn update(&mut self, field_id: i32, value: Statistics) -> Result<()> {
+    fn update(&mut self, field_id: i32, value: &Statistics) -> Result<()> {
         let Some(ty) = self
             .schema
             .field_by_id(field_id)
@@ -378,7 +372,7 @@ impl MinMaxColAggregator {
         };
 
         if value.min_is_exact() {
-            let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, &value)? else {
+            let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("Statistics {value} is not match with field type {ty}."),
@@ -389,7 +383,7 @@ impl MinMaxColAggregator {
         }
 
         if value.max_is_exact() {
-            let Some(max_datum) = get_parquet_stat_max_as_datum(&ty, &value)? else {
+            let Some(max_datum) = get_parquet_stat_max_as_datum(&ty, value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("Statistics {value} is not match with field type {ty}."),
@@ -426,12 +420,10 @@ impl ParquetWriter {
             let reader = input_file.reader().await?;
 
             let mut parquet_reader = ArrowFileReader::new(file_metadata, reader);
-            let parquet_metadata = parquet_reader.get_metadata(None).await.map_err(|err| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Error reading Parquet metadata: {err}"),
-                )
-            })?;
+            let parquet_metadata = parquet_reader
+                .get_metadata(None)
+                .await
+                .map_err(|err| invalid_data!("Error reading Parquet metadata: {err}"))?;
             let mut builder = ParquetWriter::parquet_to_data_file_builder(
                 table_metadata.current_schema().clone(),
                 parquet_metadata,
@@ -488,7 +480,7 @@ impl ParquetWriter {
                             *per_col_null_val_num.entry(field_id).or_insert(0) += null_count;
                         }
 
-                        min_max_agg.update(field_id, statistics.clone())?;
+                        min_max_agg.update(field_id, statistics)?;
                     }
                 }
             }
@@ -547,22 +539,19 @@ impl ParquetWriter {
                 upper_bounds.get(&field.source_id),
             ) {
                 if !field.transform.preserves_order() {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "cannot infer partition value for non linear partition field (needs to preserve order): {} with transform {}",
-                            field.name, field.transform
-                        ),
+                    return Err(invalid_data!(
+                        "cannot infer partition value for non linear partition field (needs to preserve order): {} with transform {}",
+                        field.name,
+                        field.transform
                     ));
                 }
 
                 if lower != upper {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "multiple partition values for field {}: lower: {:?}, upper: {:?}",
-                            field.name, lower, upper
-                        ),
+                    return Err(invalid_data!(
+                        "multiple partition values for field {}: lower: {:?}, upper: {:?}",
+                        field.name,
+                        lower,
+                        upper
                     ));
                 }
 
@@ -743,9 +732,11 @@ impl ArrowAsyncFileWriter for AsyncFileWriter {
 
     fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
         Box::pin(async {
+            // TODO(encryption): retain the stored file size in data-file key metadata.
             self.0
                 .close()
                 .await
+                .map(|_| ())
                 .map_err(|err| parquet::errors::ParquetError::External(Box::new(err)))
         })
     }
@@ -2523,16 +2514,16 @@ mod tests {
         let create_statistics =
             |min, max| Statistics::Int32(ValueStatistics::new(min, max, None, None, false));
         min_max_agg
-            .update(0, create_statistics(None, Some(42)))
+            .update(0, &create_statistics(None, Some(42)))
             .unwrap();
         min_max_agg
-            .update(0, create_statistics(Some(0), Some(i32::MAX)))
+            .update(0, &create_statistics(Some(0), Some(i32::MAX)))
             .unwrap();
         min_max_agg
-            .update(0, create_statistics(Some(i32::MIN), None))
+            .update(0, &create_statistics(Some(i32::MIN), None))
             .unwrap();
         min_max_agg
-            .update(0, create_statistics(None, None))
+            .update(0, &create_statistics(None, None))
             .unwrap();
 
         let (lower_bounds, upper_bounds) = min_max_agg.produce();

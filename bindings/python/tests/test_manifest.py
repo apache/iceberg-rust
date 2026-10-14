@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -26,7 +27,9 @@ from pyiceberg.manifest import (
     FileFormat,
     ManifestEntry,
     ManifestEntryStatus,
+    ManifestFile,
     _manifests,
+    write_manifest_list,
 )
 
 
@@ -171,3 +174,64 @@ def test_read_manifest_entry(generated_manifest_entry_file: str) -> None:
     assert data_file.split_offsets == [4]
     assert data_file.equality_ids is None
     assert data_file.sort_order_id == 0
+
+
+@pytest.mark.parametrize(
+    "payload", [b"", b"not-an-avro-file", b"Obj\x01truncated-after-the-avro-magic"]
+)
+def test_read_manifest_entries_raises_on_invalid_avro(payload: bytes) -> None:
+    from pyiceberg_core import manifest
+
+    with pytest.raises(ValueError):
+        manifest.read_manifest_entries(payload)
+
+
+@pytest.mark.parametrize(
+    "payload", [b"", b"not-an-avro-file", b"Obj\x01truncated-after-the-avro-magic"]
+)
+def test_read_manifest_list_raises_on_invalid_avro(payload: bytes) -> None:
+    from pyiceberg_core import manifest
+
+    with pytest.raises(ValueError):
+        manifest.read_manifest_list(payload)
+
+
+def test_manifest_file_without_partition_summaries(tmp_path: Path) -> None:
+    """Field summaries are optional, so a manifest list without them reads back as None."""
+    from pyiceberg_core import manifest
+
+    manifest_list_file = str(tmp_path / "snap.avro")
+    io = PyArrowFileIO()
+
+    with write_manifest_list(
+        format_version=2,
+        output_file=io.new_output(manifest_list_file),
+        snapshot_id=25,
+        parent_snapshot_id=None,
+        sequence_number=1,
+        avro_compression="null",
+    ) as writer:
+        writer.add_manifests(
+            [
+                ManifestFile.from_args(
+                    manifest_path="s3://bucket/metadata/manifest.avro",
+                    manifest_length=1024,
+                    partition_spec_id=0,
+                    added_snapshot_id=25,
+                    sequence_number=1,
+                    min_sequence_number=1,
+                    added_files_count=1,
+                    existing_files_count=0,
+                    deleted_files_count=0,
+                    added_rows_count=10,
+                    existing_rows_count=0,
+                    deleted_rows_count=0,
+                    partitions=None,
+                )
+            ]
+        )
+
+    bs = io.new_input(manifest_list_file).open().read()
+    manifest_file = manifest.read_manifest_list(bs).entries()[0]
+
+    assert manifest_file.partitions is None

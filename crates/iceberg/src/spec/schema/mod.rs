@@ -25,6 +25,9 @@ mod utils;
 mod visitor;
 pub use self::visitor::*;
 pub(super) mod _serde;
+// TODO: Use for table replacement in https://github.com/apache/iceberg-rust/issues/3056.
+#[allow(dead_code)]
+pub(crate) mod assign_fresh_ids;
 mod id_reassigner;
 mod index;
 mod prune_columns;
@@ -37,7 +40,7 @@ use self::id_reassigner::ReassignFieldIds;
 use self::index::{IndexByName, index_by_id, index_parents};
 pub use self::prune_columns::prune_columns;
 use super::NestedField;
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::expr::accessor::StructAccessor;
 use crate::spec::FormatVersion;
 use crate::spec::datatypes::{
@@ -71,7 +74,8 @@ pub struct Schema {
     id_to_field: HashMap<i32, NestedFieldRef>,
 
     name_to_id: HashMap<String, i32>,
-    lowercase_name_to_id: HashMap<String, i32>,
+    // `None` marks a lower-cased name that resolves to more than one field.
+    lowercase_name_to_id: HashMap<String, Option<i32>>,
     id_to_name: HashMap<i32, String>,
 
     field_id_to_accessor: HashMap<i32, Arc<StructAccessor>>,
@@ -150,10 +154,13 @@ impl SchemaBuilder {
             index.indexes()
         };
 
-        let lowercase_name_to_id = name_to_id
-            .iter()
-            .map(|(k, v)| (k.to_lowercase(), *v))
-            .collect();
+        let mut lowercase_name_to_id = HashMap::new();
+        for (name, field_id) in &name_to_id {
+            lowercase_name_to_id
+                .entry(name.to_lowercase())
+                .and_modify(|existing| *existing = None)
+                .or_insert(Some(*field_id));
+        }
 
         let highest_field_id = id_to_field.keys().max().cloned().unwrap_or(0);
 
@@ -258,11 +265,8 @@ impl SchemaBuilder {
         let id_to_parent = index_parents(r#struct)?;
         for identifier_field_id in identifier_field_ids {
             let field = id_to_field.get(&identifier_field_id).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot add identifier field {identifier_field_id}: field does not exist"
-                    ),
+                invalid_data!(
+                    "Cannot add identifier field {identifier_field_id}: field does not exist"
                 )
             })?;
             ensure_data_valid!(
@@ -277,12 +281,9 @@ impl SchemaBuilder {
                     field.name
                 );
             } else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot add field {} as an identifier field: not a primitive type field",
-                        field.name
-                    ),
+                return Err(invalid_data!(
+                    "Cannot add field {} as an identifier field: not a primitive type field",
+                    field.name
                 ));
             }
 
@@ -348,13 +349,47 @@ impl Schema {
             .and_then(|id| self.field_by_id(*id))
     }
 
-    /// Get field by field name, but in case-insensitive way.
+    /// Get field by field name in a case-insensitive way.
     ///
     /// Both full name and short name could work here.
+    /// Returns `None` if the name is missing or matches multiple fields case-insensitively.
+    /// Use [`Self::field_by_name_case_insensitive_checked`] to distinguish those cases.
     pub fn field_by_name_case_insensitive(&self, field_name: &str) -> Option<&NestedFieldRef> {
         self.lowercase_name_to_id
             .get(&field_name.to_lowercase())
-            .and_then(|id| self.field_by_id(*id))
+            .copied()
+            .flatten()
+            .and_then(|id| self.field_by_id(id))
+    }
+
+    /// Get field by field name in a case-insensitive way, reporting ambiguous names.
+    ///
+    /// Both full name and short name could work here. Returns `Ok(None)` if the name is
+    /// missing, or an error if it matches multiple fields case-insensitively. A collision
+    /// on another name does not prevent this name from resolving. This differs from Iceberg
+    /// Java, which rejects all case-insensitive lookups after a collision, and PyIceberg,
+    /// which silently keeps one of the colliding fields.
+    pub fn field_by_name_case_insensitive_checked(
+        &self,
+        field_name: &str,
+    ) -> Result<Option<&NestedFieldRef>> {
+        let lowercase_name = field_name.to_lowercase();
+        match self.lowercase_name_to_id.get(&lowercase_name) {
+            Some(Some(id)) => Ok(self.field_by_id(*id)),
+            Some(None) => {
+                let mut colliders: Vec<&str> = self
+                    .name_to_id
+                    .keys()
+                    .filter(|name| name.to_lowercase() == lowercase_name)
+                    .map(String::as_str)
+                    .collect();
+                colliders.sort_unstable();
+                Err(invalid_data!(
+                    "Multiple fields match {field_name} case-insensitively: {colliders:?}"
+                ))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Get field by alias.
@@ -504,9 +539,8 @@ impl Schema {
             .sorted_by_key(|(id, _)| *id)
             .map(|(_, msg)| msg)
             .join("\n- ");
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("Invalid schema for {format_version}:\n- {message}"),
+        Err(invalid_data!(
+            "Invalid schema for {format_version}:\n- {message}"
         ))
     }
 }
@@ -646,6 +680,17 @@ mod tests {
             NestedField::optional(1, "v", Variant(VariantType)).into(),
         ]);
         assert_eq!(variant.calc_min_compatible_format(), FormatVersion::V3);
+
+        // Unknown is a v3-only primitive type.
+        let unknown = schema_with(vec![
+            NestedField::optional(1, "u", Primitive(PrimitiveType::Unknown)).into(),
+        ]);
+        assert_eq!(unknown.calc_min_compatible_format(), FormatVersion::V3);
+        assert!(
+            unknown
+                .check_format_compatibility(FormatVersion::V2)
+                .is_err()
+        );
 
         // A v3-only type nested inside a list inside a struct → V3 (flattened fields).
         let nested = schema_with(vec![
@@ -967,6 +1012,40 @@ table {
                 schema.field_by_name_case_insensitive(&name).map(|f| f.id)
             );
         }
+    }
+
+    #[test]
+    fn test_schema_field_by_name_case_insensitive_checked() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "ID", Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(3, "data", Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .expect("case-insensitive name ambiguity is valid in a schema");
+
+        assert_eq!(
+            schema
+                .field_by_name_case_insensitive_checked("DATA")
+                .unwrap()
+                .map(|field| field.id),
+            Some(3)
+        );
+        assert!(
+            schema
+                .field_by_name_case_insensitive_checked("missing")
+                .unwrap()
+                .is_none()
+        );
+
+        let error = schema
+            .field_by_name_case_insensitive_checked("Id")
+            .unwrap_err();
+        assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+        assert!(error.message().contains("case-insensitively"), "{error}");
+        assert!(error.message().contains("[\"ID\", \"id\"]"), "{error}");
+        assert!(schema.field_by_name_case_insensitive("Id").is_none());
     }
 
     #[test]
@@ -1474,5 +1553,154 @@ table {
                 .build()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_unknown_type_deserialization_rejects_non_null_default() {
+        let field_json = serde_json::json!({
+            "id": 1,
+            "name": "empty",
+            "required": false,
+            "type": "unknown",
+            "initial-default": 1
+        });
+
+        let error = serde_json::from_value::<NestedField>(field_json.clone()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Unknown type only supports null default values"),
+            "unexpected error: {error}"
+        );
+
+        let schema_json = serde_json::json!({
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [field_json]
+        });
+        assert!(serde_json::from_value::<Schema>(schema_json).is_err());
+    }
+
+    #[test]
+    fn test_unknown_type_deserialization_accepts_null_defaults() {
+        let schema_json = serde_json::json!({
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [
+                {
+                    "id": 1,
+                    "name": "empty",
+                    "required": false,
+                    "type": "unknown",
+                    "initial-default": null,
+                    "write-default": null
+                }
+            ]
+        });
+
+        serde_json::from_value::<Schema>(schema_json).unwrap();
+    }
+
+    #[test]
+    fn test_unknown_type_accepts_null_container_defaults() {
+        let cases = [
+            (
+                "struct",
+                Struct(StructType::new(vec![
+                    NestedField::optional(2, "empty", Primitive(PrimitiveType::Unknown)).into(),
+                ])),
+                Literal::Struct(crate::spec::Struct::from_iter([None])),
+            ),
+            (
+                "list",
+                List(ListType::new(
+                    NestedField::list_element(2, Primitive(PrimitiveType::Unknown), false).into(),
+                )),
+                Literal::List(vec![None]),
+            ),
+            (
+                "map",
+                Map(MapType::optional(
+                    2,
+                    Primitive(PrimitiveType::String),
+                    3,
+                    Primitive(PrimitiveType::Unknown),
+                )),
+                Literal::Map(MapValue::from([(Literal::string("key"), None)])),
+            ),
+        ];
+
+        for (name, field_type, default) in cases {
+            let schema = Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, name, field_type)
+                        .with_write_default(default)
+                        .into(),
+                ])
+                .build()
+                .unwrap();
+            serde_json::to_value(schema).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_unknown_type_deserialization_rejects_non_null_container_defaults() {
+        let cases = [
+            (
+                "struct",
+                serde_json::json!({
+                    "type": "struct",
+                    "fields": [{
+                        "id": 2,
+                        "name": "empty",
+                        "required": false,
+                        "type": "unknown"
+                    }]
+                }),
+                serde_json::json!({"2": 1}),
+            ),
+            (
+                "list",
+                serde_json::json!({
+                    "type": "list",
+                    "element-id": 2,
+                    "element-required": false,
+                    "element": "unknown"
+                }),
+                serde_json::json!([1]),
+            ),
+            (
+                "map",
+                serde_json::json!({
+                    "type": "map",
+                    "key-id": 2,
+                    "key": "string",
+                    "value-id": 3,
+                    "value-required": false,
+                    "value": "unknown"
+                }),
+                serde_json::json!({"keys": ["key"], "values": [1]}),
+            ),
+        ];
+
+        for (name, field_type, default) in cases {
+            let schema_json = serde_json::json!({
+                "type": "struct",
+                "schema-id": 1,
+                "fields": [{
+                    "id": 1,
+                    "name": name,
+                    "required": false,
+                    "type": field_type,
+                    "initial-default": default
+                }]
+            });
+
+            assert!(
+                serde_json::from_value::<Schema>(schema_json).is_err(),
+                "non-null unknown default in {name} should be rejected"
+            );
+        }
     }
 }
