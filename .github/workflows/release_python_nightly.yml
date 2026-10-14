@@ -17,6 +17,10 @@
 
 name: "Nightly PyPI Build"
 
+concurrency:
+  group: ${{github.workflow}}-${{github.ref}}-${{github.event_name}}
+  cancel-in-progress: true
+
 on:
   schedule:
     - cron: "0 0 * * *" # Runs at midnight UTC every day
