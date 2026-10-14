@@ -24,7 +24,7 @@ use futures::{StreamExt, TryStreamExt};
 use tokio::sync::oneshot::{Receiver, channel};
 
 use super::delete_filter::{DeleteFilter, PosDelLoadAction};
-use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
+use crate::arrow::delete_file_loader::{BasicDeleteFileLoader, equality_delete_projection};
 use crate::arrow::scan_metrics::ScanMetrics;
 use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
@@ -302,8 +302,9 @@ impl CachingDeleteFileLoader {
                 del_filter.insert_equality_delete(task.file_path(), receiver);
 
                 // Per the Iceberg spec, evolve schema for equality deletes but only for the
-                // equality_ids columns, not all table columns.
+                // columns holding the equality_ids, not all table columns.
                 let equality_ids_vec = task.equality_ids().unwrap().to_vec();
+                let projection = equality_delete_projection(&schema, &equality_ids_vec);
                 let evolved_stream = BasicDeleteFileLoader::evolve_schema(
                     basic_delete_file_loader
                         .parquet_to_batch_stream(
@@ -313,7 +314,7 @@ impl CachingDeleteFileLoader {
                         )
                         .await?,
                     schema,
-                    &equality_ids_vec,
+                    &projection,
                 )
                 .await?;
 
@@ -604,7 +605,7 @@ impl CachingDeleteFileLoader {
 
             let root_array: ArrayRef = Arc::new(StructArray::from(record_batch));
 
-            let mut processor = EqDelColumnProcessor::new(&equality_ids);
+            let mut processor = EqDelColumnProcessor::new(&equality_ids, schema);
             visit_schema_with_partner(schema, &root_array, &mut processor, &accessor)?;
 
             let mut datum_columns_with_names = processor.finish()?;
@@ -661,13 +662,15 @@ impl CachingDeleteFileLoader {
 
 struct EqDelColumnProcessor<'a> {
     equality_ids: &'a HashSet<i32>,
+    schema: &'a Schema,
     collected_columns: Vec<(ArrayRef, String, Type)>,
 }
 
 impl<'a> EqDelColumnProcessor<'a> {
-    fn new(equality_ids: &'a HashSet<i32>) -> Self {
+    fn new(equality_ids: &'a HashSet<i32>, schema: &'a Schema) -> Self {
         Self {
             equality_ids,
+            schema,
             collected_columns: Vec::with_capacity(equality_ids.len()),
         }
     }
@@ -723,9 +726,17 @@ impl SchemaWithPartnerVisitor<ArrayRef> for EqDelColumnProcessor<'_> {
 
     fn field(&mut self, field: &NestedFieldRef, partner: &ArrayRef, _value: ()) -> Result<()> {
         if self.equality_ids.contains(&field.id) && field.field_type.as_primitive_type().is_some() {
+            // Use the full name so a nested field (`s.f`) binds to itself, not to a top-level
+            // column with the same leaf name.
+            let name = self.schema.name_by_field_id(field.id).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!("equality delete field {} not found in schema", field.id),
+                )
+            })?;
             self.collected_columns.push((
                 partner.clone(),
-                field.name.clone(),
+                name.to_string(),
                 field.field_type.as_ref().clone(),
             ));
         }
@@ -888,7 +899,7 @@ mod tests {
         .await
         .expect("error parsing batch stream");
 
-        let expected = "((((((y IS NULL) OR (y != 1)) OR ((z IS NULL) OR (z != 100))) OR ((a IS NULL) OR (a != \"HELP\"))) OR ((sa IS NULL) OR (sa != 4))) OR ((b IS NULL) OR (b != 62696E6172795F64617461))) AND ((((((y IS NULL) OR (y != 2)) OR (z IS NOT NULL)) OR (a IS NOT NULL)) OR ((sa IS NULL) OR (sa != 5))) OR (b IS NOT NULL))".to_string();
+        let expected = "((((((y IS NULL) OR (y != 1)) OR ((z IS NULL) OR (z != 100))) OR ((a IS NULL) OR (a != \"HELP\"))) OR ((s.sa IS NULL) OR (s.sa != 4))) OR ((b IS NULL) OR (b != 62696E6172795F64617461))) AND ((((((y IS NULL) OR (y != 2)) OR (z IS NOT NULL)) OR (a IS NOT NULL)) OR ((s.sa IS NULL) OR (s.sa != 5))) OR (b IS NOT NULL))".to_string();
 
         assert_eq!(parsed_eq_delete.to_string(), expected);
     }
@@ -1790,5 +1801,84 @@ mod tests {
                 .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.message().contains("expected 2 from record_count"));
+    }
+
+    /// An equality delete on a field nested in a struct loads, and its predicate uses the full
+    /// field name. The table also has a top-level column with the same leaf name, which the
+    /// predicate must not refer to.
+    #[tokio::test]
+    async fn test_nested_field_equality_delete_predicate() {
+        use crate::arrow::delete_file_loader::equality_delete_projection;
+        use crate::expr::Bind;
+        use crate::spec::{Datum, StructType};
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap();
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "f", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(
+                        2,
+                        "s",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(3, "f", Type::Primitive(PrimitiveType::Long))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Delete file with `s.f = 7`.
+        let f_field = Arc::new(simple_field("f", DataType::Int64, true, "3"));
+        let s_field = simple_field(
+            "s",
+            DataType::Struct(Fields::from(vec![f_field.clone()])),
+            true,
+            "2",
+        );
+        let delete_schema = Arc::new(arrow_schema::Schema::new(vec![s_field]));
+        let s = StructArray::from(vec![(
+            f_field,
+            Arc::new(Int64Array::from(vec![7])) as ArrayRef,
+        )]);
+        let batch = RecordBatch::try_new(delete_schema.clone(), vec![Arc::new(s)]).unwrap();
+        let path = format!("{table_location}/nested-eq-delete.parquet");
+        let mut writer =
+            ArrowWriter::try_new(File::create(&path).unwrap(), delete_schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Only the top-level struct holding field 3 is read.
+        assert_eq!(equality_delete_projection(&table_schema, &[3]), vec![2]);
+
+        let loader = BasicDeleteFileLoader::new(FileIO::new_with_fs(), ScanMetrics::new());
+        let stream = loader
+            .parquet_to_batch_stream(&path, std::fs::metadata(&path).unwrap().len(), None)
+            .await
+            .unwrap();
+        let evolved = BasicDeleteFileLoader::evolve_schema(stream, table_schema.clone(), &[2])
+            .await
+            .unwrap();
+        let predicate = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
+            evolved,
+            HashSet::from([3]),
+        )
+        .await
+        .unwrap();
+
+        let s_f = Reference::new("s.f");
+        assert_eq!(
+            predicate,
+            s_f.clone().is_null().or(s_f.not_equal_to(Datum::long(7)))
+        );
+        // It binds to the nested field, not to the top-level `f`.
+        let bound = predicate.bind(table_schema, true).unwrap();
+        assert!(format!("{bound:?}").contains("id: 3"));
+        assert!(!format!("{bound:?}").contains("id: 1,"));
     }
 }
