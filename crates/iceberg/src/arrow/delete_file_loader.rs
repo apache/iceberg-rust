@@ -115,6 +115,30 @@ impl BasicDeleteFileLoader {
     }
 }
 
+/// Returns the top-level field ids to read for an equality delete file.
+///
+/// Equality ids may name fields nested in structs, but schema evolution of a delete file works on
+/// top-level fields, so each id is replaced by the top-level field that contains it.
+pub(crate) fn equality_delete_projection(schema: &Schema, equality_ids: &[i32]) -> Vec<i32> {
+    use crate::spec::{NestedField, Type};
+
+    fn contains(field: &NestedField, id: i32) -> bool {
+        field.id == id
+            || match field.field_type.as_ref() {
+                Type::Struct(s) => s.fields().iter().any(|child| contains(child, id)),
+                _ => false,
+            }
+    }
+
+    schema
+        .as_struct()
+        .fields()
+        .iter()
+        .filter(|field| equality_ids.iter().any(|&id| contains(field, id)))
+        .map(|field| field.id)
+        .collect()
+}
+
 #[async_trait::async_trait]
 impl DeleteFileLoader for BasicDeleteFileLoader {
     async fn read_delete_file(
@@ -130,10 +154,10 @@ impl DeleteFileLoader for BasicDeleteFileLoader {
             )
             .await?;
 
-        // For equality deletes, only evolve the equality_ids columns.
+        // For equality deletes, only evolve the columns holding the equality_ids.
         // For positional deletes (equality_ids is None), use all field IDs.
         let field_ids = match task.equality_ids() {
-            Some(ids) => ids.to_vec(),
+            Some(ids) => equality_delete_projection(&schema, ids),
             None => schema.field_id_to_name_map().keys().cloned().collect(),
         };
 
