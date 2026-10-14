@@ -49,6 +49,8 @@ use crate::spec::{
 use crate::table::Table;
 use crate::test_utils::test_runtime;
 
+pub(crate) const ROWS_PER_FIXTURE_FILE: usize = 1024;
+
 fn render_template(template: &str, ctx: Value) -> String {
     let mut env = Environment::new();
     env.set_auto_escape_callback(|_| AutoEscape::None);
@@ -267,7 +269,7 @@ impl TableTestFixture {
         }
     }
 
-    fn next_manifest_file(&self) -> OutputFile {
+    pub(crate) fn next_manifest_file(&self) -> OutputFile {
         self.table
             .file_io()
             .new_output(format!(
@@ -621,7 +623,8 @@ impl TableTestFixture {
             Arc::new(arrow_schema::Schema::new(fields))
         };
         // x: [1, 1, 1, 1, ...]
-        let col1 = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
+        let col1 =
+            Arc::new(Int64Array::from_iter_values(vec![1; ROWS_PER_FIXTURE_FILE])) as ArrayRef;
 
         let mut values = vec![2; 512];
         values.append(vec![3; 200].as_mut());
