@@ -55,6 +55,8 @@ mod action;
 pub use action::*;
 mod append;
 mod expire_snapshots;
+mod merging;
+mod rewrite;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -75,6 +77,7 @@ use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 pub use crate::transaction::append::FastAppendAction;
 pub use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
+pub use crate::transaction::rewrite::RewriteFilesAction;
 pub use crate::transaction::sort_order::ReplaceSortOrderAction;
 pub use crate::transaction::update_location::UpdateLocationAction;
 pub use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -149,6 +152,15 @@ impl Transaction {
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
+    }
+
+    /// Creates a rewrite files action for compaction.
+    ///
+    /// This action replaces a set of data files with a new set while keeping
+    /// the logical table contents unchanged. The resulting snapshot uses
+    /// [`Operation::Replace`](crate::spec::Operation::Replace).
+    pub fn rewrite_files(&self) -> RewriteFilesAction {
+        RewriteFilesAction::new(self.table.metadata().current_snapshot_id())
     }
 
     /// Creates replace sort order action.
@@ -254,13 +266,38 @@ mod tests {
     use crate::io::FileIO;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
         TableProperties,
     };
     use crate::table::Table;
     use crate::test_utils::{make_encrypted_table, test_runtime};
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
+
+    /// Create a test data file with the given path, record count, and file size.
+    pub(crate) fn make_data_file(table: &Table, path: &str, records: u64, size: u64) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(size)
+            .record_count(records)
+            .partition(Struct::from_iter([Some(Literal::long(1))]))
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .build()
+            .unwrap()
+    }
+
+    /// Append data files to a table via fast_append and return the updated table.
+    pub(crate) async fn append_files(
+        catalog: &impl Catalog,
+        table: &Table,
+        files: Vec<DataFile>,
+    ) -> Table {
+        let tx = Transaction::new(table);
+        let tx = tx.fast_append().add_data_files(files).apply(tx).unwrap();
+        tx.commit(catalog).await.unwrap()
+    }
 
     pub fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -322,7 +359,38 @@ mod tests {
             .unwrap()
     }
 
+    pub(crate) async fn make_v1_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+        make_minimal_table_in_catalog(
+            catalog,
+            "TableMetadataV1Valid.json",
+            crate::spec::FormatVersion::V1,
+        )
+        .await
+    }
+
+    pub(crate) async fn make_v2_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+        make_minimal_table_in_catalog(
+            catalog,
+            "TableMetadataV2ValidMinimal.json",
+            crate::spec::FormatVersion::V2,
+        )
+        .await
+    }
+
     pub(crate) async fn make_v3_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+        make_minimal_table_in_catalog(
+            catalog,
+            "TableMetadataV3ValidMinimal.json",
+            crate::spec::FormatVersion::V3,
+        )
+        .await
+    }
+
+    async fn make_minimal_table_in_catalog(
+        catalog: &impl Catalog,
+        metadata_file: &str,
+        format_version: crate::spec::FormatVersion,
+    ) -> Table {
         let table_ident =
             TableIdent::from_strs([format!("ns1-{}", uuid::Uuid::new_v4()), "test1".to_string()])
                 .unwrap();
@@ -335,7 +403,7 @@ mod tests {
         let file = File::open(format!(
             "{}/testdata/table_metadata/{}",
             env!("CARGO_MANIFEST_DIR"),
-            "TableMetadataV3ValidMinimal.json"
+            metadata_file
         ))
         .unwrap();
         let reader = BufReader::new(file);
@@ -346,7 +414,7 @@ mod tests {
             .partition_spec((**base_metadata.default_partition_spec()).clone())
             .sort_order((**base_metadata.default_sort_order()).clone())
             .name(table_ident.name().to_string())
-            .format_version(crate::spec::FormatVersion::V3)
+            .format_version(format_version)
             .build();
 
         catalog
