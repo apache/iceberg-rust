@@ -19,6 +19,10 @@
 
 name: GitHub Actions Security Analysis with zizmor 🌈
 
+concurrency:
+  group: ${{github.workflow}}-${{github.ref}}-${{github.event_name}}
+  cancel-in-progress: true
+
 on:
   pull_request:
   merge_group:
