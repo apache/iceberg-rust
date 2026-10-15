@@ -16,16 +16,16 @@
 <a href=#16 id=16 data-nosnippet>16</a>// under the License.
 <a href=#17 id=17 data-nosnippet>17</a>
 <a href=#18 id=18 data-nosnippet>18</a></span><span class="kw">use </span>std::collections::HashMap;
-<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>std::sync::Arc;
-<a href=#20 id=20 data-nosnippet>20</a>
-<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>async_trait::async_trait;
-<a href=#22 id=22 data-nosnippet>22</a>
-<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span><span class="kw">crate</span>::spec::StatisticsFile;
-<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span><span class="kw">crate</span>::table::Table;
-<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span><span class="kw">crate</span>::transaction::{ActionCommit, TransactionAction};
-<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>crate::{<span class="prelude-ty">Result</span>, TableUpdate};
-<a href=#27 id=27 data-nosnippet>27</a>
-<a href=#28 id=28 data-nosnippet>28</a><span class="doccomment">/// A transactional action for updating statistics files in a table
+<a href=#19 id=19 data-nosnippet>19</a>
+<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>async_trait::async_trait;
+<a href=#21 id=21 data-nosnippet>21</a>
+<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span><span class="kw">crate</span>::spec::StatisticsFile;
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span><span class="kw">crate</span>::table::Table;
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span><span class="kw">crate</span>::transaction::{ActionCommit, StatelessAction};
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>crate::{<span class="prelude-ty">Result</span>, TableUpdate};
+<a href=#26 id=26 data-nosnippet>26</a>
+<a href=#27 id=27 data-nosnippet>27</a><span class="doccomment">/// A transactional action for updating statistics files in a table
+<a href=#28 id=28 data-nosnippet>28</a></span><span class="attr">#[derive(Clone)]
 <a href=#29 id=29 data-nosnippet>29</a></span><span class="kw">pub struct </span>UpdateStatisticsAction {
 <a href=#30 id=30 data-nosnippet>30</a>    statistics_to_set: HashMap&lt;i64, <span class="prelude-ty">Option</span>&lt;StatisticsFile&gt;&gt;,
 <a href=#31 id=31 data-nosnippet>31</a>}
@@ -69,8 +69,8 @@
 <a href=#69 id=69 data-nosnippet>69</a>}
 <a href=#70 id=70 data-nosnippet>70</a>
 <a href=#71 id=71 data-nosnippet>71</a><span class="attr">#[async_trait]
-<a href=#72 id=72 data-nosnippet>72</a></span><span class="kw">impl </span>TransactionAction <span class="kw">for </span>UpdateStatisticsAction {
-<a href=#73 id=73 data-nosnippet>73</a>    <span class="kw">async fn </span>commit(<span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;, _table: <span class="kw-2">&amp;</span>Table) -&gt; <span class="prelude-ty">Result</span>&lt;ActionCommit&gt; {
+<a href=#72 id=72 data-nosnippet>72</a></span><span class="kw">impl </span>StatelessAction <span class="kw">for </span>UpdateStatisticsAction {
+<a href=#73 id=73 data-nosnippet>73</a>    <span class="kw">async fn </span>commit(<span class="kw-2">&amp;</span><span class="self">self</span>, _table: <span class="kw-2">&amp;</span>Table) -&gt; <span class="prelude-ty">Result</span>&lt;ActionCommit&gt; {
 <a href=#74 id=74 data-nosnippet>74</a>        <span class="kw">let </span><span class="kw-2">mut </span>updates: Vec&lt;TableUpdate&gt; = <span class="macro">vec!</span>[];
 <a href=#75 id=75 data-nosnippet>75</a>
 <a href=#76 id=76 data-nosnippet>76</a>        <span class="self">self</span>.statistics_to_set
@@ -98,124 +98,128 @@
 <a href=#98 id=98 data-nosnippet>98</a>    <span class="kw">use </span>as_any::Downcast;
 <a href=#99 id=99 data-nosnippet>99</a>
 <a href=#100 id=100 data-nosnippet>100</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{BlobMetadata, StatisticsFile};
-<a href=#101 id=101 data-nosnippet>101</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::tests::make_v2_table;
-<a href=#102 id=102 data-nosnippet>102</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::update_statistics::UpdateStatisticsAction;
-<a href=#103 id=103 data-nosnippet>103</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::{ApplyTransactionAction, Transaction};
-<a href=#104 id=104 data-nosnippet>104</a>
-<a href=#105 id=105 data-nosnippet>105</a>    <span class="attr">#[test]
-<a href=#106 id=106 data-nosnippet>106</a>    </span><span class="kw">fn </span>test_update_statistics() {
-<a href=#107 id=107 data-nosnippet>107</a>        <span class="kw">let </span>table = make_v2_table();
-<a href=#108 id=108 data-nosnippet>108</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
-<a href=#109 id=109 data-nosnippet>109</a>
-<a href=#110 id=110 data-nosnippet>110</a>        <span class="kw">let </span>statistics_file_1 = StatisticsFile {
-<a href=#111 id=111 data-nosnippet>111</a>            snapshot_id: <span class="number">3055729675574597004i64</span>,
-<a href=#112 id=112 data-nosnippet>112</a>            statistics_path: <span class="string">"s3://a/b/stats.puffin"</span>.to_string(),
-<a href=#113 id=113 data-nosnippet>113</a>            file_size_in_bytes: <span class="number">413</span>,
-<a href=#114 id=114 data-nosnippet>114</a>            file_footer_size_in_bytes: <span class="number">42</span>,
-<a href=#115 id=115 data-nosnippet>115</a>            key_metadata: <span class="prelude-val">None</span>,
-<a href=#116 id=116 data-nosnippet>116</a>            blob_metadata: <span class="macro">vec!</span>[BlobMetadata {
-<a href=#117 id=117 data-nosnippet>117</a>                r#type: <span class="string">"ndv"</span>.to_string(),
-<a href=#118 id=118 data-nosnippet>118</a>                snapshot_id: <span class="number">3055729675574597004i64</span>,
-<a href=#119 id=119 data-nosnippet>119</a>                sequence_number: <span class="number">1</span>,
-<a href=#120 id=120 data-nosnippet>120</a>                fields: <span class="macro">vec!</span>[<span class="number">1</span>],
-<a href=#121 id=121 data-nosnippet>121</a>                properties: HashMap::new(),
-<a href=#122 id=122 data-nosnippet>122</a>            }],
-<a href=#123 id=123 data-nosnippet>123</a>        };
-<a href=#124 id=124 data-nosnippet>124</a>
-<a href=#125 id=125 data-nosnippet>125</a>        <span class="kw">let </span>statistics_file_2 = StatisticsFile {
-<a href=#126 id=126 data-nosnippet>126</a>            snapshot_id: <span class="number">3366729675595277004i64</span>,
-<a href=#127 id=127 data-nosnippet>127</a>            statistics_path: <span class="string">"s3://a/b/stats.puffin"</span>.to_string(),
-<a href=#128 id=128 data-nosnippet>128</a>            file_size_in_bytes: <span class="number">413</span>,
-<a href=#129 id=129 data-nosnippet>129</a>            file_footer_size_in_bytes: <span class="number">42</span>,
-<a href=#130 id=130 data-nosnippet>130</a>            key_metadata: <span class="prelude-val">None</span>,
-<a href=#131 id=131 data-nosnippet>131</a>            blob_metadata: <span class="macro">vec!</span>[BlobMetadata {
-<a href=#132 id=132 data-nosnippet>132</a>                r#type: <span class="string">"ndv"</span>.to_string(),
-<a href=#133 id=133 data-nosnippet>133</a>                snapshot_id: <span class="number">3366729675595277004i64</span>,
-<a href=#134 id=134 data-nosnippet>134</a>                sequence_number: <span class="number">1</span>,
-<a href=#135 id=135 data-nosnippet>135</a>                fields: <span class="macro">vec!</span>[<span class="number">1</span>],
-<a href=#136 id=136 data-nosnippet>136</a>                properties: HashMap::new(),
-<a href=#137 id=137 data-nosnippet>137</a>            }],
-<a href=#138 id=138 data-nosnippet>138</a>        };
-<a href=#139 id=139 data-nosnippet>139</a>
-<a href=#140 id=140 data-nosnippet>140</a>        <span class="comment">// set stats1
-<a href=#141 id=141 data-nosnippet>141</a>        </span><span class="kw">let </span>tx = tx
-<a href=#142 id=142 data-nosnippet>142</a>            .update_statistics()
-<a href=#143 id=143 data-nosnippet>143</a>            .set_statistics(statistics_file_1.clone())
-<a href=#144 id=144 data-nosnippet>144</a>            .set_statistics(statistics_file_2.clone())
-<a href=#145 id=145 data-nosnippet>145</a>            .remove_statistics(<span class="number">3055729675574597004i64</span>) <span class="comment">// remove stats1
-<a href=#146 id=146 data-nosnippet>146</a>            </span>.apply(tx)
-<a href=#147 id=147 data-nosnippet>147</a>            .unwrap();
-<a href=#148 id=148 data-nosnippet>148</a>
-<a href=#149 id=149 data-nosnippet>149</a>        <span class="kw">let </span>action = (<span class="kw-2">*</span>tx.actions[<span class="number">0</span>])
-<a href=#150 id=150 data-nosnippet>150</a>            .downcast_ref::&lt;UpdateStatisticsAction&gt;()
-<a href=#151 id=151 data-nosnippet>151</a>            .unwrap();
-<a href=#152 id=152 data-nosnippet>152</a>        <span class="macro">assert!</span>(
-<a href=#153 id=153 data-nosnippet>153</a>            action
-<a href=#154 id=154 data-nosnippet>154</a>                .statistics_to_set
-<a href=#155 id=155 data-nosnippet>155</a>                .get(<span class="kw-2">&amp;</span>statistics_file_1.snapshot_id)
-<a href=#156 id=156 data-nosnippet>156</a>                .unwrap()
-<a href=#157 id=157 data-nosnippet>157</a>                .is_none()
-<a href=#158 id=158 data-nosnippet>158</a>        ); <span class="comment">// stats1 should have been removed
-<a href=#159 id=159 data-nosnippet>159</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#160 id=160 data-nosnippet>160</a>            action
-<a href=#161 id=161 data-nosnippet>161</a>                .statistics_to_set
-<a href=#162 id=162 data-nosnippet>162</a>                .get(<span class="kw-2">&amp;</span>statistics_file_2.snapshot_id)
-<a href=#163 id=163 data-nosnippet>163</a>                .unwrap()
-<a href=#164 id=164 data-nosnippet>164</a>                .clone(),
-<a href=#165 id=165 data-nosnippet>165</a>            <span class="prelude-val">Some</span>(statistics_file_2)
-<a href=#166 id=166 data-nosnippet>166</a>        );
-<a href=#167 id=167 data-nosnippet>167</a>    }
-<a href=#168 id=168 data-nosnippet>168</a>
-<a href=#169 id=169 data-nosnippet>169</a>    <span class="attr">#[test]
-<a href=#170 id=170 data-nosnippet>170</a>    </span><span class="kw">fn </span>test_set_single_statistics() {
-<a href=#171 id=171 data-nosnippet>171</a>        <span class="kw">let </span>table = make_v2_table();
-<a href=#172 id=172 data-nosnippet>172</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
-<a href=#173 id=173 data-nosnippet>173</a>
-<a href=#174 id=174 data-nosnippet>174</a>        <span class="kw">let </span>statistics_file = StatisticsFile {
-<a href=#175 id=175 data-nosnippet>175</a>            snapshot_id: <span class="number">1234567890i64</span>,
-<a href=#176 id=176 data-nosnippet>176</a>            statistics_path: <span class="string">"s3://a/b/stats1.puffin"</span>.to_string(),
-<a href=#177 id=177 data-nosnippet>177</a>            file_size_in_bytes: <span class="number">500</span>,
-<a href=#178 id=178 data-nosnippet>178</a>            file_footer_size_in_bytes: <span class="number">50</span>,
-<a href=#179 id=179 data-nosnippet>179</a>            key_metadata: <span class="prelude-val">None</span>,
-<a href=#180 id=180 data-nosnippet>180</a>            blob_metadata: <span class="macro">vec!</span>[],
-<a href=#181 id=181 data-nosnippet>181</a>        };
-<a href=#182 id=182 data-nosnippet>182</a>
-<a href=#183 id=183 data-nosnippet>183</a>        <span class="comment">// Set statistics
-<a href=#184 id=184 data-nosnippet>184</a>        </span><span class="kw">let </span>tx = tx
-<a href=#185 id=185 data-nosnippet>185</a>            .update_statistics()
-<a href=#186 id=186 data-nosnippet>186</a>            .set_statistics(statistics_file.clone())
-<a href=#187 id=187 data-nosnippet>187</a>            .apply(tx)
-<a href=#188 id=188 data-nosnippet>188</a>            .unwrap();
-<a href=#189 id=189 data-nosnippet>189</a>
-<a href=#190 id=190 data-nosnippet>190</a>        <span class="kw">let </span>action = (<span class="kw-2">*</span>tx.actions[<span class="number">0</span>])
-<a href=#191 id=191 data-nosnippet>191</a>            .downcast_ref::&lt;UpdateStatisticsAction&gt;()
-<a href=#192 id=192 data-nosnippet>192</a>            .unwrap();
-<a href=#193 id=193 data-nosnippet>193</a>
-<a href=#194 id=194 data-nosnippet>194</a>        <span class="comment">// Verify that the statistics file is set correctly
-<a href=#195 id=195 data-nosnippet>195</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#196 id=196 data-nosnippet>196</a>            action
-<a href=#197 id=197 data-nosnippet>197</a>                .statistics_to_set
-<a href=#198 id=198 data-nosnippet>198</a>                .get(<span class="kw-2">&amp;</span>statistics_file.snapshot_id)
-<a href=#199 id=199 data-nosnippet>199</a>                .unwrap()
-<a href=#200 id=200 data-nosnippet>200</a>                .clone(),
-<a href=#201 id=201 data-nosnippet>201</a>            <span class="prelude-val">Some</span>(statistics_file)
-<a href=#202 id=202 data-nosnippet>202</a>        );
-<a href=#203 id=203 data-nosnippet>203</a>    }
-<a href=#204 id=204 data-nosnippet>204</a>
-<a href=#205 id=205 data-nosnippet>205</a>    <span class="attr">#[test]
-<a href=#206 id=206 data-nosnippet>206</a>    </span><span class="kw">fn </span>test_no_statistics_set() {
-<a href=#207 id=207 data-nosnippet>207</a>        <span class="kw">let </span>table = make_v2_table();
-<a href=#208 id=208 data-nosnippet>208</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
-<a href=#209 id=209 data-nosnippet>209</a>
-<a href=#210 id=210 data-nosnippet>210</a>        <span class="comment">// No statistics are set or removed
-<a href=#211 id=211 data-nosnippet>211</a>        </span><span class="kw">let </span>tx = tx.update_statistics().apply(tx).unwrap();
+<a href=#101 id=101 data-nosnippet>101</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::action::ActionEntry;
+<a href=#102 id=102 data-nosnippet>102</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::tests::make_v2_table;
+<a href=#103 id=103 data-nosnippet>103</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::update_statistics::UpdateStatisticsAction;
+<a href=#104 id=104 data-nosnippet>104</a>    <span class="kw">use </span><span class="kw">crate</span>::transaction::{ApplyTransactionAction, Transaction};
+<a href=#105 id=105 data-nosnippet>105</a>
+<a href=#106 id=106 data-nosnippet>106</a>    <span class="attr">#[test]
+<a href=#107 id=107 data-nosnippet>107</a>    </span><span class="kw">fn </span>test_update_statistics() {
+<a href=#108 id=108 data-nosnippet>108</a>        <span class="kw">let </span>table = make_v2_table();
+<a href=#109 id=109 data-nosnippet>109</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
+<a href=#110 id=110 data-nosnippet>110</a>
+<a href=#111 id=111 data-nosnippet>111</a>        <span class="kw">let </span>statistics_file_1 = StatisticsFile {
+<a href=#112 id=112 data-nosnippet>112</a>            snapshot_id: <span class="number">3055729675574597004i64</span>,
+<a href=#113 id=113 data-nosnippet>113</a>            statistics_path: <span class="string">"s3://a/b/stats.puffin"</span>.to_string(),
+<a href=#114 id=114 data-nosnippet>114</a>            file_size_in_bytes: <span class="number">413</span>,
+<a href=#115 id=115 data-nosnippet>115</a>            file_footer_size_in_bytes: <span class="number">42</span>,
+<a href=#116 id=116 data-nosnippet>116</a>            key_metadata: <span class="prelude-val">None</span>,
+<a href=#117 id=117 data-nosnippet>117</a>            blob_metadata: <span class="macro">vec!</span>[BlobMetadata {
+<a href=#118 id=118 data-nosnippet>118</a>                r#type: <span class="string">"ndv"</span>.to_string(),
+<a href=#119 id=119 data-nosnippet>119</a>                snapshot_id: <span class="number">3055729675574597004i64</span>,
+<a href=#120 id=120 data-nosnippet>120</a>                sequence_number: <span class="number">1</span>,
+<a href=#121 id=121 data-nosnippet>121</a>                fields: <span class="macro">vec!</span>[<span class="number">1</span>],
+<a href=#122 id=122 data-nosnippet>122</a>                properties: HashMap::new(),
+<a href=#123 id=123 data-nosnippet>123</a>            }],
+<a href=#124 id=124 data-nosnippet>124</a>        };
+<a href=#125 id=125 data-nosnippet>125</a>
+<a href=#126 id=126 data-nosnippet>126</a>        <span class="kw">let </span>statistics_file_2 = StatisticsFile {
+<a href=#127 id=127 data-nosnippet>127</a>            snapshot_id: <span class="number">3366729675595277004i64</span>,
+<a href=#128 id=128 data-nosnippet>128</a>            statistics_path: <span class="string">"s3://a/b/stats.puffin"</span>.to_string(),
+<a href=#129 id=129 data-nosnippet>129</a>            file_size_in_bytes: <span class="number">413</span>,
+<a href=#130 id=130 data-nosnippet>130</a>            file_footer_size_in_bytes: <span class="number">42</span>,
+<a href=#131 id=131 data-nosnippet>131</a>            key_metadata: <span class="prelude-val">None</span>,
+<a href=#132 id=132 data-nosnippet>132</a>            blob_metadata: <span class="macro">vec!</span>[BlobMetadata {
+<a href=#133 id=133 data-nosnippet>133</a>                r#type: <span class="string">"ndv"</span>.to_string(),
+<a href=#134 id=134 data-nosnippet>134</a>                snapshot_id: <span class="number">3366729675595277004i64</span>,
+<a href=#135 id=135 data-nosnippet>135</a>                sequence_number: <span class="number">1</span>,
+<a href=#136 id=136 data-nosnippet>136</a>                fields: <span class="macro">vec!</span>[<span class="number">1</span>],
+<a href=#137 id=137 data-nosnippet>137</a>                properties: HashMap::new(),
+<a href=#138 id=138 data-nosnippet>138</a>            }],
+<a href=#139 id=139 data-nosnippet>139</a>        };
+<a href=#140 id=140 data-nosnippet>140</a>
+<a href=#141 id=141 data-nosnippet>141</a>        <span class="comment">// set stats1
+<a href=#142 id=142 data-nosnippet>142</a>        </span><span class="kw">let </span>tx = tx
+<a href=#143 id=143 data-nosnippet>143</a>            .update_statistics()
+<a href=#144 id=144 data-nosnippet>144</a>            .set_statistics(statistics_file_1.clone())
+<a href=#145 id=145 data-nosnippet>145</a>            .set_statistics(statistics_file_2.clone())
+<a href=#146 id=146 data-nosnippet>146</a>            .remove_statistics(<span class="number">3055729675574597004i64</span>) <span class="comment">// remove stats1
+<a href=#147 id=147 data-nosnippet>147</a>            </span>.apply(tx)
+<a href=#148 id=148 data-nosnippet>148</a>            .unwrap();
+<a href=#149 id=149 data-nosnippet>149</a>
+<a href=#150 id=150 data-nosnippet>150</a>        <span class="kw">let </span>action = (<span class="kw-2">*</span>tx.actions[<span class="number">0</span>])
+<a href=#151 id=151 data-nosnippet>151</a>            .downcast_ref::&lt;ActionEntry&lt;UpdateStatisticsAction&gt;&gt;()
+<a href=#152 id=152 data-nosnippet>152</a>            .unwrap()
+<a href=#153 id=153 data-nosnippet>153</a>            .action();
+<a href=#154 id=154 data-nosnippet>154</a>        <span class="macro">assert!</span>(
+<a href=#155 id=155 data-nosnippet>155</a>            action
+<a href=#156 id=156 data-nosnippet>156</a>                .statistics_to_set
+<a href=#157 id=157 data-nosnippet>157</a>                .get(<span class="kw-2">&amp;</span>statistics_file_1.snapshot_id)
+<a href=#158 id=158 data-nosnippet>158</a>                .unwrap()
+<a href=#159 id=159 data-nosnippet>159</a>                .is_none()
+<a href=#160 id=160 data-nosnippet>160</a>        ); <span class="comment">// stats1 should have been removed
+<a href=#161 id=161 data-nosnippet>161</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#162 id=162 data-nosnippet>162</a>            action
+<a href=#163 id=163 data-nosnippet>163</a>                .statistics_to_set
+<a href=#164 id=164 data-nosnippet>164</a>                .get(<span class="kw-2">&amp;</span>statistics_file_2.snapshot_id)
+<a href=#165 id=165 data-nosnippet>165</a>                .unwrap()
+<a href=#166 id=166 data-nosnippet>166</a>                .clone(),
+<a href=#167 id=167 data-nosnippet>167</a>            <span class="prelude-val">Some</span>(statistics_file_2)
+<a href=#168 id=168 data-nosnippet>168</a>        );
+<a href=#169 id=169 data-nosnippet>169</a>    }
+<a href=#170 id=170 data-nosnippet>170</a>
+<a href=#171 id=171 data-nosnippet>171</a>    <span class="attr">#[test]
+<a href=#172 id=172 data-nosnippet>172</a>    </span><span class="kw">fn </span>test_set_single_statistics() {
+<a href=#173 id=173 data-nosnippet>173</a>        <span class="kw">let </span>table = make_v2_table();
+<a href=#174 id=174 data-nosnippet>174</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
+<a href=#175 id=175 data-nosnippet>175</a>
+<a href=#176 id=176 data-nosnippet>176</a>        <span class="kw">let </span>statistics_file = StatisticsFile {
+<a href=#177 id=177 data-nosnippet>177</a>            snapshot_id: <span class="number">1234567890i64</span>,
+<a href=#178 id=178 data-nosnippet>178</a>            statistics_path: <span class="string">"s3://a/b/stats1.puffin"</span>.to_string(),
+<a href=#179 id=179 data-nosnippet>179</a>            file_size_in_bytes: <span class="number">500</span>,
+<a href=#180 id=180 data-nosnippet>180</a>            file_footer_size_in_bytes: <span class="number">50</span>,
+<a href=#181 id=181 data-nosnippet>181</a>            key_metadata: <span class="prelude-val">None</span>,
+<a href=#182 id=182 data-nosnippet>182</a>            blob_metadata: <span class="macro">vec!</span>[],
+<a href=#183 id=183 data-nosnippet>183</a>        };
+<a href=#184 id=184 data-nosnippet>184</a>
+<a href=#185 id=185 data-nosnippet>185</a>        <span class="comment">// Set statistics
+<a href=#186 id=186 data-nosnippet>186</a>        </span><span class="kw">let </span>tx = tx
+<a href=#187 id=187 data-nosnippet>187</a>            .update_statistics()
+<a href=#188 id=188 data-nosnippet>188</a>            .set_statistics(statistics_file.clone())
+<a href=#189 id=189 data-nosnippet>189</a>            .apply(tx)
+<a href=#190 id=190 data-nosnippet>190</a>            .unwrap();
+<a href=#191 id=191 data-nosnippet>191</a>
+<a href=#192 id=192 data-nosnippet>192</a>        <span class="kw">let </span>action = (<span class="kw-2">*</span>tx.actions[<span class="number">0</span>])
+<a href=#193 id=193 data-nosnippet>193</a>            .downcast_ref::&lt;ActionEntry&lt;UpdateStatisticsAction&gt;&gt;()
+<a href=#194 id=194 data-nosnippet>194</a>            .unwrap()
+<a href=#195 id=195 data-nosnippet>195</a>            .action();
+<a href=#196 id=196 data-nosnippet>196</a>
+<a href=#197 id=197 data-nosnippet>197</a>        <span class="comment">// Verify that the statistics file is set correctly
+<a href=#198 id=198 data-nosnippet>198</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#199 id=199 data-nosnippet>199</a>            action
+<a href=#200 id=200 data-nosnippet>200</a>                .statistics_to_set
+<a href=#201 id=201 data-nosnippet>201</a>                .get(<span class="kw-2">&amp;</span>statistics_file.snapshot_id)
+<a href=#202 id=202 data-nosnippet>202</a>                .unwrap()
+<a href=#203 id=203 data-nosnippet>203</a>                .clone(),
+<a href=#204 id=204 data-nosnippet>204</a>            <span class="prelude-val">Some</span>(statistics_file)
+<a href=#205 id=205 data-nosnippet>205</a>        );
+<a href=#206 id=206 data-nosnippet>206</a>    }
+<a href=#207 id=207 data-nosnippet>207</a>
+<a href=#208 id=208 data-nosnippet>208</a>    <span class="attr">#[test]
+<a href=#209 id=209 data-nosnippet>209</a>    </span><span class="kw">fn </span>test_no_statistics_set() {
+<a href=#210 id=210 data-nosnippet>210</a>        <span class="kw">let </span>table = make_v2_table();
+<a href=#211 id=211 data-nosnippet>211</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
 <a href=#212 id=212 data-nosnippet>212</a>
-<a href=#213 id=213 data-nosnippet>213</a>        <span class="kw">let </span>action = (<span class="kw-2">*</span>tx.actions[<span class="number">0</span>])
-<a href=#214 id=214 data-nosnippet>214</a>            .downcast_ref::&lt;UpdateStatisticsAction&gt;()
-<a href=#215 id=215 data-nosnippet>215</a>            .unwrap();
-<a href=#216 id=216 data-nosnippet>216</a>
-<a href=#217 id=217 data-nosnippet>217</a>        <span class="comment">// Verify that no statistics are set
-<a href=#218 id=218 data-nosnippet>218</a>        </span><span class="macro">assert!</span>(action.statistics_to_set.is_empty());
-<a href=#219 id=219 data-nosnippet>219</a>    }
-<a href=#220 id=220 data-nosnippet>220</a>}
+<a href=#213 id=213 data-nosnippet>213</a>        <span class="comment">// No statistics are set or removed
+<a href=#214 id=214 data-nosnippet>214</a>        </span><span class="kw">let </span>tx = tx.update_statistics().apply(tx).unwrap();
+<a href=#215 id=215 data-nosnippet>215</a>
+<a href=#216 id=216 data-nosnippet>216</a>        <span class="kw">let </span>action = (<span class="kw-2">*</span>tx.actions[<span class="number">0</span>])
+<a href=#217 id=217 data-nosnippet>217</a>            .downcast_ref::&lt;ActionEntry&lt;UpdateStatisticsAction&gt;&gt;()
+<a href=#218 id=218 data-nosnippet>218</a>            .unwrap()
+<a href=#219 id=219 data-nosnippet>219</a>            .action();
+<a href=#220 id=220 data-nosnippet>220</a>
+<a href=#221 id=221 data-nosnippet>221</a>        <span class="comment">// Verify that no statistics are set
+<a href=#222 id=222 data-nosnippet>222</a>        </span><span class="macro">assert!</span>(action.statistics_to_set.is_empty());
+<a href=#223 id=223 data-nosnippet>223</a>    }
+<a href=#224 id=224 data-nosnippet>224</a>}
 </code></pre></div></section></main></body></html>
