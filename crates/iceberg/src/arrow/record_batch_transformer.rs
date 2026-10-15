@@ -1696,12 +1696,14 @@ mod test {
 
     #[test]
     fn promote_struct_without_source_field_ids_reads_null() {
+        let nulls = NullBuffer::from(vec![true, true, false]);
         let source = Arc::new(StructArray::new(
             Fields::from(vec![Field::new("x", DataType::Int32, true)]),
-            vec![Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef],
-            None,
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+            Some(nulls.clone()),
         )) as ArrayRef;
 
+        // Fields read as null and the struct keeps the file's validity, as Spark's reader does.
         let out = promote(&source, &evolved_struct_type(), &empty_schema()).unwrap();
         let expected = StructArray::new(
             Fields::from(vec![
@@ -1709,10 +1711,10 @@ mod test {
                 field_with_id("y", DataType::Int32, true, 6),
             ]),
             vec![
-                new_null_array(&DataType::Int32, 2),
-                new_null_array(&DataType::Int32, 2),
+                new_null_array(&DataType::Int32, 3),
+                new_null_array(&DataType::Int32, 3),
             ],
-            None,
+            Some(nulls),
         );
         assert_eq!(out.as_struct(), &expected);
     }
