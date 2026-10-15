@@ -133,8 +133,8 @@ fn write_manifest(num_entries: u64) -> Vec<u8> {
     .to_vec()
 }
 
-/// Rewrites `bytes` the way Iceberg Java writes V2 manifests: without the
-/// `data_file` fields it doesn't write, deflate, and 64 KB blocks.
+/// Rewrites `bytes` the way Iceberg Java writes V2 manifests by default:
+/// without the `data_file` fields it doesn't write, deflate, and 64 KB blocks.
 fn rewrite_like_java(bytes: &[u8]) -> Vec<u8> {
     const OMITTED: [&str; 3] = ["first_row_id", "content_offset", "content_size_in_bytes"];
     let retain = |fields: &mut Vec<serde_json::Value>| {
@@ -178,20 +178,17 @@ fn bench_parse_avro(c: &mut Criterion) {
     group.sample_size(10);
     for num_entries in [1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000] {
         let bytes = write_manifest(num_entries);
-        let cases = [
-            ("java_like", rewrite_like_java(&bytes)),
-            ("iceberg_rust_writer", bytes),
-        ];
+        let java_like = rewrite_like_java(&bytes);
         assert_eq!(
-            Manifest::parse_avro(&cases[0].1).unwrap(),
-            Manifest::parse_avro(&cases[1].1).unwrap()
+            Manifest::parse_avro(&java_like).unwrap(),
+            Manifest::parse_avro(&bytes).unwrap()
         );
         group.throughput(Throughput::Elements(num_entries));
-        for (name, bytes) in &cases {
-            group.bench_with_input(BenchmarkId::new(*name, num_entries), bytes, |b, bytes| {
-                b.iter(|| Manifest::parse_avro(black_box(bytes)).unwrap())
-            });
-        }
+        group.bench_with_input(
+            BenchmarkId::from_parameter(num_entries),
+            &java_like,
+            |b, bytes| b.iter(|| Manifest::parse_avro(black_box(bytes)).unwrap()),
+        );
     }
     group.finish();
 }
