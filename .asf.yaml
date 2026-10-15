@@ -83,10 +83,7 @@ github:
     allow_auto_merge: true
     # auto-delete head branches after being merged
     del_branch_on_merge: true
-    # Limit open pull requests per user without write access.
-    #
-    # With coding agents, the number of open PRs now far exceeds our review capacity.
-    # Setting a limit helps reviewers focus on fewer PRs at a time.
+    # Limit open, non-draft PRs per user without write access. See CONTRIBUTING.md.
     creation_cap:
       enabled: true
       max_open_pull_requests: 3
