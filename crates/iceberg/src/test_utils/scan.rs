@@ -44,8 +44,8 @@ use crate::metadata_columns::{
 use crate::scan::FileScanTaskColumnStats;
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, ManifestEntry,
-    ManifestListWriter, ManifestStatus, ManifestWriterBuilder, PartitionSpec, Struct, StructType,
-    TableMetadata, TableMetadataBuilder,
+    ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec,
+    PrimitiveType, Schema, Struct, StructType, TableMetadata, TableMetadataBuilder, Type,
 };
 use crate::table::Table;
 use crate::test_utils::test_runtime;
@@ -265,6 +265,32 @@ impl TableTestFixture {
         Self {
             table_location,
             table: table.with_metadata(new_table_metadata),
+        }
+    }
+
+    /// Creates a fixture with a column added to its schema after its last
+    /// write, so its current snapshot was written with an older schema than
+    /// its current one.
+    pub(crate) fn new_with_column_added_after_last_write() -> Self {
+        let fixture = Self::new();
+        let metadata = fixture.table.metadata();
+
+        let mut fields = metadata.current_schema().as_struct().fields().to_vec();
+        // Beyond the fixture's field ids 1..=8.
+        fields
+            .push(NestedField::optional(100, "added", Type::Primitive(PrimitiveType::Long)).into());
+        let new_table_metadata = TableMetadataBuilder::new_from_metadata(metadata.clone(), None)
+            .add_schema(Schema::builder().with_fields(fields).build().unwrap())
+            .unwrap()
+            .set_current_schema(-1)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        Self {
+            table: fixture.table.with_metadata(Arc::new(new_table_metadata)),
+            ..fixture
         }
     }
 
