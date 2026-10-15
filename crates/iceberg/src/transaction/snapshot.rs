@@ -28,12 +28,11 @@ use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
     ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
     SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
-    TableProperties, update_snapshot_summaries,
+    TableProperties, set_iceberg_version, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
-
 /// A trait that defines how different table operations produce new snapshots.
 ///
 /// `SnapshotProduceOperation` is used by [`SnapshotProducer`] to customize snapshot creation
@@ -411,11 +410,13 @@ impl<'a> SnapshotProducer<'a> {
             additional_properties,
         };
 
-        update_snapshot_summaries(
+        let mut summary = update_snapshot_summaries(
             summary,
             previous_snapshot.map(|s| s.summary()),
             snapshot_produce_operation.operation() == Operation::Overwrite,
-        )
+        )?;
+        set_iceberg_version(&mut summary.additional_properties);
+        Ok(summary)
     }
 
     fn generate_manifest_list_file_path(&self, attempt: i64) -> Result<String> {
