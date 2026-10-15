@@ -211,7 +211,9 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Set the snapshot to scan. When not set, it uses current snapshot.
+    /// Set the snapshot to scan. The scan projects the schema that snapshot was
+    /// written with. When not set, the scan reads the current snapshot with the
+    /// table's current schema.
     pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
         self.snapshot_id = Some(snapshot_id);
         self
@@ -313,7 +315,12 @@ impl<'a> TableScanBuilder<'a> {
             }
         };
 
-        let schema = snapshot.schema(self.table.metadata())?;
+        // A scan of the current state uses the table's current schema; time travel uses the
+        // schema its snapshot was written with.
+        let schema = match self.snapshot_id {
+            Some(_) => snapshot.schema(self.table.metadata())?,
+            None => self.table.metadata().current_schema().clone(),
+        };
         let field_ids =
             collect_scan_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
         let snapshot_bound_predicate =
@@ -896,6 +903,39 @@ mod tests {
         assert_eq!(
             table_scan.snapshot().unwrap().snapshot_id(),
             3051729675574597004
+        );
+    }
+
+    /// A scan of the current state reads the current snapshot with the table's
+    /// current schema, not the older one that snapshot was written with.
+    #[test]
+    fn test_scan_of_current_state_uses_current_schema() {
+        let table = TableTestFixture::new_with_column_added_after_last_write().table;
+
+        let table_scan = table.scan().build().unwrap();
+        assert_eq!(table_scan.snapshot(), table.metadata().current_snapshot());
+        assert_eq!(
+            table_scan.plan_context.as_ref().unwrap().snapshot_schema,
+            *table.metadata().current_schema()
+        );
+    }
+
+    /// A scan pinned to a snapshot uses the schema that snapshot was written
+    /// with, even when it is the current snapshot.
+    #[test]
+    fn test_time_travel_scan_uses_snapshot_schema() {
+        let table = TableTestFixture::new_with_column_added_after_last_write().table;
+        let snapshot = table.metadata().current_snapshot().unwrap();
+
+        let table_scan = table
+            .scan()
+            .snapshot_id(snapshot.snapshot_id())
+            .build()
+            .unwrap();
+        assert_eq!(table_scan.snapshot(), Some(snapshot));
+        assert_eq!(
+            table_scan.plan_context.as_ref().unwrap().snapshot_schema,
+            snapshot.schema(table.metadata()).unwrap()
         );
     }
 

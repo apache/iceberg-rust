@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   validate-release-tag:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       cargo-version: ${{ steps.validate.outputs.cargo-version }}
       is-rc: ${{ steps.validate.outputs.is-rc }}
@@ -103,7 +103,7 @@ jobs:
           echo "is-rc=$IS_RC" >> $GITHUB_OUTPUT
 
   sdist:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [validate-release-tag]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -145,13 +145,13 @@ jobs:
         include:
           - { os: windows-latest }
           - { os: macos-latest, target: "universal2-apple-darwin" }
-          - { os: ubuntu-latest, target: "x86_64" }
+          - { os: ubuntu-24.04, target: "x86_64" }
           - {
-              os: ubuntu-latest,
+              os: ubuntu-24.04,
               target: "aarch64",
               manylinux: "manylinux_2_28",
             }
-          - { os: ubuntu-latest, target: "armv7l" }
+          - { os: ubuntu-24.04, target: "armv7l" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -212,7 +212,7 @@ jobs:
   pypi-publish:
     name: Publish Python 🐍 distribution 📦 to Pypi
     needs: [sdist, wheels]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     environment:
       name: pypi
