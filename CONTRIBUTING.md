@@ -38,6 +38,10 @@ First, thank you for contributing to Iceberg Rust! The goal of this document is 
 
 Once your changes are ready you must submit your branch as a [pull request](https://github.com/apache/iceberg-rust/pulls).
 
+#### Open Pull Request Limit
+
+With coding agents, the number of open PRs now far exceeds our review capacity. To help reviewers focus on fewer PRs, users without write access are limited to **3 open, non-draft PRs** at a time. If you reach the limit, wait for existing PRs to be merged or close them until you have fewer than 3 before opening another.
+
 #### Title
 
 The pull request title must follow the format outlined in the [conventional commits spec](https://www.conventionalcommits.org). [Conventional commits](https://www.conventionalcommits.org) is a standardized format for commit messages. iceberg-rust only requires this format for commits on the `main` branch. And because iceberg-rust squashes commits before merging branches, this means that only the pull request title must conform to this format.
