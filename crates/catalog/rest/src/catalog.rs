@@ -1455,7 +1455,7 @@ impl SessionCatalog for RestSessionCatalog {
 
     async fn unregister_table(
         &self,
-        _context: &SessionContext,
+        context: &SessionContext,
         table_ident: &TableIdent,
     ) -> Result<Table> {
         if !self.supports_endpoint(&V1_UNREGISTER_TABLE).await? {
@@ -1470,7 +1470,7 @@ impl SessionCatalog for RestSessionCatalog {
             Method::POST,
             client.config.unregister_table_endpoint(table_ident),
         ))?;
-        let http_response = client.query_catalog(request).await?;
+        let http_response = client.query_catalog(context, request).await?;
 
         let response: UnregisterTableResult = match http_response.status() {
             StatusCode::OK => deserialize_catalog_response(http_response).map_err(|error| {
