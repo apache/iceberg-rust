@@ -46,8 +46,8 @@ pub use file_reader::ArrowFileReader;
 pub(crate) use options::ParquetReadOptions;
 use predicate_visitor::{CollectFieldIdVisitor, PredicateConverter};
 use projection::{
-    add_fallback_field_ids_to_arrow_schema, apply_name_mapping_to_arrow_schema,
-    find_leaf_by_field_id, list_views_as_lists,
+    add_fallback_field_ids_to_arrow_schema, apply_name_mapping_to_arrow_schema, coerce_list_views,
+    find_leaf_by_field_id,
 };
 
 /// Builder to create ArrowReader

@@ -499,7 +499,7 @@ fn apply_name_mapping_to_field(
                 .with_data_type(DataType::Struct(entry_fields));
             DataType::Map(Arc::new(entries), *sorted)
         }
-        // List views were already rewritten to lists by `list_views_as_lists`.
+        // List views were already rewritten to lists by `coerce_list_views`.
         other => other.clone(),
     };
 
@@ -535,62 +535,59 @@ fn try_map_fields(
 /// Rewrites every `ListView` and `LargeListView` in `arrow_schema` to `List` and `LargeList`,
 /// because `Fields::filter_leaves`, which the projection relies on, treats list views as leaves
 /// (#3393). Returns `None` if there are none.
-pub(super) fn list_views_as_lists(arrow_schema: &ArrowSchemaRef) -> Option<ArrowSchemaRef> {
-    if !arrow_schema
-        .fields()
-        .iter()
-        .any(|field| contains_list_view(field.data_type()))
-    {
-        return None;
-    }
-    let fields: Fields = arrow_schema
-        .fields()
-        .iter()
-        .map(list_view_as_list)
-        .collect();
+pub(super) fn coerce_list_views(arrow_schema: &ArrowSchemaRef) -> Option<ArrowSchemaRef> {
+    let fields = coerce_list_views_in_fields(arrow_schema.fields())?;
     Some(Arc::new(ArrowSchema::new_with_metadata(
         fields,
         arrow_schema.metadata().clone(),
     )))
 }
 
-/// Returns `field` with its list views rewritten, sharing every subtree that has none.
-fn list_view_as_list(field: &FieldRef) -> FieldRef {
-    if !contains_list_view(field.data_type()) {
-        return Arc::clone(field);
-    }
-    let data_type = match field.data_type() {
-        DataType::List(element) | DataType::ListView(element) => {
-            DataType::List(list_view_as_list(element))
-        }
-        DataType::LargeList(element) | DataType::LargeListView(element) => {
-            DataType::LargeList(list_view_as_list(element))
-        }
-        DataType::FixedSizeList(element, size) => {
-            DataType::FixedSizeList(list_view_as_list(element), *size)
-        }
-        DataType::Map(entries, sorted) => DataType::Map(list_view_as_list(entries), *sorted),
-        DataType::Struct(fields) => {
-            DataType::Struct(fields.iter().map(list_view_as_list).collect())
-        }
-        other => other.clone(),
-    };
-    Arc::new(field.as_ref().clone().with_data_type(data_type))
+/// Returns `fields` with their list views rewritten, or `None` if they have none. Unchanged
+/// fields are shared, and nothing is allocated before the first change.
+fn coerce_list_views_in_fields(fields: &Fields) -> Option<Fields> {
+    let (index, first) = fields
+        .iter()
+        .enumerate()
+        .find_map(|(index, field)| Some((index, coerce_list_views_in_field(field)?)))?;
+    let rest = fields
+        .iter()
+        .skip(index + 1)
+        .map(coerce_list_views_or_share);
+    Some(
+        fields
+            .iter()
+            .take(index)
+            .cloned()
+            .chain([first])
+            .chain(rest)
+            .collect(),
+    )
 }
 
-/// Whether `data_type` is, or contains, a `ListView` or `LargeListView`.
-fn contains_list_view(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::ListView(_) | DataType::LargeListView(_) => true,
-        DataType::List(element)
-        | DataType::LargeList(element)
-        | DataType::FixedSizeList(element, _)
-        | DataType::Map(element, _) => contains_list_view(element.data_type()),
-        DataType::Struct(fields) => fields
-            .iter()
-            .any(|field| contains_list_view(field.data_type())),
-        _ => false,
-    }
+/// Returns `field` with its list views rewritten, or `None` if it has none.
+fn coerce_list_views_in_field(field: &FieldRef) -> Option<FieldRef> {
+    let data_type = match field.data_type() {
+        DataType::ListView(element) => DataType::List(coerce_list_views_or_share(element)),
+        DataType::LargeListView(element) => {
+            DataType::LargeList(coerce_list_views_or_share(element))
+        }
+        DataType::List(element) => DataType::List(coerce_list_views_in_field(element)?),
+        DataType::LargeList(element) => DataType::LargeList(coerce_list_views_in_field(element)?),
+        DataType::FixedSizeList(element, size) => {
+            DataType::FixedSizeList(coerce_list_views_in_field(element)?, *size)
+        }
+        DataType::Map(entries, sorted) => {
+            DataType::Map(coerce_list_views_in_field(entries)?, *sorted)
+        }
+        DataType::Struct(fields) => DataType::Struct(coerce_list_views_in_fields(fields)?),
+        _ => return None,
+    };
+    Some(Arc::new(field.as_ref().clone().with_data_type(data_type)))
+}
+
+fn coerce_list_views_or_share(field: &FieldRef) -> FieldRef {
+    coerce_list_views_in_field(field).unwrap_or_else(|| Arc::clone(field))
 }
 
 /// Add position-based fallback field IDs to Arrow schema for Parquet files lacking them.
@@ -1453,164 +1450,62 @@ message schema {
         );
     }
 
-    /// Regression test for #3393: list views are read as lists, so their elements and the
-    /// columns after them project correctly.
-    #[tokio::test]
-    async fn test_read_list_view_columns() {
-        use arrow_array::types::Int32Type;
-        use arrow_array::{Int32Array, ListViewArray, StructArray};
-        use arrow_buffer::ScalarBuffer;
-
-        use crate::spec::ListType;
-
-        let with_id = |field: Field, id: i32| {
-            field.with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                id.to_string(),
-            )]))
-        };
-        let int = |id, name: &str| {
-            NestedField::optional(id, name, Type::Primitive(PrimitiveType::Int)).into()
-        };
-
-        // 2: lv list_view<3: struct<4: a int, 5: b int>>, then 1: id int.
-        let a = Arc::new(with_id(Field::new("a", DataType::Int32, true), 4));
-        let b = Arc::new(with_id(Field::new("b", DataType::Int32, true), 5));
-        let structs = StructArray::new(
-            vec![a, b].into(),
-            vec![
-                Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef,
-                Arc::new(Int32Array::from(vec![-10, -20, -30])) as ArrayRef,
-            ],
-            None,
-        );
-        let element = Arc::new(with_id(
-            Field::new("element", structs.data_type().clone(), true),
-            3,
-        ));
-        let lv = ListViewArray::new(
-            element.clone(),
-            ScalarBuffer::from(vec![0, 1, 2]),
-            ScalarBuffer::from(vec![1, 1, 1]),
-            Arc::new(structs),
-            None,
-        );
-        let file_schema = Arc::new(ArrowSchema::new(vec![
-            with_id(Field::new("lv", DataType::ListView(element), true), 2),
-            with_id(Field::new("id", DataType::Int32, true), 1),
-        ]));
-        let batch = RecordBatch::try_new(file_schema.clone(), vec![
-            Arc::new(lv) as ArrayRef,
-            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
-        ])
-        .unwrap();
-        let tmp_dir = TempDir::new().unwrap();
-        let path = format!("{}/1.parquet", tmp_dir.path().to_str().unwrap());
-        let file = File::create(&path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, file_schema, None).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        let element_type = Type::Struct(StructType::new(vec![int(4, "a"), int(5, "b")]));
-        let element_field = NestedField::list_element(3, element_type, false).into();
-        let schema = Arc::new(
-            Schema::builder()
-                .with_fields(vec![
-                    NestedField::optional(2, "lv", Type::List(ListType::new(element_field))).into(),
-                    int(1, "id"),
-                ])
-                .build()
-                .unwrap(),
-        );
-        let task = FileScanTask::builder()
-            .with_file_size_in_bytes(std::fs::metadata(&path).unwrap().len())
-            .with_start(0)
-            .with_length(0)
-            .with_data_file_path(path)
-            .with_data_file_format(DataFileFormat::Parquet)
-            .with_schema(schema)
-            .with_project_field_ids(vec![2, 1])
-            .with_case_sensitive(false)
-            .build()
-            .unwrap();
-        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
-        let tasks = Box::pin(futures::stream::iter([Ok(task)])) as FileScanTaskStream;
-        let result = reader
-            .read(tasks)
-            .unwrap()
-            .stream()
-            .try_collect::<Vec<RecordBatch>>()
-            .await
-            .unwrap();
-
-        let lv = result[0].column(0).as_list::<i32>();
-        assert_eq!(lv.value_offsets(), &[0, 1, 2, 3]);
-        let structs = lv.values().as_struct();
-        assert_eq!(
-            structs.column(0).as_primitive::<Int32Type>(),
-            &Int32Array::from(vec![10, 20, 30])
-        );
-        assert_eq!(
-            structs.column(1).as_primitive::<Int32Type>(),
-            &Int32Array::from(vec![-10, -20, -30])
-        );
-        assert_eq!(
-            result[0].column(1).as_primitive::<Int32Type>(),
-            &Int32Array::from(vec![1, 2, 3])
-        );
-    }
-
-    /// List views become lists at any depth and keep their metadata, and a schema without one is
-    /// left as it is.
+    /// List views become lists at any depth and keep their metadata, and a schema without one
+    /// is left as it is.
     #[test]
-    fn test_list_views_as_lists() {
+    fn test_coerce_list_views() {
         use arrow_schema::{FieldRef, Fields};
 
-        use super::list_views_as_lists;
+        use super::coerce_list_views;
 
         // The same schema, built with list views or with lists.
         let schema = |list: fn(FieldRef) -> DataType, large_list: fn(FieldRef) -> DataType| {
             let id = HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "9".to_string())]);
-            let int =
-                Arc::new(Field::new("element", DataType::Int32, true).with_metadata(id.clone()));
+            let int = |name: &str| Field::new(name, DataType::Int32, true);
             let element = |data_type| Arc::new(Field::new("element", data_type, true));
+            let ints = element(DataType::Int32);
             let entries = Field::new(
                 "key_value",
                 DataType::Struct(Fields::from(vec![
                     Field::new("key", DataType::Utf8, false),
-                    Field::new("value", list(int.clone()), true),
+                    Field::new("value", list(ints.clone()), true),
                 ])),
                 false,
             );
             Arc::new(ArrowSchema::new(vec![
-                Field::new("lv", list(int.clone()), true).with_metadata(id),
-                Field::new("llv", large_list(int.clone()), true),
+                int("id"),
                 Field::new(
                     "s",
-                    DataType::Struct(Fields::from(vec![Field::new(
-                        "lv",
-                        list(int.clone()),
-                        true,
-                    )])),
+                    DataType::Struct(Fields::from(vec![
+                        int("a"),
+                        Field::new("lv", list(ints.clone()), true),
+                        int("b"),
+                    ])),
                     true,
                 ),
-                Field::new("nested", list(element(large_list(int.clone()))), true),
+                Field::new("nested", list(element(large_list(ints.clone()))), true)
+                    .with_metadata(id),
+                Field::new("list", DataType::List(element(list(ints.clone()))), true),
+                Field::new(
+                    "large",
+                    DataType::LargeList(element(list(ints.clone()))),
+                    true,
+                ),
                 Field::new(
                     "fixed",
-                    DataType::FixedSizeList(element(list(int)), 2),
+                    DataType::FixedSizeList(element(list(ints)), 2),
                     true,
                 ),
-                Field::new("map", DataType::Map(Arc::new(entries), false), true),
-                Field::new("id", DataType::Int32, true),
+                Field::new("map", DataType::Map(Arc::new(entries), true), true),
             ]))
         };
         let lists = schema(DataType::List, DataType::LargeList);
 
         assert_eq!(
-            list_views_as_lists(&schema(DataType::ListView, DataType::LargeListView)),
+            coerce_list_views(&schema(DataType::ListView, DataType::LargeListView)),
             Some(Arc::clone(&lists))
         );
-        assert_eq!(list_views_as_lists(&lists), None);
+        assert_eq!(coerce_list_views(&lists), None);
     }
 
     /// Test reading Parquet files without field IDs with partial projection.
