@@ -521,6 +521,14 @@ impl FileScanTaskReader {
         }
 
         if let Some(predicate) = final_predicate {
+            // Normalize NOT out of the predicate once for every consumer below. The
+            // conservative row-group and page-index evaluators cannot soundly negate
+            // a NOT node (negating a "might match" bound can prune matching rows, and
+            // the page-index evaluator rejects NOT outright). A FileScanTask built or
+            // deserialized outside TableScan carries an un-normalized predicate, so
+            // rewrite it here. Matches TableScan::with_filter.
+            let predicate = predicate.rewrite_not();
+
             let (iceberg_field_ids, field_id_map) = ArrowReader::build_field_id_set_and_map(
                 record_batch_stream_builder.parquet_schema(),
                 record_batch_stream_builder.schema(),
