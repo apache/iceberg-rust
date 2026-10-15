@@ -73,7 +73,7 @@ use crate::error::Result;
 use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
-pub use crate::transaction::append::FastAppendAction;
+pub use crate::transaction::append::{FastAppendAction, IDEMPOTENCY_KEY_SUMMARY_PROPERTY};
 pub use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
 pub use crate::transaction::sort_order::ReplaceSortOrderAction;
 pub use crate::transaction::update_location::UpdateLocationAction;
@@ -230,6 +230,11 @@ impl Transaction {
                 &mut existing_updates,
                 &mut existing_requirements,
             )?;
+        }
+
+        if existing_updates.is_empty() && existing_requirements.is_empty() {
+            // every action was a no-op (e.g. an idempotent append already committed)
+            return Ok(self.table.clone());
         }
 
         let table_commit = TableCommit::builder()
@@ -566,6 +571,27 @@ mod tests {
         assert_eq!(summary.get("total-records").unwrap(), "30");
         assert_eq!(summary.get("total-data-files").unwrap(), "2");
         assert_eq!(summary.get("total-files-size").unwrap(), "300");
+    }
+
+    #[tokio::test]
+    async fn test_commit_without_updates_writes_nothing() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // The table has no snapshots, so there is nothing to expire.
+        let tx = Transaction::new(&table);
+        let committed = tx
+            .expire_snapshots()
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (committed.metadata(), committed.metadata_location()),
+            (table.metadata(), table.metadata_location())
+        );
     }
 
     #[tokio::test]
