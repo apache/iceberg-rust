@@ -85,6 +85,10 @@ github:
     allow_auto_merge: true
     # auto-delete head branches after being merged
     del_branch_on_merge: true
+    # Limit open, non-draft PRs per user without write access. See CONTRIBUTING.md.
+    creation_cap:
+      enabled: true
+      max_open_pull_requests: 3
   features:
     wiki: false
     issues: true

@@ -1040,6 +1040,8 @@ catalog and the context it should run under:</p>
 <p><em>All</em> changes must be made in a branch and submitted as <a href="CONTRIBUTING.html#github-pull-requests">pull requests</a>. iceberg-rust does not adopt any type of branch naming style, but please use something descriptive of your changes.</p>
 <h3 id="github-pull-requests"><a class="header" href="#github-pull-requests">GitHub Pull Requests</a></h3>
 <p>Once your changes are ready you must submit your branch as a <a href="https://github.com/apache/iceberg-rust/pulls">pull request</a>.</p>
+<h4 id="open-pull-request-limit"><a class="header" href="#open-pull-request-limit">Open Pull Request Limit</a></h4>
+<p>With coding agents, the number of open PRs now far exceeds our review capacity. To help reviewers focus on fewer PRs, users without write access are limited to <strong>3 open, non-draft PRs</strong> at a time. If you've reached the limit, wait for existing PRs to be merged, close some of them, or convert some to drafts until you have fewer than three open PRs before opening another.</p>
 <h4 id="title"><a class="header" href="#title">Title</a></h4>
 <p>The pull request title must follow the format outlined in the <a href="https://www.conventionalcommits.org">conventional commits spec</a>. <a href="https://www.conventionalcommits.org">Conventional commits</a> is a standardized format for commit messages. iceberg-rust only requires this format for commits on the <code>main</code> branch. And because iceberg-rust squashes commits before merging branches, this means that only the pull request title must conform to this format.</p>
 <p>The following are all good examples of pull request titles:</p>
