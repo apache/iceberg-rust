@@ -1952,6 +1952,32 @@ mod tests {
     }
 
     #[test]
+    fn test_partition_to_path_float_matches_java() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "d", Type::Primitive(PrimitiveType::Double)).into(),
+                NestedField::required(2, "f", Type::Primitive(PrimitiveType::Float)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let spec = PartitionSpec::builder(schema.clone())
+            .add_partition_field("d", "d", Transform::Identity)
+            .unwrap()
+            .add_partition_field("f", "f", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let data = Struct::from_iter([Some(Literal::double(1.0)), Some(Literal::float(1.0e7_f32))]);
+
+        assert_eq!(
+            spec.partition_to_path(&data, schema.into()),
+            "d=1.0/f=1.0E7"
+        );
+    }
+
+    #[test]
     fn test_partition_to_path_escaped_strings() {
         let schema = Schema::builder()
             .with_fields(vec![
