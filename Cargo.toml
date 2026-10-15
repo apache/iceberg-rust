@@ -80,6 +80,9 @@ bytes = "1.11"
 cfg-if = "1"
 chrono = "0.4.41"
 crc32fast = "1"
+criterion = { version = "0.8", default-features = false, features = [
+  "cargo_bench_support",
+] }
 derive_builder = "0.20"
 expect-test = "1"
 fastnum = { version = "0.7", default-features = false, features = [
