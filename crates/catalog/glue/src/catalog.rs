@@ -52,7 +52,7 @@ use crate::{
 pub const GLUE_CATALOG_PROP_URI: &str = "uri";
 /// Glue catalog id
 pub const GLUE_CATALOG_PROP_CATALOG_ID: &str = "catalog_id";
-/// Glue catalog warehouse location
+/// Glue catalog warehouse location, used for new tables whose namespace has no location
 pub const GLUE_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
 /// Builder for [`GlueCatalog`].
@@ -90,12 +90,6 @@ impl CatalogBuilder for GlueCatalogBuilder {
 
         async move {
             let catalog_properties = GlueCatalogProperties::from_properties(&props)?;
-            if catalog_properties.warehouse.is_empty() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog warehouse is required",
-                ));
-            }
 
             let runtime = match self.runtime {
                 Some(rt) => rt,
@@ -589,7 +583,7 @@ impl Catalog for GlueCatalog {
         if creation.location.is_none() {
             let ns = self.get_namespace(namespace).await?;
             let location =
-                get_default_table_location(&ns, &db_name, &table_name, &self.properties.warehouse);
+                get_default_table_location(&ns, &db_name, &table_name, &self.properties.warehouse)?;
             creation.location = Some(location);
         }
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
@@ -963,18 +957,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_rejects_missing_or_empty_warehouse() {
+    async fn test_load_without_warehouse() {
         for props in [
             HashMap::new(),
             HashMap::from([(GLUE_CATALOG_PROP_WAREHOUSE.to_string(), String::new())]),
         ] {
-            let error = GlueCatalogBuilder::default()
+            let catalog = GlueCatalogBuilder::default()
                 .load("glue", props)
                 .await
-                .unwrap_err();
+                .unwrap();
 
-            assert_eq!(error.kind(), ErrorKind::DataInvalid);
-            assert_eq!(error.message(), "Catalog warehouse is required");
+            assert_eq!(catalog.properties.warehouse, "");
         }
     }
 }
