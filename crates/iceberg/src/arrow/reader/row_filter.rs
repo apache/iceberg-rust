@@ -977,6 +977,161 @@ mod tests {
         )
     }
 
+    /// A `FileScanTask` built or deserialized outside `TableScan` carries an
+    /// un-normalized predicate, so a raw `Not(...)` can reach the reader.
+    #[tokio::test]
+    async fn test_not_predicate_read_returns_matching_rows() {
+        use arrow_array::Int32Array;
+
+        let schema = int_schema();
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("x", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_path = format!("{table_location}/not_pred.parquet");
+
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), None).unwrap();
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int32Array::from(
+            (0..=10).collect::<Vec<i32>>(),
+        ))])
+        .unwrap();
+        writer.write(&batch).expect("Writing batch");
+        writer.close().unwrap();
+
+        // NOT(x > 5) == x <= 5, bound without rewriting, as a non-TableScan caller
+        // would supply it.
+        let predicate = (!Reference::new("x").greater_than(Datum::int(5)))
+            .bind(schema.clone(), false)
+            .unwrap();
+        assert!(
+            matches!(predicate, BoundPredicate::Not(_)),
+            "test must drive a raw Not(...) node"
+        );
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+            .with_row_group_filtering_enabled(true)
+            .build();
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema.clone())
+            .with_project_field_ids(vec![1])
+            .with_predicate(Some(predicate))
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        let mut values = Vec::new();
+        for batch in &batches {
+            let col = batch
+                .column(0)
+                .as_primitive::<arrow_array::types::Int32Type>();
+            values.extend(col.values().iter().copied());
+        }
+
+        assert_eq!(values, (0..=5).collect::<Vec<i32>>());
+    }
+
+    #[tokio::test]
+    async fn test_not_predicate_read_through_page_index() {
+        use arrow_array::Int32Array;
+        use parquet::file::reader::{FileReader, SerializedFileReader};
+        use parquet::file::serialized_reader::ReadOptionsBuilder;
+
+        let schema = int_schema();
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("x", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_path = format!("{table_location}/not_pred_pages.parquet");
+
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), None).unwrap();
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int32Array::from(
+            (0..100).collect::<Vec<i32>>(),
+        ))])
+        .unwrap();
+        writer.write(&batch).expect("Writing batch");
+        writer.close().unwrap();
+
+        {
+            let f = File::open(&file_path).unwrap();
+            let opts = ReadOptionsBuilder::new().with_page_index().build();
+            let rdr = SerializedFileReader::new_with_options(f, opts).unwrap();
+            assert!(
+                rdr.metadata().column_index().is_some(),
+                "fixture must carry a column index so the page-index path runs"
+            );
+        }
+
+        // NOT(x >= 50) == x < 50, as a non-TableScan caller would supply it.
+        let predicate = (!Reference::new("x").greater_than_or_equal_to(Datum::int(50)))
+            .bind(schema.clone(), false)
+            .unwrap();
+        assert!(matches!(predicate, BoundPredicate::Not(_)));
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+            .with_row_group_filtering_enabled(false)
+            .with_row_selection_enabled(true)
+            .build();
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema.clone())
+            .with_project_field_ids(vec![1])
+            .with_predicate(Some(predicate))
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        let mut values = Vec::new();
+        for batch in &batches {
+            let col = batch
+                .column(0)
+                .as_primitive::<arrow_array::types::Int32Type>();
+            values.extend(col.values().iter().copied());
+        }
+
+        assert_eq!(values, (0..50).collect::<Vec<i32>>());
+    }
+
     #[test]
     fn test_row_group_pruning_rejects_invalid_candidate() {
         let schema = int_schema();

@@ -207,8 +207,14 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         Ok(lhs || rhs)
     }
 
-    fn not(&mut self, inner: bool) -> Result<bool> {
-        Ok(!inner)
+    fn not(&mut self, _: bool) -> Result<bool> {
+        // Negating a conservative "might match" bound is unsound (it can turn into
+        // "can't match" and prune row groups that do match), so NOT must be
+        // rewritten out of the predicate before it reaches this evaluator.
+        Err(Error::new(
+            ErrorKind::Unexpected,
+            "NOT unsupported at this point. NOT-rewrite should be performed first",
+        ))
     }
 
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
@@ -543,9 +549,9 @@ mod tests {
     use rand::Rng;
 
     use super::RowGroupMetricsEvaluator;
-    use crate::Result;
     use crate::expr::{Bind, Reference};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
+    use crate::{ErrorKind, Result};
 
     #[test]
     fn eval_matches_no_rows_for_empty_row_group() -> Result<()> {
@@ -587,6 +593,32 @@ mod tests {
         )?;
 
         assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_error_for_not_predicate_requires_rewrite() -> Result<()> {
+        // The evaluator cannot soundly negate a conservative bound, so a NOT node
+        // that reaches it (one that was not rewritten away first) is rejected
+        // rather than silently mispruning a matching row group.
+        let row_group_metadata = create_row_group_metadata(1, 1, None, 1, None)?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = (!Reference::new("col_float").greater_than(Datum::float(5.0_f32)))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let err = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.message().contains("NOT"));
 
         Ok(())
     }
