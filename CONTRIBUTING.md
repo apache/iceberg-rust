@@ -40,7 +40,7 @@ Once your changes are ready you must submit your branch as a [pull request](http
 
 #### Open Pull Request Limit
 
-With coding agents, the number of open PRs now far exceeds our review capacity. To help reviewers focus on fewer PRs, users without write access are limited to **3 open, non-draft PRs** at a time. If you reach the limit, wait for existing PRs to be merged or close them until you have fewer than 3 before opening another.
+With coding agents, the number of open PRs now far exceeds our review capacity. To help reviewers focus on fewer PRs, users without write access are limited to **3 open, non-draft PRs** at a time. If you've reached the limit, wait for existing PRs to be merged, close some of them, or convert some to drafts until you have fewer than three open PRs before opening another.
 
 #### Title
 
