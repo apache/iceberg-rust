@@ -122,6 +122,9 @@ jobs:
       - name: Cargo clippy
         run: make check-clippy
 
+      - name: Cargo doc
+        run: make check-doc
+
   build:
     needs: lint
     runs-on: ${{ matrix.os }}
