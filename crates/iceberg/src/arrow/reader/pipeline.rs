@@ -36,7 +36,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 use super::row_lineage::synthesize_row_id_column;
 use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
-    apply_name_mapping_to_arrow_schema, find_leaf_by_field_id,
+    apply_name_mapping_to_arrow_schema, find_leaf_by_field_id, list_views_as_lists,
 };
 use crate::arrow::build_partition_constant;
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
@@ -655,23 +655,22 @@ impl FileScanTaskReader {
         // otherwise, use applyNameMapping() followed by pruneColumns() when configured, or
         // addFallbackIds() followed by pruneColumnsFallback() for position-based fallback.
         // The fast path returns early without materializing an owned schema.
+        let lists = list_views_as_lists(arrow_metadata.schema());
+        let file_schema = lists.as_ref().unwrap_or(arrow_metadata.schema());
         let arrow_schema = if missing_field_ids {
             let schema = if let Some(name_mapping) = task.name_mapping() {
-                apply_name_mapping_to_arrow_schema(
-                    Arc::clone(arrow_metadata.schema()),
-                    name_mapping,
-                )?
+                apply_name_mapping_to_arrow_schema(Arc::clone(file_schema), name_mapping)?
             } else {
-                add_fallback_field_ids_to_arrow_schema(arrow_metadata.schema())
+                add_fallback_field_ids_to_arrow_schema(file_schema)
             };
             // Coerce INT96 timestamp columns before building the stream reader to avoid
             // i64 overflow in arrow-rs. Apply this after assigning any missing field IDs
             // so the final schema contains both changes.
             coerce_int96_timestamps(&schema, task.schema()).unwrap_or(schema)
-        } else if let Some(coerced) =
-            coerce_int96_timestamps(arrow_metadata.schema(), task.schema())
-        {
+        } else if let Some(coerced) = coerce_int96_timestamps(file_schema, task.schema()) {
             coerced
+        } else if let Some(lists) = lists {
+            lists
         } else if install_row_number {
             Arc::clone(arrow_metadata.schema())
         } else {

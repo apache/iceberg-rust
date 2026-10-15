@@ -47,7 +47,7 @@ pub(crate) use options::ParquetReadOptions;
 use predicate_visitor::{CollectFieldIdVisitor, PredicateConverter};
 use projection::{
     add_fallback_field_ids_to_arrow_schema, apply_name_mapping_to_arrow_schema,
-    find_leaf_by_field_id,
+    find_leaf_by_field_id, list_views_as_lists,
 };
 
 /// Builder to create ArrowReader
