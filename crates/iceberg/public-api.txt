@@ -3326,6 +3326,7 @@ pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transac
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::ReplaceSortOrderAction
 pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::UpdateLocationAction
+pub fn iceberg::transaction::Transaction::update_partition_spec(&self) -> iceberg::transaction::UpdatePartitionSpecAction
 pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::UpdateSchemaAction
 pub fn iceberg::transaction::Transaction::update_statistics(&self) -> iceberg::transaction::UpdateStatisticsAction
 pub fn iceberg::transaction::Transaction::update_table_properties(&self) -> iceberg::transaction::UpdatePropertiesAction
@@ -3335,6 +3336,16 @@ pub fn iceberg::transaction::Transaction::clone(&self) -> iceberg::transaction::
 pub struct iceberg::transaction::UpdateLocationAction
 impl iceberg::transaction::UpdateLocationAction
 pub fn iceberg::transaction::UpdateLocationAction::set_location(self, location: alloc::string::String) -> Self
+pub struct iceberg::transaction::UpdatePartitionSpecAction
+impl iceberg::transaction::UpdatePartitionSpecAction
+pub fn iceberg::transaction::UpdatePartitionSpecAction::add_field(self, source_name: impl core::convert::Into<alloc::string::String>, transform: iceberg::spec::Transform) -> Self
+pub fn iceberg::transaction::UpdatePartitionSpecAction::add_field_with_name(self, name: impl core::convert::Into<alloc::string::String>, source_name: impl core::convert::Into<alloc::string::String>, transform: iceberg::spec::Transform) -> Self
+pub fn iceberg::transaction::UpdatePartitionSpecAction::add_identity(self, source_name: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::transaction::UpdatePartitionSpecAction::add_non_default_spec(self) -> Self
+pub fn iceberg::transaction::UpdatePartitionSpecAction::case_sensitive(self, case_sensitive: bool) -> Self
+pub fn iceberg::transaction::UpdatePartitionSpecAction::remove_field(self, name: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::transaction::UpdatePartitionSpecAction::remove_field_by_transform(self, source_name: impl core::convert::Into<alloc::string::String>, transform: iceberg::spec::Transform) -> Self
+pub fn iceberg::transaction::UpdatePartitionSpecAction::rename_field(self, name: impl core::convert::Into<alloc::string::String>, new_name: impl core::convert::Into<alloc::string::String>) -> Self
 pub struct iceberg::transaction::UpdatePropertiesAction
 impl iceberg::transaction::UpdatePropertiesAction
 pub fn iceberg::transaction::UpdatePropertiesAction::remove(self, key: alloc::string::String) -> Self
