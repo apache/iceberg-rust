@@ -20,6 +20,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use apache_avro::types::Value;
+use apache_avro::{Codec, DeflateSettings};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use iceberg::io::FileIO;
 use iceberg::spec::{
@@ -132,9 +133,9 @@ fn write_manifest(num_entries: u64) -> Vec<u8> {
     .to_vec()
 }
 
-/// Rewrites `bytes` without the `data_file` fields that PyIceberg doesn't
-/// write, so the writer schema differs from the reader schema.
-fn without_optional_fields(bytes: &[u8]) -> Vec<u8> {
+/// Rewrites `bytes` the way Iceberg Java writes V2 manifests: without the
+/// `data_file` fields it doesn't write, deflate, and 64 KB blocks.
+fn rewrite_like_java(bytes: &[u8]) -> Vec<u8> {
     const OMITTED: [&str; 3] = ["first_row_id", "content_offset", "content_size_in_bytes"];
     let retain = |fields: &mut Vec<serde_json::Value>| {
         fields.retain(|f| !OMITTED.contains(&f["name"].as_str().unwrap()))
@@ -148,7 +149,13 @@ fn without_optional_fields(bytes: &[u8]) -> Vec<u8> {
         }
     }
     let schema = apache_avro::Schema::parse(&schema).unwrap();
-    let mut writer = apache_avro::Writer::new(&schema, Vec::new()).unwrap();
+    let mut writer = apache_avro::Writer::builder()
+        .schema(&schema)
+        .writer(Vec::new())
+        .codec(Codec::Deflate(DeflateSettings::default()))
+        .block_size(64_000)
+        .build()
+        .unwrap();
     for (key, value) in reader.user_metadata() {
         writer.add_user_metadata(key.clone(), value).unwrap();
     }
@@ -169,11 +176,11 @@ fn without_optional_fields(bytes: &[u8]) -> Vec<u8> {
 fn bench_parse_avro(c: &mut Criterion) {
     let mut group = c.benchmark_group("manifest_parse_avro");
     group.sample_size(10);
-    for num_entries in [1_000, 10_000, 50_000] {
+    for num_entries in [1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000] {
         let bytes = write_manifest(num_entries);
         let cases = [
-            ("fewer_writer_fields", without_optional_fields(&bytes)),
-            ("same_writer_schema", bytes),
+            ("java_like", rewrite_like_java(&bytes)),
+            ("iceberg_rust_writer", bytes),
         ];
         assert_eq!(
             Manifest::parse_avro(&cases[0].1).unwrap(),
