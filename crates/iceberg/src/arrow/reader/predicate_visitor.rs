@@ -585,17 +585,17 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(idx) = self.bound_reference(reference)? {
-            let literals: Vec<_> = literals
-                .iter()
-                .map(|lit| get_arrow_datum(lit).unwrap())
-                .collect();
+            let mut arrow_literals = Vec::with_capacity(literals.len());
+            for lit in literals {
+                arrow_literals.push(get_arrow_datum(lit)?);
+            }
 
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native is_in kernel
                 let left = project_column(&batch, idx)?;
 
                 let mut acc = constant_bool_array(false, batch.num_rows());
-                for literal in &literals {
+                for literal in &arrow_literals {
                     let literal = try_cast_literal(literal, left.data_type())?;
                     acc = or(&acc, &eq(&left, literal.as_ref())?)?
                 }
@@ -615,16 +615,16 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(idx) = self.bound_reference(reference)? {
-            let literals: Vec<_> = literals
-                .iter()
-                .map(|lit| get_arrow_datum(lit).unwrap())
-                .collect();
+            let mut arrow_literals = Vec::with_capacity(literals.len());
+            for lit in literals {
+                arrow_literals.push(get_arrow_datum(lit)?);
+            }
 
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native not_in kernel
                 let left = project_column(&batch, idx)?;
                 let mut acc = constant_bool_array(true, batch.num_rows());
-                for literal in &literals {
+                for literal in &arrow_literals {
                     let literal = try_cast_literal(literal, left.data_type())?;
                     acc = and(&acc, &neq(&left, literal.as_ref())?)?
                 }
@@ -670,9 +670,14 @@ mod tests {
     use parquet::schema::types::SchemaDescriptor;
 
     use super::{CollectFieldIdVisitor, PredicateConverter, constant_bool_array};
+    use crate::ErrorKind;
     use crate::expr::visitors::bound_predicate_visitor::visit;
-    use crate::expr::{Bind, Predicate, Reference};
-    use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::expr::{
+        Bind, BoundPredicate, Predicate, PredicateOperator, Reference, SetExpression,
+    };
+    use crate::spec::{
+        Datum, NestedField, PrimitiveLiteral, PrimitiveType, Schema, SchemaRef, Type,
+    };
 
     fn table_schema_simple() -> SchemaRef {
         Arc::new(
@@ -745,6 +750,33 @@ mod tests {
         expected.insert(3);
 
         assert_eq!(visitor.field_ids, expected);
+    }
+
+    #[test]
+    fn test_set_predicate_propagates_literal_conversion_error() {
+        let schema = table_schema_simple();
+        let reference = Reference::new("bar").bind(schema, true).unwrap();
+        let parquet_type =
+            parse_message_type("message schema { required int32 bar = 2; }").unwrap();
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
+        let column_map = HashMap::from([(2, 0)]);
+        let column_indices = vec![0];
+        let mut converter = PredicateConverter {
+            parquet_schema: &parquet_schema,
+            column_map: &column_map,
+            column_indices: &column_indices,
+        };
+        let literals: fnv::FnvHashSet<_> =
+            [Datum::new(PrimitiveType::Int, PrimitiveLiteral::Long(1))]
+                .into_iter()
+                .collect();
+
+        for op in [PredicateOperator::In, PredicateOperator::NotIn] {
+            let predicate =
+                BoundPredicate::Set(SetExpression::new(op, reference.clone(), literals.clone()));
+            let error = visit(&mut converter, &predicate).err().unwrap();
+            assert_eq!(error.kind(), ErrorKind::FeatureUnsupported);
+        }
     }
 
     #[test]
