@@ -333,12 +333,15 @@ mod tests {
     }
 
     async fn make_v2_minimal_readonly_table() -> Table {
-        let metadata = make_v2_minimal_table().metadata().clone();
-        let ident = TableIdent::from_strs(["ns1", "test1"]).unwrap();
-        StaticTable::from_metadata(metadata, ident, FileIO::new_with_memory())
-            .await
-            .unwrap()
-            .into_table()
+        let table = make_v2_minimal_table();
+        StaticTable::from_metadata(
+            table.metadata().clone(),
+            table.identifier().clone(),
+            FileIO::new_with_memory(),
+        )
+        .await
+        .unwrap()
+        .into_table()
     }
 
     pub(crate) async fn make_v3_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
