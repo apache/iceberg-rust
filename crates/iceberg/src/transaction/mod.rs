@@ -55,7 +55,8 @@ mod action;
 pub use action::*;
 mod append;
 mod expire_snapshots;
-mod snapshot;
+mod simple_snapshot_producer;
+mod snapshot_helpers;
 mod sort_order;
 mod update_location;
 mod update_properties;
@@ -379,8 +380,11 @@ mod tests {
 
     /// Helper function to create a test table with retry properties
     pub(super) fn setup_test_table(num_retries: &str) -> Table {
-        let table = make_v2_table();
+        with_retry_properties(make_v2_table(), num_retries)
+    }
 
+    /// Sets fast commit retry properties on `table`.
+    pub(super) fn with_retry_properties(table: Table, num_retries: &str) -> Table {
         // Set retry properties
         let mut props = HashMap::new();
         props.insert("commit.retry.min-wait-ms".to_string(), "10".to_string());
