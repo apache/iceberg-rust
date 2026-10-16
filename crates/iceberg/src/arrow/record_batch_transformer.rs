@@ -894,7 +894,7 @@ impl RecordBatchTransformer {
 
         let target_schema = Arc::new(ArrowSchema::new(fields?));
 
-        match Self::compare_schemas(source_schema, &target_schema) {
+        match Self::compare_schemas(source_schema, &target_schema)? {
             SchemaComparison::Equivalent => Ok(BatchTransform::PassThrough),
             SchemaComparison::NameChangesOnly => Ok(BatchTransform::ModifySchema { target_schema }),
             SchemaComparison::Different => Ok(BatchTransform::Modify {
@@ -912,14 +912,13 @@ impl RecordBatchTransformer {
     }
 
     /// Compares the source and target schemas to decide how much work the
-    /// transform must do. The checks are applied in this order:
+    /// transform must do. The comparison distinguishes these cases:
     ///  1. If the schemas have different numbers of fields, they are
     ///     `Different`: we must rebuild both the schema AND the columns.
-    ///  2. If every field matches positionally in name, data type, and
-    ///     nullability, they are `Equivalent`: the original RecordBatch can be
-    ///     passed through unmodified.
-    ///  3. If they contain the same set of fields but in a different order
-    ///     (detected via set-equality, since field names are unique), they are
+    ///  2. If every field matches positionally in field ID, name, data type, and
+    ///     nullability, with no missing field IDs, they are `Equivalent`: the
+    ///     original RecordBatch can be passed through unmodified.
+    ///  3. If any field ID is missing or differs positionally, they are
     ///     `Different`: the columns must be rebuilt in the target order.
     ///  4. Otherwise, the fields align positionally: if any differs in data
     ///     type or nullability the schemas are `Different` (rebuild schema AND
@@ -928,43 +927,30 @@ impl RecordBatchTransformer {
     fn compare_schemas(
         source_schema: &ArrowSchemaRef,
         target_schema: &ArrowSchemaRef,
-    ) -> SchemaComparison {
+    ) -> Result<SchemaComparison> {
         if source_schema.fields().len() != target_schema.fields().len() {
-            return SchemaComparison::Different;
+            return Ok(SchemaComparison::Different);
         }
 
-        let field_eq = |a: &FieldRef, b: &FieldRef| {
-            a.name() == b.name()
-                && a.data_type() == b.data_type()
-                && a.is_nullable() == b.is_nullable()
-        };
-
-        let positional = || source_schema.fields().iter().zip(target_schema.fields());
-
-        // Field-by-field identical: nothing to do.
-        if positional().all(|(s, t)| field_eq(s, t)) {
-            return SchemaComparison::Equivalent;
+        let mut names_match = true;
+        for (source, target) in source_schema.fields().iter().zip(target_schema.fields()) {
+            let source_id = try_get_field_id_from_metadata(source)?;
+            let target_id = try_get_field_id_from_metadata(target)?;
+            if source_id.is_none()
+                || source_id != target_id
+                || source.data_type() != target.data_type()
+                || source.is_nullable() != target.is_nullable()
+            {
+                return Ok(SchemaComparison::Different);
+            }
+            names_match &= source.name() == target.name();
         }
 
-        // Same set of fields but reordered: rebuild in target (selection) order.
-        // Lengths are equal and field names are unique, so this is set-equality.
-        let reordered = target_schema
-            .fields()
-            .iter()
-            .all(|t| source_schema.fields().iter().any(|s| field_eq(s, t)));
-        if reordered {
-            return SchemaComparison::Different;
-        }
-
-        // Not a reordering: any type/nullability difference needs a full
-        // rebuild; otherwise only names differ and we can just relabel.
-        if positional()
-            .any(|(s, t)| s.data_type() != t.data_type() || s.is_nullable() != t.is_nullable())
-        {
-            SchemaComparison::Different
+        Ok(if names_match {
+            SchemaComparison::Equivalent
         } else {
             SchemaComparison::NameChangesOnly
-        }
+        })
     }
 
     fn generate_transform_operations(
@@ -2104,6 +2090,82 @@ mod test {
         } else {
             panic!("Expected Int32Array or RunEndEncoded<Int32Array>");
         }
+    }
+
+    #[test]
+    fn renamed_reverse_projection_preserves_values_and_cached_plan() {
+        for (name_a, name_b, target_type) in [
+            ("renamed_a", "renamed_b", PrimitiveType::Int),
+            ("b", "a", PrimitiveType::Int),
+            ("renamed_a", "renamed_b", PrimitiveType::Long),
+        ] {
+            let snapshot_schema = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::optional(1, name_a, Type::Primitive(target_type.clone()))
+                            .into(),
+                        NestedField::optional(2, name_b, Type::Primitive(target_type)).into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let target_schema = Arc::new(
+                schema_to_arrow_schema(&snapshot_schema)
+                    .unwrap()
+                    .project(&[1, 0])
+                    .unwrap(),
+            );
+            let source_schema = Arc::new(ArrowSchema::new(vec![
+                field_with_id("a", DataType::Int32, true, 1),
+                field_with_id("b", DataType::Int32, true, 2),
+            ]));
+            let mut transformer =
+                RecordBatchTransformerBuilder::new(snapshot_schema, &[2, 1]).build();
+            for (a, b) in [
+                (vec![Some(1), None, Some(3)], vec![Some(10), Some(20), None]),
+                (vec![None, Some(4)], vec![Some(40), None]),
+            ] {
+                let a = Arc::new(Int32Array::from(a)) as ArrayRef;
+                let b = Arc::new(Int32Array::from(b)) as ArrayRef;
+                let source =
+                    RecordBatch::try_new(source_schema.clone(), vec![a.clone(), b.clone()])
+                        .unwrap();
+                let expected = RecordBatch::try_new(target_schema.clone(), vec![
+                    cast(&b, target_schema.field(0).data_type()).unwrap(),
+                    cast(&a, target_schema.field(1).data_type()).unwrap(),
+                ])
+                .unwrap();
+                assert_eq!(transformer.process_record_batch(source).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn readded_same_name_column_is_null_by_field_id() {
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(2, "a", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let target_schema = Arc::new(schema_to_arrow_schema(&snapshot_schema).unwrap());
+        let source_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "a",
+            DataType::Int32,
+            true,
+            1,
+        )]));
+        let source =
+            RecordBatch::try_new(source_schema, vec![Arc::new(Int32Array::from(vec![1, 2]))])
+                .unwrap();
+        let expected = RecordBatch::try_new(target_schema, vec![Arc::new(Int32Array::from(vec![
+            None, None,
+        ]))])
+        .unwrap();
+        let mut transformer = RecordBatchTransformerBuilder::new(snapshot_schema, &[2]).build();
+        assert_eq!(transformer.process_record_batch(source).unwrap(), expected);
     }
 
     #[test]

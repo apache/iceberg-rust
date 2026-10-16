@@ -598,6 +598,74 @@ mod tests {
     };
     use crate::{ErrorKind, Runtime};
 
+    #[tokio::test]
+    async fn test_renamed_reverse_projection_reads_values_by_field_id() {
+        use arrow_array::Int32Array;
+
+        use crate::arrow::schema_to_arrow_schema;
+
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "renamed_a", Type::Primitive(PrimitiveType::Int))
+                        .into(),
+                    NestedField::optional(2, "renamed_b", Type::Primitive(PrimitiveType::Int))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let file_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("a", DataType::Int32, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("b", DataType::Int32, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+        let a = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as ArrayRef;
+        let b = Arc::new(Int32Array::from(vec![Some(10), Some(20), None])) as ArrayRef;
+        let to_write = RecordBatch::try_new(file_schema, vec![a.clone(), b.clone()]).unwrap();
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = tmp_dir.path().join("renamed.parquet");
+        let mut writer =
+            ArrowWriter::try_new(File::create(&file_path).unwrap(), to_write.schema(), None)
+                .unwrap();
+        writer.write(&to_write).unwrap();
+        writer.close().unwrap();
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path.to_str().unwrap().to_string())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(snapshot_schema.clone())
+            .with_project_field_ids(vec![2, 1])
+            .with_case_sensitive(true)
+            .build()
+            .unwrap();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+        let expected_schema = Arc::new(
+            schema_to_arrow_schema(&snapshot_schema)
+                .unwrap()
+                .project(&[1, 0])
+                .unwrap(),
+        );
+        let expected = RecordBatch::try_new(expected_schema, vec![b, a]).unwrap();
+        assert_eq!(result, vec![expected]);
+    }
+
     #[test]
     fn test_name_mapping_duplicate_alias_preserves_first_match() {
         let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
