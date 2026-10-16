@@ -71,7 +71,8 @@ pub const REST_CATALOG_PROP_AUTH_TYPE: &str = "rest.auth.type";
 /// Maximum number of loaded tables kept for freshness-aware loading (defaults
 /// to 100; 0 disables the cache). The cache is keyed by session id, so it only
 /// helps callers that reuse a [`SessionContext`], and a table changed through
-/// this catalog is invalidated only for the session that changed it.
+/// this catalog is invalidated only for the session that changed it. Loads that
+/// vend short-lived storage credentials are never cached.
 pub const REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES: &str = "rest-table-cache.max-entries";
 /// How long a loaded table stays cached for freshness-aware loading, in
 /// milliseconds (defaults to 5 minutes; must be positive and at most 1000 years).
@@ -4435,6 +4436,44 @@ mod tests {
                 ErrorKind::DataInvalid
             );
         }
+    }
+
+    #[test]
+    fn test_is_short_lived_credential() {
+        for key in [
+            "S3.Session-Token",
+            "gcs.oauth2.token",
+            "adls.sas-token.account",
+        ] {
+            assert!(is_short_lived_credential(key), "{key}");
+        }
+        for key in ["s3.sse.key", "s3.access-key-id", "encryption.key-id"] {
+            assert!(!is_short_lived_credential(key), "{key}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_failed_drop_still_invalidates_cached_table() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let load = load_table_mock(&mut server, Matcher::Missing, 200, Some("\"v1\""))
+            .await
+            .expect(2);
+        // Cut the connection mid-response so the drop fails inside `query_catalog`.
+        let _drop = server
+            .mock("DELETE", "/v1/namespaces/ns1/tables/test1")
+            .with_chunked_body(|_| Err(std::io::Error::other("connection reset")))
+            .create_async()
+            .await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let context = SessionContext::empty();
+        let ident = test_table_ident();
+
+        catalog.load_table(&context, &ident).await.unwrap();
+        catalog.drop_table(&context, &ident).await.unwrap_err();
+        catalog.load_table(&context, &ident).await.unwrap();
+
+        load.assert_async().await;
     }
 
     #[tokio::test]
