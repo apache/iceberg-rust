@@ -33,13 +33,8 @@ github:
     squash_commit_message: PR_TITLE_AND_COMMIT_DETAILS
     merge: false
     rebase: false
-  protected_branches:
-    main:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-        dismiss_stale_reviews: false
-
-      required_linear_history: true
+  # Disabled: the "Merge Queue" ruleset owns the merge gate so its bypass actors can bypass it.
+  protected_branches: ~
   rulesets:
     - name: Merge Queue
       target: branch
@@ -60,6 +55,18 @@ github:
             - "~DEFAULT_BRANCH"
           exclude: []
       rules:
+        - type: deletion
+        - type: non_fast_forward
+        - type: required_linear_history
+        - type: pull_request
+          parameters:
+            allowed_merge_methods:
+              - squash
+            dismiss_stale_reviews_on_push: false
+            require_code_owner_review: false
+            require_last_push_approval: false
+            required_approving_review_count: 1
+            required_review_thread_resolution: false
         - type: required_status_checks
           parameters:
             # PR branches need not be up to date with main: Merge Queue
